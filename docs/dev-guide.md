@@ -44,3 +44,11 @@ cargo build -p cadektor-cli && uv run --with pytest --with ezdxf pytest tests/be
 ```
 
 All four must pass. End each commit message with the co-author line that the project uses.
+
+## Parallel work in worktrees
+
+- Use your own build folder: `CARGO_TARGET_DIR=<repo main folder>/target-<feature>`. Shared build folders mix binaries from different branches.
+- Disk space is limited. Set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=0`. Run release and coverage builds only when you need them.
+- Point the behavior tests at your binary: `CADEKTOR_BIN=$CARGO_TARGET_DIR/debug/cadektor`.
+- Other branches add `Shape` variants, commands and API methods at the same time. Add catch-all arms where a match does not need every kind, and keep shared edits small.
+- Before you finish, merge `main` into your branch, resolve conflicts, and run the checks again.
