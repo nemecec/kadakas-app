@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 use glam::DVec2;
 
+use crate::curve;
 use crate::model::*;
 
 /// Bounds of all visible objects, or `None` for an empty drawing.
@@ -72,7 +73,12 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                     writeln!(s, r#"<path d="M {} {} A {radius} {radius} 0 {large} 0 {} {}" {style}/>"#, p0.x, -p0.y, p1.x, -p1.y)
                 }
             }
+            Shape::Polyline { points, closed } if !curve::all_straight(points) => {
+                // Curved: exact arcs and Bezier curves in one path.
+                writeln!(s, r#"<path d="{}" {style}/>"#, curve::path(points, *closed).svg_d())
+            }
             Shape::Polyline { points, closed } => {
+                let points = &curve::positions(points);
                 let tag = if *closed { "polygon" } else { "polyline" };
                 writeln!(s, r#"<{tag} points="{}" {style}/>"#, points_attr(points))
             }
@@ -92,8 +98,11 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                 spread / 2.0,
                 esc(species)
             ),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } if !curve::all_straight(boundary) => {
+                writeln!(s, r#"<path d="{}" {style} data-kind="{}"/>"#, curve::path(boundary, true).svg_d(), o.shape.kind())
+            }
             Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
-                writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(boundary), o.shape.kind())
+                writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&curve::positions(boundary)), o.shape.kind())
             }
         };
     }
@@ -162,9 +171,9 @@ mod tests {
     #[test]
     fn polyline_and_polygon_elements() {
         let pts = vec![DVec2::new(1.0, 2.0), DVec2::new(3.0, -4.0)];
-        let svg = one(Shape::Polyline { points: pts.clone(), closed: false });
+        let svg = one(Shape::Polyline { points: crate::curve::corners(&pts.clone()), closed: false });
         assert!(svg.contains(r#"<polyline points="1,-2 3,4""#), "{svg}");
-        let svg = one(Shape::Polyline { points: pts, closed: true });
+        let svg = one(Shape::Polyline { points: crate::curve::corners(&pts), closed: true });
         assert!(svg.contains(r#"<polygon points="1,-2 3,4""#), "{svg}");
     }
 
@@ -185,10 +194,10 @@ mod tests {
     #[test]
     fn landscape_and_hardscape_are_polygons_with_kind() {
         let boundary = vec![DVec2::new(1.0, 1.0), DVec2::new(3.0, 1.0), DVec2::new(3.0, 4.0)];
-        let svg = one(Shape::LandscapeArea { boundary: boundary.clone(), name: "Meadow".into() });
+        let svg = one(Shape::LandscapeArea { boundary: crate::curve::corners(&boundary.clone()), name: "Meadow".into() });
         assert!(svg.contains(r#"<polygon points="1,-1 3,-1 3,-4""#), "{svg}");
         assert!(svg.contains(r#"data-kind="landscape_area""#), "{svg}");
-        let svg = one(Shape::Hardscape { boundary, material: "Setts".into() });
+        let svg = one(Shape::Hardscape { boundary: crate::curve::corners(&boundary), material: "Setts".into() });
         assert!(svg.contains(r#"data-kind="hardscape""#), "{svg}");
     }
 
@@ -282,5 +291,33 @@ mod tests {
         let svg = one(Shape::Arc { center: DVec2::ZERO, radius: 10.0, start: 0.0, end: std::f64::consts::TAU });
         assert_eq!(svg.matches(" A 10 10 0 1 0 ").count(), 2, "{svg}");
         assert!(svg.contains("M 10 -0 A 10 10 0 1 0 -10 -0 A"), "{svg}");
+    }
+
+    #[test]
+    fn curved_shapes_use_exact_path_commands() {
+        let v = |x: f64, y: f64, kind| Vertex::new(DVec2::new(x, y), kind);
+        let corner = VertexKind::Corner;
+        let rounded = vec![
+            v(0.0, 0.0, corner),
+            v(10.0, 0.0, VertexKind::Arc { radius: 2.0 }),
+            v(10.0, 10.0, VertexKind::Arc { radius: 2.0 }),
+            v(0.0, 10.0, corner),
+        ];
+        let svg = one(Shape::Polyline { points: rounded.clone(), closed: true });
+        assert!(svg.contains(r#"<path d="M 0 0 L 8 0 A 2 2 0 0 0 10 -2 L 10 -8 A 2 2 0 0 0 8 -10 L 0 -10 Z""#), "{svg}");
+        let svg = one(Shape::Hardscape { boundary: rounded.clone(), material: "m".into() });
+        assert!(svg.contains(r#"data-kind="hardscape""#) && svg.contains("<path d="), "{svg}");
+        let svg = one(Shape::LandscapeArea { boundary: rounded, name: "n".into() });
+        assert!(svg.contains(r#"data-kind="landscape_area""#) && !svg.contains("<polygon"), "{svg}");
+        let curves = vec![
+            v(0.0, 0.0, corner),
+            v(5.0, 5.0, VertexKind::Bezier),
+            v(10.0, 0.0, corner),
+            v(15.0, -5.0, VertexKind::Cubic),
+            v(20.0, -5.0, VertexKind::Cubic),
+            v(25.0, 0.0, corner),
+        ];
+        let svg = one(Shape::Polyline { points: curves, closed: false });
+        assert!(svg.contains(" Q ") && svg.contains(" C ") && !svg.contains(" Z"), "{svg}");
     }
 }

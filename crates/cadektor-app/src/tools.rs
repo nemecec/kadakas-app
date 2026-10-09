@@ -3,7 +3,8 @@
 //! They never touch the document.
 
 use cadektor_core::command::Command;
-use cadektor_core::model::{Attributes, Document, ObjectId, Shape};
+use cadektor_core::curve;
+use cadektor_core::model::{Attributes, Document, ObjectId, Shape, Vertex, VertexKind};
 use glam::DVec2;
 
 use crate::hit;
@@ -40,6 +41,88 @@ impl Tool {
     }
 }
 
+/// Radius of new arc vertices until the user changes it, in mm.
+pub const DEFAULT_ARC_RADIUS: f64 = 500.0;
+
+/// True for the tools that draw a path of vertices and have vertex modes.
+pub fn has_vertex_modes(tool: Tool) -> bool {
+    matches!(tool, Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape)
+}
+
+/// What the next click adds to a polyline, landscape area or hardscape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VertexMode {
+    #[default]
+    Corner,
+    /// A quadratic Bezier control point.
+    Bezier,
+    /// A smooth point that the curve passes through (cubic spline).
+    Cubic,
+    /// A fillet arc with the default radius.
+    Arc,
+    /// An arc that continues the last segment and ends at the click.
+    TangentArc,
+    /// The click is a point on an arc through the neighbors.
+    PointOnArc,
+}
+
+impl VertexMode {
+    pub const ALL: [VertexMode; 6] = [
+        VertexMode::Corner,
+        VertexMode::Bezier,
+        VertexMode::Cubic,
+        VertexMode::TangentArc,
+        VertexMode::PointOnArc,
+        VertexMode::Arc,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VertexMode::Corner => "Corner",
+            VertexMode::Bezier => "B\u{e9}zier",
+            VertexMode::Cubic => "Cubic",
+            VertexMode::Arc => "Arc",
+            VertexMode::TangentArc => "Tangent arc",
+            VertexMode::PointOnArc => "Point on arc",
+        }
+    }
+
+    /// The next mode in the list, wrapping around.
+    pub fn next(self) -> VertexMode {
+        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
+    fn kind(self, radius: f64) -> VertexKind {
+        match self {
+            VertexMode::Corner | VertexMode::TangentArc => VertexKind::Corner,
+            VertexMode::Bezier => VertexKind::Bezier,
+            VertexMode::Cubic => VertexKind::Cubic,
+            VertexMode::Arc => VertexKind::Arc { radius },
+            VertexMode::PointOnArc => VertexKind::PointOnArc,
+        }
+    }
+}
+
+/// The vertices of a path after a click at `p` in `mode`. A tangent arc adds
+/// two vertices (a point on the arc, and `p`). It is a corner when there is
+/// no segment to continue or `p` is on the tangent line.
+pub fn extend_path(existing: &[Vertex], p: DVec2, mode: VertexMode, radius: f64) -> Vec<Vertex> {
+    let mut v = existing.to_vec();
+    if mode == VertexMode::TangentArc
+        && let Some(pair) = curve::tangent_arc_vertices(&v, p)
+    {
+        // The start of the arc must be a corner for the arc to be tangent.
+        if let Some(last) = v.last_mut() {
+            last.kind = VertexKind::Corner;
+        }
+        v.extend(pair);
+    } else {
+        v.push(Vertex::new(p, mode.kind(radius)));
+    }
+    v
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolSettings {
     pub text: String,
@@ -49,6 +132,10 @@ pub struct ToolSettings {
     pub plant_height: f64,
     pub area_name: String,
     pub material: String,
+    /// Vertex mode of the Polyline, Landscape Area and Hardscape tools.
+    pub vertex_mode: VertexMode,
+    /// Radius for new arc vertices in mm. It stays until the user changes it.
+    pub arc_radius: f64,
 }
 
 impl Default for ToolSettings {
@@ -61,6 +148,8 @@ impl Default for ToolSettings {
             plant_height: 8000.0,
             area_name: "Planting bed".into(),
             material: "Paving".into(),
+            vertex_mode: VertexMode::Corner,
+            arc_radius: DEFAULT_ARC_RADIUS,
         }
     }
 }
@@ -93,7 +182,7 @@ pub enum Effect {
 pub enum Preview {
     None,
     Shape(Shape),
-    Path { points: Vec<DVec2>, closed: bool },
+    Path { vertices: Vec<Vertex>, closed: bool },
     Box { min: DVec2, max: DVec2, crossing: bool },
     /// Move the listed objects by this delta.
     Move { ids: Vec<ObjectId>, delta: DVec2 },
@@ -103,6 +192,9 @@ pub enum Preview {
 enum State {
     Idle,
     Points(Vec<DVec2>),
+    /// The vertices of a path after each click. The last entry is the current path.
+    /// Taking back a click removes the last entry.
+    Path(Vec<Vec<Vertex>>),
     Drag { start: DVec2, cur: DVec2, ids: Vec<ObjectId> },
     Box { start: DVec2, cur: DVec2, add: bool },
 }
@@ -122,11 +214,12 @@ fn add(shape: Shape) -> Effect {
     Effect::Exec(Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() })
 }
 
-fn dedup(points: &[DVec2]) -> Vec<DVec2> {
-    let mut out: Vec<DVec2> = Vec::new();
-    for p in points {
-        if out.last() != Some(p) {
-            out.push(*p);
+/// Removes a vertex that sits on the same point as the one before it.
+fn dedup(vertices: &[Vertex]) -> Vec<Vertex> {
+    let mut out: Vec<Vertex> = Vec::new();
+    for v in vertices {
+        if out.last().map(|l| l.p) != Some(v.p) {
+            out.push(*v);
         }
     }
     out
@@ -146,17 +239,27 @@ impl ToolMachine {
     pub fn anchor(&self) -> Option<DVec2> {
         match &self.state {
             State::Points(p) => p.last().copied(),
+            State::Path(h) => h.last().and_then(|v| v.last()).map(|v| v.p),
             _ => None,
         }
     }
 
     /// Takes back the last clicked point. The operation ends when none is left.
     pub fn pop_point(&mut self) {
-        if let State::Points(p) = &mut self.state {
-            p.pop();
-            if p.is_empty() {
-                self.state = State::Idle;
+        match &mut self.state {
+            State::Points(p) => {
+                p.pop();
+                if p.is_empty() {
+                    self.state = State::Idle;
+                }
             }
+            State::Path(h) => {
+                h.pop();
+                if h.is_empty() {
+                    self.state = State::Idle;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -178,11 +281,20 @@ impl ToolMachine {
     }
 
     fn finish_polygon(&mut self, cx: &Ctx) -> Vec<Effect> {
-        let State::Points(pts) = std::mem::replace(&mut self.state, State::Idle) else {
+        let State::Path(mut history) = std::mem::replace(&mut self.state, State::Idle) else {
             return vec![];
         };
-        let pts = dedup(&pts);
+        let mut pts = dedup(&history.pop().unwrap_or_default());
         let s = cx.settings;
+        if self.tool == Tool::Polyline {
+            // The ends of an open path are on the curve, so their kind has no meaning.
+            if let Some(first) = pts.first_mut() {
+                first.kind = VertexKind::Corner;
+            }
+            if let Some(last) = pts.last_mut() {
+                last.kind = VertexKind::Corner;
+            }
+        }
         let shape = match self.tool {
             Tool::Polyline if pts.len() >= 2 => Shape::Polyline { points: pts, closed: false },
             Tool::LandscapeArea if pts.len() >= 3 => Shape::LandscapeArea { boundary: pts, name: s.area_name.clone() },
@@ -202,9 +314,13 @@ impl ToolMachine {
             },
             Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape => match input {
                 Input::Press { p, .. } => {
-                    match &mut self.state {
-                        State::Points(pts) => pts.push(p),
-                        s => *s = State::Points(vec![p]),
+                    let s = cx.settings;
+                    if !matches!(self.state, State::Path(_)) {
+                        self.state = State::Path(vec![]);
+                    }
+                    if let State::Path(history) = &mut self.state {
+                        let next = extend_path(history.last().map_or(&[], |v| v.as_slice()), p, s.vertex_mode, s.arc_radius);
+                        history.push(next);
                     }
                     vec![]
                 }
@@ -319,10 +435,11 @@ impl ToolMachine {
             (State::Points(pts), Tool::Line | Tool::Rect | Tool::Circle) => {
                 Self::two_click_shape(self.tool, pts[0], cursor).map_or(Preview::None, Preview::Shape)
             }
-            (State::Points(pts), _) => {
-                let mut points = pts.clone();
-                points.push(cursor);
-                Preview::Path { points, closed: self.tool != Tool::Polyline }
+            (State::Points(_), _) => Preview::None,
+            (State::Path(h), _) => {
+                let s = cx.settings;
+                let vertices = extend_path(h.last().map_or(&[], |v| v.as_slice()), cursor, s.vertex_mode, s.arc_radius);
+                Preview::Path { vertices, closed: self.tool != Tool::Polyline }
             }
             (State::Drag { start, ids, .. }, _) => Preview::Move { ids: ids.clone(), delta: cursor - *start },
             (State::Box { start, .. }, _) => {
@@ -344,7 +461,7 @@ impl ToolMachine {
     }
 
     /// Text for the data bar: the live measurement of the current operation.
-    pub fn readout(&self, cursor: DVec2) -> String {
+    pub fn readout(&self, cursor: DVec2, settings: &ToolSettings) -> String {
         let seg = |a: DVec2, b: DVec2| {
             let d = b - a;
             format!("Length {:.1} mm  Angle {:.1}\u{b0}", d.length(), d.y.atan2(d.x).to_degrees())
@@ -358,6 +475,13 @@ impl ToolMachine {
             (State::Points(p), _) => {
                 let last = *p.last().unwrap_or(&cursor);
                 format!("{}  Points {}", seg(last, cursor), p.len())
+            }
+            (State::Path(h), _) => {
+                let verts = h.last().map_or(&[][..], |v| v.as_slice());
+                let last = verts.last().map_or(cursor, |v| v.p);
+                let mode = settings.vertex_mode;
+                let radius = if mode == VertexMode::Arc { format!("  Radius {:.1} mm", settings.arc_radius) } else { String::new() };
+                format!("{}  Points {}  Mode {}{radius}", seg(last, cursor), verts.len(), mode.label())
             }
             (State::Drag { start, .. }, _) => format!("Move dX {:.1}  dY {:.1} mm", cursor.x - start.x, cursor.y - start.y),
             (State::Box { start, .. }, _) => {
@@ -376,7 +500,7 @@ impl ToolMachine {
             (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",
             (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
             (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape, _) => {
-                "Click points. Double-click or Enter finishes. Esc cancels."
+                "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
             (Tool::Text | Tool::Plant, _) => "Click to place. Set values in the Data bar.",
         }
@@ -466,7 +590,7 @@ mod tests {
         f.send(Input::DoubleClick);
         assert_eq!(
             f.shapes(),
-            vec![Shape::Polyline { points: vec![DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(100.0, 100.0)], closed: false }]
+            vec![Shape::Polyline { points: curve::corners(&[DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(100.0, 100.0)]), closed: false }]
         );
         assert!(!f.m.is_busy());
     }
@@ -573,9 +697,207 @@ mod tests {
         f.click(0.0, 0.0);
         let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
         assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Shape(Shape::Line { .. })));
-        assert!(f.m.readout(DVec2::new(3.0, 4.0)).contains("Length 5.0"));
+        assert!(f.m.readout(DVec2::new(3.0, 4.0), &f.settings).contains("Length 5.0"));
         assert_eq!(f.m.anchor(), Some(DVec2::ZERO));
         f.m.pop_point();
         assert!(!f.m.is_busy() && f.m.anchor().is_none());
+    }
+
+    fn verts(shape: &Shape) -> Vec<Vertex> {
+        shape.vertices().expect("a path shape").clone()
+    }
+
+    #[test]
+    fn mode_list_cycles_through_all_six_and_wraps() {
+        let mut m = VertexMode::Corner;
+        let mut seen = vec![m];
+        for _ in 0..6 {
+            m = m.next();
+            seen.push(m);
+        }
+        assert_eq!(seen[..6], VertexMode::ALL);
+        assert_eq!(seen[6], VertexMode::Corner);
+        let labels: Vec<_> = VertexMode::ALL.iter().map(|m| m.label()).collect();
+        assert_eq!(labels, ["Corner", "B\u{e9}zier", "Cubic", "Tangent arc", "Point on arc", "Arc"]);
+        assert!(has_vertex_modes(Tool::Polyline) && has_vertex_modes(Tool::Hardscape) && has_vertex_modes(Tool::LandscapeArea));
+        assert!(!has_vertex_modes(Tool::Line) && !has_vertex_modes(Tool::Select));
+        assert_eq!(ToolSettings::default().vertex_mode, VertexMode::Corner);
+    }
+
+    #[test]
+    fn each_mode_adds_its_vertex_kind() {
+        let cases = [
+            (VertexMode::Corner, VertexKind::Corner),
+            (VertexMode::Bezier, VertexKind::Bezier),
+            (VertexMode::Cubic, VertexKind::Cubic),
+            (VertexMode::Arc, VertexKind::Arc { radius: 123.0 }),
+            (VertexMode::PointOnArc, VertexKind::PointOnArc),
+            // A tangent arc with nothing to continue is a corner.
+            (VertexMode::TangentArc, VertexKind::Corner),
+        ];
+        for (mode, kind) in cases {
+            let mut f = Fixture::new(Tool::Hardscape);
+            f.settings.vertex_mode = mode;
+            f.settings.arc_radius = 123.0;
+            for (x, y) in [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)] {
+                f.click(x, y);
+            }
+            // The first vertex (nothing to continue) is a corner for a tangent arc.
+            f.send(Input::Enter);
+            let vs = verts(&f.shapes()[0]);
+            assert_eq!(vs[0].kind, kind, "{mode:?}");
+            if mode != VertexMode::TangentArc {
+                assert!(vs.iter().all(|v| v.kind == kind), "{mode:?}");
+            }
+            assert!(f.session.editor.doc.objects.len() == 1);
+        }
+    }
+
+    #[test]
+    fn polyline_ends_are_corners_but_inner_vertices_keep_their_kind() {
+        let mut f = Fixture::new(Tool::Polyline);
+        f.settings.vertex_mode = VertexMode::Arc;
+        for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        let vs = verts(&f.shapes()[0]);
+        assert_eq!(vs[0].kind, VertexKind::Corner);
+        assert_eq!(vs[1].kind, VertexKind::Arc { radius: DEFAULT_ARC_RADIUS });
+        assert_eq!(vs[2].kind, VertexKind::Corner);
+    }
+
+    #[test]
+    fn the_mode_can_change_between_clicks_and_the_radius_follows_the_setting() {
+        let mut f = Fixture::new(Tool::Polyline);
+        f.click(0.0, 0.0);
+        f.settings.vertex_mode = VertexMode::Arc;
+        f.settings.arc_radius = 40.0;
+        f.click(100.0, 0.0);
+        f.settings.arc_radius = 60.0;
+        f.click(100.0, 100.0);
+        f.settings.vertex_mode = VertexMode::Corner;
+        f.click(0.0, 100.0);
+        f.send(Input::DoubleClick);
+        let vs = verts(&f.shapes()[0]);
+        assert_eq!(vs.len(), 4);
+        assert_eq!(vs[1].kind, VertexKind::Arc { radius: 40.0 });
+        assert_eq!(vs[2].kind, VertexKind::Arc { radius: 60.0 });
+        assert_eq!(vs[3].kind, VertexKind::Corner);
+    }
+
+    #[test]
+    fn tangent_arc_continues_the_last_segment_and_ends_at_the_click() {
+        let mut f = Fixture::new(Tool::Polyline);
+        f.click(0.0, 0.0);
+        f.settings.vertex_mode = VertexMode::TangentArc;
+        f.click(100.0, 0.0); // No segment yet before this one: a line.
+        f.click(200.0, 100.0);
+        f.send(Input::Enter);
+        let Shape::Polyline { points, .. } = &f.shapes()[0] else { panic!() };
+        // Corner, corner, point on arc, corner.
+        let kinds: Vec<_> = points.iter().map(|v| v.kind).collect();
+        assert_eq!(kinds, [VertexKind::Corner, VertexKind::Corner, VertexKind::PointOnArc, VertexKind::Corner]);
+        assert_eq!(points[3].p, DVec2::new(200.0, 100.0));
+        // The arc is a circle of radius 100 around (100, 100), tangent to the line at (100, 0).
+        let path = curve::path(points, false);
+        let arcs: Vec<_> = path.segs.iter().filter(|s| matches!(s, curve::Seg::Arc { .. })).collect();
+        assert_eq!(arcs.len(), 2);
+        for s in arcs {
+            let curve::Seg::Arc { center, radius, .. } = s else { unreachable!() };
+            assert!(center.distance(DVec2::new(100.0, 100.0)) < 1e-9 && (radius - 100.0).abs() < 1e-9);
+        }
+        assert_eq!(path.segs.last().unwrap().to(), DVec2::new(200.0, 100.0));
+    }
+
+    #[test]
+    fn tangent_arc_chains_and_a_point_on_the_tangent_line_is_a_line() {
+        let mut f = Fixture::new(Tool::Polyline);
+        f.settings.vertex_mode = VertexMode::TangentArc;
+        f.click(0.0, 0.0);
+        f.click(100.0, 0.0);
+        f.click(200.0, 0.0); // On the tangent line: a plain corner vertex.
+        f.click(300.0, 100.0);
+        f.click(400.0, 100.0);
+        f.send(Input::Enter);
+        let vs = verts(&f.shapes()[0]);
+        let kinds: Vec<_> = vs.iter().map(|v| v.kind).collect();
+        use VertexKind::{Corner, PointOnArc};
+        assert_eq!(kinds, [Corner, Corner, Corner, PointOnArc, Corner, PointOnArc, Corner]);
+        // Everything is connected and the path ends exactly at the last click.
+        let path = curve::path(&vs, false);
+        let mut at = path.start;
+        for s in &path.segs {
+            assert!(s.from().distance(at) < 1e-9);
+            at = s.to();
+        }
+        assert_eq!(at, DVec2::new(400.0, 100.0));
+    }
+
+    #[test]
+    fn taking_back_a_tangent_arc_click_restores_the_previous_vertices() {
+        let mut f = Fixture::new(Tool::Polyline);
+        f.click(0.0, 0.0);
+        f.settings.vertex_mode = VertexMode::Arc;
+        f.click(100.0, 0.0);
+        f.settings.vertex_mode = VertexMode::TangentArc;
+        f.click(200.0, 100.0);
+        assert_eq!(f.m.anchor(), Some(DVec2::new(200.0, 100.0)));
+        f.m.pop_point();
+        // Back to two vertices; the Arc kind of the second vertex is back too.
+        assert_eq!(f.m.anchor(), Some(DVec2::new(100.0, 0.0)));
+        f.settings.vertex_mode = VertexMode::Corner;
+        f.click(100.0, 50.0);
+        f.send(Input::Enter);
+        let vs = verts(&f.shapes()[0]);
+        assert_eq!(vs.len(), 3);
+        assert_eq!(vs[1].kind, VertexKind::Arc { radius: DEFAULT_ARC_RADIUS });
+        f.m.pop_point();
+        assert!(!f.m.is_busy());
+    }
+
+    #[test]
+    fn the_preview_shows_what_the_next_click_would_add() {
+        let mut f = Fixture::new(Tool::Hardscape);
+        f.settings.vertex_mode = VertexMode::Arc;
+        f.settings.arc_radius = 80.0;
+        f.click(0.0, 0.0);
+        f.click(100.0, 0.0);
+        let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
+        let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else { panic!() };
+        assert!(closed);
+        assert_eq!(vertices.len(), 3);
+        assert_eq!(vertices[2], Vertex::new(DVec2::new(100.0, 100.0), VertexKind::Arc { radius: 80.0 }));
+        let readout = f.m.readout(DVec2::new(100.0, 100.0), &f.settings);
+        assert!(readout.contains("Mode Arc") && readout.contains("Radius 80.0"), "{readout}");
+        f.settings.vertex_mode = VertexMode::Corner;
+        let readout = f.m.readout(DVec2::new(100.0, 100.0), &f.settings);
+        assert!(readout.contains("Mode Corner") && !readout.contains("Radius"), "{readout}");
+        // A polyline preview is open.
+        let mut f = Fixture::new(Tool::Polyline);
+        f.click(0.0, 0.0);
+        let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
+        assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Path { closed: false, .. }));
+    }
+
+    #[test]
+    fn a_rounded_hardscape_gets_the_exact_area() {
+        let mut f = Fixture::new(Tool::Hardscape);
+        f.settings.vertex_mode = VertexMode::Arc;
+        f.settings.arc_radius = 100.0;
+        for (x, y) in [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        let expected = 1000.0 * 1000.0 - (4.0 - std::f64::consts::PI) * 100.0 * 100.0;
+        let area = f.shapes()[0].area().unwrap();
+        assert!((area - expected).abs() < 1e-6 * expected, "{area} vs {expected}");
+    }
+
+    #[test]
+    fn mode_buttons_and_hint_text() {
+        let f = Fixture::new(Tool::Polyline);
+        assert!(f.m.hint().contains("vertex mode"));
+        assert!(f.m.hint().contains("U cycles"));
     }
 }

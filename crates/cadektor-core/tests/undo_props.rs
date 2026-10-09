@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use cadektor_core::command::{Command, Editor};
-use cadektor_core::model::{Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape};
+use cadektor_core::model::{Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape, Vertex, VertexKind};
 use cadektor_core::DVec2;
 use proptest::prelude::*;
 use serde_json::{json, Value};
@@ -25,13 +25,32 @@ fn point() -> impl Strategy<Value = DVec2> {
     (coord(), coord()).prop_map(|(x, y)| DVec2::new(x, y))
 }
 
+/// A vertex of any kind. Radii are sometimes negative or not a number, which commands must refuse.
+fn vertex() -> impl Strategy<Value = Vertex> {
+    let p = || (-1e4..1e4f64, -1e4..1e4f64).prop_map(|(x, y)| DVec2::new(x, y));
+    let kind = prop_oneof![
+        4 => Just(VertexKind::Corner),
+        4 => (0.0..2000.0f64).prop_map(|radius| VertexKind::Arc { radius }),
+        1 => prop_oneof![Just(-5.0), Just(f64::NAN), Just(f64::INFINITY), Just(1e308)].prop_map(|radius| VertexKind::Arc { radius }),
+        2 => Just(VertexKind::PointOnArc),
+        2 => Just(VertexKind::Bezier),
+        2 => Just(VertexKind::Cubic),
+    ];
+    (p(), kind).prop_map(|(p, kind)| Vertex { p, kind })
+}
+
 fn shape() -> impl Strategy<Value = Shape> {
     let p = || (-1e4..1e4f64, -1e4..1e4f64).prop_map(|(x, y)| DVec2::new(x, y));
     prop_oneof![
         8 => (p(), p()).prop_map(|(a, b)| Shape::Line { a, b }),
         8 => (p(), -10.0..500.0f64).prop_map(|(center, radius)| Shape::Circle { center, radius }),
         4 => (p(), 1.0..5000.0f64).prop_map(|(at, spread)| Shape::Plant { at, species: "Oak".into(), spread, height: 1.0 }),
-        4 => prop::collection::vec(p(), 0..6).prop_map(|boundary| Shape::Hardscape { boundary, material: "Gravel".into() }),
+        2 => prop::collection::vec(p(), 0..6)
+            .prop_map(|pts| Shape::Hardscape { boundary: cadektor_core::curve::corners(&pts), material: "Gravel".into() }),
+        4 => prop::collection::vec(vertex(), 0..7).prop_map(|boundary| Shape::Hardscape { boundary, material: "Gravel".into() }),
+        4 => (prop::collection::vec(vertex(), 0..7), any::<bool>())
+            .prop_map(|(points, closed)| Shape::Polyline { points, closed }),
+        2 => prop::collection::vec(vertex(), 0..7).prop_map(|boundary| Shape::LandscapeArea { boundary, name: "Lawn".into() }),
         4 => (p(), 1.0..100.0f64, -10.0..10.0f64, -10.0..10.0f64)
             .prop_map(|(center, radius, start, end)| Shape::Arc { center, radius, start, end }),
         1 => (point(), point()).prop_map(|(a, b)| Shape::Line { a, b }),
@@ -68,6 +87,8 @@ fn command() -> impl Strategy<Value = Command> {
             .prop_map(|(ids, d)| Command::MoveObjects { ids, delta: DVec2::splat(d) }),
         2 => (oid(), prop::option::of(shape()), prop::option::of(lid()), prop::option::of(cid()), prop::option::of(attrs()))
             .prop_map(|(id, shape, layer, class, attrs)| Command::ModifyObject { id, shape, layer, class, attrs }),
+        3 => (oid(), 0usize..8, prop::option::of(vertex().prop_map(|v| v.kind)), prop::option::of(point()))
+            .prop_map(|(id, index, kind, p)| Command::SetVertex { id, index, kind, p }),
         2 => (oid(), data(), prop::collection::vec(prop::sample::select(vec!["a", "b", "z"]).prop_map(String::from), 0..3))
             .prop_map(|(id, set, remove)| Command::SetData { id, set, remove }),
         1 => "[a-z]{1,6}".prop_map(|name| Command::AddLayer { name, elevation: 0.0, scale: None, kind: None }),
@@ -120,6 +141,29 @@ fn assert_saveable(doc: &Document) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Curve code never panics, and finite vertices with small coordinates give finite results.
+fn assert_curves_are_sane(doc: &Document) -> Result<(), TestCaseError> {
+    for o in doc.objects.values() {
+        let (lo, hi) = o.shape.bounds();
+        let area = o.shape.area();
+        if let Some(vs) = o.shape.vertices()
+            && !vs.is_empty()
+            && vs.iter().all(|v| v.p.abs().max_element() < 1e5 && !matches!(v.kind, VertexKind::Arc { radius } if radius > 1e6))
+        {
+            prop_assert!(lo.is_finite() && hi.is_finite(), "bounds {lo:?} {hi:?}");
+            prop_assert!(area.is_none_or(|a| a.is_finite() && a >= 0.0), "area {area:?} of {:?}", o.shape);
+            // The drawing in SVG has only finite numbers.
+            let mut ed = Editor::default();
+            let add = Command::AddObject { shape: o.shape.clone(), layer: None, class: None, attrs: Attributes::default() };
+            if ed.execute(&add).is_ok() {
+                let svg = cadektor_core::svg::render(&ed.doc, 200);
+                prop_assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+            }
+        }
+    }
+    Ok(())
+}
+
 proptest! {
 
     #[test]
@@ -135,6 +179,7 @@ proptest! {
                 Err(_) => prop_assert_eq!(content(&ed.doc), before),
             }
             assert_saveable(&ed.doc)?;
+            assert_curves_are_sane(&ed.doc)?;
         }
         for s in states.iter().rev().skip(1) {
             prop_assert!(ed.undo());

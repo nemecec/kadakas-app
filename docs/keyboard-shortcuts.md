@@ -8,7 +8,6 @@ Rules
 - Status `done`: the key works in the app and is in the default keymap. The test `doc_matches_default_keymap`
   (`crates/cadektor-app/src/keymap.rs`) checks every `done` row that names an action id.
 - Status `planned`: the feature is missing. The key is the Vectorworks default and will be used when the feature is built.
-  Rows with an action id and status `planned` (tool mode groups) are already in the keymap and show a "planned" message.
 - Single-key shortcuts never fire while a text field has focus. Only Cmd/Ctrl chords do, except Undo, Redo and Select All,
   which stay with the text field.
 - The first column also shows the action id used in the keymap file.
@@ -76,16 +75,20 @@ Tool keys switch the active tool.
 
 ## Tool modes
 
-Keys that jump between the groups of mode buttons in the tool bar (UI-11).
+Keys that cycle the groups of mode buttons in the tool bar (UI-11).
+The Polyline, Landscape Area and Hardscape tools have one group of mode buttons: the vertex modes
+(Corner, Bézier, Cubic, Tangent arc, Point on arc, Arc). Group 1 (`U`) picks the next vertex mode and wraps
+around after the last one. The other groups are bound, but these tools have no buttons for them, so the key only
+shows a message in the status line. Other tools have no mode buttons yet.
 
 | Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
 |---|---|---|---|
-| Tool mode group 1 (`mode.group1`) | U (both) | U | planned |
-| Tool mode group 2 (`mode.group2`) | I (both) | I | planned |
-| Tool mode group 3 (`mode.group3`) | O (both) | O | planned |
-| Tool mode group 4 (`mode.group4`) | P (both) | P | planned |
-| Tool mode group 5 (`mode.group5`) | [ (both) | [ | planned |
-| Tool mode group 6 (`mode.group6`) | ] (both) | ] | planned |
+| Tool mode group 1 (`mode.group1`) | U (both) | U | done |
+| Tool mode group 2 (`mode.group2`) | I (both) | I | done |
+| Tool mode group 3 (`mode.group3`) | O (both) | O | done |
+| Tool mode group 4 (`mode.group4`) | P (both) | P | done |
+| Tool mode group 5 (`mode.group5`) | [ (both) | [ | done |
+| Tool mode group 6 (`mode.group6`) | ] (both) | ] | done |
 
 ## Snapping
 

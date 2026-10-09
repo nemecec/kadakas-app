@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod command;
+pub mod curve;
 pub mod fsio;
 pub mod geom;
 pub mod model;

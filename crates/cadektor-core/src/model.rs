@@ -8,6 +8,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::curve::{Vertex, VertexKind};
+use crate::curve;
+
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -87,14 +90,14 @@ pub enum Shape {
     Circle { center: DVec2, radius: f64 },
     /// Counterclockwise arc. Angles are radians. A sweep of 2π or more is a full circle.
     Arc { center: DVec2, radius: f64, start: f64, end: f64 },
-    Polyline { points: Vec<DVec2>, closed: bool },
+    Polyline { points: Vec<Vertex>, closed: bool },
     Text { at: DVec2, text: String, height: f64 },
     /// Plant instance. `spread` is the canopy diameter.
     Plant { at: DVec2, species: String, spread: f64, height: f64 },
     /// Planting area with a plant mix, bounded by a closed outline.
-    LandscapeArea { boundary: Vec<DVec2>, name: String },
+    LandscapeArea { boundary: Vec<Vertex>, name: String },
     /// Paved area (path, patio, drive).
-    Hardscape { boundary: Vec<DVec2>, material: String },
+    Hardscape { boundary: Vec<Vertex>, material: String },
 }
 
 /// Counterclockwise sweep of an arc in radians, from 0 (empty) to 2π (full circle).
@@ -119,6 +122,23 @@ impl Shape {
         }
     }
 
+    /// The vertices of a polyline, landscape area or hardscape.
+    pub fn vertices(&self) -> Option<&Vec<Vertex>> {
+        match self {
+            Shape::Polyline { points, .. } => Some(points),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            _ => None,
+        }
+    }
+
+    pub fn vertices_mut(&mut self) -> Option<&mut Vec<Vertex>> {
+        match self {
+            Shape::Polyline { points, .. } => Some(points),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            _ => None,
+        }
+    }
+
     /// True if every number in the shape is finite.
     pub fn is_finite(&self) -> bool {
         let v = |p: &DVec2| p.is_finite();
@@ -131,7 +151,7 @@ impl Shape {
             Shape::Plant { at, spread, height, .. } => v(at) && spread.is_finite() && height.is_finite(),
             Shape::Polyline { points, .. }
             | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => points.iter().all(v),
+            | Shape::Hardscape { boundary: points, .. } => points.iter().all(Vertex::is_finite),
         }
     }
 
@@ -150,7 +170,7 @@ impl Shape {
             Shape::Text { at, .. } | Shape::Plant { at, .. } => mv(at),
             Shape::Polyline { points, .. }
             | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => points.iter_mut().for_each(mv),
+            | Shape::Hardscape { boundary: points, .. } => points.iter_mut().for_each(|x| mv(&mut x.p)),
         }
     }
 
@@ -189,9 +209,8 @@ impl Shape {
                 let r = DVec2::splat(spread / 2.0);
                 (*at - r, *at + r)
             }
-            Shape::Polyline { points, .. }
-            | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => from_points(points),
+            Shape::Polyline { points, closed } => curve::bounds(points, *closed),
+            Shape::LandscapeArea { boundary: points, .. } | Shape::Hardscape { boundary: points, .. } => curve::bounds(points, true),
         }
     }
 
@@ -202,7 +221,7 @@ impl Shape {
             Shape::Circle { radius, .. } => Some(std::f64::consts::PI * radius * radius),
             Shape::Polyline { points, closed: true }
             | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => Some(crate::geom::polygon_area(points)),
+            | Shape::Hardscape { boundary: points, .. } => Some(curve::area(points)),
             _ => None,
         }
     }
@@ -440,7 +459,9 @@ impl Document {
             return Err(format!("object {} refers to a missing layer or class", o.id));
         }
         if let Some(o) = self.objects.values().find(|o| {
-            !o.is_finite() || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
+            !o.is_finite()
+                || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
+                || o.shape.vertices().is_some_and(|vs| vs.iter().any(|v| matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0)))
         }) {
             return Err(format!("object {} has an invalid shape", o.id));
         }
@@ -519,11 +540,11 @@ mod tests {
             (Shape::Rect { min: v(0.0, 0.0), max: v(1.0, 1.0) }, "rect"),
             (Shape::Circle { center: v(0.0, 0.0), radius: 1.0 }, "circle"),
             (Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: 0.0, end: 1.0 }, "arc"),
-            (Shape::Polyline { points: vec![], closed: false }, "polyline"),
+            (Shape::Polyline { points: crate::curve::corners(&[]), closed: false }, "polyline"),
             (Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: 1.0 }, "text"),
             (Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: 1.0 }, "plant"),
-            (Shape::LandscapeArea { boundary: vec![], name: "n".into() }, "landscape_area"),
-            (Shape::Hardscape { boundary: vec![], material: "m".into() }, "hardscape"),
+            (Shape::LandscapeArea { boundary: crate::curve::corners(&[]), name: "n".into() }, "landscape_area"),
+            (Shape::Hardscape { boundary: crate::curve::corners(&[]), material: "m".into() }, "hardscape"),
         ];
         for (shape, kind) in cases {
             assert_eq!(shape.kind(), kind);
@@ -538,11 +559,11 @@ mod tests {
             Shape::Rect { min: v(0.0, 0.0), max: v(2.0, 2.0) },
             Shape::Circle { center: v(5.0, 5.0), radius: 1.0 },
             Shape::Arc { center: v(5.0, 5.0), radius: 1.0, start: 0.0, end: 1.0 },
-            Shape::Polyline { points: vec![v(0.0, 0.0), v(1.0, 0.0)], closed: true },
+            Shape::Polyline { points: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0)]), closed: true },
             Shape::Text { at: v(3.0, 3.0), text: "x".into(), height: 2.0 },
             Shape::Plant { at: v(3.0, 3.0), species: "x".into(), spread: 2.0, height: 2.0 },
-            Shape::LandscapeArea { boundary: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], name: "a".into() },
-            Shape::Hardscape { boundary: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], material: "m".into() },
+            Shape::LandscapeArea { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), name: "a".into() },
+            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), material: "m".into() },
         ];
         for s in &mut shapes {
             let before = s.bounds();
@@ -592,9 +613,9 @@ mod tests {
 
         let poly = vec![v(0.0, 0.0), v(4.0, -1.0), v(2.0, 6.0)];
         let expected = (v(0.0, -1.0), v(4.0, 6.0));
-        assert_eq!(Shape::Polyline { points: poly.clone(), closed: false }.bounds(), expected);
-        assert_eq!(Shape::LandscapeArea { boundary: poly.clone(), name: "a".into() }.bounds(), expected);
-        assert_eq!(Shape::Hardscape { boundary: poly, material: "m".into() }.bounds(), expected);
+        assert_eq!(Shape::Polyline { points: crate::curve::corners(&poly.clone()), closed: false }.bounds(), expected);
+        assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&poly.clone()), name: "a".into() }.bounds(), expected);
+        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&poly), material: "m".into() }.bounds(), expected);
     }
 
     #[test]
@@ -604,12 +625,12 @@ mod tests {
         assert!((circle - 4.0 * std::f64::consts::PI).abs() < 1e-9);
 
         let square = vec![v(0.0, 0.0), v(3.0, 0.0), v(3.0, 3.0), v(0.0, 3.0)];
-        assert_eq!(Shape::Polyline { points: square.clone(), closed: true }.area(), Some(9.0));
-        assert_eq!(Shape::Polyline { points: square.clone(), closed: false }.area(), None);
-        assert_eq!(Shape::Hardscape { boundary: square.clone(), material: "m".into() }.area(), Some(9.0));
+        assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: true }.area(), Some(9.0));
+        assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: false }.area(), None);
+        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&square.clone()), material: "m".into() }.area(), Some(9.0));
 
         let tri = vec![v(0.0, 0.0), v(4.0, 0.0), v(0.0, 3.0)];
-        assert_eq!(Shape::LandscapeArea { boundary: tri, name: "t".into() }.area(), Some(6.0));
+        assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&tri), name: "t".into() }.area(), Some(6.0));
 
         let open_shapes = [
             Shape::Line { a: v(0.0, 0.0), b: v(1.0, 0.0) },
@@ -749,12 +770,12 @@ mod tests {
             Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: nan, end: 1.0 },
             Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: 0.0, end: nan },
             Shape::Arc { center: v(0.0, 0.0), radius: nan, start: 0.0, end: 1.0 },
-            Shape::Polyline { points: vec![v(0.0, 0.0), v(nan, 0.0)], closed: false },
+            Shape::Polyline { points: crate::curve::corners(&[v(0.0, 0.0), v(nan, 0.0)]), closed: false },
             Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: nan },
             Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: nan },
             Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: nan, height: 1.0 },
-            Shape::LandscapeArea { boundary: vec![v(nan, 0.0)], name: "n".into() },
-            Shape::Hardscape { boundary: vec![v(0.0, nan)], material: "m".into() },
+            Shape::LandscapeArea { boundary: crate::curve::corners(&[v(nan, 0.0)]), name: "n".into() },
+            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, nan)]), material: "m".into() },
         ];
         for s in bad {
             assert!(!s.is_finite(), "{s:?}");
@@ -896,5 +917,48 @@ mod tests {
         assert_eq!(a, b);
         b.objects.pop();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn old_files_with_plain_points_still_load() {
+        let old = r#"{"format_version":1,"layers":[{"id":1,"name":"L","visible":true,"locked":false,"elevation":0,"scale":100}],
+            "classes":[{"id":0,"name":"None","visible":true,"attrs":{}}],
+            "objects":[{"id":2,"layer":1,"class":0,"shape":{"kind":"hardscape","boundary":[[0,0],[4,0],[4,3]],"material":"m"}},
+                       {"id":3,"layer":1,"class":0,"shape":{"kind":"polyline","points":[[0,0],[1,1]],"closed":false}}],
+            "active_layer":1,"active_class":0,"next_id":4}"#;
+        let doc = Document::from_json(old).unwrap();
+        assert_eq!(doc.object(ObjectId(2)).unwrap().shape.area(), Some(6.0));
+        // Saving writes corners as plain points, so old readers' format is kept for old content.
+        let text = serde_json::to_string(&doc).unwrap();
+        assert!(text.contains(r#""boundary":[[0.0,0.0],[4.0,0.0],[4.0,3.0]]"#), "{text}");
+        // Curved vertices round-trip, and a negative radius is refused on load.
+        let curved = old.replace("[[0,0],[1,1]]", r#"[[0,0],{"p":[1,1],"kind":"arc","radius":5},[3,0]]"#);
+        let doc = Document::from_json(&curved).unwrap();
+        assert_eq!(Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap(), doc);
+        let negative = curved.replace(r#""radius":5"#, r#""radius":-5"#);
+        assert!(Document::from_json(&negative).is_err());
+    }
+
+    #[test]
+    fn curved_bounds_and_area() {
+        let arc = |x: f64, y: f64| Vertex::new(v(x, y), VertexKind::Arc { radius: 10.0 });
+        let rounded = Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into() };
+        // The fillets cut the corners, so the box is still the square (the sides touch it).
+        let (lo, hi) = rounded.bounds();
+        assert_vec_close(lo, v(0.0, 0.0));
+        assert_vec_close(hi, v(100.0, 100.0));
+        let expected = 100.0 * 100.0 - (4.0 - std::f64::consts::PI) * 100.0;
+        assert!((rounded.area().unwrap() - expected).abs() < 1e-6 * expected);
+        // A bulging point on an arc pushes the box out.
+        let bulge = Shape::Polyline {
+            points: vec![
+                Vertex::corner(v(-10.0, 0.0)),
+                Vertex::new(v(0.0, 10.0), VertexKind::PointOnArc),
+                Vertex::corner(v(10.0, 0.0)),
+            ],
+            closed: false,
+        };
+        let (lo, hi) = bulge.bounds();
+        assert!((hi.y - 10.0).abs() < 1e-9 && lo.y == 0.0);
     }
 }

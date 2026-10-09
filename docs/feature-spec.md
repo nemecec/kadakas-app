@@ -109,7 +109,12 @@ Non-goals
 | DRF-06 | Tools for the shapes above with live preview. | P0 | planned |
 | DRF-07 | Rotate, scale, mirror, offset, duplicate array. | P0 | planned |
 | DRF-08 | Fillet, chamfer, trim, extend, split. | P1 | planned |
-| DRF-09 | Polyline editing (vertices, smooth, Bezier, spline). | P1 | planned |
+| DRF-09 | Polyline editing (vertices, smooth, Bezier, spline). | P1 | done |
+| DRF-15 | Curved polylines. A vertex is a corner, a fillet arc with a radius, a point on an arc, a quadratic Bezier control point or a cubic point that the curve passes through (centripetal Catmull-Rom). Landscape area and hardscape boundaries use the same vertices. A plain `[x, y]` in a file is a corner. | P1 | done |
+| DRF-16 | Exact curve math: arc radius is clamped to fit, area is exact (rounded square = s² − (4 − π)r²), bounds and hit tests use a chord tolerance. SVG output uses true `A`, `Q` and `C` path commands. | P1 | done |
+| DRF-17 | `set_vertex` command: change the kind, radius or position of one vertex, undoable. | P1 | done |
+| DRF-18 | Vertex mode buttons in the tool bar for Polyline, Landscape Area and Hardscape: Corner, Bézier, Cubic, Tangent arc, Point on arc, Arc. The Arc radius is a default that stays until changed. | P1 | done |
+| DRF-19 | Object Info vertex list: index, X, Y, kind and radius, all editable. Selected paths show vertex markers. | P1 | done |
 | DRF-10 | Fill, pen, line type, hatch attributes. | P1 | planned |
 | DRF-11 | Dimensions (linear, angular, radial, area). | P1 | planned |
 | DRF-12 | Groups and select-similar. | P1 | planned |
@@ -146,7 +151,7 @@ Non-goals
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
 | UI-09 | Keyboard shortcuts compatible with common CAD habits. | P0 | planned |
 | UI-10 | Light and dark themes. | P1 | planned |
-| UI-11 | Tool modes in tool bar. Keys jump between mode groups. | P1 | planned |
+| UI-11 | Tool modes in tool bar. Keys jump between mode groups. Done for the vertex modes of the path tools (group 1, key U). | P1 | done |
 | UI-12 | Undo history list. | P2 | planned |
 
 ### 4.5 Site model and grading
@@ -192,7 +197,7 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| LND-01 | Landscape area shape: boundary and name. | P0 | done |
+| LND-01 | Landscape area shape: boundary (corners and curved vertices) and name. | P0 | done |
 | LND-02 | Area calculation. | P0 | done |
 | LND-03 | Area report via `report.areas`. | P0 | done |
 | LND-04 | Landscape area style (mix of plants). | P0 | planned |
@@ -207,7 +212,7 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| HRD-01 | Hardscape shape: boundary and material. | P0 | done |
+| HRD-01 | Hardscape shape: boundary (corners and curved vertices) and material. | P0 | done |
 | HRD-02 | Hardscape style resource (surface, components, thickness). | P1 | planned |
 | HRD-03 | Area, perimeter, volume quantities. | P1 | planned |
 | HRD-04 | Edge offsets from the drawn line. | P1 | planned |
@@ -343,7 +348,7 @@ Non-goals
 | API-06 | `selection.get`, `selection.set`. | P0 | done |
 | API-07 | `render.svg`. | P0 | done |
 | API-08 | `report.plants`, `report.areas`. | P0 | done |
-| API-09 | Serializable Command enum (add/delete/move/modify, set_data, layers, classes, batch). | P0 | done |
+| API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |
 | API-12 | `cadektor mcp` server for Claude Code. | P0 | done |

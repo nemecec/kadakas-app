@@ -3,7 +3,7 @@
 
 use cadektor_core::api::Session;
 use cadektor_core::command::{Command, Outcome};
-use cadektor_core::model::{Attributes, Color, ObjectId, Shape};
+use cadektor_core::model::{Attributes, Color, ObjectId, Shape, Vertex, VertexKind};
 use egui::{DragValue, Ui};
 use glam::DVec2;
 
@@ -11,7 +11,7 @@ use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::keymap::{Action, Keymap};
 use crate::snap::{SnapConfig, SnapResult};
-use crate::tools::{Tool, ToolMachine, ToolSettings};
+use crate::tools::{DEFAULT_ARC_RADIUS, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
@@ -111,7 +111,28 @@ fn tool_button(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, tool: Tool) {
     }
 }
 
-pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap) {
+/// The vertex mode buttons and the default arc radius, for the tools that draw paths.
+pub fn vertex_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, keys: &Keymap) {
+    ui.add_space(8.0);
+    ui.label("Vertex mode");
+    let key = keys.hint(Action::ToolMode1);
+    let tip = if key.is_empty() { String::new() } else { format!(" ({key} cycles the modes)") };
+    ui.horizontal_wrapped(|ui| {
+        for mode in VertexMode::ALL {
+            let r = ui.selectable_label(settings.vertex_mode == mode, mode.label());
+            if r.on_hover_text(format!("{} vertex{tip}", mode.label())).clicked() {
+                settings.vertex_mode = mode;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Arc radius");
+        let r = ui.add(DragValue::new(&mut settings.arc_radius).speed(10.0).range(0.0..=1.0e7).suffix(" mm"));
+        r.on_hover_text("Radius of new arc vertices. Type a value in the Data bar (Tab) in Arc mode.");
+    });
+}
+
+pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mut ToolSettings) {
     ui.heading("Tools");
     ui.separator();
     ui.label("Basic");
@@ -122,6 +143,9 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap) {
     ui.label("Landscape");
     for t in Tool::LANDSCAPE {
         tool_button(ui, m, keys, t);
+    }
+    if has_vertex_modes(m.tool()) {
+        vertex_mode_bar(ui, settings, keys);
     }
 }
 
@@ -167,9 +191,10 @@ pub fn data_bar(
             _ => {}
         }
         let anchor = m.anchor();
-        let fields = databar::fields(m.tool(), anchor.is_some());
+        let arc = has_vertex_modes(m.tool()) && s.vertex_mode == VertexMode::Arc;
+        let fields = databar::fields(m.tool(), anchor.is_some(), arc);
         if !fields.is_empty() {
-            let live = databar::live_values(m.tool(), anchor, cursor);
+            let live = databar::live_values(m.tool(), anchor, cursor, arc, s.arc_radius);
             let mut focused = false;
             let target = entry.want_focus.then_some(entry.focus);
             for (i, f) in fields.iter().enumerate() {
@@ -202,7 +227,7 @@ pub fn data_bar(
         } else {
             entry.active = false;
         }
-        let readout = m.readout(cursor);
+        let readout = m.readout(cursor, s);
         if !readout.is_empty() {
             ui.monospace(readout);
         }
@@ -235,6 +260,10 @@ impl Fields {
         let r = ui.add(DragValue::new(v).speed(speed));
         self.commit |= r.drag_stopped() || r.lost_focus();
     }
+    fn num_range(&mut self, ui: &mut Ui, v: &mut f64) {
+        let r = ui.add(DragValue::new(v).speed(10.0).range(0.0..=1.0e9));
+        self.commit |= r.drag_stopped() || r.lost_focus();
+    }
     fn xy(&mut self, ui: &mut Ui, label: &str, p: &mut DVec2) {
         ui.label(label);
         ui.horizontal(|ui| {
@@ -262,14 +291,83 @@ impl Fields {
         *rad = deg.to_radians();
         ui.end_row();
     }
-    fn points(&mut self, ui: &mut Ui, pts: &mut [DVec2]) {
-        ui.label("Points");
-        ui.label(format!("{}", pts.len()));
+    fn count(&mut self, ui: &mut Ui, n: usize) {
+        ui.label("Vertices");
+        ui.label(format!("{n}"));
         ui.end_row();
-        for (i, p) in pts.iter_mut().enumerate().take(64) {
-            self.xy(ui, &format!("  {}", i + 1), p);
-        }
     }
+}
+
+/// Names of the vertex kinds in the vertex table.
+pub fn kind_label(kind: VertexKind) -> &'static str {
+    match kind {
+        VertexKind::Corner => "Corner",
+        VertexKind::Arc { .. } => "Arc",
+        VertexKind::PointOnArc => "Point on arc",
+        VertexKind::Bezier => "B\u{e9}zier",
+        VertexKind::Cubic => "Cubic",
+    }
+}
+
+const KIND_CHOICES: [VertexKind; 5] = [
+    VertexKind::Corner,
+    VertexKind::Arc { radius: DEFAULT_ARC_RADIUS },
+    VertexKind::PointOnArc,
+    VertexKind::Bezier,
+    VertexKind::Cubic,
+];
+
+/// The most vertex rows that the palette shows.
+const MAX_VERTEX_ROWS: usize = 500;
+
+/// The vertex list: index, X, Y, kind and radius. Returns true when an edit is finished.
+fn vertex_table(ui: &mut Ui, id: ObjectId, vertices: &mut [Vertex]) -> bool {
+    let mut f = Fields { commit: false };
+    egui::ScrollArea::vertical().max_height(260.0).id_salt("vertex_scroll").show(ui, |ui| {
+        egui::Grid::new("vertex_table").num_columns(5).striped(true).show(ui, |ui| {
+            for h in ["#", "X", "Y", "Kind", "Radius"] {
+                ui.strong(h);
+            }
+            ui.end_row();
+            for (i, v) in vertices.iter_mut().enumerate().take(MAX_VERTEX_ROWS) {
+                ui.label(format!("{i}"));
+                f.num(ui, &mut v.p.x, 10.0);
+                f.num(ui, &mut v.p.y, 10.0);
+                let before = kind_label(v.kind);
+                egui::ComboBox::from_id_salt(("vertex_kind", id, i)).selected_text(before).width(90.0).show_ui(ui, |ui| {
+                    for choice in KIND_CHOICES {
+                        let same = kind_label(choice) == before;
+                        if ui.selectable_label(same, kind_label(choice)).clicked() && !same {
+                            v.kind = choice;
+                            f.commit = true;
+                        }
+                    }
+                });
+                if let VertexKind::Arc { radius } = &mut v.kind {
+                    f.num_range(ui, radius);
+                } else {
+                    ui.label("-");
+                }
+                ui.end_row();
+            }
+        });
+    });
+    f.commit
+}
+
+/// The commands that turn the vertices `base` into `edited`: one `SetVertex` per changed vertex.
+pub fn vertex_edit_commands(id: ObjectId, base: &[Vertex], edited: &[Vertex]) -> Vec<Command> {
+    base.iter()
+        .zip(edited)
+        .enumerate()
+        .filter(|(_, (b, e))| b != e)
+        .map(|(index, (b, e))| Command::SetVertex {
+            id,
+            index,
+            kind: (b.kind != e.kind).then_some(e.kind),
+            p: (b.p != e.p).then_some(e.p),
+        })
+        .collect()
 }
 
 fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
@@ -297,7 +395,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             ui.label("Closed");
             f.commit |= ui.checkbox(closed, "").changed();
             ui.end_row();
-            f.points(ui, points);
+            f.count(ui, points.len());
         }
         Shape::Text { at, text, height } => {
             f.xy(ui, "Position", at);
@@ -312,11 +410,11 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
         }
         Shape::LandscapeArea { boundary, name } => {
             f.text(ui, "Name", name);
-            f.points(ui, boundary);
+            f.count(ui, boundary.len());
         }
         Shape::Hardscape { boundary, material } => {
             f.text(ui, "Material", material);
-            f.points(ui, boundary);
+            f.count(ui, boundary.len());
         }
     });
     f.commit
@@ -367,6 +465,18 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     ui.label(format!("{}  (id {})", obj.shape.kind(), id));
     let edited = edit.edited.as_mut().expect("edit buffer");
     let commit = edit_shape(ui, edited);
+    // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
+    if edited.vertices().is_some() {
+        let base_vertices = edit.base.as_ref().and_then(Shape::vertices).cloned().unwrap_or_default();
+        let finished = vertex_table(ui, id, edited.vertices_mut().expect("has vertices"));
+        let cmds = vertex_edit_commands(id, &base_vertices, edited.vertices().expect("has vertices"));
+        if finished && !cmds.is_empty() {
+            let cmd = if cmds.len() == 1 { cmds[0].clone() } else { Command::Batch { commands: cmds } };
+            run_command(session, &cmd, status);
+            *edit = InfoEdit::default();
+            return;
+        }
+    }
     if commit && Some(&*edited) != edit.base.as_ref() {
         let cmd = Command::ModifyObject { id, shape: Some(edited.clone()), layer: None, class: None, attrs: None };
         if run_command(session, &cmd, status).is_none() {
@@ -541,5 +651,88 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
     }
     for c in cmds {
         run_command(session, &c, status);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadektor_core::curve;
+
+    fn rounded() -> Shape {
+        let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 100.0 });
+        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(1000.0, 0.0), arc(1000.0, 1000.0), arc(0.0, 1000.0)], material: "m".into() }
+    }
+
+    fn add(session: &mut Session, shape: Shape) -> ObjectId {
+        let cmd = Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() };
+        ObjectId(session.editor.execute(&cmd).unwrap().created[0])
+    }
+
+    #[test]
+    fn vertex_edits_become_set_vertex_commands() {
+        let mut s = Session::default();
+        let id = add(&mut s, rounded());
+        let base = s.editor.doc.object(id).unwrap().shape.vertices().unwrap().clone();
+        assert!(vertex_edit_commands(id, &base, &base).is_empty());
+        let mut edited = base.clone();
+        edited[1].kind = VertexKind::Arc { radius: 250.0 };
+        edited[2].p = DVec2::new(1100.0, 1000.0);
+        edited[3].kind = VertexKind::Bezier;
+        edited[3].p = DVec2::new(-10.0, 1000.0);
+        let cmds = vertex_edit_commands(id, &base, &edited);
+        assert_eq!(
+            cmds,
+            vec![
+                Command::SetVertex { id, index: 1, kind: Some(VertexKind::Arc { radius: 250.0 }), p: None },
+                Command::SetVertex { id, index: 2, kind: None, p: Some(DVec2::new(1100.0, 1000.0)) },
+                Command::SetVertex { id, index: 3, kind: Some(VertexKind::Bezier), p: Some(DVec2::new(-10.0, 1000.0)) },
+            ]
+        );
+        let mut status = String::new();
+        assert!(run_command(&mut s, &Command::Batch { commands: cmds }, &mut status).is_some());
+        assert_eq!(s.editor.doc.object(id).unwrap().shape.vertices().unwrap(), &edited);
+        // One undo step brings all three back.
+        assert!(s.editor.undo());
+        assert_eq!(s.editor.doc.object(id).unwrap().shape.vertices().unwrap(), &base);
+    }
+
+    #[test]
+    fn kind_labels() {
+        assert_eq!(kind_label(VertexKind::Corner), "Corner");
+        assert_eq!(kind_label(VertexKind::Arc { radius: 1.0 }), "Arc");
+        assert_eq!(kind_label(VertexKind::PointOnArc), "Point on arc");
+        assert_eq!(kind_label(VertexKind::Bezier), "B\u{e9}zier");
+        assert_eq!(kind_label(VertexKind::Cubic), "Cubic");
+        assert_eq!(KIND_CHOICES.len(), 5);
+    }
+
+    #[test]
+    fn palettes_draw_for_a_curved_selection() {
+        let ctx = egui::Context::default();
+        let mut s = Session::default();
+        let id = add(&mut s, rounded());
+        let poly = add(
+            &mut s,
+            Shape::Polyline {
+                points: vec![Vertex::corner(DVec2::ZERO), Vertex::new(DVec2::new(5.0, 5.0), VertexKind::Bezier), Vertex::corner(DVec2::new(10.0, 0.0))],
+                closed: false,
+            },
+        );
+        let (mut edit, mut status) = (InfoEdit::default(), String::new());
+        let mut settings = ToolSettings::default();
+        let mut machine = ToolMachine::default();
+        let keys = Keymap::defaults();
+        for sel in [id, poly] {
+            s.selection = vec![sel];
+            for tool in [Tool::Select, Tool::Polyline] {
+                machine.set_tool(tool);
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    object_info(ui, &mut s, &mut edit, &mut status);
+                    tool_panel(ui, &mut machine, &keys, &mut settings);
+                });
+            }
+        }
+        assert!(curve::path(s.editor.doc.object(poly).unwrap().shape.vertices().unwrap(), false).segs.len() == 1);
     }
 }

@@ -13,7 +13,7 @@ use crate::file_io;
 use crate::keymap::{self, Action, Chord, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
 use crate::snap::{self, SnapConfig, SnapResult};
-use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings};
+use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
 use crate::view::{View, grid_step};
 
 /// Pan step of an arrow key, in px.
@@ -241,6 +241,12 @@ impl CadektorApp {
                 }
             }
             Action::Finish => self.send(Input::Enter),
+            Action::ToolMode1 => self.mode_group(1),
+            Action::ToolMode2 => self.mode_group(2),
+            Action::ToolMode3 => self.mode_group(3),
+            Action::ToolMode4 => self.mode_group(4),
+            Action::ToolMode5 => self.mode_group(5),
+            Action::ToolMode6 => self.mode_group(6),
             Action::NudgeLeft => self.nudge(DVec2::NEG_X),
             Action::NudgeRight => self.nudge(DVec2::X),
             Action::NudgeUp => self.nudge(DVec2::Y),
@@ -301,10 +307,39 @@ impl CadektorApp {
         }
     }
 
+    /// True when the Data bar has the arc Radius field: a path tool in Arc vertex mode.
+    fn arc_fields(&self) -> bool {
+        has_vertex_modes(self.machine.tool()) && self.settings.vertex_mode == VertexMode::Arc
+    }
+
+    /// A valid radius typed in the Data bar becomes the default radius of new arc vertices.
+    /// It stays after the point is placed.
+    fn apply_typed_radius(&mut self) {
+        let anchored = self.machine.anchor().is_some();
+        if let Some(r) = databar::typed_arc_radius(self.machine.tool(), anchored, self.arc_fields(), &self.entry.values()) {
+            self.settings.arc_radius = r;
+        }
+    }
+
+    /// Keys U, I, O, P, [ and ]: cycle the modes of a group of mode buttons. The path tools
+    /// have one group (the vertex modes), so only group 1 does anything for them.
+    fn mode_group(&mut self, group: usize) {
+        let tool = self.machine.tool();
+        if !has_vertex_modes(tool) {
+            self.status = format!("The {} tool has no mode buttons", tool.name());
+        } else if group == 1 {
+            self.settings.vertex_mode = self.settings.vertex_mode.next();
+            self.status = format!("Vertex mode: {}", self.settings.vertex_mode.label());
+        } else {
+            self.status = format!("The {} tool has only one group of mode buttons", tool.name());
+        }
+    }
+
     /// Enter in a Data bar field: click at the typed point, as if the user had clicked there.
     fn commit_entry(&mut self, ctx: &egui::Context) {
-        let target = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values());
+        let target = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values(), self.arc_fields());
         let Some(p) = target else { return };
+        self.apply_typed_radius();
         let was_anchored = self.machine.anchor().is_some();
         self.send(Input::Press { p, shift: false });
         self.entry.clear_text();
@@ -401,13 +436,15 @@ impl CadektorApp {
             self.live_cursor = self.cursor;
             // Typed Data bar values override the mouse.
             if self.entry.any_typed()
-                && let Some(p) = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values())
+                && let Some(p) = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values(), self.arc_fields())
             {
                 self.cursor = p;
             }
         } else {
             self.snap_hit = None;
         }
+
+        self.apply_typed_radius();
 
         // Tool events.
         if !panning && !space {
@@ -463,7 +500,7 @@ impl eframe::App for CadektorApp {
         if std::mem::take(&mut self.title_dirty) {
             self.set_title(&ctx);
         }
-        self.entry.sync(self.machine.tool(), self.machine.anchor().is_some());
+        self.entry.sync(self.machine.tool(), self.machine.anchor().is_some(), self.arc_fields());
         self.handle_keys(&ctx);
 
         let (can_undo, can_redo) = (self.session.editor.can_undo(), self.session.editor.can_redo());
@@ -498,7 +535,7 @@ impl eframe::App for CadektorApp {
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys));
+        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings));
         egui::Panel::right("palettes").default_size(280.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
@@ -525,7 +562,7 @@ mod tests {
         let input = egui::RawInput { events, ..Default::default() };
         let _ = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            app.entry.sync(app.machine.tool(), app.machine.anchor().is_some());
+            app.entry.sync(app.machine.tool(), app.machine.anchor().is_some(), app.arc_fields());
             app.handle_keys(&ctx);
             egui::Panel::bottom("databar").show(ui, |ui| {
                 panels::data_bar(ui, &app.machine, &mut app.settings, &mut app.entry, app.live_cursor, None, app.snap_cfg);
@@ -586,5 +623,88 @@ mod tests {
         assert_eq!(app.machine.anchor(), Some(DVec2::ZERO));
         frame(&mut app, &ctx, key(Key::Backspace, egui::Modifiers::NONE));
         assert!(!app.machine.is_busy());
+    }
+
+    #[test]
+    fn mode_group_keys_cycle_the_vertex_modes() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let none = egui::Modifiers::NONE;
+        // Without a path tool the keys only say that there are no modes.
+        frame(&mut app, &ctx, key(Key::U, none));
+        assert_eq!(app.settings.vertex_mode, VertexMode::Corner);
+        assert!(app.status.contains("no mode buttons"), "{}", app.status);
+        app.machine.set_tool(Tool::Hardscape);
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            frame(&mut app, &ctx, key(Key::U, none));
+            seen.push(app.settings.vertex_mode);
+        }
+        assert_eq!(
+            seen,
+            [VertexMode::Bezier, VertexMode::Cubic, VertexMode::TangentArc, VertexMode::PointOnArc, VertexMode::Arc, VertexMode::Corner]
+        );
+        assert_eq!(app.status, "Vertex mode: Corner");
+        // The other groups have no buttons for these tools. They do not change the mode.
+        for k in [Key::I, Key::O, Key::P, Key::OpenBracket, Key::CloseBracket] {
+            frame(&mut app, &ctx, key(k, none));
+            assert_eq!(app.settings.vertex_mode, VertexMode::Corner);
+            assert!(app.status.contains("only one group"), "{}", app.status);
+        }
+        // The tool keys still work: P is a mode key, 5 selects the Polyline tool.
+        frame(&mut app, &ctx, key(Key::Num5, none));
+        assert_eq!(app.machine.tool(), Tool::Polyline);
+    }
+
+    #[test]
+    fn arc_mode_gives_a_radius_field_and_the_value_persists() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let none = egui::Modifiers::NONE;
+        app.machine.set_tool(Tool::Polyline);
+        // Corner mode: only X and Y.
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.entry.text.len(), 2);
+        app.settings.vertex_mode = VertexMode::Arc;
+        frame(&mut app, &ctx, vec![]);
+        assert_eq!(app.entry.text.len(), 3);
+        // Tab goes through X, Y and Radius.
+        frame(&mut app, &ctx, key(Key::Tab, none));
+        frame(&mut app, &ctx, key(Key::Tab, none));
+        frame(&mut app, &ctx, key(Key::Tab, none));
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entry.active);
+        assert_eq!(app.entry.focus, 2);
+        // A typed radius becomes the default for the next arc vertices.
+        app.entry.text[2] = "750".into();
+        app.apply_typed_radius();
+        assert_eq!(app.settings.arc_radius, 750.0);
+        // Bad or negative text keeps the old value.
+        app.entry.text[2] = "-5".into();
+        app.apply_typed_radius();
+        app.entry.text[2] = "abc".into();
+        app.apply_typed_radius();
+        assert_eq!(app.settings.arc_radius, 750.0);
+        // Enter places the first point with X and Y typed, and uses the radius.
+        app.entry.text = vec!["100".into(), "200".into(), "300".into()];
+        app.commit_entry(&ctx);
+        assert_eq!(app.machine.anchor(), Some(DVec2::new(100.0, 200.0)));
+        assert_eq!(app.settings.arc_radius, 300.0);
+        frame(&mut app, &ctx, vec![]);
+        // After the first click the fields are Length, Angle and Radius.
+        assert_eq!(app.entry.text.len(), 3);
+        app.entry.text = vec!["100".into(), "0".into(), "50".into()];
+        app.commit_entry(&ctx);
+        assert_eq!(app.machine.anchor(), Some(DVec2::new(200.0, 200.0)));
+        assert_eq!(app.settings.arc_radius, 50.0);
+        // The radius is kept when the fields are empty again.
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.entry.any_typed());
+        assert_eq!(app.settings.arc_radius, 50.0);
+        app.send(Input::Press { p: DVec2::new(200.0, 300.0), shift: false });
+        app.send(Input::Enter);
+        let o = app.session.editor.doc.objects.values().next().unwrap();
+        let vs = o.shape.vertices().unwrap();
+        assert_eq!(vs[1].kind, cadektor_core::model::VertexKind::Arc { radius: 50.0 });
     }
 }

@@ -86,6 +86,7 @@ impl Session {
             "describe" => json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
                 "units": "millimeters, Y axis up, angles in radians",
+                "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
             }),
             "execute" => {
@@ -245,6 +246,8 @@ fn command_examples() -> Value {
         {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5000, 3000]}},
         {"op": "add_object", "shape": {"kind": "plant", "at": [1000, 1000], "species": "Acer campestre", "spread": 4000, "height": 8000}},
         {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0,0],[3000,0],[3000,1200],[0,1200]], "material": "Granite setts"}},
+        {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[0,0], {"p": [3000,0], "kind": "arc", "radius": 400}, {"p": [3000,2000], "kind": "arc", "radius": 400}, [0,2000]]}},
+        {"op": "set_vertex", "id": 2, "index": 1, "kind": {"kind": "arc", "radius": 250}},
         {"op": "move_objects", "ids": [2], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},
         {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}]}
@@ -316,7 +319,7 @@ mod tests {
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
-        assert_eq!(d["command_examples"].as_array().unwrap().len(), 6);
+        assert_eq!(d["command_examples"].as_array().unwrap().len(), 8);
 
         // Every advertised method is handled: none of them is "unknown method".
         for (name, _) in METHODS {

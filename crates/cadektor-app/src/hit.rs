@@ -1,5 +1,6 @@
 //! Hit testing and box selection against document objects.
 
+use cadektor_core::curve;
 use cadektor_core::geom::{dist_to_segment, point_in_polygon};
 use cadektor_core::model::{Document, Object, ObjectId, Shape, arc_sweep};
 use glam::DVec2;
@@ -10,6 +11,11 @@ fn edge_dist(points: &[DVec2], closed: bool, p: DVec2) -> f64 {
     (0..segs)
         .map(|i| dist_to_segment(p, points[i], points[(i + 1) % n]))
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Chord tolerance when testing curves: a tenth of the pick distance.
+fn curve_tolerance(tol: f64) -> f64 {
+    (tol / 10.0).max(1e-3)
 }
 
 /// True if the direction `a` is inside the counterclockwise sweep from `start` to `end`.
@@ -36,10 +42,12 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             (v.length() - radius).abs() <= tol && angle_in_arc(v.y.atan2(v.x), *start, *end)
         }
         Shape::Polyline { points, closed } => {
-            edge_dist(points, *closed, p) <= tol || (*closed && filled && point_in_polygon(p, points))
+            let flat = curve::flatten(points, *closed, curve_tolerance(tol));
+            edge_dist(&flat, *closed, p) <= tol || (*closed && filled && point_in_polygon(p, &flat))
         }
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
-            edge_dist(boundary, true, p) <= tol || point_in_polygon(p, boundary)
+            let flat = curve::flatten(boundary, true, curve_tolerance(tol));
+            edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
         Shape::Plant { at, spread, .. } => p.distance(*at) <= spread / 2.0 + tol,
         Shape::Text { .. } => {
@@ -120,7 +128,7 @@ mod tests {
         let doc = doc_with(vec![
             Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(100.0) },
             Shape::Hardscape {
-                boundary: vec![DVec2::new(200.0, 0.0), DVec2::new(300.0, 0.0), DVec2::new(300.0, 100.0)],
+                boundary: cadektor_core::curve::corners(&[DVec2::new(200.0, 0.0), DVec2::new(300.0, 0.0), DVec2::new(300.0, 100.0)]),
                 material: "x".into(),
             },
         ]);
@@ -181,5 +189,23 @@ mod tests {
         let b = (DVec2::new(-20.0, -20.0), DVec2::new(105.0, 20.0));
         assert_eq!(box_select(&doc, b.0, b.1, false).len(), 1);
         assert_eq!(box_select(&doc, b.0, b.1, true).len(), 2);
+    }
+
+    #[test]
+    fn rounded_corners_are_hit_on_the_curve_not_the_corner() {
+        use cadektor_core::model::{Vertex, VertexKind};
+        let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 100.0 });
+        let shape = Shape::Polyline { points: vec![arc(0.0, 0.0), arc(1000.0, 0.0), arc(1000.0, 1000.0), arc(0.0, 1000.0)], closed: true };
+        // The sharp corner is cut off: a click on it misses, a click on the arc hits.
+        assert!(!shape_hit(&shape, false, DVec2::new(0.0, 0.0), 5.0));
+        let on_arc = DVec2::new(100.0, 100.0) - DVec2::new(1.0, 1.0).normalize() * 100.0;
+        assert!(shape_hit(&shape, false, on_arc, 5.0));
+        assert!(shape_hit(&shape, false, DVec2::new(500.0, 0.0), 5.0));
+        // Inside is hit when filled.
+        assert!(shape_hit(&shape, true, DVec2::new(500.0, 500.0), 5.0));
+        assert!(!shape_hit(&shape, false, DVec2::new(500.0, 500.0), 5.0));
+        let area = Shape::Hardscape { boundary: shape.vertices().unwrap().clone(), material: "m".into() };
+        assert!(shape_hit(&area, false, DVec2::new(500.0, 500.0), 5.0));
+        assert!(!shape_hit(&area, false, DVec2::new(-20.0, -20.0), 5.0));
     }
 }

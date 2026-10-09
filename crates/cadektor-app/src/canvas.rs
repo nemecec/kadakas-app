@@ -1,6 +1,7 @@
 //! Painting the drawing area. Pure drawing: no document changes here.
 
-use cadektor_core::model::{Color, Document, Object, ObjectId, Shape, arc_sweep};
+use cadektor_core::curve;
+use cadektor_core::model::{Color, Document, Object, ObjectId, Shape, Vertex, arc_sweep};
 use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
@@ -64,6 +65,11 @@ fn arc_points(center: DVec2, r: f64, start: f64, end: f64) -> Vec<DVec2> {
     (0..=n).map(|i| center + DVec2::from_angle(start + sweep * i as f64 / n as f64) * r).collect()
 }
 
+/// Chord tolerance for drawing curves: a quarter of a screen pixel, in model units.
+fn curve_tolerance(zoom: f64) -> f64 {
+    (0.25 / zoom).max(1e-3)
+}
+
 /// Draws one shape. `offset` is added to every model point (used for drag ghosts).
 pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offset: DVec2) {
     let s = |p: DVec2| view.to_screen(p + offset);
@@ -85,11 +91,12 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         }
         Shape::Arc { center, radius, start, end } => path(&arc_points(*center, *radius, *start, *end), false),
         Shape::Polyline { points, closed } => {
+            let flat = curve::flatten(points, *closed, curve_tolerance(view.zoom));
             if *closed {
-                let sp: Vec<Pos2> = points.iter().map(|p| s(*p)).collect();
-                fill_polygon(painter, points, &sp, st.fill);
+                let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+                fill_polygon(painter, &flat, &sp, st.fill);
             }
-            path(points, *closed);
+            path(&flat, *closed);
         }
         Shape::Text { at, text, height } => {
             let size = (*height * view.zoom) as f32;
@@ -108,9 +115,23 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             painter.line_segment([c - egui::vec2(0.0, k), c + egui::vec2(0.0, k)], stroke);
         }
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
-            let sp: Vec<Pos2> = boundary.iter().map(|p| s(*p)).collect();
-            fill_polygon(painter, boundary, &sp, st.fill);
-            path(boundary, true);
+            let flat = curve::flatten(boundary, true, curve_tolerance(view.zoom));
+            let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+            fill_polygon(painter, &flat, &sp, st.fill);
+            path(&flat, true);
+        }
+    }
+}
+
+/// Small squares at the vertices of a selected path. Filled: on the curve (corner, point on arc).
+/// Hollow: the curve is shaped by the point but may not pass through it (arc, Bezier, cubic).
+fn draw_vertex_markers(painter: &Painter, view: &View, vertices: &[Vertex]) {
+    for v in vertices.iter().take(1000) {
+        let r = Rect::from_center_size(view.to_screen(v.p), egui::vec2(6.0, 6.0));
+        if matches!(v.kind, cadektor_core::model::VertexKind::Corner | cadektor_core::model::VertexKind::PointOnArc) {
+            painter.rect_filled(r, 0.0, SELECT_COLOR);
+        } else {
+            painter.rect(r, 0.0, Color32::WHITE, Stroke::new(1.0, SELECT_COLOR), egui::StrokeKind::Middle);
         }
     }
 }
@@ -163,6 +184,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
             draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
+            if let Some(vs) = o.shape.vertices() {
+                draw_vertex_markers(&painter, view, vs);
+            }
             let (lo, hi) = o.shape.bounds();
             painter.rect_stroke(
                 Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(3.0),
@@ -196,10 +220,11 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
     match f.preview {
         Preview::None => {}
         Preview::Shape(shape) => draw_shape(painter, view, shape, st, DVec2::ZERO),
-        Preview::Path { points, closed } => {
+        Preview::Path { vertices, closed } => {
+            let points = curve::flatten(vertices, *closed, curve_tolerance(view.zoom));
             let sp: Vec<Pos2> = points.iter().map(|p| view.to_screen(*p)).collect();
             if *closed && points.len() >= 3 {
-                fill_polygon(painter, points, &sp, st.fill);
+                fill_polygon(painter, &points, &sp, st.fill);
             }
             painter.add(PathShape { points: sp, closed: *closed, fill: Color32::TRANSPARENT, stroke: PathStroke::new(1.5, PREVIEW_COLOR) });
         }

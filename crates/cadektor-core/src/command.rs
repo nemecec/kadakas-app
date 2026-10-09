@@ -39,6 +39,17 @@ pub enum Command {
         #[serde(default)]
         attrs: Option<Attributes>,
     },
+    /// Change one vertex of a polyline, landscape area or hardscape.
+    /// Missing fields stay unchanged. `kind` is a vertex kind such as
+    /// `{"kind": "arc", "radius": 50}`.
+    SetVertex {
+        id: ObjectId,
+        index: usize,
+        #[serde(default)]
+        kind: Option<VertexKind>,
+        #[serde(default)]
+        p: Option<DVec2>,
+    },
     /// Change the record data of one object: `set` merges keys, `remove`
     /// deletes keys. Keys in `set` are applied first.
     SetData {
@@ -400,6 +411,27 @@ impl<'a> Tx<'a> {
                     o.attrs = a.clone();
                 }
             }
+            Command::SetVertex { id, index, kind, p } => {
+                self.editable(*id)?;
+                let len = self.doc.object(*id).and_then(|o| o.shape.vertices()).map(Vec::len);
+                match len {
+                    None => return Err(CommandError::Invalid("object has no vertices".into())),
+                    Some(len) if *index >= len => {
+                        return Err(CommandError::Invalid(format!("vertex index {index} is out of range (0..{len})")))
+                    }
+                    Some(_) => {}
+                }
+                let mut v = self.doc.object(*id).expect("checked").shape.vertices().expect("checked")[*index];
+                if let Some(k) = kind {
+                    v.kind = *k;
+                }
+                if let Some(p) = p {
+                    v.p = *p;
+                }
+                validate_vertex(&v)?;
+                self.touch(*id);
+                self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
+            }
             Command::SetData { id, set, remove } => {
                 self.editable(*id)?;
                 self.touch(*id);
@@ -546,10 +578,23 @@ fn validate_layer_numbers(elevation: Option<f64>, scale: Option<f64>) -> Result<
     Ok(())
 }
 
+fn validate_vertex(v: &Vertex) -> Result<(), CommandError> {
+    if !v.is_finite() {
+        return Err(CommandError::Invalid(NOT_FINITE.into()));
+    }
+    if matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0) {
+        return Err(CommandError::Invalid("vertex radius must be zero or more".into()));
+    }
+    Ok(())
+}
+
 fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     let bad = |m: &str| Err(CommandError::Invalid(m.into()));
     if !shape.is_finite() {
         return bad(NOT_FINITE);
+    }
+    if let Some(vs) = shape.vertices() {
+        vs.iter().try_for_each(validate_vertex)?;
     }
     match shape {
         Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => bad("radius must be positive"),
@@ -746,13 +791,13 @@ mod tests {
             (Shape::Arc { center: DVec2::ZERO, radius: -1.0, start: 0.0, end: 1.0 }, "radius must be positive"),
             (Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 0.0, height: 1.0 }, "spread must be positive"),
             (Shape::Text { at: DVec2::ZERO, text: "x".into(), height: -2.0 }, "text height must be positive"),
-            (Shape::Polyline { points: vec![DVec2::ZERO], closed: false }, "polyline needs 2 or more points"),
+            (Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO]), closed: false }, "polyline needs 2 or more points"),
             (
-                Shape::LandscapeArea { boundary: vec![DVec2::ZERO, DVec2::X], name: "a".into() },
+                Shape::LandscapeArea { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), name: "a".into() },
                 "boundary needs 3 or more points",
             ),
             (
-                Shape::Hardscape { boundary: vec![DVec2::ZERO, DVec2::X], material: "m".into() },
+                Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), material: "m".into() },
                 "boundary needs 3 or more points",
             ),
         ];
@@ -766,8 +811,8 @@ mod tests {
 
         // The smallest valid shapes are accepted.
         let mut ed = Editor::default();
-        add_to(&mut ed, Shape::Polyline { points: vec![DVec2::ZERO, DVec2::X], closed: false });
-        add_to(&mut ed, Shape::Hardscape { boundary: vec![DVec2::ZERO, DVec2::X, DVec2::Y], material: "m".into() });
+        add_to(&mut ed, Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), closed: false });
+        add_to(&mut ed, Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]), material: "m".into() });
         assert_eq!(ed.doc.objects.len(), 2);
     }
 
@@ -1305,5 +1350,67 @@ mod tests {
         assert_eq!(ed.doc.layer(FIRST_LAYER).unwrap().kind, LayerKind::Design);
         let json = serde_json::to_string(&ed.doc).unwrap();
         assert_eq!(Document::from_json(&json).unwrap(), ed.doc);
+    }
+
+    fn rounded_square() -> Shape {
+        let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 10.0 });
+        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into() }
+    }
+
+    #[test]
+    fn set_vertex_changes_one_vertex_and_undoes() {
+        let mut ed = Editor::default();
+        let id = add_to(&mut ed, rounded_square());
+        let before = ed.doc.clone();
+        let set = |index, kind, p| Command::SetVertex { id, index, kind, p };
+        ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None)).unwrap();
+        ed.execute(&set(2, None, Some(DVec2::new(120.0, 110.0)))).unwrap();
+        ed.execute(&set(3, Some(VertexKind::Bezier), Some(DVec2::new(-5.0, 99.0)))).unwrap();
+        let vs = ed.doc.object(id).unwrap().shape.vertices().unwrap().clone();
+        assert_eq!(vs[1], Vertex::new(DVec2::new(100.0, 0.0), VertexKind::Arc { radius: 25.0 }));
+        assert_eq!(vs[2], Vertex::new(DVec2::new(120.0, 110.0), VertexKind::Arc { radius: 10.0 }));
+        assert_eq!(vs[3], Vertex::new(DVec2::new(-5.0, 99.0), VertexKind::Bezier));
+        // Repeating a change is a no-op and is not recorded.
+        assert_eq!(ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None)).unwrap().created, Vec::<u64>::new());
+        for _ in 0..3 {
+            assert!(ed.undo());
+        }
+        assert_eq!(ed.doc, before);
+    }
+
+    #[test]
+    fn set_vertex_errors_change_nothing() {
+        let mut ed = Editor::default();
+        let id = add_to(&mut ed, rounded_square());
+        let circle_id = add_to(&mut ed, circle());
+        let before = ed.doc.clone();
+        let invalid = |m: &str| Err(CommandError::Invalid(m.into()));
+        let set = |id, index, kind, p| Command::SetVertex { id, index, kind, p };
+        assert_eq!(ed.execute(&set(id, 4, None, None)), invalid("vertex index 4 is out of range (0..4)"));
+        assert_eq!(ed.execute(&set(circle_id, 0, None, None)), invalid("object has no vertices"));
+        assert_eq!(ed.execute(&set(ObjectId(999), 0, None, None)), Err(CommandError::NoObject(ObjectId(999))));
+        for radius in [-1.0, f64::NAN, f64::INFINITY] {
+            let kind = Some(VertexKind::Arc { radius });
+            assert!(matches!(ed.execute(&set(id, 0, kind, None)), Err(CommandError::Invalid(_))), "{radius}");
+        }
+        assert_eq!(ed.execute(&set(id, 0, None, Some(DVec2::new(f64::NAN, 0.0)))), invalid(NOT_FINITE));
+        assert_eq!(ed.doc, before);
+        // The same rules hold when a whole shape is added or modified.
+        let bad = Shape::Polyline {
+            points: vec![Vertex::corner(DVec2::ZERO), Vertex::new(DVec2::X, VertexKind::Arc { radius: -2.0 })],
+            closed: false,
+        };
+        assert_eq!(
+            ed.execute(&Command::AddObject { shape: bad, layer: None, class: None, attrs: Attributes::default() }),
+            invalid("vertex radius must be zero or more")
+        );
+    }
+
+    #[test]
+    fn set_vertex_json_form() {
+        let c: Command = serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":1,"kind":{"kind":"arc","radius":30}}"#).unwrap();
+        assert_eq!(c, Command::SetVertex { id: ObjectId(2), index: 1, kind: Some(VertexKind::Arc { radius: 30.0 }), p: None });
+        let c: Command = serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":0,"p":[1,2]}"#).unwrap();
+        assert_eq!(c, Command::SetVertex { id: ObjectId(2), index: 0, kind: None, p: Some(DVec2::new(1.0, 2.0)) });
     }
 }
