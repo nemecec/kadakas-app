@@ -256,12 +256,12 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| GIS-01 | Georeference per design layer: CRS plus origin offset. | P0 | planned |
-| GIS-02 | CRS from EPSG code. | P0 | planned |
-| GIS-03 | CRS from WKT text and `.prj` file. | P0 | planned |
-| GIS-04 | Coordinate transform (via a PROJ-compatible library). | P0 | planned |
-| GIS-05 | Shapefile import and export. | P0 | planned |
-| GIS-06 | GeoJSON import and export. | P0 | planned |
+| GIS-01 | Georeference: CRS plus origin offset, rotation and user origin. One per document (per design layer is planned). | P0 | done |
+| GIS-02 | CRS from EPSG code. | P0 | done |
+| GIS-03 | CRS from WKT text and `.prj` file. | P0 | done |
+| GIS-04 | Coordinate transform (via a PROJ-compatible library). Uses `proj4rs`. | P0 | done |
+| GIS-05 | Shapefile import (points, lines, polygons with holes, Z values, dbf attributes). Export is planned. | P0 | done |
+| GIS-06 | GeoJSON import and export. | P0 | done |
 | GIS-07 | Survey point tool (set known point). | P1 | planned |
 | GIS-08 | Georeferenced images (world file, GeoTIFF). | P1 | planned |
 | GIS-09 | Web map tiles and WMS as backdrop. | P2 | planned |
@@ -343,12 +343,12 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| IOP-01 | DXF import and export (2D, layers, blocks). | P0 | planned |
+| IOP-01 | DXF import and export (2D, layers, blocks). ASCII DXF. Bulges stay exact arcs. | P0 | done |
 | IOP-02 | IFC4 export with property sets. | P0 | planned |
 | IOP-03 | IFC4 import (geometry, property sets, spatial tree). | P0 | planned |
 | IOP-04 | IFC 2x3 import and export. | P1 | planned |
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
-| IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | planned |
+| IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
 | IOP-07 | Data mapping rules to IFC fields. | P1 | planned |
 | IOP-08 | PDF export. | P1 | planned |
 | IOP-09 | DXF 3D entities. | P1 | planned |
@@ -356,7 +356,7 @@ Non-goals
 | IOP-11 | OBJ, STL, STEP. | P2 | planned |
 | IOP-12 | Point cloud import. | P2 | planned |
 | IOP-13 | Native `.vwx`. | Deferred | planned |
-| IOP-14 | Import report that lists dropped or approximated items. | P1 | planned |
+| IOP-14 | Import report that lists dropped or approximated items. | P1 | done |
 
 ### 4.17 Agent API
 

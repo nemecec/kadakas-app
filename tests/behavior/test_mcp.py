@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from conftest import ALLOW
 from helpers import McpClient, plant_cmd, rect_cmd
 
 
@@ -102,7 +103,7 @@ def test_file_save_then_file_open_round_trip_through_tools(mcp, tmp_path):
     assert mcp.tool_json("file_save", {"path": str(path)}) == {"ok": True}
     expected = mcp.tool_json("document_get")
 
-    other = McpClient(["mcp"])
+    other = McpClient(["mcp", *ALLOW])
     try:
         other.initialize()
         assert other.tool_json("file_open", {"path": str(path)}) == {"ok": True}

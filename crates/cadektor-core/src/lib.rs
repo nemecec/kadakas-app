@@ -6,6 +6,7 @@ pub mod command;
 pub mod curve;
 pub mod fsio;
 pub mod geom;
+pub mod georef;
 pub mod hardscape;
 pub mod landscape;
 pub mod mesh;
