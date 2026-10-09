@@ -431,6 +431,9 @@ pub struct Document {
     pub objects: Objects,
     pub active_layer: LayerId,
     pub active_class: ClassId,
+    /// Where the drawing sits on the earth, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub georef: Option<crate::georef::Georeference>,
     #[serde(default)]
     next_id: u64,
 }
@@ -443,6 +446,7 @@ impl PartialEq for Document {
             && self.classes == other.classes
             && self.active_layer == other.active_layer
             && self.active_class == other.active_class
+            && self.georef == other.georef
             && self.next_id == other.next_id
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
@@ -503,6 +507,7 @@ impl Default for Document {
             objects: Objects::new(),
             active_layer: FIRST_LAYER,
             active_class: NONE_CLASS,
+            georef: None,
             next_id: 2,
         }
     }
@@ -536,6 +541,12 @@ impl Document {
     #[cfg(test)]
     pub(crate) fn set_next_id(&mut self, n: u64) {
         self.next_id = n;
+    }
+
+    /// The ID that the next new object, layer or class gets. File importers use it
+    /// to plan the IDs of a batch of commands.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
     }
 
     /// Returns `None` when the IDs are used up.

@@ -7,6 +7,8 @@ mod databar;
 mod file_io;
 mod gpu3d;
 mod hit;
+#[cfg(not(target_arch = "wasm32"))]
+mod io_dialog;
 mod keymap;
 mod panels;
 mod snap;

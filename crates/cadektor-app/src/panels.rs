@@ -21,6 +21,8 @@ pub enum MenuAction {
     Save,
     SaveAs,
     ExportSvg,
+    Import,
+    Export,
     Undo,
     Redo,
     Delete,
@@ -62,6 +64,9 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
                 item(ui, "Save", true, Save, &mut out);
                 item(ui, "Save As...", true, SaveAs, &mut out);
                 item(ui, "Export SVG...", true, ExportSvg, &mut out);
+                ui.separator();
+                item(ui, "Import...", true, Import, &mut out);
+                item(ui, "Export...", true, Export, &mut out);
             }
         });
         ui.menu_button("Edit", |ui| {
@@ -127,7 +132,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Delete => Action::Delete,
         MenuAction::SelectAll => Action::SelectAll,
         MenuAction::ZoomFit => Action::ZoomFit,
-        MenuAction::ExportSvg => return None,
+        MenuAction::ExportSvg | MenuAction::Import | MenuAction::Export => return None,
     })
 }
 

@@ -1,0 +1,14 @@
+[package]
+name = "cadektor-io"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+proj4rs = { version = "0.2.1", features = ["crs-definitions"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"

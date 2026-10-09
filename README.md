@@ -4,6 +4,7 @@ Cadektor is a 2D CAD program for landscape design, written in Rust. Every change
 serializable, undoable command. The desktop app, scripts and AI agents all send the same commands.
 
 - `crates/cadektor-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
+- `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. The core never parses files.
 - `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/cadektor-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
@@ -31,6 +32,18 @@ cargo run --release -p cadektor-cli -- serve [file.cdk.json]
 # Render a document to SVG
 cargo run --release -p cadektor-cli -- render drawing.cdk.json -o drawing.svg
 ```
+
+Import and export (File > Import... and File > Export... in the app, `import.file` and `export.file` in the API):
+
+```sh
+cadektor import site.dxf -o drawing.cdk.json                                # DXF layers become classes
+cadektor import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS data sets the georeference
+cadektor import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
+cadektor export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
+```
+
+An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the
+document CRS with `proj4rs`. The document keeps a georeference (CRS and origin offset), so geometry stays near (0, 0).
 
 Saves are atomic: the app and the CLI write a temporary file and rename it. The previous file stays as `<name>.bak`.
 
@@ -107,6 +120,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p cadektor-cli && uv run --with pytest pytest tests/behavior -q
 cargo test -p cadektor-core --release --test perf -- --ignored --nocapture   # speed on 50,000 objects
 cargo llvm-cov -p cadektor-core --summary-only
+cargo llvm-cov -p cadektor-io --summary-only
 ```
 
 ## License

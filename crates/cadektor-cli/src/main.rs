@@ -3,6 +3,8 @@
 //! - `cadektor serve`: JSON-RPC 2.0 on stdin/stdout, one request per line.
 //! - `cadektor mcp`: Model Context Protocol server on stdio, for Claude Code.
 //! - `cadektor render <file> -o out.svg`: render a document to SVG.
+//! - `cadektor import <file> -o doc.json`: import a DXF, Shapefile or GeoJSON file into a document.
+//! - `cadektor export <doc> -o out.dxf`: export a document to DXF or GeoJSON.
 //!
 //! With `--connect`, `serve` and `mcp` forward every request to a running
 //! desktop app instead of a headless document. `--connect` alone finds the
@@ -48,6 +50,34 @@ enum Cmd {
         output: PathBuf,
         #[arg(long, default_value_t = 1200)]
         width: u32,
+    },
+    /// Import a DXF, Shapefile (.shp) or GeoJSON file. Saves the document and prints the report.
+    Import {
+        file: PathBuf,
+        /// The document to write.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Import into this document instead of an empty one.
+        #[arg(long)]
+        into: Option<PathBuf>,
+        /// dxf, shp or geojson. Default: from the file name.
+        #[arg(long)]
+        format: Option<String>,
+        /// Import options as JSON, for example '{"layer_mode": "layers"}'.
+        #[arg(long)]
+        options: Option<String>,
+    },
+    /// Export a document to DXF or GeoJSON. Prints the report.
+    Export {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// dxf or geojson. Default: from the file name.
+        #[arg(long)]
+        format: Option<String>,
+        /// Export options as JSON, for example '{"unit": "m"}'.
+        #[arg(long)]
+        options: Option<String>,
     },
 }
 
@@ -281,11 +311,49 @@ fn mcp(mut backend: Backend) {
     }
 }
 
+/// Calls `import.file` or `export.file` on a session and returns the result.
+fn io_call(session: &mut Session, method: &str, path: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<Value, String> {
+    let options = match options {
+        Some(t) => serde_json::from_str::<Value>(&t).map_err(|e| format!("--options is not JSON: {e}"))?,
+        None => Value::Null,
+    };
+    let mut params = json!({"path": path, "options": options});
+    if let Some(f) = format {
+        params["format"] = json!(f);
+    }
+    session.handle(method, params).map_err(|e| e.message)
+}
+
+fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
+    fsio::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn import_command(file: &std::path::Path, output: &std::path::Path, base: Option<PathBuf>, format: Option<String>, options: Option<String>) -> Result<(), String> {
+    let mut session = Session::default();
+    if let Some(base) = base {
+        session.editor = cadektor_core::command::Editor::new(load(&base)?);
+    }
+    let result = io_call(&mut session, "import.file", file, format, options)?;
+    save(session.editor.doc(), output)?;
+    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    Ok(())
+}
+
+fn export_command(file: &std::path::Path, output: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<(), String> {
+    let mut session = Session::with_document(load(&file.to_path_buf())?);
+    let result = io_call(&mut session, "export.file", output, format, options)?;
+    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    Ok(())
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
         Cmd::Mcp { file, remote } => Backend::new(file, remote).map(mcp),
+        Cmd::Import { file, output, into, format, options } => import_command(&file, &output, into, format, options),
+        Cmd::Export { file, output, format, options } => export_command(&file, &output, format, options),
         Cmd::Render { file, output, width } => load(&file).and_then(|doc| {
             fsio::write_atomic(&output, cadektor_core::svg::render(&doc, width).as_bytes()).map_err(|e| e.to_string())
         }),
@@ -378,6 +446,29 @@ mod tests {
         h.join().unwrap();
         let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
         assert!(connect_remote(&free, "t").unwrap_err().contains("cannot connect"));
+    }
+
+    #[test]
+    fn import_and_export_commands() {
+        let dir = std::env::temp_dir().join(format!("cadektor-cli-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.geojson");
+        std::fs::write(&src, r#"{"type":"Point","coordinates":[24.9,60.1,3]}"#).unwrap();
+        let doc = dir.join("doc.cdk.json");
+        import_command(&src, &doc, None, None, None).unwrap();
+        let loaded = load(&doc).unwrap();
+        assert_eq!(loaded.objects.len(), 1);
+        assert!(loaded.georef.is_some());
+        // Import a second time into the saved document.
+        import_command(&src, &doc, Some(doc.clone()), Some("geojson".into()), Some(r#"{"layer": "GIS"}"#.into())).unwrap();
+        assert_eq!(load(&doc).unwrap().objects.len(), 2);
+        let out = dir.join("out.dxf");
+        export_command(&doc, &out, None, Some(r#"{"unit": "m"}"#.into())).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().contains("ENTITIES"));
+        assert!(import_command(&src, &doc, None, None, Some("{nope".into())).unwrap_err().contains("--options"));
+        assert!(import_command(&dir.join("missing.dxf"), &doc, None, None, None).is_err());
+        assert!(export_command(&dir.join("missing.json"), &out, None, None).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

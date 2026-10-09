@@ -9,6 +9,7 @@ ADVERTISED_METHODS = [
     "describe", "execute", "undo", "redo", "document.summary", "document.get", "document.load",
     "objects.list", "objects.get", "selection.get", "selection.set", "render.svg",
     "render.png", "view.list", "view.set", "report.plants", "report.areas",
+    "import.file", "export.file",
 ]
 
 

@@ -10,6 +10,11 @@ use serde_json::{json, Value};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+#[cfg(not(target_arch = "wasm32"))]
+mod io;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod io_tests;
+
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
 /// An open document with its history and selection.
@@ -70,6 +75,10 @@ pub const METHODS: &[(&str, &str)] = &[
     ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
     ("report.plants", "Plant schedule: count by species."),
     ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("import.file", "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}."),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("export.file", "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}."),
 ];
 
 impl Session {
@@ -104,12 +113,20 @@ impl Session {
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
         let doc = self.editor.doc();
         Ok(match method {
-            "describe" => json!({
+            "describe" => {
+                #[allow(unused_mut)]
+                let mut d = json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
                 "units": "millimeters, Y axis up, angles in radians",
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
-            }),
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    d["io"] = io::describe();
+                }
+                d
+            }
             "execute" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -144,6 +161,7 @@ impl Session {
                     "object_count": doc.objects.len(),
                     "objects_by_kind": kinds,
                     "bounds": bounds,
+                    "georeference": doc.georef,
                     "can_undo": self.editor.can_undo(),
                     "can_redo": self.editor.can_redo(),
                 })
@@ -275,6 +293,10 @@ impl Session {
                     .collect();
                 json!({ "rows": rows })
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            "import.file" => self.import_file(p)?,
+            #[cfg(not(target_arch = "wasm32"))]
+            "export.file" => self.export_file(p)?,
             _ => return Err(RpcError { code: -32601, message: format!("unknown method: {method}") }),
         })
     }

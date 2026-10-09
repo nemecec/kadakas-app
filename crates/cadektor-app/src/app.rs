@@ -55,6 +55,9 @@ pub struct CadektorApp {
     pending_pan: egui::Vec2,
     #[cfg(not(target_arch = "wasm32"))]
     agent: Option<crate::agent::AgentServer>,
+    /// The File > Import and File > Export dialogs.
+    #[cfg(not(target_arch = "wasm32"))]
+    io_ui: crate::io_dialog::IoUi,
 }
 
 impl CadektorApp {
@@ -116,6 +119,8 @@ impl CadektorApp {
             pending_pan: egui::Vec2::ZERO,
             #[cfg(not(target_arch = "wasm32"))]
             agent: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            io_ui: Default::default(),
         }
     }
 
@@ -192,6 +197,10 @@ impl CadektorApp {
             MenuAction::SaveAs => self.save(true, ctx),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ExportSvg => self.export_svg(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::Import => self.io_ui.start_import(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::Export => self.io_ui.start_export(),
             #[cfg(target_arch = "wasm32")]
             _ => {
                 let _ = ctx;
@@ -573,6 +582,10 @@ impl eframe::App for CadektorApp {
         });
         for a in actions {
             self.apply_menu(&ctx, a);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.io_ui.show(&ctx, &mut self.session, &mut self.status) == crate::io_dialog::IoEvent::Imported {
+            self.needs_fit = true;
         }
         let before = self.session.view.view;
         egui::Panel::top("viewbar").show(ui, |ui| panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready));
