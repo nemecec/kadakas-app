@@ -39,7 +39,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 pub(crate) fn describe() -> Value {
     json!({
         "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson"],
-        "export_formats": ["dxf (ASCII)", "geojson"],
+        "export_formats": ["dxf (ASCII)", "geojson", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed)",
@@ -128,6 +128,9 @@ impl Session {
 
     fn export_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
         let FileParams { path, format, options, overwrite } = params(p)?;
+        if let Some(f) = format.as_deref().filter(|f| crate::sheets_api::is_sheet_format(f)) {
+            return self.export_sheet_file(f, path, &options, overwrite, checked);
+        }
         let opts = ExportOptions::from_json(&options).map_err(rpc)?;
         let format = format_of(format.as_deref())?;
         let path = if checked { self.file_path(path, format, true)? } else { path };

@@ -63,7 +63,7 @@ impl Builder {
         Builder {
             next_id: ctx.next_id,
             cmds: Vec::new(),
-            layers: ctx.layers.iter().filter(|l| !l.locked).map(|l| (l.name.clone(), l.id)).collect(),
+            layers: ctx.layers.iter().filter(|l| !l.locked && l.kind == cadektor_core::model::LayerKind::Design).map(|l| (l.name.clone(), l.id)).collect(),
             classes: ctx.classes.iter().map(|(id, n)| (n.clone(), *id)).collect(),
             report: Report::new(format),
             max_objects,

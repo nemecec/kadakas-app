@@ -556,6 +556,8 @@ impl Builder<'_> {
                 let pts: Vec<Vec3> = points.iter().map(|p| v3(o, p.truncate(), z + p.z)).collect();
                 self.scene.lines.polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
             }
+            // Sheet layer objects are paper space. They never reach the 3D scene.
+            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 if let Some(ext) = self.ext {
                     let mut sink = SceneSink { scene: &mut self.scene, object: id, z0: z };

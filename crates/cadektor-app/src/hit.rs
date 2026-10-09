@@ -69,12 +69,18 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let (lo, hi) = shape.bounds();
             p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
         }
+        // A viewport is picked inside its frame. A title block is picked at its border.
+        Shape::Viewport(_) | Shape::TitleBlock(_) => {
+            let (lo, hi) = shape.bounds();
+            let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
+            edge_dist(&corners, true, p) <= tol || (matches!(shape, Shape::Viewport(_)) && p.cmpge(lo).all() && p.cmple(hi).all())
+        }
     }
 }
 
 /// Visible objects on unlocked layers can be picked.
 fn pickable(doc: &Document, o: &Object) -> bool {
-    doc.is_visible(o) && doc.layer(o.layer).is_some_and(|l| !l.locked)
+    doc.is_pickable(o) && doc.layer(o.layer).is_some_and(|l| !l.locked)
 }
 
 /// Topmost pickable object at `p`.

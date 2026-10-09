@@ -62,6 +62,7 @@ impl Tx<'_> {
                 let start = boundary.clone().unwrap_or_else(|| crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]));
                 let shape = Shape::Hardscape { boundary: start, material: "Paving".into(), thickness: None, elevation: None };
                 validate_shape(&shape)?;
+                self.check_sheet_rules(layer, &shape, None)?;
                 let id = ObjectId(self.alloc()?);
                 let mut o = Object::new(id, layer, class, shape);
                 o.attrs = attrs.clone();
@@ -85,6 +86,7 @@ impl Tx<'_> {
                 }
                 let shape = Shape::LandscapeArea { boundary: boundary.clone(), name: name.clone() };
                 validate_shape(&shape)?;
+                self.check_sheet_rules(layer, &shape, None)?;
                 let id = ObjectId(self.alloc()?);
                 let mut o = Object::new(id, layer, class, shape);
                 o.attrs = attrs.clone();

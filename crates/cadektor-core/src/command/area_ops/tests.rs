@@ -201,3 +201,20 @@ fn relinking_plants_to_a_style_that_now_locks_a_field_drops_the_old_override() {
     bad.insert("spread".into(), 5.0.into());
     assert!(ed.execute(&Command::SetPlantStyle { ids: vec![plant], style: Some(sid), overrides: Some(bad), unlink: false }).is_err());
 }
+
+#[test]
+fn sheet_layers_refuse_hardscapes_and_landscape_areas() {
+    let mut ed = Editor::default();
+    let sheet = LayerId(ed.execute(&Command::AddSheet { name: "S".into(), paper: None, orientation: None, number: None, title: None }).unwrap().created[0]);
+    let hard = Command::AddHardscape { boundary: Some(sq(100.0)), patch: Box::default(), layer: Some(sheet), class: None, attrs: Attributes::default() };
+    assert!(ed.execute(&hard).unwrap_err().to_string().contains("sheet layer cannot hold a hardscape"));
+    let path = Command::AddHardscape { boundary: None, patch: Box::new(HardscapePatch { center: Some(line_center()), ..Default::default() }), layer: Some(sheet), class: None, attrs: Attributes::default() };
+    assert!(ed.execute(&path).is_err());
+    let area = Command::AddLandscapeArea { boundary: sq(100.0), name: "a".into(), patch: Box::default(), layer: Some(sheet), class: None, attrs: Attributes::default() };
+    assert!(ed.execute(&area).unwrap_err().to_string().contains("landscape_area"));
+    // Moving one to a sheet layer is refused too.
+    let id = id_of(ed.execute(&add_hardscape(HardscapePatch::default(), Some(sq(100.0)))).unwrap());
+    let to_sheet = Command::ModifyObject { id, shape: None, layer: Some(sheet), class: None, attrs: None };
+    assert!(ed.execute(&to_sheet).is_err());
+    assert_eq!(ed.doc().objects.len(), 1);
+}

@@ -13,6 +13,7 @@ pub mod mesh;
 pub mod model;
 pub mod plants;
 pub mod resource;
+pub mod sheets;
 pub mod site;
 pub mod svg;
 

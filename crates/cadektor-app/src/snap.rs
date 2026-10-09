@@ -40,6 +40,10 @@ impl Default for SnapConfig {
 
 pub type SnapPoint = (DVec2, SnapKind);
 
+fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
+    [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)]
+}
+
 pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
     use SnapKind::*;
     match shape {
@@ -72,13 +76,15 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
         Shape::Text { at, .. } => out.push((*at, Vertex)),
         Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => out.push((*at, Center)),
         Shape::PlantTag { at, anchor, .. } => out.extend([(*at, Vertex), (*anchor, Vertex)]),
+        Shape::Viewport(vp) => out.extend(rect_corners(vp.min, vp.max).into_iter().map(|p| (p, Vertex))),
+        Shape::TitleBlock(_) => {}
     }
 }
 
 /// Snap candidates of all visible objects, except those in `exclude`.
 pub fn snap_points(doc: &Document, exclude: &[ObjectId]) -> Vec<SnapPoint> {
     let mut out = Vec::new();
-    for o in doc.objects.values().filter(|o| doc.is_visible(o) && !exclude.contains(&o.id)) {
+    for o in doc.objects.values().filter(|o| doc.is_pickable(o) && !exclude.contains(&o.id)) {
         shape_snap_points(&o.shape, &mut out);
     }
     out

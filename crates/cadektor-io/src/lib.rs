@@ -165,6 +165,23 @@ pub fn importer(format: Format) -> Box<dyn Importer> {
     }
 }
 
+/// The model of a document: without sheet layers and their objects. Sheets are paper space (mm on paper),
+/// so exporters must never write them as model geometry.
+pub(crate) fn model_only(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    use cadektor_core::model::LayerKind;
+    if !doc.layers.iter().any(|l| l.kind == LayerKind::Sheet) {
+        return std::borrow::Cow::Borrowed(doc);
+    }
+    let mut d = doc.clone();
+    let sheets: Vec<_> = d.layers.iter().filter(|l| l.kind == LayerKind::Sheet).map(|l| l.id).collect();
+    d.objects.retain(|_, o| !sheets.contains(&o.layer));
+    d.layers.retain(|l| l.kind != LayerKind::Sheet);
+    if d.layer(d.active_layer).is_none() {
+        d.active_layer = d.layers[0].id;
+    }
+    std::borrow::Cow::Owned(d)
+}
+
 /// The exporter for a format, if the format can be written.
 pub fn exporter(format: Format) -> Option<Box<dyn Exporter>> {
     match format {

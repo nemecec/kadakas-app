@@ -158,6 +158,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 let tag = if *closed { "polygon" } else { "polyline" };
                 writeln!(s, r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#, points_attr(&points))
             }
+            Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 let outline = site_outline(&o.shape);
                 let res = writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&outline), o.shape.kind());

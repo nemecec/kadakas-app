@@ -13,6 +13,7 @@ use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
 mod area_ops;
+mod drawing_ops;
 mod plant_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -185,6 +186,52 @@ pub enum Command {
     SetHardscape { ids: Vec<ObjectId>, patch: crate::hardscape::HardscapePatch },
     /// Change the style, holes or options of landscape areas.
     SetLandscapeArea { ids: Vec<ObjectId>, patch: crate::landscape::LandscapePatch },
+    /// Add a sheet layer with its page settings, as one step. Returns the layer ID in `created`.
+    AddSheet {
+        name: String,
+        #[serde(default)]
+        paper: Option<crate::sheets::PaperSize>,
+        #[serde(default)]
+        orientation: Option<crate::sheets::Orientation>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Change the page of a sheet layer. Missing fields stay unchanged.
+    /// `paper` is a size id (`a3`, `letter`, ...) or `{custom: {width_mm, height_mm}}`.
+    SetSheet {
+        layer: LayerId,
+        #[serde(default)]
+        paper: Option<crate::sheets::PaperSize>,
+        #[serde(default)]
+        orientation: Option<crate::sheets::Orientation>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Change the project data that title blocks show. Missing fields stay unchanged.
+    SetProject {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        client: Option<String>,
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        drawn_by: Option<String>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        revision: Option<String>,
+    },
+    /// Store a saved view. A view with the same name is replaced.
+    SaveView { view: Box<crate::sheets::SavedView> },
+    DeleteView { name: String },
+    /// Apply a saved view: layer and class visibility and the active layer and class.
+    /// The camera part (zoom, pan, 3D view) is for the host to apply.
+    RestoreView { name: String },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -221,6 +268,7 @@ pub struct Outcome {
 /// Snapshot of the document parts that are not objects.
 #[derive(Clone, Debug, PartialEq)]
 struct Meta {
+    drawing: crate::sheets::Drawing,
     layers: Vec<Layer>,
     classes: Vec<Class>,
     resources: Resources,
@@ -232,6 +280,7 @@ struct Meta {
 impl Meta {
     fn of(doc: &Document) -> Self {
         Meta {
+            drawing: doc.drawing.clone(),
             layers: doc.layers.clone(),
             classes: doc.classes.clone(),
             resources: doc.resources.clone(),
@@ -242,6 +291,7 @@ impl Meta {
     }
 
     fn restore(&self, doc: &mut Document) {
+        doc.drawing = self.drawing.clone();
         doc.layers = self.layers.clone();
         doc.classes = self.classes.clone();
         doc.resources = self.resources.clone();
@@ -251,7 +301,8 @@ impl Meta {
     }
 
     fn is_finite(&self) -> bool {
-        self.layers.iter().all(|l| l.elevation.is_finite() && l.scale.is_finite())
+        self.drawing.saved_views.iter().all(crate::sheets::SavedView::is_finite)
+            && self.layers.iter().all(|l| l.elevation.is_finite() && l.scale.is_finite())
             && self.classes.iter().all(|c| c.attrs.is_finite())
     }
 }
@@ -424,6 +475,7 @@ impl<'a> Tx<'a> {
                 self.check_class(class)?;
                 validate_shape(shape)?;
                 self.check_shape_refs(shape)?;
+                self.check_sheet_rules(layer, shape, None)?;
                 validate_attrs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
@@ -431,6 +483,7 @@ impl<'a> Tx<'a> {
                 let mut o = Object::new(id, layer, class, shape.clone());
                 o.attrs = attrs.clone();
                 self.doc.objects.insert(id, o);
+                self.sync_title_block(id);
                 out.created.push(id.0);
             }
             Command::DeleteObjects { ids } => {
@@ -495,6 +548,10 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
+                }
+                {
+                    let o = self.doc.object(*id).expect("checked");
+                    self.check_sheet_rules(layer.unwrap_or(o.layer), shape.as_ref().unwrap_or(&o.shape), Some(*id))?;
                 }
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
@@ -575,8 +632,9 @@ impl<'a> Tx<'a> {
                     visible: true,
                     locked: false,
                     elevation: *elevation,
-                    scale: scale.unwrap_or(100.0),
+                    scale: scale.unwrap_or(if *kind == Some(LayerKind::Sheet) { 1.0 } else { 100.0 }),
                 });
+                self.on_layer_added(id);
                 out.created.push(id.0);
             }
             Command::ModifyLayer { id, name, visible, locked, elevation, scale } => {
@@ -607,6 +665,7 @@ impl<'a> Tx<'a> {
                     return Err(CommandError::LastLayer);
                 }
                 self.doc.layers.retain(|l| l.id != *id);
+                self.doc.drawing.sheets.remove(id);
                 if self.doc.active_layer == *id {
                     self.doc.active_layer = self.doc.layers[0].id;
                 }
@@ -654,6 +713,12 @@ impl<'a> Tx<'a> {
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
             Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
+            Command::AddSheet { .. }
+            | Command::SetSheet { .. }
+            | Command::SetProject { .. }
+            | Command::SaveView { .. }
+            | Command::DeleteView { .. }
+            | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;
@@ -729,6 +794,9 @@ fn validate_vertex(v: &Vertex) -> Result<(), CommandError> {
 
 fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     let bad = |m: &str| Err(CommandError::Invalid(m.into()));
+    if let Some(m) = crate::sheets::shape_problem(shape) {
+        return bad(&m);
+    }
     if !shape.is_finite() {
         return bad(NOT_FINITE);
     }
