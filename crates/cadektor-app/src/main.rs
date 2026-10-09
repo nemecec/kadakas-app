@@ -9,6 +9,7 @@ mod gpu3d;
 mod hit;
 mod keymap;
 mod panels;
+mod site_ui;
 mod snap;
 mod tess;
 mod tools;

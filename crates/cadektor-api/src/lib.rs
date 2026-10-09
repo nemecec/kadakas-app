@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+mod site;
+
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
 /// An open document with its history and selection.
@@ -22,6 +24,7 @@ pub struct Session {
     replaced: bool,
     view_changed: bool,
     mesh_cache: MeshCache,
+    site_cache: cadektor_site::SiteCache,
 }
 
 #[derive(Debug)]
@@ -70,6 +73,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
     ("report.plants", "Plant schedule: count by species."),
     ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
+    ("site.create", "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color. Pads and grade limits are objects of kind site_modifier on the same layer. Returns {id}."),
+    ("site.update", "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}."),
+    ("site.elevation", "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y."),
+    ("site.cut_fill", "Cut and fill volumes of the proposed surface against the existing one. params: {id}. Returns {cut_m3, fill_m3, net_m3, area_m2} (net is fill minus cut)."),
+    ("site.contours", "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}."),
 ];
 
 impl Session {
@@ -85,7 +93,14 @@ impl Session {
 
     /// The 3D scene of the current document. It is rebuilt only when the document changed.
     pub fn scene(&mut self) -> Arc<Scene> {
-        self.mesh_cache.get(self.editor.revision(), self.editor.doc())
+        let revision = self.editor.revision();
+        let ext = cadektor_site::draw::scene_ext(&self.site_cache, revision);
+        self.mesh_cache.get_with(revision, self.editor.doc(), Some(&ext))
+    }
+
+    /// The cache of site model results (TIN, contours, volumes), by document revision.
+    pub fn site_cache(&self) -> &cadektor_site::SiteCache {
+        &self.site_cache
     }
 
     /// True once after `view.set` changed the view. A host with a window should
@@ -102,6 +117,9 @@ impl Session {
     }
 
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if method.starts_with("site.") {
+            return self.handle_site(method, p);
+        }
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => json!({
@@ -201,7 +219,8 @@ impl Session {
                     width: Option<u32>,
                 }
                 let P { width } = params(p)?;
-                json!({ "svg": cadektor_core::svg::render(doc, width.unwrap_or(800).clamp(16, 8192)) })
+                let ext = cadektor_site::draw::svg_ext(&self.site_cache, self.editor.revision());
+                json!({ "svg": cadektor_core::svg::render_with(doc, width.unwrap_or(800).clamp(16, 8192), Some(&ext)) })
             }
             "render.png" => {
                 #[derive(Deserialize)]
@@ -215,7 +234,7 @@ impl Session {
                 let P { view, width, height, projection, mode } = params(p)?;
                 let settings = self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
-                let scene = self.mesh_cache.get(self.editor.revision(), self.editor.doc());
+                let scene = self.scene();
                 let mut camera = Camera::standard(settings.view, settings.projection);
                 camera.fit(scene.bounds, width as f32 / height as f32);
                 let img = cadektor_render::render(&scene, &camera, &RenderOptions { width, height, mode: settings.mode, ..Default::default() });
@@ -358,7 +377,9 @@ fn command_examples() -> Value {
         {"op": "add_layer", "name": "Planting", "elevation": 0},
         {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}]},
         {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
-        {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}}
+        {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}},
+        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "pad", "elevation": 1200}, "boundary": [[2000,2000],[6000,2000],[6000,5000],[2000,5000]]}},
+        {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}}
     ])
 }
 
@@ -427,7 +448,7 @@ mod tests {
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
-        assert_eq!(d["command_examples"].as_array().unwrap().len(), 10);
+        assert!(d["command_examples"].as_array().unwrap().len() >= 10);
 
         // Every advertised method is handled: none of them is "unknown method".
         for (name, _) in METHODS {

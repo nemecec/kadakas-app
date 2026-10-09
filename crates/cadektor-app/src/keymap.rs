@@ -128,6 +128,8 @@ actions! {
     ToolPlant => "tool.plant", "Plant tool", ["Alt+Shift+P"], true;
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
+    ToolPad => "tool.pad", "Pad tool", ["Alt+Shift+D"], true;
+    ToolGradeLimits => "tool.grade_limits", "Grade Limits tool", ["Alt+Shift+G"], true;
     ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
     ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
     ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
@@ -192,6 +194,8 @@ impl Action {
             Action::ToolPlant => Tool::Plant,
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
+            Action::ToolPad => Tool::Pad,
+            Action::ToolGradeLimits => Tool::GradeLimits,
             _ => return None,
         })
     }
@@ -207,6 +211,8 @@ impl Action {
             Tool::Plant => Action::ToolPlant,
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
+            Tool::Pad => Action::ToolPad,
+            Tool::GradeLimits => Action::ToolGradeLimits,
         }
     }
 

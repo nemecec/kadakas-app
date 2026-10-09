@@ -1,0 +1,14 @@
+[package]
+name = "cadektor-site"
+version = "0.1.0"
+edition = "2024"
+description = "Site model (terrain): TIN, contours, slope, site modifiers and cut and fill volumes."
+
+[dependencies]
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+glam = { version = "0.34.1", features = ["serde"] }
+spade = "2.15.1"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"

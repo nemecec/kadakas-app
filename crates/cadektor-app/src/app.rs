@@ -171,6 +171,13 @@ impl CadektorApp {
         }
     }
 
+    fn create_site_model(&mut self) {
+        self.status = match crate::site_ui::create_site_model(&mut self.session) {
+            Ok(id) => format!("Created site model {id}"),
+            Err(e) => format!("Error: {e}"),
+        };
+    }
+
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
         self.session.selection = doc.objects.values().filter(|o| doc.is_visible(o)).map(|o| o.id).collect();
@@ -184,6 +191,7 @@ impl CadektorApp {
             MenuAction::Delete => self.delete_selection(),
             MenuAction::SelectAll => self.select_all(),
             MenuAction::ZoomFit => self.zoom_fit(),
+            MenuAction::CreateSiteModel => self.create_site_model(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Open => self.open_file(ctx),
             #[cfg(not(target_arch = "wasm32"))]
@@ -531,6 +539,7 @@ impl CadektorApp {
             preview: &preview,
             snap: self.snap_hit,
             show_grid: self.show_grid,
+            site: Some((self.session.site_cache(), self.session.editor.revision())),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
     }
@@ -569,7 +578,8 @@ impl eframe::App for CadektorApp {
         let (can_undo, can_redo) = (self.session.editor.can_undo(), self.session.editor.can_redo());
         let mut actions = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
-            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid);
+            let can_site = !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection).is_empty();
+            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid, can_site);
         });
         for a in actions {
             self.apply_menu(&ctx, a);

@@ -45,10 +45,12 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let flat = curve::flatten(points, *closed, curve_tolerance(tol));
             edge_dist(&flat, *closed, p) <= tol || (*closed && filled && point_in_polygon(p, &flat))
         }
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => {
             let flat = curve::flatten(boundary, true, curve_tolerance(tol));
             edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
+        // Only the outline picks a site model, so that objects on the terrain stay pickable.
+        Shape::SiteModel { .. } => edge_dist(&cadektor_core::svg::site_outline(shape), true, p) <= tol,
         Shape::Locus3d { p: q } => p.distance(q.truncate()) <= tol,
         Shape::Polyline3d { points, closed } => {
             let flat: Vec<DVec2> = points.iter().map(|q| q.truncate()).collect();
