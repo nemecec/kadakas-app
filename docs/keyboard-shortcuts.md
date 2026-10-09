@@ -40,6 +40,13 @@ is already used by another action, the user file wins, the other action loses th
 - Modifiers: `Cmd/Ctrl` is the command key. `Ctrl` alone in a keymap file means the command key on Windows and Linux, but the real Control key on macOS. Use `Cmd` for the command key on macOS.
 - The Data bar keys are not in the Vectorworks list. They follow its Data bar workflow (Tab to enter, Tab and Shift+Tab between fields).
 - Space plus drag pans. Vectorworks lets you use any tool while Space is held.
+- The 3D standard views use the Vectorworks numbering: 0 Top/Plan, 5 Top, 2 Front, 8 Back, 4 Left, 6 Right, 1 and 3 the front
+  isometrics, 7 and 9 the rear isometrics. Vectorworks binds them to the numeric keypad, which cannot be changed there.
+  egui cannot tell keypad digits from the digit row, and the plain digits are tool keys here, so Cadektor uses
+  `Alt+Shift` plus the same digit. The digit is read from the physical key, because Shift changes the character on
+  many layouts. Bottom has no key in Vectorworks and none here: use the view bar.
+  Top/Plan is the 2D drawing. The other views are the 3D view. In 3D, drag orbits (the Flyover behavior), Shift-drag,
+  Space-drag or middle-drag pans, and the wheel zooms toward the pointer. Zoom to Fit works in 3D too.
 
 ## Tools
 
@@ -117,6 +124,20 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Pan up (`view.pan_up`) | Arrow (both) | Up | done |
 | Pan down (`view.pan_down`) | Arrow (both) | Down | done |
 | Pan while held, then back to the old tool (`view.pan_hold`) | Space (hold) (both) | Space (Space plus drag pans; VW lets you use any tool) | done |
+| Top/Plan view, the 2D drawing (`view.top_plan`) | Num 0, and Cmd+5 / Ctrl+5 (Standard views) | Alt+Shift+0 or Cmd/Ctrl+5 | done |
+| Top view, 3D (`view.top`) | Num 5 | Alt+Shift+5 | done |
+| Front view (`view.front`) | Num 2 | Alt+Shift+2 | done |
+| Back view (`view.back`) | Num 8 | Alt+Shift+8 | done |
+| Left view (`view.left`) | Num 4 | Alt+Shift+4 | done |
+| Right view (`view.right`) | Num 6 | Alt+Shift+6 | done |
+| Left Isometric view (`view.left_isometric`) | Num 1 | Alt+Shift+1 | done |
+| Right Isometric view (`view.right_isometric`) | Num 3 | Alt+Shift+3 | done |
+| Left Rear Isometric view (`view.left_rear_isometric`) | Num 7 | Alt+Shift+7 | done |
+| Right Rear Isometric view (`view.right_rear_isometric`) | Num 9 | Alt+Shift+9 | done |
+| Flyover: orbit in 3D (`view.flyover`) | Shift+C (Flyover tool) | Shift+C | done |
+| Wireframe rendering (`view.wireframe`) | Cmd+Shift+W / Ctrl+Shift+W | Cmd/Ctrl+Shift+W | done |
+| Shaded rendering (`view.shaded`) | Cmd+Shift+G / Ctrl+Shift+G | Cmd/Ctrl+Shift+G | done |
+| Toggle parallel and perspective projection (`view.projection`) | none | Alt+Shift+J | done |
 | Next view in history | Cmd+Shift+. / Ctrl+Shift+. | Ctrl+Shift+. | planned |
 | Previous view in history | Cmd+Shift+, / Ctrl+Shift+, | Ctrl+Shift+, | planned |
 | Zoom in, factor 2 (double tap) | CC (both) | CC | planned |
@@ -191,12 +212,12 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 
 These Vectorworks shortcuts have no function in Cadektor and none is planned.
 
-- Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page, Flyover, Callout,
+- Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page, Callout,
   2D Locus, Symbol Insertion, Double Line, Rounded Rectangle, Oval, Quarter Arc, Freehand, Regular Polygon, Spiral, Eyedropper,
   Visibility, Attribute Mapping, Connect/Combine, Move by Points, Texture.
-- Menus: Page Setup, Print, Quit, Close, Rendering modes, Multiple View Panes, Standard views and the numeric keypad views,
+- Menus: Page Setup, Print, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), render modes other than wireframe and shaded,
   Model menu (solids, extrusions, 3D power pack), AEC, Spotlight, Energos, Plug-in Manager, Origin, stacking order commands,
   Align and Distribute, Convert commands, Show and Hide Guides.
 - Other keys: Toggle Automatic Working Plane, X-ray Select, Coincident Selection, Set Datum, Edit list row (F2), worksheet cell keys,
-  Alt/Cmd-click to run the Selection tool inside another tool, Flyover with the wheel button.
+  Alt/Cmd-click to run the Selection tool inside another tool, Flyover with the wheel button (the wheel button pans).
 - Keys reserved by the operating system (Cmd+H, Cmd+Shift+Q, Cmd+Shift+1 to 9, Alt+- and others).

@@ -18,6 +18,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: cargo build -p cadektor-cli
       - run: uv run --with pytest pytest tests/behavior -q
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api --target wasm32-unknown-unknown
   coverage:
     runs-on: ubuntu-latest
     steps:

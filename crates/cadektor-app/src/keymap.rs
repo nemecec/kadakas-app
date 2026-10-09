@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use cadektor_render::StandardView;
 use egui::{Key, Modifiers};
 
 use crate::tools::Tool;
@@ -158,6 +159,20 @@ actions! {
     SnapSuspend => "snap.suspend", "Suspend snapping while held", ["Backtick"], true;
     DataBarFocus => "databar.focus", "Data bar: next field", ["Tab"], true;
     DataBarPrev => "databar.prev", "Data bar: previous field", ["Shift+Tab"], true;
+    ViewPlan => "view.top_plan", "Top/Plan view", ["Alt+Shift+0", "Cmd/Ctrl+5"], true;
+    ViewTop => "view.top", "Top view", ["Alt+Shift+5"], true;
+    ViewFront => "view.front", "Front view", ["Alt+Shift+2"], true;
+    ViewBack => "view.back", "Back view", ["Alt+Shift+8"], true;
+    ViewLeft => "view.left", "Left view", ["Alt+Shift+4"], true;
+    ViewRight => "view.right", "Right view", ["Alt+Shift+6"], true;
+    ViewLeftIso => "view.left_isometric", "Left Isometric view", ["Alt+Shift+1"], true;
+    ViewRightIso => "view.right_isometric", "Right Isometric view", ["Alt+Shift+3"], true;
+    ViewLeftRearIso => "view.left_rear_isometric", "Left Rear Isometric view", ["Alt+Shift+7"], true;
+    ViewRightRearIso => "view.right_rear_isometric", "Right Rear Isometric view", ["Alt+Shift+9"], true;
+    ViewFlyover => "view.flyover", "Flyover (orbit in 3D)", ["Shift+C"], true;
+    ViewProjection => "view.projection", "Toggle parallel and perspective projection", ["Alt+Shift+J"], true;
+    ViewWireframe => "view.wireframe", "Wireframe rendering", ["Cmd/Ctrl+Shift+W"], true;
+    ViewShaded => "view.shaded", "Shaded rendering", ["Cmd/Ctrl+Shift+G"], true;
 }
 
 impl Action {
@@ -195,6 +210,28 @@ impl Action {
         }
     }
 
+    /// The standard view that this action shows.
+    pub fn standard_view(self) -> Option<StandardView> {
+        Some(match self {
+            Action::ViewPlan => StandardView::Plan,
+            Action::ViewTop => StandardView::Top,
+            Action::ViewFront => StandardView::Front,
+            Action::ViewBack => StandardView::Back,
+            Action::ViewLeft => StandardView::Left,
+            Action::ViewRight => StandardView::Right,
+            Action::ViewLeftIso => StandardView::LeftIsometric,
+            Action::ViewRightIso => StandardView::RightIsometric,
+            Action::ViewLeftRearIso => StandardView::LeftRearIsometric,
+            Action::ViewRightRearIso => StandardView::RightRearIsometric,
+            _ => return None,
+        })
+    }
+
+    /// The action that shows `view`. Bottom has no action: Vectorworks gives it no key.
+    pub fn for_view(view: StandardView) -> Option<Action> {
+        Action::ALL.iter().copied().find(|a| a.standard_view() == Some(view))
+    }
+
     /// Keys that repeat while held.
     pub fn repeats(self) -> bool {
         matches!(
@@ -209,6 +246,10 @@ impl Action {
                 | Action::NudgeDown
         )
     }
+}
+
+fn is_digit(k: Key) -> bool {
+    matches!(k, Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9)
 }
 
 /// While a text field has focus, only chords with Cmd/Ctrl may fire, and not the ones
@@ -311,6 +352,19 @@ impl Keymap {
         }
     }
 
+    /// The action of a key event and the chord that matched. Digit chords such as `Alt+Shift+1`
+    /// are also matched by the physical key: with Shift held, many layouts report another logical key
+    /// (`!` on a US layout), and with Alt held, macOS reports a symbol.
+    pub fn action_for_event(&self, key: Key, physical: Option<Key>, m: Modifiers) -> Option<(Action, Chord)> {
+        let chord = Chord::from_event(key, m);
+        if let Some(a) = self.action_for(chord) {
+            return Some((a, chord));
+        }
+        let physical = physical.filter(|p| *p != key && is_digit(*p))?;
+        let chord = Chord::from_event(physical, m);
+        self.action_for(chord).map(|a| (a, chord))
+    }
+
     pub fn action_for(&self, chord: Chord) -> Option<Action> {
         self.lookup.get(&chord).copied()
     }
@@ -361,6 +415,49 @@ mod tests {
 
     fn chord(s: &str) -> Chord {
         Chord::parse(s).unwrap()
+    }
+
+    #[test]
+    fn every_standard_view_has_a_key() {
+        for v in StandardView::ALL {
+            match Action::for_view(v) {
+                Some(a) => {
+                    assert_eq!(a.standard_view(), Some(v));
+                    assert!(!Keymap::defaults().chords(a).is_empty());
+                }
+                None => assert_eq!(v, StandardView::Bottom),
+            }
+        }
+        // The numbering follows the Vectorworks numeric keypad: 0 Top/Plan, 5 Top, 2 Front, 8 Back, 4 Left, 6 Right, 1 and 3 front isometrics, 7 and 9 rear.
+        let km = Keymap::defaults();
+        let m = |k: &str| km.action_for(chord(&format!("Alt+Shift+{k}")));
+        assert_eq!(m("0"), Some(Action::ViewPlan));
+        assert_eq!(m("5"), Some(Action::ViewTop));
+        assert_eq!(m("2"), Some(Action::ViewFront));
+        assert_eq!(m("9"), Some(Action::ViewRightRearIso));
+        assert_eq!(km.action_for(chord("Cmd/Ctrl+5")), Some(Action::ViewPlan));
+        assert_eq!(km.action_for(chord("Shift+C")), Some(Action::ViewFlyover));
+        assert_eq!(km.action_for(chord("Cmd/Ctrl+Shift+W")), Some(Action::ViewWireframe));
+        assert_eq!(km.action_for(chord("Cmd/Ctrl+Shift+G")), Some(Action::ViewShaded));
+        assert_eq!(Action::ViewFlyover.standard_view(), None);
+    }
+
+    #[test]
+    fn digit_chords_match_the_physical_key_when_the_character_differs() {
+        let km = Keymap::defaults();
+        let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
+        // US layout, Shift+1 types "!": logical key Exclamationmark, physical key Digit1.
+        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::Num1), alt_shift).map(|x| x.0), Some(Action::ViewLeftIso));
+        // The logical key matches when it is the digit already.
+        assert_eq!(km.action_for_event(Key::Num3, Some(Key::Num3), alt_shift).map(|x| x.0), Some(Action::ViewRightIso));
+        assert_eq!(km.action_for_event(Key::Num3, None, alt_shift).map(|x| x.0), Some(Action::ViewRightIso));
+        // Other keys are not remapped: a logical key that is bound wins, and a physical letter never counts.
+        assert_eq!(km.action_for_event(Key::J, Some(Key::Semicolon), alt_shift).map(|x| x.0), Some(Action::ViewProjection));
+        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::A), alt_shift), None);
+        // Shift+1 alone is not bound.
+        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::Num1), Modifiers::SHIFT), None);
+        // A plain digit is still a tool key.
+        assert_eq!(km.action_for_event(Key::Num2, Some(Key::Num2), Modifiers::NONE).map(|x| x.0), Some(Action::ToolLine));
     }
 
     #[test]

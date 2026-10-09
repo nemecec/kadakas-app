@@ -298,7 +298,7 @@ impl ToolMachine {
         let shape = match self.tool {
             Tool::Polyline if pts.len() >= 2 => Shape::Polyline { points: pts, closed: false },
             Tool::LandscapeArea if pts.len() >= 3 => Shape::LandscapeArea { boundary: pts, name: s.area_name.clone() },
-            Tool::Hardscape if pts.len() >= 3 => Shape::Hardscape { boundary: pts, material: s.material.clone() },
+            Tool::Hardscape if pts.len() >= 3 => Shape::Hardscape { boundary: pts, material: s.material.clone(), thickness: None, elevation: None },
             _ => return vec![],
         };
         vec![add(shape)]
@@ -510,7 +510,7 @@ impl ToolMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadektor_core::api::Session;
+    use cadektor_api::Session;
 
     struct Fixture {
         session: Session,
@@ -528,7 +528,7 @@ mod tests {
         /// Sends an input and applies the effects like the app does.
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
-                let cx = Ctx { doc: &self.session.editor.doc, selection: &self.session.selection, settings: &self.settings, tol: 5.0 };
+                let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: 5.0 };
                 self.m.handle(input, &cx)
             };
             for e in &fx {
@@ -546,7 +546,7 @@ mod tests {
             self.send(Input::Press { p: DVec2::new(x, y), shift: false })
         }
         fn shapes(&self) -> Vec<Shape> {
-            self.session.editor.doc.objects.values().map(|o| o.shape.clone()).collect()
+            self.session.editor.doc().objects.values().map(|o| o.shape.clone()).collect()
         }
     }
 
@@ -610,7 +610,7 @@ mod tests {
             f.click(x, y);
         }
         f.send(Input::Enter);
-        assert!(matches!(&f.shapes()[0], Shape::Hardscape { boundary, material } if boundary.len() == 3 && material == "Paving"));
+        assert!(matches!(&f.shapes()[0], Shape::Hardscape { boundary, material, .. } if boundary.len() == 3 && material == "Paving"));
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod tests {
     fn select_click_shift_and_empty() {
         let mut f = Fixture::new(Tool::Select);
         with_two_circles(&mut f);
-        let ids: Vec<_> = f.session.editor.doc.objects.values().map(|o| o.id).collect();
+        let ids: Vec<_> = f.session.editor.doc().objects.values().map(|o| o.id).collect();
         f.click(100.0, 0.0);
         f.send(Input::Release(DVec2::new(100.0, 0.0)));
         assert_eq!(f.session.selection, vec![ids[0]]);
@@ -663,10 +663,10 @@ mod tests {
         assert_eq!(f.m.moving_ids().len(), 1);
         let fx = f.send(Input::Release(DVec2::new(200.0, 40.0)));
         assert_eq!(fx.len(), 1);
-        let doc = &f.session.editor.doc;
+        let doc = &f.session.editor.doc();
         assert!(matches!(doc.objects[0].shape, Shape::Circle { center, .. } if center == DVec2::new(100.0, 40.0)));
         f.session.editor.undo();
-        assert!(matches!(f.session.editor.doc.objects[0].shape, Shape::Circle { center, .. } if center == DVec2::ZERO));
+        assert!(matches!(f.session.editor.doc().objects[0].shape, Shape::Circle { center, .. } if center == DVec2::ZERO));
     }
 
     #[test]
@@ -695,7 +695,7 @@ mod tests {
     fn previews_and_keys() {
         let mut f = Fixture::new(Tool::Line);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
         assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Shape(Shape::Line { .. })));
         assert!(f.m.readout(DVec2::new(3.0, 4.0), &f.settings).contains("Length 5.0"));
         assert_eq!(f.m.anchor(), Some(DVec2::ZERO));
@@ -749,7 +749,7 @@ mod tests {
             if mode != VertexMode::TangentArc {
                 assert!(vs.iter().all(|v| v.kind == kind), "{mode:?}");
             }
-            assert!(f.session.editor.doc.objects.len() == 1);
+            assert!(f.session.editor.doc().objects.len() == 1);
         }
     }
 
@@ -863,7 +863,7 @@ mod tests {
         f.settings.arc_radius = 80.0;
         f.click(0.0, 0.0);
         f.click(100.0, 0.0);
-        let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
         let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else { panic!() };
         assert!(closed);
         assert_eq!(vertices.len(), 3);
@@ -876,7 +876,7 @@ mod tests {
         // A polyline preview is open.
         let mut f = Fixture::new(Tool::Polyline);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: &f.session.editor.doc, selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
         assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Path { closed: false, .. }));
     }
 

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cadektor_core::api::Session;
+use cadektor_api::Session;
 use cadektor_core::fsio;
 use cadektor_core::model::Document;
 use serde_json::{Value, json};
@@ -59,7 +59,7 @@ pub fn agent_line(session: &mut Session, path: &mut Option<PathBuf>, line: &str,
     };
     let result = match req["params"]["path"].as_str().map(PathBuf::from) {
         None => Err((-32602, "params.path is required".to_string())),
-        Some(p) if method == "file.save" => write_document(&p, &session.editor.doc).map_err(|e| (1, e)).map(|()| {
+        Some(p) if method == "file.save" => write_document(&p, session.editor.doc()).map_err(|e| (1, e)).map(|()| {
             *path = Some(p);
             fx.path_changed = true;
         }),
@@ -82,7 +82,7 @@ pub fn agent_line(session: &mut Session, path: &mut Option<PathBuf>, line: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadektor_core::api::Session;
+    use cadektor_api::Session;
     use cadektor_core::command::Command;
     use cadektor_core::model::{Attributes, FORMAT_VERSION, Shape};
     use glam::DVec2;
@@ -99,10 +99,10 @@ mod tests {
             })
             .unwrap();
         let path = std::env::temp_dir().join(format!("cadektor-test-{}.cdk.json", std::process::id()));
-        write_document(&path, &s.editor.doc).unwrap();
-        assert_eq!(read_document(&path).unwrap(), s.editor.doc);
+        write_document(&path, s.editor.doc()).unwrap();
+        assert_eq!(read_document(&path).unwrap(), s.editor.doc().clone());
         let svg = std::env::temp_dir().join(format!("cadektor-test-{}.svg", std::process::id()));
-        write_svg(&svg, &s.editor.doc).unwrap();
+        write_svg(&svg, s.editor.doc()).unwrap();
         assert!(std::fs::read_to_string(&svg).unwrap().contains("<circle"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(svg);
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(r["result"], json!({"ok": true}));
         assert_eq!(fx, AgentEffects { replaced: true, path_changed: true });
         assert_eq!(path.as_deref(), Some(other.as_path()));
-        assert!(s.editor.doc.objects.is_empty());
+        assert!(s.editor.doc().objects.is_empty());
         assert!(!s.take_replaced(), "the flag was consumed by the app handler");
 
         // Errors: missing path, missing file, newer format. The old state stays.
@@ -217,5 +217,19 @@ mod tests {
         // Lines that are not JSON still get the normal parse error.
         let line = agent_line(&mut s, &mut path, "{nope", &mut fx).unwrap();
         assert!(line.contains("-32700"));
+    }
+
+    #[test]
+    fn agent_can_render_and_switch_the_view_in_the_live_app() {
+        let mut s = Session::default();
+        let mut path = None;
+        let mut fx = AgentEffects::default();
+        let r = call(&mut s, &mut path, &mut fx, json!({"id": 1, "method": "view.set", "params": {"view": "front", "mode": "wireframe"}}));
+        assert_eq!(r["result"], json!({"view": "front", "projection": "ortho", "mode": "wireframe"}));
+        assert_eq!(fx, AgentEffects::default(), "the app polls the session for view changes");
+        assert!(s.take_view_changed());
+        let r = call(&mut s, &mut path, &mut fx, json!({"id": 2, "method": "render.png", "params": {"width": 32, "height": 32}}));
+        assert_eq!(r["result"]["view"], "front");
+        assert!(r["result"]["png_base64"].as_str().unwrap().starts_with("iVBOR"));
     }
 }

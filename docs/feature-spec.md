@@ -293,10 +293,11 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| 3D-01 | wgpu 3D view: orbit, pan, zoom. | P1 | planned |
-| 3D-02 | Standard views (top, front, iso). | P1 | planned |
+| 3D-01 | wgpu 3D view: orbit, pan, zoom to cursor, zoom to fit, click to select. | P1 | done |
+| 3D-02 | Standard views (top, bottom, front, back, left, right, four isometrics), parallel and perspective. | P1 | done |
 | 3D-03 | Extrude, sweep, 3D polygon. | P1 | planned |
-| 3D-04 | Render modes: wireframe, hidden line, shaded. | P1 | planned |
+| 3D-04 | Render modes: wireframe and shaded. | P1 | done |
+| 3D-10 | Render mode: hidden line. | P2 | planned |
 | 3D-05 | Terrain mesh with texture. | P1 | planned |
 | 3D-06 | Textures and materials. | P2 | planned |
 | 3D-07 | Lights, sun position by georeference and date. | P2 | planned |
@@ -352,12 +353,13 @@ Non-goals
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |
 | API-12 | `cadektor mcp` server for Claude Code. | P0 | done |
-| API-13 | PNG render. | P1 | planned |
+| API-13 | `render.png`: a CPU render of the 3D model, base64 PNG, also in `cadektor serve`, over `--connect` and in MCP (as an image). | P1 | done |
 | API-14 | Screenshot of the live viewport. | P1 | planned |
 | API-15 | Command schema (JSON Schema) in `describe`. | P1 | planned |
 | API-16 | Query by criteria (class, layer, record field). | P1 | planned |
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
+| API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
 
 ### 4.18 Scripting
 

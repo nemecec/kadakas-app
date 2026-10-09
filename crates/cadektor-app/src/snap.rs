@@ -102,7 +102,7 @@ pub fn snap(cursor: DVec2, tol: f64, grid_step: f64, cfg: SnapConfig, pts: &[Sna
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadektor_core::api::Session;
+    use cadektor_api::Session;
     use cadektor_core::command::Command;
     use cadektor_core::model::Attributes;
 
@@ -149,9 +149,9 @@ mod tests {
         let mut s = Session::default();
         let a = add(&mut s, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(100.0, 50.0) });
         add(&mut s, Shape::Plant { at: DVec2::new(5.0, 5.0), species: "x".into(), spread: 10.0, height: 10.0 });
-        let all = snap_points(&s.editor.doc, &[]);
+        let all = snap_points(s.editor.doc(), &[]);
         assert_eq!(all.len(), 6);
         assert!(all.contains(&(DVec2::new(50.0, 25.0), SnapKind::Center)));
-        assert_eq!(snap_points(&s.editor.doc, &[a]).len(), 1);
+        assert_eq!(snap_points(s.editor.doc(), &[a]).len(), 1);
     }
 }

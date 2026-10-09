@@ -29,16 +29,22 @@ def test_deleting_the_same_id_twice_is_fine_and_undo_restores_the_z_order(cad):
     assert ids(cad) == [made[1], made[11]]
 
 
-def test_overflow_to_infinity_is_refused_and_the_document_still_saves_and_opens(make_serve, tmp_path):
+def test_numbers_beyond_1e9_mm_are_refused_and_the_document_still_saves_and_opens(make_serve, tmp_path):
     cad = make_serve()
-    (a,) = cad.execute(line_cmd(0, 0, 1e308, 0))
-    err = cad.error("execute", {"command": {"op": "move_objects", "ids": [a], "delta": [1e308, 0]}})
-    assert "finite" in err["message"]
+    (a,) = cad.execute(line_cmd(0, 0, 1e9, 0))
+    err = cad.error("execute", {"command": {"op": "move_objects", "ids": [a], "delta": [1, 0]}})
+    assert "1e9" in err["message"]
+    assert cad.error("execute", {"command": line_cmd(0, 0, 1e39, 0)})["code"] == 1
+    slab = {"kind": "hardscape", "boundary": [[0, 0], [1, 0], [0, 1]], "material": "m"}
+    assert cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": 1e39}}})["code"] == 1
+    for bad in (0, -3):
+        err = cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": bad}}})
+        assert "thickness" in err["message"]
     path = tmp_path / "big.json"
     assert cad.result("file.save", {"path": str(path)}) == {"ok": True}
     other = make_serve()
     assert other.result("file.open", {"path": str(path)}) == {"ok": True}
-    assert other.result("objects.get", {"id": a})["shape"]["b"][0] == 1e308
+    assert other.result("objects.get", {"id": a})["shape"]["b"][0] == 1e9
 
 
 def test_non_finite_numbers_in_a_request_are_a_parse_error(cad):

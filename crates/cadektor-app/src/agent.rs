@@ -298,7 +298,7 @@ pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadektor_core::api::Session;
+    use cadektor_api::Session;
     use std::sync::atomic::AtomicUsize;
 
     fn wait() -> Arc<AtomicUsize> {

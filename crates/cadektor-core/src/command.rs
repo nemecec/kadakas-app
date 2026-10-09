@@ -533,13 +533,14 @@ impl<'a> Tx<'a> {
     /// still have finite numbers, so the document can always be saved and
     /// reopened.
     fn check_result(&self) -> Result<(), CommandError> {
-        let bad = self
-            .added
-            .iter()
-            .chain(self.before.keys())
-            .filter_map(|id| self.doc.object(*id))
-            .any(|o| !o.is_finite());
-        if bad { Err(CommandError::Invalid(NOT_FINITE.into())) } else { Ok(()) }
+        let mut touched = self.added.iter().chain(self.before.keys()).filter_map(|id| self.doc.object(*id));
+        if touched.clone().any(|o| !o.is_finite()) {
+            Err(CommandError::Invalid(NOT_FINITE.into()))
+        } else if touched.any(|o| !o.shape.is_in_range()) {
+            Err(CommandError::Invalid(OUT_OF_RANGE.into()))
+        } else {
+            Ok(())
+        }
     }
 
     fn finish(self, meta_before: Meta) -> Patch {
@@ -563,6 +564,7 @@ impl<'a> Tx<'a> {
 }
 
 const NOT_FINITE: &str = "numbers must be finite";
+const OUT_OF_RANGE: &str = "numbers must not be larger than 1e9 mm";
 
 fn validate_attrs(attrs: &Attributes) -> Result<(), CommandError> {
     if attrs.is_finite() { Ok(()) } else { Err(CommandError::Invalid(NOT_FINITE.into())) }
@@ -571,6 +573,9 @@ fn validate_attrs(attrs: &Attributes) -> Result<(), CommandError> {
 fn validate_layer_numbers(elevation: Option<f64>, scale: Option<f64>) -> Result<(), CommandError> {
     if elevation.is_some_and(|e| !e.is_finite()) || scale.is_some_and(|s| !s.is_finite()) {
         return Err(CommandError::Invalid(NOT_FINITE.into()));
+    }
+    if elevation.is_some_and(|e| e.abs() > MAX_COORD) {
+        return Err(CommandError::Invalid(OUT_OF_RANGE.into()));
     }
     if scale.is_some_and(|s| s <= 0.0) {
         return Err(CommandError::Invalid("scale must be positive".into()));
@@ -593,8 +598,14 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     if !shape.is_finite() {
         return bad(NOT_FINITE);
     }
+    if !shape.is_in_range() {
+        return bad(OUT_OF_RANGE);
+    }
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
+    }
+    if !shape.has_valid_thickness() {
+        return bad("thickness must be positive");
     }
     match shape {
         Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => bad("radius must be positive"),
@@ -610,16 +621,41 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
 }
 
 /// A document with undo and redo history.
-#[derive(Default)]
 pub struct Editor {
-    pub doc: Document,
+    doc: Document,
     undo: Vec<Patch>,
     redo: Vec<Patch>,
+    revision: u64,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Editor::new(Document::default())
+    }
+}
+
+/// Source of revision numbers. They are unique across all editors in the process,
+/// so a cache keyed by revision never mixes up two documents.
+static REVISIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    REVISIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Editor {
     pub fn new(doc: Document) -> Self {
-        Editor { doc, undo: Vec::new(), redo: Vec::new() }
+        Editor { doc, undo: Vec::new(), redo: Vec::new(), revision: next_revision() }
+    }
+
+    /// The document. It changes only through `execute`, `undo` and `redo`.
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
+
+    /// Changes whenever the document changes (command, undo or redo), and differs
+    /// between editors. Use it to decide when derived data, like a 3D mesh, is stale.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Runs a command as one undo step. On error the document is unchanged.
@@ -638,6 +674,7 @@ impl Editor {
                 if !patch.is_empty() {
                     self.undo.push(patch);
                     self.redo.clear();
+                    self.revision = next_revision();
                 }
                 Ok(out)
             }
@@ -652,6 +689,7 @@ impl Editor {
         self.undo.pop().map(|p| {
             p.apply(&mut self.doc, false);
             self.redo.push(p);
+            self.revision = next_revision();
         }).is_some()
     }
 
@@ -659,6 +697,7 @@ impl Editor {
         self.redo.pop().map(|p| {
             p.apply(&mut self.doc, true);
             self.undo.push(p);
+            self.revision = next_revision();
         }).is_some()
     }
 
@@ -797,7 +836,7 @@ mod tests {
                 "boundary needs 3 or more points",
             ),
             (
-                Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), material: "m".into() },
+                Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), material: "m".into(), thickness: None, elevation: None },
                 "boundary needs 3 or more points",
             ),
         ];
@@ -812,7 +851,7 @@ mod tests {
         // The smallest valid shapes are accepted.
         let mut ed = Editor::default();
         add_to(&mut ed, Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), closed: false });
-        add_to(&mut ed, Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]), material: "m".into() });
+        add_to(&mut ed, Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]), material: "m".into(), thickness: None, elevation: None });
         assert_eq!(ed.doc.objects.len(), 2);
     }
 
@@ -1282,16 +1321,54 @@ mod tests {
     }
 
     #[test]
-    fn overflow_to_infinity_is_rejected_and_rolled_back() {
+    fn moving_out_of_range_is_rejected_and_rolled_back() {
         let mut ed = Editor::default();
-        let a = add_to(&mut ed, Shape::Line { a: DVec2::splat(1e308), b: DVec2::splat(-1e308) });
+        let a = add_to(&mut ed, Shape::Line { a: DVec2::splat(MAX_COORD), b: DVec2::splat(-MAX_COORD) });
         let before = ed.doc.clone();
-        let r = ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::splat(1e308) });
-        assert_eq!(r, Err(CommandError::Invalid("numbers must be finite".into())));
+        let r = ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::splat(1.0) });
+        assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
         assert_eq!(ed.doc, before);
-        // Large but finite values are fine, and the file reopens.
+        let r = ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::splat(f64::MAX) });
+        assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
+        assert_eq!(ed.doc, before);
+        // Values at the limit are fine, and the file reopens.
         let json = serde_json::to_string(&ed.doc).unwrap();
         assert_eq!(Document::from_json(&json).unwrap(), ed.doc);
+    }
+
+    #[test]
+    fn numbers_beyond_the_limit_and_bad_thickness_are_refused() {
+        let mut ed = Editor::default();
+        let add = |ed: &mut Editor, shape| ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() });
+        let range = Err(CommandError::Invalid(OUT_OF_RANGE.into()));
+        assert_eq!(add(&mut ed, Shape::Circle { center: DVec2::new(1.1e9, 0.0), radius: 1.0 }), range);
+        assert_eq!(add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 1e39 }), range);
+        assert_eq!(add(&mut ed, Shape::Plant { at: DVec2::ZERO, species: "p".into(), spread: 1.0, height: 1e10 }), range);
+        let slab = |thickness, elevation| Shape::Hardscape {
+            boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]),
+            material: "m".into(),
+            thickness,
+            elevation,
+        };
+        assert_eq!(add(&mut ed, slab(Some(1e39), None)), range);
+        assert_eq!(add(&mut ed, slab(None, Some(-1e10))), range);
+        for t in [0.0, -5.0] {
+            assert_eq!(add(&mut ed, slab(Some(t), None)), Err(CommandError::Invalid("thickness must be positive".into())));
+        }
+        assert!(add(&mut ed, slab(Some(MAX_COORD), Some(MAX_COORD))).is_ok());
+        assert!(add(&mut ed, slab(None, None)).is_ok());
+        // Layers: the elevation is limited too.
+        assert!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: 1e10, scale: None, kind: None }).is_err());
+        assert!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: -1e9, scale: None, kind: None }).is_ok());
+        // A loaded document is checked the same way.
+        let mut doc = ed.doc.clone();
+        if let Some(o) = doc.objects.values_mut().next() {
+            o.shape = slab(Some(-1.0), None);
+        }
+        assert!(doc.validate().is_err());
+        let mut doc = ed.doc.clone();
+        doc.layers[0].elevation = 1e12;
+        assert!(doc.validate().is_err());
     }
 
     #[test]
@@ -1354,7 +1431,7 @@ mod tests {
 
     fn rounded_square() -> Shape {
         let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 10.0 });
-        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into() }
+        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into(), thickness: None, elevation: None }
     }
 
     #[test]

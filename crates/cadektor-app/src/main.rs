@@ -2,15 +2,19 @@ mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
 mod canvas;
+mod canvas3d;
 mod databar;
 mod file_io;
+mod gpu3d;
 mod hit;
 mod keymap;
 mod panels;
 mod snap;
 mod tess;
 mod tools;
+mod vertex;
 mod view;
+mod view3d;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {

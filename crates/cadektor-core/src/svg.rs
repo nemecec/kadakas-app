@@ -121,11 +121,11 @@ mod tests {
         let add = |shape| Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() };
         ed.execute(&add(Shape::Circle { center: DVec2::ZERO, radius: 50.0 })).unwrap();
         ed.execute(&add(Shape::Text { at: DVec2::ZERO, text: "a<b".into(), height: 10.0 })).unwrap();
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         assert!(svg.contains("<circle"));
         assert!(svg.contains("a&lt;b"));
         ed.execute(&Command::ModifyClass { id: NONE_CLASS, name: None, visible: Some(false), attrs: None }).unwrap();
-        assert!(!render(&ed.doc, 400).contains("<circle"));
+        assert!(!render(ed.doc(), 400).contains("<circle"));
     }
 
     fn add(ed: &mut Editor, shape: Shape) -> u64 {
@@ -137,7 +137,7 @@ mod tests {
     fn one(shape: Shape) -> String {
         let mut ed = Editor::default();
         add(&mut ed, shape);
-        render(&ed.doc, 400)
+        render(ed.doc(), 400)
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
         let svg = one(Shape::LandscapeArea { boundary: crate::curve::corners(&boundary.clone()), name: "Meadow".into() });
         assert!(svg.contains(r#"<polygon points="1,-1 3,-1 3,-4""#), "{svg}");
         assert!(svg.contains(r#"data-kind="landscape_area""#), "{svg}");
-        let svg = one(Shape::Hardscape { boundary: crate::curve::corners(&boundary), material: "Setts".into() });
+        let svg = one(Shape::Hardscape { boundary: crate::curve::corners(&boundary), material: "Setts".into(), thickness: None, elevation: None });
         assert!(svg.contains(r#"data-kind="hardscape""#), "{svg}");
     }
 
@@ -206,7 +206,7 @@ mod tests {
         let mut ed = Editor::default();
         // Class defaults: pen black, no fill, weight 0.25 mm at 1:100 gives 25.
         let c = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         let expected = format!(r#"stroke="rgba(0,0,0,1.000)" fill="none" stroke-width="25" data-id="{c}""#);
         assert!(svg.contains(&expected), "{svg}");
 
@@ -219,14 +219,14 @@ mod tests {
             attrs: Some(Attributes { pen: Some(Color([255, 0, 0, 255])), fill: Some(Color([0, 0, 255, 128])), line_weight: None }),
         })
         .unwrap();
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         assert!(svg.contains(r#"stroke="rgba(255,0,0,1.000)" fill="rgba(0,0,255,0.502)""#), "{svg}");
 
         // A layer at 1:50 halves the stroke width.
         let lid = ed.execute(&Command::AddLayer { name: "Detail".into(), elevation: 0.0, scale: Some(50.0), kind: None }).unwrap().created[0];
         ed.execute(&Command::SetActive { layer: Some(LayerId(lid)), class: None }).unwrap();
         add(&mut ed, Shape::Circle { center: DVec2::new(100.0, 0.0), radius: 5.0 });
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         assert!(svg.contains(r#"stroke-width="12.5""#), "{svg}");
     }
 
@@ -238,7 +238,7 @@ mod tests {
         );
         ed.execute(&Command::SetActive { layer: None, class: Some(cid) }).unwrap();
         add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         assert!(svg.contains(r#"stroke="rgba(0,0,0,1.000)" fill="none" stroke-width="25""#), "{svg}");
     }
 
@@ -248,7 +248,7 @@ mod tests {
         add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
         ed.execute(&Command::ModifyLayer { id: FIRST_LAYER, name: None, visible: Some(false), locked: None, elevation: None, scale: None })
             .unwrap();
-        let svg = render(&ed.doc, 400);
+        let svg = render(ed.doc(), 400);
         assert!(!svg.contains("<circle"));
         // With nothing visible the empty-drawing defaults apply.
         assert!(svg.contains(r#"viewBox="-50 -1050 1100 1100""#), "{svg}");
@@ -265,25 +265,25 @@ mod tests {
         let mut ed = Editor::default();
         add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(1000.0, 500.0) });
         // Model frame is 1100 x 600 with the 5% margin.
-        let svg = render(&ed.doc, 550);
+        let svg = render(ed.doc(), 550);
         assert!(svg.contains(r#"width="550" height="300" viewBox="-50 -550 1100 600""#), "{svg}");
         // A tiny width still gives at least one pixel of height.
         let mut ed = Editor::default();
         add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(1000.0, 500.0) });
-        assert!(render(&ed.doc, 1).contains(r#"width="1" height="1""#));
+        assert!(render(ed.doc(), 1).contains(r#"width="1" height="1""#));
     }
 
     #[test]
     fn drawing_bounds_ignores_hidden_objects() {
         let mut ed = Editor::default();
-        assert_eq!(drawing_bounds(&ed.doc), None);
+        assert_eq!(drawing_bounds(ed.doc()), None);
         add(&mut ed, Shape::Circle { center: DVec2::new(10.0, 10.0), radius: 1.0 });
         let hidden = ed.execute(&Command::AddLayer { name: "Hidden2".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0];
         ed.execute(&Command::ModifyLayer { id: LayerId(hidden), name: None, visible: Some(false), locked: None, elevation: None, scale: None })
             .unwrap();
         ed.execute(&Command::SetActive { layer: Some(LayerId(hidden)), class: None }).unwrap();
         add(&mut ed, Shape::Circle { center: DVec2::new(-500.0, 40.0), radius: 1.0 });
-        assert_eq!(drawing_bounds(&ed.doc), Some((DVec2::new(9.0, 9.0), DVec2::new(11.0, 11.0))));
+        assert_eq!(drawing_bounds(ed.doc()), Some((DVec2::new(9.0, 9.0), DVec2::new(11.0, 11.0))));
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         ];
         let svg = one(Shape::Polyline { points: rounded.clone(), closed: true });
         assert!(svg.contains(r#"<path d="M 0 0 L 8 0 A 2 2 0 0 0 10 -2 L 10 -8 A 2 2 0 0 0 8 -10 L 0 -10 Z""#), "{svg}");
-        let svg = one(Shape::Hardscape { boundary: rounded.clone(), material: "m".into() });
+        let svg = one(Shape::Hardscape { boundary: rounded.clone(), material: "m".into(), thickness: None, elevation: None });
         assert!(svg.contains(r#"data-kind="hardscape""#) && svg.contains("<path d="), "{svg}");
         let svg = one(Shape::LandscapeArea { boundary: rounded, name: "n".into() });
         assert!(svg.contains(r#"data-kind="landscape_area""#) && !svg.contains("<polygon"), "{svg}");

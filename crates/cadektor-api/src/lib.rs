@@ -2,19 +2,26 @@
 //! it to AI agents. Each request is one JSON object on one line.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::command::{Command, Editor};
-use crate::model::*;
+use cadektor_core::command::{Command, Editor};
+use cadektor_core::mesh::{MeshCache, Scene};
+use cadektor_core::model::*;
+use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
 /// An open document with its history and selection.
 #[derive(Default)]
 pub struct Session {
     pub editor: Editor,
     pub selection: Vec<ObjectId>,
+    /// The chosen 3D view. `view.set` changes it, and the app follows it.
+    pub view: ViewSettings,
     replaced: bool,
+    view_changed: bool,
+    mesh_cache: MeshCache,
 }
 
 #[derive(Debug)]
@@ -58,6 +65,9 @@ pub const METHODS: &[(&str, &str)] = &[
     ("selection.get", "Selected object IDs."),
     ("selection.set", "Select objects. params: {ids: [id]}."),
     ("render.svg", "SVG image of visible objects. params: {width?: px}."),
+    ("render.png", "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}."),
+    ("view.list", "Standard 3D views, projections and render modes, and the current view."),
+    ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
     ("report.plants", "Plant schedule: count by species."),
     ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
 ];
@@ -65,12 +75,23 @@ pub const METHODS: &[(&str, &str)] = &[
 impl Session {
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(doc: Document) -> Self {
-        Session { editor: Editor::new(doc), selection: Vec::new(), replaced: false }
+        Session { editor: Editor::new(doc), ..Session::default() }
     }
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag.
     pub fn replace_document(&mut self, doc: Document) {
-        *self = Session { replaced: true, ..Session::with_document(doc) };
+        *self = Session { replaced: true, view: self.view, ..Session::with_document(doc) };
+    }
+
+    /// The 3D scene of the current document. It is rebuilt only when the document changed.
+    pub fn scene(&mut self) -> Arc<Scene> {
+        self.mesh_cache.get(self.editor.revision(), self.editor.doc())
+    }
+
+    /// True once after `view.set` changed the view. A host with a window should
+    /// poll this after `handle` and show `self.view`.
+    pub fn take_view_changed(&mut self) -> bool {
+        std::mem::take(&mut self.view_changed)
     }
 
     /// True once after the document was replaced by `document.load` (or
@@ -81,7 +102,7 @@ impl Session {
     }
 
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
-        let doc = &self.editor.doc;
+        let doc = self.editor.doc();
         Ok(match method {
             "describe" => json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
@@ -114,7 +135,7 @@ impl Session {
                 for o in doc.objects.values() {
                     *kinds.entry(o.shape.kind()).or_default() += 1;
                 }
-                let bounds = crate::svg::drawing_bounds(doc).map(|(a, b)| json!({"min": a, "max": b}));
+                let bounds = cadektor_core::svg::drawing_bounds(doc).map(|(a, b)| json!({"min": a, "max": b}));
                 json!({
                     "layers": doc.layers,
                     "classes": doc.classes,
@@ -180,7 +201,54 @@ impl Session {
                     width: Option<u32>,
                 }
                 let P { width } = params(p)?;
-                json!({ "svg": crate::svg::render(doc, width.unwrap_or(800).clamp(16, 8192)) })
+                json!({ "svg": cadektor_core::svg::render(doc, width.unwrap_or(800).clamp(16, 8192)) })
+            }
+            "render.png" => {
+                #[derive(Deserialize)]
+                struct P {
+                    view: Option<String>,
+                    width: Option<u32>,
+                    height: Option<u32>,
+                    projection: Option<String>,
+                    mode: Option<String>,
+                }
+                let P { view, width, height, projection, mode } = params(p)?;
+                let settings = self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
+                let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
+                let scene = self.mesh_cache.get(self.editor.revision(), self.editor.doc());
+                let mut camera = Camera::standard(settings.view, settings.projection);
+                camera.fit(scene.bounds, width as f32 / height as f32);
+                let img = cadektor_render::render(&scene, &camera, &RenderOptions { width, height, mode: settings.mode, ..Default::default() });
+                use base64::Engine;
+                json!({
+                    "png_base64": base64::engine::general_purpose::STANDARD.encode(img.to_png()),
+                    "width": width,
+                    "height": height,
+                    "view": settings.view.id(),
+                    "projection": settings.projection.id(),
+                    "mode": settings.mode.id(),
+                })
+            }
+            "view.list" => json!({
+                "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),
+                "projections": [Projection::Orthographic.id(), Projection::Perspective.id()],
+                "modes": [RenderMode::Shaded.id(), RenderMode::Wireframe.id()],
+                "current": view_json(self.view),
+            }),
+            "view.set" => {
+                #[derive(Deserialize)]
+                struct P {
+                    view: Option<String>,
+                    projection: Option<String>,
+                    mode: Option<String>,
+                }
+                let P { view, projection, mode } = params(p)?;
+                if view.is_none() && projection.is_none() && mode.is_none() {
+                    return Err(RpcError::invalid_params("give view, projection or mode"));
+                }
+                self.view = self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
+                self.view_changed = true;
+                view_json(self.view)
             }
             "report.plants" => {
                 let mut rows = BTreeMap::<&str, usize>::new();
@@ -211,9 +279,27 @@ impl Session {
         })
     }
 
+    /// The current view with the given names applied. Fails on an unknown name.
+    fn resolve_view(&self, view: Option<&str>, projection: Option<&str>, mode: Option<&str>) -> Result<ViewSettings, RpcError> {
+        let mut v = self.view;
+        if let Some(n) = view {
+            v.view = StandardView::from_name(n).ok_or_else(|| {
+                let all: Vec<&str> = StandardView::ALL.iter().map(|v| v.id()).collect();
+                RpcError::invalid_params(format!("unknown view '{n}'. Views: {}", all.join(", ")))
+            })?;
+        }
+        if let Some(n) = projection {
+            v.projection = Projection::from_name(n).ok_or_else(|| RpcError::invalid_params(format!("unknown projection '{n}'. Use ortho or perspective")))?;
+        }
+        if let Some(n) = mode {
+            v.mode = RenderMode::from_name(n).ok_or_else(|| RpcError::invalid_params(format!("unknown mode '{n}'. Use shaded or wireframe")))?;
+        }
+        Ok(v)
+    }
+
     /// Drops selected IDs that no longer exist.
     pub fn prune_selection(&mut self) {
-        let doc = &self.editor.doc;
+        let doc = self.editor.doc();
         self.selection.retain(|id| doc.object(*id).is_some());
     }
 
@@ -235,6 +321,26 @@ impl Session {
             Err(e) => error_response(id, e.code, &e.message),
         })
     }
+}
+
+/// Longest side of a rendered image, in px.
+const MAX_SIDE: u32 = 2048;
+/// Most pixels in a rendered image. The renderer runs on the UI thread of the app.
+const MAX_PIXELS: u64 = 4_000_000;
+
+/// The size to render: each side 16 to `MAX_SIDE`, scaled down in one piece if the area is too big.
+fn image_size(width: u32, height: u32) -> (u32, u32) {
+    let (w, h) = (width.clamp(16, MAX_SIDE), height.clamp(16, MAX_SIDE));
+    let area = w as u64 * h as u64;
+    if area <= MAX_PIXELS {
+        return (w, h);
+    }
+    let k = (MAX_PIXELS as f64 / area as f64).sqrt();
+    (((w as f64 * k) as u32).max(16), ((h as f64 * k) as u32).max(16))
+}
+
+fn view_json(v: ViewSettings) -> Value {
+    json!({"view": v.view.id(), "projection": v.projection.id(), "mode": v.mode.id()})
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> String {
@@ -620,7 +726,7 @@ mod tests {
         assert_eq!(s.selection, vec![ObjectId(id)]);
         s.replace_document(Document::default());
         assert!(s.selection.is_empty() && s.take_replaced());
-        assert!(Session::with_document(Document::default()).editor.doc.objects.is_empty());
+        assert!(Session::with_document(Document::default()).editor.doc().objects.is_empty());
     }
 
     #[test]
@@ -631,5 +737,86 @@ mod tests {
         assert_eq!(ok(&mut s, "objects.get", json!({"id": id}))["data"], json!({"Pset": {"a": 1}}));
         exec(&mut s, json!({"op": "set_data", "id": id, "remove": ["Pset"]}));
         assert!(ok(&mut s, "objects.get", json!({"id": id})).get("data").is_none());
+    }
+
+    fn decode_png(result: &Value) -> (u32, u32, Vec<u8>) {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(result["png_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        (info.width, info.height, buf)
+    }
+
+    #[test]
+    fn render_png_draws_the_model_and_clamps_the_size() {
+        let mut s = Session::default();
+        let empty = ok(&mut s, "render.png", json!({"width": 64, "height": 48}));
+        let (w, h, px) = decode_png(&empty);
+        assert_eq!((w, h), (64, 48));
+        assert!(px.chunks(4).all(|p| p == cadektor_render::BACKGROUND), "empty drawing is all background");
+
+        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]], "material": "Setts", "thickness": 100}}));
+        let r = ok(&mut s, "render.png", json!({"view": "Right Isometric", "width": 100, "height": 80, "projection": "perspective", "mode": "wireframe"}));
+        assert_eq!((r["view"].as_str(), r["projection"].as_str(), r["mode"].as_str()), (Some("right_isometric"), Some("perspective"), Some("wireframe")));
+        let (w, h, px) = decode_png(&r);
+        assert_eq!((w, h), (100, 80));
+        assert!(px.chunks(4).any(|p| p != cadektor_render::BACKGROUND));
+
+        let r = ok(&mut s, "render.png", json!({"width": 1, "height": 100000}));
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(16), Some(2048)));
+        // Too many pixels: both sides shrink, keeping the shape.
+        let r = ok(&mut s, "render.png", json!({"width": 99999, "height": 99999}));
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(2000), Some(2000)));
+        assert_eq!(image_size(2048, 2048), (2000, 2000));
+        assert_eq!(image_size(2000, 2000), (2000, 2000));
+        assert_eq!(image_size(2048, 1024), (2048, 1024));
+        assert_eq!(fail(&mut s, "render.png", json!({"view": "sideways"})).0, -32602);
+        assert!(fail(&mut s, "render.png", json!({"view": "sideways"})).1.contains("right_isometric"));
+        assert_eq!(fail(&mut s, "render.png", json!({"projection": "fisheye"})).0, -32602);
+        assert_eq!(fail(&mut s, "render.png", json!({"mode": "xray"})).0, -32602);
+        assert_eq!(fail(&mut s, "render.png", json!({"width": "wide"})).0, -32602);
+    }
+
+    #[test]
+    fn view_list_and_view_set() {
+        let mut s = Session::default();
+        let l = ok(&mut s, "view.list", json!({}));
+        let ids: Vec<&str> = l["views"].as_array().unwrap().iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert_eq!(ids.len(), 11);
+        assert!(ids.contains(&"plan") && ids.contains(&"top") && ids.contains(&"left_rear_isometric"));
+        assert_eq!(l["current"], json!({"view": "plan", "projection": "ortho", "mode": "shaded"}));
+        assert!(!s.take_view_changed());
+
+        let r = ok(&mut s, "view.set", json!({"view": "front"}));
+        assert_eq!(r, json!({"view": "front", "projection": "ortho", "mode": "shaded"}));
+        assert!(s.take_view_changed());
+        assert!(!s.take_view_changed());
+        // Fields that are not given stay as they were.
+        ok(&mut s, "view.set", json!({"projection": "perspective", "mode": "wireframe"}));
+        assert_eq!(ok(&mut s, "view.list", json!({}))["current"], json!({"view": "front", "projection": "perspective", "mode": "wireframe"}));
+        // render.png without a view uses the current one.
+        assert_eq!(ok(&mut s, "render.png", json!({"width": 16, "height": 16}))["view"], "front");
+        // Nothing given, or a bad name: refused, nothing changes.
+        s.take_view_changed();
+        assert_eq!(fail(&mut s, "view.set", json!({})).0, -32602);
+        assert_eq!(fail(&mut s, "view.set", json!({"view": "nope"})).0, -32602);
+        assert!(!s.take_view_changed());
+        assert_eq!(s.view.view, StandardView::Front);
+        // A new document keeps the view.
+        s.replace_document(Document::default());
+        assert_eq!(s.view.view, StandardView::Front);
+    }
+
+    #[test]
+    fn render_png_reuses_the_mesh_until_the_document_changes() {
+        let mut s = Session::default();
+        ok(&mut s, "render.png", json!({"width": 16, "height": 16}));
+        ok(&mut s, "render.png", json!({"width": 16, "height": 16, "view": "front"}));
+        assert_eq!(s.mesh_cache.builds, 1);
+        exec(&mut s, circle_cmd(0.0));
+        ok(&mut s, "render.png", json!({"width": 16, "height": 16}));
+        assert_eq!(s.mesh_cache.builds, 2);
     }
 }

@@ -97,7 +97,7 @@ pub fn box_select(doc: &Document, a: DVec2, b: DVec2, crossing: bool) -> Vec<Obj
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadektor_core::api::Session;
+    use cadektor_api::Session;
     use cadektor_core::command::Command;
     use cadektor_core::model::Attributes;
 
@@ -108,7 +108,7 @@ mod tests {
                 .execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() })
                 .unwrap();
         }
-        s.editor.doc
+        s.editor.doc().clone()
     }
 
     #[test]
@@ -129,7 +129,7 @@ mod tests {
             Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(100.0) },
             Shape::Hardscape {
                 boundary: cadektor_core::curve::corners(&[DVec2::new(200.0, 0.0), DVec2::new(300.0, 0.0), DVec2::new(300.0, 100.0)]),
-                material: "x".into(),
+                material: "x".into(), thickness: None, elevation: None,
             },
         ]);
         assert_eq!(hit_test(&doc, DVec2::splat(50.0), 2.0), None);
@@ -177,7 +177,7 @@ mod tests {
         s.editor
             .execute(&Command::ModifyLayer { id: cadektor_core::model::FIRST_LAYER, name: None, visible: None, locked: Some(true), elevation: None, scale: None })
             .unwrap();
-        assert_eq!(hit_test(&s.editor.doc, DVec2::new(0.5, 0.0), 1.0), None);
+        assert_eq!(hit_test(s.editor.doc(), DVec2::new(0.5, 0.0), 1.0), None);
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         // Inside is hit when filled.
         assert!(shape_hit(&shape, true, DVec2::new(500.0, 500.0), 5.0));
         assert!(!shape_hit(&shape, false, DVec2::new(500.0, 500.0), 5.0));
-        let area = Shape::Hardscape { boundary: shape.vertices().unwrap().clone(), material: "m".into() };
+        let area = Shape::Hardscape { boundary: shape.vertices().unwrap().clone(), material: "m".into(), thickness: None, elevation: None };
         assert!(shape_hit(&area, false, DVec2::new(500.0, 500.0), 5.0));
         assert!(!shape_hit(&area, false, DVec2::new(-20.0, -20.0), 5.0));
     }

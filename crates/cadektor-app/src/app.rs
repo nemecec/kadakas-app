@@ -1,8 +1,9 @@
 //! The application: one `Session`, a view, the active tool and the panels.
 
-use cadektor_core::api::Session;
+use cadektor_api::Session;
 use cadektor_core::command::Command;
 use cadektor_core::model::{Document, ObjectId};
+use cadektor_render::{RenderMode, StandardView};
 use egui::{Key, Sense};
 use glam::DVec2;
 use serde_json::Value;
@@ -10,11 +11,14 @@ use serde_json::Value;
 use crate::canvas;
 use crate::databar::{self, DataEntry};
 use crate::file_io;
-use crate::keymap::{self, Action, Chord, Keymap};
+use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
 use crate::snap::{self, SnapConfig, SnapResult};
 use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
+use crate::canvas3d;
+use crate::gpu3d::Gpu3d;
 use crate::view::{View, grid_step};
+use crate::view3d::{self, View3d};
 
 /// Pan step of an arrow key, in px.
 const PAN_STEP_PX: f32 = 60.0;
@@ -26,6 +30,10 @@ pub struct CadektorApp {
     session: Session,
     view: View,
     needs_fit: bool,
+    /// Camera of the 3D view. What it shows is chosen in `session.view`.
+    view3d: View3d,
+    /// The 3D renderer is available (the app runs on wgpu).
+    gpu_ready: bool,
     machine: ToolMachine,
     settings: ToolSettings,
     snap_cfg: SnapConfig,
@@ -53,6 +61,11 @@ impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>, agent_port: Option<u16>) -> Self {
         let mut app = Self::blank();
+        if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            let gpu = Gpu3d::new(&rs.device, rs.target_format);
+            rs.renderer.write().callback_resources.insert(gpu);
+            app.gpu_ready = true;
+        }
         let (keys, warnings) = Keymap::load();
         app.keys = keys;
         for w in &warnings {
@@ -83,6 +96,8 @@ impl CadektorApp {
             session: Session::default(),
             view: View::default(),
             needs_fit: true,
+            view3d: View3d::default(),
+            gpu_ready: false,
             machine: ToolMachine::default(),
             settings: ToolSettings::default(),
             snap_cfg: SnapConfig::default(),
@@ -114,6 +129,31 @@ impl CadektorApp {
         self.title_dirty = true;
         self.machine.cancel();
         self.needs_fit = true;
+        self.view3d.request_fit();
+    }
+
+    /// True while the 2D plan canvas shows, not the 3D view.
+    fn plan(&self) -> bool {
+        view3d::is_plan(self.session.view)
+    }
+
+    fn zoom_fit(&mut self) {
+        if self.plan() {
+            self.needs_fit = true;
+        } else {
+            self.view3d.request_fit();
+        }
+    }
+
+    /// Shows a standard view. Top/Plan is the 2D drawing; the others are the 3D view.
+    fn set_standard_view(&mut self, view: StandardView) {
+        self.session.view.view = view;
+        if !view.is_plan() {
+            self.machine.cancel();
+            if !self.gpu_ready {
+                self.status = "The 3D view needs the wgpu renderer".into();
+            }
+        }
     }
 
     fn undo(&mut self) {
@@ -132,7 +172,7 @@ impl CadektorApp {
     }
 
     fn select_all(&mut self) {
-        let doc = &self.session.editor.doc;
+        let doc = &self.session.editor.doc();
         self.session.selection = doc.objects.values().filter(|o| doc.is_visible(o)).map(|o| o.id).collect();
     }
 
@@ -143,7 +183,7 @@ impl CadektorApp {
             MenuAction::Redo => self.redo(),
             MenuAction::Delete => self.delete_selection(),
             MenuAction::SelectAll => self.select_all(),
-            MenuAction::ZoomFit => self.needs_fit = true,
+            MenuAction::ZoomFit => self.zoom_fit(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Open => self.open_file(ctx),
             #[cfg(not(target_arch = "wasm32"))]
@@ -189,7 +229,7 @@ impl CadektorApp {
                 file_io::with_extension(&p)
             }
         };
-        match file_io::write_document(&path, &self.session.editor.doc) {
+        match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());
                 self.path = Some(path);
@@ -202,7 +242,7 @@ impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn export_svg(&mut self) {
         let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).set_file_name("drawing.svg").save_file() else { return };
-        self.status = match file_io::write_svg(&p, &self.session.editor.doc) {
+        self.status = match file_io::write_svg(&p, self.session.editor.doc()) {
             Ok(()) => format!("Exported {}", p.display()),
             Err(e) => e,
         };
@@ -219,7 +259,15 @@ impl CadektorApp {
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
         if let Some(t) = action.tool() {
+            // Drawing happens on the plan. Choosing a drawing tool in 3D goes back to it.
+            if t != Tool::Select && !self.plan() {
+                self.set_standard_view(StandardView::Plan);
+            }
             self.machine.set_tool(t);
+            return;
+        }
+        if let Some(v) = action.standard_view() {
+            self.set_standard_view(v);
             return;
         }
         match action {
@@ -251,7 +299,18 @@ impl CadektorApp {
             Action::NudgeRight => self.nudge(DVec2::X),
             Action::NudgeUp => self.nudge(DVec2::Y),
             Action::NudgeDown => self.nudge(DVec2::NEG_Y),
-            Action::ZoomFit => self.needs_fit = true,
+            Action::ZoomFit => self.zoom_fit(),
+            Action::ViewFlyover => {
+                if self.plan() {
+                    self.set_standard_view(StandardView::RightIsometric);
+                }
+                self.status = "Flyover: drag to orbit, Shift-drag or middle-drag to pan, wheel to zoom".into();
+            }
+            Action::ViewProjection => {
+                self.session.view.projection = self.session.view.projection.toggled();
+            }
+            Action::ViewWireframe => self.session.view.mode = RenderMode::Wireframe,
+            Action::ViewShaded => self.session.view.mode = RenderMode::Shaded,
             Action::ZoomIn => self.pending_zoom *= 2.0,
             Action::ZoomOut => self.pending_zoom *= 0.5,
             // Arrow keys move the view like the scroll bars would: the drawing follows the key.
@@ -284,18 +343,17 @@ impl CadektorApp {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // egui drops focus on Esc before this runs, so the focus state of the last frame counts too.
         let typing = ctx.egui_wants_keyboard_input() || self.entry.active;
-        let events: Vec<(Key, egui::Modifiers, bool)> = ctx.input(|i| {
+        let events: Vec<(Key, Option<Key>, egui::Modifiers, bool)> = ctx.input(|i| {
             i.events
                 .iter()
                 .filter_map(|e| match e {
-                    egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => Some((*key, *modifiers, *repeat)),
+                    egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers } => Some((*key, *physical_key, *modifiers, *repeat)),
                     _ => None,
                 })
                 .collect()
         });
-        for (key, mods, repeat) in events {
-            let chord = Chord::from_event(key, mods);
-            let Some(action) = self.keys.action_for(chord) else { continue };
+        for (key, physical, mods, repeat) in events {
+            let Some((action, chord)) = self.keys.action_for_event(key, physical, mods) else { continue };
             if repeat && !action.repeats() {
                 continue;
             }
@@ -356,7 +414,7 @@ impl CadektorApp {
 
     fn send(&mut self, input: Input) {
         let effects = {
-            let cx = Ctx { doc: &self.session.editor.doc, selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
+            let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
             self.machine.handle(input, &cx)
         };
         for e in effects {
@@ -376,10 +434,11 @@ impl CadektorApp {
     }
 
     fn fit_view(&mut self, rect: egui::Rect) {
-        let (lo, hi) = cadektor_core::svg::drawing_bounds(&self.session.editor.doc)
+        let (lo, hi) = cadektor_core::svg::drawing_bounds(self.session.editor.doc())
             .unwrap_or((DVec2::new(-1000.0, -1000.0), DVec2::new(19000.0, 14000.0)));
         self.view.fit(lo, hi, rect);
     }
+
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -429,7 +488,7 @@ impl CadektorApp {
             self.snap_hit = if suspend {
                 None
             } else {
-                let pts = snap::snap_points(&self.session.editor.doc, &busy_ids);
+                let pts = snap::snap_points(self.session.editor.doc(), &busy_ids);
                 snap::snap(raw, self.tol(), grid_step(self.view.zoom, 12.0), self.snap_cfg, &pts)
             };
             self.cursor = self.snap_hit.map_or(raw, |s| s.point);
@@ -464,10 +523,10 @@ impl CadektorApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
 
-        let cx = Ctx { doc: &self.session.editor.doc, selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
+        let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
         let preview = if resp.hovered() || self.machine.is_busy() { self.machine.preview(self.cursor, &cx) } else { crate::tools::Preview::None };
         let frame = canvas::Frame {
-            doc: &self.session.editor.doc,
+            doc: self.session.editor.doc(),
             selection: &self.session.selection,
             preview: &preview,
             snap: self.snap_hit,
@@ -493,6 +552,7 @@ impl eframe::App for CadektorApp {
             if fx.replaced {
                 self.machine.cancel();
                 self.needs_fit = true;
+                self.view3d.request_fit();
             }
             self.title_dirty |= fx.path_changed;
         }
@@ -502,6 +562,9 @@ impl eframe::App for CadektorApp {
         }
         self.entry.sync(self.machine.tool(), self.machine.anchor().is_some(), self.arc_fields());
         self.handle_keys(&ctx);
+        // The camera follows the chosen view, whoever chose it: a key, the view bar or an agent.
+        let forced = self.session.take_view_changed();
+        self.view3d.sync(self.session.view, forced);
 
         let (can_undo, can_redo) = (self.session.editor.can_undo(), self.session.editor.can_redo());
         let mut actions = Vec::new();
@@ -511,20 +574,30 @@ impl eframe::App for CadektorApp {
         for a in actions {
             self.apply_menu(&ctx, a);
         }
+        let before = self.session.view.view;
+        egui::Panel::top("viewbar").show(ui, |ui| panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready));
+        if self.session.view.view != before {
+            self.set_standard_view(self.session.view.view);
+        }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let d = &self.session.editor.doc;
+                let d = &self.session.editor.doc();
                 ui.label(&self.status);
                 ui.separator();
                 ui.label(self.machine.hint());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!(
-                        "{} objects, {} selected, zoom {:.3} px/mm, 1:{}",
-                        d.objects.len(),
-                        self.session.selection.len(),
-                        self.view.zoom,
-                        d.layer(d.active_layer).map_or(100.0, |l| l.scale)
-                    ));
+                    if self.plan() {
+                        ui.label(format!(
+                            "{} objects, {} selected, zoom {:.3} px/mm, 1:{}",
+                            d.objects.len(),
+                            self.session.selection.len(),
+                            self.view.zoom,
+                            d.layer(d.active_layer).map_or(100.0, |l| l.scale)
+                        ));
+                    } else {
+                        let v = self.session.view;
+                        ui.label(format!("{} objects, {} selected, {}, {}", d.objects.len(), self.session.selection.len(), v.view.label(), v.projection.id()));
+                    }
                 });
             });
         });
@@ -543,13 +616,30 @@ impl eframe::App for CadektorApp {
                 panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
             });
         });
-        egui::CentralPanel::no_frame().show(ui, |ui| self.canvas(ui));
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if self.plan() {
+                self.canvas(ui);
+            } else {
+                canvas3d::show(
+                    ui,
+                    canvas3d::Canvas3d {
+                        session: &mut self.session,
+                        view3d: &mut self.view3d,
+                        keys: &self.keys,
+                        gpu_ready: self.gpu_ready,
+                        pending_zoom: &mut self.pending_zoom,
+                        pending_pan: &mut self.pending_pan,
+                    },
+                );
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_render::Projection;
 
     /// A key press followed by its release, so the next press is not seen as a repeat.
     fn key(k: Key, mods: egui::Modifiers) -> Vec<egui::Event> {
@@ -703,8 +793,112 @@ mod tests {
         assert_eq!(app.settings.arc_radius, 50.0);
         app.send(Input::Press { p: DVec2::new(200.0, 300.0), shift: false });
         app.send(Input::Enter);
-        let o = app.session.editor.doc.objects.values().next().unwrap();
+        let o = app.session.editor.doc().objects.values().next().unwrap();
         let vs = o.shape.vertices().unwrap();
         assert_eq!(vs[1].kind, cadektor_core::model::VertexKind::Arc { radius: 50.0 });
+    }
+
+    /// A key press the way a real keyboard reports it: the logical key can differ from the physical one.
+    fn real_key(logical: Key, physical: Key, mods: egui::Modifiers) -> Vec<egui::Event> {
+        let ev = |pressed| egui::Event::Key { key: logical, physical_key: Some(physical), pressed, repeat: false, modifiers: mods };
+        vec![ev(true), ev(false)]
+    }
+
+    #[test]
+    fn standard_view_keys_switch_between_plan_and_3d() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let m = egui::Modifiers { alt: true, shift: true, ..Default::default() };
+        assert_eq!(app.session.view.view, StandardView::Plan);
+        assert!(app.plan());
+        // Vectorworks numbering. The logical key is what a US keyboard types with Shift held;
+        // the physical key is the digit.
+        for (digit, logical, view) in [
+            (Key::Num2, Key::Num2, StandardView::Front),
+            (Key::Num8, Key::Num8, StandardView::Back),
+            (Key::Num4, Key::Num4, StandardView::Left),
+            (Key::Num6, Key::Num6, StandardView::Right),
+            (Key::Num1, Key::Exclamationmark, StandardView::LeftIsometric),
+            (Key::Num3, Key::Num3, StandardView::RightIsometric),
+            (Key::Num7, Key::Num7, StandardView::LeftRearIsometric),
+            (Key::Num9, Key::Num9, StandardView::RightRearIsometric),
+            (Key::Num5, Key::Num5, StandardView::Top),
+            (Key::Num0, Key::Num0, StandardView::Plan),
+        ] {
+            frame(&mut app, &ctx, real_key(logical, digit, m));
+            assert_eq!(app.session.view.view, view, "{digit:?} ({logical:?})");
+            assert_eq!(app.plan(), view == StandardView::Plan);
+        }
+        // Cmd/Ctrl+5 is Top/Plan.
+        app.set_standard_view(StandardView::Front);
+        frame(&mut app, &ctx, key(Key::Num5, egui::Modifiers::COMMAND));
+        assert!(app.plan());
+        // Projection and render mode.
+        frame(&mut app, &ctx, key(Key::J, m));
+        assert_eq!(app.session.view.projection, Projection::Perspective);
+        frame(&mut app, &ctx, key(Key::J, m));
+        assert_eq!(app.session.view.projection, Projection::Orthographic);
+        let cs = egui::Modifiers { shift: true, ..egui::Modifiers::COMMAND };
+        frame(&mut app, &ctx, key(Key::W, cs));
+        assert_eq!(app.session.view.mode, RenderMode::Wireframe);
+        frame(&mut app, &ctx, key(Key::G, cs));
+        assert_eq!(app.session.view.mode, RenderMode::Shaded);
+        // Flyover (Shift+C) leaves the plan for an isometric view. In 3D it only says how to navigate.
+        frame(&mut app, &ctx, key(Key::C, egui::Modifiers::SHIFT));
+        assert_eq!(app.session.view.view, StandardView::RightIsometric);
+        assert!(app.status.contains("orbit"), "{}", app.status);
+        frame(&mut app, &ctx, real_key(Key::Num2, Key::Num2, m));
+        frame(&mut app, &ctx, key(Key::C, egui::Modifiers::SHIFT));
+        assert_eq!(app.session.view.view, StandardView::Front);
+        // Choosing a drawing tool goes back to the plan; the Selection tool stays in 3D.
+        frame(&mut app, &ctx, key(Key::X, egui::Modifiers::NONE));
+        assert_eq!(app.session.view.view, StandardView::Front);
+        frame(&mut app, &ctx, key(Key::Num4, egui::Modifiers::NONE));
+        assert_eq!(app.machine.tool(), Tool::Rect);
+        assert!(app.plan());
+        // Zoom to fit asks the right canvas.
+        app.needs_fit = false;
+        app.zoom_fit();
+        assert!(app.needs_fit);
+        app.set_standard_view(StandardView::Front);
+        app.view3d.fit(None, 1.0);
+        app.zoom_fit();
+        assert!(app.view3d.fit_pending());
+    }
+
+    #[test]
+    fn view_keys_do_not_fire_while_typing() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        app.machine.set_tool(Tool::Line);
+        app.send(Input::Press { p: DVec2::ZERO, shift: false });
+        frame(&mut app, &ctx, key(Key::Tab, egui::Modifiers::NONE));
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.entry.active);
+        frame(&mut app, &ctx, key(Key::C, egui::Modifiers::SHIFT));
+        assert!(app.plan(), "Shift+C types a letter in a field");
+    }
+
+    #[test]
+    fn a_3d_view_without_a_gpu_says_so() {
+        let mut app = CadektorApp::blank();
+        app.set_standard_view(StandardView::Front);
+        assert!(app.status.contains("wgpu"));
+        assert!(!app.plan());
+    }
+
+    #[test]
+    fn agent_view_set_moves_the_camera() {
+        let mut app = CadektorApp::blank();
+        app.session.handle("view.set", serde_json::json!({"view": "back", "projection": "perspective"})).unwrap();
+        let forced = app.session.take_view_changed();
+        assert!(forced);
+        app.view3d.sync(app.session.view, forced);
+        assert!(!app.plan());
+        assert!((app.view3d.camera.eye_dir() - glam::Vec3::Y).length() < 1e-5);
+        assert_eq!(app.view3d.camera.projection, Projection::Perspective);
+        app.session.handle("view.set", serde_json::json!({"view": "plan"})).unwrap();
+        assert!(app.session.take_view_changed());
+        assert!(app.plan());
     }
 }

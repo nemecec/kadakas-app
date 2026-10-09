@@ -81,6 +81,10 @@ impl Attributes {
     }
 }
 
+/// Largest absolute value of any coordinate, size or elevation, in mm (1000 km).
+/// Larger numbers are refused, because 3D views and exports cannot hold them.
+pub const MAX_COORD: f64 = 1.0e9;
+
 /// Geometry and parameters of an object. Coordinates are model units (mm).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -97,7 +101,16 @@ pub enum Shape {
     /// Planting area with a plant mix, bounded by a closed outline.
     LandscapeArea { boundary: Vec<Vertex>, name: String },
     /// Paved area (path, patio, drive).
-    Hardscape { boundary: Vec<Vertex>, material: String },
+    /// `thickness` (default 150 mm) is measured down from the top surface. `elevation` (default 0)
+    /// is the height of the top surface above the layer elevation.
+    Hardscape {
+        boundary: Vec<Vertex>,
+        material: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thickness: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elevation: Option<f64>,
+    },
 }
 
 /// Counterclockwise sweep of an arc in radians, from 0 (empty) to 2π (full circle).
@@ -149,10 +162,70 @@ impl Shape {
             Shape::Arc { center, radius, start, end } => v(center) && radius.is_finite() && start.is_finite() && end.is_finite(),
             Shape::Text { at, height, .. } => v(at) && height.is_finite(),
             Shape::Plant { at, spread, height, .. } => v(at) && spread.is_finite() && height.is_finite(),
-            Shape::Polyline { points, .. }
-            | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => points.iter().all(Vertex::is_finite),
+            Shape::Hardscape { boundary, thickness, elevation, .. } => {
+                boundary.iter().all(Vertex::is_finite) && thickness.is_none_or(f64::is_finite) && elevation.is_none_or(f64::is_finite)
+            }
+            Shape::Polyline { points, .. } | Shape::LandscapeArea { boundary: points, .. } => points.iter().all(Vertex::is_finite),
         }
+    }
+
+    /// Calls `f` with every number of the shape.
+    fn for_each_number(&self, f: &mut dyn FnMut(f64)) {
+        let mut v = |p: &DVec2| {
+            f(p.x);
+            f(p.y);
+        };
+        let vertex = |x: &Vertex, f: &mut dyn FnMut(f64)| {
+            f(x.p.x);
+            f(x.p.y);
+            if let VertexKind::Arc { radius } = x.kind {
+                f(radius);
+            }
+        };
+        match self {
+            Shape::Line { a, b } => {
+                v(a);
+                v(b);
+            }
+            Shape::Rect { min, max } => {
+                v(min);
+                v(max);
+            }
+            Shape::Circle { center, radius } => {
+                v(center);
+                f(*radius);
+            }
+            Shape::Arc { center, radius, start, end } => {
+                v(center);
+                [*radius, *start, *end].into_iter().for_each(&mut *f);
+            }
+            Shape::Text { at, height, .. } => {
+                v(at);
+                f(*height);
+            }
+            Shape::Plant { at, spread, height, .. } => {
+                v(at);
+                f(*spread);
+                f(*height);
+            }
+            Shape::Hardscape { boundary, thickness, elevation, .. } => {
+                boundary.iter().for_each(|x| vertex(x, f));
+                thickness.iter().chain(elevation.iter()).for_each(|x| f(*x));
+            }
+            Shape::Polyline { points, .. } | Shape::LandscapeArea { boundary: points, .. } => points.iter().for_each(|x| vertex(x, f)),
+        }
+    }
+
+    /// True if no number is larger than `MAX_COORD` in absolute value (NaN fails too).
+    pub fn is_in_range(&self) -> bool {
+        let mut ok = true;
+        self.for_each_number(&mut |x| ok &= x.abs() <= MAX_COORD);
+        ok
+    }
+
+    /// True unless a hardscape has a thickness of zero or less.
+    pub fn has_valid_thickness(&self) -> bool {
+        !matches!(self, Shape::Hardscape { thickness: Some(t), .. } if t.is_nan() || *t <= 0.0)
     }
 
     pub fn translate(&mut self, d: DVec2) {
@@ -455,11 +528,16 @@ impl Document {
         if self.layers.is_empty() {
             return Err("document has no layers".into());
         }
+        if let Some(l) = self.layers.iter().find(|l| l.elevation.is_nan() || l.elevation.abs() > MAX_COORD) {
+            return Err(format!("layer {} has an elevation out of range", l.id));
+        }
         if let Some(o) = self.objects.values().find(|o| self.layer(o.layer).is_none() || self.class(o.class).is_none()) {
             return Err(format!("object {} refers to a missing layer or class", o.id));
         }
         if let Some(o) = self.objects.values().find(|o| {
             !o.is_finite()
+                || !o.shape.is_in_range()
+                || !o.shape.has_valid_thickness()
                 || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
                 || o.shape.vertices().is_some_and(|vs| vs.iter().any(|v| matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0)))
         }) {
@@ -544,7 +622,7 @@ mod tests {
             (Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: 1.0 }, "text"),
             (Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: 1.0 }, "plant"),
             (Shape::LandscapeArea { boundary: crate::curve::corners(&[]), name: "n".into() }, "landscape_area"),
-            (Shape::Hardscape { boundary: crate::curve::corners(&[]), material: "m".into() }, "hardscape"),
+            (Shape::Hardscape { boundary: crate::curve::corners(&[]), material: "m".into(), thickness: None, elevation: None }, "hardscape"),
         ];
         for (shape, kind) in cases {
             assert_eq!(shape.kind(), kind);
@@ -563,7 +641,7 @@ mod tests {
             Shape::Text { at: v(3.0, 3.0), text: "x".into(), height: 2.0 },
             Shape::Plant { at: v(3.0, 3.0), species: "x".into(), spread: 2.0, height: 2.0 },
             Shape::LandscapeArea { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), name: "a".into() },
-            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), material: "m".into() },
+            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), material: "m".into(), thickness: None, elevation: None },
         ];
         for s in &mut shapes {
             let before = s.bounds();
@@ -615,7 +693,7 @@ mod tests {
         let expected = (v(0.0, -1.0), v(4.0, 6.0));
         assert_eq!(Shape::Polyline { points: crate::curve::corners(&poly.clone()), closed: false }.bounds(), expected);
         assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&poly.clone()), name: "a".into() }.bounds(), expected);
-        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&poly), material: "m".into() }.bounds(), expected);
+        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&poly), material: "m".into(), thickness: None, elevation: None }.bounds(), expected);
     }
 
     #[test]
@@ -627,7 +705,7 @@ mod tests {
         let square = vec![v(0.0, 0.0), v(3.0, 0.0), v(3.0, 3.0), v(0.0, 3.0)];
         assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: true }.area(), Some(9.0));
         assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: false }.area(), None);
-        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&square.clone()), material: "m".into() }.area(), Some(9.0));
+        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&square.clone()), material: "m".into(), thickness: None, elevation: None }.area(), Some(9.0));
 
         let tri = vec![v(0.0, 0.0), v(4.0, 0.0), v(0.0, 3.0)];
         assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&tri), name: "t".into() }.area(), Some(6.0));
@@ -775,7 +853,7 @@ mod tests {
             Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: nan },
             Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: nan, height: 1.0 },
             Shape::LandscapeArea { boundary: crate::curve::corners(&[v(nan, 0.0)]), name: "n".into() },
-            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, nan)]), material: "m".into() },
+            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, nan)]), material: "m".into(), thickness: None, elevation: None },
         ];
         for s in bad {
             assert!(!s.is_finite(), "{s:?}");
@@ -942,7 +1020,7 @@ mod tests {
     #[test]
     fn curved_bounds_and_area() {
         let arc = |x: f64, y: f64| Vertex::new(v(x, y), VertexKind::Arc { radius: 10.0 });
-        let rounded = Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into() };
+        let rounded = Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into(), thickness: None, elevation: None };
         // The fillets cut the corners, so the box is still the square (the sides touch it).
         let (lo, hi) = rounded.bounds();
         assert_vec_close(lo, v(0.0, 0.0));

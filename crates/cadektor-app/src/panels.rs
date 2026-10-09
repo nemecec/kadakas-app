@@ -1,9 +1,10 @@
 //! Side panels, menu and data bar. Every document change goes through
 //! `run_command`, which uses `Session::editor.execute`.
 
-use cadektor_core::api::Session;
+use cadektor_api::Session;
 use cadektor_core::command::{Command, Outcome};
 use cadektor_core::model::{Attributes, Color, ObjectId, Shape, Vertex, VertexKind};
+use cadektor_render::{Projection, RenderMode, StandardView, ViewSettings};
 use egui::{DragValue, Ui};
 use glam::DVec2;
 
@@ -31,7 +32,7 @@ pub enum MenuAction {
 pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) -> Option<Outcome> {
     match session.editor.execute(cmd) {
         Ok(out) => {
-            let doc = &session.editor.doc;
+            let doc = &session.editor.doc();
             session.selection.retain(|id| doc.object(*id).is_some());
             Some(out)
         }
@@ -79,6 +80,39 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
         });
     });
     out
+}
+
+/// The key of a view, for a tooltip. Empty for a view without a key.
+fn view_hint(keys: &Keymap, view: StandardView) -> String {
+    Action::for_view(view).map(|a| keys.hint(a)).unwrap_or_default()
+}
+
+/// The view bar: standard view, projection and render mode. The projection and the render
+/// mode apply to the 3D views only; Top/Plan is the 2D drawing.
+pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: bool) {
+    ui.horizontal(|ui| {
+        ui.label("View");
+        egui::ComboBox::from_id_salt("standard_view").selected_text(v.view.label()).show_ui(ui, |ui| {
+            for s in StandardView::ALL {
+                ui.selectable_value(&mut v.view, s, s.label()).on_hover_text(view_hint(keys, s));
+            }
+        });
+        for s in [StandardView::Plan, StandardView::Front, StandardView::RightIsometric] {
+            if ui.selectable_label(v.view == s, s.label()).on_hover_text(view_hint(keys, s)).clicked() {
+                v.view = s;
+            }
+        }
+        ui.separator();
+        ui.add_enabled_ui(!v.view.is_plan() && gpu_ready, |ui| {
+            ui.selectable_value(&mut v.projection, Projection::Orthographic, "Parallel");
+            ui.selectable_value(&mut v.projection, Projection::Perspective, "Perspective")
+                .on_hover_text(keys.hint(Action::ViewProjection));
+            ui.separator();
+            ui.selectable_value(&mut v.mode, RenderMode::Wireframe, "Wireframe")
+                .on_hover_text(keys.hint(Action::ViewWireframe));
+            ui.selectable_value(&mut v.mode, RenderMode::Shaded, "Shaded").on_hover_text(keys.hint(Action::ViewShaded));
+        });
+    });
 }
 
 /// The key action that does the same as a menu item.
@@ -412,7 +446,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.text(ui, "Name", name);
             f.count(ui, boundary.len());
         }
-        Shape::Hardscape { boundary, material } => {
+        Shape::Hardscape { boundary, material, .. } => {
             f.text(ui, "Material", material);
             f.count(ui, boundary.len());
         }
@@ -444,7 +478,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     ui.separator();
     let sel = session.selection.clone();
     let Some(&id) = sel.first() else {
-        let d = &session.editor.doc;
+        let d = &session.editor.doc();
         let layer = d.layer(d.active_layer).map_or("?", |l| l.name.as_str());
         let class = d.class(d.active_class).map_or("?", |c| c.name.as_str());
         ui.label(format!("Nothing selected.\nActive layer: {layer}\nActive class: {class}"));
@@ -457,7 +491,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         class_layer_combos(ui, session, &sel, status);
         return;
     }
-    let Some(obj) = session.editor.doc.object(id).cloned() else { return };
+    let Some(obj) = session.editor.doc().object(id).cloned() else { return };
     // Reset the buffer when another object is selected or the shape changed elsewhere.
     if edit.id != id || edit.base.as_ref() != Some(&obj.shape) {
         *edit = InfoEdit { id, base: Some(obj.shape.clone()), edited: Some(obj.shape.clone()) };
@@ -488,7 +522,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     ui.separator();
     class_layer_combos(ui, session, &sel, status);
-    let doc = &session.editor.doc;
+    let doc = &session.editor.doc();
     let res = doc.resolved_attrs(&obj);
     let mut attrs: Attributes = obj.attrs.clone();
     let mut changed = attr_row(ui, "Pen", &mut attrs.pen, res.pen);
@@ -511,7 +545,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
 }
 
 fn class_layer_combos(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut String) {
-    let doc = &session.editor.doc;
+    let doc = &session.editor.doc();
     let first = doc.object(sel[0]).cloned();
     let Some(first) = first else { return };
     let layers: Vec<_> = doc.layers.iter().map(|l| (l.id, l.name.clone())).collect();
@@ -561,7 +595,7 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
     ui.heading("Navigation");
     ui.separator();
     let mut cmds: Vec<Command> = Vec::new();
-    let doc = &session.editor.doc;
+    let doc = &session.editor.doc();
 
     ui.horizontal(|ui| {
         ui.strong("Design Layers");
@@ -661,7 +695,7 @@ mod tests {
 
     fn rounded() -> Shape {
         let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 100.0 });
-        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(1000.0, 0.0), arc(1000.0, 1000.0), arc(0.0, 1000.0)], material: "m".into() }
+        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(1000.0, 0.0), arc(1000.0, 1000.0), arc(0.0, 1000.0)], material: "m".into(), thickness: None, elevation: None }
     }
 
     fn add(session: &mut Session, shape: Shape) -> ObjectId {
@@ -673,7 +707,7 @@ mod tests {
     fn vertex_edits_become_set_vertex_commands() {
         let mut s = Session::default();
         let id = add(&mut s, rounded());
-        let base = s.editor.doc.object(id).unwrap().shape.vertices().unwrap().clone();
+        let base = s.editor.doc().object(id).unwrap().shape.vertices().unwrap().clone();
         assert!(vertex_edit_commands(id, &base, &base).is_empty());
         let mut edited = base.clone();
         edited[1].kind = VertexKind::Arc { radius: 250.0 };
@@ -691,10 +725,10 @@ mod tests {
         );
         let mut status = String::new();
         assert!(run_command(&mut s, &Command::Batch { commands: cmds }, &mut status).is_some());
-        assert_eq!(s.editor.doc.object(id).unwrap().shape.vertices().unwrap(), &edited);
+        assert_eq!(s.editor.doc().object(id).unwrap().shape.vertices().unwrap(), &edited);
         // One undo step brings all three back.
         assert!(s.editor.undo());
-        assert_eq!(s.editor.doc.object(id).unwrap().shape.vertices().unwrap(), &base);
+        assert_eq!(s.editor.doc().object(id).unwrap().shape.vertices().unwrap(), &base);
     }
 
     #[test]
@@ -733,6 +767,6 @@ mod tests {
                 });
             }
         }
-        assert!(curve::path(s.editor.doc.object(poly).unwrap().shape.vertices().unwrap(), false).segs.len() == 1);
+        assert!(curve::path(s.editor.doc().object(poly).unwrap().shape.vertices().unwrap(), false).segs.len() == 1);
     }
 }

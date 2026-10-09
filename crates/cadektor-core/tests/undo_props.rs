@@ -46,8 +46,8 @@ fn shape() -> impl Strategy<Value = Shape> {
         8 => (p(), -10.0..500.0f64).prop_map(|(center, radius)| Shape::Circle { center, radius }),
         4 => (p(), 1.0..5000.0f64).prop_map(|(at, spread)| Shape::Plant { at, species: "Oak".into(), spread, height: 1.0 }),
         2 => prop::collection::vec(p(), 0..6)
-            .prop_map(|pts| Shape::Hardscape { boundary: cadektor_core::curve::corners(&pts), material: "Gravel".into() }),
-        4 => prop::collection::vec(vertex(), 0..7).prop_map(|boundary| Shape::Hardscape { boundary, material: "Gravel".into() }),
+            .prop_map(|pts| Shape::Hardscape { boundary: cadektor_core::curve::corners(&pts), material: "Gravel".into(), thickness: None, elevation: None }),
+        4 => prop::collection::vec(vertex(), 0..7).prop_map(|boundary| Shape::Hardscape { boundary, material: "Gravel".into(), thickness: None, elevation: None }),
         4 => (prop::collection::vec(vertex(), 0..7), any::<bool>())
             .prop_map(|(points, closed)| Shape::Polyline { points, closed }),
         2 => prop::collection::vec(vertex(), 0..7).prop_map(|boundary| Shape::LandscapeArea { boundary, name: "Lawn".into() }),
@@ -156,7 +156,7 @@ fn assert_curves_are_sane(doc: &Document) -> Result<(), TestCaseError> {
             let mut ed = Editor::default();
             let add = Command::AddObject { shape: o.shape.clone(), layer: None, class: None, attrs: Attributes::default() };
             if ed.execute(&add).is_ok() {
-                let svg = cadektor_core::svg::render(&ed.doc, 200);
+                let svg = cadektor_core::svg::render(ed.doc(), 200);
                 prop_assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
             }
         }
@@ -169,26 +169,26 @@ proptest! {
     #[test]
     fn undo_all_then_redo_all(cmds in prop::collection::vec(command(), 0..25)) {
         let mut ed = Editor::default();
-        let mut states = vec![content(&ed.doc)];
+        let mut states = vec![content(ed.doc())];
         for c in &cmds {
-            let before = content(&ed.doc);
+            let before = content(ed.doc());
             match ed.execute(c) {
-                Ok(_) if content(&ed.doc) != before => states.push(content(&ed.doc)),
+                Ok(_) if content(ed.doc()) != before => states.push(content(ed.doc())),
                 Ok(_) => {}
                 // A failed command leaves the document unchanged.
-                Err(_) => prop_assert_eq!(content(&ed.doc), before),
+                Err(_) => prop_assert_eq!(content(ed.doc()), before),
             }
-            assert_saveable(&ed.doc)?;
-            assert_curves_are_sane(&ed.doc)?;
+            assert_saveable(ed.doc())?;
+            assert_curves_are_sane(ed.doc())?;
         }
         for s in states.iter().rev().skip(1) {
             prop_assert!(ed.undo());
-            prop_assert_eq!(&content(&ed.doc), s);
+            prop_assert_eq!(&content(ed.doc()), s);
         }
         prop_assert!(!ed.undo());
         for s in states.iter().skip(1) {
             prop_assert!(ed.redo());
-            prop_assert_eq!(&content(&ed.doc), s);
+            prop_assert_eq!(&content(ed.doc()), s);
         }
         prop_assert!(!ed.redo());
     }
@@ -198,20 +198,20 @@ proptest! {
     #[test]
     fn interleaved_undo_redo_and_new_commands(steps in prop::collection::vec(step(), 0..40)) {
         let mut ed = Editor::default();
-        let mut states = vec![content(&ed.doc)];
+        let mut states = vec![content(ed.doc())];
         let mut pos = 0usize;
         for s in &steps {
             match s {
                 Step::Do(c) => {
-                    let before = content(&ed.doc);
+                    let before = content(ed.doc());
                     match ed.execute(c) {
-                        Ok(_) if content(&ed.doc) != before => {
+                        Ok(_) if content(ed.doc()) != before => {
                             states.truncate(pos + 1);
-                            states.push(content(&ed.doc));
+                            states.push(content(ed.doc()));
                             pos += 1;
                         }
                         Ok(_) => {}
-                        Err(_) => prop_assert_eq!(content(&ed.doc), before),
+                        Err(_) => prop_assert_eq!(content(ed.doc()), before),
                     }
                 }
                 Step::Undo => {
@@ -226,10 +226,10 @@ proptest! {
                     }
                 }
             }
-            prop_assert_eq!(&content(&ed.doc), &states[pos]);
+            prop_assert_eq!(&content(ed.doc()), &states[pos]);
             prop_assert_eq!(ed.can_undo(), pos > 0);
             prop_assert_eq!(ed.can_redo(), pos + 1 < states.len());
-            assert_saveable(&ed.doc)?;
+            assert_saveable(ed.doc())?;
         }
     }
 
@@ -239,8 +239,8 @@ proptest! {
         for c in &cmds {
             let _ = ed.execute(c);
         }
-        let json = serde_json::to_string(&ed.doc).unwrap();
+        let json = serde_json::to_string(&ed.doc()).unwrap();
         let back: Document = serde_json::from_str(&json).unwrap();
-        prop_assert_eq!(back, ed.doc);
+        prop_assert_eq!(&back, ed.doc());
     }
 }

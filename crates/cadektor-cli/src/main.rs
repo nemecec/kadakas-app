@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use cadektor_core::api::{Session, METHODS};
+use cadektor_api::{Session, METHODS};
 use cadektor_core::fsio::{self, AgentInfo};
 use cadektor_core::model::Document;
 use clap::{Parser, Subcommand};
@@ -64,7 +64,7 @@ struct RemoteArgs {
 
 /// Where requests go: a local document, or a running app over TCP.
 enum Backend {
-    Local(Session),
+    Local(Box<Session>),
     Remote(BufReader<TcpStream>),
 }
 
@@ -79,7 +79,7 @@ impl Backend {
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
         }
-        Ok(Backend::Local(session))
+        Ok(Backend::Local(Box::new(session)))
     }
 
     /// Calls one method and returns the JSON-RPC response object.
@@ -144,7 +144,7 @@ fn file_method(s: &mut Session, req: &Value) -> String {
     let path = req["params"]["path"].as_str().map(PathBuf::from);
     let result = match (req["method"].as_str(), path) {
         (_, None) => Err((-32602, "params.path is required".to_string())),
-        (Some("file.save"), Some(p)) => serde_json::to_string_pretty(&s.editor.doc)
+        (Some("file.save"), Some(p)) => serde_json::to_string_pretty(&s.editor.doc())
             .map_err(|e| (1, e.to_string()))
             .and_then(|t| fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))),
         (_, Some(p)) => load(&p).map_err(|e| (1, e)).and_then(|d| {
@@ -212,6 +212,19 @@ fn mcp_tools() -> Value {
     json!(tools)
 }
 
+/// The content of a tool result. `render.png` gives an image block that a model can look at,
+/// plus the other fields as text. Other methods give their result as text.
+fn tool_content(method: &str, response: &Value, text: String) -> Value {
+    if method == "render.png"
+        && let Some(data) = response["result"]["png_base64"].as_str()
+    {
+        let mut meta = response["result"].clone();
+        meta.as_object_mut().map(|o| o.remove("png_base64"));
+        return json!([{"type": "image", "data": data, "mimeType": "image/png"}, {"type": "text", "text": meta.to_string()}]);
+    }
+    json!([{"type": "text", "text": text}])
+}
+
 fn mcp(mut backend: Backend) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
@@ -253,7 +266,7 @@ fn mcp(mut backend: Backend) {
                             Some(e) => (e["message"].as_str().unwrap_or("error").to_string(), true),
                             None => (r["result"].to_string(), false),
                         };
-                        Ok(json!({"content": [{"type": "text", "text": text}], "isError": is_error}))
+                        Ok(json!({"content": tool_content(m, &r, text), "isError": is_error}))
                     }
                 }
             }
@@ -307,6 +320,19 @@ mod tests {
         assert_eq!(resolve_remote("127.0.0.1:4000", None, info()), Ok(("127.0.0.1:4000".into(), "file-token".into())));
         assert_eq!(resolve_remote("10.0.0.5:9", Some("t"), info()).unwrap().1, "t");
         assert!(resolve_remote("10.0.0.5:9", None, None).unwrap_err().contains("--token"));
+    }
+
+    #[test]
+    fn render_png_tool_result_is_an_image() {
+        let ok = json!({"result": {"png_base64": "AAAA", "width": 2, "view": "top"}});
+        let c = tool_content("render.png", &ok, ok["result"].to_string());
+        assert_eq!(c[0], json!({"type": "image", "data": "AAAA", "mimeType": "image/png"}));
+        let meta: Value = serde_json::from_str(c[1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(meta, json!({"width": 2, "view": "top"}));
+        // Errors and other methods stay text.
+        let err = json!({"error": {"message": "bad"}});
+        assert_eq!(tool_content("render.png", &err, "bad".into()), json!([{"type": "text", "text": "bad"}]));
+        assert_eq!(tool_content("view.list", &ok, "x".into()), json!([{"type": "text", "text": "x"}]));
     }
 
     #[test]
