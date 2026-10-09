@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod hardscape_api;
 mod plants_api;
 mod sheets_api;
 
@@ -115,6 +116,26 @@ pub const METHODS: &[(&str, &str)] = &[
     plants_api::PLANTS_SET_STYLE,
     plants_api::REPORT_PLANT_SCHEDULE,
     plants_api::REPORT_EXISTING_TREES,
+    // Hardscapes and landscape areas (see hardscape_api.rs).
+    hardscape_api::HARDSCAPE_STYLE_LIST,
+    hardscape_api::HARDSCAPE_STYLE_GET,
+    hardscape_api::HARDSCAPE_STYLE_CREATE,
+    hardscape_api::HARDSCAPE_STYLE_UPDATE,
+    hardscape_api::HARDSCAPE_STYLE_DUPLICATE,
+    hardscape_api::HARDSCAPE_STYLE_DELETE,
+    hardscape_api::LANDSCAPE_AREA_STYLE_LIST,
+    hardscape_api::LANDSCAPE_AREA_STYLE_GET,
+    hardscape_api::LANDSCAPE_AREA_STYLE_CREATE,
+    hardscape_api::LANDSCAPE_AREA_STYLE_UPDATE,
+    hardscape_api::LANDSCAPE_AREA_STYLE_DUPLICATE,
+    hardscape_api::LANDSCAPE_AREA_STYLE_DELETE,
+    hardscape_api::HARDSCAPE_ADD,
+    hardscape_api::HARDSCAPE_SET,
+    hardscape_api::LANDSCAPE_AREA_ADD,
+    hardscape_api::LANDSCAPE_AREA_SET,
+    hardscape_api::REPORT_HARDSCAPE,
+    hardscape_api::REPORT_LANDSCAPE_AREAS,
+    hardscape_api::REPORT_PLANT_LIST,
     ("site.create", "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh). Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}."),
     ("site.update", "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}."),
     ("site.elevation", "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y."),
@@ -217,6 +238,7 @@ impl Session {
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
+                "hardscapes": hardscape_api::describe(),
                     "sheets": sheets_api::describe(),
                 });
                 #[cfg(not(target_arch = "wasm32"))]
@@ -388,7 +410,12 @@ impl Session {
             "import.file" => self.import_file(p)?,
             #[cfg(not(target_arch = "wasm32"))]
             "export.file" => self.export_file(p)?,
-            _ => return plants_api::handle(self, method, p.clone()).or_else(|| sheets_api::handle(self, method, p)).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") })),
+            _ => {
+                if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                return plants_api::handle(self, method, p.clone()).or_else(|| sheets_api::handle(self, method, p)).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") }));
+            }
         })
     }
 

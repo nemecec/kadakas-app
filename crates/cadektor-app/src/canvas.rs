@@ -30,7 +30,7 @@ pub struct Style {
 }
 
 fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
-    let a = doc.resolved_attrs(o);
+    let a = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let pen = color32(a.pen.unwrap_or(Color::BLACK));
     let mut fill = a.fill.map_or(Color32::TRANSPARENT, color32);
@@ -177,6 +177,10 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
         }
+        Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
+            draw_shape(painter, view, &o.shape, st, offset);
+            crate::area_ui::draw_extras(painter, view, doc, o, st, offset);
+        }
         shape => draw_shape(painter, view, shape, st, offset),
     }
 }
@@ -247,6 +251,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {

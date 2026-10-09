@@ -83,6 +83,8 @@ pub struct AgentServer {
     /// The secret that clients send in `auth`.
     pub token: String,
     rx: Receiver<Request>,
+    /// A request that was taken from the queue when the time budget ran out. It runs first in the next poll.
+    carry: std::sync::Mutex<Option<Request>>,
     wake: Arc<dyn Fn() + Send + Sync>,
     info_path: Option<PathBuf>,
     stop: Arc<AtomicBool>,
@@ -101,14 +103,21 @@ impl AgentServer {
     pub fn poll_for(&self, budget: Duration, handle: &mut dyn FnMut(&str) -> Option<String>) -> usize {
         let start = Instant::now();
         let mut n = 0;
-        while let Ok(req) = self.rx.try_recv() {
+        let mut next = self.carry.lock().unwrap_or_else(|e| e.into_inner()).take().or_else(|| self.rx.try_recv().ok());
+        while let Some(req) = next.take() {
+            next = self.rx.try_recv().ok();
             if req.cancelled.load(Ordering::SeqCst) {
                 continue; // the client was told that this request was cancelled
             }
             let _ = req.reply.send(handle(&req.line));
             n += 1;
             if start.elapsed() >= budget {
-                (self.wake)();
+                // Ask for another frame only if a request is really waiting. The wake of a client
+                // that is not waiting would be a repaint for nothing, and it made the tests flaky.
+                if next.is_some() {
+                    *self.carry.lock().unwrap_or_else(|e| e.into_inner()) = next;
+                    (self.wake)();
+                }
                 break;
             }
         }
@@ -178,7 +187,7 @@ pub fn start_with(
             }
         });
     }
-    Ok(AgentServer { addr, token, rx, wake, info_path, stop })
+    Ok(AgentServer { addr, token, rx, carry: std::sync::Mutex::new(None), wake, info_path, stop })
 }
 
 /// Counts a connected client until its thread ends.
@@ -672,6 +681,27 @@ mod tests {
         assert!(c.drains_to_close());
         assert!(start.elapsed() < Duration::from_secs(2), "closed near the 300 ms deadline");
         ui.finish();
+    }
+
+    #[test]
+    fn a_slow_request_does_not_ask_for_a_repaint_when_nothing_waits() {
+        // A budget of zero is "the handler took too long". With one request the queue is empty
+        // afterwards, so there is nothing to come back for, and the wake count stays exact.
+        let wakes = wait();
+        let server = start(0, counter_wake(&wakes), None).unwrap();
+        let (addr, token) = (server.addr, server.token.clone());
+        let client = thread::spawn(move || {
+            let mut c = Client::connect(addr);
+            c.auth(&token).unwrap();
+            c.call(1, "selection.get")
+        });
+        while wakes.load(Ordering::SeqCst) < 1 {
+            thread::sleep(Duration::from_millis(2));
+        }
+        let mut session = Session::default();
+        assert_eq!(server.poll_for(Duration::ZERO, &mut |line| session.handle_line(line)), 1);
+        assert!(client.join().unwrap()["result"].is_object());
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
     }
 
     #[test]

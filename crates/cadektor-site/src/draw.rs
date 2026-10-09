@@ -5,6 +5,7 @@ use std::fmt::Write;
 
 use glam::DVec3;
 
+use cadektor_core::hardscape::TerrainSource;
 use cadektor_core::mesh::SceneSink;
 use cadektor_core::model::{Color, Document, Object, Shape};
 use cadektor_core::site::{Display3d, SurfaceDisplay};
@@ -77,6 +78,18 @@ pub fn scene_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, 
         if let Shape::SiteModel { .. } = obj.shape {
             if let Ok(site) = cache.get(revision, doc, obj.id) {
                 draw_3d(&site, sink);
+            }
+        } else if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
+            // Core sends only the objects that drape. They follow the site models on their layer.
+            let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
+            let at = |p| terrain.elevation(obj, p);
+            // Fully outside the site models there is no ground to follow.
+            let ring = cadektor_core::curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, 2.0);
+            let ground: Option<cadektor_core::hardscape::Terrain<'_>> = ring.iter().step_by((ring.len() / 64).max(1)).any(|p| terrain.covered(obj, *p)).then_some(&at);
+            if matches!(obj.shape, Shape::Hardscape { .. }) {
+                cadektor_core::hardscape::emit_object(doc, obj, ground, sink);
+            } else {
+                cadektor_core::landscape::emit_object(doc, obj, ground, sink);
             }
         } else if let Shape::SiteModifier { boundary, .. } = &obj.shape {
             // The outline of a modifier, at the height of the proposed surface where it can be found.

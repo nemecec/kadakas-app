@@ -170,7 +170,7 @@ Non-goals
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
 | SIT-18 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
-| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). | P1 | planned |
+| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). | P1 | planned |
 | SIT-13 | Stake / spot elevation object. | P1 | planned |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
 | SIT-15 | Slope and aspect analysis display. | P2 | partial: slope and aspect at a point, no legend display |
@@ -214,24 +214,31 @@ Non-goals
 | LND-01 | Landscape area shape: boundary (corners and curved vertices) and name. | P0 | done |
 | LND-02 | Area calculation. | P0 | done |
 | LND-03 | Area report via `report.areas`. | P0 | done |
-| LND-04 | Landscape area style (mix of plants). | P0 | planned |
-| LND-05 | Mix by spacing rate. | P0 | planned |
-| LND-06 | Mix by percentage with minimum counts. | P1 | planned |
-| LND-07 | Representative plant scatter in 2D. | P1 | planned |
-| LND-08 | Quantities by species in schedules. | P0 | planned |
+| LND-04 | Landscape area style resource: a plant mix (plant styles from the resource store), 2D fill and border, data fields, and a default for "Show plants". Undoable add, edit and delete. A plant style in a mix cannot be deleted unless it is reassigned. | P0 | done |
+| LND-05 | Mix by spacing or density per m2. Without either, the canopy of the plant gives the spacing. | P0 | done |
+| LND-06 | Mix by percentage of the area with minimum counts. | P1 | done |
+| LND-07 | Representative plant scatter in 2D: deterministic symbols from the mix, outside the holes, tree protection zones included. | P1 | done |
+| LND-08 | Quantities per plant style from the net area (`report.landscape_areas`). The plant list (`report.plant_list`) adds them to the single plants, one row per style. Groundcovers counted by area keep their price per m2. | P0 | done |
 | LND-09 | Hedgerow mode (staggered rows). | P1 | planned |
-| LND-10 | Hydrozone and water budget reports. | P2 | planned |
+| LND-10 | Hydrozone and water budget reports. Data fields of the style are in the report. | P2 | planned |
+| LND-11 | Holes: parts of an area that stay empty (`landscape_area.set` with holes or exclude). They move with the area. Overlapping holes count once, and holes must stay inside the boundary. | P1 | done |
+| LND-12 | Draped landscape area: a 3D face on the site model, and the draped surface area in the report. | P1 | done |
+| LND-13 | Edit modes in Object Info (style, show plants, drape, holes) and a style picker in the Landscape Area tool. | P1 | done |
 
 ### 4.8 Hardscapes
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | HRD-01 | Hardscape shape: boundary (corners and curved vertices) and material. | P0 | done |
-| HRD-02 | Hardscape style resource (surface, components, thickness). | P1 | planned |
-| HRD-03 | Area, perimeter, volume quantities. | P1 | planned |
-| HRD-04 | Edge offsets from the drawn line. | P1 | planned |
-| HRD-05 | Path hardscape (width along a line). | P1 | planned |
-| HRD-06 | Slope on hardscape. | P2 | planned |
+| HRD-02 | Hardscape style resource: surface material and thickness, build-up components (layers with material and thickness), border (width, material, both sides or one) and a joint pattern. Undoable add, edit and delete. | P1 | done |
+| HRD-03 | Quantities (`report.hardscape`): plan area, surface area (slope or draped), perimeter, and the volume of every layer. Materials are added up. | P1 | done |
+| HRD-04 | Path alignment and offset: the drawn line is the center or the left or right edge of the path, with a sideways offset. Slab edge offsets are not done. | P1 | done |
+| HRD-05 | Path hardscape: a center line (curves allowed, open or closed) with a width and miter, round or bevel joins. The outline is a union of the legs and the joins, so tight curves and short legs make no loops. The area of a straight path is exactly length times width. | P1 | done |
+| HRD-06 | Slope: none, by edge elevations (a plane through the corner heights; start and end heights of a path), a fall in percent, a fall by angle, or a rise over a run. Edge heights follow an outline edit. | P2 | done |
+| HRD-08 | Joint patterns in 2D: running bond, stack, herringbone and basket weave, with unit size, joint width and angle. | P1 | done |
+| HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground, a few mm above it) and in the area report. Beyond the edge of the model the height of the nearest edge counts, and the report says `partially_draped`. | P1 | done |
+| HRD-10 | Site modifier option: the hardscape acts as a pad at its formation level (top minus build-up), sloped as the hardscape. | P2 | done |
+| HRD-11 | Edit modes in Object Info (style, slab or path, width, join, slope, elevation, drape, site modifier) and style, path and width options in the Hardscape tool. | P1 | done |
 | HRD-07 | Landscape walls. | P2 | planned |
 
 ### 4.9 Existing trees
@@ -279,7 +286,7 @@ Non-goals
 | RPT-01 | Plant and area reports through the API. | P0 | done |
 | RPT-02 | Record formats: define fields, attach to objects. | P0 | planned |
 | RPT-03 | Worksheet object with criteria and formulas. | P1 | planned |
-| RPT-04 | Preformatted reports (plant list, area list, hardscape list). | P0 | planned |
+| RPT-04 | Preformatted reports: `report.plant_list`, `report.landscape_areas` and `report.hardscape` are done, with CSV. Printable layouts are not. | P0 | planned |
 | RPT-05 | Export worksheet to CSV. | P0 | planned |
 | RPT-06 | Data tag styles and tag placement. | P1 | planned |
 | RPT-07 | Data visualizations (color by criteria). | P1 | planned |

@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
+mod area_ops;
 mod drawing_ops;
 mod plant_ops;
 
@@ -153,6 +154,38 @@ pub enum Command {
         #[serde(default)]
         unlink: bool,
     },
+    /// Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.
+    /// The patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).
+    AddHardscape {
+        #[serde(default)]
+        boundary: Option<Vec<Vertex>>,
+        #[serde(default)]
+        patch: Box<crate::hardscape::HardscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Add a landscape area with a boundary, a name and settings (style, holes, drape).
+    AddLandscapeArea {
+        boundary: Vec<Vertex>,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        patch: Box<crate::landscape::LandscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Change hardscape settings of one or more hardscapes. Missing fields stay unchanged.
+    SetHardscape { ids: Vec<ObjectId>, patch: crate::hardscape::HardscapePatch },
+    /// Change the style, holes or options of landscape areas.
+    SetLandscapeArea { ids: Vec<ObjectId>, patch: crate::landscape::LandscapePatch },
     /// Add a sheet layer with its page settings, as one step. Returns the layer ID in `created`.
     AddSheet {
         name: String,
@@ -492,7 +525,9 @@ impl<'a> Tx<'a> {
                 }
                 for id in ids {
                     self.touch(id);
-                    self.doc.object_mut(id).expect("checked").shape.translate(*delta);
+                    let o = self.doc.object_mut(id).expect("checked");
+                    o.shape.translate(*delta);
+                    crate::hardscape::translate_object_data(o, *delta);
                 }
             }
             Command::ModifyObject { id, shape, layer, class, attrs } => {
@@ -506,6 +541,10 @@ impl<'a> Tx<'a> {
                 if let Some(s) = shape {
                     validate_shape(s)?;
                     self.check_shape_refs(s)?;
+                    self.guard_path(*id, Some(s))?;
+                    if let Shape::LandscapeArea { boundary, .. } = s {
+                        self.check_holes(*id, boundary)?;
+                    }
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
@@ -517,6 +556,7 @@ impl<'a> Tx<'a> {
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
                 let linked_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| crate::plants::link::link(o).is_some()).cloned();
+                let area_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| matches!(o.shape, Shape::Hardscape { .. })).cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
                     o.shape = s.clone();
@@ -535,6 +575,11 @@ impl<'a> Tx<'a> {
                     crate::plants::link::adopt_shape_edit(self.doc, &prev, &mut now);
                     *self.doc.object_mut(*id).expect("checked") = now;
                 }
+                if let Some(prev) = area_before {
+                    let mut now = self.doc.object(*id).expect("checked").clone();
+                    crate::hardscape::data::fix_edge_elevations(&prev, &mut now);
+                    *self.doc.object_mut(*id).expect("checked") = now;
+                }
             }
             Command::SetVertex { id, index, kind, p } => {
                 self.editable(*id)?;
@@ -546,6 +591,7 @@ impl<'a> Tx<'a> {
                     }
                     Some(_) => {}
                 }
+                self.guard_path(*id, None)?;
                 let mut v = self.doc.object(*id).expect("checked").shape.vertices().expect("checked")[*index];
                 if let Some(k) = kind {
                     v.kind = *k;
@@ -554,12 +600,17 @@ impl<'a> Tx<'a> {
                     v.p = *p;
                 }
                 validate_vertex(&v)?;
+                if let Some(vs) = self.doc.object(*id).and_then(|o| o.shape.vertices()) {
+                    let mut moved = vs.clone();
+                    moved[*index] = v;
+                    self.check_holes(*id, &moved)?;
+                }
                 self.touch(*id);
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
                 if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
-                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)")));
                 }
                 self.editable(*id)?;
                 self.touch(*id);
@@ -661,6 +712,7 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
             Command::AddSheet { .. }
             | Command::SetSheet { .. }
             | Command::SetProject { .. }
@@ -753,6 +805,9 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     }
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
+    }
+    if matches!(shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) && shape.vertices().is_some_and(|v| v.len() > crate::hardscape::data::MAX_VERTICES) {
+        return bad("a boundary has at most 50000 points");
     }
     if !shape.has_valid_thickness() {
         return bad("thickness must be positive");

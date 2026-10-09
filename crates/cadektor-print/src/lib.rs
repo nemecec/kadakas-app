@@ -4,6 +4,7 @@
 //! PDF writer: `pdf-writer` (maintained, pure Rust, no unsafe). Pages hold vector paths with
 //! line weights, fills, arcs as Bezier curves, Helvetica text, and 3D viewports as images.
 
+pub mod areas;
 pub mod compose;
 pub mod display;
 pub mod pdf;

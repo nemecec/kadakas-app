@@ -153,8 +153,26 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
             out.push(text(xf.p(*at), &t, xf.len(*height), ink));
         }
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+            // The style gives pen and fill where the object has none of its own. The attributes
+            // arrive with the by-class overrides of the viewport applied, and objects have no
+            // overrides of their own in a viewport.
+            // A field that the viewport changed stays as the viewport made it.
+            let base = doc.resolved_attrs(obj);
+            let styled = cadektor_core::hardscape::styled_attrs(doc, obj, base.clone());
+            let mut a = attrs.clone();
+            if a.fill == base.fill {
+                a.fill = styled.fill;
+            }
+            if a.pen == base.pen {
+                a.pen = styled.pen;
+            }
+            if a.line_weight == base.line_weight {
+                a.line_weight = styled.line_weight;
+            }
+            let st = Style::of(&a);
             let segs = if curve::all_straight(boundary) { mapped(&curve::positions(boundary), xf) } else { curve_segs(&curve::path(boundary, true), xf) };
             out.push(path(segs, true, &st));
+            crate::areas::extras(doc, obj, &st, xf, out);
         }
         Shape::Locus3d { p } => {
             let h = cadektor_core::model::LOCUS_MARKER_HALF;

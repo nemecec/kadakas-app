@@ -52,7 +52,7 @@ pub fn modifier_of(shape: &Shape) -> Option<Modifier> {
     }
 }
 
-/// The modifiers that act on a site model: visible modifiers on the same layer whose box touches
+/// The modifiers that act on a site model: visible modifiers (and hardscapes that act as pads) on the same layer whose box touches
 /// the box of the site model. Returns their IDs in document order.
 pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)> {
     let Some(obj) = doc.object(site) else { return Vec::new() };
@@ -61,7 +61,7 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
         .values()
         .filter(|o| o.layer == obj.layer && doc.is_visible(o))
         .filter_map(|o| {
-            let m = modifier_of(&o.shape)?;
+            let m = modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o))?;
             let (a, b) = o.shape.bounds();
             (a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y).then_some((o.id, m))
         })
