@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::hardscape::style::HardscapeStyle;
+use crate::landscape::style::LandscapeAreaStyle;
 use crate::plants::style::PlantStyle;
 
 /// Identifier of a resource. Resources share one ID space with objects, layers and classes.
@@ -29,6 +31,8 @@ pub enum ResourceBody {
     DataMap(Box<crate::datamap::DataMap>),
     /// A worksheet definition. The core keeps it as JSON. `cadektor-sheet` reads and writes it.
     Worksheet(serde_json::Value),
+    HardscapeStyle(Box<HardscapeStyle>),
+    LandscapeAreaStyle(Box<LandscapeAreaStyle>),
     Unknown(serde_json::Value),
 }
 
@@ -42,7 +46,18 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::RecordFormat(f) => tagged(f.as_ref(), "record_format", s),
             ResourceBody::DataMap(m) => tagged(m.as_ref(), "data_map", s),
-            ResourceBody::Worksheet(v) | ResourceBody::Unknown(v) => v.serialize(s),
+            ResourceBody::Worksheet(v) => v.serialize(s),
+            ResourceBody::HardscapeStyle(style) => {
+                let mut v = serde_json::to_value(style).map_err(serde::ser::Error::custom)?;
+                v["type"] = "hardscape_style".into();
+                v.serialize(s)
+            }
+            ResourceBody::LandscapeAreaStyle(style) => {
+                let mut v = serde_json::to_value(style).map_err(serde::ser::Error::custom)?;
+                v["type"] = "landscape_area_style".into();
+                v.serialize(s)
+            }
+            ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
 }
@@ -67,6 +82,12 @@ impl<'de> Deserialize<'de> for ResourceBody {
             }
             Some("data_map") => serde_json::from_value(v).map(|m| ResourceBody::DataMap(Box::new(m))).map_err(serde::de::Error::custom),
             Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
+            Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
+                .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
+                .map_err(serde::de::Error::custom),
+            Some("landscape_area_style") => serde_json::from_value::<LandscapeAreaStyle>(v)
+                .map(|s| ResourceBody::LandscapeAreaStyle(Box::new(s)))
+                .map_err(serde::de::Error::custom),
             _ => Ok(ResourceBody::Unknown(v)),
         }
     }
@@ -85,6 +106,8 @@ impl ResourceBody {
             ResourceBody::RecordFormat(_) => "record_format",
             ResourceBody::DataMap(_) => "data_map",
             ResourceBody::Worksheet(_) => "worksheet",
+            ResourceBody::HardscapeStyle(_) => "hardscape_style",
+            ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -96,7 +119,10 @@ impl ResourceBody {
             ResourceBody::RecordFormat(f) => f.validate(),
             ResourceBody::DataMap(m) => m.validate(),
             ResourceBody::Worksheet(v) if !v.is_object() => Err("a worksheet is a JSON object".into()),
-            ResourceBody::Worksheet(_) | ResourceBody::Unknown(_) => Ok(()),
+            ResourceBody::Worksheet(_) => Ok(()),
+            ResourceBody::HardscapeStyle(s) => s.validate(),
+            ResourceBody::LandscapeAreaStyle(s) => s.validate(),
+            ResourceBody::Unknown(_) => Ok(()),
         }
     }
 }
@@ -166,6 +192,53 @@ impl Resources {
             ResourceBody::DataMap(m) => Some(m.as_ref()),
             _ => None,
         }
+    }
+
+    /// The hardscape style with this ID.
+    pub fn hardscape_style(&self, id: ResourceId) -> Option<&HardscapeStyle> {
+        match &self.get(id)?.body {
+            ResourceBody::HardscapeStyle(s) => Some(s.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The landscape area style with this ID.
+    pub fn landscape_area_style(&self, id: ResourceId) -> Option<&LandscapeAreaStyle> {
+        match &self.get(id)?.body {
+            ResourceBody::LandscapeAreaStyle(s) => Some(s.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// All hardscape styles with their IDs and names.
+    pub fn hardscape_styles(&self) -> impl Iterator<Item = (ResourceId, &str, &HardscapeStyle)> {
+        self.0.iter().filter_map(|r| match &r.body {
+            ResourceBody::HardscapeStyle(s) => Some((r.id, r.name.as_str(), s.as_ref())),
+            _ => None,
+        })
+    }
+
+    /// All landscape area styles with their IDs and names.
+    pub fn landscape_area_styles(&self) -> impl Iterator<Item = (ResourceId, &str, &LandscapeAreaStyle)> {
+        self.0.iter().filter_map(|r| match &r.body {
+            ResourceBody::LandscapeAreaStyle(s) => Some((r.id, r.name.as_str(), s.as_ref())),
+            _ => None,
+        })
+    }
+
+    /// The ID of the hardscape style with this name (compared without case).
+    pub fn find_hardscape_style(&self, name: &str) -> Option<ResourceId> {
+        self.hardscape_styles().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| id)
+    }
+
+    /// The ID of the landscape area style with this name (compared without case).
+    pub fn find_landscape_area_style(&self, name: &str) -> Option<ResourceId> {
+        self.landscape_area_styles().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| id)
+    }
+
+    /// The landscape area styles whose mix uses this plant style.
+    pub fn mixes_using(&self, plant: ResourceId) -> Vec<ResourceId> {
+        self.landscape_area_styles().filter(|(_, _, s)| s.mix.iter().any(|e| e.plant == plant)).map(|(id, _, _)| id).collect()
     }
 
     /// The ID of the plant style with this name (compared without case).

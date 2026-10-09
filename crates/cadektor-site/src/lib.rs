@@ -13,6 +13,7 @@ pub mod grid;
 pub mod model;
 pub mod modifier;
 pub mod overlay;
+pub mod terrain;
 pub mod tin;
 pub mod volume;
 
@@ -20,6 +21,7 @@ pub use contour::{Contour, ContourSpec, contours};
 pub use drape::drape;
 pub use model::{SiteCache, SiteResult, Surface, drape_polyline, elevation_at};
 pub use modifier::{Modifier, PadSlope, proposed_surface};
+pub use terrain::SiteTerrain;
 pub use tin::{SlopeAspect, SourceData, SourceLine, Tin, TinBuilder};
 pub use volume::{CutFill, cut_fill, cut_fill_in};
 

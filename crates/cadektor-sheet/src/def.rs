@@ -134,6 +134,19 @@ pub enum GroupMode {
     Summary,
 }
 
+/// Where the rows of a database block come from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RowSource {
+    /// One row per object of the document.
+    #[default]
+    Objects,
+    /// One row per plant style, with the single plants and the plants of landscape area mixes
+    /// counted together, as `report.plant_list` does. Names: Style, IdCode, Botanical,
+    /// CommonName, Category, Size, Container, Root, Plants, InAreas, Count, Price, Cost, Area.
+    PlantList,
+}
+
 fn yes() -> bool {
     true
 }
@@ -147,6 +160,8 @@ fn a1() -> String {
 #[serde(default)]
 pub struct DatabaseDef {
     pub name: String,
+    /// Objects (default), or the plant list.
+    pub source: RowSource,
     /// The top left cell of the block.
     pub anchor: String,
     /// Which objects to list. For example `Kind = "plant" AND Layer = "Planting"`. Empty means all objects.
@@ -168,6 +183,7 @@ impl Default for DatabaseDef {
     fn default() -> Self {
         DatabaseDef {
             name: String::new(),
+            source: RowSource::Objects,
             anchor: a1(),
             criteria: String::new(),
             columns: Vec::new(),

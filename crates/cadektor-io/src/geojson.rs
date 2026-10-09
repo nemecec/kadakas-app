@@ -181,6 +181,7 @@ fn outline(shape: &Shape, tol: f64) -> Option<(Vec<[f64; 3]>, bool, bool)> {
 }
 
 fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    let doc = &*crate::model_only(doc);
     let mut report = Report::new("geojson");
     let wgs = Crs::from_epsg(4326).map_err(IoError::Format)?;
     let georef = if opts.origin == crate::options::ExportOrigin::File { doc.georef.as_ref() } else { None };

@@ -14,10 +14,12 @@ pub mod def;
 pub mod eval;
 pub mod export;
 pub mod formula;
+pub mod layout;
 pub mod templates;
 pub mod value;
 
 pub use cache::SheetCache;
-pub use compute::{Computed, compute};
-pub use def::{CellDef, CellFormat, ColumnDef, DatabaseDef, GroupMode, SortKey, Summary, WorksheetDef};
+pub use compute::{Computed, compute, compute_with};
+pub use def::{CellDef, CellFormat, ColumnDef, DatabaseDef, GroupMode, RowSource, SortKey, Summary, WorksheetDef};
+pub use layout::{TableLayout, layout};
 pub use value::{ErrorKind, Value};

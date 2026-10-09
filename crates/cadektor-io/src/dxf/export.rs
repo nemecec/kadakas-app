@@ -215,6 +215,7 @@ const H_DIMSTYLE_STANDARD: &str = "2B";
 const FIRST_HANDLE: u64 = 0x100;
 
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
     let mut cx = Ctx { unit: opts.unit.mm_per_unit(), tol: opts.tolerance, layer_mode: opts.layer_mode, doc, plant_blocks: BTreeSet::new(), shift: DVec2::ZERO };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).

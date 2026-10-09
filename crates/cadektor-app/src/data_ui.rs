@@ -458,6 +458,112 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
 }
 
 // ---------------------------------------------------------------------------
+// Worksheet tables in the drawing
+
+thread_local! {
+    /// Calculated worksheets of the document revision that is drawn, so a table is calculated once per change.
+    static TABLES: std::cell::RefCell<(u64, HashMap<ResourceId, std::sync::Arc<cadektor_sheet::Computed>>)> = std::cell::RefCell::new((0, HashMap::new()));
+}
+
+fn calculated(doc: &Document, id: ResourceId, site: Option<(&cadektor_site::SiteCache, u64)>) -> Option<std::sync::Arc<cadektor_sheet::Computed>> {
+    let def = match &doc.resources.get(id)?.body {
+        ResourceBody::Worksheet(v) => WorksheetDef::from_value(v).ok()?,
+        _ => return None,
+    };
+    let run = || match site {
+        Some((cache, revision)) => cadektor_sheet::compute_with(&def, doc, &cadektor_site::SiteTerrain::new(cache, revision, doc)),
+        None => cadektor_sheet::compute(&def, doc),
+    };
+    let Some((_, revision)) = site else { return Some(std::sync::Arc::new(run())) };
+    TABLES.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.0 != revision {
+            *t = (revision, HashMap::new());
+        }
+        Some(t.1.entry(id).or_insert_with(|| std::sync::Arc::new(run())).clone())
+    })
+}
+
+/// Draws the cells of a worksheet table inside its frame (a rectangle) on a design layer. Tables on
+/// sheet layers are drawn by the sheet display list, which has the same layout.
+pub fn draw_table(painter: &egui::Painter, view: &crate::view::View, doc: &Document, o: &cadektor_core::model::Object, d: &cadektor_core::worksheet_table::TableData, ink: Color32, site: Option<(&cadektor_site::SiteCache, u64)>) {
+    let cadektor_core::model::Shape::Rect { min, max } = &o.shape else { return };
+    let Some(c) = calculated(doc, d.worksheet, site) else { return };
+    let l = cadektor_sheet::layout(&c, d.text_height);
+    let (lo, hi) = (min.min(*max), min.max(*max));
+    let frame = egui::Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi));
+    let painter = painter.with_clip_rect(frame.intersect(painter.clip_rect()));
+    let z = view.zoom;
+    let grid = egui::Stroke::new(0.5, Color32::from_gray(150));
+    let top = frame.min.y;
+    let mut xs = vec![frame.min.x];
+    for w in &l.col_widths {
+        xs.push(xs.last().copied().unwrap_or(frame.min.x) + (*w * z) as f32);
+    }
+    let row_h = (l.row_height * z) as f32;
+    let clip = painter.clip_rect();
+    for r in 0..=l.rows {
+        let y = top + row_h * r as f32;
+        if y >= clip.min.y - 1.0 && y <= clip.max.y + 1.0 {
+            painter.line_segment([egui::pos2(frame.min.x, y), egui::pos2(*xs.last().unwrap_or(&frame.min.x), y)], grid);
+        }
+    }
+    for x in &xs {
+        painter.line_segment([egui::pos2(*x, top), egui::pos2(*x, top + row_h * l.rows as f32)], grid);
+    }
+    let size = (d.text_height * z) as f32;
+    if size < 3.0 {
+        return;
+    }
+    let font = egui::FontId::proportional(size.min(200.0));
+    let pad = size * 0.45;
+    for r in 1..=l.rows {
+        let y = top + row_h * (r - 1) as f32;
+        if y + row_h < clip.min.y || y > clip.max.y {
+            continue;
+        }
+        for col in 1..=l.cols {
+            let text = c.display(r, col);
+            if text.is_empty() {
+                continue;
+            }
+            let (left, right) = (xs[col as usize - 1], xs[col as usize]);
+            if right < clip.min.x || left > clip.max.x {
+                continue;
+            }
+            let color = if c.value(r, col).is_error() { ERROR_COLOR } else { ink };
+            if cadektor_sheet::layout::is_number(&c, r, col) {
+                painter.text(egui::pos2(right - pad, y + row_h / 2.0), egui::Align2::RIGHT_CENTER, text, font.clone(), color);
+            } else {
+                painter.text(egui::pos2(left + pad, y + row_h / 2.0), egui::Align2::LEFT_CENTER, text, font.clone(), color);
+            }
+        }
+    }
+}
+
+/// Object Info for a worksheet table: fit the frame to the table, and change the text height.
+pub fn table_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
+    let Some(d) = session.editor.doc().object(id).and_then(cadektor_core::worksheet_table::data) else { return };
+    let name = session.editor.doc().resources.get(d.worksheet).map(|r| r.name.clone()).unwrap_or_default();
+    ui.separator();
+    ui.strong(format!("Worksheet table: {name}"));
+    let mut h = d.text_height;
+    let r = ui.horizontal(|ui| {
+        ui.label("Text height");
+        ui.add(DragValue::new(&mut h).speed(0.1).range(0.1..=10_000.0).suffix(" mm"))
+    });
+    if (r.inner.drag_stopped() || r.inner.lost_focus()) && h != d.text_height {
+        run_command(session, &Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: Some(h), size: None }, status);
+    }
+    if ui.button("Fit frame to table").on_hover_text("Resize the frame to the calculated table. The top left corner stays.").clicked()
+        && let Some((_, c)) = session.worksheet_result(d.worksheet)
+    {
+        let l = cadektor_sheet::layout(&c, d.text_height);
+        run_command(session, &Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) }, status);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The worksheet window
 
 fn cell_ref(row: u32, col: u32) -> String {
@@ -522,6 +628,12 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
             #[cfg(target_arch = "wasm32")]
             let _ = (&computed, &status);
             ui.weak(format!("{} errors", computed.error_count()));
+            if ui.button("Place in drawing").on_hover_text("Add the worksheet as a table on the active layer").clicked() {
+                let l = cadektor_sheet::layout(&computed, cadektor_core::worksheet_table::DEFAULT_TEXT_HEIGHT);
+                let at = session.editor.doc().layer(session.editor.doc().active_layer).map_or(cadektor_core::DVec2::ZERO, |layer| if layer.kind == cadektor_core::model::LayerKind::Sheet { cadektor_core::DVec2::new(20.0, 200.0) } else { cadektor_core::DVec2::ZERO });
+                let cmd = Command::AddWorksheetTable { worksheet: id, at, size: cadektor_core::DVec2::new(l.width, l.height), text_height: None, layer: None, class: None, attrs: Default::default() };
+                run_command(session, &cmd, status);
+            }
         }
     });
     let Some((def, computed)) = session.worksheet_result(id) else { return };
@@ -610,13 +722,14 @@ fn database_setup(ui: &mut Ui, session: &mut Session, st: &mut SheetState, statu
     let (_, base, edit) = st.db.as_mut().expect("buffer");
     let mut commit = false;
     let mut message: Option<String> = None;
+    let fields = criteria_fields(session.editor.doc());
     egui::CollapsingHeader::new("Database rows").default_open(false).show(ui, |ui| {
         ui.weak("A database block lists the objects that match the criteria. Columns are expressions such as Area, Layer, Style, Count or Soil.Depth.");
         let mut remove = None;
         for (bi, db) in edit.databases.iter_mut().enumerate() {
             let title = if db.name.is_empty() { format!("Database {}", bi + 1) } else { db.name.clone() };
             egui::CollapsingHeader::new(title).id_salt(("db", bi)).default_open(true).show(ui, |ui| {
-                commit |= db_form(ui, db);
+                commit |= db_form(ui, db, &fields);
                 if ui.button("Remove database").clicked() {
                     remove = Some(bi);
                 }
@@ -665,8 +778,89 @@ fn column_combo(ui: &mut Ui, salt: &'static str, value: &mut Option<usize>, colu
     *value != before
 }
 
-fn db_form(ui: &mut Ui, db: &mut DatabaseDef) -> bool {
+/// The names that the criteria builder offers: built-in properties and the fields of record formats.
+fn criteria_fields(doc: &Document) -> Vec<String> {
+    let mut out: Vec<String> = cadektor_core::props::NAMES.iter().map(|n| n.to_string()).collect();
+    for r in doc.resources.iter() {
+        if let ResourceBody::RecordFormat(f) = &r.body {
+            out.extend(f.fields.iter().map(|f| format!("'{}'.'{}'", r.name.replace('\'', "''"), f.name.replace('\'', "''"))));
+        }
+    }
+    out
+}
+
+/// The comparison operators of the criteria builder.
+const OPERATORS: [&str; 6] = ["=", "<>", "<", "<=", ">", ">="];
+
+/// One clause for the criteria: `Area > 20` or `Kind = "plant"`. A number stays a number, anything else is text.
+pub fn criteria_clause(name: &str, op: &str, value: &str) -> String {
+    let v = value.trim();
+    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite) || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") { v.to_string() } else { format!("\"{}\"", v.replace('"', "\"\"")) };
+    format!("{name} {op} {literal}")
+}
+
+/// Adds a clause to the criteria with AND or OR.
+pub fn add_clause(criteria: &str, clause: &str, or: bool) -> String {
+    if criteria.trim().is_empty() { clause.to_string() } else { format!("{} {} {clause}", criteria.trim(), if or { "OR" } else { "AND" }) }
+}
+
+#[derive(Clone, Default)]
+struct ClauseBuilder {
+    name: String,
+    op: usize,
+    value: String,
+    or: bool,
+}
+
+/// A row of widgets that builds one clause and adds it to the criteria. Returns true when it did.
+fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bool {
+    let key = ui.id().with("criteria_builder");
+    let mut b: ClauseBuilder = ui.data_mut(|d| d.get_temp(key)).unwrap_or_default();
+    if b.name.is_empty() {
+        b.name = "Kind".into();
+    }
+    let mut added = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Add");
+        egui::ComboBox::from_id_salt("clause_name").width(90.0).selected_text(b.name.clone()).show_ui(ui, |ui| {
+            for f in fields {
+                ui.selectable_value(&mut b.name, f.clone(), f);
+            }
+        });
+        egui::ComboBox::from_id_salt("clause_op").width(40.0).selected_text(OPERATORS[b.op.min(5)]).show_ui(ui, |ui| {
+            for (i, o) in OPERATORS.iter().enumerate() {
+                ui.selectable_value(&mut b.op, i, *o);
+            }
+        });
+        ui.add(egui::TextEdit::singleline(&mut b.value).desired_width(80.0).hint_text("value"));
+        egui::ComboBox::from_id_salt("clause_join").width(50.0).selected_text(if b.or { "OR" } else { "AND" }).show_ui(ui, |ui| {
+            ui.selectable_value(&mut b.or, false, "AND");
+            ui.selectable_value(&mut b.or, true, "OR");
+        });
+        if ui.button("Add").on_hover_text("Add this test to the criteria").clicked() && !b.value.trim().is_empty() {
+            *criteria = add_clause(criteria, &criteria_clause(&b.name, OPERATORS[b.op.min(5)], &b.value), b.or);
+            added = true;
+        }
+        if ui.button("Clear").clicked() {
+            criteria.clear();
+            added = true;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(key, b));
+    added
+}
+
+fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
     let mut commit = false;
+    ui.horizontal(|ui| {
+        ui.label("Rows");
+        let before = db.source;
+        egui::ComboBox::from_id_salt("db_source").selected_text(if db.source == cadektor_sheet::RowSource::Objects { "objects" } else { "plant list" }).show_ui(ui, |ui| {
+            ui.selectable_value(&mut db.source, cadektor_sheet::RowSource::Objects, "objects").on_hover_text("One row per object");
+            ui.selectable_value(&mut db.source, cadektor_sheet::RowSource::PlantList, "plant list").on_hover_text("One row per plant style, with the plants of landscape area mixes");
+        });
+        commit |= db.source != before;
+    });
     ui.horizontal(|ui| {
         ui.label("Name");
         commit |= ui.add(egui::TextEdit::singleline(&mut db.name).desired_width(110.0)).lost_focus();
@@ -674,6 +868,7 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef) -> bool {
         commit |= ui.add(egui::TextEdit::singleline(&mut db.anchor).desired_width(40.0)).lost_focus();
     });
     ui.label("Criteria");
+    commit |= criteria_builder(ui, &mut db.criteria, fields);
     commit |= ui.add(egui::TextEdit::multiline(&mut db.criteria).desired_rows(2).desired_width(f32::INFINITY).hint_text("Kind = \"plant\" AND Layer = \"Planting\"")).lost_focus();
     ui.label("Columns");
     let mut remove = None;
@@ -884,6 +1079,77 @@ mod tests {
     }
 
     #[test]
+    fn criteria_clauses_are_built_and_parse() {
+        assert_eq!(criteria_clause("Area", ">", " 20 "), "Area > 20");
+        assert_eq!(criteria_clause("Kind", "=", "plant"), "Kind = \"plant\"");
+        assert_eq!(criteria_clause("Style", "=", "6\" pot"), "Style = \"6\"\" pot\"");
+        assert_eq!(criteria_clause("'Soil'.'Wet'", "=", "TRUE"), "'Soil'.'Wet' = TRUE");
+        assert_eq!(add_clause("", "Area > 1", false), "Area > 1");
+        assert_eq!(add_clause(" Area > 1 ", "Kind = \"plant\"", false), "Area > 1 AND Kind = \"plant\"");
+        assert_eq!(add_clause("Area > 1", "Layer = \"A\"", true), "Area > 1 OR Layer = \"A\"");
+        let mut c = String::new();
+        for (n, o, v) in [("Kind", "=", "hardscape"), ("Area", ">=", "2.5"), ("Style", "<>", "it's \"x\"")] {
+            c = add_clause(&c, &criteria_clause(n, o, v), false);
+        }
+        cadektor_sheet::formula::parse(&c).unwrap();
+        for n in cadektor_core::props::NAMES {
+            cadektor_sheet::formula::parse(&criteria_clause(n, "=", "1")).unwrap();
+        }
+        // Record fields are offered with quoted names.
+        let (s, _, _) = session_with_record();
+        let fields = criteria_fields(s.editor.doc());
+        assert!(fields.contains(&"Area".to_string()) && fields.contains(&"'Soil'.'Depth'".to_string()));
+        cadektor_sheet::formula::parse(&criteria_clause("'Soil'.'Depth'", ">", "300")).unwrap();
+    }
+
+    #[test]
+    fn the_builder_adds_to_the_criteria() {
+        let ctx = egui::Context::default();
+        let mut crit = String::from("Area > 1");
+        run_ui(&ctx, |ui| {
+            assert!(!criteria_builder(ui, &mut crit, &["Kind".to_string()]));
+        });
+        assert_eq!(crit, "Area > 1");
+    }
+
+    #[test]
+    fn tables_are_calculated_once_per_revision_and_draw() {
+        let ctx = egui::Context::default();
+        let (mut s, oid, _) = session_with_record();
+        let mut def = WorksheetDef::default();
+        def.set_cell("A1", "Item", None).unwrap();
+        def.set_cell("B1", "7", None).unwrap();
+        def.set_cell("B2", "=1/0", None).unwrap();
+        let ws = ResourceId(s.editor.execute(&Command::AddResource { name: "T".into(), body: ResourceBody::Worksheet(def.to_value()) }).unwrap().created[0]);
+        let id = ObjectId(s.editor.execute(&Command::AddWorksheetTable { worksheet: ws, at: cadektor_core::DVec2::new(0.0, 100.0), size: cadektor_core::DVec2::new(40.0, 10.0), text_height: Some(3.0), layer: None, class: None, attrs: Default::default() }).unwrap().created[0]);
+        let cache = cadektor_site::SiteCache::default();
+        let rev = s.editor.revision();
+        let a = calculated(s.editor.doc(), ws, Some((&cache, rev))).unwrap();
+        let b = calculated(s.editor.doc(), ws, Some((&cache, rev))).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        assert!(calculated(s.editor.doc(), ResourceId(9999), None).is_none());
+        assert!(calculated(s.editor.doc(), ResourceId(oid.0), None).is_none());
+        assert!(calculated(s.editor.doc(), ws, None).is_some());
+        let mut status = String::new();
+        for zoom in [0.001, 5.0] {
+            let view = crate::view::View { zoom, ..Default::default() };
+            let doc = s.editor.doc().clone();
+            let o = doc.object(id).unwrap().clone();
+            let d = cadektor_core::worksheet_table::data(&o).unwrap();
+            run_ui(&ctx, |ui| {
+                draw_table(ui.painter(), &view, &doc, &o, &d, Color32::BLACK, Some((&cache, rev)));
+                table_info(ui, &mut s, id, &mut status);
+            });
+        }
+        // Fit resizes the frame through the same command as the button.
+        let l = cadektor_sheet::layout(&a, 3.0);
+        s.editor.execute(&Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) }).unwrap();
+        // A window with the place button draws too.
+        ctx.data_mut(|d| d.insert_temp(Id::new("sheet_state"), SheetState { open: true, selected: Some(ws), ..Default::default() }));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| windows(&ui.ctx().clone(), &mut s, &mut status));
+    }
+
+    #[test]
     fn database_form_edits_keep_indexes_in_line() {
         let ctx = egui::Context::default();
         let mut db = DatabaseDef {
@@ -893,7 +1159,7 @@ mod tests {
             ..Default::default()
         };
         run_ui(&ctx, |ui| {
-            db_form(ui, &mut db);
+            db_form(ui, &mut db, &criteria_fields(&Document::default()));
         });
         assert_eq!(db.columns.len(), 2);
         assert_eq!(summary_label(Some(Summary::Average)), "average");

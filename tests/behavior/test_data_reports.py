@@ -207,7 +207,7 @@ def test_plant_list_template_totals(cad, planted):
     # The worksheet agrees with the plant schedule report.
     schedule = cad.result("report.plant_schedule")
     assert total[6] == schedule["total_count"] and total[8] == approx(schedule["total_price"])
-    assert r["blocks"] == [{"name": "Plant list", "first_row": 1, "rows": 4, "matched": 5}]
+    assert r["blocks"] == [{"name": "Plant list", "first_row": 1, "rows": 4, "matched": 2}]
 
 
 def test_worksheet_is_live_and_cells_read_database_results(cad, planted):
@@ -457,3 +457,129 @@ def test_describe_has_examples_for_the_new_methods(cad):
     assert d["data"]["worksheet"]["examples"] and d["data"]["data_manager"]["examples"]
     assert {"plant_list", "tree_survey"} <= {t["id"] for t in d["data"]["worksheet"]["templates"]}
     assert any(f["name"] == "SUM" for f in d["data"]["worksheet"]["functions"])
+
+
+# --- Agreement with the hardscape and landscape reports ------------------------------------
+
+
+def paving_style(cad):
+    return cad.result("hardscape_style.create", {"name": "Granite setts", "material": "Granite", "thickness": 60,
+                                                 "components": [{"name": "Base", "material": "Crushed stone", "thickness": 150}]})["id"]
+
+
+def test_worksheet_area_and_volume_agree_with_the_hardscape_and_landscape_reports(cad):
+    paving_style(cad)
+    cad.result("hardscape.add", {"boundary": SQUARE(3000), "style": "Granite setts", "slope": {"type": "angle", "degrees": 20}})
+    for name, spread in (("Lavender", 400), ("Sedge", 500)):
+        cad.result("plant_style.create", {"name": name, "botanical_name": name, "spread": spread, "height": 500, "price": 5})
+    cad.result("landscape_area_style.create", {"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 4}, {"plant": "Sedge", "percent": 40, "spacing": 500}]})
+    hole = [[2000, 2000], [4000, 2000], [4000, 4000], [2000, 4000]]
+    cad.result("landscape_area.add", {"boundary": SQUARE(10000), "name": "Bed A", "style": "Meadow", "holes": [hole]})
+    hrow = cad.result("report.hardscape")["rows"][0]
+    lrow = cad.result("report.landscape_areas")["rows"][0]
+    assert hrow["surface_area_m2"] > hrow["plan_area_m2"] * 1.05
+    sid = cad.result("worksheet.create", {"name": "Q", "databases": [
+        {"criteria": 'Kind = "hardscape"', "anchor": "A1", "header": False, "total": False,
+         "columns": [{"header": "Area", "expr": "Area"}, {"header": "Plan", "expr": "PlanArea"}, {"header": "Volume", "expr": "Volume"}, {"header": "Perimeter", "expr": "Perimeter"}]},
+        {"criteria": 'Kind = "landscape_area"', "anchor": "A3", "header": False, "total": False,
+         "columns": [{"header": "Area", "expr": "Area"}, {"header": "Gross", "expr": "GrossArea"}, {"header": "Holes", "expr": "HolesArea"}]}]})["id"]
+    c = cad.result("worksheet.evaluate", {"id": sid})["cells"]
+    assert c["A1"] == approx(hrow["surface_area_m2"]) and c["B1"] == approx(hrow["plan_area_m2"])
+    assert c["C1"] == approx(hrow["volume_m3"]) and c["D1"] == approx(hrow["perimeter_m"])
+    assert c["A3"] == approx(lrow["net_area_m2"]) and c["A3"] == approx(96.0)
+    assert c["B3"] == approx(100.0) and c["C3"] == approx(4.0)
+
+
+def test_plant_list_worksheet_matches_report_plant_list_with_landscape_area_mixes(cad, planted):
+    for name, spread in (("Lavender", 400), ("Sedge", 500)):
+        cad.result("plant_style.create", {"name": name, "botanical_name": name, "id_code": name[:2].upper(), "spread": spread, "height": 500, "price": 5})
+    cad.result("landscape_area_style.create", {"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 4}, {"plant": "Sedge", "percent": 40, "spacing": 500}]})
+    cad.result("landscape_area.add", {"boundary": SQUARE(10000), "name": "Bed A", "style": "Meadow"})
+    report = cad.result("report.plant_list")
+    sid = cad.result("worksheet.create", {"name": "List", "template": "plant_list"})["id"]
+    r = cad.result("worksheet.evaluate", {"id": sid})
+    assert r["problems"] == []
+    by_name = {row[0]: row for row in r["values"][1:-1]}
+    assert set(by_name) == {row["name"] for row in report["rows"]}
+    for row in report["rows"]:
+        assert by_name[row["name"]][6] == row["count"], row["name"]
+        assert by_name[row["name"]][8] == approx(row["total_price"]), row["name"]
+    assert by_name["Lavender"][6] > 0, "plants of the mix are in the list"
+    total = r["values"][-1]
+    assert total[6] == report["total_count"] and total[8] == approx(report["total_price"])
+
+
+def test_has_record_ignores_the_reserved_data_keys(cad):
+    paving_style(cad)
+    h = cad.result("hardscape.add", {"boundary": SQUARE(2000), "style": "Granite setts"})["id"]
+    assert "hardscape" in cad.result("objects.get", {"id": h})["data"]
+    cad.result("worksheet.create", {"name": "H", "databases": [{
+        "criteria": 'HASRECORD("hardscape") OR HASRECORD("plant") OR HASRECORD("landscape_area")', "columns": [{"header": "Id", "expr": "Id"}]}]})
+    assert cad.result("worksheet.evaluate", {"id": "H"})["blocks"][0]["matched"] == 0
+    for name in ("hardscape", "landscape_area", "plant", "worksheet_table"):
+        assert cad.error("record_format.create", {"name": name, "fields": []})["code"] == 1
+
+
+# --- Worksheets in the drawing -------------------------------------------------------------
+
+
+def test_a_worksheet_table_on_a_sheet_prints_in_pdf_and_svg(cad, planted, tmp_path):
+    import re
+    import zlib
+
+    sid = cad.result("worksheet.create", {"name": "Plant list", "template": "plant_list"})["id"]
+    sheet = cad.result("sheet.create", {"name": "L-1", "paper": "a3"})["layer"]
+    placed = cad.result("worksheet.place", {"id": sid, "at": [20, 280], "layer": sheet, "text_height": 3})
+    tid = placed["id"]
+    assert placed["size"][0] > 50 and placed["size"][1] > 5
+    obj = cad.result("objects.get", {"id": tid})
+    assert obj["layer"] == sheet and obj["data"]["worksheet_table"]["worksheet"] == sid
+    svg = cad.result("sheet.render", {"sheet": sheet})["svg"]
+    for want in ("Field maple", "Silver birch", "Total", "380.00"):
+        assert want in svg, want
+    pdf = tmp_path / "t.pdf"
+    cad.result("export.file", {"format": "pdf", "path": str(pdf)})
+    data = pdf.read_bytes()
+    assert data.startswith(b"%PDF-")
+    text = ""
+    for m in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", data, re.S):
+        try:
+            text += zlib.decompress(m.group(1)).decode("latin-1")
+        except zlib.error:
+            pass
+    assert "(Field maple)" in text and "(Silver birch)" in text
+    svg_file = tmp_path / "t.svg"
+    cad.result("export.file", {"format": "sheet_svg", "path": str(svg_file), "options": {"sheet": "L-1"}})
+    assert "Silver birch" in svg_file.read_text()
+    # The table follows the document, and fit resizes the frame from the top left corner.
+    before = cad.result("objects.get", {"id": tid})["shape"]
+    cad.result("plant_style.create", {"name": "A very long plant style name for the table", "spread": 3000, "height": 4000})
+    cad.result("plants.place", {"mode": "poly", "style": "A very long plant style name for the table", "points": [[0, 9000]]})
+    assert "A very long plant style name for the table" in cad.result("sheet.render", {"sheet": sheet})["svg"]
+    assert cad.result("worksheet.fit", {})["fitted"] == 1
+    after = cad.result("objects.get", {"id": tid})["shape"]
+    assert after["min"][1] < before["min"][1] and after["max"][1] == before["max"][1] and after["max"][0] > before["max"][0]
+
+
+def test_a_worksheet_table_on_a_design_layer_and_the_rules_of_sheets(cad):
+    sid = cad.result("worksheet.create", {"name": "S", "cells": {"A1": "x-ray", "B1": "=1+1"}})["id"]
+    on_design = cad.result("worksheet.place", {"id": "S", "at": [0, 5000], "text_height": 120})["id"]
+    assert cad.result("objects.get", {"id": on_design})["shape"]["kind"] == "rect"
+    sheet = cad.result("sheet.create", {"name": "L-2"})["layer"]
+    cad.result("viewport.create", {"sheet": "L-2"})
+    assert "x-ray" in cad.result("sheet.render", {"sheet": sheet})["svg"], "a table on a design layer shows in a viewport"
+    assert cad.error("worksheet.place", {"id": "nope", "at": [0, 0]})["code"] == -32602
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "text_height": -1})["code"] == -32602
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": 9999})["code"] == 1
+    assert "used by 1" in cad.error("worksheet.delete", {"id": sid})["message"]
+    assert cad.error("execute", {"command": {"op": "set_data", "id": on_design, "set": {"worksheet_table": {}}}})["code"] == 1
+    assert cad.error("worksheet.fit", {"ids": [999]})["code"] == -32602
+    cad.execute({"op": "modify_layer", "id": sheet, "locked": True})
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": sheet})["code"] == 1
+    cad.execute({"op": "modify_layer", "id": sheet, "locked": False})
+    n = len(cad.result("objects.list", {}))
+    cad.result("worksheet.place", {"id": sid, "at": [0, 0]})
+    assert len(cad.result("objects.list", {})) == n + 1
+    assert cad.result("undo")["done"] and len(cad.result("objects.list", {})) == n
+    cad.execute({"op": "delete_objects", "ids": [on_design]})
+    cad.result("worksheet.delete", {"id": sid})

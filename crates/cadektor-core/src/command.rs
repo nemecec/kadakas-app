@@ -12,8 +12,11 @@ use serde_json::Value;
 use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
+mod area_ops;
+mod drawing_ops;
 mod plant_ops;
 mod record_ops;
+mod table_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -165,6 +168,109 @@ pub enum Command {
     DetachRecord { ids: Vec<ObjectId>, record: ResourceId },
     /// Change field values of a record that is attached. Other fields stay unchanged.
     SetRecordFields { ids: Vec<ObjectId>, record: ResourceId, values: serde_json::Map<String, Value> },
+    /// Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.
+    /// The patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).
+    AddHardscape {
+        #[serde(default)]
+        boundary: Option<Vec<Vertex>>,
+        #[serde(default)]
+        patch: Box<crate::hardscape::HardscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Add a landscape area with a boundary, a name and settings (style, holes, drape).
+    AddLandscapeArea {
+        boundary: Vec<Vertex>,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        patch: Box<crate::landscape::LandscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Change hardscape settings of one or more hardscapes. Missing fields stay unchanged.
+    SetHardscape { ids: Vec<ObjectId>, patch: crate::hardscape::HardscapePatch },
+    /// Change the style, holes or options of landscape areas.
+    SetLandscapeArea { ids: Vec<ObjectId>, patch: crate::landscape::LandscapePatch },
+    /// Add a sheet layer with its page settings, as one step. Returns the layer ID in `created`.
+    AddSheet {
+        name: String,
+        #[serde(default)]
+        paper: Option<crate::sheets::PaperSize>,
+        #[serde(default)]
+        orientation: Option<crate::sheets::Orientation>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Change the page of a sheet layer. Missing fields stay unchanged.
+    /// `paper` is a size id (`a3`, `letter`, ...) or `{custom: {width_mm, height_mm}}`.
+    SetSheet {
+        layer: LayerId,
+        #[serde(default)]
+        paper: Option<crate::sheets::PaperSize>,
+        #[serde(default)]
+        orientation: Option<crate::sheets::Orientation>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
+    /// Change the project data that title blocks show. Missing fields stay unchanged.
+    SetProject {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        client: Option<String>,
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        drawn_by: Option<String>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        revision: Option<String>,
+    },
+    /// Store a saved view. A view with the same name is replaced.
+    SaveView { view: Box<crate::sheets::SavedView> },
+    DeleteView { name: String },
+    /// Apply a saved view: layer and class visibility and the active layer and class.
+    /// The camera part (zoom, pan, 3D view) is for the host to apply.
+    RestoreView { name: String },
+    /// Place a worksheet in the drawing as a table. `at` is the top left corner and `size` the
+    /// frame in mm (paper mm on a sheet layer). The table is drawn from the calculated worksheet.
+    AddWorksheetTable {
+        worksheet: ResourceId,
+        at: DVec2,
+        size: DVec2,
+        #[serde(default)]
+        text_height: Option<f64>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Change tables: the worksheet, the text height or the size of the frame (the top left corner stays).
+    SetWorksheetTable {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        worksheet: Option<ResourceId>,
+        #[serde(default)]
+        text_height: Option<f64>,
+        #[serde(default)]
+        size: Option<DVec2>,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -201,6 +307,7 @@ pub struct Outcome {
 /// Snapshot of the document parts that are not objects.
 #[derive(Clone, Debug, PartialEq)]
 struct Meta {
+    drawing: crate::sheets::Drawing,
     layers: Vec<Layer>,
     classes: Vec<Class>,
     resources: Resources,
@@ -212,6 +319,7 @@ struct Meta {
 impl Meta {
     fn of(doc: &Document) -> Self {
         Meta {
+            drawing: doc.drawing.clone(),
             layers: doc.layers.clone(),
             classes: doc.classes.clone(),
             resources: doc.resources.clone(),
@@ -222,6 +330,7 @@ impl Meta {
     }
 
     fn restore(&self, doc: &mut Document) {
+        doc.drawing = self.drawing.clone();
         doc.layers = self.layers.clone();
         doc.classes = self.classes.clone();
         doc.resources = self.resources.clone();
@@ -231,7 +340,8 @@ impl Meta {
     }
 
     fn is_finite(&self) -> bool {
-        self.layers.iter().all(|l| l.elevation.is_finite() && l.scale.is_finite())
+        self.drawing.saved_views.iter().all(crate::sheets::SavedView::is_finite)
+            && self.layers.iter().all(|l| l.elevation.is_finite() && l.scale.is_finite())
             && self.classes.iter().all(|c| c.attrs.is_finite())
     }
 }
@@ -404,6 +514,7 @@ impl<'a> Tx<'a> {
                 self.check_class(class)?;
                 validate_shape(shape)?;
                 self.check_shape_refs(shape)?;
+                self.check_sheet_rules(layer, shape, None)?;
                 validate_attrs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
@@ -411,6 +522,7 @@ impl<'a> Tx<'a> {
                 let mut o = Object::new(id, layer, class, shape.clone());
                 o.attrs = attrs.clone();
                 self.doc.objects.insert(id, o);
+                self.sync_title_block(id);
                 out.created.push(id.0);
             }
             Command::DeleteObjects { ids } => {
@@ -452,7 +564,9 @@ impl<'a> Tx<'a> {
                 }
                 for id in ids {
                     self.touch(id);
-                    self.doc.object_mut(id).expect("checked").shape.translate(*delta);
+                    let o = self.doc.object_mut(id).expect("checked");
+                    o.shape.translate(*delta);
+                    crate::hardscape::translate_object_data(o, *delta);
                 }
             }
             Command::ModifyObject { id, shape, layer, class, attrs } => {
@@ -466,13 +580,22 @@ impl<'a> Tx<'a> {
                 if let Some(s) = shape {
                     validate_shape(s)?;
                     self.check_shape_refs(s)?;
+                    self.guard_path(*id, Some(s))?;
+                    if let Shape::LandscapeArea { boundary, .. } = s {
+                        self.check_holes(*id, boundary)?;
+                    }
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
                 }
+                {
+                    let o = self.doc.object(*id).expect("checked");
+                    self.check_sheet_rules(layer.unwrap_or(o.layer), shape.as_ref().unwrap_or(&o.shape), Some(*id))?;
+                }
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
                 let linked_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| crate::plants::link::link(o).is_some()).cloned();
+                let area_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| matches!(o.shape, Shape::Hardscape { .. })).cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
                     o.shape = s.clone();
@@ -491,6 +614,11 @@ impl<'a> Tx<'a> {
                     crate::plants::link::adopt_shape_edit(self.doc, &prev, &mut now);
                     *self.doc.object_mut(*id).expect("checked") = now;
                 }
+                if let Some(prev) = area_before {
+                    let mut now = self.doc.object(*id).expect("checked").clone();
+                    crate::hardscape::data::fix_edge_elevations(&prev, &mut now);
+                    *self.doc.object_mut(*id).expect("checked") = now;
+                }
             }
             Command::SetVertex { id, index, kind, p } => {
                 self.editable(*id)?;
@@ -502,6 +630,7 @@ impl<'a> Tx<'a> {
                     }
                     Some(_) => {}
                 }
+                self.guard_path(*id, None)?;
                 let mut v = self.doc.object(*id).expect("checked").shape.vertices().expect("checked")[*index];
                 if let Some(k) = kind {
                     v.kind = *k;
@@ -510,6 +639,11 @@ impl<'a> Tx<'a> {
                     v.p = *p;
                 }
                 validate_vertex(&v)?;
+                if let Some(vs) = self.doc.object(*id).and_then(|o| o.shape.vertices()) {
+                    let mut moved = vs.clone();
+                    moved[*index] = v;
+                    self.check_holes(*id, &moved)?;
+                }
                 self.touch(*id);
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
@@ -517,8 +651,8 @@ impl<'a> Tx<'a> {
                 if let Some(k) = set.keys().chain(remove.iter()).find(|k| self.is_record_key(k)) {
                     return Err(CommandError::Invalid(format!("the data key '{k}' is a record. Use the record commands")));
                 }
-                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
-                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str()) || k.as_str() == crate::worksheet_table::KEY) {
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)")));
                 }
                 self.editable(*id)?;
                 self.touch(*id);
@@ -540,8 +674,9 @@ impl<'a> Tx<'a> {
                     visible: true,
                     locked: false,
                     elevation: *elevation,
-                    scale: scale.unwrap_or(100.0),
+                    scale: scale.unwrap_or(if *kind == Some(LayerKind::Sheet) { 1.0 } else { 100.0 }),
                 });
+                self.on_layer_added(id);
                 out.created.push(id.0);
             }
             Command::ModifyLayer { id, name, visible, locked, elevation, scale } => {
@@ -572,6 +707,7 @@ impl<'a> Tx<'a> {
                     return Err(CommandError::LastLayer);
                 }
                 self.doc.layers.retain(|l| l.id != *id);
+                self.doc.drawing.sheets.remove(id);
                 if self.doc.active_layer == *id {
                     self.doc.active_layer = self.doc.layers[0].id;
                 }
@@ -619,6 +755,14 @@ impl<'a> Tx<'a> {
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
             Command::AttachRecord { .. } | Command::DetachRecord { .. } | Command::SetRecordFields { .. } => self.run_record(cmd)?,
+            Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => self.run_table(cmd, out)?,
+            Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
+            Command::AddSheet { .. }
+            | Command::SetSheet { .. }
+            | Command::SetProject { .. }
+            | Command::SaveView { .. }
+            | Command::DeleteView { .. }
+            | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;
@@ -694,6 +838,9 @@ fn validate_vertex(v: &Vertex) -> Result<(), CommandError> {
 
 fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     let bad = |m: &str| Err(CommandError::Invalid(m.into()));
+    if let Some(m) = crate::sheets::shape_problem(shape) {
+        return bad(&m);
+    }
     if !shape.is_finite() {
         return bad(NOT_FINITE);
     }
@@ -702,6 +849,9 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     }
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
+    }
+    if matches!(shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) && shape.vertices().is_some_and(|v| v.len() > crate::hardscape::data::MAX_VERTICES) {
+        return bad("a boundary has at most 50000 points");
     }
     if !shape.has_valid_thickness() {
         return bad("thickness must be positive");

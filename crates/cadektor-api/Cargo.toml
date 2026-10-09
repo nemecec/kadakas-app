@@ -14,6 +14,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cadektor-print = { version = "0.1.0", path = "../cadektor-print" }
 cadektor-io = { version = "0.1.0", path = "../cadektor-io" }
 
 [dev-dependencies]

@@ -103,7 +103,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
-        let a = doc.resolved_attrs(o);
+        let a = crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
         let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
         let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
         let fill = a.fill.unwrap_or(Color::NONE).to_css();
@@ -158,6 +158,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 let tag = if *closed { "polygon" } else { "polyline" };
                 writeln!(s, r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#, points_attr(&points))
             }
+            Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 let outline = site_outline(&o.shape);
                 let res = writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&outline), o.shape.kind());
@@ -253,11 +254,14 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                     esc(&text)
                 )
             }
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } if !curve::all_straight(boundary) => {
-                writeln!(s, r#"<path d="{}" {style} data-kind="{}"/>"#, curve::path(boundary, true).svg_d(), o.shape.kind())
-            }
             Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
-                writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&curve::positions(boundary)), o.shape.kind())
+                let res = if curve::all_straight(boundary) {
+                    writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&curve::positions(boundary)), o.shape.kind())
+                } else {
+                    writeln!(s, r#"<path d="{}" {style} data-kind="{}"/>"#, curve::path(boundary, true).svg_d(), o.shape.kind())
+                };
+                s.push_str(&crate::hardscape::object_svg_extras(doc, o, scale, &stroke));
+                res
             }
         };
     }

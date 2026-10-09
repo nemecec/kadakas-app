@@ -4,6 +4,11 @@
 //! or `Layer`, a plant style field (`Plant.spread`), or a record field (`Soil.Depth`).
 //! Worksheet database rows and Data Manager rules both use it, so they agree.
 //!
+//! `Area` of a hardscape is its surface (sloped or draped), and `Area` of a landscape area is the
+//! planted area (holes taken out), as the reports count them. `PlanArea`, `SurfaceArea`,
+//! `GrossArea`, `NetArea` and `HolesArea` give the parts. With a ground (`property_on`) draped
+//! objects follow the site model.
+//!
 //! Units: `Area` is in m2, `Volume` in m3, `Length` and `Perimeter` in m. All other lengths
 //! (spread, height, dbh, thickness, elevation, rpz) are in mm, as stored.
 
@@ -32,7 +37,7 @@ pub enum Prop {
 
 /// The built-in property names, as shown to users.
 pub const NAMES: &[&str] = &[
-    "Id", "Kind", "Layer", "Class", "Name", "Style", "Count", "Area", "Length", "Perimeter", "Volume", "Material", "Thickness", "Elevation",
+    "Id", "Kind", "Layer", "Class", "Name", "Style", "Count", "Area", "PlanArea", "SurfaceArea", "GrossArea", "NetArea", "HolesArea", "Length", "Perimeter", "Volume", "Material", "Thickness", "Elevation",
     "Species", "Botanical", "CommonName", "IdCode", "Category", "Spread", "Height", "Price", "Size", "Container", "Root", "DBH", "Condition",
     "Action", "RPZ", "X", "Y",
 ];
@@ -111,12 +116,19 @@ pub fn has_record(obj: &Object, name: &str) -> bool {
     obj.data.iter().any(|(k, v)| k.eq_ignore_ascii_case(name.trim()) && v.as_object().is_some_and(|m| m.contains_key(record::MARKER)))
 }
 
+/// Reads a property with no ground: a draped hardscape or area is measured flat.
+pub fn property(doc: &Document, obj: &Object, path: &[&str]) -> Prop {
+    property_on(doc, obj, path, &crate::hardscape::NoTerrain)
+}
+
 /// Reads a property. `path` has one name (`Area`), or two or more names: `Plant` and a style
 /// field, or a record name and a field name (`Soil`, `Depth`).
-pub fn property(doc: &Document, obj: &Object, path: &[&str]) -> Prop {
+/// `ground` gives the heights of the site model, so `Area` and `Volume` of draped hardscapes and
+/// landscape areas agree with `report.hardscape` and `report.landscape_areas`.
+pub fn property_on(doc: &Document, obj: &Object, path: &[&str], ground: &dyn crate::hardscape::TerrainSource) -> Prop {
     match path {
         [] => Prop::Unknown,
-        [name] => builtin(doc, obj, name),
+        [name] => builtin(doc, obj, name, ground),
         [first, rest @ ..] if first.eq_ignore_ascii_case("plant") => plant_field(doc, obj, rest),
         [record_name, field] => record_field(doc, obj, record_name, field),
         _ => Prop::Unknown,
@@ -154,7 +166,17 @@ fn plant_field(doc: &Document, obj: &Object, rest: &[&str]) -> Prop {
     if v.is_null() { Prop::NotApplicable } else { Prop::Value(v) }
 }
 
-fn builtin(doc: &Document, obj: &Object, name: &str) -> Prop {
+/// Gross area, planted (net) area and the ratio of draped surface to plan area of a landscape area.
+fn landscape_area(doc: &Document, obj: &Object, ground: &dyn crate::hardscape::TerrainSource) -> Option<(f64, f64, f64)> {
+    let q = crate::landscape::quantities(doc, obj)?;
+    let ratio = match crate::landscape::surface_area_on(obj, ground) {
+        Some(s) if q.gross_area_m2 > 0.0 => s / q.gross_area_m2,
+        _ => 1.0,
+    };
+    Some((q.gross_area_m2, q.net_area_m2, ratio))
+}
+
+fn builtin(doc: &Document, obj: &Object, name: &str, ground: &dyn crate::hardscape::TerrainSource) -> Prop {
     let shape = &obj.shape;
     match key(name).as_str() {
         "id" => Prop::Value(Value::from(obj.id.0)),
@@ -162,11 +184,31 @@ fn builtin(doc: &Document, obj: &Object, name: &str) -> Prop {
         "layer" => doc.layer(obj.layer).map_or(Prop::NotApplicable, |l| text(l.name.clone())),
         "class" => doc.class(obj.class).map_or(Prop::NotApplicable, |c| text(c.name.clone())),
         "count" => Prop::Value(Value::from(1)),
-        "area" => area_m2(shape).map_or(Prop::NotApplicable, num),
+        "area" | "surfacearea" => match shape {
+            // The surface of the hardscape: sloped or draped, as the hardscape report counts it.
+            Shape::Hardscape { .. } => crate::hardscape::report::quantities_on(doc, obj, ground).map_or(Prop::NotApplicable, |q| num(q.surface_area_m2)),
+            // The planted area: holes are taken out, and a draped area counts its surface.
+            Shape::LandscapeArea { .. } => landscape_area(doc, obj, ground).map_or(Prop::NotApplicable, |(_, net, ratio)| num(net * ratio)),
+            _ if key(name) == "surfacearea" => Prop::NotApplicable,
+            _ => area_m2(shape).map_or(Prop::NotApplicable, num),
+        },
+        "planarea" => match shape {
+            Shape::Hardscape { .. } => crate::hardscape::report::quantities_on(doc, obj, ground).map_or(Prop::NotApplicable, |q| num(q.plan_area_m2)),
+            _ => area_m2(shape).map_or(Prop::NotApplicable, num),
+        },
+        "grossarea" | "netarea" | "holesarea" => match landscape_area(doc, obj, ground) {
+            Some((gross, net, _)) => match key(name).as_str() {
+                "grossarea" => num(gross),
+                "netarea" => num(net),
+                _ => num((gross - net).max(0.0)),
+            },
+            None => Prop::NotApplicable,
+        },
         "length" => length_m(shape).map_or(Prop::NotApplicable, num),
         "perimeter" => if is_closed(shape) { length_m(shape).map_or(Prop::NotApplicable, num) } else { Prop::NotApplicable },
+        // The volume of all layers, components included.
         "volume" => match shape {
-            Shape::Hardscape { thickness, .. } => area_m2(shape).map_or(Prop::NotApplicable, |a| num(a * thickness.unwrap_or(DEFAULT_THICKNESS) / 1000.0)),
+            Shape::Hardscape { .. } => crate::hardscape::report::quantities_on(doc, obj, ground).map_or(Prop::NotApplicable, |q| num(q.volume_m3)),
             _ => Prop::NotApplicable,
         },
         "x" => position(shape).map_or(Prop::NotApplicable, |p| num(p.x)),
@@ -387,6 +429,112 @@ mod tests {
         assert_eq!(p(&ed, id2, &["Species"]), v(json!("Birch")));
     }
 
+    fn square_ring(side: f64, at: f64) -> Vec<crate::curve::Vertex> {
+        curve::corners(&[DVec2::new(at, at), DVec2::new(at + side, at), DVec2::new(at + side, at + side), DVec2::new(at, at + side)])
+    }
+
+    #[test]
+    fn hardscape_and_landscape_values_agree_with_the_reports() {
+        use crate::model::ObjectId;
+        use crate::hardscape::style::{Component, HardscapeStyle};
+        use crate::hardscape::{report, HardscapePatch, NoTerrain};
+        use crate::landscape::style::{LandscapeAreaStyle, MixEntry};
+        use crate::landscape::LandscapePatch;
+        let mut ed = Editor::default();
+        // A styled hardscape: surface layer and a component, so the volume is more than area x thickness.
+        let style = HardscapeStyle { thickness: 60.0, components: vec![Component { name: "Base".into(), material: "Gravel".into(), thickness: 150.0, color: None }], ..HardscapeStyle::default() };
+        let hs = ResourceId(ed.execute(&Command::AddResource { name: "Paving".into(), body: ResourceBody::HardscapeStyle(Box::new(style)) }).unwrap().created[0]);
+        let h = ObjectId(
+            ed.execute(&Command::AddHardscape { boundary: Some(square_ring(2000.0, 0.0)), patch: Box::new(HardscapePatch { style: Some(hs), ..Default::default() }), layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0],
+        );
+        let q = report::quantities_on(ed.doc(), ed.doc().object(h).unwrap(), &NoTerrain).unwrap();
+        assert!((q.volume_m3 - 4.0 * 0.21).abs() < 1e-9, "{}", q.volume_m3);
+        assert_eq!(p(&ed, h, &["Volume"]), v(json!(q.volume_m3)));
+        assert_eq!(p(&ed, h, &["Area"]), v(json!(q.surface_area_m2)));
+        assert_eq!(p(&ed, h, &["PlanArea"]), v(json!(q.plan_area_m2)));
+        assert_eq!(p(&ed, h, &["SurfaceArea"]), v(json!(q.surface_area_m2)));
+        assert_eq!(p(&ed, h, &["Perimeter"]), v(json!(q.perimeter_m)));
+        assert_eq!(p(&ed, h, &["GrossArea"]), Prop::NotApplicable);
+        // A slope makes the surface larger than the plan.
+        ed.execute(&Command::SetHardscape { ids: vec![h], patch: HardscapePatch { slope: Some(crate::hardscape::Slope::Angle { degrees: 30.0, angle_deg: 0.0 }), ..Default::default() } }).unwrap();
+        let q = report::quantities_on(ed.doc(), ed.doc().object(h).unwrap(), &NoTerrain).unwrap();
+        assert!(q.surface_area_m2 > q.plan_area_m2 + 0.1);
+        assert_eq!(p(&ed, h, &["Area"]), v(json!(q.surface_area_m2)));
+        assert_eq!(p(&ed, h, &["PlanArea"]), v(json!(q.plan_area_m2)));
+        // A ground makes a draped hardscape follow it.
+        ed.execute(&Command::SetHardscape { ids: vec![h], patch: HardscapePatch { slope: Some(crate::hardscape::Slope::None), drape: Some(true), ..Default::default() } }).unwrap();
+        let hill = |_: &Object, p: DVec2| Some(p.x * 0.5);
+        struct Hill(fn(&Object, DVec2) -> Option<f64>);
+        impl crate::hardscape::TerrainSource for Hill {
+            fn elevation(&self, o: &Object, p: DVec2) -> Option<f64> {
+                (self.0)(o, p)
+            }
+        }
+        let ground = Hill(hill);
+        let obj = ed.doc().object(h).unwrap();
+        let on = report::quantities_on(ed.doc(), obj, &ground).unwrap();
+        assert!(on.draped && on.surface_area_m2 > on.plan_area_m2 * 1.05);
+        assert_eq!(property_on(ed.doc(), obj, &["Area"], &ground), v(json!(on.surface_area_m2)));
+        assert_eq!(property_on(ed.doc(), obj, &["Volume"], &ground), v(json!(on.volume_m3)));
+        assert_eq!(p(&ed, h, &["Area"]), v(json!(4.0)), "no ground, no drape");
+
+        // A landscape area with a hole and a plant mix.
+        let plant = ResourceId(ed.execute(&Command::AddResource { name: "Sedge".into(), body: ResourceBody::plant_style(PlantStyle { spread: 500.0, ..PlantStyle::default() }) }).unwrap().created[0]);
+        let ls = ResourceId(
+            ed.execute(&Command::AddResource { name: "Meadow".into(), body: ResourceBody::LandscapeAreaStyle(Box::new(LandscapeAreaStyle { mix: vec![MixEntry { plant, percent: 100.0, ..Default::default() }], ..Default::default() })) }).unwrap().created[0],
+        );
+        let a = ObjectId(
+            ed.execute(&Command::AddLandscapeArea {
+                boundary: square_ring(10_000.0, 0.0),
+                name: "Lawn".into(),
+                patch: Box::new(LandscapePatch { style: Some(ls), holes: Some(vec![square_ring(2000.0, 4000.0)]), ..Default::default() }),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        assert_eq!(p(&ed, a, &["GrossArea"]), v(json!(100.0)));
+        assert_eq!(p(&ed, a, &["HolesArea"]), v(json!(4.0)));
+        assert_eq!(p(&ed, a, &["NetArea"]), v(json!(96.0)));
+        assert_eq!(p(&ed, a, &["Area"]), v(json!(96.0)), "holes are taken out");
+        assert_eq!(p(&ed, a, &["Volume"]), Prop::NotApplicable);
+        let rep = crate::landscape::report(ed.doc(), &NoTerrain);
+        assert_eq!(rep.rows[0].quantities.net_area_m2, 96.0);
+        // A draped area counts its surface for the planted part.
+        ed.execute(&Command::SetLandscapeArea { ids: vec![a], patch: LandscapePatch { drape: Some(true), ..Default::default() } }).unwrap();
+        let obj = ed.doc().object(a).unwrap();
+        let rep = crate::landscape::report(ed.doc(), &ground);
+        let surface = rep.rows[0].surface_area_m2.unwrap();
+        assert!(surface > 100.0 * 1.05);
+        let Prop::Value(area) = property_on(ed.doc(), obj, &["Area"], &ground) else { panic!() };
+        assert!((area.as_f64().unwrap() - 96.0 * surface / 100.0).abs() < 1e-9);
+        assert_eq!(p(&ed, a, &["Area"]), v(json!(96.0)));
+        // Plants and other shapes keep their own rules.
+        assert_eq!(p(&ed, a, &["PlanArea"]), v(json!(100.0)));
+    }
+
+    #[test]
+    fn reserved_data_keys_are_not_records() {
+        let mut ed = Editor::default();
+        let a = add(&mut ed, Shape::Hardscape { boundary: square_ring(1000.0, 0.0), material: "x".into(), thickness: None, elevation: None });
+        let o = ed.doc().object(a).unwrap();
+        let mut o = o.clone();
+        o.data.insert("hardscape".into(), json!({"mode": "slab"}));
+        o.data.insert("landscape_area".into(), json!({"holes": []}));
+        o.data.insert("plant".into(), json!({"style": 3}));
+        o.data.insert("worksheet_table".into(), json!({"worksheet": 1, "text_height": 3.0}));
+        for key in ["hardscape", "landscape_area", "plant", "worksheet_table", "Hardscape"] {
+            assert!(!has_record(&o, key), "{key} is not a record");
+        }
+        // A record format cannot take these names.
+        for name in ["hardscape", "landscape_area", "Plant", "worksheet_table", "rotation"] {
+            let r = ed.execute(&Command::AddResource { name: name.into(), body: ResourceBody::RecordFormat(Box::default()) });
+            assert!(r.is_err(), "{name}");
+        }
+    }
+
     #[test]
     fn record_fields() {
         let mut ed = Editor::default();
@@ -405,6 +553,6 @@ mod tests {
         ed.execute(&Command::SetData { id: b, set: [("Other".to_string(), json!({"Depth": 5}))].into(), remove: vec![] }).unwrap();
         assert!(!has_record(ed.doc().object(b).unwrap(), "Other"));
         assert_eq!(p(&ed, a, &["Nope", "Depth"]), Prop::Unknown);
-        assert!(NAMES.iter().all(|n| !matches!(builtin(ed.doc(), ed.doc().object(a).unwrap(), n), Prop::Unknown)));
+        assert!(NAMES.iter().all(|n| !matches!(builtin(ed.doc(), ed.doc().object(a).unwrap(), n, &crate::hardscape::NoTerrain), Prop::Unknown)));
     }
 }

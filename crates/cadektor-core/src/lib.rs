@@ -8,13 +8,17 @@ pub mod datamap;
 pub mod fsio;
 pub mod geom;
 pub mod georef;
+pub mod hardscape;
+pub mod landscape;
 pub mod mesh;
 pub mod model;
 pub mod plants;
 pub mod props;
 pub mod record;
 pub mod resource;
+pub mod sheets;
 pub mod site;
 pub mod svg;
+pub mod worksheet_table;
 
 pub use glam::{DVec2, DVec3};

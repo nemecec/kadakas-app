@@ -243,7 +243,7 @@ pub fn check_name(kind: &str, name: &str) -> Result<(), String> {
 /// Names that an object's `data` already uses for other purposes.
 pub fn is_reserved_record_name(name: &str) -> bool {
     let n = name.trim();
-    crate::plants::link::RESERVED_DATA_KEYS.iter().any(|k| k.eq_ignore_ascii_case(n)) || n.eq_ignore_ascii_case(crate::plants::link::ROTATION_KEY)
+    crate::plants::link::RESERVED_DATA_KEYS.iter().any(|k| k.eq_ignore_ascii_case(n)) || n.eq_ignore_ascii_case(crate::plants::link::ROTATION_KEY) || n.eq_ignore_ascii_case(crate::worksheet_table::KEY)
 }
 
 impl RecordFormat {

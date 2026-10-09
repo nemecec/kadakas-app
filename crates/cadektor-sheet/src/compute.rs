@@ -146,8 +146,14 @@ fn dependencies(expr: &Expr, cells: &BTreeMap<Pos, Cell>) -> Vec<Pos> {
     out
 }
 
-/// Calculates a worksheet against a document.
+/// Calculates a worksheet against a document, with no ground.
 pub fn compute(def: &WorksheetDef, doc: &Document) -> Computed {
+    compute_with(def, doc, &cadektor_core::hardscape::NoTerrain)
+}
+
+/// Calculates a worksheet against a document and the ground of its site models, so draped
+/// hardscapes and landscape areas are measured as the reports measure them.
+pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_core::hardscape::TerrainSource) -> Computed {
     let mut result = Computed::default();
     let mut cells: BTreeMap<Pos, Cell> = BTreeMap::new();
 
@@ -183,7 +189,7 @@ pub fn compute(def: &WorksheetDef, doc: &Document) -> Computed {
             result.problems.push(format!("database {}: '{}' is not a cell address", i + 1, d.anchor));
             continue;
         };
-        let out = db::run(doc, d, i);
+        let out = db::run_on(doc, d, i, ground);
         result.problems.extend(out.problems.iter().cloned());
         for (li, line) in out.lines.iter().enumerate() {
             for (ci, v) in line.values.iter().enumerate() {

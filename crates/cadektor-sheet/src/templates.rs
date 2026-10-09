@@ -1,6 +1,6 @@
 //! Built-in report templates. Each one is a worksheet definition that the user can change.
 
-use crate::def::{ColumnDef, DatabaseDef, GroupMode, SortKey, Summary, WorksheetDef};
+use crate::def::{ColumnDef, DatabaseDef, GroupMode, RowSource, SortKey, Summary, WorksheetDef};
 
 /// A template for the list of templates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +36,9 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
     let db = match id {
         "plant_list" => DatabaseDef {
             name: "Plant list".into(),
-            criteria: "Kind = \"plant\"".into(),
+            // The plant list of the document: single plants and the plants of landscape area mixes.
+            source: RowSource::PlantList,
+            criteria: String::new(),
             columns: vec![
                 col("Style", "Style"),
                 col("Code", "IdCode"),
@@ -46,7 +48,7 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
                 col("Container", "Container"),
                 sum("Count", "Count", None, ""),
                 dec(col("Unit price", "Price"), 2, ""),
-                sum("Cost", "Price", Some(2), ""),
+                sum("Cost", "Cost", Some(2), ""),
             ],
             group_by: Some(0),
             group_mode: GroupMode::Summary,
@@ -148,6 +150,57 @@ mod tests {
         assert_eq!(c.display(3, 1), "Total");
         assert_eq!(c.value(3, 7), Value::Number(3.0));
         assert_eq!(c.value(3, 9), Value::Number(150.0));
+    }
+
+    #[test]
+    fn plant_list_includes_landscape_area_mixes_like_the_report() {
+        use cadektor_core::landscape::LandscapePatch;
+        use cadektor_core::landscape::plant_list::plant_list;
+        use cadektor_core::landscape::style::{LandscapeAreaStyle, MixEntry};
+        let mut ed = scene();
+        let maple = ed.doc().resources.find_plant_style("Maple").unwrap();
+        let sedge = cadektor_core::resource::ResourceId(
+            ed.execute(&Command::AddResource { name: "Sedge".into(), body: ResourceBody::plant_style(PlantStyle { botanical_name: "Carex".into(), id_code: "CX".into(), price: 4.0, spread: 500.0, ..PlantStyle::default() }) }).unwrap().created[0],
+        );
+        let mix = LandscapeAreaStyle { mix: vec![MixEntry { plant: sedge, percent: 70.0, ..Default::default() }, MixEntry { plant: maple, percent: 30.0, min_count: 2, ..Default::default() }], ..Default::default() };
+        let style = cadektor_core::resource::ResourceId(ed.execute(&Command::AddResource { name: "Meadow".into(), body: ResourceBody::LandscapeAreaStyle(Box::new(mix)) }).unwrap().created[0]);
+        let b = corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0), DVec2::new(5000.0, 4000.0), DVec2::new(0.0, 4000.0)]);
+        ed.execute(&Command::AddLandscapeArea {
+            boundary: b,
+            name: "Meadow".into(),
+            patch: Box::new(LandscapePatch { style: Some(style), ..Default::default() }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let report = plant_list(ed.doc());
+        assert!(report.total_in_areas > 0);
+        let c = compute(&template("plant_list").unwrap(), ed.doc());
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        let rows = report.rows.len() as u32;
+        assert_eq!(c.rows, rows + 2, "header, a row per style, total");
+        for (i, r) in report.rows.iter().enumerate() {
+            let row = i as u32 + 2;
+            assert_eq!(c.display(row, 1), r.name);
+            assert_eq!(c.value(row, 7), Value::Number(r.count as f64), "{}", r.name);
+            assert!((match c.value(row, 9) {
+                Value::Number(n) => n,
+                other => panic!("{other:?}"),
+            } - r.total_price)
+                .abs()
+                < 1e-9);
+        }
+        assert_eq!(c.value(rows + 2, 7), Value::Number(report.total_count as f64));
+        assert_eq!(c.value(rows + 2, 9), Value::Number(report.total_price));
+        // The columns of the list can be used with criteria.
+        let mut w = WorksheetDef::default();
+        let mut db = template("plant_list").unwrap().databases.remove(0);
+        db.criteria = "InAreas > 0 AND Category = \"tree\" OR Style = \"Sedge\"".into();
+        w.databases.push(db);
+        let c = compute(&w, ed.doc());
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert!(c.blocks[0].matched >= 1);
     }
 
     #[test]

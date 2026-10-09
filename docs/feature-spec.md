@@ -90,7 +90,7 @@ Non-goals
 | DOC-10 | Native file format (JSON based, versioned). | P0 | planned |
 | DOC-11 | Layer elevation, stories, 3D height. | P1 | planned |
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
-| DOC-13 | Saved views. | P1 | planned |
+| DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
 | DOC-14 | Phases (existing, new, demolished). | P1 | planned |
 | DOC-15 | Symbols and symbol definitions. | P1 | planned |
 | DOC-16 | Resource library files (shared styles and symbols). | P1 | planned |
@@ -170,7 +170,7 @@ Non-goals
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
 | SIT-18 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
-| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). | P1 | planned |
+| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). | P1 | planned |
 | SIT-13 | Stake / spot elevation object. | P1 | planned |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
 | SIT-15 | Slope and aspect analysis display. | P2 | partial: slope and aspect at a point, no legend display |
@@ -214,24 +214,31 @@ Non-goals
 | LND-01 | Landscape area shape: boundary (corners and curved vertices) and name. | P0 | done |
 | LND-02 | Area calculation. | P0 | done |
 | LND-03 | Area report via `report.areas`. | P0 | done |
-| LND-04 | Landscape area style (mix of plants). | P0 | planned |
-| LND-05 | Mix by spacing rate. | P0 | planned |
-| LND-06 | Mix by percentage with minimum counts. | P1 | planned |
-| LND-07 | Representative plant scatter in 2D. | P1 | planned |
-| LND-08 | Quantities by species in schedules. | P0 | planned |
+| LND-04 | Landscape area style resource: a plant mix (plant styles from the resource store), 2D fill and border, data fields, and a default for "Show plants". Undoable add, edit and delete. A plant style in a mix cannot be deleted unless it is reassigned. | P0 | done |
+| LND-05 | Mix by spacing or density per m2. Without either, the canopy of the plant gives the spacing. | P0 | done |
+| LND-06 | Mix by percentage of the area with minimum counts. | P1 | done |
+| LND-07 | Representative plant scatter in 2D: deterministic symbols from the mix, outside the holes, tree protection zones included. | P1 | done |
+| LND-08 | Quantities per plant style from the net area (`report.landscape_areas`). The plant list (`report.plant_list`) adds them to the single plants, one row per style. Groundcovers counted by area keep their price per m2. | P0 | done |
 | LND-09 | Hedgerow mode (staggered rows). | P1 | planned |
-| LND-10 | Hydrozone and water budget reports. | P2 | planned |
+| LND-10 | Hydrozone and water budget reports. Data fields of the style are in the report. | P2 | planned |
+| LND-11 | Holes: parts of an area that stay empty (`landscape_area.set` with holes or exclude). They move with the area. Overlapping holes count once, and holes must stay inside the boundary. | P1 | done |
+| LND-12 | Draped landscape area: a 3D face on the site model, and the draped surface area in the report. | P1 | done |
+| LND-13 | Edit modes in Object Info (style, show plants, drape, holes) and a style picker in the Landscape Area tool. | P1 | done |
 
 ### 4.8 Hardscapes
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | HRD-01 | Hardscape shape: boundary (corners and curved vertices) and material. | P0 | done |
-| HRD-02 | Hardscape style resource (surface, components, thickness). | P1 | planned |
-| HRD-03 | Area, perimeter, volume quantities. | P1 | planned |
-| HRD-04 | Edge offsets from the drawn line. | P1 | planned |
-| HRD-05 | Path hardscape (width along a line). | P1 | planned |
-| HRD-06 | Slope on hardscape. | P2 | planned |
+| HRD-02 | Hardscape style resource: surface material and thickness, build-up components (layers with material and thickness), border (width, material, both sides or one) and a joint pattern. Undoable add, edit and delete. | P1 | done |
+| HRD-03 | Quantities (`report.hardscape`): plan area, surface area (slope or draped), perimeter, and the volume of every layer. Materials are added up. | P1 | done |
+| HRD-04 | Path alignment and offset: the drawn line is the center or the left or right edge of the path, with a sideways offset. Slab edge offsets are not done. | P1 | done |
+| HRD-05 | Path hardscape: a center line (curves allowed, open or closed) with a width and miter, round or bevel joins. The outline is a union of the legs and the joins, so tight curves and short legs make no loops. The area of a straight path is exactly length times width. | P1 | done |
+| HRD-06 | Slope: none, by edge elevations (a plane through the corner heights; start and end heights of a path), a fall in percent, a fall by angle, or a rise over a run. Edge heights follow an outline edit. | P2 | done |
+| HRD-08 | Joint patterns in 2D: running bond, stack, herringbone and basket weave, with unit size, joint width and angle. | P1 | done |
+| HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground, a few mm above it) and in the area report. Beyond the edge of the model the height of the nearest edge counts, and the report says `partially_draped`. | P1 | done |
+| HRD-10 | Site modifier option: the hardscape acts as a pad at its formation level (top minus build-up), sloped as the hardscape. | P2 | done |
+| HRD-11 | Edit modes in Object Info (style, slab or path, width, join, slope, elevation, drape, site modifier) and style, path and width options in the Hardscape tool. | P1 | done |
 | HRD-07 | Landscape walls. | P2 | planned |
 
 ### 4.9 Existing trees
@@ -279,28 +286,29 @@ Non-goals
 | RPT-01 | Plant and area reports through the API. | P0 | done |
 | RPT-02 | Record formats: typed fields (text, integer, number, boolean, dimension, area, choice list) with defaults and units, as resources. Attach, detach and edit records on objects (undoable, validated). Record format editor and Data tab of Object Info. | P0 | done |
 | RPT-03 | Worksheet resource (`cadektor-sheet`): cells, formulas (+ - * / ^ &, comparisons, references A1 and B2:C5, SUM AVERAGE MIN MAX COUNT IF ROUND CONCAT and more), formats (decimals, unit), live recalculation cached by revision, cycles give #CYCLE!. Worksheet window with grid and formula bar. | P1 | done |
-| RPT-04 | Preformatted reports: plant list, hardscape quantities, area schedule, existing tree survey. | P0 | done |
+| RPT-04 | Preformatted reports: `report.plant_list`, `report.landscape_areas` and `report.hardscape` are done, with CSV. Printable layouts are not. | P0 | planned |
 | RPT-05 | Export worksheet to CSV. | P0 | done |
 | RPT-06 | Data tag styles and tag placement. | P1 | planned |
 | RPT-07 | Data visualizations (color by criteria). | P1 | planned |
 | RPT-08 | Graphic legends. | P2 | planned |
 | RPT-09 | Worksheet database rows linked to live objects: criteria (kind, layer, class, record, field comparisons, style), column expressions (Area, Length, Perimeter, Count, Layer, Class, Style, plant and record fields), sort, group, subtotals and totals. Database setup in the worksheet window. | P1 | done |
 | RPT-10 | Export worksheet to XLSX (values and number formats, own small writer, no extra crate). | P2 | done |
+| RPT-11 | Worksheet table object: place a worksheet on a design layer or a sheet layer (`worksheet.place`, `AddWorksheetTable`). It draws the calculated cells, follows the document, prints in PDF, sheet SVG and PNG, and obeys the sheet layer rules. Criteria builder in the worksheet window. | P1 | done |
 
 ### 4.13 Sheets, viewports, annotation
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | SHT-01 | SVG render of a layer set. | P0 | done |
-| SHT-02 | Sheet layer with page size and title block. | P1 | planned |
-| SHT-03 | Viewport with layer, class, scale. | P1 | planned |
-| SHT-04 | Viewport class and layer overrides. | P1 | planned |
-| SHT-05 | Viewport annotations on the sheet. | P1 | planned |
-| SHT-06 | PDF export of sheets. | P1 | planned |
+| SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
+| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
+| SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: object attributes, viewport class override (by-class attributes only), class attributes, defaults. A viewport keeps its own layer and class visibility. Layer and class graphic "grey" mode is missing. | P1 | done |
+| SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation tools in the app are still missing. | P1 | partial |
+| SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
 | SHT-07 | Batch print / publish. | P2 | planned |
 | SHT-08 | Section and elevation viewports. | P2 | planned |
 | SHT-09 | Design layer viewports. | P2 | planned |
-| SHT-10 | Title block data from document fields. | P1 | planned |
+| SHT-10 | Title block border: parametric object with border, grid reference and a title block with fields from project and sheet data. Standard layout or JSON layout. `title_block.*`, `project.*`. | P1 | done |
 | SHT-11 | North arrow and scale bar. | P1 | planned |
 
 ### 4.14 3D and rendering
@@ -343,7 +351,7 @@ Non-goals
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
 | IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
 | IOP-07 | Data mapping rules to IFC fields: a Data Manager mapping table (resource) from object parameters to record fields and IFC property sets, with an evaluation function and API. The IFC writer itself is IOP-02. | P1 | done |
-| IOP-08 | PDF export. | P1 | planned |
+| IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
 | IOP-10 | DWG import and export. | P2 | planned |
 | IOP-11 | OBJ, STL, STEP. | P2 | planned |
@@ -364,6 +372,7 @@ Non-goals
 | API-07 | `render.svg`. | P0 | done |
 | API-08 | `report.plants`, `report.areas`. | P0 | done |
 | API-40 | Plant methods: `plant_style.*` (list, get, create, update, duplicate, delete, import_csv, export_csv, sample_csv), `plants.place`, `plants.set_style`, `report.plant_schedule`, `report.existing_trees`. Existing trees and plant tags are shapes that `execute` adds. | P0 | done |
+| API-41 | Drawing documentation methods: `sheet.*`, `project.*`, `viewport.*`, `title_block.*`, `saved_view.*`, `export.file` with the formats `pdf`, `sheet_svg`, `sheet_png`. Their examples are in `describe`. | P1 | done |
 | API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |
@@ -375,7 +384,7 @@ Non-goals
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
-| API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export). Examples in `describe`. | P0 | done |
+| API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
 
 ### 4.18 Scripting
 

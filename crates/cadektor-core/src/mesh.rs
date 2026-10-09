@@ -225,7 +225,8 @@ impl SceneSink<'_> {
 }
 
 /// Draws objects that core does not know how to draw. Gets the document and the object, and
-/// adds geometry to the sink. It is called for site models and site modifiers only.
+/// adds geometry to the sink. It is called for site models, site modifiers, and hardscapes and
+/// landscape areas that drape on the site model.
 pub type SceneExt<'a> = &'a dyn Fn(&Document, &Object, &mut SceneSink<'_>);
 
 /// Keeps the scene of the latest document revision. `get` rebuilds it only when
@@ -486,7 +487,7 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn add_object(&mut self, obj: &Object, layer: &Layer) {
         let o = self.origin;
-        let attrs = self.doc.resolved_attrs(obj);
+        let attrs = crate::hardscape::styled_attrs(self.doc, obj, self.doc.resolved_attrs(obj));
         let fill = attrs.fill.filter(|c| c.0[3] > 0).map(rgba);
         let pen = attrs.pen.filter(|c| c.0[3] > 0).map(rgba);
         let edge = pen.unwrap_or(EDGE_DEFAULT);
@@ -513,6 +514,7 @@ impl Builder<'_> {
             Shape::Circle { center, radius } => {
                 self.flat_face(&circle_points(*center, *radius), z, fill.unwrap_or(FACE_DEFAULT), edge, id)
             }
+            Shape::LandscapeArea { .. } | Shape::Hardscape { .. } if self.styled_solid(obj, z) => {}
             Shape::LandscapeArea { boundary, .. } => {
                 self.flat_face(&curve::flatten(boundary, true, FLATTEN_TOLERANCE), z, fill.unwrap_or(AREA_DEFAULT), edge, id)
             }
@@ -554,6 +556,8 @@ impl Builder<'_> {
                 let pts: Vec<Vec3> = points.iter().map(|p| v3(o, p.truncate(), z + p.z)).collect();
                 self.scene.lines.polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
             }
+            // Sheet layer objects are paper space. They never reach the 3D scene.
+            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 if let Some(ext) = self.ext {
                     let mut sink = SceneSink { scene: &mut self.scene, object: id, z0: z };
@@ -565,6 +569,23 @@ impl Builder<'_> {
                 }
             }
         }
+    }
+
+    /// Draws a hardscape with settings, or a landscape area that drapes, through the hardscape
+    /// and landscape modules. A draped object goes to the extension, which knows the terrain.
+    /// Returns false if the object has no such settings. The caller then draws it as a plain shape.
+    fn styled_solid(&mut self, obj: &Object, z: f64) -> bool {
+        let hardscape = matches!(obj.shape, Shape::Hardscape { .. });
+        if !(crate::hardscape::wants_drape(obj) || (hardscape && crate::hardscape::data(obj).is_some())) {
+            return false;
+        }
+        let mut sink = SceneSink { scene: &mut self.scene, object: obj.id, z0: z };
+        match self.ext {
+            Some(ext) if crate::hardscape::wants_drape(obj) => ext(self.doc, obj, &mut sink),
+            _ if hardscape => crate::hardscape::emit_object(self.doc, obj, None, &mut sink),
+            _ => return false,
+        }
+        true
     }
 
     fn flat_face(&mut self, ring: &[DVec2], z: f64, color: [u8; 4], edge: [u8; 4], id: ObjectId) {

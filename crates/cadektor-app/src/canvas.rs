@@ -30,7 +30,7 @@ pub struct Style {
 }
 
 fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
-    let a = doc.resolved_attrs(o);
+    let a = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let pen = color32(a.pen.unwrap_or(Color::BLACK));
     let mut fill = a.fill.map_or(Color32::TRANSPARENT, color32);
@@ -144,6 +144,8 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         }
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+        // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
+        Shape::Viewport(_) | Shape::TitleBlock(_) => {}
     }
 }
 
@@ -174,6 +176,10 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
         Shape::PlantTag { at, anchor, height, .. } => {
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
+        }
+        Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
+            draw_shape(painter, view, &o.shape, st, offset);
+            crate::area_ui::draw_extras(painter, view, doc, o, st, offset);
         }
         shape => draw_shape(painter, view, shape, st, offset),
     }
@@ -225,14 +231,27 @@ pub struct Frame<'a> {
     pub show_grid: bool,
     /// Cache of site model results and the document revision, to draw contours.
     pub site: Option<(&'a cadektor_site::SiteCache, u64)>,
+    /// The page of the active sheet layer. The canvas shows the sheet instead of the model.
+    pub sheet: Option<(&'a crate::sheets_ui::SheetUi, &'a cadektor_print::Page)>,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
-    painter.rect_filled(rect, 0.0, Color32::WHITE);
     let painter = painter.with_clip_rect(rect);
+    if let Some((sheets, page)) = f.sheet {
+        painter.rect_filled(rect, 0.0, Color32::from_gray(205));
+        sheets.paint(&painter, view, page);
+        for o in f.doc.objects.values().filter(|o| f.selection.contains(&o.id)) {
+            let (lo, hi) = o.shape.bounds();
+            painter.rect_stroke(Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(2.0), 0.0, Stroke::new(1.5, SELECT_COLOR), egui::StrokeKind::Middle);
+        }
+        draw_preview(&painter, view, f);
+        return;
+    }
+    painter.rect_filled(rect, 0.0, Color32::WHITE);
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
@@ -241,6 +260,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
+        if let Some(t) = cadektor_core::worksheet_table::data(o) {
+            crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
+        }
         if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
             crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
         }

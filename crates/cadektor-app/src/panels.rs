@@ -23,6 +23,7 @@ pub enum MenuAction {
     Save,
     SaveAs,
     ExportSvg,
+    ExportPdf,
     Import,
     Export,
     Undo,
@@ -69,6 +70,7 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
                 item(ui, "Save", true, Save, &mut out);
                 item(ui, "Save As...", true, SaveAs, &mut out);
                 item(ui, "Export SVG...", true, ExportSvg, &mut out);
+                item(ui, "Export PDF...", true, ExportPdf, &mut out);
                 ui.separator();
                 item(ui, "Import...", true, Import, &mut out);
                 item(ui, "Export...", true, Export, &mut out);
@@ -136,6 +138,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Open => Action::FileOpen,
         MenuAction::Save => Action::FileSave,
         MenuAction::SaveAs => Action::FileSaveAs,
+        MenuAction::ExportPdf => Action::FileExportPdf,
         MenuAction::Undo => Action::Undo,
         MenuAction::Redo => Action::Redo,
         MenuAction::Delete => Action::Delete,
@@ -199,6 +202,9 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mu
     }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
+    }
+    if matches!(m.tool(), Tool::Hardscape | Tool::LandscapeArea) {
+        crate::area_ui::tool_options(ui, m.tool(), settings, doc);
     }
     if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
         // A new mode starts a new placement.
@@ -449,6 +455,17 @@ pub fn vertex_edit_commands(id: ObjectId, base: &[Vertex], edited: &[Vertex]) ->
 fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields").num_columns(2).show(ui, |ui| match shape {
+        Shape::Viewport(vp) => {
+            f.text(ui, "Name", &mut vp.name);
+            f.scalar(ui, "Scale 1:", &mut vp.scale, 1.0);
+            f.xy(ui, "Frame min", &mut vp.min);
+            f.xy(ui, "Frame max", &mut vp.max);
+            f.xy(ui, "Model center", &mut vp.center);
+            ui.label("Frame");
+            f.commit |= ui.checkbox(&mut vp.show_frame, "Show").changed();
+            ui.end_row();
+        }
+        Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
         Shape::Line { a, b } => {
             f.xy(ui, "Start", a);
             f.xy(ui, "End", b);
@@ -636,6 +653,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
         crate::plant_ui::plant_object_info(ui, session, id, status);
     }
+    if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
+        crate::area_ui::object_info(ui, session, id, status);
+    }
+    crate::data_ui::table_info(ui, session, id, status);
     crate::site_ui::cut_fill_readout(ui, session, id);
     ui.separator();
     class_layer_combos(ui, session, &sel, status);
@@ -705,6 +726,7 @@ enum RenameKind {
 
 #[derive(Default)]
 pub struct NavState {
+    pub sheets: crate::sheets_ui::SheetUi,
     renaming: Option<(RenameKind, u64, String)>,
 }
 
@@ -720,7 +742,7 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
             cmds.push(Command::AddLayer { name: format!("Layer {}", doc.layers.len() + 1), elevation: 0.0, scale: None, kind: None });
         }
     });
-    for l in &doc.layers {
+    for l in doc.layers.iter().filter(|l| l.kind == cadektor_core::model::LayerKind::Design) {
         ui.horizontal(|ui| {
             let mut vis = l.visible;
             if ui.checkbox(&mut vis, "").on_hover_text("Visible").changed() {
@@ -803,6 +825,7 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
     for c in cmds {
         run_command(session, &c, status);
     }
+    crate::sheets_ui::navigation_sections(ui, session, &mut nav.sheets, status);
 }
 
 #[cfg(test)]

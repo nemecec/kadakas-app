@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use cadektor_core::model::Document;
 
-use crate::compute::{Computed, compute};
+use crate::compute::{Computed, compute_with};
 use crate::def::WorksheetDef;
 
 /// Results of worksheets by (revision, worksheet ID).
@@ -22,6 +22,11 @@ pub struct SheetCache {
 impl SheetCache {
     /// The result for a worksheet at this revision. It is calculated once per revision.
     pub fn get(&self, revision: u64, sheet_id: u64, def: &WorksheetDef, doc: &Document) -> Arc<Computed> {
+        self.get_with(revision, sheet_id, def, doc, &cadektor_core::hardscape::NoTerrain)
+    }
+
+    /// Like `get`, with the ground of the site models. The ground must belong to this revision.
+    pub fn get_with(&self, revision: u64, sheet_id: u64, def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_core::hardscape::TerrainSource) -> Arc<Computed> {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if guard.0 != revision {
             guard.0 = revision;
@@ -32,7 +37,7 @@ impl SheetCache {
         }
         // Calculate without the lock held, so that a long calculation does not block readers of other sheets.
         drop(guard);
-        let result = Arc::new(compute(def, doc));
+        let result = Arc::new(compute_with(def, doc, ground));
         self.runs.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if guard.0 == revision {

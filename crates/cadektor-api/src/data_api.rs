@@ -50,6 +50,8 @@ pub const WORKSHEET_SET_CELLS: (&str, &str) = ("worksheet.set_cells", "Set many 
 pub const WORKSHEET_SET_DATABASE: (&str, &str) = ("worksheet.set_database", "Add or replace a database block. params: {id, index?, database: {name?, anchor?, criteria?, columns: [{header, expr, summary?, decimals?, unit?}], sort?: [{column, descending?}], group_by?, group_mode?: detail|summary, header?, total?}}. Without index the block is added.");
 pub const WORKSHEET_REMOVE_DATABASE: (&str, &str) = ("worksheet.remove_database", "Remove a database block. params: {id, index}.");
 pub const WORKSHEET_EVALUATE: (&str, &str) = ("worksheet.evaluate", "Calculate a worksheet now. params: {id}. Returns {rows, cols, values: [[...]], text: [[...]], cells: {A1: value}, blocks, problems, errors}. An error cell is {error: \"#DIV/0!\"}. Cycles give #CYCLE!.");
+pub const WORKSHEET_PLACE: (&str, &str) = ("worksheet.place", "Place a worksheet in the drawing as a table, on a design layer or a sheet layer (a sheet layer takes paper mm). It draws the calculated cells, prints in PDF and sheet.svg, and follows the document. params: {id, at: [x, y] (top left corner), text_height? (mm, default 3.5), layer?, class?}. Returns {id, size: [w, h]}. The frame is cut to the table size; use worksheet.fit after the worksheet changes.");
+pub const WORKSHEET_FIT: (&str, &str) = ("worksheet.fit", "Fit the frames of worksheet tables to their calculated tables (the top left corner stays). params: {ids?: [object id]} (default: all tables). Returns {fitted}.");
 pub const WORKSHEET_EXPORT: (&str, &str) = ("worksheet.export", "Export a calculated worksheet. params: {id, format: csv | xlsx, path?, overwrite?}. Without a path, csv returns {csv} and xlsx returns {xlsx_base64}. With a path the file is written. XLSX holds values, not formulas.");
 
 /// Extra text for `describe`.
@@ -74,7 +76,8 @@ pub fn describe() -> Value {
                 {"method": "worksheet.create", "params": {"name": "Trees", "databases": [{"anchor": "A1", "criteria": "Kind = \"existing_tree\"", "columns": [{"header": "Species", "expr": "Species"}, {"header": "Count", "expr": "Count", "summary": "sum"}], "group_by": 0, "group_mode": "summary"}]}},
                 {"method": "worksheet.set_cell", "params": {"id": "Plants", "address": "L1", "input": "=SUM(G2:G20)", "decimals": 0}},
                 {"method": "worksheet.evaluate", "params": {"id": "Plants"}},
-                {"method": "worksheet.export", "params": {"id": "Plants", "format": "csv"}}
+                {"method": "worksheet.export", "params": {"id": "Plants", "format": "csv"}},
+                {"method": "worksheet.place", "params": {"id": "Plants", "at": [10, 280], "layer": 5}}
             ],
             "templates": templates::TEMPLATES.iter().map(|t| json!({"id": t.id, "title": t.title, "description": t.description})).collect::<Vec<_>>(),
             "functions": cadektor_sheet::eval::FUNCTIONS.iter().map(|(n, d)| json!({"name": n, "doc": d})).collect::<Vec<_>>(),
@@ -122,6 +125,8 @@ const NAMES: &[&str] = &[
     "worksheet.remove_database",
     "worksheet.evaluate",
     "worksheet.export",
+    "worksheet.place",
+    "worksheet.fit",
 ];
 
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
@@ -613,6 +618,50 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                 "errors": c.error_count(),
             }))
         }
+        "worksheet.place" => {
+            #[derive(Deserialize)]
+            struct P {
+                id: Value,
+                at: cadektor_core::DVec2,
+                text_height: Option<f64>,
+                layer: Option<cadektor_core::model::LayerId>,
+                class: Option<cadektor_core::model::ClassId>,
+            }
+            let P { id, at, text_height, layer, class } = params(p)?;
+            let (c, _) = computed(s, &id)?;
+            let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
+            let h = text_height.unwrap_or(cadektor_core::worksheet_table::DEFAULT_TEXT_HEIGHT);
+            if !h.is_finite() || h <= 0.0 {
+                return Err(bad("text_height must be a positive number"));
+            }
+            let l = cadektor_sheet::layout(&c, h);
+            let size = cadektor_core::DVec2::new(l.width, l.height);
+            let out = exec(s, Command::AddWorksheetTable { worksheet: rid, at, size, text_height: Some(h), layer, class, attrs: Default::default() })?;
+            Ok(json!({"id": out.created[0], "size": [l.width, l.height]}))
+        }
+        "worksheet.fit" => {
+            #[derive(Deserialize)]
+            struct P {
+                ids: Option<Vec<ObjectId>>,
+            }
+            let P { ids } = params(p)?;
+            let doc = s.editor.doc();
+            let tables: Vec<(ObjectId, cadektor_core::worksheet_table::TableData)> = match ids {
+                Some(ids) => ids.iter().map(|i| doc.object(*i).and_then(cadektor_core::worksheet_table::data).map(|d| (*i, d)).ok_or_else(|| bad(format!("object {i} is not a worksheet table")))).collect::<Result<_, _>>()?,
+                None => doc.objects.values().filter_map(|o| cadektor_core::worksheet_table::data(o).map(|d| (o.id, d))).collect(),
+            };
+            let mut commands = Vec::new();
+            for (oid, d) in &tables {
+                let (c, _) = computed(s, &json!(d.worksheet.0))?;
+                let l = cadektor_sheet::layout(&c, d.text_height);
+                commands.push(Command::SetWorksheetTable { ids: vec![*oid], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) });
+            }
+            let fitted = commands.len();
+            if fitted > 0 {
+                exec(s, Command::Batch { commands })?;
+            }
+            Ok(json!({"fitted": fitted}))
+        }
         "worksheet.export" => {
             let ExportSheet { id, format, path, overwrite } = params(p)?;
             let (c, name) = computed(s, &id)?;
@@ -641,7 +690,8 @@ fn computed(s: &Session, id: &Value) -> Result<(std::sync::Arc<cadektor_sheet::C
     let rid = resource_ref(doc, id, "worksheet")?;
     let def = worksheet_def(doc, rid)?;
     let name = doc.resources.get(rid).map(|r| r.name.clone()).unwrap_or_default();
-    Ok((s.sheet_cache.get(s.editor.revision(), rid.0, &def, doc), name))
+    let ground = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+    Ok((s.worksheet_cache.get_with(s.editor.revision(), rid.0, &def, doc, &ground), name))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -665,7 +715,8 @@ impl Session {
     pub fn worksheet_result(&self, id: ResourceId) -> Option<(WorksheetDef, std::sync::Arc<cadektor_sheet::Computed>)> {
         let doc = self.editor.doc();
         let def = worksheet_def(doc, id).ok()?;
-        let result = self.sheet_cache.get(self.editor.revision(), id.0, &def, doc);
+        let ground = cadektor_site::SiteTerrain::new(self.site_cache(), self.editor.revision(), doc);
+        let result = self.worksheet_cache.get_with(self.editor.revision(), id.0, &def, doc, &ground);
         Some((def, result))
     }
 }

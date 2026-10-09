@@ -1,4 +1,5 @@
 mod app;
+mod area_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
 mod canvas;
@@ -14,6 +15,7 @@ mod keymap;
 mod panels;
 mod plant_draw;
 mod plant_ui;
+mod sheets_ui;
 mod site_ui;
 mod snap;
 mod tess;

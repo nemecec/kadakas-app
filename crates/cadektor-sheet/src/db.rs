@@ -3,10 +3,12 @@
 //! The result is a list of output lines (header, detail, subtotal and total rows). `compute`
 //! places them in the grid.
 
+use cadektor_core::hardscape::{NoTerrain, TerrainSource};
+use cadektor_core::landscape::plant_list::{PlantListRow, plant_list};
 use cadektor_core::model::{Document, Object};
 use cadektor_core::props::{self, Prop};
 
-use crate::def::{ColumnDef, DatabaseDef, GroupMode, Summary};
+use crate::def::{ColumnDef, DatabaseDef, GroupMode, RowSource, Summary};
 use crate::eval::{Env, eval};
 use crate::formula::{self, CellRef, Expr};
 use crate::value::{ErrorKind, Value};
@@ -40,6 +42,62 @@ pub struct DbOutput {
 pub struct ObjEnv<'a> {
     pub doc: &'a Document,
     pub obj: &'a Object,
+    /// The ground, for draped hardscapes and landscape areas.
+    pub ground: &'a dyn TerrainSource,
+}
+
+/// Environment of one row of the plant list.
+struct ListEnv<'a> {
+    row: &'a PlantListRow,
+}
+
+fn norm(s: &str) -> String {
+    s.chars().filter(|c| !matches!(c, ' ' | '_' | '-')).collect::<String>().to_ascii_lowercase()
+}
+
+impl Env for ListEnv<'_> {
+    fn cell(&self, _: CellRef) -> Value {
+        Value::Error(ErrorKind::Ref)
+    }
+
+    fn range(&self, _: CellRef, _: CellRef) -> Vec<Value> {
+        vec![Value::Error(ErrorKind::Ref)]
+    }
+
+    fn name(&self, name: &str) -> Value {
+        let r = self.row;
+        let text = |s: &str| Value::Text(s.to_string());
+        match norm(name).as_str() {
+            "kind" => text("plant"),
+            "style" | "name" => text(&r.name),
+            "idcode" | "code" => text(&r.id_code),
+            "botanical" | "botanicalname" => text(&r.botanical_name),
+            "commonname" => text(&r.common_name),
+            "category" => text(r.category.id()),
+            "size" => text(&r.size),
+            "container" => text(&r.container),
+            "root" => text(&r.root),
+            "plants" => Value::num(r.plants as f64),
+            "inareas" => Value::num(r.in_areas as f64),
+            "count" => Value::num(r.count as f64),
+            "price" | "unitprice" => Value::num(r.unit_price),
+            "cost" | "totalprice" => Value::num(r.total_price),
+            "area" => Value::num(r.area_m2),
+            _ => Value::Error(ErrorKind::Name),
+        }
+    }
+
+    fn path(&self, _: &[String]) -> Value {
+        Value::Error(ErrorKind::Name)
+    }
+
+    fn has_record(&self, _: &str) -> bool {
+        false
+    }
+
+    fn blank_is_zero(&self) -> bool {
+        false
+    }
 }
 
 fn from_json(v: serde_json::Value) -> Value {
@@ -70,12 +128,12 @@ impl Env for ObjEnv<'_> {
     }
 
     fn name(&self, name: &str) -> Value {
-        from_prop(props::property(self.doc, self.obj, &[name]))
+        from_prop(props::property_on(self.doc, self.obj, &[name], self.ground))
     }
 
     fn path(&self, path: &[String]) -> Value {
         let p: Vec<&str> = path.iter().map(String::as_str).collect();
-        from_prop(props::property(self.doc, self.obj, &p))
+        from_prop(props::property_on(self.doc, self.obj, &p, self.ground))
     }
 
     fn has_record(&self, name: &str) -> bool {
@@ -114,7 +172,7 @@ pub fn summarize(s: Summary, values: &[&Value]) -> Value {
 }
 
 /// The matching objects with their column values.
-fn select(doc: &Document, db: &DatabaseDef, label: &str, out: &mut DbOutput) -> Vec<Vec<Value>> {
+fn select(doc: &Document, db: &DatabaseDef, label: &str, ground: &dyn TerrainSource, out: &mut DbOutput) -> Vec<Vec<Value>> {
     let criteria: Option<Expr> = if db.criteria.trim().is_empty() {
         None
     } else {
@@ -134,10 +192,15 @@ fn select(doc: &Document, db: &DatabaseDef, label: &str, out: &mut DbOutput) -> 
     }
     let mut rows = Vec::new();
     let mut criteria_errors = 0;
-    for obj in doc.objects.values() {
-        let env = ObjEnv { doc, obj };
+    let list = if db.source == RowSource::PlantList { plant_list(doc).rows } else { Vec::new() };
+    let envs: Vec<Box<dyn Env + '_>> = match db.source {
+        RowSource::Objects => doc.objects.values().map(|obj| Box::new(ObjEnv { doc, obj, ground }) as Box<dyn Env + '_>).collect(),
+        RowSource::PlantList => list.iter().map(|row| Box::new(ListEnv { row }) as Box<dyn Env + '_>).collect(),
+    };
+    for env in &envs {
+        let env: &dyn Env = env.as_ref();
         if let Some(c) = &criteria {
-            match eval(c, &env).to_bool() {
+            match eval(c, env).to_bool() {
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(_) => {
@@ -146,7 +209,7 @@ fn select(doc: &Document, db: &DatabaseDef, label: &str, out: &mut DbOutput) -> 
                 }
             }
         }
-        rows.push(exprs.iter().map(|e| e.as_ref().map_or(Value::Error(ErrorKind::Parse), |e| eval(e, &env))).collect());
+        rows.push(exprs.iter().map(|e| e.as_ref().map_or(Value::Error(ErrorKind::Parse), |e| eval(e, env))).collect());
     }
     if criteria_errors > 0 {
         out.problems.push(format!("{label}: the criteria give an error for {criteria_errors} object(s), which are left out (check the names)"));
@@ -158,11 +221,16 @@ fn summary_line(columns: &[ColumnDef], rows: &[&Vec<Value>]) -> Vec<Value> {
     columns.iter().enumerate().map(|(i, c)| c.summary.map_or(Value::Empty, |s| summarize(s, &rows.iter().map(|r| &r[i]).collect::<Vec<_>>()))).collect()
 }
 
-/// Runs one database block against the document.
+/// Runs one database block against the document, with no ground.
 pub fn run(doc: &Document, db: &DatabaseDef, index: usize) -> DbOutput {
+    run_on(doc, db, index, &NoTerrain)
+}
+
+/// Runs one database block against the document and the ground of its site models.
+pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn TerrainSource) -> DbOutput {
     let label = if db.name.trim().is_empty() { format!("database {}", index + 1) } else { format!("database '{}'", db.name.trim()) };
     let mut out = DbOutput::default();
-    let mut rows = select(doc, db, &label, &mut out);
+    let mut rows = select(doc, db, &label, ground, &mut out);
     out.matched = rows.len();
 
     // Sort: the group column first, then the sort keys. Stable, so objects keep document order on ties.
@@ -233,7 +301,7 @@ pub fn run(doc: &Document, db: &DatabaseDef, index: usize) -> DbOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::def::SortKey;
+    use crate::def::{RowSource, SortKey};
     use cadektor_core::command::{Command, Editor};
     use cadektor_core::curve::corners;
     use cadektor_core::model::{Attributes, ObjectId, Shape};
@@ -479,6 +547,44 @@ mod tests {
         let out = run(ed.doc(), &database("Soil.Nope = 1", cols), 0);
         assert_eq!(out.matched, 0);
         assert!(!out.problems.is_empty());
+    }
+
+    #[test]
+    fn plant_list_rows_have_names_and_errors() {
+        let mut ed = Editor::default();
+        ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions: vec![DVec2::ZERO, DVec2::new(3000.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
+        let cols = vec![
+            col("Style", "Style", None),
+            col("Code", "Code", None),
+            col("Count", "Count", Some(Summary::Sum)),
+            col("Kind", "Kind", None),
+            col("Plants", "Plants", None),
+            col("In areas", "InAreas", None),
+            col("Price", "Price", None),
+            col("Cost", "Cost", None),
+            col("Area", "Area", None),
+            col("Cat", "Category", None),
+            col("Bad", "Bogus", None),
+            col("Path", "Plant.price", None),
+            col("Cell", "A1", None),
+        ];
+        let mut d = database("Kind = \"plant\" AND NOT Style = \"\"", cols);
+        d.source = RowSource::PlantList;
+        let out = run(ed.doc(), &d, 0);
+        assert_eq!(out.matched, 1);
+        let row = &out.lines[1].values;
+        assert_eq!(row[2], Value::Number(2.0));
+        assert_eq!(row[3], Value::Text("plant".into()));
+        assert_eq!((row[4].clone(), row[5].clone()), (Value::Number(2.0), Value::Number(0.0)));
+        assert_eq!(row[10], Value::Error(ErrorKind::Name));
+        assert_eq!(row[11], Value::Error(ErrorKind::Name));
+        assert_eq!(row[12], Value::Error(ErrorKind::Ref));
+        let mut d2 = database("SUM(A1:B2) = 0 OR HASRECORD(\"x\")", vec![col("S", "Style", None)]);
+        d2.source = RowSource::PlantList;
+        assert_eq!(run(ed.doc(), &d2, 0).matched, 0, "errors leave a row out");
+        let mut d3 = database("HASRECORD(\"x\") OR Style = \"nothing\"", vec![col("S", "Style", None)]);
+        d3.source = RowSource::PlantList;
+        assert_eq!(run(ed.doc(), &d3, 0).matched, 0);
     }
 
     #[test]

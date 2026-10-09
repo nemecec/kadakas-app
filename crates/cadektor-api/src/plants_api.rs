@@ -97,7 +97,7 @@ fn patched(base: &PlantStyle, patch: &Map<String, Value>) -> Result<PlantStyle, 
 fn style_json(doc: &Document, id: ResourceId) -> Value {
     let r = doc.resources.get(id).expect("exists");
     let s = doc.resources.plant_style(id).expect("a plant style");
-    let used = doc.objects.values().filter(|o| link::link(o).is_some_and(|l| l.style == id)).count();
+    let used = doc.objects.values().filter(|o| link::link(o).is_some_and(|l| l.style == id)).count() + doc.resources.mixes_using(id).len();
     let mut v = serde_json::to_value(s).unwrap();
     v["id"] = json!(id);
     v["name"] = json!(r.name);
