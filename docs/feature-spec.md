@@ -158,21 +158,22 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| SIT-01 | 3D point source data: survey points, 3D loci, 3D polygons. | P0 | planned |
-| SIT-02 | Triangulated existing surface. | P0 | planned |
-| SIT-03 | Proposed surface from modifiers. | P0 | planned |
-| SIT-04 | Pad modifier. | P0 | planned |
-| SIT-05 | Grade limits. | P0 | planned |
-| SIT-06 | Cut and fill volumes (proposed minus existing). | P0 | planned |
-| SIT-07 | Contours for existing and proposed surfaces. | P0 | planned |
-| SIT-08 | Elevation lookup at a point. | P0 | planned |
-| SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | planned |
+| SIT-01 | 3D point source data: survey points, 3D loci, 3D polygons. | P0 | partial: 3D loci and 3D polylines move into a site model (survey point import comes with the file format work) |
+| SIT-02 | Triangulated existing surface. | P0 | done |
+| SIT-03 | Proposed surface from modifiers. | P0 | done |
+| SIT-04 | Pad modifier. | P0 | done (flat or sloped by elevation at end; overlapping pads nest, the later one wins; exact vertical edge without grade limits, no gap) |
+| SIT-05 | Grade limits. The ground outside does not change (overlay of the existing triangles). | P0 | done |
+| SIT-11 | Site Modifiers tool with modes, crop boundary, Update Site Model (auto update off shows out of date), site.drape. | P1 | done |
+| SIT-06 | Cut and fill volumes (proposed minus existing). | P0 | done (exact on the overlay of both surfaces) |
+| SIT-07 | Contours for existing and proposed surfaces. | P0 | done (major and minor, smooth option, labels) |
+| SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |
+| SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
 | SIT-11 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
 | SIT-12 | Aligned modifiers (to hardscape, wall, polygon). | P1 | planned |
 | SIT-13 | Stake / spot elevation object. | P1 | planned |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
-| SIT-15 | Slope and aspect analysis display. | P2 | planned |
+| SIT-15 | Slope and aspect analysis display. | P2 | partial: slope and aspect at a point, no legend display |
 | SIT-16 | Point cloud as source (LAS/E57). | P2 | planned |
 | SIT-17 | Volume fill and grading impact report. | P2 | planned |
 
@@ -298,7 +299,7 @@ Non-goals
 | 3D-03 | Extrude, sweep, 3D polygon. | P1 | planned |
 | 3D-04 | Render modes: wireframe and shaded. | P1 | done |
 | 3D-10 | Render mode: hidden line. | P2 | planned |
-| 3D-05 | Terrain mesh with texture. | P1 | planned |
+| 3D-05 | Terrain mesh with texture. | P1 | partial: terrain mesh and contours in 3D, no texture |
 | 3D-06 | Textures and materials. | P2 | planned |
 | 3D-07 | Lights, sun position by georeference and date. | P2 | planned |
 | 3D-08 | Raster render styles. | P2 | planned |

@@ -26,6 +26,8 @@ pub enum MenuAction {
     Delete,
     SelectAll,
     ZoomFit,
+    CreateSiteModel,
+    UpdateSiteModel,
 }
 
 /// Runs a command on the session. Errors go to the status line.
@@ -43,7 +45,8 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
     }
 }
 
-pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool) -> Vec<MenuAction> {
+#[allow(clippy::too_many_arguments)]
+pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool, can_site: bool, can_update_site: bool) -> Vec<MenuAction> {
     use MenuAction::*;
     let mut out = Vec::new();
     egui::MenuBar::new().ui(ui, |ui| {
@@ -70,6 +73,10 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
             ui.separator();
             item(ui, "Delete", true, Delete, &mut out);
             item(ui, "Select All", true, SelectAll, &mut out);
+        });
+        ui.menu_button("Site", |ui| {
+            item(ui, "Create Site Model from Selection", can_site, CreateSiteModel, &mut out);
+            item(ui, "Update Site Model", can_update_site, UpdateSiteModel, &mut out);
         });
         ui.menu_button("View", |ui| {
             item(ui, "Zoom to Fit", true, ZoomFit, &mut out);
@@ -127,7 +134,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Delete => Action::Delete,
         MenuAction::SelectAll => Action::SelectAll,
         MenuAction::ZoomFit => Action::ZoomFit,
-        MenuAction::ExportSvg => return None,
+        MenuAction::ExportSvg | MenuAction::CreateSiteModel | MenuAction::UpdateSiteModel => return None,
     })
 }
 
@@ -178,6 +185,11 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mu
     for t in Tool::LANDSCAPE {
         tool_button(ui, m, keys, t);
     }
+    ui.add_space(8.0);
+    ui.label("Site");
+    for t in Tool::SITE {
+        tool_button(ui, m, keys, t);
+    }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
     }
@@ -221,6 +233,25 @@ pub fn data_bar(
             Tool::Hardscape => {
                 ui.label("Material");
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
+            }
+            Tool::SiteModifier => {
+                for mode in crate::tools::ModifierMode::ALL {
+                    ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
+                }
+                if s.modifier_mode == crate::tools::ModifierMode::Pad {
+                    ui.label("Elevation");
+                    ui.add(DragValue::new(&mut s.pad_elevation).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                    let mut sloped = s.pad_end_elevation.is_some();
+                    if ui.checkbox(&mut sloped, "Slope").changed() {
+                        s.pad_end_elevation = sloped.then_some(s.pad_elevation);
+                    }
+                    if let Some(end) = &mut s.pad_end_elevation {
+                        ui.label("Elevation at end");
+                        ui.add(DragValue::new(end).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                        ui.label("Falls toward");
+                        ui.add(DragValue::new(&mut s.pad_direction_deg).speed(1.0).suffix("\u{b0}"));
+                    }
+                }
             }
             _ => {}
         }
@@ -469,6 +500,8 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.text(ui, "Material", material);
             f.count(ui, boundary.len());
         }
+        Shape::SiteModel { points, lines, settings } => f.commit |= crate::site_ui::model_fields(ui, points.len(), lines.len(), settings),
+        Shape::SiteModifier { modifier, boundary } => f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary),
     });
     f.commit
 }
@@ -539,6 +572,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     if let Some(area) = obj.shape.area() {
         ui.label(format!("Area {:.2} m\u{b2}", area / 1e6));
     }
+    crate::site_ui::cut_fill_readout(ui, session, id);
     ui.separator();
     class_layer_combos(ui, session, &sel, status);
     let doc = &session.editor.doc();

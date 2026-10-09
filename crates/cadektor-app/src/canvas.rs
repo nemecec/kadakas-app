@@ -38,6 +38,7 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
             Shape::LandscapeArea { .. } => tinted([80, 170, 80, 90]),
             Shape::Hardscape { .. } => tinted([175, 150, 115, 130]),
             Shape::Plant { .. } => tinted([70, 150, 70, 70]),
+            Shape::SiteModifier { modifier: cadektor_core::model::ModifierKind::Pad { .. }, .. } => tinted([200, 170, 120, 70]),
             _ => fill,
         };
     }
@@ -127,7 +128,11 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             painter.line_segment([c - egui::vec2(k, 0.0), c + egui::vec2(k, 0.0)], stroke);
             painter.line_segment([c - egui::vec2(0.0, k), c + egui::vec2(0.0, k)], stroke);
         }
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+        Shape::SiteModel { .. } => {
+            let outline = cadektor_core::svg::site_outline(shape);
+            path(&outline, true);
+        }
+        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => {
             let flat = curve::flatten(boundary, true, curve_tolerance(view.zoom));
             let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
             fill_polygon(painter, &flat, &sp, st.fill);
@@ -180,6 +185,8 @@ pub struct Frame<'a> {
     pub preview: &'a Preview,
     pub snap: Option<SnapResult>,
     pub show_grid: bool,
+    /// Cache of site model results and the document revision, to draw contours.
+    pub site: Option<(&'a cadektor_site::SiteCache, u64)>,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
@@ -194,6 +201,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
         draw_shape(&painter, view, &o.shape, st, DVec2::ZERO);
+        if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
+            crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
+        }
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
             draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
