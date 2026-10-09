@@ -98,6 +98,19 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             }
             path(&flat, *closed);
         }
+        Shape::Locus3d { p } => {
+            let c = s(p.truncate());
+            painter.line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
+            painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
+        }
+        Shape::Polyline3d { points, closed } => {
+            let flat: Vec<DVec2> = points.iter().map(|p| p.truncate()).collect();
+            if *closed {
+                let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+                fill_polygon(painter, &flat, &sp, st.fill);
+            }
+            path(&flat, *closed);
+        }
         Shape::Text { at, text, height } => {
             let size = (*height * view.zoom) as f32;
             if size >= 3.0 {

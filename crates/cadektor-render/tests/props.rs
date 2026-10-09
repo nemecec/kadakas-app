@@ -5,7 +5,7 @@ use cadektor_core::curve::corners;
 use cadektor_core::mesh::build;
 use cadektor_core::model::{Attributes, Shape};
 use cadektor_render::{render, Camera, Projection, RenderMode, RenderOptions, StandardView};
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 use proptest::prelude::*;
 
 /// Numbers from tiny to far beyond what the document accepts, and some that are not numbers at all.
@@ -21,6 +21,10 @@ fn point() -> impl Strategy<Value = DVec2> {
     (num(), num()).prop_map(|(x, y)| DVec2::new(x, y))
 }
 
+fn point3() -> impl Strategy<Value = DVec3> {
+    (num(), num(), num()).prop_map(|(x, y, z)| DVec3::new(x, y, z))
+}
+
 fn shape() -> impl Strategy<Value = Shape> {
     prop_oneof![
         (point(), point()).prop_map(|(a, b)| Shape::Line { a, b }),
@@ -34,6 +38,8 @@ fn shape() -> impl Strategy<Value = Shape> {
             elevation: Some(e),
         }),
         (prop::collection::vec(point(), 0..8), any::<bool>()).prop_map(|(pts, closed)| Shape::Polyline { points: corners(&pts), closed }),
+        point3().prop_map(|p| Shape::Locus3d { p }),
+        (prop::collection::vec(point3(), 0..8), any::<bool>()).prop_map(|(points, closed)| Shape::Polyline3d { points, closed }),
         prop::collection::vec(point(), 0..8).prop_map(|pts| Shape::LandscapeArea { boundary: corners(&pts), name: "a".into() }),
     ]
 }

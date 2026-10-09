@@ -453,6 +453,18 @@ impl Builder<'_> {
             }
             Shape::Plant { at, spread, height, .. } => self.plant(*at, *spread, *height, z, fill, edge, &obj.shape, id),
             Shape::Text { .. } => {}
+            Shape::Locus3d { p } => {
+                let h = crate::model::LOCUS_MARKER_HALF;
+                let c = pen.unwrap_or([0, 0, 0, 255]);
+                let at = |d: DVec3| Vec3::new((p.x + d.x - o.x) as f32, (p.y + d.y - o.y) as f32, (z + p.z + d.z - o.z) as f32);
+                for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
+                    self.scene.lines.push(at(-axis * h), at(axis * h), c, id);
+                }
+            }
+            Shape::Polyline3d { points, closed } => {
+                let pts: Vec<Vec3> = points.iter().map(|p| v3(o, p.truncate(), z + p.z)).collect();
+                self.scene.lines.polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
+            }
         }
     }
 
@@ -850,6 +862,23 @@ mod tests {
         let obj = Object::new(ObjectId(50), FIRST_LAYER, NONE_CLASS, Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 0.0, height: 8000.0 });
         doc.objects.insert(obj.id, obj);
         assert!(build(&doc).is_empty());
+    }
+
+    #[test]
+    fn locus3d_and_polyline3d_use_their_z() {
+        let mut ed = Editor::default();
+        let l = add(&mut ed, Shape::Locus3d { p: DVec3::new(10.0, 20.0, 5.0) });
+        let open = add(&mut ed, Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 7.0), DVec3::new(1.0, 1.0, 3.0)], closed: false });
+        let closed = add(&mut ed, Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 7.0), DVec3::new(1.0, 1.0, 3.0)], closed: true });
+        let scene = build(ed.doc());
+        let segs = |id: ObjectId| scene.lines.objects.iter().filter(|o| **o == id).count();
+        assert_eq!((segs(l), segs(open), segs(closed)), (3, 2, 3));
+        assert_eq!(scene.mesh.triangle_count(), 0);
+        let (lo, hi) = world_bounds(&scene, l);
+        assert!((lo.z - (5.0 - crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3 && (hi.z - (5.0 + crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3);
+        assert!((lo.x - (10.0 - crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3);
+        let (lo, hi) = world_bounds(&scene, open);
+        assert_eq!((lo.z, hi.z), (1.0, 7.0));
     }
 
     #[test]

@@ -49,6 +49,11 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let flat = curve::flatten(boundary, true, curve_tolerance(tol));
             edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
+        Shape::Locus3d { p: q } => p.distance(q.truncate()) <= tol,
+        Shape::Polyline3d { points, closed } => {
+            let flat: Vec<DVec2> = points.iter().map(|q| q.truncate()).collect();
+            edge_dist(&flat, *closed, p) <= tol || (*closed && filled && point_in_polygon(p, &flat))
+        }
         Shape::Plant { at, spread, .. } => p.distance(*at) <= spread / 2.0 + tol,
         Shape::Text { .. } => {
             let (lo, hi) = shape.bounds();

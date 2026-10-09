@@ -82,6 +82,19 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                 let tag = if *closed { "polygon" } else { "polyline" };
                 writeln!(s, r#"<{tag} points="{}" {style}/>"#, points_attr(points))
             }
+            Shape::Locus3d { p } => {
+                let h = crate::model::LOCUS_MARKER_HALF;
+                writeln!(
+                    s,
+                    r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} data-kind="locus3d"/>"#,
+                    p.x - h, -p.y, p.x + h, -p.y, p.x, -p.y - h, p.x, -p.y + h
+                )
+            }
+            Shape::Polyline3d { points, closed } => {
+                let points = points.iter().map(|p| p.truncate()).collect::<Vec<_>>();
+                let tag = if *closed { "polygon" } else { "polyline" };
+                writeln!(s, r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#, points_attr(&points))
+            }
             Shape::Text { at, text, height } => writeln!(
                 s,
                 r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}" data-id="{}">{}</text>"#,
@@ -166,6 +179,17 @@ mod tests {
         // End below start wraps around: from 270 degrees to 0 is a quarter turn.
         let svg = one(arc(1.5 * std::f64::consts::PI, 0.0));
         assert!(svg.contains("A 10 10 0 0 0"), "{svg}");
+    }
+
+    #[test]
+    fn locus3d_is_a_cross_and_polyline3d_uses_xy() {
+        let svg = one(Shape::Locus3d { p: glam::DVec3::new(10.0, 20.0, 5.0) });
+        assert!(svg.contains(r#"<path d="M -90 -20 L 110 -20 M 10 -120 L 10 80""#) && svg.contains("locus3d"), "{svg}");
+        let pts = vec![glam::DVec3::new(1.0, 2.0, 9.0), glam::DVec3::new(3.0, -4.0, 8.0)];
+        let svg = one(Shape::Polyline3d { points: pts.clone(), closed: false });
+        assert!(svg.contains(r#"<polyline points="1,-2 3,4""#), "{svg}");
+        let svg = one(Shape::Polyline3d { points: pts, closed: true });
+        assert!(svg.contains(r#"<polygon points="1,-2 3,4""#), "{svg}");
     }
 
     #[test]

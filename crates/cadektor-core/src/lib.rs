@@ -10,4 +10,4 @@ pub mod mesh;
 pub mod model;
 pub mod svg;
 
-pub use glam::DVec2;
+pub use glam::{DVec2, DVec3};

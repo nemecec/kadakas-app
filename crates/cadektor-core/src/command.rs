@@ -613,6 +613,7 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
         Shape::Plant { spread, .. } if *spread <= 0.0 => bad("spread must be positive"),
         Shape::Text { height, .. } if *height <= 0.0 => bad("text height must be positive"),
         Shape::Polyline { points, .. } if points.len() < 2 => bad("polyline needs 2 or more points"),
+        Shape::Polyline3d { points, .. } if points.len() < 2 => bad("polyline3d needs 2 or more points"),
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } if boundary.len() < 3 => {
             bad("boundary needs 3 or more points")
         }
@@ -831,6 +832,7 @@ mod tests {
             (Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 0.0, height: 1.0 }, "spread must be positive"),
             (Shape::Text { at: DVec2::ZERO, text: "x".into(), height: -2.0 }, "text height must be positive"),
             (Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO]), closed: false }, "polyline needs 2 or more points"),
+            (Shape::Polyline3d { points: vec![glam::DVec3::ZERO], closed: false }, "polyline3d needs 2 or more points"),
             (
                 Shape::LandscapeArea { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), name: "a".into() },
                 "boundary needs 3 or more points",
@@ -852,7 +854,12 @@ mod tests {
         let mut ed = Editor::default();
         add_to(&mut ed, Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), closed: false });
         add_to(&mut ed, Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]), material: "m".into(), thickness: None, elevation: None });
-        assert_eq!(ed.doc.objects.len(), 2);
+        add_to(&mut ed, Shape::Locus3d { p: glam::DVec3::new(1.0, 2.0, 3.0) });
+        add_to(&mut ed, Shape::Polyline3d { points: vec![glam::DVec3::ZERO, glam::DVec3::ONE], closed: false });
+        assert_eq!(ed.doc.objects.len(), 4);
+        let far = Shape::Locus3d { p: glam::DVec3::new(0.0, 0.0, 1e10) };
+        let r = ed.execute(&Command::AddObject { shape: far, layer: None, class: None, attrs: Attributes::default() });
+        assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
     }
 
     #[test]

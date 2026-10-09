@@ -356,7 +356,9 @@ fn command_examples() -> Value {
         {"op": "set_vertex", "id": 2, "index": 1, "kind": {"kind": "arc", "radius": 250}},
         {"op": "move_objects", "ids": [2], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},
-        {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}]}
+        {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}]},
+        {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
+        {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}}
     ])
 }
 
@@ -425,7 +427,7 @@ mod tests {
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
-        assert_eq!(d["command_examples"].as_array().unwrap().len(), 8);
+        assert_eq!(d["command_examples"].as_array().unwrap().len(), 10);
 
         // Every advertised method is handled: none of them is "unknown method".
         for (name, _) in METHODS {

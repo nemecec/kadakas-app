@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::model::{Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape, Vertex, VertexKind};
-use cadektor_core::DVec2;
+use cadektor_core::{DVec2, DVec3};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
@@ -41,7 +41,10 @@ fn vertex() -> impl Strategy<Value = Vertex> {
 
 fn shape() -> impl Strategy<Value = Shape> {
     let p = || (-1e4..1e4f64, -1e4..1e4f64).prop_map(|(x, y)| DVec2::new(x, y));
+    let p3 = || (-1e4..1e4f64, -1e4..1e4f64, -1e3..1e3f64).prop_map(|(x, y, z)| DVec3::new(x, y, z));
     prop_oneof![
+        2 => p3().prop_map(|p| Shape::Locus3d { p }),
+        2 => (prop::collection::vec(p3(), 0..6), any::<bool>()).prop_map(|(points, closed)| Shape::Polyline3d { points, closed }),
         8 => (p(), p()).prop_map(|(a, b)| Shape::Line { a, b }),
         8 => (p(), -10.0..500.0f64).prop_map(|(center, radius)| Shape::Circle { center, radius }),
         4 => (p(), 1.0..5000.0f64).prop_map(|(at, spread)| Shape::Plant { at, species: "Oak".into(), spread, height: 1.0 }),

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -111,6 +111,23 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elevation: Option<f64>,
     },
+    /// Survey point with a Z value.
+    Locus3d { p: DVec3 },
+    /// Polygon or contour with a Z value per vertex.
+    Polyline3d { points: Vec<DVec3>, closed: bool },
+}
+
+/// Half the width of the cross that marks a `Locus3d` in drawings and 3D views, in model units.
+pub const LOCUS_MARKER_HALF: f64 = 100.0;
+
+/// Area of the XY projection of a polygon, in square model units.
+fn polygon_area_xy(points: &[DVec3]) -> f64 {
+    let n = points.len();
+    let twice: f64 = (0..n).map(|i| {
+        let (a, b) = (points[i], points[(i + 1) % n]);
+        a.x * b.y - b.x * a.y
+    }).sum();
+    twice.abs() / 2.0
 }
 
 /// Counterclockwise sweep of an arc in radians, from 0 (empty) to 2π (full circle).
@@ -132,6 +149,8 @@ impl Shape {
             Shape::Plant { .. } => "plant",
             Shape::LandscapeArea { .. } => "landscape_area",
             Shape::Hardscape { .. } => "hardscape",
+            Shape::Locus3d { .. } => "locus3d",
+            Shape::Polyline3d { .. } => "polyline3d",
         }
     }
 
@@ -156,6 +175,8 @@ impl Shape {
     pub fn is_finite(&self) -> bool {
         let v = |p: &DVec2| p.is_finite();
         match self {
+            Shape::Locus3d { p } => p.is_finite(),
+            Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
             Shape::Line { a, b } => v(a) && v(b),
             Shape::Rect { min, max } => v(min) && v(max),
             Shape::Circle { center, radius } => v(center) && radius.is_finite(),
@@ -183,6 +204,8 @@ impl Shape {
             }
         };
         match self {
+            Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
+            Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
             Shape::Line { a, b } => {
                 v(a);
                 v(b);
@@ -231,6 +254,14 @@ impl Shape {
     pub fn translate(&mut self, d: DVec2) {
         let mv = |p: &mut DVec2| *p += d;
         match self {
+            Shape::Locus3d { p } => {
+                p.x += d.x;
+                p.y += d.y;
+            }
+            Shape::Polyline3d { points, .. } => points.iter_mut().for_each(|p| {
+                p.x += d.x;
+                p.y += d.y;
+            }),
             Shape::Line { a, b } => {
                 mv(a);
                 mv(b);
@@ -256,6 +287,10 @@ impl Shape {
             )
         };
         match self {
+            Shape::Locus3d { p } => (p.truncate(), p.truncate()),
+            Shape::Polyline3d { points, .. } => {
+                from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
+            }
             Shape::Line { a, b } => from_points(&[*a, *b]),
             Shape::Rect { min, max } => from_points(&[*min, *max]),
             Shape::Circle { center, radius } => (*center - DVec2::splat(*radius), *center + DVec2::splat(*radius)),
@@ -292,6 +327,7 @@ impl Shape {
         match self {
             Shape::Rect { min, max } => Some(((max.x - min.x) * (max.y - min.y)).abs()),
             Shape::Circle { radius, .. } => Some(std::f64::consts::PI * radius * radius),
+            Shape::Polyline3d { points, closed: true } => Some(polygon_area_xy(points)),
             Shape::Polyline { points, closed: true }
             | Shape::LandscapeArea { boundary: points, .. }
             | Shape::Hardscape { boundary: points, .. } => Some(curve::area(points)),
@@ -623,6 +659,8 @@ mod tests {
             (Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: 1.0 }, "plant"),
             (Shape::LandscapeArea { boundary: crate::curve::corners(&[]), name: "n".into() }, "landscape_area"),
             (Shape::Hardscape { boundary: crate::curve::corners(&[]), material: "m".into(), thickness: None, elevation: None }, "hardscape"),
+            (Shape::Locus3d { p: DVec3::ZERO }, "locus3d"),
+            (Shape::Polyline3d { points: vec![], closed: false }, "polyline3d"),
         ];
         for (shape, kind) in cases {
             assert_eq!(shape.kind(), kind);
@@ -662,6 +700,51 @@ mod tests {
         let mut t = Shape::Text { at: v(3.0, 3.0), text: "x".into(), height: 2.0 };
         t.translate(d);
         assert_eq!(t, Shape::Text { at: v(4.0, 1.0), text: "x".into(), height: 2.0 });
+    }
+
+    #[test]
+    fn locus3d_and_polyline3d_translate_in_xy_only() {
+        let mut l = Shape::Locus3d { p: DVec3::new(1.0, 2.0, 3.0) };
+        l.translate(v(10.0, -1.0));
+        assert_eq!(l, Shape::Locus3d { p: DVec3::new(11.0, 1.0, 3.0) });
+        let mut p = Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 5.0), DVec3::new(1.0, 1.0, 6.0)], closed: false };
+        p.translate(v(1.0, 2.0));
+        assert_eq!(p, Shape::Polyline3d { points: vec![DVec3::new(1.0, 2.0, 5.0), DVec3::new(2.0, 3.0, 6.0)], closed: false });
+    }
+
+    #[test]
+    fn locus3d_and_polyline3d_bounds_ignore_z() {
+        let (lo, hi) = Shape::Locus3d { p: DVec3::new(4.0, -2.0, 99.0) }.bounds();
+        assert_eq!((lo, hi), (v(4.0, -2.0), v(4.0, -2.0)));
+        let pts = vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, -1.0, 50.0), DVec3::new(2.0, 6.0, -3.0)];
+        assert_eq!(Shape::Polyline3d { points: pts, closed: true }.bounds(), (v(0.0, -1.0), v(4.0, 6.0)));
+    }
+
+    #[test]
+    fn polyline3d_area_is_the_xy_area_when_closed() {
+        let sq = vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(3.0, 0.0, 9.0), DVec3::new(3.0, 3.0, 2.0), DVec3::new(0.0, 3.0, 0.0)];
+        assert_eq!(Shape::Polyline3d { points: sq.clone(), closed: true }.area(), Some(9.0));
+        let cw: Vec<DVec3> = sq.iter().rev().copied().collect();
+        assert_eq!(Shape::Polyline3d { points: cw, closed: true }.area(), Some(9.0));
+        assert_eq!(Shape::Polyline3d { points: sq, closed: false }.area(), None);
+        assert_eq!(Shape::Locus3d { p: DVec3::ZERO }.area(), None);
+    }
+
+    #[test]
+    fn locus3d_and_polyline3d_finite_range_and_serde() {
+        let ok = Shape::Locus3d { p: DVec3::new(1.0, 2.0, 3.0) };
+        assert!(ok.is_finite() && ok.is_in_range());
+        assert!(!Shape::Locus3d { p: DVec3::new(0.0, 0.0, f64::NAN) }.is_finite());
+        assert!(!Shape::Locus3d { p: DVec3::new(0.0, 0.0, 2.0 * MAX_COORD) }.is_in_range());
+        let far = Shape::Polyline3d { points: vec![DVec3::ZERO, DVec3::new(0.0, 0.0, -2.0 * MAX_COORD)], closed: false };
+        assert!(far.is_finite() && !far.is_in_range());
+        assert!(!Shape::Polyline3d { points: vec![DVec3::new(f64::INFINITY, 0.0, 0.0)], closed: false }.is_finite());
+        let j = serde_json::to_value(&ok).unwrap();
+        assert_eq!(j, serde_json::json!({"kind": "locus3d", "p": [1.0, 2.0, 3.0]}));
+        let pl = Shape::Polyline3d { points: vec![DVec3::new(0.0, 1.0, 2.0)], closed: true };
+        let j = serde_json::to_value(&pl).unwrap();
+        assert_eq!(j, serde_json::json!({"kind": "polyline3d", "points": [[0.0, 1.0, 2.0]], "closed": true}));
+        assert_eq!(serde_json::from_value::<Shape>(j).unwrap(), pl);
     }
 
     #[test]

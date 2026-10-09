@@ -65,6 +65,8 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
         Shape::Polyline { points, .. }
         | Shape::LandscapeArea { boundary: points, .. }
         | Shape::Hardscape { boundary: points, .. } => out.extend(points.iter().map(|v| (v.p, Vertex))),
+        Shape::Locus3d { p } => out.push((p.truncate(), Vertex)),
+        Shape::Polyline3d { points, .. } => out.extend(points.iter().map(|p| (p.truncate(), Vertex))),
         Shape::Text { at, .. } => out.push((*at, Vertex)),
         Shape::Plant { at, .. } => out.push((*at, Center)),
     }

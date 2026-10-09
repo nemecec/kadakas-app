@@ -431,6 +431,25 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             ui.end_row();
             f.count(ui, points.len());
         }
+        Shape::Locus3d { p } => {
+            ui.label("Position");
+            ui.horizontal(|ui| {
+                f.num(ui, &mut p.x, 10.0);
+                f.num(ui, &mut p.y, 10.0);
+            });
+            ui.end_row();
+            f.scalar(ui, "Z", &mut p.z, 10.0);
+        }
+        Shape::Polyline3d { points, closed } => {
+            ui.label("Closed");
+            f.commit |= ui.checkbox(closed, "").changed();
+            ui.end_row();
+            f.count(ui, points.len());
+            let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
+            ui.label("Z range");
+            ui.label(if points.is_empty() { "-".to_string() } else { format!("{lo:.1} to {hi:.1}") });
+            ui.end_row();
+        }
         Shape::Text { at, text, height } => {
             f.xy(ui, "Position", at);
             f.text(ui, "Text", text);
