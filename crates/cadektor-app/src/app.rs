@@ -178,6 +178,10 @@ impl CadektorApp {
         };
     }
 
+    fn update_site_model(&mut self) {
+        self.status = crate::site_ui::update_site_models(&mut self.session);
+    }
+
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
         self.session.selection = doc.objects.values().filter(|o| doc.is_visible(o)).map(|o| o.id).collect();
@@ -192,6 +196,7 @@ impl CadektorApp {
             MenuAction::SelectAll => self.select_all(),
             MenuAction::ZoomFit => self.zoom_fit(),
             MenuAction::CreateSiteModel => self.create_site_model(),
+            MenuAction::UpdateSiteModel => self.update_site_model(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Open => self.open_file(ctx),
             #[cfg(not(target_arch = "wasm32"))]
@@ -579,7 +584,8 @@ impl eframe::App for CadektorApp {
         let mut actions = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
             let can_site = !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection).is_empty();
-            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid, can_site);
+            let can_update = !crate::site_ui::selected_site_models(self.session.editor.doc(), &self.session.selection).is_empty();
+            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid, can_site, can_update);
         });
         for a in actions {
             self.apply_menu(&ctx, a);

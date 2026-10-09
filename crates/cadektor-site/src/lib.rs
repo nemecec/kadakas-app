@@ -12,6 +12,7 @@ pub mod drape;
 pub mod grid;
 pub mod model;
 pub mod modifier;
+pub mod overlay;
 pub mod tin;
 pub mod volume;
 

@@ -138,7 +138,7 @@ proptest! {
             Modifier::GradeLimit { boundary: rect(x0 - 2.0, y0 - 2.0, x0 + w + 2.0, y0 + h + 2.0) },
             Modifier::Pad { boundary: boundary.clone(), elevation: 3.0 + rise, slope: None },
         ];
-        let proposed = proposed_surface(&src, &existing, &mods).unwrap();
+        let proposed = proposed_surface(&existing, &mods).unwrap();
         let r = cut_fill_in(&existing, &proposed, Some(&boundary));
         let expect = w * h * rise.abs();
         prop_assert!((r.fill + r.cut - expect).abs() < 1e-6 * (1.0 + expect), "{r:?} {expect}");
@@ -146,6 +146,41 @@ proptest! {
         // The ground outside the grade limit does not change.
         let outside = proposed.elevation_at(DVec2::new(99.0, 99.0)).unwrap();
         prop_assert!((outside - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn proposed_surface_equals_existing_outside_limits_and_pads_on_curved_terrain(
+        fx in 0.02f64..0.15, fy in 0.02f64..0.15, amp in 0.5f64..6.0,
+        x0 in 20.0f64..60.0, w in 8.0f64..30.0, y0 in 20.0f64..60.0, h in 8.0f64..30.0,
+        margin in 0.0f64..12.0, with_limit in any::<bool>(), rise in -8.0f64..8.0,
+    ) {
+        let mut points = Vec::new();
+        for i in 0..16 { for j in 0..16 {
+            let (x, y) = (i as f64 * 7.0, j as f64 * 7.0);
+            points.push(DVec3::new(x, y, amp * (x * fx).sin() + amp * (y * fy).cos()));
+        } }
+        let existing = Tin::build(&SourceData { points, lines: vec![] }).unwrap();
+        let pad = rect(x0, y0, x0 + w, y0 + h);
+        let limit = rect(x0 - margin - 1.0, y0 - margin - 1.0, x0 + w + margin + 1.0, y0 + h + margin + 1.0);
+        let mut mods = vec![Modifier::Pad { boundary: pad.clone(), elevation: rise, slope: None }];
+        if with_limit { mods.insert(0, Modifier::GradeLimit { boundary: limit.clone() }); }
+        let proposed = proposed_surface(&existing, &mods).unwrap();
+        let region = if with_limit { &limit } else { &pad };
+        for i in 0..37 { for j in 0..37 {
+            let q = DVec2::new(0.37 + i as f64 * 2.8, 0.61 + j as f64 * 2.8);
+            let inside = q.x >= region[0].x - 1e-6 && q.x <= region[2].x + 1e-6 && q.y >= region[0].y - 1e-6 && q.y <= region[2].y + 1e-6;
+            if !inside {
+                let (a, b) = (proposed.elevation_at(q).unwrap(), existing.elevation_at(q).unwrap());
+                prop_assert!((a - b).abs() < 1e-9, "{q} {a} {b}");
+            }
+        } }
+        prop_assert!((proposed.area_xy() - existing.area_xy()).abs() < 1e-6);
+        // Net volume of the pad itself: plane minus ground, over the pad.
+        let in_pad = cut_fill_in(&existing, &proposed, Some(&pad));
+        let all = cut_fill(&existing, &proposed);
+        if !with_limit {
+            prop_assert!((in_pad.fill - all.fill).abs() < 1e-6 * (1.0 + all.fill) && (in_pad.cut - all.cut).abs() < 1e-6 * (1.0 + all.cut));
+        }
     }
 
     #[test]

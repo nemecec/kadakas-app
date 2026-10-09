@@ -79,8 +79,7 @@ Tool keys switch the active tool.
 | Plant tool (Cadektor landscape tool) (`tool.plant`) | none | Alt+Shift+P (no VW default; Plant needs a free key) | done |
 | Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
-| Pad tool (Cadektor site modifier) (`tool.pad`) | none | Alt+Shift+D (no VW default) | done |
-| Grade Limits tool (Cadektor site modifier) (`tool.grade_limits`) | none | Alt+Shift+G (no VW default) | done |
+| Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
 
 ## Tool modes
 

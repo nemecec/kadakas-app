@@ -4,6 +4,7 @@
 //! is computed here and kept in a cache by document revision. Nothing derived is saved.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use glam::{DVec2, DVec3};
@@ -16,6 +17,7 @@ use crate::SiteError;
 use crate::contour::{Contour, ContourSpec, contours};
 use crate::drape::drape;
 use crate::modifier::{Modifier, PadSlope, proposed_surface};
+use crate::overlay::crop;
 use crate::tin::{SlopeAspect, SourceData, SourceLine, Tin};
 use crate::volume::{CutFill, cut_fill};
 
@@ -80,6 +82,10 @@ pub struct SiteResult {
     pub proposed: Option<Tin>,
     /// The modifiers that were applied.
     pub modifiers: Vec<ObjectId>,
+    /// Hash of what the surfaces are made from (source data, modifiers, crop).
+    pub geometry_hash: u64,
+    /// Hash of the geometry and the settings.
+    pub content_hash: u64,
     existing_contours: OnceLock<Result<Vec<Contour>, SiteError>>,
     proposed_contours: OnceLock<Result<Vec<Contour>, SiteError>>,
     volumes: OnceLock<CutFill>,
@@ -91,12 +97,16 @@ impl SiteResult {
         let obj = doc.object(id).ok_or(SiteError::NoObject(id))?;
         let src = source_data(&obj.shape).ok_or(SiteError::NotASiteModel(id))?;
         let Shape::SiteModel { settings, .. } = &obj.shape else { unreachable!("checked by source_data") };
-        let existing = Tin::build(&src)?;
+        let mut existing = Tin::build(&src)?;
+        if !settings.crop.is_empty() {
+            existing = crop(&existing, &settings.crop)?;
+        }
         let mods = modifiers_for(doc, id);
+        let (geometry_hash, content_hash) = fingerprints(doc, id).unwrap_or_default();
         let pads = mods.iter().any(|(_, m)| matches!(m, Modifier::Pad { .. }));
         let proposed = if pads {
             let list: Vec<Modifier> = mods.iter().map(|(_, m)| m.clone()).collect();
-            Some(proposed_surface(&src, &existing, &list)?)
+            Some(proposed_surface(&existing, &list)?)
         } else {
             None
         };
@@ -106,6 +116,8 @@ impl SiteResult {
             existing,
             proposed,
             modifiers: mods.into_iter().map(|(i, _)| i).collect(),
+            geometry_hash,
+            content_hash,
             existing_contours: OnceLock::new(),
             proposed_contours: OnceLock::new(),
             volumes: OnceLock::new(),
@@ -162,42 +174,100 @@ pub fn drape_polyline(site: &SiteResult, vertices: &[Vertex], closed: bool) -> R
     drape(site.surface(Surface::Proposed), &flat, closed)
 }
 
-/// Results by document revision. Revisions are unique across editors, so one cache can serve
-/// many documents. Failures are not kept.
+/// Hashes of a site model: what its surfaces are made from, and that plus the settings.
+/// Two documents with the same hashes give the same surfaces. `None` if `id` is not a site model.
+pub fn fingerprints(doc: &Document, id: ObjectId) -> Option<(u64, u64)> {
+    let obj = doc.object(id)?;
+    let Shape::SiteModel { points, lines, settings } = &obj.shape else { return None };
+    let mut h = DefaultHasher::new();
+    let v3 = |h: &mut DefaultHasher, p: &DVec3| [p.x, p.y, p.z].iter().for_each(|f| (f + 0.0).to_bits().hash(h));
+    points.iter().for_each(|p| v3(&mut h, p));
+    for l in lines {
+        l.closed.hash(&mut h);
+        l.points.len().hash(&mut h);
+        l.points.iter().for_each(|p| v3(&mut h, p));
+    }
+    format!("{:?}{:?}", modifiers_for(doc, id), settings.crop).hash(&mut h);
+    let geometry = h.finish();
+    let mut h = DefaultHasher::new();
+    geometry.hash(&mut h);
+    format!("{settings:?}").hash(&mut h);
+    Some((geometry, h.finish()))
+}
+
+/// Results of site models. A result is kept while the content of its site model and modifiers
+/// stays the same, so an edit of anything else in the document does not rebuild the terrain.
+/// Failures are not kept.
 #[derive(Default)]
 pub struct SiteCache {
     inner: Mutex<CacheInner>,
 }
 
+struct Entry {
+    result: Arc<SiteResult>,
+    /// The last document revision that was checked against the result.
+    revision: u64,
+}
+
 #[derive(Default)]
 struct CacheInner {
-    revision: Option<u64>,
-    sites: HashMap<ObjectId, Arc<SiteResult>>,
+    sites: HashMap<ObjectId, Entry>,
     /// How often a site model was computed.
     builds: u64,
 }
 
 impl SiteCache {
     /// The result for site model `id` in `doc`, which must be the document of `revision`.
+    /// A site model with `auto_update` off keeps its old result when the geometry changes,
+    /// until `update` is called. Use `is_stale` to ask.
     pub fn get(&self, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
         let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if c.revision != Some(revision) {
-            c.revision = Some(revision);
-            c.sites.clear();
+        if let Some(e) = c.sites.get_mut(&id) {
+            if e.revision == revision {
+                return Ok(e.result.clone());
+            }
+            if let Some((geometry, content)) = fingerprints(doc, id) {
+                let keep_old = !auto_update(doc, id) && e.result.geometry_hash != geometry;
+                if e.result.content_hash == content || keep_old {
+                    e.revision = revision;
+                    return Ok(e.result.clone());
+                }
+            }
         }
-        if let Some(s) = c.sites.get(&id) {
-            return Ok(s.clone());
-        }
+        Self::build(&mut c, revision, doc, id)
+    }
+
+    fn build(c: &mut CacheInner, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
         let s = Arc::new(SiteResult::compute(doc, id)?);
-        c.sites.insert(id, s.clone());
+        c.sites.insert(id, Entry { result: s.clone(), revision });
         c.builds += 1;
         Ok(s)
+    }
+
+    /// Rebuilds site model `id` now ("Update Site Model").
+    pub fn update(&self, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
+        let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        Self::build(&mut c, revision, doc, id)
+    }
+
+    /// True if the document has changed the geometry of site model `id` since its result was built
+    /// and the site model does not update by itself.
+    pub fn is_stale(&self, doc: &Document, id: ObjectId) -> bool {
+        let c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match (c.sites.get(&id), fingerprints(doc, id)) {
+            (Some(e), Some((geometry, _))) => !auto_update(doc, id) && e.result.geometry_hash != geometry,
+            _ => false,
+        }
     }
 
     /// How many site models were computed so far.
     pub fn builds(&self) -> u64 {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).builds
     }
+}
+
+fn auto_update(doc: &Document, id: ObjectId) -> bool {
+    matches!(doc.object(id).map(|o| &o.shape), Some(Shape::SiteModel { settings, .. }) if settings.auto_update)
 }
 
 #[cfg(test)]
@@ -295,11 +365,46 @@ pub(crate) mod tests {
         let b = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(cache.builds(), 1);
+        // An edit of something else does not rebuild the terrain.
         add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
         let c = cache.get(ed.revision(), ed.doc(), id).unwrap();
-        assert!(!Arc::ptr_eq(&a, &c));
+        assert!(Arc::ptr_eq(&a, &c));
+        assert_eq!(cache.builds(), 1);
+        // An edit of a pad does.
+        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 9.0, slope: None }, boundary: sq(500.0, 1500.0) });
+        let d = cache.get(ed.revision(), ed.doc(), id).unwrap();
+        assert!(!Arc::ptr_eq(&a, &d));
         assert_eq!(cache.builds(), 2);
         assert!(cache.get(ed.revision(), ed.doc(), ObjectId(500)).is_err());
+    }
+
+    #[test]
+    fn site_without_auto_update_goes_stale_until_updated() {
+        let mut ed = Editor::default();
+        let Shape::SiteModel { points, lines, mut settings } = grid_site(5, 1000.0, |_, _| 0.0) else { unreachable!() };
+        settings.auto_update = false;
+        let id = add(&mut ed, Shape::SiteModel { points, lines, settings });
+        let cache = SiteCache::default();
+        let a = cache.get(ed.revision(), ed.doc(), id).unwrap();
+        assert!(!cache.is_stale(ed.doc(), id));
+        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 50.0, slope: None }, boundary: sq(1000.0, 2000.0) });
+        assert!(cache.is_stale(ed.doc(), id));
+        let b = cache.get(ed.revision(), ed.doc(), id).unwrap();
+        assert!(Arc::ptr_eq(&a, &b) && b.proposed.is_none());
+        let c = cache.update(ed.revision(), ed.doc(), id).unwrap();
+        assert!(c.proposed.is_some() && !cache.is_stale(ed.doc(), id));
+        assert!((c.elevation_at(DVec2::new(1500.0, 1500.0)).unwrap() - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn crop_setting_cuts_the_site_model() {
+        let mut ed = Editor::default();
+        let Shape::SiteModel { points, lines, mut settings } = grid_site(5, 1000.0, |_, _| 0.0) else { unreachable!() };
+        settings.crop = vec![DVec2::new(0.0, 0.0), DVec2::new(4000.0, 0.0), DVec2::new(4000.0, 1000.0), DVec2::new(1000.0, 1000.0), DVec2::new(1000.0, 4000.0), DVec2::new(0.0, 4000.0)];
+        let id = add(&mut ed, Shape::SiteModel { points, lines, settings });
+        let r = SiteResult::compute(ed.doc(), id).unwrap();
+        assert!((r.existing.area_xy() - 7e6).abs() < 1e-3);
+        assert!(r.elevation_at(DVec2::new(3000.0, 3000.0)).is_none());
     }
 
     #[test]

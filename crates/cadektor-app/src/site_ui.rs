@@ -3,7 +3,8 @@
 
 use cadektor_api::Session;
 use cadektor_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
-use cadektor_core::site::{Display3d, PadSlope, SurfaceDisplay};
+use cadektor_core::curve::Vertex;
+use cadektor_core::site::{Display3d, PadSlope, SurfaceDisplay, boundary_points, end_elevation, slope_from_end_elevation};
 use cadektor_site::draw::shown_surfaces;
 use cadektor_site::{SiteCache, Surface};
 use egui::epaint::{PathShape, PathStroke};
@@ -32,6 +33,26 @@ pub fn create_site_model(session: &mut Session) -> Result<ObjectId, String> {
     let id = ObjectId(r["id"].as_u64().unwrap_or(0));
     session.selection = vec![id];
     Ok(id)
+}
+
+/// The selected site models.
+pub fn selected_site_models(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
+    selection.iter().copied().filter(|id| doc.object(*id).is_some_and(|o| matches!(o.shape, Shape::SiteModel { .. }))).collect()
+}
+
+/// "Update Site Model": rebuilds the surfaces of the selected site models now.
+/// Returns the message to show.
+pub fn update_site_models(session: &mut Session) -> String {
+    let ids = selected_site_models(session.editor.doc(), &session.selection);
+    if ids.is_empty() {
+        return "Select a site model first".into();
+    }
+    for id in &ids {
+        if let Err(e) = session.handle("site.refresh", json!({ "id": id })) {
+            return format!("Error: {}", e.message);
+        }
+    }
+    format!("Updated {} site model(s)", ids.len())
 }
 
 /// Draws the contours of a site model over its outline, for the surfaces its settings choose.
@@ -97,6 +118,20 @@ pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettin
     commit |= length_row(ui, "Minor interval", &mut s.minor_interval, 10.0, 1.0..=1.0e6);
     commit |= length_row(ui, "Major interval", &mut s.major_interval, 10.0, s.minor_interval..=1.0e7);
     commit |= length_row(ui, "Datum", &mut s.datum, 10.0, -1.0e8..=1.0e8);
+    ui.label("Update");
+    commit |= ui.checkbox(&mut s.auto_update, "Automatic").changed();
+    ui.end_row();
+    ui.label("Crop boundary");
+    if s.crop.is_empty() {
+        ui.label("none (set it with site.update)");
+    } else {
+        ui.label(format!("{} points", s.crop.len()));
+        if ui.button("Clear").clicked() {
+            s.crop.clear();
+            commit = true;
+        }
+    }
+    ui.end_row();
     ui.label("Smooth contours");
     commit |= ui.checkbox(&mut s.smooth_contours, "").changed();
     ui.end_row();
@@ -122,7 +157,8 @@ pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettin
 }
 
 /// The Object Info rows of a site modifier. Returns true when an edit is finished.
-pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, vertices: usize) -> bool {
+pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Vertex]) -> bool {
+    let vertices = boundary.len();
     let mut commit = false;
     match modifier {
         ModifierKind::Pad { elevation, slope } => {
@@ -138,9 +174,20 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, vertices: usize
             }
             ui.end_row();
             if let Some(s) = slope {
-                ui.label("Slope percent");
-                let r = ui.add(DragValue::new(&mut s.percent).speed(0.1).range(-100.0..=100.0).suffix(" %"));
+                // The slope is given as the elevation at the end of the pad, in the falling direction.
+                let flat = boundary_points(boundary);
+                let mut end = end_elevation(&flat, *elevation, *s);
+                ui.label("Elevation at end");
+                let r = ui.add(DragValue::new(&mut end).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                if r.changed()
+                    && let Some(n) = slope_from_end_elevation(&flat, *elevation, s.direction, end)
+                {
+                    *s = n;
+                }
                 commit |= r.drag_stopped() || r.lost_focus();
+                ui.end_row();
+                ui.label("Slope");
+                ui.label(format!("{:.2} %", s.percent));
                 ui.end_row();
                 let mut deg = s.direction.to_degrees();
                 ui.label("Falls toward");
@@ -173,6 +220,9 @@ pub fn cut_fill_readout(ui: &mut Ui, session: &Session, id: ObjectId) {
             let c = site.cut_fill();
             ui.label(format!("Cut {:.2} m\u{b3}  Fill {:.2} m\u{b3}  Net {:+.2} m\u{b3}", c.cut / 1e9, c.fill / 1e9, c.net() / 1e9));
             ui.label(format!("Surface {:.1} m\u{b2}", site.existing.area_xy() / 1e6));
+            if session.site_cache().is_stale(doc, id) {
+                ui.colored_label(Color32::from_rgb(200, 120, 20), "Proposed surface is out of date: Site > Update Site Model");
+            }
         }
         Err(e) => {
             ui.colored_label(Color32::from_rgb(200, 80, 40), e.to_string());
@@ -242,8 +292,9 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::Grid::new("g").show(ui, |ui| {
                 assert!(!model_fields(ui, 3, 0, &mut settings));
-                assert!(!modifier_fields(ui, &mut kind, 4));
-                assert!(!modifier_fields(ui, &mut grade, 4));
+                let b = cadektor_core::curve::corners(&[glam::DVec2::ZERO, glam::DVec2::X * 1000.0, glam::DVec2::ONE * 1000.0]);
+                assert!(!modifier_fields(ui, &mut kind, &b));
+                assert!(!modifier_fields(ui, &mut grade, &b));
             });
             cut_fill_readout(ui, &s, id);
             cut_fill_readout(ui, &s, ObjectId(4242));

@@ -27,6 +27,7 @@ pub enum MenuAction {
     SelectAll,
     ZoomFit,
     CreateSiteModel,
+    UpdateSiteModel,
 }
 
 /// Runs a command on the session. Errors go to the status line.
@@ -44,7 +45,8 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
     }
 }
 
-pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool, can_site: bool) -> Vec<MenuAction> {
+#[allow(clippy::too_many_arguments)]
+pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool, can_site: bool, can_update_site: bool) -> Vec<MenuAction> {
     use MenuAction::*;
     let mut out = Vec::new();
     egui::MenuBar::new().ui(ui, |ui| {
@@ -74,6 +76,7 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
         });
         ui.menu_button("Site", |ui| {
             item(ui, "Create Site Model from Selection", can_site, CreateSiteModel, &mut out);
+            item(ui, "Update Site Model", can_update_site, UpdateSiteModel, &mut out);
         });
         ui.menu_button("View", |ui| {
             item(ui, "Zoom to Fit", true, ZoomFit, &mut out);
@@ -131,7 +134,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Delete => Action::Delete,
         MenuAction::SelectAll => Action::SelectAll,
         MenuAction::ZoomFit => Action::ZoomFit,
-        MenuAction::ExportSvg | MenuAction::CreateSiteModel => return None,
+        MenuAction::ExportSvg | MenuAction::CreateSiteModel | MenuAction::UpdateSiteModel => return None,
     })
 }
 
@@ -231,9 +234,24 @@ pub fn data_bar(
                 ui.label("Material");
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
             }
-            Tool::Pad => {
-                ui.label("Elevation");
-                ui.add(DragValue::new(&mut s.pad_elevation).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+            Tool::SiteModifier => {
+                for mode in crate::tools::ModifierMode::ALL {
+                    ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
+                }
+                if s.modifier_mode == crate::tools::ModifierMode::Pad {
+                    ui.label("Elevation");
+                    ui.add(DragValue::new(&mut s.pad_elevation).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                    let mut sloped = s.pad_end_elevation.is_some();
+                    if ui.checkbox(&mut sloped, "Slope").changed() {
+                        s.pad_end_elevation = sloped.then_some(s.pad_elevation);
+                    }
+                    if let Some(end) = &mut s.pad_end_elevation {
+                        ui.label("Elevation at end");
+                        ui.add(DragValue::new(end).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                        ui.label("Falls toward");
+                        ui.add(DragValue::new(&mut s.pad_direction_deg).speed(1.0).suffix("\u{b0}"));
+                    }
+                }
             }
             _ => {}
         }
@@ -483,7 +501,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.count(ui, boundary.len());
         }
         Shape::SiteModel { points, lines, settings } => f.commit |= crate::site_ui::model_fields(ui, points.len(), lines.len(), settings),
-        Shape::SiteModifier { modifier, boundary } => f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary.len()),
+        Shape::SiteModifier { modifier, boundary } => f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary),
     });
     f.commit
 }

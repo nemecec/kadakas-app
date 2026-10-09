@@ -59,7 +59,15 @@ pub struct SiteSettings {
     pub existing_color: Option<Color>,
     /// Color of the proposed surface. `None` picks a default.
     pub proposed_color: Option<Color>,
+    /// Only the part of the surface inside this ring stays. Empty: no crop. The ring may be concave.
+    pub crop: Vec<DVec2>,
+    /// When false, the proposed surface changes only on an explicit "Update Site Model" and shows
+    /// "out of date" until then.
+    pub auto_update: bool,
 }
+
+/// The most contour levels a site model may ask for.
+pub const MAX_CONTOUR_LEVELS: f64 = 10_000.0;
 
 impl Default for SiteSettings {
     fn default() -> Self {
@@ -74,6 +82,8 @@ impl Default for SiteSettings {
             datum: 0.0,
             existing_color: None,
             proposed_color: None,
+            crop: Vec::new(),
+            auto_update: true,
         }
     }
 }
@@ -81,7 +91,7 @@ impl Default for SiteSettings {
 impl SiteSettings {
     /// True if every number is finite.
     pub fn is_finite(&self) -> bool {
-        self.minor_interval.is_finite() && self.major_interval.is_finite() && self.datum.is_finite()
+        self.minor_interval.is_finite() && self.major_interval.is_finite() && self.datum.is_finite() && self.crop.iter().all(|p| p.is_finite())
     }
 
     /// Why the settings are not usable, if they are not.
@@ -92,6 +102,12 @@ impl SiteSettings {
             Some("minor contour interval must be positive")
         } else if self.major_interval < self.minor_interval {
             Some("major contour interval must not be smaller than the minor interval")
+        } else if self.major_interval / self.minor_interval > MAX_CONTOUR_LEVELS {
+            Some("major contour interval is too large for the minor interval (at most 10000 times)")
+        } else if self.minor_interval < 1e-3 {
+            Some("minor contour interval must be at least 0.001 mm")
+        } else if !self.crop.is_empty() && self.crop.len() < 3 {
+            Some("crop boundary needs at least 3 points")
         } else {
             None
         }
@@ -148,6 +164,25 @@ pub fn boundary_points(boundary: &[Vertex]) -> Vec<DVec2> {
     curve::flatten(boundary, true, 2.0)
 }
 
+/// The farthest distance from the middle of the boundary points along `direction` (radians).
+fn reach(boundary: &[DVec2], direction: f64) -> f64 {
+    let mid = boundary.iter().copied().sum::<DVec2>() / boundary.len().max(1) as f64;
+    let d = DVec2::from_angle(direction);
+    boundary.iter().map(|p| d.dot(*p - mid)).fold(0.0, f64::max)
+}
+
+/// A pad slope from the elevation at its end: the height where the boundary ends in the
+/// falling `direction`. `None` if the boundary has no extent in that direction.
+pub fn slope_from_end_elevation(boundary: &[DVec2], elevation: f64, direction: f64, end_elevation: f64) -> Option<PadSlope> {
+    let r = reach(boundary, direction);
+    (r > 0.0 && end_elevation.is_finite()).then(|| PadSlope { direction, percent: (elevation - end_elevation) / r * 100.0 })
+}
+
+/// The elevation at the end of a sloped pad (see `slope_from_end_elevation`).
+pub fn end_elevation(boundary: &[DVec2], elevation: f64, slope: PadSlope) -> f64 {
+    elevation - slope.percent / 100.0 * reach(boundary, slope.direction)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +198,15 @@ mod tests {
         assert!(s.problem().unwrap().contains("major"));
         s.major_interval = f64::NAN;
         assert!(s.problem().unwrap().contains("finite"));
+        s.major_interval = 500.0;
+        s.minor_interval = 1e-300;
+        assert!(s.problem().is_some());
+        s.minor_interval = 1.0;
+        s.major_interval = 1e6;
+        assert!(s.problem().unwrap().contains("too large"));
+        s.major_interval = 10.0;
+        s.crop = vec![DVec2::ZERO, DVec2::X];
+        assert!(s.problem().unwrap().contains("crop"));
     }
 
     #[test]
@@ -183,6 +227,17 @@ mod tests {
         assert!(!ModifierKind::Pad { elevation: f64::NAN, slope: None }.is_finite());
         assert!(!ModifierKind::Pad { elevation: 0.0, slope: Some(PadSlope { direction: f64::NAN, percent: 1.0 }) }.is_finite());
         assert!(ModifierKind::GradeLimit.is_finite() && ModifierKind::GradeLimit.numbers().is_empty());
+    }
+
+    #[test]
+    fn slope_from_the_elevation_at_the_end() {
+        let sq = [DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0), DVec2::new(0.0, 10.0)];
+        // Falls toward +X; the end is 5 from the middle. 10 at the middle and 9 at the end is 20 percent.
+        let s = slope_from_end_elevation(&sq, 10.0, 0.0, 9.0).unwrap();
+        assert!((s.percent - 20.0).abs() < 1e-9 && s.direction == 0.0);
+        assert!((end_elevation(&sq, 10.0, s) - 9.0).abs() < 1e-9);
+        assert!(slope_from_end_elevation(&[], 1.0, 0.0, 2.0).is_none());
+        assert!(slope_from_end_elevation(&sq, 1.0, 0.0, f64::NAN).is_none());
     }
 
     #[test]

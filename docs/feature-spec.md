@@ -161,8 +161,9 @@ Non-goals
 | SIT-01 | 3D point source data: survey points, 3D loci, 3D polygons. | P0 | partial: 3D loci and 3D polylines move into a site model (survey point import comes with the file format work) |
 | SIT-02 | Triangulated existing surface. | P0 | done |
 | SIT-03 | Proposed surface from modifiers. | P0 | done |
-| SIT-04 | Pad modifier. | P0 | done (flat or sloped, vertical edge without grade limits) |
-| SIT-05 | Grade limits. | P0 | done |
+| SIT-04 | Pad modifier. | P0 | done (flat or sloped by elevation at end; overlapping pads nest, the later one wins; exact vertical edge without grade limits, no gap) |
+| SIT-05 | Grade limits. The ground outside does not change (overlay of the existing triangles). | P0 | done |
+| SIT-11 | Site Modifiers tool with modes, crop boundary, Update Site Model (auto update off shows out of date), site.drape. | P1 | done |
 | SIT-06 | Cut and fill volumes (proposed minus existing). | P0 | done (exact on the overlay of both surfaces) |
 | SIT-07 | Contours for existing and proposed surfaces. | P0 | done (major and minor, smooth option, labels) |
 | SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |

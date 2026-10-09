@@ -130,6 +130,30 @@ impl Session {
                 self.prune_selection();
                 Ok(json!({ "id": id, "points": np, "lines": nl }))
             }
+            "site.refresh" => {
+                // "Update Site Model": rebuild the surfaces now, even when the site model does not update by itself.
+                let q: Query = params(p)?;
+                let site = self.site_cache.update(self.editor.revision(), self.editor.doc(), q.id).map_err(RpcError::app)?;
+                Ok(json!({ "id": q.id, "out_of_date": false, "modifiers": site.modifiers, "has_proposed": site.proposed.is_some() }))
+            }
+            "site.drape" => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: ObjectId,
+                    points: Vec<[f64; 2]>,
+                    #[serde(default)]
+                    closed: bool,
+                }
+                let P { id, points, closed } = params(p)?;
+                if points.is_empty() || points.iter().any(|p| !(p[0].is_finite() && p[1].is_finite())) {
+                    return Err(RpcError::invalid_params("points must be a list of finite [x, y] pairs"));
+                }
+                let site = self.site(id)?;
+                let flat: Vec<DVec2> = points.iter().map(|p| DVec2::new(p[0], p[1])).collect();
+                // Draped on the proposed surface, with extra points where the line crosses triangle edges.
+                let out = cadektor_site::drape(site.surface(Surface::Proposed), &flat, closed).map_err(RpcError::app)?;
+                Ok(json!({ "points": out.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>() }))
+            }
             "site.elevation" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -164,6 +188,7 @@ impl Session {
                     "net_m3": c.net() / M3,
                     "area_m2": c.area / 1e6,
                     "modifiers": site.modifiers,
+                    "out_of_date": self.site_cache.is_stale(self.editor.doc(), q.id),
                 }))
             }
             "site.contours" => {
@@ -263,6 +288,47 @@ mod tests {
         assert_eq!(e.code, -32602);
         // A failed create leaves the document alone.
         assert!(s.editor.doc().object(ObjectId(locus)).is_some());
+    }
+
+    #[test]
+    fn drape_refresh_and_tiny_intervals() {
+        let mut s = Session::default();
+        let ids = grid(&mut s);
+        let id = call(&mut s, "site.create", json!({"source_ids": ids, "settings": {"auto_update": false}})).unwrap()["id"].as_u64().unwrap();
+        let r = call(&mut s, "site.drape", json!({"id": id, "points": [[500, 500], [3500, 500]]})).unwrap();
+        let pts = r["points"].as_array().unwrap();
+        assert!(pts.len() >= 2);
+        for p in pts {
+            assert!((p[2].as_f64().unwrap() - p[0].as_f64().unwrap() / 10.0).abs() < 1e-9);
+        }
+        assert!(call(&mut s, "site.drape", json!({"id": id, "points": [[99999, 0]]})).is_err());
+        assert_eq!(call(&mut s, "site.drape", json!({"id": id, "points": []})).unwrap_err().code, -32602);
+        // A pad is added: with auto_update off the model is out of date until site.refresh.
+        let cf = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
+        assert_eq!(cf["out_of_date"], false);
+        s.editor
+            .execute(&Command::AddObject {
+                shape: Shape::SiteModifier {
+                    modifier: cadektor_core::model::ModifierKind::Pad { elevation: 5000.0, slope: None },
+                    boundary: cadektor_core::curve::corners(&[DVec2::new(2000.0, 2000.0), DVec2::new(4000.0, 2000.0), DVec2::new(4000.0, 4000.0), DVec2::new(2000.0, 4000.0)]),
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        let cf = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
+        assert_eq!(cf["out_of_date"], true);
+        assert_eq!(cf["fill_m3"], 0.0);
+        let r = call(&mut s, "site.refresh", json!({"id": id})).unwrap();
+        assert_eq!(r["has_proposed"], true);
+        let cf = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
+        assert_eq!(cf["out_of_date"], false);
+        assert!(cf["fill_m3"].as_f64().unwrap() > 0.0);
+        // A contour interval that would overflow is refused.
+        let locus = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [0, 0, 0]}}));
+        let e = call(&mut s, "site.create", json!({"source_ids": [locus], "settings": {"minor_interval": 1e-300}})).unwrap_err();
+        assert!(e.message.contains("contour"), "{}", e.message);
     }
 
     #[test]

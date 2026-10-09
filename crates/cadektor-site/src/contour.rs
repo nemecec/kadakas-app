@@ -60,11 +60,12 @@ pub fn contours(tin: &Tin, spec: &ContourSpec) -> Result<Vec<Contour>, SiteError
         return Err(SiteError::BadInterval);
     }
     let (zlo, zhi) = tin.z_range();
-    let k_lo = ((zlo - spec.datum) / spec.minor_interval).floor() as i64;
-    let k_hi = ((zhi - spec.datum) / spec.minor_interval).ceil() as i64;
-    if k_hi - k_lo > MAX_LEVELS {
+    // Count in f64 first: a tiny interval would overflow the integers.
+    let (f_lo, f_hi) = ((zlo - spec.datum) / spec.minor_interval, (zhi - spec.datum) / spec.minor_interval);
+    if !(f_hi.ceil() - f_lo.floor()).is_finite() || f_hi.ceil() - f_lo.floor() > MAX_LEVELS as f64 {
         return Err(SiteError::TooManyContours);
     }
+    let (k_lo, k_hi) = (f_lo.floor() as i64, f_hi.ceil() as i64);
     let level = |k: i64| spec.datum + k as f64 * spec.minor_interval;
     let n_levels = (k_hi - k_lo + 1) as usize;
     let mut per_level: Vec<Vec<Seg>> = (0..n_levels).map(|_| Vec::new()).collect();
@@ -267,6 +268,8 @@ mod tests {
         assert_eq!(contours(&tin, &ContourSpec { datum: f64::INFINITY, ..spec(1.0, 5.0) }).unwrap_err(), SiteError::BadInterval);
         let steep = grid(3, 10.0, |x, _| x * 1e6);
         assert_eq!(contours(&steep, &spec(1.0, 5.0)).unwrap_err(), SiteError::TooManyContours);
+        assert_eq!(contours(&steep, &spec(1e-300, 5.0)).unwrap_err(), SiteError::TooManyContours);
+        assert_eq!(contours(&steep, &spec(f64::MIN_POSITIVE, 5.0)).unwrap_err(), SiteError::TooManyContours);
         // A major interval of zero means no major lines.
         assert!(contours(&tin, &spec(5.0, 0.0)).unwrap().iter().all(|c| !c.major));
     }

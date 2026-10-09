@@ -51,8 +51,15 @@ pub fn draw_3d(site: &SiteResult, sink: &mut SceneSink<'_>) {
     for which in shown_surfaces(site, site.settings.surface_3d) {
         if matches!(display, Display3d::Mesh | Display3d::Both) {
             let tin = site.surface(which);
-            let idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
-            sink.mesh(&tin.vertices, &idx, mesh_color(site, which));
+            let mut idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
+            // Vertical pad edges are drawn as walls.
+            let mut vertices = tin.vertices.clone();
+            for q in tin.walls() {
+                let n = vertices.len() as u32;
+                vertices.extend(q);
+                idx.extend([n, n + 1, n + 2, n, n + 2, n + 3]);
+            }
+            sink.mesh(&vertices, &idx, mesh_color(site, which));
         }
         if matches!(display, Display3d::Contours | Display3d::Both) {
             let color = line_color(site, which).0;

@@ -260,16 +260,48 @@ impl Tin {
             .sum()
     }
 
-    /// Vertices on the outer edge of the surface (edges that belong to one triangle).
-    pub fn boundary_vertices(&self) -> HashSet<u32> {
-        let mut count: HashMap<(u32, u32), u32> = HashMap::with_capacity(self.triangles.len() * 2);
+    /// Edges that belong to one triangle, as (from, to) in the direction of that triangle.
+    pub fn boundary_edges(&self) -> Vec<(u32, u32)> {
+        let mut count: HashMap<(u32, u32), (u32, (u32, u32))> = HashMap::with_capacity(self.triangles.len() * 2);
         for t in &self.triangles {
             for k in 0..3 {
                 let (a, b) = (t[k], t[(k + 1) % 3]);
-                *count.entry((a.min(b), a.max(b))).or_default() += 1;
+                let e = count.entry((a.min(b), a.max(b))).or_insert((0, (a, b)));
+                e.0 += 1;
             }
         }
-        count.into_iter().filter(|(_, n)| *n == 1).flat_map(|((a, b), _)| [a, b]).collect()
+        count.into_values().filter(|(n, _)| *n == 1).map(|(_, e)| e).collect()
+    }
+
+    /// Vertices on the outer edge of the surface (edges that belong to one triangle).
+    pub fn boundary_vertices(&self) -> HashSet<u32> {
+        self.boundary_edges().into_iter().flat_map(|(a, b)| [a, b]).collect()
+    }
+
+    /// Vertical walls: pairs of outer edges that have the same place in XY and different heights
+    /// (the edge of a pad without a grade limit). Each wall is a quad a1, b1, b2, a2.
+    pub fn walls(&self) -> Vec<[DVec3; 4]> {
+        let key = |p: DVec3| ((p.x + 0.0).to_bits(), (p.y + 0.0).to_bits());
+        type Place = ((u64, u64), (u64, u64));
+        let mut by_place: HashMap<Place, Vec<(DVec3, DVec3)>> = HashMap::new();
+        for (a, b) in self.boundary_edges() {
+            let (pa, pb) = (self.vertices[a as usize], self.vertices[b as usize]);
+            let (ka, kb) = (key(pa), key(pb));
+            if ka <= kb {
+                by_place.entry((ka, kb)).or_default().push((pa, pb));
+            } else {
+                by_place.entry((kb, ka)).or_default().push((pb, pa));
+            }
+        }
+        let mut out = Vec::new();
+        for pairs in by_place.into_values() {
+            if let [(a1, b1), (a2, b2)] = pairs[..]
+                && (a1.z != a2.z || b1.z != b2.z)
+            {
+                out.push([a1, b1, b2, a2]);
+            }
+        }
+        out
     }
 
     /// Candidate triangles for a box, without repeats.
