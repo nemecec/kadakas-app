@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod plants_api;
+mod sheets_api;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -12,6 +13,7 @@ use serde_json::{json, Value};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+use cadektor_core::sheets::SavedView;
 mod site;
 
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
@@ -27,6 +29,11 @@ pub struct Session {
     view_changed: bool,
     mesh_cache: MeshCache,
     site_cache: cadektor_site::SiteCache,
+    /// Display lists of sheets, by document revision (see `sheet.render`).
+    #[cfg(not(target_arch = "wasm32"))]
+    sheet_cache: cadektor_print::SheetCache,
+    /// The saved view that `saved_view.restore` applied last, until the host takes it.
+    applied_view: Option<SavedView>,
 }
 
 #[derive(Debug)]
@@ -96,6 +103,29 @@ pub const METHODS: &[(&str, &str)] = &[
     ("site.drape", "Put a 2D line on the proposed surface, with extra points where it crosses triangle edges. params: {id, points: [[x, y]], closed?: bool}. Returns {points: [[x, y, z]]}. Fails if a point is outside the model."),
     ("site.refresh", "Update Site Model: rebuild the surfaces now. Needed when auto_update is false and the source data or a modifier has changed (cut_fill shows out_of_date: true). params: {id}. Returns {id, out_of_date, modifiers, has_proposed}."),
     ("site.contours", "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}."),
+    // Drawing documentation (see sheets_api.rs).
+    sheets_api::SHEET_LIST,
+    sheets_api::SHEET_CREATE,
+    sheets_api::SHEET_SET,
+    sheets_api::SHEET_RENDER,
+    sheets_api::PROJECT_GET,
+    sheets_api::PROJECT_SET,
+    sheets_api::VIEWPORT_CREATE,
+    sheets_api::VIEWPORT_GET,
+    sheets_api::VIEWPORT_LIST,
+    sheets_api::VIEWPORT_UPDATE,
+    sheets_api::VIEWPORT_SET_OVERRIDE,
+    sheets_api::VIEWPORT_ANNOTATE,
+    sheets_api::TITLE_BLOCK_CREATE,
+    sheets_api::TITLE_BLOCK_UPDATE,
+    sheets_api::TITLE_BLOCK_RESOLVE,
+    sheets_api::SAVED_VIEW_LIST,
+    sheets_api::SAVED_VIEW_SAVE,
+    sheets_api::SAVED_VIEW_RESTORE,
+    sheets_api::SAVED_VIEW_DELETE,
+    sheets_api::EXPORT_PDF,
+    sheets_api::EXPORT_SVG,
+    sheets_api::EXPORT_PNG,
 ];
 
 impl Session {
@@ -146,6 +176,7 @@ impl Session {
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
+                "sheets": sheets_api::describe(),
             }),
             "execute" => {
                 #[derive(Deserialize)]
@@ -305,7 +336,7 @@ impl Session {
                     .collect();
                 json!({ "rows": rows })
             }
-            _ => return plants_api::handle(self, method, p).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") })),
+            _ => return plants_api::handle(self, method, p.clone()).or_else(|| sheets_api::handle(self, method, p)).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") })),
         })
     }
 
@@ -390,6 +421,11 @@ fn command_examples() -> Value {
         {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
         {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}},
         {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "pad", "elevation": 1200}, "boundary": [[2000,2000],[6000,2000],[6000,5000],[2000,5000]]}},
+        {"op": "add_sheet", "name": "Planting plan", "paper": "a1", "number": "L-101"},
+        {"op": "set_project", "name": "Riverside garden", "drawn_by": "NM"},
+        {"op": "add_object", "layer": 3, "shape": {"kind": "viewport", "min": [15, 55], "max": [405, 282], "center": [10000, 5000], "scale": 100, "layers": [1]}},
+        {"op": "add_object", "layer": 3, "shape": {"kind": "title_block", "grid_columns": 6, "grid_rows": 4}},
+        {"op": "restore_view", "name": "Planting only"},
         {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}}
     ])
 }

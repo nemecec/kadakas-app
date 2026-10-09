@@ -215,7 +215,7 @@ fn mcp_tools() -> Value {
 /// The content of a tool result. `render.png` gives an image block that a model can look at,
 /// plus the other fields as text. Other methods give their result as text.
 fn tool_content(method: &str, response: &Value, text: String) -> Value {
-    if method == "render.png"
+    if (method == "render.png" || method == "sheet.render")
         && let Some(data) = response["result"]["png_base64"].as_str()
     {
         let mut meta = response["result"].clone();

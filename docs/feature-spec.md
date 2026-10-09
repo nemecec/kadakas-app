@@ -90,7 +90,7 @@ Non-goals
 | DOC-10 | Native file format (JSON based, versioned). | P0 | planned |
 | DOC-11 | Layer elevation, stories, 3D height. | P1 | planned |
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
-| DOC-13 | Saved views. | P1 | planned |
+| DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
 | DOC-14 | Phases (existing, new, demolished). | P1 | planned |
 | DOC-15 | Symbols and symbol definitions. | P1 | planned |
 | DOC-16 | Resource library files (shared styles and symbols). | P1 | planned |
@@ -292,15 +292,15 @@ Non-goals
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | SHT-01 | SVG render of a layer set. | P0 | done |
-| SHT-02 | Sheet layer with page size and title block. | P1 | planned |
-| SHT-03 | Viewport with layer, class, scale. | P1 | planned |
-| SHT-04 | Viewport class and layer overrides. | P1 | planned |
-| SHT-05 | Viewport annotations on the sheet. | P1 | planned |
-| SHT-06 | PDF export of sheets. | P1 | planned |
+| SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
+| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
+| SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: viewport class override, object attributes, class attributes, defaults. Layer and class graphic "grey" mode is missing. | P1 | done |
+| SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation tools in the app are still missing. | P1 | partial |
+| SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.pdf`. | P1 | done |
 | SHT-07 | Batch print / publish. | P2 | planned |
 | SHT-08 | Section and elevation viewports. | P2 | planned |
 | SHT-09 | Design layer viewports. | P2 | planned |
-| SHT-10 | Title block data from document fields. | P1 | planned |
+| SHT-10 | Title block border: parametric object with border, grid reference and a title block with fields from project and sheet data. Standard layout or JSON layout. `title_block.*`, `project.*`. | P1 | done |
 | SHT-11 | North arrow and scale bar. | P1 | planned |
 
 ### 4.14 3D and rendering
@@ -343,7 +343,7 @@ Non-goals
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
 | IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | planned |
 | IOP-07 | Data mapping rules to IFC fields. | P1 | planned |
-| IOP-08 | PDF export. | P1 | planned |
+| IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
 | IOP-10 | DWG import and export. | P2 | planned |
 | IOP-11 | OBJ, STL, STEP. | P2 | planned |
@@ -364,6 +364,7 @@ Non-goals
 | API-07 | `render.svg`. | P0 | done |
 | API-08 | `report.plants`, `report.areas`. | P0 | done |
 | API-40 | Plant methods: `plant_style.*` (list, get, create, update, duplicate, delete, import_csv, export_csv, sample_csv), `plants.place`, `plants.set_style`, `report.plant_schedule`, `report.existing_trees`. Existing trees and plant tags are shapes that `execute` adds. | P0 | done |
+| API-41 | Drawing documentation methods: `sheet.*`, `project.*`, `viewport.*`, `title_block.*`, `saved_view.*`, `export.pdf|svg|png`. Their examples are in `describe`. | P1 | done |
 | API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |

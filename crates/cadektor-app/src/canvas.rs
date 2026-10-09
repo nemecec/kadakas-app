@@ -144,6 +144,8 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         }
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+        // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
+        Shape::Viewport(_) | Shape::TitleBlock(_) => {}
     }
 }
 
@@ -225,11 +227,23 @@ pub struct Frame<'a> {
     pub show_grid: bool,
     /// Cache of site model results and the document revision, to draw contours.
     pub site: Option<(&'a cadektor_site::SiteCache, u64)>,
+    /// The page of the active sheet layer. The canvas shows the sheet instead of the model.
+    pub sheet: Option<(&'a crate::sheets_ui::SheetUi, &'a cadektor_print::Page)>,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
-    painter.rect_filled(rect, 0.0, Color32::WHITE);
     let painter = painter.with_clip_rect(rect);
+    if let Some((sheets, page)) = f.sheet {
+        painter.rect_filled(rect, 0.0, Color32::from_gray(205));
+        sheets.paint(&painter, view, page);
+        for o in f.doc.objects.values().filter(|o| f.selection.contains(&o.id)) {
+            let (lo, hi) = o.shape.bounds();
+            painter.rect_stroke(Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(2.0), 0.0, Stroke::new(1.5, SELECT_COLOR), egui::StrokeKind::Middle);
+        }
+        draw_preview(&painter, view, f);
+        return;
+    }
+    painter.rect_filled(rect, 0.0, Color32::WHITE);
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
