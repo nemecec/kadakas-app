@@ -40,7 +40,7 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site --target wasm32-unknown-unknown
-cargo build -p cadektor-cli && uv run --with pytest pytest tests/behavior -q
+cargo build -p cadektor-cli && uv run --with pytest --with ezdxf pytest tests/behavior -q
 ```
 
 All four must pass. End each commit message with the co-author line that the project uses.
