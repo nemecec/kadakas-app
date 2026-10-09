@@ -473,6 +473,8 @@ dependencies = [
  "cadektor-core",
  "cadektor-io",
  "cadektor-render",
+ "cadektor-site",
+ "glam",
  "png",
  "serde",
  "serde_json",
@@ -486,6 +488,7 @@ dependencies = [
  "cadektor-api",
  "cadektor-core",
  "cadektor-render",
+ "cadektor-site",
  "eframe",
  "egui",
  "getrandom 0.4.3",
@@ -522,6 +525,7 @@ name = "cadektor-io"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
+ "cadektor-site",
  "encoding_rs",
  "proj4rs",
  "proptest",
@@ -538,6 +542,17 @@ dependencies = [
  "glam",
  "png",
  "proptest",
+]
+
+[[package]]
+name = "cadektor-site"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "glam",
+ "proptest",
+ "spade",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2842,6 +2857,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3132,6 +3153,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
 ]
 
 [[package]]

@@ -4,10 +4,13 @@
 
 use cadektor_core::command::Command;
 use cadektor_core::curve;
-use cadektor_core::model::{Attributes, Document, ObjectId, Shape, Vertex, VertexKind};
+use cadektor_core::model::{Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind};
 use glam::DVec2;
 
 use crate::hit;
+
+mod plant_tool;
+pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -20,11 +23,35 @@ pub enum Tool {
     Plant,
     LandscapeArea,
     Hardscape,
+    /// Site modifiers: one tool with modes (pad, grade limits).
+    SiteModifier,
+}
+
+/// What the Site Modifiers tool makes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModifierMode {
+    /// A flat or sloped area of the proposed surface.
+    #[default]
+    Pad,
+    /// The edge of the modified area.
+    GradeLimits,
+}
+
+impl ModifierMode {
+    pub const ALL: [ModifierMode; 2] = [ModifierMode::Pad, ModifierMode::GradeLimits];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ModifierMode::Pad => "Pad",
+            ModifierMode::GradeLimits => "Grade Limits",
+        }
+    }
 }
 
 impl Tool {
     pub const BASIC: [Tool; 6] = [Tool::Select, Tool::Line, Tool::Rect, Tool::Circle, Tool::Polyline, Tool::Text];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
+    pub const SITE: [Tool; 1] = [Tool::SiteModifier];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -37,6 +64,7 @@ impl Tool {
             Tool::Plant => "Plant",
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
+            Tool::SiteModifier => "Site Modifiers",
         }
     }
 }
@@ -46,7 +74,7 @@ pub const DEFAULT_ARC_RADIUS: f64 = 500.0;
 
 /// True for the tools that draw a path of vertices and have vertex modes.
 pub fn has_vertex_modes(tool: Tool) -> bool {
-    matches!(tool, Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape)
+    matches!(tool, Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier)
 }
 
 /// What the next click adds to a polyline, landscape area or hardscape.
@@ -136,6 +164,16 @@ pub struct ToolSettings {
     pub vertex_mode: VertexMode,
     /// Radius for new arc vertices in mm. It stays until the user changes it.
     pub arc_radius: f64,
+    /// Placement mode and style of the Plant tool.
+    pub plant: PlantSettings,
+    /// Elevation of new pads in mm.
+    pub pad_elevation: f64,
+    /// What the Site Modifiers tool makes.
+    pub modifier_mode: ModifierMode,
+    /// Elevation at the end of a sloped pad in mm. `None`: a level pad.
+    pub pad_end_elevation: Option<f64>,
+    /// The direction in which a sloped pad falls, in degrees counterclockwise from +X.
+    pub pad_direction_deg: f64,
 }
 
 impl Default for ToolSettings {
@@ -150,6 +188,11 @@ impl Default for ToolSettings {
             material: "Paving".into(),
             vertex_mode: VertexMode::Corner,
             arc_radius: DEFAULT_ARC_RADIUS,
+            plant: PlantSettings::default(),
+            pad_elevation: 0.0,
+            modifier_mode: ModifierMode::Pad,
+            pad_end_elevation: None,
+            pad_direction_deg: 0.0,
         }
     }
 }
@@ -176,6 +219,8 @@ pub enum Input {
 pub enum Effect {
     Exec(Command),
     SetSelection(Vec<ObjectId>),
+    /// A message for the status line.
+    Notice(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +344,14 @@ impl ToolMachine {
             Tool::Polyline if pts.len() >= 2 => Shape::Polyline { points: pts, closed: false },
             Tool::LandscapeArea if pts.len() >= 3 => Shape::LandscapeArea { boundary: pts, name: s.area_name.clone() },
             Tool::Hardscape if pts.len() >= 3 => Shape::Hardscape { boundary: pts, material: s.material.clone(), thickness: None, elevation: None },
+            Tool::SiteModifier if pts.len() >= 3 && s.modifier_mode == ModifierMode::Pad => {
+                let flat = cadektor_core::site::boundary_points(&pts);
+                let slope = s.pad_end_elevation.and_then(|end| {
+                    cadektor_core::site::slope_from_end_elevation(&flat, s.pad_elevation, s.pad_direction_deg.to_radians(), end)
+                });
+                Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: s.pad_elevation, slope }, boundary: pts }
+            }
+            Tool::SiteModifier if pts.len() >= 3 => Shape::SiteModifier { modifier: ModifierKind::GradeLimit, boundary: pts },
             _ => return vec![],
         };
         vec![add(shape)]
@@ -308,11 +361,12 @@ impl ToolMachine {
         match self.tool {
             Tool::Select => self.handle_select(input, cx),
             Tool::Line | Tool::Rect | Tool::Circle => self.handle_two_click(input),
-            Tool::Text | Tool::Plant => match input {
+            Tool::Text => match input {
                 Input::Press { p, .. } => self.place(p, cx),
                 _ => vec![],
             },
-            Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape => match input {
+            Tool::Plant => self.handle_plant(input, cx),
+            Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => match input {
                 Input::Press { p, .. } => {
                     let s = cx.settings;
                     if !matches!(self.state, State::Path(_)) {
@@ -336,12 +390,6 @@ impl ToolMachine {
             Tool::Text if !s.text.is_empty() && s.text_height > 0.0 => {
                 vec![add(Shape::Text { at: p, text: s.text.clone(), height: s.text_height })]
             }
-            Tool::Plant if s.spread > 0.0 => vec![add(Shape::Plant {
-                at: p,
-                species: s.species.clone(),
-                spread: s.spread,
-                height: s.plant_height,
-            })],
             _ => vec![],
         }
     }
@@ -435,6 +483,7 @@ impl ToolMachine {
             (State::Points(pts), Tool::Line | Tool::Rect | Tool::Circle) => {
                 Self::two_click_shape(self.tool, pts[0], cursor).map_or(Preview::None, Preview::Shape)
             }
+            (_, Tool::Plant) => self.plant_preview(cursor, cx),
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
@@ -445,12 +494,6 @@ impl ToolMachine {
             (State::Box { start, .. }, _) => {
                 Preview::Box { min: start.min(cursor), max: start.max(cursor), crossing: cursor.x < start.x }
             }
-            (State::Idle, Tool::Plant) if cx.settings.spread > 0.0 => Preview::Shape(Shape::Plant {
-                at: cursor,
-                species: cx.settings.species.clone(),
-                spread: cx.settings.spread,
-                height: cx.settings.plant_height,
-            }),
             (State::Idle, Tool::Text) if !cx.settings.text.is_empty() => Preview::Shape(Shape::Text {
                 at: cursor,
                 text: cx.settings.text.clone(),
@@ -499,10 +542,11 @@ impl ToolMachine {
             (Tool::Line | Tool::Rect | Tool::Circle, false) => "Click the first point. Esc returns to Selection.",
             (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",
             (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
-            (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape, _) => {
+            (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
-            (Tool::Text | Tool::Plant, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Plant, _) => "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels.",
         }
     }
 }
@@ -537,6 +581,7 @@ mod tests {
                         self.session.editor.execute(c).unwrap();
                     }
                     Effect::SetSelection(s) => self.session.selection = s.clone(),
+                    Effect::Notice(_) => {}
                 }
             }
             fx
@@ -548,6 +593,45 @@ mod tests {
         fn shapes(&self) -> Vec<Shape> {
             self.session.editor.doc().objects.values().map(|o| o.shape.clone()).collect()
         }
+    }
+
+    #[test]
+    fn site_modifier_tool_makes_pads_and_grade_limits_by_mode() {
+        let mut f = Fixture::new(Tool::SiteModifier);
+        f.settings.pad_elevation = 1250.0;
+        for (x, y) in [(0.0, 0.0), (1000.0, 0.0), (1000.0, 800.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        let mut g = Fixture::new(Tool::SiteModifier);
+        g.settings.modifier_mode = ModifierMode::GradeLimits;
+        for (x, y) in [(-100.0, -100.0), (2000.0, 0.0), (2000.0, 2000.0)] {
+            g.click(x, y);
+        }
+        g.send(Input::DoubleClick);
+        let Shape::SiteModifier { modifier, boundary } = &f.shapes()[0] else { panic!("not a modifier") };
+        assert_eq!(*modifier, ModifierKind::Pad { elevation: 1250.0, slope: None });
+        assert_eq!(boundary.len(), 3);
+        assert!(matches!(&g.shapes()[0], Shape::SiteModifier { modifier: ModifierKind::GradeLimit, .. }));
+        // A sloped pad: the elevation at its end sets the percent.
+        let mut k = Fixture::new(Tool::SiteModifier);
+        k.settings.pad_elevation = 1000.0;
+        k.settings.pad_end_elevation = Some(900.0);
+        for (x, y) in [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)] {
+            k.click(x, y);
+        }
+        k.send(Input::Enter);
+        let Shape::SiteModifier { modifier: ModifierKind::Pad { slope: Some(s), .. }, .. } = &k.shapes()[0] else { panic!("no slope") };
+        assert!((s.percent - 20.0).abs() < 1e-9 && s.direction == 0.0, "{s:?}");
+        // Two points are not enough.
+        let mut h = Fixture::new(Tool::SiteModifier);
+        h.click(0.0, 0.0);
+        h.click(10.0, 0.0);
+        h.send(Input::Enter);
+        assert!(h.shapes().is_empty());
+        assert!(has_vertex_modes(Tool::SiteModifier) && Tool::SITE.contains(&Tool::SiteModifier));
+        assert_eq!((Tool::SiteModifier.name(), ModifierMode::GradeLimits.name(), ModifierMode::Pad.name()), ("Site Modifiers", "Grade Limits", "Pad"));
+        assert!(h.m.hint().contains("Click points"));
     }
 
     #[test]

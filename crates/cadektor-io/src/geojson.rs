@@ -170,7 +170,10 @@ fn outline(shape: &Shape, tol: f64) -> Option<(Vec<[f64; 3]>, bool, bool)> {
         Shape::Polyline { points, closed } => flat(curve::flatten(points, *closed, tol), *closed),
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => flat(curve::flatten(boundary, true, tol), true),
         Shape::Polyline3d { points, closed } => Some((points.iter().map(|p| [p.x, p.y, p.z]).collect(), *closed, true)),
-        Shape::Text { .. } | Shape::Plant { .. } | Shape::Locus3d { .. } => None,
+        Shape::Text { .. } | Shape::Plant { .. } | Shape::ExistingTree { .. } | Shape::Locus3d { .. } => None,
+        Shape::SiteModifier { boundary, .. } => flat(curve::flatten(boundary, true, tol), true),
+        // Tags and site models have no outline here (site models export their contours, see `export`).
+        Shape::PlantTag { .. } | Shape::SiteModel { .. } => None,
         // Other crates add shape kinds. They are reported as skipped, not guessed.
         #[allow(unreachable_patterns)]
         _ => None,
@@ -234,6 +237,29 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
             report.count(o.shape.kind());
             continue;
         }
+        if matches!(o.shape, Shape::SiteModel { .. }) {
+            // Contours as LineStrings with the elevation (m) as the third number. Proposed surface if there is one.
+            let contours = cadektor_site::SiteResult::compute(doc, o.id).ok().and_then(|s| s.contours(cadektor_site::Surface::Proposed).ok().map(<[_]>::to_vec));
+            let Some(contours) = contours else {
+                report.skip("site_model", "the surface could not be built");
+                continue;
+            };
+            for c in &contours {
+                let mut pts: Vec<[f64; 3]> = c.points.iter().map(|p| [p.x, p.y, c.level]).collect();
+                if c.closed && let Some(first) = pts.first().copied() {
+                    pts.push(first);
+                }
+                let line: Option<Vec<Value>> = pts.iter().map(|p| conv(*p)).collect();
+                let Some(line) = line else {
+                    report.skip("site_model", "coordinates could not be converted");
+                    continue;
+                };
+                let props = json!({"kind": "contour", "site": o.id.0, "level_m": c.level / 1000.0, "major": c.major, "closed": c.closed});
+                features.push(json!({"type": "Feature", "geometry": {"type": "LineString", "coordinates": line}, "properties": props}));
+            }
+            report.count(o.shape.kind());
+            continue;
+        }
         let mine: Vec<&Object> = holes.get(&o.id.0).cloned().unwrap_or_default();
         let geometry = match geometry_of(o, opts.tolerance, &conv, &mine) {
             Ok(g) => g,
@@ -254,6 +280,20 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
         match &o.shape {
             Shape::Plant { species, spread, height, .. } => {
                 props.insert("species".into(), json!(species));
+                props.insert("spread_mm".into(), json!(spread));
+                props.insert("height_mm".into(), json!(height));
+                // The style data of a plant that has a style.
+                if let Some(e) = cadektor_core::plants::link::effective(doc, o).filter(|e| e.style_id.is_some()) {
+                    props.insert("plant_style".into(), json!(e.style_name));
+                    props.insert("id_code".into(), json!(e.style.id_code));
+                    props.insert("common_name".into(), json!(e.style.common_name));
+                    props.insert("price".into(), json!(e.style.price));
+                    props.insert("container".into(), json!(e.style.container));
+                }
+            }
+            Shape::ExistingTree { species, dbh, spread, height, .. } => {
+                props.insert("species".into(), json!(species));
+                props.insert("dbh_mm".into(), json!(dbh));
                 props.insert("spread_mm".into(), json!(spread));
                 props.insert("height_mm".into(), json!(height));
             }
@@ -287,7 +327,7 @@ fn oriented(mut pts: Vec<[f64; 3]>, ccw: bool) -> Vec<[f64; 3]> {
 
 fn geometry_of(o: &Object, tol: f64, conv: &dyn Fn([f64; 3]) -> Option<Value>, holes: &[&Object]) -> Result<Value, &'static str> {
     let anchor = match &o.shape {
-        Shape::Text { at, .. } | Shape::Plant { at, .. } => Some([at.x, at.y, 0.0]),
+        Shape::Text { at, .. } | Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => Some([at.x, at.y, 0.0]),
         Shape::Locus3d { p } => Some([p.x, p.y, p.z]),
         _ => None,
     };

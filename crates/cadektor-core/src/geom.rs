@@ -8,9 +8,9 @@ pub fn polygon_area(points: &[DVec2]) -> f64 {
     if n < 3 {
         return 0.0;
     }
-    let twice: f64 = (0..n)
-        .map(|i| points[i].perp_dot(points[(i + 1) % n]))
-        .sum();
+    // Relative to the first point: sums of absolute coordinates lose precision far from the origin.
+    let o = points[0];
+    let twice: f64 = (0..n).map(|i| (points[i] - o).perp_dot(points[(i + 1) % n] - o)).sum();
     twice.abs() / 2.0
 }
 

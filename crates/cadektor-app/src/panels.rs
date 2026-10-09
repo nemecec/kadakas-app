@@ -8,6 +8,8 @@ use cadektor_render::{Projection, RenderMode, StandardView, ViewSettings};
 use egui::{DragValue, Ui};
 use glam::DVec2;
 
+use cadektor_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
+
 use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::keymap::{Action, Keymap};
@@ -28,6 +30,8 @@ pub enum MenuAction {
     Delete,
     SelectAll,
     ZoomFit,
+    CreateSiteModel,
+    UpdateSiteModel,
 }
 
 /// Runs a command on the session. Errors go to the status line.
@@ -45,7 +49,8 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
     }
 }
 
-pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool) -> Vec<MenuAction> {
+#[allow(clippy::too_many_arguments)]
+pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap: &mut SnapConfig, show_grid: &mut bool, can_site: bool, can_update_site: bool) -> Vec<MenuAction> {
     use MenuAction::*;
     let mut out = Vec::new();
     egui::MenuBar::new().ui(ui, |ui| {
@@ -75,6 +80,10 @@ pub fn menu_bar(ui: &mut Ui, keys: &Keymap, can_undo: bool, can_redo: bool, snap
             ui.separator();
             item(ui, "Delete", true, Delete, &mut out);
             item(ui, "Select All", true, SelectAll, &mut out);
+        });
+        ui.menu_button("Site", |ui| {
+            item(ui, "Create Site Model from Selection", can_site, CreateSiteModel, &mut out);
+            item(ui, "Update Site Model", can_update_site, UpdateSiteModel, &mut out);
         });
         ui.menu_button("View", |ui| {
             item(ui, "Zoom to Fit", true, ZoomFit, &mut out);
@@ -132,7 +141,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Delete => Action::Delete,
         MenuAction::SelectAll => Action::SelectAll,
         MenuAction::ZoomFit => Action::ZoomFit,
-        MenuAction::ExportSvg | MenuAction::Import | MenuAction::Export => return None,
+        MenuAction::ExportSvg | MenuAction::Import | MenuAction::Export | MenuAction::CreateSiteModel | MenuAction::UpdateSiteModel => return None,
     })
 }
 
@@ -171,7 +180,7 @@ pub fn vertex_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, keys: &Keymap) 
     });
 }
 
-pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mut ToolSettings) {
+pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mut ToolSettings, doc: &cadektor_core::model::Document) {
     ui.heading("Tools");
     ui.separator();
     ui.label("Basic");
@@ -183,8 +192,17 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mu
     for t in Tool::LANDSCAPE {
         tool_button(ui, m, keys, t);
     }
+    ui.add_space(8.0);
+    ui.label("Site");
+    for t in Tool::SITE {
+        tool_button(ui, m, keys, t);
+    }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
+    }
+    if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
+        // A new mode starts a new placement.
+        m.cancel();
     }
 }
 
@@ -226,6 +244,25 @@ pub fn data_bar(
             Tool::Hardscape => {
                 ui.label("Material");
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
+            }
+            Tool::SiteModifier => {
+                for mode in crate::tools::ModifierMode::ALL {
+                    ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
+                }
+                if s.modifier_mode == crate::tools::ModifierMode::Pad {
+                    ui.label("Elevation");
+                    ui.add(DragValue::new(&mut s.pad_elevation).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                    let mut sloped = s.pad_end_elevation.is_some();
+                    if ui.checkbox(&mut sloped, "Slope").changed() {
+                        s.pad_end_elevation = sloped.then_some(s.pad_elevation);
+                    }
+                    if let Some(end) = &mut s.pad_end_elevation {
+                        ui.label("Elevation at end");
+                        ui.add(DragValue::new(end).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                        ui.label("Falls toward");
+                        ui.add(DragValue::new(&mut s.pad_direction_deg).speed(1.0).suffix("\u{b0}"));
+                    }
+                }
             }
             _ => {}
         }
@@ -466,6 +503,52 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.scalar(ui, "Spread", spread, 50.0);
             f.scalar(ui, "Height", height, 50.0);
         }
+        Shape::ExistingTree { at, species, dbh, spread, height, condition, action, rpz_factor, rpz_cap } => {
+            f.xy(ui, "Position", at);
+            f.text(ui, "Species", species);
+            f.scalar(ui, "Trunk diameter", dbh, 10.0);
+            f.scalar(ui, "Canopy spread", spread, 50.0);
+            f.scalar(ui, "Height", height, 50.0);
+            ui.label("Condition");
+            let before = *condition;
+            egui::ComboBox::from_id_salt("tree_condition").selected_text(condition.id()).show_ui(ui, |ui| {
+                for c in TreeCondition::ALL {
+                    ui.selectable_value(condition, c, c.id());
+                }
+            });
+            f.commit |= *condition != before;
+            ui.end_row();
+            ui.label("Action");
+            let before = *action;
+            egui::ComboBox::from_id_salt("tree_action").selected_text(action.id()).show_ui(ui, |ui| {
+                for a in TreeAction::ALL {
+                    ui.selectable_value(action, a, a.id());
+                }
+            });
+            f.commit |= *action != before;
+            ui.end_row();
+            ui.label("Root zone factor");
+            let mut factor = rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR);
+            let r = ui.add(DragValue::new(&mut factor).speed(0.1).range(0.0..=100.0).suffix(" x DBH"));
+            if r.changed() {
+                *rpz_factor = Some(factor);
+            }
+            f.commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+            ui.label("Root zone cap");
+            let mut cap = rpz_cap.unwrap_or(DEFAULT_RPZ_CAP);
+            let r = ui.add(DragValue::new(&mut cap).speed(100.0).range(0.0..=1.0e6).suffix(" mm"));
+            if r.changed() {
+                *rpz_cap = Some(cap);
+            }
+            f.commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+        }
+        Shape::PlantTag { at, anchor, height, .. } => {
+            f.xy(ui, "Label position", at);
+            f.xy(ui, "Leader end", anchor);
+            f.scalar(ui, "Text height", height, 5.0);
+        }
         Shape::LandscapeArea { boundary, name } => {
             f.text(ui, "Name", name);
             f.count(ui, boundary.len());
@@ -474,6 +557,8 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.text(ui, "Material", material);
             f.count(ui, boundary.len());
         }
+        Shape::SiteModel { points, lines, settings } => f.commit |= crate::site_ui::model_fields(ui, points.len(), lines.len(), settings),
+        Shape::SiteModifier { modifier, boundary } => f.commit |= crate::site_ui::modifier_fields(ui, modifier, boundary),
     });
     f.commit
 }
@@ -544,6 +629,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     if let Some(area) = obj.shape.area() {
         ui.label(format!("Area {:.2} m\u{b2}", area / 1e6));
     }
+    if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
+        crate::plant_ui::plant_object_info(ui, session, id, status);
+    }
+    crate::site_ui::cut_fill_readout(ui, session, id);
     ui.separator();
     class_layer_combos(ui, session, &sel, status);
     let doc = &session.editor.doc();
@@ -787,7 +876,7 @@ mod tests {
                 machine.set_tool(tool);
                 let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                     object_info(ui, &mut s, &mut edit, &mut status);
-                    tool_panel(ui, &mut machine, &keys, &mut settings);
+                    tool_panel(ui, &mut machine, &keys, &mut settings, &Default::default());
                 });
             }
         }

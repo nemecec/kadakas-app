@@ -6,6 +6,9 @@ use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
 
+use cadektor_core::plants::schedule::{TagCounts, tag_counts};
+
+use crate::plant_draw;
 use crate::snap::SnapResult;
 use crate::tess;
 use crate::tools::Preview;
@@ -38,6 +41,8 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
             Shape::LandscapeArea { .. } => tinted([80, 170, 80, 90]),
             Shape::Hardscape { .. } => tinted([175, 150, 115, 130]),
             Shape::Plant { .. } => tinted([70, 150, 70, 70]),
+            Shape::ExistingTree { .. } => tinted([110, 130, 110, 50]),
+            Shape::SiteModifier { modifier: cadektor_core::model::ModifierKind::Pad { .. }, .. } => tinted([200, 170, 120, 70]),
             _ => fill,
         };
     }
@@ -127,12 +132,50 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             painter.line_segment([c - egui::vec2(k, 0.0), c + egui::vec2(k, 0.0)], stroke);
             painter.line_segment([c - egui::vec2(0.0, k), c + egui::vec2(0.0, k)], stroke);
         }
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+        Shape::SiteModel { .. } => {
+            let outline = cadektor_core::svg::site_outline(shape);
+            path(&outline, true);
+        }
+        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => {
             let flat = curve::flatten(boundary, true, curve_tolerance(view.zoom));
             let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
             fill_polygon(painter, &flat, &sp, st.fill);
             path(&flat, true);
         }
+        Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
+        Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+    }
+}
+
+/// Draws an object. Plants and tags need the document: a plant draws the outline and colors
+/// of its style, and a tag shows the live ID code and count.
+pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2) {
+    match &o.shape {
+        Shape::Plant { at, spread, .. } => {
+            let look = cadektor_core::plants::link::look(doc, o);
+            // The colors of the style apply when the object has none of its own.
+            let soft = |c: Color| {
+                let [r, g, b, a] = c.0;
+                Color32::from_rgba_unmultiplied(r, g, b, a.min(110))
+            };
+            let mut st = st;
+            if o.attrs.fill.is_none()
+                && let Some(c) = look.fill
+            {
+                st.fill = soft(c);
+            }
+            if o.attrs.pen.is_none()
+                && let Some(c) = look.pen
+            {
+                st.pen = color32(c);
+            }
+            plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
+        }
+        Shape::PlantTag { at, anchor, height, .. } => {
+            let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
+            plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
+        }
+        shape => draw_shape(painter, view, shape, st, offset),
     }
 }
 
@@ -180,6 +223,8 @@ pub struct Frame<'a> {
     pub preview: &'a Preview,
     pub snap: Option<SnapResult>,
     pub show_grid: bool,
+    /// Cache of site model results and the document revision, to draw contours.
+    pub site: Option<(&'a cadektor_site::SiteCache, u64)>,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
@@ -188,12 +233,17 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    // Tag counts are made once per frame, not once per tag.
+    let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
         let st = object_style(f.doc, o, view.zoom);
         let selected = f.selection.contains(&o.id);
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
-        draw_shape(&painter, view, &o.shape, st, DVec2::ZERO);
+        draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
+        if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
+            crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
+        }
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
             draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
@@ -247,8 +297,9 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
             painter.rect(r, 0.0, c.gamma_multiply(0.1), Stroke::new(1.0, c), egui::StrokeKind::Middle);
         }
         Preview::Move { ids, delta } => {
+            let counts = tag_counts(f.doc);
             for o in f.doc.objects.values().filter(|o| ids.contains(&o.id)) {
-                draw_shape(painter, view, &o.shape, st, *delta);
+                draw_object(painter, view, f.doc, &counts, o, st, *delta);
             }
         }
     }

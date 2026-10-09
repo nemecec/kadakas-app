@@ -13,6 +13,7 @@ use crate::databar::{self, DataEntry};
 use crate::file_io;
 use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
+use crate::plant_ui::{self, PlantUi};
 use crate::snap::{self, SnapConfig, SnapResult};
 use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
 use crate::canvas3d;
@@ -46,6 +47,7 @@ pub struct CadektorApp {
     title_dirty: bool,
     info: InfoEdit,
     nav: NavState,
+    plant_ui: PlantUi,
     keys: Keymap,
     entry: DataEntry,
     /// Cursor before Data bar values are applied.
@@ -114,6 +116,7 @@ impl CadektorApp {
             title_dirty: false,
             info: InfoEdit::default(),
             nav: NavState::default(),
+            plant_ui: PlantUi::default(),
             keys: Keymap::defaults(),
             entry: DataEntry::default(),
             live_cursor: DVec2::ZERO,
@@ -178,6 +181,17 @@ impl CadektorApp {
         }
     }
 
+    fn create_site_model(&mut self) {
+        self.status = match crate::site_ui::create_site_model(&mut self.session) {
+            Ok(id) => format!("Created site model {id}"),
+            Err(e) => format!("Error: {e}"),
+        };
+    }
+
+    fn update_site_model(&mut self) {
+        self.status = crate::site_ui::update_site_models(&mut self.session);
+    }
+
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
         self.session.selection = doc.objects.values().filter(|o| doc.is_visible(o)).map(|o| o.id).collect();
@@ -191,6 +205,8 @@ impl CadektorApp {
             MenuAction::Delete => self.delete_selection(),
             MenuAction::SelectAll => self.select_all(),
             MenuAction::ZoomFit => self.zoom_fit(),
+            MenuAction::CreateSiteModel => self.create_site_model(),
+            MenuAction::UpdateSiteModel => self.update_site_model(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Open => self.open_file(ctx),
             #[cfg(not(target_arch = "wasm32"))]
@@ -394,7 +410,11 @@ impl CadektorApp {
     /// have one group (the vertex modes), so only group 1 does anything for them.
     fn mode_group(&mut self, group: usize) {
         let tool = self.machine.tool();
-        if !has_vertex_modes(tool) {
+        if tool == Tool::Plant && group == 1 {
+            self.settings.plant.mode = self.settings.plant.mode.next();
+            self.machine.cancel();
+            self.status = format!("Placement mode: {}", self.settings.plant.mode.label());
+        } else if !has_vertex_modes(tool) {
             self.status = format!("The {} tool has no mode buttons", tool.name());
         } else if group == 1 {
             self.settings.vertex_mode = self.settings.vertex_mode.next();
@@ -431,6 +451,7 @@ impl CadektorApp {
         for e in effects {
             match e {
                 Effect::SetSelection(s) => self.session.selection = s,
+                Effect::Notice(m) => self.status = m,
                 Effect::Exec(cmd) => {
                     let is_add = matches!(cmd, Command::AddObject { .. });
                     if let Some(out) = panels::run_command(&mut self.session, &cmd, &mut self.status)
@@ -542,6 +563,7 @@ impl CadektorApp {
             preview: &preview,
             snap: self.snap_hit,
             show_grid: self.show_grid,
+            site: Some((self.session.site_cache(), self.session.editor.revision())),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
     }
@@ -581,7 +603,9 @@ impl eframe::App for CadektorApp {
         let (can_undo, can_redo) = (self.session.editor.can_undo(), self.session.editor.can_redo());
         let mut actions = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
-            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid);
+            let can_site = !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection).is_empty();
+            let can_update = !crate::site_ui::selected_site_models(self.session.editor.doc(), &self.session.selection).is_empty();
+            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid, can_site, can_update);
         });
         for a in actions {
             self.apply_menu(&ctx, a);
@@ -624,12 +648,16 @@ impl eframe::App for CadektorApp {
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings));
+        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings, self.session.editor.doc()));
         egui::Panel::right("palettes").default_size(280.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
                 ui.add_space(12.0);
                 panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
+                ui.add_space(12.0);
+                plant_ui::resource_manager(ui, &mut self.session, &mut self.plant_ui, &mut self.status);
+                ui.add_space(12.0);
+                plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
             });
         });
         egui::CentralPanel::no_frame().show(ui, |ui| {

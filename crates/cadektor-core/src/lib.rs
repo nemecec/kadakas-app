@@ -9,6 +9,9 @@ pub mod geom;
 pub mod georef;
 pub mod mesh;
 pub mod model;
+pub mod plants;
+pub mod resource;
+pub mod site;
 pub mod svg;
 
 pub use glam::{DVec2, DVec3};

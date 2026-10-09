@@ -154,6 +154,8 @@ struct Ctx<'a> {
     layer_mode: LayerMode,
     doc: &'a Document,
     plant_blocks: BTreeSet<String>,
+    /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
+    shift: DVec2,
 }
 
 impl Ctx<'_> {
@@ -214,7 +216,7 @@ const FIRST_HANDLE: u64 = 0x100;
 
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let mut report = Report::new("dxf");
-    let mut cx = Ctx { unit: opts.unit.mm_per_unit(), tol: opts.tolerance, layer_mode: opts.layer_mode, doc, plant_blocks: BTreeSet::new() };
+    let mut cx = Ctx { unit: opts.unit.mm_per_unit(), tol: opts.tolerance, layer_mode: opts.layer_mode, doc, plant_blocks: BTreeSet::new(), shift: DVec2::ZERO };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
     let mut shift = DVec2::ZERO;
     if let (Some(g), ExportOrigin::File) = (&doc.georef, opts.origin) {
@@ -223,6 +225,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             report.note("the georeference is rotated: the rotation is not applied to the coordinates");
         }
     }
+    cx.shift = shift;
     let mut ents = W::new(FIRST_HANDLE);
     ents.owner = H_MODEL_RECORD.into();
     for o in doc.objects.values() {
@@ -641,44 +644,37 @@ fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) 
                 w.pair(100, "AcDbText");
             }
         }
-        Shape::Plant { at, species, spread, .. } => {
-            circle(w, cx, o, layer, hidden, *at, spread / 2.0);
-            let name = format!("PLANT_{}", safe_name(species).replace(' ', "_"));
-            cx.plant_blocks.insert(name.clone());
-            common(w, "INSERT", layer, o, hidden);
-            w.pair(100, "AcDbBlockReference");
-            w.pair(2, &name);
-            cx.pt3(w, 10, at.x, at.y, 0.0);
-            let s = spread / 2.0 / cx.unit;
-            w.num(41, s);
-            w.num(42, s);
-            w.num(43, s);
-            w.num(50, 0.0);
+        Shape::Plant { at, species, spread, .. } | Shape::ExistingTree { at, species, spread, .. } => {
+            plant_symbol(w, cx, o, layer, hidden, *at, species, *spread);
         }
         Shape::Locus3d { p } => {
             common(w, "POINT", layer, o, hidden);
             w.pair(100, "AcDbPoint");
             cx.pt3(w, 10, p.x, p.y, p.z);
         }
-        Shape::Polyline3d { points, closed } => {
-            common(w, "POLYLINE", layer, o, hidden);
-            w.pair(100, "AcDb3dPolyline");
-            w.pair(66, 1);
-            cx.pt3(w, 10, 0.0, 0.0, 0.0);
-            w.pair(70, 8 | i32::from(*closed));
-            for p in points {
-                w.start("VERTEX");
-                w.pair(100, "AcDbEntity");
-                w.pair(8, layer);
-                w.pair(100, "AcDbVertex");
-                w.pair(100, "AcDb3dPolylineVertex");
-                cx.pt3(w, 10, p.x, p.y, p.z);
-                w.pair(70, 32);
-            }
-            w.start("SEQEND");
-            w.pair(100, "AcDbEntity");
-            w.pair(8, layer);
+        Shape::Polyline3d { points, closed } => polyline3d(w, cx, o, layer, hidden, points.iter().map(|p| (p.x, p.y, p.z)), *closed),
+        Shape::SiteModifier { boundary, .. } => {
+            let (verts, _) = bulged_vertices(boundary, true, cx.tol);
+            lwpolyline(w, cx, o, layer, hidden, &verts, true);
         }
+        Shape::SiteModel { points, .. } => {
+            // The contours of the surface (the proposed one if there is one) as 3D polylines at their height,
+            // and the source points as POINT entities. The TIN itself is not exported.
+            let Ok(site) = cadektor_site::SiteResult::compute(cx.doc, o.id) else { return false };
+            let Ok(contours) = site.contours(cadektor_site::Surface::Proposed) else { return false };
+            let shift = cx.shift;
+            for c in contours {
+                polyline3d(w, cx, o, layer, hidden, c.points.iter().map(|p| (p.x + shift.x, p.y + shift.y, c.level)), c.closed);
+            }
+            for p in points {
+                common(w, "POINT", layer, o, hidden);
+                w.pair(100, "AcDbPoint");
+                // The object was shifted already, so its points are in the final coordinates.
+                cx.pt3(w, 10, p.x, p.y, p.z);
+            }
+        }
+        // A plant tag is a label that the drawing makes from a style. There is nothing to write.
+        Shape::PlantTag { .. } => return false,
         // Other crates add shape kinds. They are reported as skipped, not guessed.
         #[allow(unreachable_patterns)]
         _ => return false,
@@ -689,6 +685,44 @@ fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) 
 /// The rotation of a text in degrees (`rotation_deg` in the data of the object), if it has one.
 fn rotation_of(o: &Object) -> Option<f64> {
     o.data.get("rotation_deg").and_then(serde_json::Value::as_f64).filter(|d| d.is_finite() && *d != 0.0)
+}
+
+/// A plant as a circle of its canopy and an INSERT of a small cross block, turned by its rotation.
+#[allow(clippy::too_many_arguments)]
+fn plant_symbol(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool, at: DVec2, species: &str, spread: f64) {
+    circle(w, cx, o, layer, hidden, at, spread / 2.0);
+    let name = format!("PLANT_{}", safe_name(species).replace(' ', "_"));
+    cx.plant_blocks.insert(name.clone());
+    common(w, "INSERT", layer, o, hidden);
+    w.pair(100, "AcDbBlockReference");
+    w.pair(2, &name);
+    cx.pt3(w, 10, at.x, at.y, 0.0);
+    let s = spread / 2.0 / cx.unit;
+    w.num(41, s);
+    w.num(42, s);
+    w.num(43, s);
+    w.num(50, cadektor_core::plants::link::rotation(o).to_degrees());
+}
+
+/// A 3D polyline with its vertices. Coordinates are in mm.
+fn polyline3d(w: &mut W, cx: &Ctx, o: &Object, layer: &str, hidden: bool, points: impl Iterator<Item = (f64, f64, f64)>, closed: bool) {
+    common(w, "POLYLINE", layer, o, hidden);
+    w.pair(100, "AcDb3dPolyline");
+    w.pair(66, 1);
+    cx.pt3(w, 10, 0.0, 0.0, 0.0);
+    w.pair(70, 8 | i32::from(closed));
+    for (x, y, z) in points {
+        w.start("VERTEX");
+        w.pair(100, "AcDbEntity");
+        w.pair(8, layer);
+        w.pair(100, "AcDbVertex");
+        w.pair(100, "AcDb3dPolylineVertex");
+        cx.pt3(w, 10, x, y, z);
+        w.pair(70, 32);
+    }
+    w.start("SEQEND");
+    w.pair(100, "AcDbEntity");
+    w.pair(8, layer);
 }
 
 fn circle(w: &mut W, cx: &Ctx, o: &Object, layer: &str, hidden: bool, c: DVec2, r: f64) {

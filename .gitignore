@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 *.proptest-regressions
 /node_modules
+/target-*
+/.claude/worktrees/

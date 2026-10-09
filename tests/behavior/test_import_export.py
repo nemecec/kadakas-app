@@ -434,3 +434,40 @@ def test_exported_dxf_passes_the_ezdxf_audit(cad, tmp_path):
     _, rec = recover.readfile(str(out))
     assert not rec.errors and not rec.fixes
     assert {"Walls _ 1", "0"} <= {layer.dxf.name for layer in doc.layers}
+
+
+def build_site_and_plants(cad):
+    ids = []
+    for i in range(9):
+        for j in range(9):
+            ids.append(cad.execute({"op": "add_object", "shape": {"kind": "locus3d", "p": [i * 1000, j * 1000, i * 100]}})[0])
+    site = cad.result("site.create", {"source_ids": ids, "settings": {"minor_interval": 200, "major_interval": 400}})["id"]
+    style = cad.result("plant_style.create", {"name": "Acer platanoides", "botanical_name": "Acer platanoides", "id_code": "AP", "spread": 4000, "height": 8000, "price": 55})
+    style_id = style.get("id") or style.get("created", [None])[0]
+    cad.result("plants.place", {"mode": "single", "style": style_id, "at": [2000, 2000]})
+    cad.execute({"op": "add_object", "shape": {"kind": "existing_tree", "at": [6000, 6000], "species": "Quercus robur", "dbh": 500, "spread": 9000, "height": 15000}})
+    return site
+
+
+def test_site_contours_plants_and_trees_are_exported(cad, tmp_path):
+    build_site_and_plants(cad)
+    dxf = tmp_path / "site.dxf"
+    r = cad.result("export.file", {"path": str(dxf)})
+    assert r["report"]["skipped"] == []
+    text = dxf.read_text()
+    # Contours at 200, 400 and 600 mm are 3D polylines at their height.
+    assert text.count("AcDb3dPolyline\n") >= 3
+    assert "PLANT_Acer_platanoides" in text and "PLANT_Quercus_robur" in text
+    geo = tmp_path / "site.geojson"
+    cad.result("export.file", {"path": str(geo), "options": {"origin": "document"}})
+    feats = json.loads(geo.read_text())["features"]
+    contours = [f for f in feats if f["properties"].get("kind") == "contour"]
+    assert len(contours) >= 3 and all(f["geometry"]["type"] == "LineString" for f in contours)
+    assert {round(f["properties"]["level_m"], 3) for f in contours} >= {0.2, 0.4, 0.6}
+    assert {c[2] for f in contours for c in f["geometry"]["coordinates"]} <= {0.2, 0.4, 0.6, 0.8}
+    plant = next(f for f in feats if f["properties"].get("kind") == "plant")
+    assert plant["properties"]["id_code"] == "AP" and plant["properties"]["plant_style"] == "Acer platanoides"
+    tree = next(f for f in feats if f["properties"].get("kind") == "existing_tree")
+    assert tree["properties"]["dbh_mm"] == 500 and tree["geometry"]["type"] == "Point"
+    ezdxf = pytest.importorskip("ezdxf", reason="run with --with ezdxf")
+    assert not ezdxf.readfile(str(dxf)).audit().errors

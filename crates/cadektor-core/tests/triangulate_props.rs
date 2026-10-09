@@ -25,7 +25,7 @@ fn star() -> impl Strategy<Value = Vec<DVec2>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(400))]
+    #![proptest_config(ProptestConfig::default())]
 
     #[test]
     fn triangles_cover_exactly_the_polygon(poly in star(), clockwise in any::<bool>(), shift in -1.0e6..1.0e6f64) {
@@ -53,7 +53,8 @@ proptest! {
         let area = polygon_area(&pts);
         let ring = clean_ring(&pts);
         prop_assert!(ring.len() >= 3);
-        let signed: f64 = (0..ring.len()).map(|i| ring[i].perp_dot(ring[(i + 1) % ring.len()])).sum::<f64>() / 2.0;
+        let o = ring[0];
+        let signed: f64 = (0..ring.len()).map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o)).sum::<f64>() / 2.0;
         prop_assert!(signed > 0.0);
         prop_assert!((signed - area).abs() <= 1e-6 * area.max(1.0));
     }

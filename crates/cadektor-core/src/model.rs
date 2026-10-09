@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::curve::{Vertex, VertexKind};
+pub use crate::site::{ModifierKind, PadSlope, SiteLine, SiteSettings};
 use crate::curve;
+use crate::plants::tree::{self, TreeAction, TreeCondition};
+use crate::resource::{ResourceId, Resources};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -98,6 +101,34 @@ pub enum Shape {
     Text { at: DVec2, text: String, height: f64 },
     /// Plant instance. `spread` is the canopy diameter.
     Plant { at: DVec2, species: String, spread: f64, height: f64 },
+    /// Existing (survey) tree. `dbh` is the trunk diameter, `spread` the canopy diameter.
+    /// The root protection zone has a radius of `rpz_factor` times `dbh` (default 12), at most `rpz_cap` (see `plants::tree`).
+    ExistingTree {
+        at: DVec2,
+        #[serde(default)]
+        species: String,
+        dbh: f64,
+        spread: f64,
+        height: f64,
+        #[serde(default)]
+        condition: TreeCondition,
+        #[serde(default)]
+        action: TreeAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rpz_factor: Option<f64>,
+        /// Largest root protection radius in mm (default 15 000, see `plants::tree`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rpz_cap: Option<f64>,
+    },
+    /// Plant tag: a label at `at` with a leader line to `anchor`. It shows the ID code and the
+    /// number of plants of the style on its layer. `height` is the text height.
+    PlantTag {
+        at: DVec2,
+        anchor: DVec2,
+        style: ResourceId,
+        #[serde(default = "default_tag_height")]
+        height: f64,
+    },
     /// Planting area with a plant mix, bounded by a closed outline.
     LandscapeArea { boundary: Vec<Vertex>, name: String },
     /// Paved area (path, patio, drive).
@@ -115,6 +146,25 @@ pub enum Shape {
     Locus3d { p: DVec3 },
     /// Polygon or contour with a Z value per vertex.
     Polyline3d { points: Vec<DVec3>, closed: bool },
+    /// Terrain. The source data (3D points and 3D polygons) lives inside the site model.
+    /// The TIN, contours and volumes are derived by `cadektor-site` and never saved.
+    SiteModel {
+        #[serde(default)]
+        points: Vec<DVec3>,
+        #[serde(default)]
+        lines: Vec<SiteLine>,
+        #[serde(default)]
+        settings: SiteSettings,
+    },
+    /// A pad or grade limits that change the proposed surface of the site models on the same layer.
+    SiteModifier { modifier: ModifierKind, boundary: Vec<Vertex> },
+}
+
+/// Default text height of a plant tag, in mm.
+pub const DEFAULT_TAG_HEIGHT: f64 = 400.0;
+
+fn default_tag_height() -> f64 {
+    DEFAULT_TAG_HEIGHT
 }
 
 /// Half the width of the cross that marks a `Locus3d` in drawings and 3D views, in model units.
@@ -147,10 +197,14 @@ impl Shape {
             Shape::Polyline { .. } => "polyline",
             Shape::Text { .. } => "text",
             Shape::Plant { .. } => "plant",
+            Shape::ExistingTree { .. } => "existing_tree",
+            Shape::PlantTag { .. } => "plant_tag",
             Shape::LandscapeArea { .. } => "landscape_area",
             Shape::Hardscape { .. } => "hardscape",
             Shape::Locus3d { .. } => "locus3d",
             Shape::Polyline3d { .. } => "polyline3d",
+            Shape::SiteModel { .. } => "site_model",
+            Shape::SiteModifier { .. } => "site_modifier",
         }
     }
 
@@ -158,7 +212,7 @@ impl Shape {
     pub fn vertices(&self) -> Option<&Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -166,7 +220,7 @@ impl Shape {
     pub fn vertices_mut(&mut self) -> Option<&mut Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -177,12 +231,20 @@ impl Shape {
         match self {
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
+            Shape::SiteModel { points, lines, settings } => {
+                points.iter().all(|p| p.is_finite()) && lines.iter().all(|l| l.points.iter().all(|p| p.is_finite())) && settings.is_finite()
+            }
+            Shape::SiteModifier { modifier, boundary } => modifier.is_finite() && boundary.iter().all(Vertex::is_finite),
             Shape::Line { a, b } => v(a) && v(b),
             Shape::Rect { min, max } => v(min) && v(max),
             Shape::Circle { center, radius } => v(center) && radius.is_finite(),
             Shape::Arc { center, radius, start, end } => v(center) && radius.is_finite() && start.is_finite() && end.is_finite(),
             Shape::Text { at, height, .. } => v(at) && height.is_finite(),
             Shape::Plant { at, spread, height, .. } => v(at) && spread.is_finite() && height.is_finite(),
+            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
+                v(at) && dbh.is_finite() && spread.is_finite() && height.is_finite() && rpz_factor.is_none_or(f64::is_finite) && rpz_cap.is_none_or(f64::is_finite)
+            }
+            Shape::PlantTag { at, anchor, height, .. } => v(at) && v(anchor) && height.is_finite(),
             Shape::Hardscape { boundary, thickness, elevation, .. } => {
                 boundary.iter().all(Vertex::is_finite) && thickness.is_none_or(f64::is_finite) && elevation.is_none_or(f64::is_finite)
             }
@@ -206,6 +268,15 @@ impl Shape {
         match self {
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
             Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
+            Shape::SiteModel { points, lines, settings } => {
+                points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                lines.iter().flat_map(|l| &l.points).for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                [settings.minor_interval, settings.major_interval, settings.datum].into_iter().for_each(&mut *f);
+            }
+            Shape::SiteModifier { modifier, boundary } => {
+                modifier.numbers().into_iter().for_each(&mut *f);
+                boundary.iter().for_each(|x| vertex(x, f));
+            }
             Shape::Line { a, b } => {
                 v(a);
                 v(b);
@@ -229,6 +300,15 @@ impl Shape {
             Shape::Plant { at, spread, height, .. } => {
                 v(at);
                 f(*spread);
+                f(*height);
+            }
+            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
+                v(at);
+                [*dbh, *spread, *height].into_iter().chain(rpz_factor.iter().copied()).chain(rpz_cap.iter().copied()).for_each(&mut *f);
+            }
+            Shape::PlantTag { at, anchor, height, .. } => {
+                v(at);
+                v(anchor);
                 f(*height);
             }
             Shape::Hardscape { boundary, thickness, elevation, .. } => {
@@ -262,6 +342,12 @@ impl Shape {
                 p.x += d.x;
                 p.y += d.y;
             }),
+            Shape::SiteModel { points, lines, .. } => {
+                points.iter_mut().chain(lines.iter_mut().flat_map(|l| l.points.iter_mut())).for_each(|p| {
+                    p.x += d.x;
+                    p.y += d.y;
+                });
+            }
             Shape::Line { a, b } => {
                 mv(a);
                 mv(b);
@@ -271,9 +357,14 @@ impl Shape {
                 mv(max);
             }
             Shape::Circle { center, .. } | Shape::Arc { center, .. } => mv(center),
-            Shape::Text { at, .. } | Shape::Plant { at, .. } => mv(at),
+            Shape::Text { at, .. } | Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => mv(at),
+            Shape::PlantTag { at, anchor, .. } => {
+                mv(at);
+                mv(anchor);
+            }
             Shape::Polyline { points, .. }
             | Shape::LandscapeArea { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. }
             | Shape::Hardscape { boundary: points, .. } => points.iter_mut().for_each(|x| mv(&mut x.p)),
         }
     }
@@ -290,6 +381,10 @@ impl Shape {
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
+            }
+            Shape::SiteModel { points, lines, .. } => {
+                let all: Vec<DVec2> = points.iter().chain(lines.iter().flat_map(|l| &l.points)).map(|p| p.truncate()).collect();
+                from_points(&all)
             }
             Shape::Line { a, b } => from_points(&[*a, *b]),
             Shape::Rect { min, max } => from_points(&[*min, *max]),
@@ -317,8 +412,18 @@ impl Shape {
                 let r = DVec2::splat(spread / 2.0);
                 (*at - r, *at + r)
             }
+            Shape::ExistingTree { at, spread, dbh, rpz_factor, rpz_cap, .. } => {
+                let r = DVec2::splat((spread / 2.0).max(tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap)));
+                (*at - r, *at + r)
+            }
+            Shape::PlantTag { at, anchor, height, .. } => {
+                // The label is about eight characters wide.
+                from_points(&[*at, *at + DVec2::new(*height * 0.6 * 8.0, *height), *anchor])
+            }
             Shape::Polyline { points, closed } => curve::bounds(points, *closed),
-            Shape::LandscapeArea { boundary: points, .. } | Shape::Hardscape { boundary: points, .. } => curve::bounds(points, true),
+            Shape::LandscapeArea { boundary: points, .. }
+            | Shape::Hardscape { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. } => curve::bounds(points, true),
         }
     }
 
@@ -330,6 +435,7 @@ impl Shape {
             Shape::Polyline3d { points, closed: true } => Some(polygon_area_xy(points)),
             Shape::Polyline { points, closed: true }
             | Shape::LandscapeArea { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. }
             | Shape::Hardscape { boundary: points, .. } => Some(curve::area(points)),
             _ => None,
         }
@@ -434,6 +540,9 @@ pub struct Document {
     /// Where the drawing sits on the earth, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub georef: Option<crate::georef::Georeference>,
+    /// Reusable definitions, such as plant styles. Older files have none.
+    #[serde(default, skip_serializing_if = "Resources::is_empty")]
+    pub resources: Resources,
     #[serde(default)]
     next_id: u64,
 }
@@ -448,6 +557,7 @@ impl PartialEq for Document {
             && self.active_class == other.active_class
             && self.georef == other.georef
             && self.next_id == other.next_id
+            && self.resources == other.resources
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
     }
@@ -508,6 +618,7 @@ impl Default for Document {
             active_layer: FIRST_LAYER,
             active_class: NONE_CLASS,
             georef: None,
+            resources: Resources::default(),
             next_id: 2,
         }
     }
@@ -566,7 +677,8 @@ impl Document {
             .keys()
             .map(|id| id.0)
             .chain(self.layers.iter().map(|l| l.id.0))
-            .chain(self.classes.iter().map(|c| c.id.0));
+            .chain(self.classes.iter().map(|c| c.id.0))
+            .chain(self.resources.iter().map(|r| r.id.0));
         for id in ids {
             if !seen.insert(id) {
                 return Err(format!("duplicate id {id}"));
@@ -590,6 +702,7 @@ impl Document {
         }) {
             return Err(format!("object {} has an invalid shape", o.id));
         }
+        self.resources.validate()?;
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {
             return Err("active layer or class does not exist".into());
         }
@@ -1132,5 +1245,106 @@ mod tests {
         };
         let (lo, hi) = bulge.bounds();
         assert!((hi.y - 10.0).abs() < 1e-9 && lo.y == 0.0);
+    }
+
+    #[test]
+    fn existing_tree_and_plant_tag_basics() {
+        use crate::plants::tree::{TreeAction, TreeCondition};
+        let tree = Shape::ExistingTree {
+            at: v(10.0, 10.0),
+            species: "Oak".into(),
+            dbh: 500.0,
+            spread: 8000.0,
+            height: 12000.0,
+            condition: TreeCondition::Poor,
+            action: TreeAction::Relocate,
+            rpz_factor: None,
+            rpz_cap: None,
+        };
+        let tag = Shape::PlantTag { at: v(0.0, 100.0), anchor: v(-50.0, 0.0), style: ResourceId(3), height: 400.0 };
+        assert_eq!((tree.kind(), tag.kind()), ("existing_tree", "plant_tag"));
+        // The root protection zone (6000 mm) is larger than the canopy radius (4000 mm).
+        assert_eq!(tree.bounds(), (v(-5990.0, -5990.0), v(6010.0, 6010.0)));
+        let (lo, hi) = tag.bounds();
+        assert_eq!((lo, hi), (v(-50.0, 0.0), v(1920.0, 500.0)));
+        assert!(tree.is_finite() && tag.is_finite() && tree.is_in_range() && tag.is_in_range());
+        let mut moved = tree.clone();
+        moved.translate(v(1.0, 2.0));
+        assert_eq!(moved.bounds().0, v(-5989.0, -5988.0));
+        let mut moved = tag.clone();
+        moved.translate(v(1.0, 2.0));
+        assert!(matches!(moved, Shape::PlantTag { at, anchor, .. } if at == v(1.0, 102.0) && anchor == v(-49.0, 2.0)));
+        assert_eq!(tree.area(), None);
+        let odd = |dbh: f64, factor: Option<f64>| Shape::ExistingTree {
+            at: v(0.0, 0.0),
+            species: String::new(),
+            dbh,
+            spread: 1.0,
+            height: 1.0,
+            condition: Default::default(),
+            action: Default::default(),
+            rpz_factor: factor,
+            rpz_cap: None,
+        };
+        assert!(!odd(f64::NAN, None).is_finite());
+        assert!(!odd(1.0, Some(f64::INFINITY)).is_finite());
+        assert!(!odd(1.0, Some(2.0 * MAX_COORD)).is_in_range());
+        assert!(!Shape::PlantTag { at: v(0.0, 0.0), anchor: v(f64::NAN, 0.0), style: ResourceId(1), height: 1.0 }.is_finite());
+        assert!(!Shape::PlantTag { at: v(0.0, 0.0), anchor: v(2.0 * MAX_COORD, 0.0), style: ResourceId(1), height: 1.0 }.is_in_range());
+        // JSON: short names, defaults for the optional fields.
+        let j = serde_json::json!({"kind": "existing_tree", "at": [1, 2], "dbh": 300, "spread": 5000, "height": 9000});
+        let back: Shape = serde_json::from_value(j).unwrap();
+        assert!(matches!(back, Shape::ExistingTree { condition: TreeCondition::Fair, action: TreeAction::Retain, rpz_factor: None, .. }));
+        let j = serde_json::to_value(&tree).unwrap();
+        assert_eq!(j["action"], "relocate");
+        assert_eq!(serde_json::from_value::<Shape>(j).unwrap(), tree);
+        let j = serde_json::json!({"kind": "plant_tag", "at": [0, 0], "anchor": [1, 1], "style": 4});
+        assert!(matches!(serde_json::from_value::<Shape>(j).unwrap(), Shape::PlantTag { height, .. } if height == DEFAULT_TAG_HEIGHT));
+    }
+
+    #[test]
+    fn old_files_without_resources_load_and_plants_keep_their_fields() {
+        // A file from before plant styles: no `resources` key, and a plant with its own fields.
+        let old = serde_json::json!({
+            "format_version": 1,
+            "layers": [{"id": 1, "name": "Layer 1", "visible": true, "locked": false, "elevation": 0.0, "scale": 100.0}],
+            "classes": [{"id": 0, "name": "None", "visible": true, "attrs": {}}],
+            "objects": [{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "plant", "at": [1.0, 2.0], "species": "Quercus robur", "spread": 6000.0, "height": 12000.0}}],
+            "active_layer": 1,
+            "active_class": 0,
+            "next_id": 6
+        });
+        let doc = Document::from_value(old).unwrap();
+        assert!(doc.resources.is_empty());
+        let e = crate::plants::link::effective(&doc, doc.object(ObjectId(5)).unwrap()).unwrap();
+        assert_eq!((e.style_id, e.style.botanical_name.as_str(), e.style.spread, e.style.height), (None, "Quercus robur", 6000.0, 12000.0));
+        let s = crate::plants::schedule::schedule(&doc);
+        assert_eq!((s.rows[0].name.as_str(), s.rows[0].count), ("Quercus robur", 1));
+        // Saving a document without resources writes no `resources` key, so old apps still read it.
+        assert!(serde_json::to_value(&doc).unwrap().get("resources").is_none());
+    }
+
+    #[test]
+    fn resources_are_saved_loaded_and_checked() {
+        use crate::command::{Command, Editor};
+        use crate::resource::ResourceBody;
+        let mut ed = Editor::default();
+        let id = ed.execute(&Command::AddResource { name: "Oak".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0];
+        ed.execute(&Command::AddPlants { style: Some(ResourceId(id)), overrides: Default::default(), positions: vec![v(0.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
+        let text = serde_json::to_string(ed.doc()).unwrap();
+        let back = Document::from_json(&text).unwrap();
+        assert_eq!(&back, ed.doc());
+        // The ID of a resource is unique among all IDs, and the counter moves past it.
+        let mut j: Value = serde_json::from_str(&text).unwrap();
+        j["resources"][0]["id"] = serde_json::json!(1);
+        assert!(Document::from_value(j.clone()).unwrap_err().to_string().contains("duplicate id"));
+        j["resources"][0]["id"] = serde_json::json!(40);
+        j["next_id"] = serde_json::json!(0);
+        let mut loaded = Document::from_value(j).unwrap();
+        assert!(loaded.alloc_id().unwrap() > 40);
+        // A bad style stops the load.
+        let mut j: Value = serde_json::from_str(&text).unwrap();
+        j["resources"][0]["body"]["spread"] = serde_json::json!(-1.0);
+        assert!(matches!(Document::from_value(j), Err(LoadError::Invalid(_))));
     }
 }
