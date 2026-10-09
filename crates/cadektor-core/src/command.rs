@@ -13,6 +13,7 @@ use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
 mod plant_ops;
+mod record_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -152,6 +153,18 @@ pub enum Command {
         #[serde(default)]
         unlink: bool,
     },
+    /// Attach a record to objects. `values` are checked against the record format. Fields
+    /// without a value get the default. Each object can have a record once.
+    AttachRecord {
+        ids: Vec<ObjectId>,
+        record: ResourceId,
+        #[serde(default)]
+        values: serde_json::Map<String, Value>,
+    },
+    /// Remove a record and its values from objects.
+    DetachRecord { ids: Vec<ObjectId>, record: ResourceId },
+    /// Change field values of a record that is attached. Other fields stay unchanged.
+    SetRecordFields { ids: Vec<ObjectId>, record: ResourceId, values: serde_json::Map<String, Value> },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -501,6 +514,9 @@ impl<'a> Tx<'a> {
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| self.is_record_key(k)) {
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is a record. Use the record commands")));
+                }
                 if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
                     return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
                 }
@@ -602,6 +618,7 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            Command::AttachRecord { .. } | Command::DetachRecord { .. } | Command::SetRecordFields { .. } => self.run_record(cmd)?,
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;

@@ -23,6 +23,12 @@ impl std::fmt::Display for ResourceId {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResourceBody {
     PlantStyle(Box<PlantStyle>),
+    /// A record format: typed fields that can be attached to objects (see `crate::record`).
+    RecordFormat(Box<crate::record::RecordFormat>),
+    /// A Data Manager mapping table (see `crate::datamap`).
+    DataMap(Box<crate::datamap::DataMap>),
+    /// A worksheet definition. The core keeps it as JSON. `cadektor-sheet` reads and writes it.
+    Worksheet(serde_json::Value),
     Unknown(serde_json::Value),
 }
 
@@ -34,9 +40,17 @@ impl Serialize for ResourceBody {
                 v["type"] = "plant_style".into();
                 v.serialize(s)
             }
-            ResourceBody::Unknown(v) => v.serialize(s),
+            ResourceBody::RecordFormat(f) => tagged(f.as_ref(), "record_format", s),
+            ResourceBody::DataMap(m) => tagged(m.as_ref(), "data_map", s),
+            ResourceBody::Worksheet(v) | ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
+}
+
+fn tagged<T: Serialize, S: serde::Serializer>(body: &T, name: &str, s: S) -> Result<S::Ok, S::Error> {
+    let mut v = serde_json::to_value(body).map_err(serde::ser::Error::custom)?;
+    v["type"] = name.into();
+    v.serialize(s)
 }
 
 impl<'de> Deserialize<'de> for ResourceBody {
@@ -46,6 +60,9 @@ impl<'de> Deserialize<'de> for ResourceBody {
             Some("plant_style") => {
                 serde_json::from_value::<PlantStyle>(v).map(|s| ResourceBody::PlantStyle(Box::new(s))).map_err(serde::de::Error::custom)
             }
+            Some("record_format") => serde_json::from_value(v).map(|f| ResourceBody::RecordFormat(Box::new(f))).map_err(serde::de::Error::custom),
+            Some("data_map") => serde_json::from_value(v).map(|m| ResourceBody::DataMap(Box::new(m))).map_err(serde::de::Error::custom),
+            Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
             _ => Ok(ResourceBody::Unknown(v)),
         }
     }
@@ -61,6 +78,9 @@ impl ResourceBody {
     pub fn type_name(&self) -> &'static str {
         match self {
             ResourceBody::PlantStyle(_) => "plant_style",
+            ResourceBody::RecordFormat(_) => "record_format",
+            ResourceBody::DataMap(_) => "data_map",
+            ResourceBody::Worksheet(_) => "worksheet",
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -69,7 +89,10 @@ impl ResourceBody {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             ResourceBody::PlantStyle(s) => s.validate(),
-            ResourceBody::Unknown(_) => Ok(()),
+            ResourceBody::RecordFormat(f) => f.validate(),
+            ResourceBody::DataMap(m) => m.validate(),
+            ResourceBody::Worksheet(v) if !v.is_object() => Err("a worksheet is a JSON object".into()),
+            ResourceBody::Worksheet(_) | ResourceBody::Unknown(_) => Ok(()),
         }
     }
 }
@@ -121,7 +144,7 @@ impl Resources {
     pub fn plant_style(&self, id: ResourceId) -> Option<&PlantStyle> {
         match &self.get(id)?.body {
             ResourceBody::PlantStyle(s) => Some(s.as_ref()),
-            ResourceBody::Unknown(_) => None,
+            _ => None,
         }
     }
 
@@ -129,8 +152,16 @@ impl Resources {
     pub fn plant_styles(&self) -> impl Iterator<Item = (ResourceId, &str, &PlantStyle)> {
         self.0.iter().filter_map(|r| match &r.body {
             ResourceBody::PlantStyle(s) => Some((r.id, r.name.as_str(), s.as_ref())),
-            ResourceBody::Unknown(_) => None,
+            _ => None,
         })
+    }
+
+    /// The data map with this ID.
+    pub fn data_map(&self, id: ResourceId) -> Option<&crate::datamap::DataMap> {
+        match &self.get(id)?.body {
+            ResourceBody::DataMap(m) => Some(m.as_ref()),
+            _ => None,
+        }
     }
 
     /// The ID of the plant style with this name (compared without case).
@@ -221,6 +252,38 @@ mod tests {
         // A plant style with a bad field is an error.
         let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "plant_style", "spread": "wide"}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
+    }
+
+    #[test]
+    fn data_resources_round_trip() {
+        use crate::record::{FieldDef, FieldType, RecordFormat};
+        let fmt = RecordFormat { fields: vec![FieldDef::new("Depth", FieldType::Dimension)] };
+        let r = Resource { id: ResourceId(1), name: "Soil".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) };
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["body"]["type"], "record_format");
+        assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), r);
+        assert_eq!(r.body.type_name(), "record_format");
+        let m = Resource { id: ResourceId(2), name: "Map".into(), body: ResourceBody::DataMap(Box::new(crate::datamap::DataMap::landscape_template())) };
+        let j = serde_json::to_value(&m).unwrap();
+        assert_eq!(j["body"]["type"], "data_map");
+        assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), m);
+        assert!(m.body.validate().is_ok());
+        let mut store = Resources::default();
+        store.push(m);
+        assert!(store.data_map(ResourceId(2)).is_some());
+        assert!(store.data_map(ResourceId(1)).is_none());
+        let w = Resource { id: ResourceId(3), name: "Sheet".into(), body: ResourceBody::Worksheet(serde_json::json!({"type": "worksheet", "cells": {}})) };
+        let j = serde_json::to_value(&w).unwrap();
+        assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), w);
+        assert_eq!(w.body.type_name(), "worksheet");
+        assert!(w.body.validate().is_ok());
+        assert!(ResourceBody::Worksheet(serde_json::json!(5)).validate().is_err());
+        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "record_format", "fields": 5}});
+        assert!(serde_json::from_value::<Resource>(bad).is_err());
+        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "data_map", "rules": 5}});
+        assert!(serde_json::from_value::<Resource>(bad).is_err());
+        let bad_fmt = ResourceBody::RecordFormat(Box::new(RecordFormat { fields: vec![FieldDef::new("", FieldType::Text)] }));
+        assert!(bad_fmt.validate().is_err());
     }
 
     #[test]

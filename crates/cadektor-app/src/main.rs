@@ -4,6 +4,7 @@ mod agent;
 mod canvas;
 mod canvas3d;
 mod databar;
+mod data_ui;
 mod file_io;
 mod gpu3d;
 mod hit;

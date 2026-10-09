@@ -594,6 +594,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         *edit = InfoEdit::default();
         return;
     };
+    if crate::data_ui::info_tab(ui, session, &sel, status) {
+        *edit = InfoEdit::default();
+        return;
+    }
     if sel.len() > 1 {
         ui.label(format!("{} objects selected", sel.len()));
         *edit = InfoEdit::default();

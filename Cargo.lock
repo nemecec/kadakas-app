@@ -473,6 +473,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-io",
  "cadektor-render",
+ "cadektor-sheet",
  "cadektor-site",
  "glam",
  "png",
@@ -488,6 +489,7 @@ dependencies = [
  "cadektor-api",
  "cadektor-core",
  "cadektor-render",
+ "cadektor-sheet",
  "cadektor-site",
  "eframe",
  "egui",
@@ -542,6 +544,16 @@ dependencies = [
  "glam",
  "png",
  "proptest",
+]
+
+[[package]]
+name = "cadektor-sheet"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

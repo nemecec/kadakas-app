@@ -656,10 +656,12 @@ impl eframe::App for CadektorApp {
                 panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
                 ui.add_space(12.0);
                 plant_ui::resource_manager(ui, &mut self.session, &mut self.plant_ui, &mut self.status);
+                crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
                 ui.add_space(12.0);
                 plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
             });
         });
+        crate::data_ui::windows(&ctx, &mut self.session, &mut self.status);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             if self.plan() {
                 self.canvas(ui);

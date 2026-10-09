@@ -4,12 +4,15 @@
 
 pub mod command;
 pub mod curve;
+pub mod datamap;
 pub mod fsio;
 pub mod geom;
 pub mod georef;
 pub mod mesh;
 pub mod model;
 pub mod plants;
+pub mod props;
+pub mod record;
 pub mod resource;
 pub mod site;
 pub mod svg;
