@@ -8,6 +8,8 @@ use cadektor_render::{Projection, RenderMode, StandardView, ViewSettings};
 use egui::{DragValue, Ui};
 use glam::DVec2;
 
+use cadektor_core::plants::tree::{DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
+
 use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::keymap::{Action, Keymap};
@@ -166,7 +168,7 @@ pub fn vertex_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, keys: &Keymap) 
     });
 }
 
-pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mut ToolSettings) {
+pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mut ToolSettings, doc: &cadektor_core::model::Document) {
     ui.heading("Tools");
     ui.separator();
     ui.label("Basic");
@@ -180,6 +182,10 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mu
     }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
+    }
+    if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
+        // A new mode starts a new placement.
+        m.cancel();
     }
 }
 
@@ -461,6 +467,44 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.scalar(ui, "Spread", spread, 50.0);
             f.scalar(ui, "Height", height, 50.0);
         }
+        Shape::ExistingTree { at, species, dbh, spread, height, condition, action, rpz_factor } => {
+            f.xy(ui, "Position", at);
+            f.text(ui, "Species", species);
+            f.scalar(ui, "Trunk diameter", dbh, 10.0);
+            f.scalar(ui, "Canopy spread", spread, 50.0);
+            f.scalar(ui, "Height", height, 50.0);
+            ui.label("Condition");
+            let before = *condition;
+            egui::ComboBox::from_id_salt("tree_condition").selected_text(condition.id()).show_ui(ui, |ui| {
+                for c in TreeCondition::ALL {
+                    ui.selectable_value(condition, c, c.id());
+                }
+            });
+            f.commit |= *condition != before;
+            ui.end_row();
+            ui.label("Action");
+            let before = *action;
+            egui::ComboBox::from_id_salt("tree_action").selected_text(action.id()).show_ui(ui, |ui| {
+                for a in TreeAction::ALL {
+                    ui.selectable_value(action, a, a.id());
+                }
+            });
+            f.commit |= *action != before;
+            ui.end_row();
+            ui.label("Root zone factor");
+            let mut factor = rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR);
+            let r = ui.add(DragValue::new(&mut factor).speed(0.1).range(0.0..=100.0).suffix(" x DBH"));
+            if r.changed() {
+                *rpz_factor = Some(factor);
+            }
+            f.commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+        }
+        Shape::PlantTag { at, anchor, height, .. } => {
+            f.xy(ui, "Label position", at);
+            f.xy(ui, "Leader end", anchor);
+            f.scalar(ui, "Text height", height, 5.0);
+        }
         Shape::LandscapeArea { boundary, name } => {
             f.text(ui, "Name", name);
             f.count(ui, boundary.len());
@@ -538,6 +582,9 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     if let Some(area) = obj.shape.area() {
         ui.label(format!("Area {:.2} m\u{b2}", area / 1e6));
+    }
+    if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
+        crate::plant_ui::plant_object_info(ui, session, id, status);
     }
     ui.separator();
     class_layer_combos(ui, session, &sel, status);
@@ -782,7 +829,7 @@ mod tests {
                 machine.set_tool(tool);
                 let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                     object_info(ui, &mut s, &mut edit, &mut status);
-                    tool_panel(ui, &mut machine, &keys, &mut settings);
+                    tool_panel(ui, &mut machine, &keys, &mut settings, &Default::default());
                 });
             }
         }

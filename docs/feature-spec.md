@@ -145,7 +145,7 @@ Non-goals
 | UI-02 | Tool palettes grouped as tool sets. | P0 | planned |
 | UI-03 | Object Info palette (Shape, Data, Render tabs). | P0 | planned |
 | UI-04 | Navigation palette (classes, layers, sheets, viewports, views). | P0 | planned |
-| UI-05 | Resource Manager palette. | P1 | planned |
+| UI-05 | Resource Manager palette (plant styles; other resource types follow). | P1 | done |
 | UI-06 | Quick search for commands. | P1 | planned |
 | UI-07 | Dockable, saveable layouts. | P1 | planned |
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
@@ -181,17 +181,25 @@ Non-goals
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | PLT-01 | Plant shape: position, species, spread, height. | P0 | done |
-| PLT-02 | Plant report (counts by species) via `report.plants`. | P0 | done |
-| PLT-03 | Plant style resource (name, ID, spread, height). | P0 | planned |
-| PLT-04 | Plant database fields (botanical/common name, images, maintenance, water need). | P1 | planned |
-| PLT-05 | 2D plant symbol rendering. | P0 | planned |
-| PLT-06 | Plant tags (three levels, quantity or ID bubble). | P1 | planned |
-| PLT-07 | Plant Style Manager (batch spreadsheet editing). | P1 | planned |
-| PLT-08 | Create plant styles from a list (CSV mapping). | P1 | planned |
-| PLT-09 | 3D plant representation (symbol, billboard, geometry). | P1 | planned |
+| PLT-02 | Plant report (counts by species) via `report.plants`. Rows of plants with a style also give style, ID code and prices. | P0 | done |
+| PLT-03 | Plant style resource (name, ID, spread, height, category, 2D graphic, 3D form, colors, price). Plants refer to a style and can override fields. Undoable add, edit and delete. A style in use cannot be deleted unless the plants are reassigned. | P0 | done |
+| PLT-04 | Plant database fields: botanical and common name, size, container, root type and custom fields. | P1 | done |
+| PLT-05 | 2D plant symbol rendering: generated outlines (circle, cloud, star, spokes, rosette, clover) with style colors. | P0 | done |
+| PLT-06 | Plant tags: a tag object with a leader line shows the ID code and the count of a style on its layer. The position is editable. | P1 | done |
+| PLT-07 | Resource Manager palette for plant styles: list, create, edit, duplicate, delete, CSV import and export. | P1 | done |
+| PLT-08 | Create plant styles from a list (CSV mapping): columns by header or explicit mapping, units per column, skip or update duplicates, and CSV export. | P1 | done |
+| PLT-09 | 3D plant representation as generated geometry: tree, columnar, conical, spreading and shrub mound forms. | P1 | done |
 | PLT-10 | Place plants on terrain height. | P1 | planned |
-| PLT-11 | Plant schedule worksheet. | P0 | planned |
-| PLT-12 | Import plant data from nursery lists. | P2 | planned |
+| PLT-11 | Plant schedule: live `report.plant_schedule` with counts and prices, CSV export and a palette in the app. | P0 | done |
+| PLT-12 | Import plant data from nursery lists as CSV (see PLT-08). | P2 | done |
+| PLT-13 | Plant tool modes: single, along a path (spacing, count or both), rectangular grid, triangular grid, fill an area (spacing, count or density) and poly. One undo step per placement. The placement math is a pure, tested module. | P0 | done |
+| PLT-14 | Existing trees: trunk diameter (DBH), canopy spread, height, condition, action (retain, remove, relocate) and a root protection zone of 12 x DBH (configurable per tree). The zone is drawn dashed. Trees to remove are drawn dashed with a cross. `report.existing_trees` lists them. | P0 | done |
+| PLT-15 | Plant styles in files: a document `resources` list. Old files load unchanged. Plants without a style keep their own species, spread and height. | P0 | done |
+| PLT-16 | Plant images, maintenance and irrigation fields in plant styles. | P1 | planned |
+| PLT-17 | Plant tags with three levels of fields and an ID bubble. | P1 | planned |
+| PLT-18 | Plant style spreadsheet view for batch editing. | P1 | planned |
+| PLT-19 | 3D plants from symbols and billboards. | P2 | planned |
+| PLT-20 | Copy plant data from partner nursery sites. | P2 | planned |
 
 ### 4.7 Landscape areas
 
@@ -349,6 +357,7 @@ Non-goals
 | API-06 | `selection.get`, `selection.set`. | P0 | done |
 | API-07 | `render.svg`. | P0 | done |
 | API-08 | `report.plants`, `report.areas`. | P0 | done |
+| API-40 | Plant methods: `plant_style.*` (list, get, create, update, duplicate, delete, import_csv, export_csv, sample_csv), `plants.place`, `plants.set_style`, `report.plant_schedule`, `report.existing_trees`. Existing trees and plant tags are shapes that `execute` adds. | P0 | done |
 | API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |

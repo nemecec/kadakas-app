@@ -6,7 +6,9 @@
 //! - Hardscape: a slab. The top surface is at `elevation` (default 0) above the
 //!   layer, and the slab is `thickness` (default 150 mm) thick, below the top.
 //! - Landscape area, rect, circle, closed polyline: a flat face at the layer elevation.
-//! - Plant: a trunk and an ellipsoid canopy. The plant is `height` tall and `spread` wide.
+//! - Plant: a trunk and a canopy. The plant is `height` tall and `spread` wide. The canopy follows the
+//!   form of the plant style: tree (ellipsoid), columnar, conical, spreading or shrub mound.
+//! - Existing tree: like a tree plant, with a trunk as thick as its trunk diameter.
 //! - Line, arc, open polyline: 3D line segments.
 //!
 //! Every face and slab also adds its outline to the line list.
@@ -22,6 +24,8 @@ use glam::{DVec2, DVec3, Vec3};
 use indexmap::IndexMap;
 
 use crate::curve;
+use crate::plants::link;
+use crate::plants::style::PlantForm;
 use crate::model::{Color, Document, Layer, LayerKind, Object, ObjectId, Shape, arc_sweep};
 
 /// Thickness of a hardscape slab when the shape does not say.
@@ -451,8 +455,26 @@ impl Builder<'_> {
                 let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
                 self.slab(&ring, top, thickness, fill.unwrap_or(HARDSCAPE_DEFAULT), edge, id);
             }
-            Shape::Plant { at, spread, height, .. } => self.plant(*at, *spread, *height, z, fill, edge, &obj.shape, id),
-            Shape::Text { .. } => {}
+            Shape::Plant { at, spread, height, species } => {
+                // A plant with a style takes its form and colors from the effective style.
+                let e = link::effective(self.doc, obj).expect("a plant");
+                let color = fill.or(e.style.fill.map(rgba)).unwrap_or_else(|| species_color(species));
+                let edge = if pen.is_none() { e.style.pen.map(rgba).unwrap_or(edge) } else { edge };
+                let build = PlantBuild { at: *at, spread: *spread, height: *height, form: e.style.form, color, trunk_radius: None };
+                self.plant(&build, z, edge, id);
+            }
+            Shape::ExistingTree { at, species, dbh, spread, height, .. } => {
+                let build = PlantBuild {
+                    at: *at,
+                    spread: *spread,
+                    height: *height,
+                    form: PlantForm::Tree,
+                    color: fill.unwrap_or_else(|| species_color(species)),
+                    trunk_radius: Some(dbh / 2.0),
+                };
+                self.plant(&build, z, edge, id);
+            }
+            Shape::Text { .. } | Shape::PlantTag { .. } => {}
             Shape::Locus3d { p } => {
                 let h = crate::model::LOCUS_MARKER_HALF;
                 let c = pen.unwrap_or([0, 0, 0, 255]);
@@ -536,59 +558,99 @@ impl Builder<'_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn plant(&mut self, at: DVec2, spread: f64, height: f64, z: f64, fill: Option<[u8; 4]>, edge: [u8; 4], shape: &Shape, id: ObjectId) {
+    /// A plant: a trunk and a canopy whose outline depends on the form (see `PlantForm`).
+    /// The canopy is the unit sphere, moved vertex by vertex into the form.
+    fn plant(&mut self, p: &PlantBuild, z: f64, edge: [u8; 4], id: ObjectId) {
+        let PlantBuild { at, spread, height, form, color, trunk_radius } = *p;
         if !(spread > 0.0 && height > 0.0) {
             return;
         }
         let o = self.origin;
-        let species_hash = match shape {
-            Shape::Plant { species, .. } => species.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)),
-            _ => 0,
-        };
-        let canopy_color = fill.unwrap_or([
-            (52 + species_hash % 40) as u8,
-            (118 + (species_hash >> 4) % 50) as u8,
-            (48 + (species_hash >> 9) % 30) as u8,
-            255,
-        ]);
         let r = spread / 2.0;
-        let canopy_bottom = z + height * 0.3;
-        let canopy_h = height * 0.7;
-        let center = v3(o, at, canopy_bottom + canopy_h / 2.0);
-        let radii = Vec3::new(r as f32, r as f32, (canopy_h / 2.0) as f32);
+        // Where the canopy starts (as a fraction of the height), and where the trunk ends.
+        let (bottom_frac, trunk_frac) = match form {
+            PlantForm::Tree => (0.3, 0.65),
+            PlantForm::Columnar => (0.1, 0.3),
+            PlantForm::Conical => (0.08, 0.2),
+            PlantForm::Spreading => (0.5, 0.6),
+            PlantForm::ShrubMound => (0.0, 0.0),
+        };
+        let canopy_bottom = z + height * bottom_frac;
+        let canopy_h = height * (1.0 - bottom_frac);
+        let center_z = canopy_bottom + canopy_h / 2.0;
 
         let mesh = &mut self.scene.mesh;
-        // Trunk: a prism from the ground into the canopy.
-        let trunk_r = (spread * 0.04).clamp(15.0, 300.0).min(r * 0.5);
-        let trunk_top = z + height * 0.65;
-        let base = mesh.positions.len() as u32;
-        for s in 0..TRUNK_SIDES {
-            let a = std::f64::consts::TAU * s as f64 / TRUNK_SIDES as f64;
-            let dir = DVec2::from_angle(a);
-            let n = Vec3::new(dir.x as f32, dir.y as f32, 0.0);
-            mesh.vertex(v3(o, at + dir * trunk_r, z), n, TRUNK);
-            mesh.vertex(v3(o, at + dir * trunk_r, trunk_top), n, TRUNK);
+        if trunk_frac > 0.0 {
+            // Trunk: a prism from the ground into the canopy.
+            let trunk_r = trunk_radius.unwrap_or((spread * 0.04).clamp(15.0, 300.0)).min(r * 0.5);
+            let trunk_top = z + height * trunk_frac;
+            let base = mesh.positions.len() as u32;
+            for s in 0..TRUNK_SIDES {
+                let a = std::f64::consts::TAU * s as f64 / TRUNK_SIDES as f64;
+                let dir = DVec2::from_angle(a);
+                let n = Vec3::new(dir.x as f32, dir.y as f32, 0.0);
+                mesh.vertex(v3(o, at + dir * trunk_r, z), n, TRUNK);
+                mesh.vertex(v3(o, at + dir * trunk_r, trunk_top), n, TRUNK);
+            }
+            for s in 0..TRUNK_SIDES {
+                let s2 = (s + 1) % TRUNK_SIDES;
+                let (b0, t0, b1, t1) = (base + 2 * s as u32, base + 2 * s as u32 + 1, base + 2 * s2 as u32, base + 2 * s2 as u32 + 1);
+                mesh.tri(b0, b1, t1, id);
+                mesh.tri(b0, t1, t0, id);
+            }
         }
-        for s in 0..TRUNK_SIDES {
-            let s2 = (s + 1) % TRUNK_SIDES;
-            let (b0, t0, b1, t1) = (base + 2 * s as u32, base + 2 * s as u32 + 1, base + 2 * s2 as u32, base + 2 * s2 as u32 + 1);
-            mesh.tri(b0, b1, t1, id);
-            mesh.tri(b0, t1, t0, id);
-        }
-        // Canopy: the unit sphere scaled to the ellipsoid. A normal scales with the inverse radii.
+        // Canopy. A normal of an ellipsoid scales with the inverse radii. A cone has slanted sides.
+        let radii = Vec3::new(r as f32, r as f32, (canopy_h / 2.0) as f32);
+        let center = v3(o, at, center_z);
+        let place = |p: Vec3| -> (Vec3, Vec3) {
+            match form {
+                PlantForm::Conical => {
+                    // t runs from 0 at the base to 1 at the tip. The radius shrinks with t.
+                    let t = (p.z + 1.0) / 2.0;
+                    let dir = Vec3::new(p.x, p.y, 0.0).normalize_or_zero();
+                    let pos = center + dir * radii.x * (1.0 - t) + Vec3::new(0.0, 0.0, p.z * radii.z);
+                    (pos, Vec3::new(dir.x * radii.z, dir.y * radii.z, radii.x).normalize_or_zero())
+                }
+                PlantForm::ShrubMound => {
+                    // The lower half is squashed flat onto the ground.
+                    let up = p.z.max(0.0);
+                    let n = (Vec3::new(p.x, p.y, up) / Vec3::new(radii.x, radii.y, radii.z * 2.0)).normalize_or_zero();
+                    (center + Vec3::new(p.x * radii.x, p.y * radii.y, (up * 2.0 - 1.0) * radii.z), n)
+                }
+                _ => (center + p * radii, (p / radii).normalize_or_zero()),
+            }
+        };
         let base = mesh.positions.len() as u32;
         for p in &self.sphere.verts {
-            let n = (*p / radii).normalize_or_zero();
-            mesh.vertex(center + *p * radii, n, canopy_color);
+            let (pos, n) = place(*p);
+            mesh.vertex(pos, n, color);
         }
         for [a, b, c] in &self.sphere.tris {
             mesh.tri(base + a, base + b, base + c, id);
         }
         // Edges: the canopy at its widest.
-        let ring: Vec<Vec3> = (0..SPHERE_SEGMENTS).map(|s| self.sphere.verts[SPHERE_RINGS / 2 * SPHERE_SEGMENTS + s] * radii + center).collect();
+        let ring_index = if form == PlantForm::Conical { 1 } else { SPHERE_RINGS / 2 };
+        let ring: Vec<Vec3> = (0..SPHERE_SEGMENTS).map(|s| place(self.sphere.verts[ring_index * SPHERE_SEGMENTS + s]).0).collect();
         self.scene.lines.polyline(&ring, true, edge, id);
     }
+}
+
+/// What the mesh builder needs to know about a plant.
+#[derive(Clone, Copy)]
+struct PlantBuild {
+    at: DVec2,
+    spread: f64,
+    height: f64,
+    form: PlantForm,
+    color: [u8; 4],
+    /// Trunk radius, or `None` for a size that follows the spread.
+    trunk_radius: Option<f64>,
+}
+
+/// A canopy color from the species name, so that species look different.
+fn species_color(species: &str) -> [u8; 4] {
+    let h = species.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+    [(52 + h % 40) as u8, (118 + (h >> 4) % 50) as u8, (48 + (h >> 9) % 30) as u8, 255]
 }
 
 /// The visible design-layer objects with their layers. Objects with numbers that the document
@@ -1063,5 +1125,103 @@ mod tests {
         let s = Scene::default();
         assert!(s.is_empty());
         assert!(s.bounds.is_none());
+    }
+
+    fn styled_plant(form: PlantForm, spread: f64, height: f64) -> (Editor, ObjectId) {
+        use crate::plants::style::PlantStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::default();
+        let style = PlantStyle { form, spread, height, ..PlantStyle::default() };
+        let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        let out = ed
+            .execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::new(1000.0, 2000.0)], layer: None, class: None })
+            .unwrap();
+        (ed, ObjectId(out.created[0]))
+    }
+
+    #[test]
+    fn every_plant_form_fits_its_spread_and_height() {
+        for form in PlantForm::ALL {
+            let (ed, id) = styled_plant(form, 3000.0, 6000.0);
+            let scene = build(ed.doc());
+            let (lo, hi) = world_bounds(&scene, id);
+            assert!((hi.z - 6000.0).abs() < 1.0, "{form:?} top {}", hi.z);
+            assert!(lo.z.abs() < 1.0, "{form:?} bottom {}", lo.z);
+            assert!(hi.x - lo.x <= 3000.0 + 1.0 && hi.x - lo.x > 2500.0, "{form:?} width {}", hi.x - lo.x);
+            assert!(((lo.x + hi.x) / 2.0 - 1000.0).abs() < 1.0 && ((lo.y + hi.y) / 2.0 - 2000.0).abs() < 1.0);
+            assert!(scene.mesh.triangle_count() > 10);
+            for n in &scene.mesh.normals {
+                assert!((n.length() - 1.0).abs() < 1e-3 || n.length() == 0.0, "{form:?} normal {n:?}");
+            }
+            assert!(scene.lines.segment_count() > 0);
+        }
+    }
+
+    #[test]
+    fn plant_forms_differ_in_shape() {
+        let positions = |f| build(styled_plant(f, 3000.0, 6000.0).0.doc()).mesh.positions.clone();
+        let tree = positions(PlantForm::Tree);
+        for f in [PlantForm::Columnar, PlantForm::Conical, PlantForm::Spreading, PlantForm::ShrubMound] {
+            assert_ne!(positions(f), tree, "{f:?}");
+        }
+        // A mound has no trunk, so it has fewer triangles than a tree.
+        let tris = |f| build(styled_plant(f, 3000.0, 600.0).0.doc()).mesh.triangle_count();
+        assert!(tris(PlantForm::ShrubMound) < tris(PlantForm::Tree));
+    }
+
+    #[test]
+    fn style_fill_colors_the_canopy_and_the_object_fill_wins() {
+        use crate::model::Attributes;
+        use crate::plants::style::PlantStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::default();
+        let style = PlantStyle { fill: Some(Color([200, 10, 20, 255])), ..PlantStyle::default() };
+        let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        ed.execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None }).unwrap();
+        let scene = build(ed.doc());
+        assert!(scene.mesh.colors.contains(&[200, 10, 20, 255]));
+        let id = *ed.doc().objects.keys().next().unwrap();
+        ed.execute(&Command::ModifyObject { id, shape: None, layer: None, class: None, attrs: Some(Attributes { fill: Some(Color([1, 2, 3, 255])), ..Default::default() }) }).unwrap();
+        let scene = build(ed.doc());
+        assert!(scene.mesh.colors.contains(&[1, 2, 3, 255]) && !scene.mesh.colors.contains(&[200, 10, 20, 255]));
+    }
+
+    #[test]
+    fn existing_tree_has_a_trunk_as_thick_as_its_dbh() {
+        let mut ed = Editor::default();
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::ExistingTree {
+                    at: DVec2::new(0.0, 0.0),
+                    species: "Quercus".into(),
+                    dbh: 600.0,
+                    spread: 8000.0,
+                    height: 14000.0,
+                    condition: Default::default(),
+                    action: Default::default(),
+                    rpz_factor: None,
+                },
+                layer: None,
+                class: None,
+                attrs: crate::model::Attributes::default(),
+            })
+            .unwrap();
+        let scene = build_at(ed.doc(), DVec3::ZERO);
+        let (lo, hi) = world_bounds(&scene, ObjectId(out.created[0]));
+        assert!((hi.z - 14000.0).abs() < 1.0 && (hi.x - lo.x - 8000.0).abs() < 1.0);
+        // The trunk vertices are 300 mm from the axis.
+        let on_trunk = scene.mesh.positions.iter().filter(|p| (p.x as f64).hypot(p.y as f64).round() == 300.0).count();
+        assert!(on_trunk >= 16, "{on_trunk}");
+    }
+
+    #[test]
+    fn tags_make_no_mesh() {
+        let mut ed = Editor::default();
+        let sid = {
+            use crate::resource::ResourceBody;
+            crate::resource::ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0])
+        };
+        ed.execute(&Command::AddObject { shape: Shape::PlantTag { at: DVec2::ZERO, anchor: DVec2::new(5.0, 5.0), style: sid, height: 400.0 }, layer: None, class: None, attrs: crate::model::Attributes::default() }).unwrap();
+        assert!(build(ed.doc()).mesh.triangle_count() == 0);
     }
 }

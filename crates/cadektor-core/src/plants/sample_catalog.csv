@@ -1,0 +1,9 @@
+Style name,Botanical name,Common name,Tag ID,Category,Spread (m),Height (m),Graphic,Form,Fill,Price,Size,Container,Root type,Water need
+Field maple,Acer campestre,Field maple,AC,tree,7,12,cloud,tree,#5E9B4A,185.00,16-18 cm girth,RB,balled,low
+Silver birch,Betula pendula,Silver birch,BP,tree,5,14,star,columnar,#7CB86A,140.00,14-16 cm girth,RB,bare root,medium
+Scots pine,Pinus sylvestris,Scots pine,PS,tree,6,16,spokes,conical,#3F7A4C,210.00,250-300 cm,RB,balled,low
+Common box,Buxus sempervirens,Box,BS,shrub,1.2,1.0,circle,shrub_mound,#2F6B3A,24.50,40-50 cm,C5,container,medium
+Dogwood,Cornus alba,Red-barked dogwood,CA,shrub,2.5,2.5,rosette,spreading,#8FBF73,18.00,60-80 cm,C3,bare root,medium
+Lavender,Lavandula angustifolia,English lavender,LA,perennial,0.6,0.5,rosette,shrub_mound,#9A8FCB,6.40,P9,P9,container,low
+Feather reed grass,Calamagrostis x acutiflora,Feather reed grass,CX,grass,0.8,1.4,spokes,shrub_mound,#C9B56A,9.75,P11,C2,container,medium
+Creeping thyme,Thymus serpyllum,Wild thyme,TS,groundcover,0.4,0.1,clover,shrub_mound,#B08FB5,3.20,P9,P9,container,low

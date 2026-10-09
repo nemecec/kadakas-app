@@ -68,7 +68,8 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
         Shape::Locus3d { p } => out.push((p.truncate(), Vertex)),
         Shape::Polyline3d { points, .. } => out.extend(points.iter().map(|p| (p.truncate(), Vertex))),
         Shape::Text { at, .. } => out.push((*at, Vertex)),
-        Shape::Plant { at, .. } => out.push((*at, Center)),
+        Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => out.push((*at, Center)),
+        Shape::PlantTag { at, anchor, .. } => out.extend([(*at, Vertex), (*anchor, Vertex)]),
     }
 }
 
@@ -155,5 +156,29 @@ mod tests {
         assert_eq!(all.len(), 6);
         assert!(all.contains(&(DVec2::new(50.0, 25.0), SnapKind::Center)));
         assert_eq!(snap_points(s.editor.doc(), &[a]).len(), 1);
+    }
+
+    #[test]
+    fn trees_and_tags_have_snap_points() {
+        use cadektor_core::plants::tree::{TreeAction, TreeCondition};
+        let mut out = Vec::new();
+        shape_snap_points(
+            &Shape::ExistingTree {
+                at: DVec2::new(1.0, 2.0),
+                species: String::new(),
+                dbh: 300.0,
+                spread: 4000.0,
+                height: 9000.0,
+                condition: TreeCondition::Good,
+                action: TreeAction::Retain,
+                rpz_factor: None,
+            },
+            &mut out,
+        );
+        shape_snap_points(
+            &Shape::PlantTag { at: DVec2::new(5.0, 5.0), anchor: DVec2::new(6.0, 6.0), style: cadektor_core::resource::ResourceId(1), height: 400.0 },
+            &mut out,
+        );
+        assert_eq!(out.iter().map(|p| p.0).collect::<Vec<_>>(), vec![DVec2::new(1.0, 2.0), DVec2::new(5.0, 5.0), DVec2::new(6.0, 6.0)]);
     }
 }

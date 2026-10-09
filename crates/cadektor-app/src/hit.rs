@@ -55,6 +55,14 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             edge_dist(&flat, *closed, p) <= tol || (*closed && filled && point_in_polygon(p, &flat))
         }
         Shape::Plant { at, spread, .. } => p.distance(*at) <= spread / 2.0 + tol,
+        // The canopy picks the tree. The root protection zone does not, so it never hides what is under it.
+        Shape::ExistingTree { at, spread, .. } => p.distance(*at) <= spread / 2.0 + tol,
+        Shape::PlantTag { at, anchor, height, .. } => {
+            // The label is about eight characters wide.
+            let label_end = *at + DVec2::new(height * 0.6 * 8.0, *height);
+            let in_label = p.cmpge(*at - tol).all() && p.cmple(label_end + tol).all();
+            in_label || dist_to_segment(p, *anchor, *at) <= tol
+        }
         Shape::Text { .. } => {
             let (lo, hi) = shape.bounds();
             p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
@@ -212,5 +220,27 @@ mod tests {
         let area = Shape::Hardscape { boundary: shape.vertices().unwrap().clone(), material: "m".into(), thickness: None, elevation: None };
         assert!(shape_hit(&area, false, DVec2::new(500.0, 500.0), 5.0));
         assert!(!shape_hit(&area, false, DVec2::new(-20.0, -20.0), 5.0));
+    }
+
+    #[test]
+    fn existing_trees_pick_by_canopy_and_tags_by_label_or_leader() {
+        use cadektor_core::plants::tree::{TreeAction, TreeCondition};
+        let tree = Shape::ExistingTree {
+            at: DVec2::ZERO,
+            species: String::new(),
+            dbh: 500.0,
+            spread: 4000.0,
+            height: 9000.0,
+            condition: TreeCondition::Good,
+            action: TreeAction::Retain,
+            rpz_factor: None,
+        };
+        assert!(shape_hit(&tree, false, DVec2::new(1900.0, 0.0), 5.0));
+        // The root protection zone (6000 mm) does not pick the tree.
+        assert!(!shape_hit(&tree, false, DVec2::new(3000.0, 0.0), 5.0));
+        let tag = Shape::PlantTag { at: DVec2::new(1000.0, 1000.0), anchor: DVec2::ZERO, style: cadektor_core::resource::ResourceId(1), height: 400.0 };
+        assert!(shape_hit(&tag, false, DVec2::new(1500.0, 1200.0), 5.0), "label");
+        assert!(shape_hit(&tag, false, DVec2::new(500.0, 500.0), 5.0), "leader");
+        assert!(!shape_hit(&tag, false, DVec2::new(-500.0, 500.0), 5.0));
     }
 }

@@ -6,6 +6,7 @@ use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
 
+use crate::plant_draw;
 use crate::snap::SnapResult;
 use crate::tess;
 use crate::tools::Preview;
@@ -38,6 +39,7 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
             Shape::LandscapeArea { .. } => tinted([80, 170, 80, 90]),
             Shape::Hardscape { .. } => tinted([175, 150, 115, 130]),
             Shape::Plant { .. } => tinted([70, 150, 70, 70]),
+            Shape::ExistingTree { .. } => tinted([110, 130, 110, 50]),
             _ => fill,
         };
     }
@@ -133,6 +135,40 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             fill_polygon(painter, &flat, &sp, st.fill);
             path(&flat, true);
         }
+        Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
+        Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+    }
+}
+
+/// Draws an object. Plants and tags need the document: a plant draws the outline and colors
+/// of its style, and a tag shows the live ID code and count.
+pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, st: Style, offset: DVec2) {
+    match &o.shape {
+        Shape::Plant { at, spread, .. } => {
+            let Some(e) = cadektor_core::plants::link::effective(doc, o) else { return };
+            // The colors of the style apply when the object has none of its own.
+            let soft = |c: Color| {
+                let [r, g, b, a] = c.0;
+                Color32::from_rgba_unmultiplied(r, g, b, a.min(110))
+            };
+            let mut st = st;
+            if o.attrs.fill.is_none()
+                && let Some(c) = e.style.fill
+            {
+                st.fill = soft(c);
+            }
+            if o.attrs.pen.is_none()
+                && let Some(c) = e.style.pen
+            {
+                st.pen = color32(c);
+            }
+            plant_draw::draw_plant(painter, view, e.style.graphic, *at, *spread, st, offset);
+        }
+        Shape::PlantTag { at, anchor, height, .. } => {
+            let text = cadektor_core::plants::schedule::tag_info(doc, o.id).map_or_else(|| "?".to_string(), |t| t.text());
+            plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
+        }
+        shape => draw_shape(painter, view, shape, st, offset),
     }
 }
 
@@ -193,7 +229,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         let selected = f.selection.contains(&o.id);
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
-        draw_shape(&painter, view, &o.shape, st, DVec2::ZERO);
+        draw_object(&painter, view, f.doc, o, st, DVec2::ZERO);
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
             draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
@@ -248,7 +284,7 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
         }
         Preview::Move { ids, delta } => {
             for o in f.doc.objects.values().filter(|o| ids.contains(&o.id)) {
-                draw_shape(painter, view, &o.shape, st, *delta);
+                draw_object(painter, view, f.doc, o, st, *delta);
             }
         }
     }

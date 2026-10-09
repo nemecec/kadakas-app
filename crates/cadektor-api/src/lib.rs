@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod plants_api;
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -68,8 +70,22 @@ pub const METHODS: &[(&str, &str)] = &[
     ("render.png", "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}."),
     ("view.list", "Standard 3D views, projections and render modes, and the current view."),
     ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
-    ("report.plants", "Plant schedule: count by species."),
+    ("report.plants", "Plant schedule: count by species. Rows of plants with a style also have style, style_name, id_code and prices (see report.plant_schedule)."),
     ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
+    // Plants (see plants_api.rs).
+    plants_api::PLANT_STYLE_LIST,
+    plants_api::PLANT_STYLE_GET,
+    plants_api::PLANT_STYLE_CREATE,
+    plants_api::PLANT_STYLE_UPDATE,
+    plants_api::PLANT_STYLE_DUPLICATE,
+    plants_api::PLANT_STYLE_DELETE,
+    plants_api::PLANT_STYLE_IMPORT_CSV,
+    plants_api::PLANT_STYLE_EXPORT_CSV,
+    plants_api::PLANT_STYLE_SAMPLE_CSV,
+    plants_api::PLANTS_PLACE,
+    plants_api::PLANTS_SET_STYLE,
+    plants_api::REPORT_PLANT_SCHEDULE,
+    plants_api::REPORT_EXISTING_TREES,
 ];
 
 impl Session {
@@ -109,6 +125,7 @@ impl Session {
                 "units": "millimeters, Y axis up, angles in radians",
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
+                "plants": plants_api::describe(),
             }),
             "execute" => {
                 #[derive(Deserialize)]
@@ -250,15 +267,6 @@ impl Session {
                 self.view_changed = true;
                 view_json(self.view)
             }
-            "report.plants" => {
-                let mut rows = BTreeMap::<&str, usize>::new();
-                for o in doc.objects.values() {
-                    if let Shape::Plant { species, .. } = &o.shape {
-                        *rows.entry(species).or_default() += 1;
-                    }
-                }
-                json!({ "rows": rows.iter().map(|(s, n)| json!({"species": s, "count": n})).collect::<Vec<_>>() })
-            }
             "report.areas" => {
                 let rows: Vec<Value> = doc
                     .objects
@@ -275,7 +283,7 @@ impl Session {
                     .collect();
                 json!({ "rows": rows })
             }
-            _ => return Err(RpcError { code: -32601, message: format!("unknown method: {method}") }),
+            _ => return plants_api::handle(self, method, p).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") })),
         })
     }
 
