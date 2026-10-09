@@ -60,7 +60,11 @@ impl<'de> Deserialize<'de> for ResourceBody {
             Some("plant_style") => {
                 serde_json::from_value::<PlantStyle>(v).map(|s| ResourceBody::PlantStyle(Box::new(s))).map_err(serde::de::Error::custom)
             }
-            Some("record_format") => serde_json::from_value(v).map(|f| ResourceBody::RecordFormat(Box::new(f))).map_err(serde::de::Error::custom),
+            Some("record_format") => {
+                let f: crate::record::RecordFormat = serde_json::from_value(v.clone()).map_err(serde::de::Error::custom)?;
+                // A field type from a newer app: keep the whole resource as it is.
+                if f.fields.iter().any(|x| x.ty == crate::record::FieldType::Unknown) { Ok(ResourceBody::Unknown(v)) } else { Ok(ResourceBody::RecordFormat(Box::new(f))) }
+            }
             Some("data_map") => serde_json::from_value(v).map(|m| ResourceBody::DataMap(Box::new(m))).map_err(serde::de::Error::custom),
             Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
             _ => Ok(ResourceBody::Unknown(v)),
@@ -278,6 +282,11 @@ mod tests {
         assert_eq!(w.body.type_name(), "worksheet");
         assert!(w.body.validate().is_ok());
         assert!(ResourceBody::Worksheet(serde_json::json!(5)).validate().is_err());
+        // A field type from the future keeps the resource, unchanged.
+        let future = serde_json::json!({"id": 4, "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}});
+        let r: Resource = serde_json::from_value(future.clone()).unwrap();
+        assert!(matches!(r.body, ResourceBody::Unknown(_)));
+        assert_eq!(serde_json::to_value(&r).unwrap(), future);
         let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "record_format", "fields": 5}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
         let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "data_map", "rules": 5}});

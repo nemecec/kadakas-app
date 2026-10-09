@@ -9,6 +9,10 @@ use serde_json::{Map, Value};
 
 use crate::model::Object;
 
+/// The key inside a stored record that tags it as a record of a format. Its value is the ID of
+/// the record format. Plain data of other kinds never has it, so it is never taken for a record.
+pub const MARKER: &str = "_record";
+
 /// Largest absolute value of a number field.
 pub const MAX_FIELD: f64 = 1.0e12;
 /// Longest field or record name, in characters.
@@ -29,11 +33,34 @@ pub enum FieldType {
     Area,
     /// One of the listed choices.
     Choice,
+    /// A date as `YYYY-MM-DD`, or empty.
+    Date,
+    /// A time as `HH:MM` or `HH:MM:SS`, or empty.
+    Time,
+    /// A volume in m3.
+    Volume,
+    /// An angle in degrees.
+    Angle,
+    /// A type that this version does not know (from a newer app). Documents with such a record
+    /// format are kept as they are and cannot be edited.
+    #[serde(other)]
+    Unknown,
 }
 
 impl FieldType {
-    pub const ALL: [FieldType; 7] =
-        [FieldType::Text, FieldType::Integer, FieldType::Number, FieldType::Boolean, FieldType::Dimension, FieldType::Area, FieldType::Choice];
+    pub const ALL: [FieldType; 11] = [
+        FieldType::Text,
+        FieldType::Integer,
+        FieldType::Number,
+        FieldType::Boolean,
+        FieldType::Dimension,
+        FieldType::Area,
+        FieldType::Choice,
+        FieldType::Date,
+        FieldType::Time,
+        FieldType::Volume,
+        FieldType::Angle,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -44,6 +71,11 @@ impl FieldType {
             FieldType::Dimension => "dimension",
             FieldType::Area => "area",
             FieldType::Choice => "choice",
+            FieldType::Date => "date",
+            FieldType::Time => "time",
+            FieldType::Volume => "volume",
+            FieldType::Angle => "angle",
+            FieldType::Unknown => "unknown",
         }
     }
 
@@ -53,7 +85,7 @@ impl FieldType {
 
     /// True for the types that hold a real number.
     pub fn is_real(self) -> bool {
-        matches!(self, FieldType::Number | FieldType::Dimension | FieldType::Area)
+        matches!(self, FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle)
     }
 }
 
@@ -86,7 +118,7 @@ impl FieldDef {
     pub fn coerce(&self, v: &Value) -> Result<Value, String> {
         let fail = |what: &str| Err(format!("field '{}' needs {what}, got {v}", self.name));
         match self.ty {
-            FieldType::Text => match v {
+            FieldType::Text | FieldType::Unknown => match v {
                 Value::String(s) if s.chars().count() <= 10_000 => Ok(v.clone()),
                 Value::String(_) => fail("text of at most 10000 characters"),
                 Value::Number(n) => Ok(Value::String(n.to_string())),
@@ -97,7 +129,7 @@ impl FieldDef {
                 Some(n) if n.fract() == 0.0 => Ok(Value::from(n as i64)),
                 _ => fail("a whole number"),
             },
-            FieldType::Number | FieldType::Dimension | FieldType::Area => match as_number(v) {
+            FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => match as_number(v) {
                 Some(n) => Ok(Value::from(n)),
                 None => fail("a finite number"),
             },
@@ -106,6 +138,14 @@ impl FieldDef {
                 Value::String(s) if s.eq_ignore_ascii_case("true") => Ok(Value::Bool(true)),
                 Value::String(s) if s.eq_ignore_ascii_case("false") => Ok(Value::Bool(false)),
                 _ => fail("true or false"),
+            },
+            FieldType::Date => match v.as_str().and_then(normalize_date) {
+                Some(d) => Ok(Value::String(d)),
+                None => fail("a date like 2026-03-27 (or empty)"),
+            },
+            FieldType::Time => match v.as_str().and_then(normalize_time) {
+                Some(t) => Ok(Value::String(t)),
+                None => fail("a time like 14:30 or 14:30:15 (or empty)"),
             },
             FieldType::Choice => match v.as_str().and_then(|s| self.choices.iter().find(|c| c.eq_ignore_ascii_case(s.trim()))) {
                 Some(c) => Ok(Value::String(c.clone())),
@@ -122,13 +162,53 @@ impl FieldDef {
             return v;
         }
         match self.ty {
-            FieldType::Text => Value::String(String::new()),
+            FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => Value::String(String::new()),
             FieldType::Integer => Value::from(0),
-            FieldType::Number | FieldType::Dimension | FieldType::Area => Value::from(0.0),
+            FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => Value::from(0.0),
             FieldType::Boolean => Value::Bool(false),
             FieldType::Choice => Value::String(self.choices.first().cloned().unwrap_or_default()),
         }
     }
+}
+
+/// A date as `YYYY-MM-DD`. Empty stays empty.
+fn normalize_date(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(String::new());
+    }
+    let mut it = s.split('-');
+    let (y, m, d) = (it.next()?, it.next()?, it.next()?);
+    if it.next().is_some() || y.len() != 4 || !(1..=2).contains(&m.len()) || !(1..=2).contains(&d.len()) {
+        return None;
+    }
+    let (y, m, d): (u32, u32, u32) = (y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days).contains(&d).then(|| format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// A time as `HH:MM` or `HH:MM:SS`. Empty stays empty.
+fn normalize_time(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(String::new());
+    }
+    let parts: Vec<&str> = s.split(':').collect();
+    if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| !(1..=2).contains(&p.len()) || !p.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let n: Vec<u32> = parts.iter().map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    if n[0] > 23 || n[1] > 59 || n.get(2).is_some_and(|s| *s > 59) {
+        return None;
+    }
+    Some(n.iter().map(|x| format!("{x:02}")).collect::<Vec<_>>().join(":"))
 }
 
 /// A finite number within range, from a JSON number or a numeric string.
@@ -175,6 +255,12 @@ impl RecordFormat {
     pub fn validate(&self) -> Result<(), String> {
         for (i, f) in self.fields.iter().enumerate() {
             check_name("field", &f.name)?;
+            if f.ty == FieldType::Unknown {
+                return Err(format!("field '{}' has a type that this version does not know", f.name));
+            }
+            if f.name.trim().eq_ignore_ascii_case(MARKER) {
+                return Err(format!("'{MARKER}' is reserved and cannot be a field name"));
+            }
             if self.fields[..i].iter().any(|o| o.name.trim().eq_ignore_ascii_case(f.name.trim())) {
                 return Err(format!("two fields are named '{}'", f.name.trim()));
             }
@@ -227,9 +313,22 @@ impl RecordFormat {
     }
 }
 
-/// The stored values of a record on an object.
+/// The stored record of this name on an object, with its marker. `None` if the object has no data
+/// under this name, or if the data is not a record (it has no marker).
 pub fn values<'a>(obj: &'a Object, record: &str) -> Option<&'a Map<String, Value>> {
-    obj.data.get(record)?.as_object()
+    obj.data.get(record)?.as_object().filter(|m| m.contains_key(MARKER))
+}
+
+/// The same record without the marker, for output.
+pub fn fields_only(stored: &Map<String, Value>) -> Map<String, Value> {
+    stored.iter().filter(|(k, _)| k.as_str() != MARKER).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// A record ready to store: the field values and the marker with the ID of the format.
+pub fn tagged(fields: Map<String, Value>, format_id: u64) -> Map<String, Value> {
+    let mut m = fields;
+    m.insert(MARKER.into(), Value::from(format_id));
+    m
 }
 
 #[cfg(test)]
@@ -355,6 +454,56 @@ mod tests {
     }
 
     #[test]
+    fn date_time_volume_and_angle_fields() {
+        let c = |t: FieldType, v: Value| FieldDef::new("F", t).coerce(&v);
+        assert_eq!(c(FieldType::Date, json!("2026-3-7")).unwrap(), json!("2026-03-07"));
+        assert_eq!(c(FieldType::Date, json!("2024-02-29")).unwrap(), json!("2024-02-29"));
+        assert_eq!(c(FieldType::Date, json!("")).unwrap(), json!(""));
+        for bad in ["2025-02-29", "2026-13-01", "2026-00-10", "26-01-01", "2026-01", "2026-01-01-01", "x", "2026-01-32", "2026-04-31"] {
+            assert!(c(FieldType::Date, json!(bad)).is_err(), "{bad}");
+        }
+        assert!(c(FieldType::Date, json!(5)).is_err());
+        assert_eq!(c(FieldType::Time, json!("9:05")).unwrap(), json!("09:05"));
+        assert_eq!(c(FieldType::Time, json!("23:59:59")).unwrap(), json!("23:59:59"));
+        assert_eq!(c(FieldType::Time, json!("")).unwrap(), json!(""));
+        for bad in ["24:00", "12:60", "12:00:60", "12", "1:2:3:4", "ab:cd", "123:00"] {
+            assert!(c(FieldType::Time, json!(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(c(FieldType::Volume, json!("2.5")).unwrap(), json!(2.5));
+        assert_eq!(c(FieldType::Angle, json!(90)).unwrap(), json!(90.0));
+        assert!(c(FieldType::Angle, json!("x")).is_err());
+        assert!(FieldType::Volume.is_real() && FieldType::Angle.is_real() && !FieldType::Date.is_real());
+        assert_eq!(FieldDef::new("D", FieldType::Date).default_value(), json!(""));
+        assert_eq!(FieldDef::new("V", FieldType::Volume).default_value(), json!(0.0));
+        for t in FieldType::ALL {
+            assert_eq!(FieldType::from_name(t.id()), Some(t));
+        }
+    }
+
+    #[test]
+    fn unknown_field_types_load_but_do_not_validate() {
+        let f: RecordFormat = serde_json::from_value(json!({"fields": [{"name": "X", "type": "hologram"}]})).unwrap();
+        assert_eq!(f.fields[0].ty, FieldType::Unknown);
+        assert!(f.validate().unwrap_err().contains("does not know"));
+        assert_eq!(FieldDef::new("X", FieldType::Unknown).coerce(&json!("a")).unwrap(), json!("a"));
+        assert_eq!(FieldDef::new("X", FieldType::Unknown).default_value(), json!(""));
+        assert_eq!(FieldType::Unknown.id(), "unknown");
+        assert_eq!(FieldType::from_name("unknown"), None);
+    }
+
+    #[test]
+    fn tags_are_added_and_removed() {
+        let m = tagged(json!({"a": 1}).as_object().unwrap().clone(), 7);
+        assert_eq!(m[MARKER], json!(7));
+        assert_eq!(fields_only(&m), *json!({"a": 1}).as_object().unwrap());
+        let mut o = Object::new(crate::model::ObjectId(1), crate::model::FIRST_LAYER, crate::model::NONE_CLASS, crate::model::Shape::Circle { center: glam::DVec2::ZERO, radius: 1.0 });
+        o.data.insert("Plain".into(), json!({"a": 1}));
+        o.data.insert("Tagged".into(), Value::Object(m));
+        assert!(values(&o, "Plain").is_none());
+        assert!(values(&o, "Tagged").is_some());
+    }
+
+    #[test]
     fn names_and_reserved_names() {
         assert!(check_name("record", "Soil").is_ok());
         assert!(check_name("record", "  ").is_err());
@@ -380,7 +529,7 @@ mod tests {
             crate::model::Shape::Circle { center: glam::DVec2::ZERO, radius: 1.0 },
         );
         assert!(values(&o, "Soil").is_none());
-        o.data.insert("Soil".into(), json!({"a": 1}));
+        o.data.insert("Soil".into(), json!({"a": 1, "_record": 3}));
         assert_eq!(values(&o, "Soil").unwrap()["a"], json!(1));
         o.data.insert("Bad".into(), json!(5));
         assert!(values(&o, "Bad").is_none());

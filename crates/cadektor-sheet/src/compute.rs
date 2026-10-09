@@ -375,6 +375,19 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_formula_is_an_error_cell_not_a_crash() {
+        let long = format!("={}1", "1+".repeat(1900));
+        let c = run(&[("A1", &long), ("A2", "=A1+1"), ("B1", "=ROUND(1.005, 2)"), ("B2", "=50%"), ("B3", "=$B$2*2"), ("B4", "=SUM(C1:C2)=0")]);
+        assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Parse));
+        assert_eq!(v(&c, "A2"), Value::Error(ErrorKind::Parse));
+        assert!(c.problems[0].contains("levels"), "{:?}", c.problems);
+        assert_eq!(v(&c, "B1"), n(1.01));
+        assert_eq!(v(&c, "B2"), n(0.5));
+        assert_eq!(v(&c, "B3"), n(1.0));
+        assert_eq!(v(&c, "B4"), Value::Bool(true));
+    }
+
+    #[test]
     fn formats_and_display() {
         let mut w = sheet(&[("A1", "3.14159"), ("A2", "-0.001"), ("A3", "12"), ("A4", "x"), ("A5", "=1/0")]);
         w.set_cell("A1", "3.14159", Some(CellFormat { decimals: Some(2), unit: "m".into() })).unwrap();

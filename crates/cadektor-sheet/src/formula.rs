@@ -5,10 +5,10 @@
 //!
 //! Syntax:
 //! - Numbers `12`, `3.5`, `1e3`. Text in double quotes (`"a ""b"""`) or single quotes (`'a'`).
-//! - Cell references `A1`, ranges `B2:C5`. Function calls `SUM(A1:A3, 2)`.
+//! - Cell references `A1`, `$A$1` (the `$` is read and dropped), ranges `B2:C5`. Function calls `SUM(A1:A3, 2)`.
 //! - Names such as `Area` and property paths: `Plant.price`, `Soil.Depth`, `'My record'.'My field'`.
 //! - Operators, from low to high precedence: `OR`, `AND`, `NOT`, comparison (`= <> < <= > >=`),
-//!   `&` (join text), `+ -`, `* /`, `^`, and a leading `-` or `+`.
+//!   `&` (join text), `+ -`, `* /`, `^`, a leading `-` or `+`, and `%` after a value (`50%` is 0.5).
 //!
 //! [`parse`] never panics. [`Expr`] prints back with `Display`, and the printed text parses to
 //! the same expression.
@@ -19,6 +19,9 @@ use std::fmt;
 pub const MAX_LEN: usize = 4096;
 /// Deepest nesting of brackets, operators and calls.
 pub const MAX_DEPTH: usize = 64;
+/// Deepest expression tree. A chain such as `1+1+1+...` is one level per term, so a long chain is
+/// refused ("use SUM") and evaluation never needs a deep stack.
+pub const MAX_TREE_DEPTH: usize = 256;
 /// Largest column and row number of a cell.
 pub const MAX_COL: u32 = 1000;
 pub const MAX_ROW: u32 = 100_000;
@@ -68,6 +71,8 @@ impl fmt::Display for CellRef {
 pub enum UnOp {
     Neg,
     Not,
+    /// Postfix `%`: divide by 100.
+    Percent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,12 +244,13 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
                 Ok(n) if n.is_finite() => Tok::Num(n),
                 _ => return Err(err("this number cannot be read", start)),
             }
-        } else if ident_start(c) {
+        } else if ident_start(c) || (c == '$' && chars.get(i + 1).is_some_and(|d| ident_start(*d))) {
             let mut j = i;
-            while chars.get(j).is_some_and(|d| ident_part(*d)) {
+            // A '$' marks an absolute reference such as $A$1. It is read and dropped.
+            while chars.get(j).is_some_and(|d| ident_part(*d) || (*d == '$' && chars.get(j + 1).is_some_and(|n| ident_part(*n)))) {
                 j += 1;
             }
-            let s: String = chars[i..j].iter().collect();
+            let s: String = chars[i..j].iter().filter(|d| **d != '$').collect();
             i = j;
             Tok::Ident(s)
         } else {
@@ -260,6 +266,7 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
                 '*' => Tok::Op("*"),
                 '/' => Tok::Op("/"),
                 '^' => Tok::Op("^"),
+                '%' => Tok::Op("%"),
                 '&' => Tok::Op("&"),
                 '=' => Tok::Op("="),
                 '<' => match chars.get(i) {
@@ -441,8 +448,17 @@ impl Parser {
                 self.depth -= 1;
                 Ok(e)
             }
-            _ => self.primary(),
+            _ => self.postfix(),
         }
+    }
+
+    fn postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut e = self.primary()?;
+        while self.peek() == Some(&Tok::Op("%")) {
+            self.pos += 1;
+            e = Expr::Unary(UnOp::Percent, Box::new(e));
+        }
+        Ok(e)
     }
 
     fn segment(&mut self) -> Result<String, ParseError> {
@@ -573,6 +589,9 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
     if p.pos < p.toks.len() {
         return p.err("unexpected text after the end of the formula");
     }
+    if e.depth() > MAX_TREE_DEPTH {
+        return Err(ParseError { message: format!("the formula has more than {MAX_TREE_DEPTH} levels. Use SUM or CONCAT for long lists"), at: 0 });
+    }
     Ok(e)
 }
 
@@ -583,6 +602,25 @@ impl Expr {
             Expr::Unary(UnOp::Neg, _) => 8,
             _ => 9,
         }
+    }
+
+    /// The depth of the expression tree, counted without recursion.
+    pub fn depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut stack: Vec<(&Expr, usize)> = vec![(self, 1)];
+        while let Some((e, d)) = stack.pop() {
+            deepest = deepest.max(d);
+            match e {
+                Expr::Unary(_, x) => stack.push((x, d + 1)),
+                Expr::Binary(_, l, r) => {
+                    stack.push((l, d + 1));
+                    stack.push((r, d + 1));
+                }
+                Expr::Call(_, args) => stack.extend(args.iter().map(|a| (a, d + 1))),
+                _ => {}
+            }
+        }
+        deepest
     }
 
     /// Every cell address that the formula reads, with ranges as corner pairs.
@@ -644,6 +682,9 @@ impl fmt::Display for Expr {
                 Ok(())
             }
             Expr::Unary(UnOp::Not, e) => write!(f, "NOT({e})"),
+            Expr::Unary(UnOp::Percent, e) => {
+                if e.prec() >= 9 { write!(f, "{e}%") } else { write!(f, "({e})%") }
+            }
             Expr::Unary(UnOp::Neg, e) => {
                 if e.prec() >= 9 || matches!(**e, Expr::Unary(UnOp::Neg, _)) {
                     write!(f, "-{e}")
@@ -735,6 +776,14 @@ mod tests {
         assert_eq!(show("b2:a1"), "A1:B2");
         assert_eq!(show("TRUE and false"), "TRUE AND FALSE");
         assert_eq!(show("(1)"), "1");
+        assert_eq!(show("50%"), "50%");
+        assert_eq!(show("-50%"), "-50%");
+        assert_eq!(show("(1+2)%"), "(1 + 2)%");
+        assert_eq!(show("(-5)%"), "(-5)%");
+        assert_eq!(show("5%%"), "5%%");
+        assert_eq!(show("2^50%"), "2 ^ 50%");
+        assert_eq!(show("$A$1 + A$2 + $B3 + $a$1:$B$2"), "A1 + A2 + B3 + A1:B2");
+        assert_eq!(show("SUM($A$1:$A$3)"), "SUM(A1:A3)");
         assert_eq!(show("1.5e3 + .5 + 2E-2"), "1500 + 0.5 + 0.02");
     }
 
@@ -785,6 +834,10 @@ mod tests {
         assert!(parse(":").is_err());
         assert!(parse(".").is_err());
         assert!(parse("* 2").is_err());
+        assert!(parse("$").is_err());
+        assert!(parse("A$").is_err());
+        assert!(parse("$1").is_err());
+        assert!(parse("%").is_err());
         assert!(parse("1 + and").unwrap_err().message.contains("reserved"));
         assert!(parse("or").is_err());
         assert!(parse(&"1".repeat(MAX_LEN + 1)).unwrap_err().message.contains("longer"));
@@ -796,6 +849,22 @@ mod tests {
         assert!(parse(&format!("{}1{}", "f(".repeat(100), ")".repeat(100))).unwrap_err().message.contains("nested"));
         assert!(parse(&format!("{}1{}", "(".repeat(60), ")".repeat(60))).is_ok());
         assert_eq!(parse("1 +").unwrap_err().to_string(), "the formula ends too early (at character 4)");
+    }
+
+    #[test]
+    fn long_chains_are_refused_without_a_crash() {
+        let chain = |n: usize, op: &str| (0..n).map(|_| "1").collect::<Vec<_>>().join(op);
+        assert!(parse(&chain(100, "+")).is_ok());
+        let e = parse(&chain(2000, "+")).unwrap_err();
+        assert!(e.message.contains("levels"), "{e}");
+        assert!(parse(&chain(2000, "&")).is_err());
+        assert!(parse(&chain(2000, "*")).is_err());
+        assert!(parse(&chain(1300, " and ")).is_err());
+        assert!(parse(&chain(2000, "=")).is_err());
+        assert!(parse(&format!("SUM({})", chain(2000, ","))).is_ok(), "a long list of arguments is flat");
+        assert!(parse(&format!("1{}", "%".repeat(2000))).is_err());
+        assert_eq!(p("1+1+1").depth(), 3);
+        assert_eq!(p("1").depth(), 1);
     }
 
     #[test]
@@ -844,6 +913,7 @@ mod tests {
                 (ops, inner.clone(), inner.clone()).prop_map(|(op, l, r)| Expr::Binary(op, Box::new(l), Box::new(r))),
                 inner.clone().prop_map(|e| Expr::Unary(UnOp::Neg, Box::new(e))),
                 inner.clone().prop_map(|e| Expr::Unary(UnOp::Not, Box::new(e))),
+                inner.clone().prop_map(|e| Expr::Unary(UnOp::Percent, Box::new(e))),
                 (prop::sample::select(vec!["SUM", "IF", "ROUND", "MAX", "CONCAT", "F"]), prop::collection::vec(inner, 0..4)).prop_map(|(n, a)| Expr::Call(n.to_string(), a)),
             ]
         })
@@ -861,6 +931,23 @@ mod tests {
             prop_assert_eq!(back.to_string(), text.clone());
             let again = parse(&back.to_string()).unwrap();
             prop_assert_eq!(again, back);
+        }
+
+        /// Long chains of any operator give an answer (a tree or an error), never a crash, and what
+        /// parses also prints, parses again and evaluates.
+        #[test]
+        fn long_chains_never_crash(n in 1usize..3000, op in prop::sample::select(vec!["+", "-", "*", "/", "&", "^", "=", " and ", " or ", ",", "%+"])) {
+            let text = (0..n).map(|_| "1").collect::<Vec<_>>().join(op);
+            for src in [text.clone(), format!("SUM({text})"), format!("-({text})"), format!("{}1{}", "(".repeat(n.min(200)), ")".repeat(n.min(200)))] {
+                if let Ok(e) = parse(&src) {
+                    prop_assert!(e.depth() <= MAX_TREE_DEPTH);
+                    let printed = e.to_string();
+                    // The printed text has spaces, so it may be longer than the limit.
+                    if printed.chars().count() <= MAX_LEN {
+                        prop_assert_eq!(parse(&printed).unwrap().to_string(), printed);
+                    }
+                }
+            }
         }
 
         /// The parser gives an answer for any text and never panics.

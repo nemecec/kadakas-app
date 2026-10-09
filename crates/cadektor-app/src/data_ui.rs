@@ -148,7 +148,7 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
 /// One editor for a record field. Returns the shown value and whether the edit is finished.
 fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
     match f.ty {
-        FieldType::Text => {
+        FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => {
             let mut s = shown.as_str().map(str::to_string).unwrap_or_else(|| shown.to_string());
             let r = ui.text_edit_singleline(&mut s);
             (Value::String(s), r.lost_focus())
@@ -158,11 +158,13 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
             let r = ui.add(DragValue::new(&mut n).speed(0.2));
             (Value::from(n), r.drag_stopped() || r.lost_focus())
         }
-        FieldType::Number | FieldType::Dimension | FieldType::Area => {
+        FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => {
             let mut n = shown.as_f64().unwrap_or(0.0);
             let suffix = match f.ty {
                 FieldType::Dimension => " mm".to_string(),
                 FieldType::Area => " m\u{b2}".to_string(),
+                FieldType::Volume => " m\u{b3}".to_string(),
+                FieldType::Angle => "\u{b0}".to_string(),
                 _ if f.unit.is_empty() => String::new(),
                 _ => format!(" {}", f.unit),
             };
@@ -230,6 +232,11 @@ fn type_label(t: FieldType) -> &'static str {
         FieldType::Dimension => "Dimension",
         FieldType::Area => "Area",
         FieldType::Choice => "Choice list",
+        FieldType::Date => "Date",
+        FieldType::Time => "Time",
+        FieldType::Volume => "Volume",
+        FieldType::Angle => "Angle",
+        FieldType::Unknown => "Unknown",
     }
 }
 
@@ -249,7 +256,7 @@ fn set_default(f: &mut FieldDef, text: &str) {
         Some(match f.ty {
             FieldType::Boolean if text.trim().eq_ignore_ascii_case("true") => Value::Bool(true),
             FieldType::Boolean if text.trim().eq_ignore_ascii_case("false") => Value::Bool(false),
-            FieldType::Integer | FieldType::Number | FieldType::Dimension | FieldType::Area => text.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map_or_else(|| Value::String(text.into()), |n| if f.ty == FieldType::Integer && n.fract() == 0.0 { Value::from(n as i64) } else { Value::from(n) }),
+            FieldType::Integer | FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => text.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map_or_else(|| Value::String(text.into()), |n| if f.ty == FieldType::Integer && n.fract() == 0.0 { Value::from(n as i64) } else { Value::from(n) }),
             _ => Value::String(text.into()),
         })
     };
@@ -813,6 +820,11 @@ mod tests {
             (FieldDef::new("A", FieldType::Area), serde_json::json!(5.5)),
             (FieldDef::new("N", FieldType::Number), serde_json::json!(1.5)),
             (FieldDef::new("B", FieldType::Boolean), serde_json::json!(true)),
+            (FieldDef::new("V", FieldType::Volume), serde_json::json!(2.5)),
+            (FieldDef::new("G", FieldType::Angle), serde_json::json!(45.0)),
+            (FieldDef::new("W", FieldType::Date), serde_json::json!("2026-03-27")),
+            (FieldDef::new("X", FieldType::Time), serde_json::json!("14:30")),
+            (FieldDef::new("U", FieldType::Unknown), serde_json::json!("x")),
             (choice, serde_json::json!("A")),
         ] {
             run_ui(&ctx, |ui| {

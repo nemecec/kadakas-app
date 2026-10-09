@@ -124,6 +124,59 @@ def test_record_format_rules(cad):
     assert cad.result("record_format.list")["formats"] == []
 
 
+def test_plain_data_is_never_taken_for_a_record(cad):
+    a = add_hardscape(cad, "Granite", 1000)
+    cad.execute({"op": "set_data", "id": a, "set": {"Notes": {"Depth": 5}}})
+    err = cad.error("record_format.create", {"name": "notes", "fields": [{"name": "Depth", "type": "number"}]})
+    assert "already have data" in err["message"]
+    fid = cad.result("record_format.create", {"name": "Soil", "fields": [{"name": "Depth", "type": "number"}]})["id"]
+    assert cad.result("record.get", {"id": a})["records"] == {}
+    assert cad.error("record.detach", {"ids": [a], "record": fid})["code"] == 1
+    cad.result("record.attach", {"ids": [a], "record": fid})
+    assert cad.result("objects.get", {"id": a})["data"]["Soil"]["_record"] == fid
+    assert cad.result("record.get", {"id": a})["records"]["Soil"] == {"Depth": 0.0}, "the tag is not shown as a field"
+    assert cad.result("objects.get", {"id": a})["data"]["Notes"] == {"Depth": 5}
+    assert cad.error("record_format.update", {"id": fid, "fields": [{"name": "_record", "type": "text"}]})["code"] == 1
+
+
+def test_date_time_volume_and_angle_fields_and_unknown_types(cad, tmp_path):
+    fields = [{"name": "Planted", "type": "date"}, {"name": "Open", "type": "time"}, {"name": "Fill", "type": "volume", "unit": "m3"}, {"name": "Slope", "type": "angle"}]
+    fid = cad.result("record_format.create", {"name": "Care", "fields": fields})["id"]
+    a = add_hardscape(cad, "Granite", 1000)
+    cad.result("record.attach", {"ids": [a], "record": fid, "values": {"Planted": "2026-3-7", "Open": "9:05", "Fill": 2.5, "Slope": "15"}})
+    assert cad.result("record.get", {"id": a})["records"]["Care"] == {"Planted": "2026-03-07", "Open": "09:05", "Fill": 2.5, "Slope": 15.0}
+    for bad in ({"Planted": "2025-02-29"}, {"Open": "25:00"}, {"Fill": "much"}):
+        assert cad.error("record.set", {"ids": [a], "record": fid, "values": bad})["code"] == 1
+    assert cad.error("record_format.create", {"name": "X", "fields": [{"name": "A", "type": "hologram"}]})["code"] == -32602
+    # A document with a field type from a newer app still opens, and the resource is kept.
+    doc = cad.result("document.get")
+    doc["resources"].append({"id": 9999, "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}})
+    cad.result("document.load", {"document": doc})
+    assert any(r["name"] == "Later" for r in cad.result("document.get")["resources"])
+    assert [f["name"] for f in cad.result("record_format.list")["formats"]] == ["Care"]
+
+
+def test_sheet_formulas_percent_absolute_round_and_negative_zero(cad):
+    sid = cad.result("worksheet.create", {"name": "Math", "cells": {
+        "A1": "=ROUND(1.005, 2)", "A2": "=200 * 15%", "A3": "10", "A4": "=$A$3 * 2", "A5": "=SUM(C1:C3) = 0", "A6": "=-0 = 0", "A7": "=0 * -1 = 0"}})["id"]
+    cells = cad.result("worksheet.evaluate", {"id": sid})["cells"]
+    assert cells["A1"] == 1.01 and cells["A2"] == approx(30) and cells["A4"] == 20
+    assert cells["A5"] is True and cells["A6"] is True and cells["A7"] is True
+    err = cad.error("worksheet.set_cell", {"id": sid, "address": "B1", "input": "=" + "1+" * 2000 + "1"})
+    assert err["code"] == -32602 and "levels" in err["message"]
+
+
+def test_xlsx_keeps_text_as_it_is(cad, tmp_path):
+    sid = cad.result("worksheet.create", {"name": "Texts", "cells": {"A1": "'-5 cm", "A2": "'bad \u0001 char \ufffe"}})["id"]
+    path = tmp_path / "t.xlsx"
+    cad.result("worksheet.export", {"id": sid, "format": "xlsx", "path": str(path)})
+    with zipfile.ZipFile(path) as z:
+        sheet = z.read("xl/worksheets/sheet1.xml").decode()
+    assert ">-5 cm</t>" in sheet and "'-5" not in sheet
+    assert "\x01" not in sheet and "\ufffe" not in sheet
+    assert cad.result("worksheet.export", {"id": sid, "format": "csv"})["csv"].startswith("'-5 cm")
+
+
 def test_plant_style_data_keeps_working_next_to_records(cad):
     cad.result("record_format.create", {"name": "Care", "fields": [{"name": "Water", "type": "choice", "choices": ["low", "high"]}]})
     sid = make_style(cad, "Field maple", "Acer campestre", "AC", 100)

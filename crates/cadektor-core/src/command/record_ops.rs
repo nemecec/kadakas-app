@@ -1,7 +1,7 @@
 //! Commands for records: attach, detach and change field values. They run inside `Tx` like all others.
 
 use super::*;
-use crate::record::RecordFormat;
+use crate::record::{self, RecordFormat};
 
 fn invalid(m: impl Into<String>) -> CommandError {
     CommandError::Invalid(m.into())
@@ -14,8 +14,9 @@ impl Tx<'_> {
     }
 
     /// Objects that have a record of this name attached.
-    pub(super) fn record_users(&self, name: &str) -> Vec<ObjectId> {
-        self.doc.objects.values().filter(|o| o.data.get(name).is_some_and(Value::is_object)).map(|o| o.id).collect()
+    pub(super) fn record_users(&self, format: ResourceId) -> Vec<ObjectId> {
+        let tag = Value::from(format.0);
+        self.doc.objects.values().filter(|o| o.data.values().any(|v| v.get(record::MARKER) == Some(&tag))).map(|o| o.id).collect()
     }
 
     /// After a record format changed: the attached records follow the new name and fields.
@@ -23,11 +24,14 @@ impl Tx<'_> {
         let Some(r) = self.doc.resources.get(id) else { return };
         let ResourceBody::RecordFormat(fmt) = &r.body else { return };
         let (fmt, new_name) = (fmt.clone(), r.name.clone());
-        for oid in self.record_users(old_name) {
+        for oid in self.record_users(id) {
             self.touch(oid);
             let o = self.doc.object_mut(oid).expect("exists");
-            let stored = o.data.remove(old_name).and_then(|v| v.as_object().cloned()).unwrap_or_default();
-            o.data.insert(new_name.clone(), Value::Object(fmt.conform(&stored)));
+            let tag = Value::from(id.0);
+            let key = o.data.iter().find(|(k, v)| v.get(record::MARKER) == Some(&tag) && k.as_str() == old_name).map(|(k, _)| k.clone());
+            let Some(key) = key else { continue };
+            let stored = o.data.remove(&key).and_then(|v| v.as_object().cloned()).unwrap_or_default();
+            o.data.insert(new_name.clone(), Value::Object(record::tagged(fmt.conform(&stored), id.0)));
         }
     }
 
@@ -47,7 +51,7 @@ impl Tx<'_> {
                 if ids.is_empty() {
                     return Err(invalid("give at least one object"));
                 }
-                let built = fmt.build(values).map_err(invalid)?;
+                let built = record::tagged(fmt.build(values).map_err(invalid)?, record.0);
                 for &id in &ids {
                     self.editable(id)?;
                     if self.doc.object(id).expect("checked").data.contains_key(&name) {
@@ -67,7 +71,7 @@ impl Tx<'_> {
                 }
                 for &id in &ids {
                     self.editable(id)?;
-                    if !self.doc.object(id).expect("checked").data.get(&name).is_some_and(Value::is_object) {
+                    if record::values(self.doc.object(id).expect("checked"), &name).is_none() {
                         return Err(invalid(format!("object {id} has no record '{name}'")));
                     }
                 }
@@ -86,7 +90,7 @@ impl Tx<'_> {
                 for &id in &ids {
                     self.editable(id)?;
                     let o = self.doc.object(id).expect("checked");
-                    let Some(stored) = o.data.get(&name).and_then(Value::as_object) else {
+                    let Some(stored) = record::values(o, &name) else {
                         return Err(invalid(format!("object {id} has no record '{name}'")));
                     };
                     next.push(fmt.merge(stored, values).map_err(invalid)?);
@@ -132,7 +136,7 @@ mod tests {
     }
 
     fn rec(ed: &Editor, id: ObjectId, name: &str) -> Option<Value> {
-        ed.doc().object(id).unwrap().data.get(name).cloned()
+        record::values(ed.doc().object(id).unwrap(), name).map(|m| Value::Object(record::fields_only(m)))
     }
 
     #[test]
@@ -194,6 +198,38 @@ mod tests {
     }
 
     #[test]
+    fn records_are_tagged_and_plain_data_is_never_taken_for_one() {
+        let (mut ed, rid, ids) = setup();
+        // Plain data under a name that is not a format yet.
+        ed.execute(&Command::SetData { id: ids[1], set: [("Water".to_string(), json!({"Depth": 5}))].into(), remove: vec![] }).unwrap();
+        ed.execute(&Command::AttachRecord { ids: vec![ids[0]], record: rid, values: Default::default() }).unwrap();
+        assert_eq!(ed.doc().object(ids[0]).unwrap().data["Soil"][record::MARKER], json!(rid.0));
+        // A format may not take a name that plain data uses already.
+        let e = ed.execute(&Command::AddResource { name: "water".into(), body: ResourceBody::RecordFormat(Box::default()) }).unwrap_err();
+        assert!(e.to_string().contains("already have data"), "{e}");
+        let other = ResourceId(ed.execute(&Command::AddResource { name: "Other".into(), body: ResourceBody::RecordFormat(Box::default()) }).unwrap().created[0]);
+        let e = ed.execute(&Command::ModifyResource { id: other, name: Some("Water".into()), body: None }).unwrap_err();
+        assert!(e.to_string().contains("already have data"), "{e}");
+        // Renaming a format onto its own records is fine, and the marker is not a name.
+        ed.execute(&Command::ModifyResource { id: rid, name: Some("SOIL".into()), body: None }).unwrap();
+        assert!(ed.execute(&Command::AddResource { name: "_record".into(), body: ResourceBody::RecordFormat(Box::default()) }).is_err());
+        // Plain data blocks attach (the key is taken) and is not seen as a record.
+        let e = ed.execute(&Command::SetData { id: ids[1], set: [("Soil".to_string(), json!({}))].into(), remove: vec![] }).unwrap_err();
+        assert!(e.to_string().contains("record"));
+        // Detach refuses data without the tag, and an object without the record is not a user.
+        let e = ed.execute(&Command::DetachRecord { ids: vec![ids[1]], record: other }).unwrap_err();
+        assert!(e.to_string().contains("no record"));
+        assert_eq!(ed.doc().object(ids[1]).unwrap().data["Water"], json!({"Depth": 5}));
+        // A format cannot have a field called like the marker.
+        let f = RecordFormat { fields: vec![FieldDef::new("_Record", FieldType::Text)] };
+        assert!(f.validate().unwrap_err().contains("reserved"));
+        // Deleting the format while an untagged key has the same name is fine: only tagged records count.
+        let ids1 = ids[1];
+        ed.execute(&Command::DeleteResource { id: other, reassign: None }).unwrap();
+        assert!(ed.doc().object(ids1).unwrap().data.contains_key("Water"));
+    }
+
+    #[test]
     fn set_data_cannot_write_records() {
         let (mut ed, _, ids) = setup();
         let e = ed.execute(&Command::SetData { id: ids[0], set: [("soil".to_string(), json!({"Depth": 1}))].into(), remove: vec![] }).unwrap_err();
@@ -214,6 +250,7 @@ mod tests {
         ed.execute(&Command::ModifyResource { id: rid, name: Some("Ground".into()), body: Some(ResourceBody::RecordFormat(Box::new(f))) }).unwrap();
         assert!(rec(&ed, ids[0], "Soil").is_none());
         assert_eq!(rec(&ed, ids[0], "Ground").unwrap(), json!({"Qty": 4, "Grade": "A", "Note": ""}));
+        assert_eq!(ed.doc().object(ids[0]).unwrap().data["Ground"][record::MARKER], json!(rid.0), "the tag survives the rename");
         assert!(rec(&ed, ids[1], "Ground").is_none());
         // The old name is free for SetData now, the new name is not.
         assert!(ed.execute(&Command::SetData { id: ids[1], set: [("Ground".to_string(), json!(1))].into(), remove: vec![] }).is_err());

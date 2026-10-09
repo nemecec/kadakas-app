@@ -25,8 +25,16 @@ impl Tx<'_> {
         }
         if matches!(body, ResourceBody::RecordFormat(_)) {
             crate::record::check_name("record", name).map_err(invalid)?;
-            if crate::record::is_reserved_record_name(name) {
+            if crate::record::is_reserved_record_name(name) || name.trim().eq_ignore_ascii_case(crate::record::MARKER) {
                 return Err(invalid(format!("'{}' is reserved. Choose another record name", name.trim())));
+            }
+            // Plain data under this key would be taken over by the record.
+            let marker = except.map(|e| serde_json::Value::from(e.0));
+            let taken = self.doc.objects.values().any(|o| {
+                o.data.iter().any(|(k, v)| k.eq_ignore_ascii_case(name.trim()) && !(marker.is_some() && v.get(crate::record::MARKER) == marker.as_ref()))
+            });
+            if taken {
+                return Err(invalid(format!("objects already have data under the key '{}'. Choose another record name", name.trim())));
             }
         }
         let clash = self
@@ -42,7 +50,7 @@ impl Tx<'_> {
         if let Some(r) = self.doc.resources.get(id)
             && matches!(r.body, ResourceBody::RecordFormat(_))
         {
-            return self.record_users(&r.name);
+            return self.record_users(id);
         }
         self.doc
             .objects

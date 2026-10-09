@@ -108,7 +108,7 @@ fn position(shape: &Shape) -> Option<glam::DVec2> {
 
 /// True if the object has a record of this name attached.
 pub fn has_record(obj: &Object, name: &str) -> bool {
-    obj.data.iter().any(|(k, v)| k.eq_ignore_ascii_case(name.trim()) && v.is_object())
+    obj.data.iter().any(|(k, v)| k.eq_ignore_ascii_case(name.trim()) && v.as_object().is_some_and(|m| m.contains_key(record::MARKER)))
 }
 
 /// Reads a property. `path` has one name (`Area`), or two or more names: `Plant` and a style
@@ -400,6 +400,10 @@ mod tests {
         assert!(has_record(ed.doc().object(a).unwrap(), " soil "));
         assert_eq!(p(&ed, a, &["soil", "depth"]), v(json!(300.0)));
         assert_eq!(p(&ed, a, &["Soil", "Nope"]), Prop::Unknown);
+        // Plain data under the same name is not a record.
+        let b = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
+        ed.execute(&Command::SetData { id: b, set: [("Other".to_string(), json!({"Depth": 5}))].into(), remove: vec![] }).unwrap();
+        assert!(!has_record(ed.doc().object(b).unwrap(), "Other"));
         assert_eq!(p(&ed, a, &["Nope", "Depth"]), Prop::Unknown);
         assert!(NAMES.iter().all(|n| !matches!(builtin(ed.doc(), ed.doc().object(a).unwrap(), n), Prop::Unknown)));
     }

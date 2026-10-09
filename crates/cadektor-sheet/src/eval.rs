@@ -65,6 +65,10 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Value {
             Ok(n) => Value::num(-n),
             Err(k) => err(k),
         },
+        Expr::Unary(UnOp::Percent, x) => match eval(x, env).to_number() {
+            Ok(n) => Value::num(n / 100.0),
+            Err(k) => err(k),
+        },
         Expr::Unary(UnOp::Not, x) => match eval(x, env).to_bool() {
             Ok(b) => Value::Bool(!b),
             Err(k) => err(k),
@@ -216,7 +220,11 @@ fn call(name: &str, args: &[Expr], env: &dyn Env) -> Value {
                 Err(k) => return err(k),
             };
             let f = 10f64.powi(digits);
-            Value::num((x * f).round() / f)
+            // 1.005 * 100 is 100.49999999999999. A few units of rounding error are forgiven, so
+            // that ROUND(1.005, 2) is 1.01 as people expect.
+            let scaled = x * f;
+            let nudged = scaled + scaled.abs() * 4.0 * f64::EPSILON * scaled.signum();
+            Value::num(nudged.round() / f)
         }
         "ABS" => {
             if let Err(v) = arity(args, 1, 1) {
@@ -362,6 +370,24 @@ mod tests {
     }
 
     #[test]
+    fn percent_and_negative_zero() {
+        assert_eq!(ev("50%"), n(0.5));
+        assert_eq!(ev("200 * 15%"), n(30.0));
+        assert_eq!(ev("-50%"), n(-0.5));
+        assert_eq!(ev("5%%"), n(0.0005));
+        assert_eq!(ev("\"x\"%"), Value::Error(ErrorKind::Value));
+        assert_eq!(ev("B2%"), Value::Error(ErrorKind::Ref));
+        // Negative zero is zero everywhere.
+        assert_eq!(ev("SUM(C1:C3) = 0"), Value::Bool(true));
+        assert_eq!(ev("-0 = 0"), Value::Bool(true));
+        assert_eq!(ev("0 * -1 = 0"), Value::Bool(true));
+        assert_eq!(ev("SUM(-0, -0) = 0"), Value::Bool(true));
+        assert_eq!(ev("-0"), n(0.0));
+        assert_eq!(ev("ROUND(-0.001, 2) = 0"), Value::Bool(true));
+        assert_eq!(ev("CONCAT(-0)"), t("0"));
+    }
+
+    #[test]
     fn arithmetic() {
         assert_eq!(ev("1+2*3"), n(7.0));
         assert_eq!(ev("(1+2)*3"), n(9.0));
@@ -439,6 +465,12 @@ mod tests {
         assert_eq!(ev("ROUND(2.567, 2)"), n(2.57));
         assert_eq!(ev("ROUND(2.5)"), n(3.0));
         assert_eq!(ev("ROUND(-2.5)"), n(-3.0));
+        assert_eq!(ev("ROUND(1.005, 2)"), n(1.01));
+        assert_eq!(ev("ROUND(-1.005, 2)"), n(-1.01));
+        assert_eq!(ev("ROUND(2.675, 2)"), n(2.68));
+        assert_eq!(ev("ROUND(0.285, 2)"), n(0.29));
+        assert_eq!(ev("ROUND(1.004, 2)"), n(1.0));
+        assert_eq!(ev("ROUND(0, 2)"), n(0.0));
         assert_eq!(ev("ROUND(1234, -2)"), n(1200.0));
         assert_eq!(ev("ROUND(\"x\")"), Value::Error(ErrorKind::Value));
         assert_eq!(ev("ROUND(1, \"x\")"), Value::Error(ErrorKind::Value));

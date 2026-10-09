@@ -75,7 +75,14 @@ impl Value {
 
     /// A number value. Not finite numbers become `#NUM!`.
     pub fn num(n: f64) -> Value {
-        if n.is_finite() { Value::Number(n) } else { Value::Error(ErrorKind::Num) }
+        // Negative zero is zero: it must compare and group like it.
+        if n == 0.0 {
+            Value::Number(0.0)
+        } else if n.is_finite() {
+            Value::Number(n)
+        } else {
+            Value::Error(ErrorKind::Num)
+        }
     }
 
     /// The value as a number, for arithmetic: empty is 0, a boolean is 0 or 1, text is read as a
@@ -129,13 +136,13 @@ impl Value {
     /// errors.
     pub fn compare(&self, other: &Value) -> Ordering {
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => a.total_cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
             (Value::Text(a), Value::Text(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
             (Value::Error(a), Value::Error(b)) => a.code().cmp(b.code()),
             // An empty cell equals 0, "" and FALSE when it meets that type.
-            (Value::Empty, Value::Number(b)) => 0.0f64.total_cmp(b),
-            (Value::Number(a), Value::Empty) => a.total_cmp(&0.0),
+            (Value::Empty, Value::Number(b)) => 0.0f64.partial_cmp(b).unwrap_or(Ordering::Equal),
+            (Value::Number(a), Value::Empty) => a.partial_cmp(&0.0).unwrap_or(Ordering::Equal),
             (Value::Empty, Value::Text(b)) => "".cmp(b.as_str()),
             (Value::Text(a), Value::Empty) => a.as_str().cmp(""),
             (Value::Empty, Value::Bool(b)) => false.cmp(b),
@@ -221,5 +228,10 @@ mod tests {
         assert_eq!(Value::Bool(false).compare(&t("a")), Greater);
         assert_eq!(Value::Error(ErrorKind::Num).compare(&Value::Bool(true)), Greater);
         assert_eq!(Value::Empty.compare(&Value::Empty), Equal);
+        // Negative zero equals zero.
+        assert_eq!(Value::Number(-0.0).compare(&Value::Number(0.0)), Equal);
+        assert_eq!(Value::Number(-0.0).compare(&Value::Empty), Equal);
+        assert_eq!(Value::Empty.compare(&Value::Number(-0.0)), Equal);
+        assert_eq!(format!("{:?}", Value::num(-0.0)), "Number(0.0)");
     }
 }

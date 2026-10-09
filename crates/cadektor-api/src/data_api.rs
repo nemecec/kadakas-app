@@ -23,7 +23,7 @@ use crate::{RpcError, Session, params};
 
 pub const RECORD_FORMAT_LIST: (&str, &str) = ("record_format.list", "Record formats with their fields and the number of objects that use each. Returns {formats: [{id, name, fields, used_by}]}.");
 pub const RECORD_FORMAT_GET: (&str, &str) = ("record_format.get", "One record format. params: {id} (the ID or the name).");
-pub const RECORD_FORMAT_CREATE: (&str, &str) = ("record_format.create", "Create a record format. params: {name, fields: [{name, type, default?, unit?, choices?}]}. type is text, integer, number, boolean, dimension (mm), area (m2) or choice (needs choices). Returns {id}.");
+pub const RECORD_FORMAT_CREATE: (&str, &str) = ("record_format.create", "Create a record format. params: {name, fields: [{name, type, default?, unit?, choices?}]}. type is text, integer, number, boolean, dimension (mm), area (m2), choice (needs choices), date (YYYY-MM-DD), time (HH:MM or HH:MM:SS), volume (m3) or angle (degrees). Returns {id}.");
 pub const RECORD_FORMAT_UPDATE: (&str, &str) = ("record_format.update", "Change a record format. params: {id, name?, fields?}. Attached records follow: they are renamed, fields that are gone are dropped, new fields get their defaults.");
 pub const RECORD_FORMAT_DELETE: (&str, &str) = ("record_format.delete", "Delete a record format. params: {id}. Fails while objects have the record attached.");
 pub const RECORD_ATTACH: (&str, &str) = ("record.attach", "Attach a record to objects. params: {ids, record (ID or name), values?: {field: value}}. Missing fields get the default. Values are checked against the field types. One undo step.");
@@ -55,7 +55,7 @@ pub const WORKSHEET_EXPORT: (&str, &str) = ("worksheet.export", "Export a calcul
 /// Extra text for `describe`.
 pub fn describe() -> Value {
     json!({
-        "records": "A record format is a document resource with typed fields (text, integer, number, boolean, dimension in mm, area in m2, choice). record.attach stores the values in object.data[<record name>]. Plant style data keeps working: the key 'plant' and 'rotation' are reserved.",
+        "records": "A record format is a document resource with typed fields (text, integer, number, boolean, dimension in mm, area in m2, choice, date YYYY-MM-DD, time HH:MM, volume in m3, angle in degrees). record.attach stores the values in object.data[<record name>] with a \"_record\" tag, and only tagged data counts as a record. Plant style data keeps working: the key 'plant' and 'rotation' are reserved.",
         "data_manager": {
             "summary": "A data map is a resource with two tables. entities: {kind, ifc_class, predefined_type?} gives the IFC class of each object kind. rules: {name?, kinds?: [kind], source, target}. source is {type: property, name: Area} | {type: plant_field, field: price} | {type: record_field, record, field} | {type: constant, value}. target is {type: ifc_property, pset, property, ifc_type: label|text|real|integer|boolean|length|area|volume} | {type: record_field, record, field}.",
             "properties": props::NAMES,
@@ -162,12 +162,15 @@ fn field_json(f: &FieldDef) -> Value {
 fn format_json(doc: &Document, id: ResourceId) -> Value {
     let r = doc.resources.get(id).expect("exists");
     let ResourceBody::RecordFormat(f) = &r.body else { return Value::Null };
-    let used = doc.objects.values().filter(|o| o.data.get(&r.name).is_some_and(Value::is_object)).count();
+    let used = doc.objects.values().filter(|o| record::values(o, &r.name).is_some()).count();
     json!({"id": id, "name": r.name, "fields": f.fields.iter().map(field_json).collect::<Vec<_>>(), "used_by": used})
 }
 
 fn parse_fields(v: &Value) -> Result<RecordFormat, RpcError> {
-    let fields: Vec<FieldDef> = serde_json::from_value(v.clone()).map_err(|e| bad(format!("fields: {e}. Each field is {{name, type (text|integer|number|boolean|dimension|area|choice), default?, unit?, choices?}}")))?;
+    let fields: Vec<FieldDef> = serde_json::from_value(v.clone()).map_err(|e| bad(format!("fields: {e}. Each field is {{name, type (text|integer|number|boolean|dimension|area|choice|date|time|volume|angle), default?, unit?, choices?}}")))?;
+    if let Some(f) = fields.iter().find(|f| f.ty == FieldType::Unknown) {
+        return Err(bad(format!("field '{}' has an unknown type. Types: text, integer, number, boolean, dimension, area, choice, date, time, volume, angle", f.name)));
+    }
     Ok(RecordFormat { fields })
 }
 
@@ -389,7 +392,7 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                 .resources
                 .iter()
                 .filter(|r| matches!(r.body, ResourceBody::RecordFormat(_)))
-                .filter_map(|r| record::values(o, &r.name).map(|v| (r.name.clone(), Value::Object(v.clone()))))
+                .filter_map(|r| record::values(o, &r.name).map(|v| (r.name.clone(), Value::Object(record::fields_only(v)))))
                 .collect();
             Ok(json!({"records": records}))
         }

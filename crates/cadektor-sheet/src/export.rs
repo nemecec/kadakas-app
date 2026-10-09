@@ -114,8 +114,9 @@ fn xml_escape(s: &str) -> String {
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
-            // Characters that XML 1.0 does not allow.
-            c if (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r') => {}
+            // Characters that XML 1.0 does not allow: controls other than tab, LF and CR, and the
+            // two non-characters U+FFFE and U+FFFF.
+            c if ((c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{fffe}' | '\u{ffff}') => {}
             c => out.push(c),
         }
     }
@@ -162,7 +163,7 @@ fn sheet_xml(c: &Computed) -> String {
                     format!("<c r=\"{at}\"{s}><v>{n}</v></c>")
                 }
                 Value::Bool(b) => format!("<c r=\"{at}\" t=\"b\"><v>{}</v></c>", u8::from(*b)),
-                Value::Text(t) => format!("<c r=\"{at}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>", xml_escape(&defuse(t))),
+                Value::Text(t) => format!("<c r=\"{at}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>", xml_escape(t)),
                 Value::Error(e) => format!("<c r=\"{at}\" t=\"inlineStr\"><is><t>{}</t></is></c>", e.code()),
             };
             cells.push_str(&body);
@@ -273,7 +274,7 @@ mod tests {
         assert!(sheet.contains("<c r=\"C3\"><v>-5</v></c>"));
         assert!(sheet.contains("line\nbreak &lt;&amp;&gt;"));
         assert!(sheet.contains("<t>#DIV/0!</t>"));
-        assert!(sheet.contains("'=cmd|"));
+        assert!(sheet.contains("<t xml:space=\"preserve\">=cmd|"), "text is not changed in XLSX, a text cell is not a formula");
         assert!(!sheet.contains("<c r=\"C1\""), "empty cells are left out");
         for part in ["xl/styles.xml", "[Content_Types].xml", "_rels/.rels", "xl/_rels/workbook.xml.rels"] {
             assert!(text(part).starts_with("<?xml"), "{part}");
@@ -291,6 +292,22 @@ mod tests {
         assert_eq!(sheet_name("  'a'  "), "a");
         assert_eq!(sheet_name("a\u{7}b"), "ab");
         assert_eq!(xml_escape("a\u{1}\"b\t"), "a&quot;b\t");
+        assert_eq!(xml_escape("a\u{fffe}b\u{ffff}c\u{b}d\u{c}e\nf\rg"), "abcde\nf\rg");
+        assert_eq!(xml_escape("\u{fffd}\u{10ffff}"), "\u{fffd}\u{10ffff}", "other characters stay");
+    }
+
+    #[test]
+    fn xlsx_text_keeps_a_leading_minus_or_equals() {
+        let mut w = WorksheetDef::default();
+        w.set_cell("A1", "'-5 cm", None).unwrap();
+        w.set_cell("A2", "'+x", None).unwrap();
+        w.set_cell("A3", "'@home", None).unwrap();
+        let c = compute(&w, &Document::default());
+        let sheet = sheet_xml(&c);
+        assert!(sheet.contains(">-5 cm</t>") && sheet.contains(">+x</t>") && sheet.contains(">@home</t>"), "{sheet}");
+        assert!(!sheet.contains("'-5"));
+        // CSV still guards against formulas.
+        assert!(csv(&c).starts_with("'-5 cm\n"));
     }
 
     #[test]
