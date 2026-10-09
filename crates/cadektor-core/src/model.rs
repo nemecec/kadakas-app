@@ -158,6 +158,10 @@ pub enum Shape {
     },
     /// A pad or grade limits that change the proposed surface of the site models on the same layer.
     SiteModifier { modifier: ModifierKind, boundary: Vec<Vertex> },
+    /// Viewport on a sheet layer: design layers at a scale. Coordinates are paper mm (see `sheets`).
+    Viewport(Box<crate::sheets::Viewport>),
+    /// Border, grid reference and title block on a sheet layer.
+    TitleBlock(crate::sheets::TitleBlock),
 }
 
 /// Default text height of a plant tag, in mm.
@@ -205,6 +209,8 @@ impl Shape {
             Shape::Polyline3d { .. } => "polyline3d",
             Shape::SiteModel { .. } => "site_model",
             Shape::SiteModifier { .. } => "site_modifier",
+            Shape::Viewport(_) => "viewport",
+            Shape::TitleBlock(_) => "title_block",
         }
     }
 
@@ -229,6 +235,8 @@ impl Shape {
     pub fn is_finite(&self) -> bool {
         let v = |p: &DVec2| p.is_finite();
         match self {
+            Shape::Viewport(vp) => vp.problem().is_none(),
+            Shape::TitleBlock(tb) => tb.problem().is_none(),
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
             Shape::SiteModel { points, lines, settings } => {
@@ -266,6 +274,8 @@ impl Shape {
             }
         };
         match self {
+            // Viewports and title blocks are checked as a whole (`Viewport::problem`).
+            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
             Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
             Shape::SiteModel { points, lines, settings } => {
@@ -334,6 +344,8 @@ impl Shape {
     pub fn translate(&mut self, d: DVec2) {
         let mv = |p: &mut DVec2| *p += d;
         match self {
+            Shape::Viewport(vp) => vp.translate(d),
+            Shape::TitleBlock(tb) => tb.translate(d),
             Shape::Locus3d { p } => {
                 p.x += d.x;
                 p.y += d.y;
@@ -378,6 +390,8 @@ impl Shape {
             )
         };
         match self {
+            Shape::Viewport(vp) => (vp.min, vp.max),
+            Shape::TitleBlock(tb) => tb.bounds(),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
@@ -543,6 +557,9 @@ pub struct Document {
     /// Reusable definitions, such as plant styles. Older files have none.
     #[serde(default, skip_serializing_if = "Resources::is_empty")]
     pub resources: Resources,
+    /// Sheets, project data and saved views. Older files have none.
+    #[serde(default, skip_serializing_if = "crate::sheets::Drawing::is_empty")]
+    pub drawing: crate::sheets::Drawing,
     #[serde(default)]
     next_id: u64,
 }
@@ -558,6 +575,7 @@ impl PartialEq for Document {
             && self.georef == other.georef
             && self.next_id == other.next_id
             && self.resources == other.resources
+            && self.drawing == other.drawing
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
     }
@@ -619,6 +637,7 @@ impl Default for Document {
             active_class: NONE_CLASS,
             georef: None,
             resources: Resources::default(),
+            drawing: Default::default(),
             next_id: 2,
         }
     }
@@ -702,6 +721,13 @@ impl Document {
         }) {
             return Err(format!("object {} has an invalid shape", o.id));
         }
+        if let Some(o) = self.objects.values().find(|o| {
+            let sheet = self.layer(o.layer).is_some_and(|l| l.kind == LayerKind::Sheet);
+            let paper_only = matches!(o.shape, Shape::Viewport(_) | Shape::TitleBlock(_));
+            (sheet && !crate::sheets::allowed_on_sheet(&o.shape)) || (paper_only && !sheet)
+        }) {
+            return Err(format!("object {} is on the wrong kind of layer", o.id));
+        }
         self.resources.validate()?;
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {
             return Err("active layer or class does not exist".into());
@@ -740,9 +766,22 @@ impl Document {
         }
     }
 
+    /// True if the object shows in the model: its design layer and class are visible.
+    /// Objects on sheet layers are paper space and never show in the model (see `is_shown`).
     pub fn is_visible(&self, obj: &Object) -> bool {
-        self.layer(obj.layer).is_some_and(|l| l.visible)
+        self.layer(obj.layer).is_some_and(|l| l.visible && l.kind == LayerKind::Design)
             && self.class(obj.class).is_some_and(|c| c.visible)
+    }
+
+    /// True if the object can be picked or snapped to: it shows in the model, or it is on the
+    /// active sheet layer.
+    pub fn is_pickable(&self, obj: &Object) -> bool {
+        self.is_visible(obj) || (self.is_shown(obj) && obj.layer == self.active_layer)
+    }
+
+    /// True if the layer and the class of the object are visible, on any kind of layer.
+    pub fn is_shown(&self, obj: &Object) -> bool {
+        self.layer(obj.layer).is_some_and(|l| l.visible) && self.class(obj.class).is_some_and(|c| c.visible)
     }
 }
 

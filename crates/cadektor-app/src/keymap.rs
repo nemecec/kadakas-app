@@ -139,6 +139,7 @@ actions! {
     FileOpen => "file.open", "Open", ["Cmd/Ctrl+O"], true;
     FileSave => "file.save", "Save", ["Cmd/Ctrl+S"], true;
     FileSaveAs => "file.save_as", "Save As", ["Cmd/Ctrl+Shift+S"], true;
+    FileExportPdf => "file.export_pdf", "Export PDF (print)", ["Cmd/Ctrl+P"], true;
     Undo => "edit.undo", "Undo", ["Cmd/Ctrl+Z"], true;
     Redo => "edit.redo", "Redo", ["Cmd/Ctrl+Y", "Cmd/Ctrl+Shift+Z"], true;
     Delete => "edit.delete", "Delete", ["Delete", "Backspace"], true;

@@ -55,6 +55,8 @@ pub struct CadektorApp {
     /// View changes from keys; applied in the next canvas pass.
     pending_zoom: f64,
     pending_pan: egui::Vec2,
+    /// The area of the canvas in the last frame.
+    canvas_rect: Option<egui::Rect>,
     #[cfg(not(target_arch = "wasm32"))]
     agent: Option<crate::agent::AgentServer>,
     /// The File > Import and File > Export dialogs.
@@ -122,6 +124,7 @@ impl CadektorApp {
             live_cursor: DVec2::ZERO,
             pending_zoom: 1.0,
             pending_pan: egui::Vec2::ZERO,
+            canvas_rect: None,
             #[cfg(not(target_arch = "wasm32"))]
             agent: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -194,7 +197,7 @@ impl CadektorApp {
 
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
-        self.session.selection = doc.objects.values().filter(|o| doc.is_visible(o)).map(|o| o.id).collect();
+        self.session.selection = doc.objects.values().filter(|o| doc.is_pickable(o)).map(|o| o.id).collect();
     }
 
     fn apply_menu(&mut self, ctx: &egui::Context, action: MenuAction) {
@@ -215,6 +218,8 @@ impl CadektorApp {
             MenuAction::SaveAs => self.save(true, ctx),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ExportSvg => self.export_svg(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::ExportPdf => self.export_pdf(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Import => self.io_ui.start_import(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -275,6 +280,39 @@ impl CadektorApp {
         };
     }
 
+    /// File > Export PDF: all sheet layers, one page each.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_pdf(&mut self) {
+        if self.session.editor.doc().sheet_layers().next().is_none() {
+            self.status = "Add a sheet layer first (Navigation > Sheet Layers > +)".into();
+            return;
+        }
+        let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name("drawing.pdf").save_file() else { return };
+        self.status = match self.session.export_file_trusted(serde_json::json!({"path": p.display().to_string(), "format": "pdf", "overwrite": true})) {
+            Ok(r) => format!("Exported {} sheet(s) to {}", r["pages"], p.display()),
+            Err(e) => format!("Error: {}", e.message),
+        };
+    }
+
+    /// Saved view requests from the palette, and views that an agent or the palette restored.
+    fn sync_saved_views(&mut self, rect: Option<egui::Rect>) {
+        if let Some(name) = self.nav.sheets.save_request.take() {
+            let center = rect.map_or(DVec2::ZERO, |r| self.view.to_model(r.center()));
+            let view = crate::sheets_ui::capture(&self.session, &name, self.view.zoom, center);
+            self.exec(&Command::SaveView { view: Box::new(view) });
+        }
+        if let Some(v) = self.session.take_applied_view() {
+            if let (Some(zoom), Some(pan)) = (v.zoom, v.pan)
+                && let Some(r) = rect
+            {
+                self.view.zoom = zoom.clamp(crate::view::MIN_ZOOM, crate::view::MAX_ZOOM);
+                let c = r.center();
+                self.view.origin = DVec2::new(c.x as f64 - pan.x * self.view.zoom, c.y as f64 + pan.y * self.view.zoom);
+            }
+            self.status = format!("Restored view '{}'", v.name);
+        }
+    }
+
     fn nudge(&mut self, dir: DVec2) {
         if self.session.selection.is_empty() {
             return;
@@ -302,6 +340,7 @@ impl CadektorApp {
             Action::FileOpen => self.apply_menu(ctx, MenuAction::Open),
             Action::FileSave => self.apply_menu(ctx, MenuAction::Save),
             Action::FileSaveAs => self.apply_menu(ctx, MenuAction::SaveAs),
+            Action::FileExportPdf => self.apply_menu(ctx, MenuAction::ExportPdf),
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
             // While drawing, Delete and Backspace take back the last clicked point.
@@ -466,6 +505,10 @@ impl CadektorApp {
     }
 
     fn fit_view(&mut self, rect: egui::Rect) {
+        if let Some(page) = crate::sheets_ui::active_sheet(&self.session).and_then(|l| self.session.editor.doc().sheet(l)) {
+            self.view.fit(DVec2::ZERO, page.size_mm(), rect);
+            return;
+        }
         let (lo, hi) = cadektor_core::svg::drawing_bounds(self.session.editor.doc())
             .unwrap_or((DVec2::new(-1000.0, -1000.0), DVec2::new(19000.0, 14000.0)));
         self.view.fit(lo, hi, rect);
@@ -474,6 +517,14 @@ impl CadektorApp {
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // A sheet layer shows its page. Changing the active sheet fits the page to the window.
+        let sheet = crate::sheets_ui::active_sheet(&self.session);
+        if sheet != self.nav.sheets.last_sheet {
+            self.nav.sheets.last_sheet = sheet;
+            self.needs_fit = true;
+        }
+        let page = sheet.and_then(|l| self.session.sheet_page(l).ok());
+        self.canvas_rect = Some(rect);
         if self.needs_fit {
             self.fit_view(rect);
             self.needs_fit = false;
@@ -564,6 +615,7 @@ impl CadektorApp {
             snap: self.snap_hit,
             show_grid: self.show_grid,
             site: Some((self.session.site_cache(), self.session.editor.revision())),
+            sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
     }
@@ -660,6 +712,8 @@ impl eframe::App for CadektorApp {
                 plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
             });
         });
+        let rect = self.canvas_rect;
+        self.sync_saved_views(rect);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             if self.plan() {
                 self.canvas(ui);

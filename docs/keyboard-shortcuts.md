@@ -155,6 +155,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Open (`file.open`) | Cmd+O / Ctrl+O | Cmd/Ctrl+O | done |
 | Save (`file.save`) | Cmd+S / Ctrl+S | Cmd/Ctrl+S | done |
 | Save As (`file.save_as`) | Cmd+Shift+S / Ctrl+Shift+S | Cmd/Ctrl+Shift+S | done |
+| Print: exports the sheets as a PDF (`file.export_pdf`) | Cmd+P / Ctrl+P | Cmd/Ctrl+P | done |
 | Undo (`edit.undo`) | Cmd+Z / Ctrl+Z | Cmd/Ctrl+Z | done |
 | Redo (`edit.redo`) | Cmd+Y / Ctrl+Y | Cmd/Ctrl+Y or Cmd/Ctrl+Shift+Z (Shift+Z is an extra, kept from the first app version) | done |
 | Select All (`edit.select_all`) | Cmd+A / Ctrl+A | Cmd/Ctrl+A | done |
@@ -216,7 +217,7 @@ These Vectorworks shortcuts have no function in Cadektor and none is planned.
 - Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page, Callout,
   2D Locus, Symbol Insertion, Double Line, Rounded Rectangle, Oval, Quarter Arc, Freehand, Regular Polygon, Spiral, Eyedropper,
   Visibility, Attribute Mapping, Connect/Combine, Move by Points, Texture.
-- Menus: Page Setup, Print, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), render modes other than wireframe and shaded,
+- Menus: Page Setup, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), render modes other than wireframe and shaded,
   Model menu (solids, extrusions, 3D power pack), AEC, Spotlight, Energos, Plug-in Manager, Origin, stacking order commands,
   Align and Distribute, Convert commands, Show and Hide Guides.
 - Other keys: Toggle Automatic Working Plane, X-ray Select, Coincident Selection, Set Datum, Edit list row (F2), worksheet cell keys,
