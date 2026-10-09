@@ -1,10 +1,13 @@
 //! A worksheet table: the calculated cells of a worksheet drawn inside the frame of a rectangle
 //! (see `cadektor_core::worksheet_table`). It is used on sheets and inside plan viewports.
 
+use std::collections::HashMap;
+
+use cadektor_core::hardscape::TerrainSource;
 use cadektor_core::model::Document;
-use cadektor_core::resource::ResourceBody;
+use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::worksheet_table::TableData;
-use cadektor_sheet::{compute, layout, layout::is_number, Value, WorksheetDef};
+use cadektor_sheet::{compute_with, layout, layout::is_number, Computed, Value, WorksheetDef};
 use glam::DVec2;
 
 use crate::display::*;
@@ -17,19 +20,40 @@ const DIGIT: f64 = 0.556;
 const GRID: Rgba = [150, 150, 150, 255];
 const ERROR: Rgba = [190, 40, 30, 255];
 
-/// The calculated worksheet of a table, or `None` if the worksheet is gone.
-fn calculated(doc: &Document, d: &TableData) -> Option<cadektor_sheet::Computed> {
-    match &doc.resources.get(d.worksheet)?.body {
-        ResourceBody::Worksheet(v) => WorksheetDef::from_value(v).ok().map(|def| compute(&def, doc)),
-        _ => None,
+/// The calculated worksheets that the tables of a document show. They are calculated once per
+/// page, with the ground of the site models, so draped hardscapes and landscape areas are measured
+/// as the reports measure them.
+#[derive(Default)]
+pub struct Tables(HashMap<ResourceId, Computed>);
+
+impl Tables {
+    /// Calculates the worksheets of all table objects in the document.
+    pub fn build(doc: &Document, ground: &dyn TerrainSource) -> Tables {
+        let mut map = HashMap::new();
+        for o in doc.objects.values() {
+            let Some(d) = cadektor_core::worksheet_table::data(o) else { continue };
+            if map.contains_key(&d.worksheet) {
+                continue;
+            }
+            if let Some(ResourceBody::Worksheet(v)) = doc.resources.get(d.worksheet).map(|r| &r.body)
+                && let Ok(def) = WorksheetDef::from_value(v)
+            {
+                map.insert(d.worksheet, compute_with(&def, doc, ground));
+            }
+        }
+        Tables(map)
+    }
+
+    pub fn get(&self, id: ResourceId) -> Option<&Computed> {
+        self.0.get(&id)
     }
 }
 
 /// The primitives of a table. `lo` and `hi` are the corners of the frame in model space, and the
 /// table starts at the top left. Cells that do not fit are cut at the frame.
-pub fn table_prims(doc: &Document, lo: DVec2, hi: DVec2, d: &TableData, xf: &Xf, ink: Rgba, out: &mut Vec<Prim>) {
-    let Some(c) = calculated(doc, d) else { return };
-    let l = layout(&c, d.text_height);
+pub fn table_prims(tables: &Tables, lo: DVec2, hi: DVec2, d: &TableData, xf: &Xf, ink: Rgba, out: &mut Vec<Prim>) {
+    let Some(c) = tables.get(d.worksheet) else { return };
+    let l = layout(c, d.text_height);
     let h = d.text_height;
     let top = hi.y;
     let frame = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)].map(|p| xf.p(p)).to_vec();
@@ -57,7 +81,7 @@ pub fn table_prims(doc: &Document, lo: DVec2, hi: DVec2, d: &TableData, xf: &Xf,
             }
             let (left, right) = (col_x[col as usize - 1], col_x[col as usize]);
             let base = top - f64::from(r - 1) * l.row_height - l.row_height * BASELINE;
-            let at_x = if is_number(&c, r, col) { (right - 0.45 * h - text.chars().count() as f64 * DIGIT * h).max(left + 0.2 * h) } else { left + 0.45 * h };
+            let at_x = if is_number(c, r, col) { (right - 0.45 * h - text.chars().count() as f64 * DIGIT * h).max(left + 0.2 * h) } else { left + 0.45 * h };
             let color = if matches!(c.value(r, col), Value::Error(_)) { ERROR } else { ink };
             out.push(Prim::Text(TextPrim { at: xf.p(DVec2::new(at_x, base)), text, height: xf.len(h), color, align: Align::Left }));
         }
@@ -68,7 +92,9 @@ pub fn table_prims(doc: &Document, lo: DVec2, hi: DVec2, d: &TableData, xf: &Xf,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compose::compose_page;
+    use crate::compose::{compose_page, compose_page_on};
+    use cadektor_core::hardscape::NoTerrain;
+    use cadektor_sheet::compute;
     use cadektor_core::command::{Command, Editor};
     use cadektor_core::model::{LayerId, ObjectId};
     use cadektor_core::resource::ResourceId;
@@ -122,6 +148,57 @@ mod tests {
         assert_eq!(texts(&page.prims).iter().filter(|t| t.as_str() == "Changed").count(), 1);
     }
 
+    /// A hill: the ground rises with x.
+    struct Hill;
+
+    impl TerrainSource for Hill {
+        fn elevation(&self, _: &cadektor_core::model::Object, p: DVec2) -> Option<f64> {
+            Some(p.x * 0.5)
+        }
+    }
+
+    #[test]
+    fn tables_are_calculated_with_the_ground() {
+        let mut ed = Editor::default();
+        let ring = cadektor_core::curve::corners(&[DVec2::ZERO, DVec2::new(4000.0, 0.0), DVec2::new(4000.0, 4000.0), DVec2::new(0.0, 4000.0)]);
+        ed.execute(&Command::AddHardscape {
+            boundary: Some(ring),
+            patch: Box::new(cadektor_core::hardscape::HardscapePatch { drape: Some(true), ..Default::default() }),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
+        .unwrap();
+        let mut def = WorksheetDef::default();
+        def.databases.push(cadektor_sheet::DatabaseDef {
+            criteria: "Kind = \"hardscape\"".into(),
+            header: false,
+            total: false,
+            columns: vec![cadektor_sheet::ColumnDef { header: "A".into(), expr: "ROUND(Area, 3)".into(), ..Default::default() }],
+            ..Default::default()
+        });
+        let ws = ResourceId(ed.execute(&Command::AddResource { name: "A".into(), body: ResourceBody::Worksheet(def.to_value()) }).unwrap().created[0]);
+        ed.execute(&Command::AddSheet { name: "A1".into(), paper: None, orientation: None, number: None, title: None }).unwrap();
+        let sheet = ed.doc().sheet_layers().next().unwrap().id;
+        ed.execute(&Command::AddWorksheetTable { worksheet: ws, at: DVec2::new(10.0, 100.0), size: DVec2::new(60.0, 10.0), text_height: Some(3.0), layer: Some(sheet), class: None, attrs: Default::default() }).unwrap();
+        // The tables of a page follow the ground they are given.
+        let flat = Tables::build(ed.doc(), &NoTerrain);
+        let hill = Tables::build(ed.doc(), &Hill);
+        assert_eq!(flat.get(ws).unwrap().value_at("A1"), Some(Value::Number(16.0)));
+        let Some(Value::Number(on_hill)) = hill.get(ws).unwrap().value_at("A1") else { panic!() };
+        assert!(on_hill > 16.5, "{on_hill}");
+        let t_flat = texts(&compose_page(ed.doc(), sheet).unwrap().prims);
+        let t_hill = texts(&compose_page_on(ed.doc(), sheet, &Hill).unwrap().prims);
+        assert_eq!(t_flat, vec!["16".to_string()]);
+        assert_eq!(t_hill, vec![cadektor_sheet::value::format_number(on_hill)]);
+        // The page cache and the PDF take the ground too.
+        let mut cache = crate::SheetCache::default();
+        let page = cache.page_on(ed.doc(), 1, sheet, &Hill).unwrap();
+        assert_eq!(texts(&page.prims), t_hill);
+        let pdf = crate::export_pdf_on(ed.doc(), 2, &mut cache, &[sheet], &Hill).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+    }
+
     #[test]
     fn a_table_in_a_viewport_is_scaled_and_a_missing_worksheet_draws_nothing() {
         let (mut ed, ws, sheet) = setup();
@@ -142,10 +219,10 @@ mod tests {
         let obj = ed.doc().object(id).unwrap().clone();
         let mut out = vec![];
         let gone = TableData { worksheet: ResourceId(9999), text_height: 3.0 };
-        table_prims(ed.doc(), DVec2::ZERO, DVec2::ONE, &gone, &Xf::IDENTITY, [0, 0, 0, 255], &mut out);
+        table_prims(&Tables::build(ed.doc(), &NoTerrain), DVec2::ZERO, DVec2::ONE, &gone, &Xf::IDENTITY, [0, 0, 0, 255], &mut out);
         assert!(out.is_empty());
         let not_a_sheet = TableData { worksheet: ResourceId(ed.doc().layers[0].id.0), text_height: 3.0 };
-        table_prims(ed.doc(), DVec2::ZERO, DVec2::ONE, &not_a_sheet, &Xf::IDENTITY, [0, 0, 0, 255], &mut out);
+        table_prims(&Tables::build(ed.doc(), &NoTerrain), DVec2::ZERO, DVec2::ONE, &not_a_sheet, &Xf::IDENTITY, [0, 0, 0, 255], &mut out);
         assert!(out.is_empty());
         assert!(cadektor_core::worksheet_table::data(&obj).is_some());
     }

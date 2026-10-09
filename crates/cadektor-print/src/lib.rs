@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use cadektor_core::model::{Document, LayerId};
 
-pub use compose::{compose_page, SheetCache};
+pub use compose::{compose_page, compose_page_on, SheetCache};
 pub use display::{Page, Prim};
 
 /// Why an output could not be made.
@@ -60,7 +60,12 @@ pub fn select_sheets(doc: &Document, ids: Option<&[LayerId]>) -> Result<Vec<Laye
 
 /// A PDF file with one page per sheet.
 pub fn export_pdf(doc: &Document, revision: u64, cache: &mut SheetCache, sheets: &[LayerId]) -> Result<Vec<u8>, PrintError> {
-    let pages = sheets.iter().map(|l| cache.page(doc, revision, *l)).collect::<Result<Vec<_>, _>>()?;
+    export_pdf_on(doc, revision, cache, sheets, &cadektor_core::hardscape::NoTerrain)
+}
+
+/// Like `export_pdf`, with the ground of the site models for the worksheet tables.
+pub fn export_pdf_on(doc: &Document, revision: u64, cache: &mut SheetCache, sheets: &[LayerId], ground: &dyn cadektor_core::hardscape::TerrainSource) -> Result<Vec<u8>, PrintError> {
+    let pages = sheets.iter().map(|l| cache.page_on(doc, revision, *l, ground)).collect::<Result<Vec<_>, _>>()?;
     let pixels: u64 = pages.iter().flat_map(|p| &p.prims).map(|p| if let Prim::Image(i) = p { i.width as u64 * i.height as u64 } else { 0 }).sum();
     if pixels > compose::MAX_RASTER_PIXELS {
         return Err(PrintError::Invalid(format!("the 3D viewports of these sheets make {} megapixels of images. The limit is {}. Lower the dpi", pixels / 1_000_000, compose::MAX_RASTER_PIXELS / 1_000_000)));

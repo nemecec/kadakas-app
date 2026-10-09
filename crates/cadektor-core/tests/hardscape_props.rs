@@ -118,13 +118,18 @@ proptest! {
         let ring = path_outline(&pts, width, j, false);
         let area = geom::polygon_area(&ring);
         let want = len * width;
-        prop_assert!((area - want).abs() <= 1e-5 * want, "{area} vs {want}");
+        // The union of the legs is made on an integer grid of 2^-31 of the extent (the polygon
+        // library's precision), so every outline point is off by up to about one grid step. For a long thin path
+        // this is a relative error of 1e-6 and more, so the tolerance is the perimeter times a few grid steps.
+        let extent = len + width;
+        let tol = 1e-9 * want + 4.0 * extent * extent / 2f64.powi(30);
+        prop_assert!((area - want).abs() <= tol, "{area} vs {want}");
         // Through the command: the plan area in the report is the same.
         let mut ed = Editor::default();
         let patch = HardscapePatch { center: Some(curve::corners(&pts)), width: Some(width), ..Default::default() };
         let id = ObjectId(ed.execute(&Command::AddHardscape { boundary: None, patch: Box::new(patch), layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0]);
         let q = hardscape::report::quantities(ed.doc(), ed.doc().object(id).unwrap(), None).unwrap();
-        prop_assert!((q.plan_area_m2 * 1e6 - want).abs() <= 1e-6 * want);
+        prop_assert!((q.plan_area_m2 * 1e6 - want).abs() <= tol, "{} vs {want}", q.plan_area_m2 * 1e6);
         prop_assert!((q.surface_area_m2 - q.plan_area_m2).abs() < 1e-12);
     }
 

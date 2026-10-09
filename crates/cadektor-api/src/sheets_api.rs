@@ -654,7 +654,8 @@ impl Session {
     /// The display list of a sheet. It is rebuilt only when the document changed.
     pub fn sheet_page(&mut self, layer: LayerId) -> Result<std::sync::Arc<cadektor_print::Page>, RpcError> {
         let revision = self.editor.revision();
-        self.sheet_cache.page(self.editor.doc(), revision, layer).map_err(app)
+        let ground = cadektor_site::SiteTerrain::new(&self.site_cache, revision, self.editor.doc());
+        self.sheet_cache.page_on(self.editor.doc(), revision, layer, &ground).map_err(app)
     }
 }
 
@@ -701,7 +702,8 @@ impl Session {
             };
             let list = print::select_sheets(doc, ids.as_deref()).map_err(bad)?;
             let revision = self.editor.revision();
-            let bytes = print::export_pdf(self.editor.doc(), revision, &mut self.sheet_cache, &list).map_err(app)?;
+            let ground = cadektor_site::SiteTerrain::new(&self.site_cache, revision, self.editor.doc());
+            let bytes = print::export_pdf_on(self.editor.doc(), revision, &mut self.sheet_cache, &list, &ground).map_err(app)?;
             (bytes, json!({"pages": list.len()}))
         } else {
             let layer = sheet_ref(doc, options.get("sheet").unwrap_or(&Value::Null))?;
