@@ -1,0 +1,29 @@
+mod app;
+#[cfg(not(target_arch = "wasm32"))]
+mod agent;
+mod canvas;
+mod databar;
+mod file_io;
+mod hit;
+mod keymap;
+mod panels;
+mod snap;
+mod tess;
+mod tools;
+mod view;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().collect();
+    let env = std::env::var("CADEKTOR_AGENT_PORT").ok();
+    let port = agent::parse_agent_port(&args, env.as_deref());
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]).with_title("Cadektor"),
+        ..Default::default()
+    };
+    eframe::run_native("Cadektor", options, Box::new(move |cc| Ok(Box::new(app::CadektorApp::new(cc, port)))))
+}
+
+// The web entry point is not set up yet. The modules above are wasm compatible.
+#[cfg(target_arch = "wasm32")]
+fn main() {}

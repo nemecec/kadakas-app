@@ -1,0 +1,14 @@
+[package]
+name = "cadektor-cli"
+default-run = "cadektor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+clap = { version = "4.6.7", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[[bin]]
+name = "cadektor"
+path = "src/main.rs"

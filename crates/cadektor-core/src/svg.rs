@@ -1,0 +1,286 @@
+//! SVG rendering of the visible objects. Agents use it to "see" a drawing.
+
+use std::fmt::Write;
+
+use glam::DVec2;
+
+use crate::model::*;
+
+/// Bounds of all visible objects, or `None` for an empty drawing.
+pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
+    doc.objects
+        .values()
+        .filter(|o| doc.is_visible(o))
+        .map(|o| o.shape.bounds())
+        .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn points_attr(pts: &[DVec2]) -> String {
+    pts.iter().map(|p| format!("{},{}", p.x, -p.y)).collect::<Vec<_>>().join(" ")
+}
+
+/// Renders the drawing with the model Y axis pointing up.
+/// `width_px` sets the pixel width. The height follows the aspect ratio.
+pub fn render(doc: &Document, width_px: u32) -> String {
+    let (lo, hi) = drawing_bounds(doc).unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
+    let margin = ((hi - lo).max_element() * 0.05).max(1.0);
+    let (lo, hi) = (lo - margin, hi + margin);
+    let size = hi - lo;
+    let height_px = (width_px as f64 * size.y / size.x).round().max(1.0);
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" viewBox="{} {} {} {}">"#,
+        lo.x, -hi.y, size.x, size.y
+    );
+    // 1 mm of line weight on paper is `scale` mm in the model.
+    for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
+        let a = doc.resolved_attrs(o);
+        let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
+        let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
+        let fill = a.fill.unwrap_or(Color::NONE).to_css();
+        let sw = a.line_weight.unwrap_or(0.25) * scale;
+        let style = format!(r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id);
+        let _ = match &o.shape {
+            Shape::Line { a, b } => writeln!(s, r#"<line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#, a.x, -a.y, b.x, -b.y),
+            Shape::Rect { min, max } => {
+                let (p, q) = (min.min(*max), min.max(*max));
+                writeln!(s, r#"<rect x="{}" y="{}" width="{}" height="{}" {style}/>"#, p.x, -q.y, q.x - p.x, q.y - p.y)
+            }
+            Shape::Circle { center, radius } => {
+                writeln!(s, r#"<circle cx="{}" cy="{}" r="{radius}" {style}/>"#, center.x, -center.y)
+            }
+            Shape::Arc { center, radius, start, end } => {
+                let sweep = arc_sweep(*start, *end);
+                let p0 = *center + DVec2::from_angle(*start) * *radius;
+                if sweep >= std::f64::consts::TAU {
+                    // One SVG arc cannot draw a full circle, so draw two halves.
+                    let p1 = *center - DVec2::from_angle(*start) * *radius;
+                    writeln!(
+                        s,
+                        r#"<path d="M {} {} A {radius} {radius} 0 1 0 {} {} A {radius} {radius} 0 1 0 {} {}" {style}/>"#,
+                        p0.x, -p0.y, p1.x, -p1.y, p0.x, -p0.y
+                    )
+                } else {
+                    let p1 = *center + DVec2::from_angle(*start + sweep) * *radius;
+                    let large = (sweep > std::f64::consts::PI) as u8;
+                    // Y is flipped, so a counterclockwise arc has sweep-flag 0.
+                    writeln!(s, r#"<path d="M {} {} A {radius} {radius} 0 {large} 0 {} {}" {style}/>"#, p0.x, -p0.y, p1.x, -p1.y)
+                }
+            }
+            Shape::Polyline { points, closed } => {
+                let tag = if *closed { "polygon" } else { "polyline" };
+                writeln!(s, r#"<{tag} points="{}" {style}/>"#, points_attr(points))
+            }
+            Shape::Text { at, text, height } => writeln!(
+                s,
+                r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}" data-id="{}">{}</text>"#,
+                at.x,
+                -at.y,
+                o.id,
+                esc(text)
+            ),
+            Shape::Plant { at, spread, species, .. } => writeln!(
+                s,
+                r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
+                at.x,
+                -at.y,
+                spread / 2.0,
+                esc(species)
+            ),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+                writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(boundary), o.shape.kind())
+            }
+        };
+    }
+    s.push_str("</svg>\n");
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::{Command, Editor};
+
+    #[test]
+    fn renders_visible_objects_only() {
+        let mut ed = Editor::default();
+        let add = |shape| Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() };
+        ed.execute(&add(Shape::Circle { center: DVec2::ZERO, radius: 50.0 })).unwrap();
+        ed.execute(&add(Shape::Text { at: DVec2::ZERO, text: "a<b".into(), height: 10.0 })).unwrap();
+        let svg = render(&ed.doc, 400);
+        assert!(svg.contains("<circle"));
+        assert!(svg.contains("a&lt;b"));
+        ed.execute(&Command::ModifyClass { id: NONE_CLASS, name: None, visible: Some(false), attrs: None }).unwrap();
+        assert!(!render(&ed.doc, 400).contains("<circle"));
+    }
+
+    fn add(ed: &mut Editor, shape: Shape) -> u64 {
+        ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() })
+            .unwrap()
+            .created[0]
+    }
+
+    fn one(shape: Shape) -> String {
+        let mut ed = Editor::default();
+        add(&mut ed, shape);
+        render(&ed.doc, 400)
+    }
+
+    #[test]
+    fn line_and_circle_elements() {
+        let svg = one(Shape::Line { a: DVec2::new(1.0, 2.0), b: DVec2::new(3.0, 4.0) });
+        assert!(svg.contains(r#"<line x1="1" y1="-2" x2="3" y2="-4""#), "{svg}");
+        let svg = one(Shape::Circle { center: DVec2::new(1.0, 2.0), radius: 3.0 });
+        assert!(svg.contains(r#"<circle cx="1" cy="-2" r="3""#), "{svg}");
+    }
+
+    #[test]
+    fn rect_with_swapped_corners_is_normalized() {
+        let svg = one(Shape::Rect { min: DVec2::new(10.0, 8.0), max: DVec2::new(2.0, 3.0) });
+        assert!(svg.contains(r#"<rect x="2" y="-8" width="8" height="5""#), "{svg}");
+    }
+
+    #[test]
+    fn arc_large_arc_flag_depends_on_sweep() {
+        let arc = |start: f64, end: f64| Shape::Arc { center: DVec2::ZERO, radius: 10.0, start, end };
+        // Sweep of a quarter turn: small arc.
+        let svg = one(arc(0.0, std::f64::consts::FRAC_PI_2));
+        assert!(svg.contains("A 10 10 0 0 0"), "{svg}");
+        // Sweep of three quarter turns: large arc.
+        let svg = one(arc(0.0, 1.5 * std::f64::consts::PI));
+        assert!(svg.contains("A 10 10 0 1 0"), "{svg}");
+        // End below start wraps around: from 270 degrees to 0 is a quarter turn.
+        let svg = one(arc(1.5 * std::f64::consts::PI, 0.0));
+        assert!(svg.contains("A 10 10 0 0 0"), "{svg}");
+    }
+
+    #[test]
+    fn polyline_and_polygon_elements() {
+        let pts = vec![DVec2::new(1.0, 2.0), DVec2::new(3.0, -4.0)];
+        let svg = one(Shape::Polyline { points: pts.clone(), closed: false });
+        assert!(svg.contains(r#"<polyline points="1,-2 3,4""#), "{svg}");
+        let svg = one(Shape::Polyline { points: pts, closed: true });
+        assert!(svg.contains(r#"<polygon points="1,-2 3,4""#), "{svg}");
+    }
+
+    #[test]
+    fn text_is_escaped_and_positioned() {
+        let svg = one(Shape::Text { at: DVec2::new(1.0, 2.0), text: r#"R&D "x" <y>"#.into(), height: 10.0 });
+        assert!(svg.contains(r#"<text x="1" y="-2" font-size="10""#), "{svg}");
+        assert!(svg.contains(">R&amp;D &quot;x&quot; &lt;y&gt;</text>"), "{svg}");
+    }
+
+    #[test]
+    fn plant_is_a_faded_circle_with_escaped_title() {
+        let svg = one(Shape::Plant { at: DVec2::new(1.0, 2.0), species: "A&B".into(), spread: 4.0, height: 8.0 });
+        assert!(svg.contains(r#"<g data-kind="plant"><circle cx="1" cy="-2" r="2""#), "{svg}");
+        assert!(svg.contains(r#"fill-opacity="0.3"/><title>A&amp;B</title></g>"#), "{svg}");
+    }
+
+    #[test]
+    fn landscape_and_hardscape_are_polygons_with_kind() {
+        let boundary = vec![DVec2::new(1.0, 1.0), DVec2::new(3.0, 1.0), DVec2::new(3.0, 4.0)];
+        let svg = one(Shape::LandscapeArea { boundary: boundary.clone(), name: "Meadow".into() });
+        assert!(svg.contains(r#"<polygon points="1,-1 3,-1 3,-4""#), "{svg}");
+        assert!(svg.contains(r#"data-kind="landscape_area""#), "{svg}");
+        let svg = one(Shape::Hardscape { boundary, material: "Setts".into() });
+        assert!(svg.contains(r#"data-kind="hardscape""#), "{svg}");
+    }
+
+    #[test]
+    fn stroke_width_uses_layer_scale_and_attributes_resolve() {
+        let mut ed = Editor::default();
+        // Class defaults: pen black, no fill, weight 0.25 mm at 1:100 gives 25.
+        let c = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
+        let svg = render(&ed.doc, 400);
+        let expected = format!(r#"stroke="rgba(0,0,0,1.000)" fill="none" stroke-width="25" data-id="{c}""#);
+        assert!(svg.contains(&expected), "{svg}");
+
+        // Object overrides beat the class.
+        ed.execute(&Command::ModifyObject {
+            id: ObjectId(c),
+            shape: None,
+            layer: None,
+            class: None,
+            attrs: Some(Attributes { pen: Some(Color([255, 0, 0, 255])), fill: Some(Color([0, 0, 255, 128])), line_weight: None }),
+        })
+        .unwrap();
+        let svg = render(&ed.doc, 400);
+        assert!(svg.contains(r#"stroke="rgba(255,0,0,1.000)" fill="rgba(0,0,255,0.502)""#), "{svg}");
+
+        // A layer at 1:50 halves the stroke width.
+        let lid = ed.execute(&Command::AddLayer { name: "Detail".into(), elevation: 0.0, scale: Some(50.0), kind: None }).unwrap().created[0];
+        ed.execute(&Command::SetActive { layer: Some(LayerId(lid)), class: None }).unwrap();
+        add(&mut ed, Shape::Circle { center: DVec2::new(100.0, 0.0), radius: 5.0 });
+        let svg = render(&ed.doc, 400);
+        assert!(svg.contains(r#"stroke-width="12.5""#), "{svg}");
+    }
+
+    #[test]
+    fn class_without_attributes_uses_fallback_colors() {
+        let mut ed = Editor::default();
+        let cid = ClassId(
+            ed.execute(&Command::AddClass { name: "Bare".into(), attrs: Attributes::default() }).unwrap().created[0],
+        );
+        ed.execute(&Command::SetActive { layer: None, class: Some(cid) }).unwrap();
+        add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
+        let svg = render(&ed.doc, 400);
+        assert!(svg.contains(r#"stroke="rgba(0,0,0,1.000)" fill="none" stroke-width="25""#), "{svg}");
+    }
+
+    #[test]
+    fn hidden_layer_objects_are_not_drawn() {
+        let mut ed = Editor::default();
+        add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
+        ed.execute(&Command::ModifyLayer { id: FIRST_LAYER, name: None, visible: Some(false), locked: None, elevation: None, scale: None })
+            .unwrap();
+        let svg = render(&ed.doc, 400);
+        assert!(!svg.contains("<circle"));
+        // With nothing visible the empty-drawing defaults apply.
+        assert!(svg.contains(r#"viewBox="-50 -1050 1100 1100""#), "{svg}");
+    }
+
+    #[test]
+    fn empty_drawing_uses_default_frame() {
+        let svg = render(&Document::default(), 400);
+        assert!(svg.contains(r#"width="400" height="400" viewBox="-50 -1050 1100 1100""#), "{svg}");
+    }
+
+    #[test]
+    fn height_follows_aspect_ratio() {
+        let mut ed = Editor::default();
+        add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(1000.0, 500.0) });
+        // Model frame is 1100 x 600 with the 5% margin.
+        let svg = render(&ed.doc, 550);
+        assert!(svg.contains(r#"width="550" height="300" viewBox="-50 -550 1100 600""#), "{svg}");
+        // A tiny width still gives at least one pixel of height.
+        let mut ed = Editor::default();
+        add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(1000.0, 500.0) });
+        assert!(render(&ed.doc, 1).contains(r#"width="1" height="1""#));
+    }
+
+    #[test]
+    fn drawing_bounds_ignores_hidden_objects() {
+        let mut ed = Editor::default();
+        assert_eq!(drawing_bounds(&ed.doc), None);
+        add(&mut ed, Shape::Circle { center: DVec2::new(10.0, 10.0), radius: 1.0 });
+        let hidden = ed.execute(&Command::AddLayer { name: "Hidden2".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0];
+        ed.execute(&Command::ModifyLayer { id: LayerId(hidden), name: None, visible: Some(false), locked: None, elevation: None, scale: None })
+            .unwrap();
+        ed.execute(&Command::SetActive { layer: Some(LayerId(hidden)), class: None }).unwrap();
+        add(&mut ed, Shape::Circle { center: DVec2::new(-500.0, 40.0), radius: 1.0 });
+        assert_eq!(drawing_bounds(&ed.doc), Some((DVec2::new(9.0, 9.0), DVec2::new(11.0, 11.0))));
+    }
+
+    #[test]
+    fn full_circle_arc_is_drawn_as_two_half_arcs() {
+        let svg = one(Shape::Arc { center: DVec2::ZERO, radius: 10.0, start: 0.0, end: std::f64::consts::TAU });
+        assert_eq!(svg.matches(" A 10 10 0 1 0 ").count(), 2, "{svg}");
+        assert!(svg.contains("M 10 -0 A 10 10 0 1 0 -10 -0 A"), "{svg}");
+    }
+}
