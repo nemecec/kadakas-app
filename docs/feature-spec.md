@@ -249,12 +249,12 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| GIS-01 | Georeference per design layer: CRS plus origin offset. | P0 | planned |
-| GIS-02 | CRS from EPSG code. | P0 | planned |
-| GIS-03 | CRS from WKT text and `.prj` file. | P0 | planned |
-| GIS-04 | Coordinate transform (via a PROJ-compatible library). | P0 | planned |
-| GIS-05 | Shapefile import and export. | P0 | planned |
-| GIS-06 | GeoJSON import and export. | P0 | planned |
+| GIS-01 | Georeference: CRS plus origin offset, rotation and user origin. One per document (per design layer is planned). | P0 | done |
+| GIS-02 | CRS from EPSG code. | P0 | done |
+| GIS-03 | CRS from WKT text and `.prj` file. | P0 | done |
+| GIS-04 | Coordinate transform (via a PROJ-compatible library). Uses `proj4rs`. | P0 | done |
+| GIS-05 | Shapefile import (points, lines, polygons with holes, Z values, dbf attributes). Export is planned. | P0 | done |
+| GIS-06 | GeoJSON import and export. | P0 | done |
 | GIS-07 | Survey point tool (set known point). | P1 | planned |
 | GIS-08 | Georeferenced images (world file, GeoTIFF). | P1 | planned |
 | GIS-09 | Web map tiles and WMS as backdrop. | P2 | planned |
@@ -294,9 +294,9 @@ Non-goals
 | SHT-01 | SVG render of a layer set. | P0 | done |
 | SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
 | SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
-| SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: viewport class override, object attributes, class attributes, defaults. Layer and class graphic "grey" mode is missing. | P1 | done |
+| SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: object attributes, viewport class override (by-class attributes only), class attributes, defaults. A viewport keeps its own layer and class visibility. Layer and class graphic "grey" mode is missing. | P1 | done |
 | SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation tools in the app are still missing. | P1 | partial |
-| SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.pdf`. | P1 | done |
+| SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
 | SHT-07 | Batch print / publish. | P2 | planned |
 | SHT-08 | Section and elevation viewports. | P2 | planned |
 | SHT-09 | Design layer viewports. | P2 | planned |
@@ -336,12 +336,12 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| IOP-01 | DXF import and export (2D, layers, blocks). | P0 | planned |
+| IOP-01 | DXF import and export (2D, layers, blocks). ASCII DXF. Bulges stay exact arcs. | P0 | done |
 | IOP-02 | IFC4 export with property sets. | P0 | planned |
 | IOP-03 | IFC4 import (geometry, property sets, spatial tree). | P0 | planned |
 | IOP-04 | IFC 2x3 import and export. | P1 | planned |
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
-| IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | planned |
+| IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
 | IOP-07 | Data mapping rules to IFC fields. | P1 | planned |
 | IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
@@ -349,7 +349,7 @@ Non-goals
 | IOP-11 | OBJ, STL, STEP. | P2 | planned |
 | IOP-12 | Point cloud import. | P2 | planned |
 | IOP-13 | Native `.vwx`. | Deferred | planned |
-| IOP-14 | Import report that lists dropped or approximated items. | P1 | planned |
+| IOP-14 | Import report that lists dropped or approximated items. | P1 | done |
 
 ### 4.17 Agent API
 
@@ -364,7 +364,7 @@ Non-goals
 | API-07 | `render.svg`. | P0 | done |
 | API-08 | `report.plants`, `report.areas`. | P0 | done |
 | API-40 | Plant methods: `plant_style.*` (list, get, create, update, duplicate, delete, import_csv, export_csv, sample_csv), `plants.place`, `plants.set_style`, `report.plant_schedule`, `report.existing_trees`. Existing trees and plant tags are shapes that `execute` adds. | P0 | done |
-| API-41 | Drawing documentation methods: `sheet.*`, `project.*`, `viewport.*`, `title_block.*`, `saved_view.*`, `export.pdf|svg|png`. Their examples are in `describe`. | P1 | done |
+| API-41 | Drawing documentation methods: `sheet.*`, `project.*`, `viewport.*`, `title_block.*`, `saved_view.*`, `export.file` with the formats `pdf`, `sheet_svg`, `sheet_png`. Their examples are in `describe`. | P1 | done |
 | API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |

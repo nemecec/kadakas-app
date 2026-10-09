@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cadektor_core::mesh;
-use cadektor_core::model::{Document, LayerId, LayerKind, Object, Shape};
+use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
 use cadektor_core::plants::schedule;
 use cadektor_core::sheets::{self, title_block_geometry, Fields, TitleBlock, Viewport};
 use cadektor_render::{render, Camera, Projection, RenderMode, RenderOptions, StandardView, FOV_Y};
@@ -17,6 +17,10 @@ use crate::PrintError;
 const INK: Rgba = [0, 0, 0, 255];
 /// Largest side of a 3D viewport image in pixels.
 const MAX_IMAGE_SIDE: f64 = 3000.0;
+/// Most pixels of 3D viewport images on one page, and in one export (about 64 megapixels).
+pub const MAX_RASTER_PIXELS: u64 = 64_000_000;
+/// Pages that the cache keeps.
+const MAX_CACHED_PAGES: usize = 8;
 
 /// Display lists by sheet layer, valid for one document revision. A new revision clears them,
 /// so a sheet is built again only after the document changed. Rasters of 3D viewports are kept
@@ -25,6 +29,8 @@ const MAX_IMAGE_SIDE: f64 = 3000.0;
 pub struct SheetCache {
     revision: Option<u64>,
     pages: HashMap<LayerId, Arc<Page>>,
+    /// Layers in the order of use, the oldest first.
+    used: std::collections::VecDeque<LayerId>,
     /// Number of pages built so far. Tests use it to see that the cache works.
     pub builds: u64,
 }
@@ -34,14 +40,25 @@ impl SheetCache {
     pub fn page(&mut self, doc: &Document, revision: u64, layer: LayerId) -> Result<Arc<Page>, PrintError> {
         if self.revision != Some(revision) {
             self.pages.clear();
+            self.used.clear();
             self.revision = Some(revision);
         }
         if let Some(p) = self.pages.get(&layer) {
+            self.used.retain(|l| *l != layer);
+            self.used.push_back(layer);
             return Ok(p.clone());
         }
         let page = Arc::new(compose_page(doc, layer)?);
         self.builds += 1;
+        // Pages hold images, so the cache keeps a few of them only.
+        while self.pages.len() >= MAX_CACHED_PAGES {
+            match self.used.pop_front() {
+                Some(old) => self.pages.remove(&old),
+                None => break,
+            };
+        }
         self.pages.insert(layer, page.clone());
+        self.used.push_back(layer);
         Ok(page)
     }
 }
@@ -56,9 +73,21 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
     let size = sheet.size_mm();
     let counts = schedule::tag_counts(doc);
     let mut prims = Vec::new();
+    let mut budget = MAX_RASTER_PIXELS;
+    let mut rasters = 0;
     for obj in doc.objects.values().filter(|o| o.layer == layer && doc.is_shown(o)) {
         match &obj.shape {
-            Shape::Viewport(vp) => viewport_prims(doc, vp, &counts, &mut prims),
+            Shape::Viewport(vp) => {
+                // A sheet layer holds a few 3D viewports at most (the commands enforce it too).
+                if !vp.is_plan() {
+                    rasters += 1;
+                }
+                let mut left = if rasters > cadektor_core::sheets::MAX_3D_VIEWPORTS { 0 } else { budget };
+                viewport_prims(doc, vp, &counts, &mut left, &mut prims);
+                if rasters <= cadektor_core::sheets::MAX_3D_VIEWPORTS {
+                    budget = left;
+                }
+            }
             Shape::TitleBlock(tb) => title_block_prims(doc, layer, tb, size, &mut prims),
             _ => {
                 let attrs = doc.resolved_attrs(obj);
@@ -75,13 +104,13 @@ fn rect_prim(lo: DVec2, hi: DVec2, width: f64) -> Prim {
 }
 
 /// The primitives of a viewport: the frame (if shown), the clipped view and the annotations.
-pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, out: &mut Vec<Prim>) {
+pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, budget: &mut u64, out: &mut Vec<Prim>) {
     let clip = vp.clip_polygon();
     if clip.len() >= 3 {
         out.push(Prim::PushClip(clip.clone()));
         if vp.is_plan() {
             plan_view(doc, vp, counts, out);
-        } else if let Some(img) = raster_view(doc, vp) {
+        } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
         out.push(Prim::PopClip);
@@ -107,39 +136,60 @@ fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, out: &
     }
 }
 
-/// The document as the viewport sees it: layers and classes shown or hidden, and class
-/// overrides applied to the objects. Used for 3D views, which read the document.
+/// The part of the document that a viewport shows, for the 3D renderer: only the objects that the
+/// viewport shows, with class overrides filled into the attributes that the object leaves to its class.
+/// The rest of the document is not copied.
 pub fn viewport_document(doc: &Document, vp: &Viewport) -> Document {
-    let mut d = doc.clone();
-    let shown: Vec<(LayerId, bool)> = d.layers.iter().map(|l| (l.id, vp.layer_visible(doc, l.id))).collect();
-    for (id, vis) in shown {
-        if let Some(l) = d.layers.iter_mut().find(|l| l.id == id) {
-            l.visible = vis;
-        }
-    }
-    for c in &mut d.classes {
-        c.visible = vp.class_visible(doc, c.id);
-    }
-    for o in d.objects.values_mut() {
-        if let Some(ov) = vp.class_overrides.get(&o.class) {
-            o.attrs.pen = ov.pen.or(o.attrs.pen);
-            o.attrs.fill = ov.fill.or(o.attrs.fill);
-            o.attrs.line_weight = ov.line_weight.or(o.attrs.line_weight);
-        }
-    }
+    let mut d = Document::default();
+    d.layers = doc.layers.iter().cloned().map(|l| Layer { visible: true, ..l }).collect();
+    d.classes = doc.classes.iter().cloned().map(|c| Class { visible: true, ..c }).collect();
+    d.resources = doc.resources.clone();
+    d.active_layer = doc.active_layer;
+    d.active_class = doc.active_class;
+    d.objects = doc
+        .objects
+        .values()
+        .filter(|o| vp.shows(doc, o))
+        .map(|o| {
+            let mut o = o.clone();
+            if let Some(ov) = vp.class_overrides.get(&o.class) {
+                o.attrs.pen = o.attrs.pen.or(ov.pen);
+                o.attrs.fill = o.attrs.fill.or(ov.fill);
+                o.attrs.line_weight = o.attrs.line_weight.or(ov.line_weight);
+            }
+            (o.id, o)
+        })
+        .collect();
     d
 }
 
+/// The pixel size of a 3D viewport image. Both sides scale by one factor, so the picture keeps the
+/// proportions of the frame. `budget` is what is left of the pixels of the page. `None` if the image
+/// would be too small to see.
+fn raster_size(vp: &Viewport, budget: &mut u64) -> Option<(u32, u32)> {
+    let size = (vp.max - vp.min) / 25.4 * vp.dpi;
+    let mut k = (MAX_IMAGE_SIDE / size.max_element()).min(1.0);
+    let pixels = size.x * size.y * k * k;
+    if pixels > *budget as f64 {
+        k *= (*budget as f64 / pixels).sqrt();
+    }
+    let (w, h) = ((size.x * k).floor(), (size.y * k).floor());
+    if w < 8.0 || h < 8.0 {
+        return None;
+    }
+    *budget = budget.saturating_sub((w * h) as u64);
+    Some((w as u32, h as u32))
+}
+
 /// Renders a 3D viewport to an image, with the viewport scale and center, from its standard view.
-/// Returns `None` for a view name that is not known.
-fn raster_view(doc: &Document, vp: &Viewport) -> Option<ImagePrim> {
+/// Returns `None` for a view name that is not known, or when no pixels are left.
+fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImagePrim> {
     let view = StandardView::from_name(&vp.view)?;
+    let (w, h) = raster_size(vp, budget)?;
     let d = viewport_document(doc, vp);
-    let origin = mesh::build(&d).origin;
-    let scene = mesh::build_at(&d, origin);
+    let scene = mesh::build(&d);
+    let origin = scene.origin;
     let size = vp.max - vp.min;
-    let px = |mm: f64| (mm / 25.4 * vp.dpi).round().clamp(16.0, MAX_IMAGE_SIDE) as u32;
-    let (w, h) = (px(size.x), px(size.y));
     let mut cam = Camera::standard(view, Projection::Orthographic);
     let c = vp.center - origin.truncate();
     let z = scene.bounds.map_or(0.0, |(lo, hi)| (lo.z + hi.z) / 2.0);

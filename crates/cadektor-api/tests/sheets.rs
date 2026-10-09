@@ -31,6 +31,11 @@ fn model() -> Session {
     s
 }
 
+/// The class override of one class in a viewport JSON. The viewport stores the visibility of every class.
+fn class_ov(vp: &Value, class: u64) -> Value {
+    vp["class_overrides"].as_array().unwrap().iter().find(|e| e[0] == class).map_or(Value::Null, |e| e[1].clone())
+}
+
 fn tmp(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("cadektor-api-sheets-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -43,7 +48,7 @@ fn every_method_is_listed_and_described() {
     for m in [
         "sheet.list", "sheet.create", "sheet.set", "sheet.render", "project.get", "project.set", "viewport.create", "viewport.get", "viewport.list", "viewport.update",
         "viewport.set_override", "viewport.annotate", "title_block.create", "title_block.update", "title_block.resolve", "saved_view.list", "saved_view.save",
-        "saved_view.restore", "saved_view.delete", "export.pdf", "export.svg", "export.png",
+        "saved_view.restore", "saved_view.delete", "export.file",
     ] {
         assert!(names.contains(&m), "{m} is not in METHODS");
     }
@@ -179,13 +184,13 @@ fn overrides_and_annotations() {
     assert!(base.contains("rgb(0,0,255)"), "the class pen shows");
 
     let r = call(&mut s, "viewport.set_override", json!({"id": id, "classes": {"Trees": {"pen": [10, 20, 30, 255], "line_weight": 0.7}}}));
-    assert_eq!(r["class_overrides"][0][1]["line_weight"], 0.7);
+    assert_eq!(class_ov(&r, 3)["line_weight"], 0.7);
     let svg = call(&mut s, "sheet.render", json!({"sheet": "S"}))["svg"].as_str().unwrap().to_string();
     assert!(svg.contains("rgb(10,20,30)") && !svg.contains("rgb(0,0,255)"));
     // Merge: a second call changes one field and keeps the others. null removes a field.
     call(&mut s, "viewport.set_override", json!({"id": id, "classes": {"3": {"visible": false, "pen": null}}}));
     let r = call(&mut s, "viewport.get", json!({"id": id}));
-    let ov = &r["class_overrides"][0][1];
+    let ov = &class_ov(&r, 3);
     assert_eq!((ov["visible"].as_bool(), ov["line_weight"].as_f64()), (Some(false), Some(0.7)));
     assert!(ov.get("pen").is_none());
     assert!(!call(&mut s, "sheet.render", json!({"sheet": "S"}))["svg"].as_str().unwrap().contains("rgb(10,20,30)"));
@@ -199,7 +204,7 @@ fn overrides_and_annotations() {
     call(&mut s, "viewport.set_override", json!({"id": id, "layers": {"1": null}}));
     assert_eq!(call(&mut s, "viewport.get", json!({"id": id}))["layer_overrides"], json!([]));
     call(&mut s, "viewport.set_override", json!({"id": id, "classes": {"Trees": null}}));
-    assert_eq!(call(&mut s, "viewport.get", json!({"id": id}))["class_overrides"], json!([]));
+    assert!(class_ov(&call(&mut s, "viewport.get", json!({"id": id})), 3).is_null());
     call(&mut s, "viewport.set_override", json!({"id": id, "layers": {"1": true}, "classes": {"Trees": {}}}));
     call(&mut s, "viewport.set_override", json!({"id": id, "reset": true}));
     let r = call(&mut s, "viewport.get", json!({"id": id}));
@@ -333,56 +338,87 @@ fn saved_views_store_and_restore_the_visibility_and_the_view() {
     assert!(fail(&mut s, "saved_view.save", json!({"name": "x", "pan": "left"})).contains("invalid type"));
 }
 
+fn export(s: &mut Session, format: &str, path: &std::path::Path, options: Value) -> Value {
+    call(s, "export.file", json!({"format": format, "path": path.display().to_string(), "options": options}))
+}
+
+fn export_err(s: &mut Session, format: &str, path: &std::path::Path, options: Value) -> String {
+    fail(s, "export.file", json!({"format": format, "path": path.display().to_string(), "options": options}))
+}
+
 #[test]
-fn export_writes_pdf_svg_and_png_files() {
+fn export_file_writes_pdf_svg_and_png_files() {
     let mut s = model();
-    assert!(fail(&mut s, "export.pdf", json!({"path": tmp("none.pdf")})).contains("no sheet layers"));
+    assert!(export_err(&mut s, "pdf", &tmp("none.pdf"), json!({})).contains("no sheet layers"));
     call(&mut s, "sheet.create", json!({"name": "One", "number": "L-1", "title": "First sheet"}));
     call(&mut s, "sheet.create", json!({"name": "Two", "paper": "a4", "orientation": "portrait", "number": "L-2", "title": "Second sheet"}));
     call(&mut s, "viewport.create", json!({"sheet": "One"}));
     call(&mut s, "title_block.create", json!({"sheet": "One"}));
-    call(&mut s, "viewport.create", json!({"sheet": "Two", "view": "iso".replace("iso", "right_isometric"), "dpi": 40}));
+    call(&mut s, "viewport.create", json!({"sheet": "Two", "view": "right_isometric", "dpi": 40}));
 
     let pdf = tmp("all.pdf");
-    let r = call(&mut s, "export.pdf", json!({"path": pdf.display().to_string()}));
+    let r = export(&mut s, "pdf", &pdf, json!({}));
     assert_eq!((r["pages"].as_u64(), r["path"].as_str()), (Some(2), Some(pdf.display().to_string().as_str())));
     let bytes = std::fs::read(&pdf).unwrap();
     assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
     assert!(bytes.starts_with(b"%PDF-") && bytes.windows(9).any(|w| w == b"/MediaBox"));
-    // Only some sheets, in the given order.
     let one = tmp("one.PDF");
-    let r = call(&mut s, "export.pdf", json!({"path": one.display().to_string(), "sheets": ["Two"]}));
-    assert_eq!(r["pages"], 1);
+    assert_eq!(export(&mut s, "pdf", &one, json!({"sheets": ["Two"]}))["pages"], 1);
 
     let svg = tmp("one.svg");
-    call(&mut s, "export.svg", json!({"sheet": "One", "path": svg.display().to_string()}));
+    export(&mut s, "sheet_svg", &svg, json!({"sheet": "One"}));
     let text = std::fs::read_to_string(&svg).unwrap();
     assert!(text.contains("First sheet") && text.starts_with("<svg"));
     let png = tmp("one.png");
-    let r = call(&mut s, "export.png", json!({"sheet": "One", "path": png.display().to_string(), "dpi": 40}));
+    let r = export(&mut s, "sheet_png", &png, json!({"sheet": "One", "dpi": 40}));
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(661), Some(468)));
     assert_eq!(&std::fs::read(&png).unwrap()[1..4], b"PNG");
     let r = call(&mut s, "sheet.render", json!({"sheet": "One", "format": "png", "dpi": 30}));
     assert_eq!(r["width"], 496);
     assert!(r["png_base64"].as_str().unwrap().starts_with("iVBOR"));
 
-    // The path rules of file.save: a path is needed. Plus: the right extension, no folders.
-    assert!(fail(&mut s, "export.pdf", json!({})).contains("path"));
-    assert!(fail(&mut s, "export.pdf", json!({"path": ""})).contains("path"));
-    assert!(fail(&mut s, "export.pdf", json!({"path": tmp("x.txt").display().to_string()})).contains(".pdf"));
+    // Errors.
+    assert!(fail(&mut s, "export.file", json!({"format": "pdf"})).contains("path"));
+    assert!(export_err(&mut s, "pdf", &tmp("x.txt"), json!({})).contains(".pdf"));
+    assert!(export_err(&mut s, "sheet_svg", &tmp("x.pdf"), json!({"sheet": "One"})).contains(".svg"));
     let folder = tmp("folder.pdf");
     std::fs::create_dir_all(&folder).unwrap();
-    assert!(fail(&mut s, "export.pdf", json!({"path": folder.display().to_string()})).contains("folder"));
-    let nowhere = tmp("a/b/c.pdf");
-    assert!(!fail(&mut s, "export.pdf", json!({"path": nowhere.display().to_string()})).is_empty());
-    assert!(fail(&mut s, "export.pdf", json!({"path": pdf.display().to_string(), "sheets": ["Layer 1"]})).contains("not a sheet"));
-    assert!(fail(&mut s, "export.pdf", json!({"path": pdf.display().to_string(), "sheets": "all"})).contains("list"));
-    assert!(!fail(&mut s, "export.png", json!({"sheet": "One", "path": png.display().to_string(), "dpi": 5000})).is_empty());
-    assert!(fail(&mut s, "export.png", json!({"sheet": "One", "path": png.display().to_string(), "dpi": 0})).contains("dpi"));
-    assert!(fail(&mut s, "export.svg", json!({"path": svg.display().to_string()})).contains("no layer"));
+    assert!(export_err(&mut s, "pdf", &folder, json!({})).contains("folder"));
+    assert!(!export_err(&mut s, "pdf", &tmp("a/b/c.pdf"), json!({})).is_empty());
+    assert!(export_err(&mut s, "pdf", &pdf, json!({"sheets": ["Layer 1"]})).contains("not a sheet"));
+    assert!(export_err(&mut s, "pdf", &pdf, json!({"sheets": "all"})).contains("list"));
+    assert!(export_err(&mut s, "sheet_png", &png, json!({"sheet": "One", "dpi": 0})).contains("dpi"));
+    assert!(!export_err(&mut s, "sheet_png", &png, json!({"sheet": "One", "dpi": 5000})).is_empty());
+    assert!(export_err(&mut s, "sheet_svg", &svg, json!({})).contains("no layer"));
     assert!(fail(&mut s, "sheet.render", json!({"sheet": "One", "format": "gif"})).contains("svg or png"));
     assert!(fail(&mut s, "sheet.render", json!({"sheet": "One", "format": "png", "dpi": 0})).contains("dpi"));
     let _ = std::fs::remove_dir_all(tmp("x").parent().unwrap());
+}
+
+#[test]
+fn sheet_exports_follow_the_path_policy() {
+    let dir = std::env::temp_dir().join(format!("cadektor-api-policy-{}", std::process::id()));
+    let allowed = dir.join("allowed");
+    let other = dir.join("other");
+    std::fs::create_dir_all(&allowed).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let mut s = model();
+    s.paths = cadektor_api::PathPolicy::restricted([allowed.clone()]);
+    call(&mut s, "sheet.create", json!({"name": "One"}));
+    // Outside the allowed folder: refused for every sheet format.
+    for (fmt, name) in [("pdf", "a.pdf"), ("sheet_svg", "a.svg"), ("sheet_png", "a.png")] {
+        let msg = export_err(&mut s, fmt, &other.join(name), json!({"sheet": "One"}));
+        assert!(msg.contains("allowed") || msg.contains("outside") || msg.contains("folder"), "{fmt}: {msg}");
+        assert!(!other.join(name).exists());
+    }
+    // Inside: written, and replacing needs overwrite.
+    let ok = allowed.join("a.pdf");
+    export(&mut s, "pdf", &ok, json!({}));
+    assert!(ok.exists());
+    let msg = export_err(&mut s, "pdf", &ok, json!({}));
+    assert!(msg.contains("overwrite"), "{msg}");
+    call(&mut s, "export.file", json!({"format": "pdf", "path": ok.display().to_string(), "overwrite": true}));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -390,4 +426,28 @@ fn unknown_sheet_methods_are_unknown() {
     let mut s = Session::default();
     assert!(fail(&mut s, "sheet.explode", json!({})).contains("unknown method"));
     assert!(fail(&mut s, "viewport.get", json!(null)).contains("id"));
+}
+
+#[test]
+fn a_viewport_keeps_its_own_visibility() {
+    let mut s = model();
+    call(&mut s, "sheet.create", json!({"name": "S"}));
+    // The document hides the class before the viewport exists: the viewport stores that.
+    exec(&mut s, json!({"op": "modify_class", "id": 3, "visible": false}));
+    let id = call(&mut s, "viewport.create", json!({"sheet": "S", "scale": 100, "center": [10000, 5000]}))["id"].as_u64().unwrap();
+    let svg = |s: &mut Session| call(s, "sheet.render", json!({"sheet": "S"}))["svg"].as_str().unwrap().to_string();
+    assert!(!svg(&mut s).contains("rgb(0,0,255)"));
+    assert_eq!(class_ov(&call(&mut s, "viewport.get", json!({"id": id})), 3)["visible"], false);
+    // Showing the class in the document later does not show it in the viewport.
+    exec(&mut s, json!({"op": "modify_class", "id": 3, "visible": true}));
+    assert!(!svg(&mut s).contains("rgb(0,0,255)"));
+    // Hiding a layer in the document does not hide it in the viewport either.
+    exec(&mut s, json!({"op": "modify_layer", "id": 1, "visible": false}));
+    assert!(svg(&mut s).contains("rgb(200,0,0)") || svg(&mut s).contains("stroke"));
+    call(&mut s, "viewport.set_override", json!({"id": id, "classes": {"Trees": {"visible": true}}}));
+    assert!(svg(&mut s).contains("rgb(0,0,255)"));
+    // A class made later shows in the viewport.
+    let c = exec(&mut s, json!({"op": "add_class", "name": "Later"}))["created"][0].as_u64().unwrap();
+    exec(&mut s, json!({"op": "add_object", "class": c, "shape": {"kind": "text", "at": [100, 100], "text": "LATER", "height": 400}}));
+    assert!(svg(&mut s).contains("LATER"));
 }

@@ -12,6 +12,8 @@ use crate::PrintError;
 
 /// Largest side of a sheet PNG in pixels.
 pub const MAX_SIDE: u32 = 12_000;
+/// Largest picture in pixels (64 megapixels, about 256 MB as RGBA).
+pub const MAX_PIXELS: u64 = 64_000_000;
 
 fn font() -> FontRef<'static> {
     FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("the bundled font is valid")
@@ -38,7 +40,7 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
     }
     let k = dpi / 25.4;
     let (w, h) = ((page.size.x * k).round() as u32, (page.size.y * k).round() as u32);
-    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || w as u64 * h as u64 > MAX_PIXELS {
         return Err(PrintError::Invalid(format!("the image would be {w} by {h} px. Use a lower dpi")));
     }
     let mut pix = Pixmap::new(w, h).ok_or_else(|| PrintError::Invalid("image too large".into()))?;
@@ -46,11 +48,17 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
     // Paper (mm, Y up) to pixels.
     let tf = Transform::from_row(k as f32, 0.0, 0.0, -(k as f32), 0.0, h as f32);
     let px = |p: DVec2| ((p.x * k) as f32, (h as f64 - p.y * k) as f32);
+    // Clip masks are made once and reused, one per level of nesting.
     let mut masks: Vec<Mask> = Vec::new();
+    let mut depth = 0usize;
     for prim in &page.prims {
         match prim {
             Prim::PushClip(poly) => {
-                let mut m = Mask::new(w, h).expect("size checked");
+                if depth == masks.len() {
+                    masks.push(Mask::new(w, h).expect("size checked"));
+                } else {
+                    masks[depth].clear();
+                }
                 let mut pb = PathBuilder::new();
                 for (i, p) in poly.iter().enumerate() {
                     let (x, y) = px(*p);
@@ -58,22 +66,24 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
                 }
                 pb.close();
                 if let Some(path) = pb.finish() {
+                    let (before, rest) = masks.split_at_mut(depth);
+                    let m = &mut rest[0];
                     m.fill_path(&path, FillRule::Winding, true, Transform::identity());
-                    if let Some(prev) = masks.last() {
+                    if let Some(prev) = before.last() {
                         // Keep what both masks allow.
                         for (a, b) in m.data_mut().iter_mut().zip(prev.data()) {
                             *a = ((*a as u16 * *b as u16) / 255) as u8;
                         }
                     }
                 }
-                masks.push(m);
+                depth += 1;
             }
             Prim::PopClip => {
-                masks.pop();
+                depth = depth.saturating_sub(1);
             }
-            Prim::Path(p) => draw_path(&mut pix, p, tf, masks.last(), k),
-            Prim::Text(t) => draw_text(&mut pix, t, k, h, masks.last()),
-            Prim::Image(i) => draw_image(&mut pix, i, k, h, masks.last()),
+            Prim::Path(p) => draw_path(&mut pix, p, tf, depth.checked_sub(1).map(|d| &masks[d]), k),
+            Prim::Text(t) => draw_text(&mut pix, t, k, h, depth.checked_sub(1).map(|d| &masks[d])),
+            Prim::Image(i) => draw_image(&mut pix, i, k, h, depth.checked_sub(1).map(|d| &masks[d])),
         }
     }
     pix.encode_png().map_err(|e| PrintError::Invalid(e.to_string()))

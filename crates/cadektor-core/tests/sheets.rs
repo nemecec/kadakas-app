@@ -103,9 +103,9 @@ proptest! {
         let mut vp = viewport(vec![FIRST_LAYER]);
         vp.class_overrides.insert(NONE_CLASS, ClassOverride { pen: ov_pen.map(Color), line_weight: ov_w, ..Default::default() });
         let a = vp.resolve(&doc, &o);
-        // Viewport override, then the object, then the class, then the defaults.
-        let pen = ov_pen.or(obj_pen).or(class_pen).map(Color).unwrap_or(Color::BLACK);
-        let w = ov_w.or(obj_w).or(class_w).unwrap_or(DEFAULT_WEIGHT);
+        // The object's own attributes, then the viewport override (by class only), then the class, then the defaults.
+        let pen = obj_pen.or(ov_pen).or(class_pen).map(Color).unwrap_or(Color::BLACK);
+        let w = obj_w.or(ov_w).or(class_w).unwrap_or(DEFAULT_WEIGHT);
         prop_assert_eq!(a.pen, Some(pen));
         prop_assert_eq!(a.line_weight, Some(w));
         prop_assert_eq!(a.fill, Some(Color::NONE));
@@ -338,4 +338,43 @@ fn annotations_are_stored_in_the_viewport() {
     let Shape::Viewport(got) = &ed.doc().object(id).unwrap().shape else { panic!() };
     assert_eq!(got.annotations[0].item, AnnotationItem::Text { at: v(5.0, 5.0), text: "N".into(), height: 4.0 });
     assert_eq!(got.annotation_to_paper(v(5.0, 5.0)), v(125.0, 35.0));
+}
+
+#[test]
+fn plants_and_3d_viewport_limits_on_sheet_layers() {
+    let mut ed = Editor::default();
+    let s = add_sheet(&mut ed, "S");
+    let r = ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions: vec![v(1.0, 1.0)], layer: Some(s), class: None, variation: None });
+    assert!(matches!(r, Err(CommandError::Invalid(m)) if m.contains("design layer")), "plants never land on a sheet layer");
+    assert!(ed.doc().objects.is_empty());
+    for i in 0..MAX_3D_VIEWPORTS {
+        let mut vp = viewport(vec![FIRST_LAYER]);
+        vp.view = "top".into();
+        vp.min = v(i as f64, 0.0);
+        add_on(&mut ed, Shape::Viewport(Box::new(vp)), s).unwrap();
+    }
+    let mut vp = viewport(vec![FIRST_LAYER]);
+    vp.view = "front".into();
+    assert!(matches!(add_on(&mut ed, Shape::Viewport(Box::new(vp.clone())), s), Err(CommandError::Invalid(m)) if m.contains("3D viewports")));
+    // Plan viewports are not limited, and an existing 3D viewport can still change.
+    vp.view = "plan".into();
+    let plan = add_on(&mut ed, Shape::Viewport(Box::new(vp.clone())), s).unwrap();
+    let first = *ed.doc().objects.keys().next().unwrap();
+    let Shape::Viewport(f) = ed.doc().object(first).unwrap().shape.clone() else { panic!() };
+    let mut f = f;
+    f.view = "back".into();
+    exec(&mut ed, Command::ModifyObject { id: first, shape: Some(Shape::Viewport(f)), layer: None, class: None, attrs: None }).unwrap();
+    vp.view = "left".into();
+    let r = ed.execute(&Command::ModifyObject { id: plan, shape: Some(Shape::Viewport(Box::new(vp))), layer: None, class: None, attrs: None });
+    assert!(r.is_err(), "turning a ninth viewport into 3D is refused");
+}
+
+#[test]
+fn loaded_documents_keep_paper_and_model_apart() {
+    let mut ed = Editor::default();
+    let s = add_sheet(&mut ed, "S");
+    add_on(&mut ed, Shape::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) }, s).unwrap();
+    let mut value = serde_json::to_value(ed.doc()).unwrap();
+    value["objects"][0]["shape"] = serde_json::json!({"kind": "plant", "at": [0, 0], "species": "x", "spread": 5, "height": 5});
+    assert!(Document::from_value(value).is_err(), "a plant on a sheet layer does not load");
 }

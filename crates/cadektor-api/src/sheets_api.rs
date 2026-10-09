@@ -2,7 +2,7 @@
 //! title blocks, project data, saved views, and sheet output (PDF, SVG, PNG).
 //!
 //! Methods: `sheet.list|create|set|render`, `project.get|set`, `viewport.create|get|list|update|set_override|annotate`,
-//! `title_block.create|update|resolve`, `saved_view.list|save|restore|delete`, `export.pdf|svg|png`.
+//! `title_block.create|update|resolve`, `saved_view.list|save|restore|delete`. Sheets are written by `export.file` with the format `pdf`, `sheet_svg` or `sheet_png`.
 //! Viewports and title blocks are objects of kind `viewport` and `title_block` on a sheet layer,
 //! so `execute` with `add_object`, `move_objects` and `delete_objects` works on them too.
 
@@ -29,7 +29,7 @@ pub const VIEWPORT_CREATE: (&str, &str) = ("viewport.create", "Add a viewport to
 pub const VIEWPORT_GET: (&str, &str) = ("viewport.get", "One viewport with all settings, overrides and annotations. params: {id}.");
 pub const VIEWPORT_LIST: (&str, &str) = ("viewport.list", "Viewports. params: {sheet?}. Returns {viewports: [{id, sheet, name, scale, view, layers, min, max}]}.");
 pub const VIEWPORT_UPDATE: (&str, &str) = ("viewport.update", "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.");
-pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = ("viewport.set_override", "Visibility and graphic overrides in one viewport. params: {id, layers? ({layer: true | false | null}; true or false replaces the document visibility, null removes the override), classes? ({class: {visible?, pen?, fill?, line_weight?} | null}; a field set to null is removed; pen and fill are [r,g,b,a]; line_weight is mm on paper), reset? (true clears all overrides first)}. Precedence: viewport class override, then the object's own attributes, then its class, then defaults. Layer and class keys are IDs or names.");
+pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = ("viewport.set_override", "Visibility and graphic overrides in one viewport. params: {id, layers? ({layer: true | false | null}; true or false replaces the document visibility, null removes the override), classes? ({class: {visible?, pen?, fill?, line_weight?} | null}; a field set to null is removed; pen and fill are [r,g,b,a]; line_weight is mm on paper), reset? (true clears all overrides first)}. Precedence: the object's own attributes, then this override (only for attributes the object leaves to its class), then the class, then defaults. A viewport keeps its own visibility; it does not follow the document. Layer and class keys are IDs or names.");
 pub const VIEWPORT_ANNOTATE: (&str, &str) = ("viewport.annotate", "Annotations of a viewport: objects in paper mm, measured from the lower left corner of the frame (they move with the viewport). params: {id, add? ([{kind: line, a, b} | {kind: text, at, text, height} | {kind: dimension, a, b, offset, text?} | {kind: shape, shape: {kind: rect | circle | arc | polyline | line | text, ...}}, each with optional class and attrs]), remove? ([annotation id]), clear? (bool)}. Returns {added: [annotation id], count}.");
 pub const TITLE_BLOCK_CREATE: (&str, &str) = ("title_block.create", "Add a border, grid reference and title block to a sheet layer. It follows the page size. params: {sheet, margin? (mm, default 10), grid_columns? (0 to 26), grid_rows? (0 to 99), layout? (omit for the standard layout; or {width, height, cells: [{x, y, w, h, label, text, size}]} in mm from the lower left corner of the block), fields? ({name: text}, for {field.name})}. Cell text may use {project.name}, {project.client}, {project.address}, {project.drawn_by}, {project.date}, {project.revision}, {sheet.number}, {sheet.title}, {sheet.scale}, {sheet.paper}, {sheet.index}, {sheet.count} and {field.<name>}. Returns {id}.");
 pub const TITLE_BLOCK_UPDATE: (&str, &str) = ("title_block.update", "Change a title block. params: {id, and any of margin, grid_columns, grid_rows, layout (null for the standard layout), fields}.");
@@ -38,15 +38,14 @@ pub const SAVED_VIEW_LIST: (&str, &str) = ("saved_view.list", "Saved views. Retu
 pub const SAVED_VIEW_SAVE: (&str, &str) = ("saved_view.save", "Save the current view: the visibility of all layers and classes, the active layer and class, and the 3D view settings. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle)}. A view with the same name is replaced.");
 pub const SAVED_VIEW_RESTORE: (&str, &str) = ("saved_view.restore", "Apply a saved view (one undo step): layer and class visibility, active layer and class, and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.");
 pub const SAVED_VIEW_DELETE: (&str, &str) = ("saved_view.delete", "Delete a saved view. params: {name}.");
-pub const EXPORT_PDF: (&str, &str) = ("export.pdf", "Export sheet layers as a PDF with one page per sheet: vector lines with line weights, fills, text, arcs as curves; 3D viewports as images. params: {path (ends with .pdf; the folder must exist), sheets? (layer IDs or names; default all sheet layers in order)}. Returns {path, pages, bytes}.");
-pub const EXPORT_SVG: (&str, &str) = ("export.svg", "Export one sheet layer as SVG, in mm. params: {sheet, path (ends with .svg)}. Returns {path, bytes}.");
-pub const EXPORT_PNG: (&str, &str) = ("export.png", "Export one sheet layer as PNG. params: {sheet, path (ends with .png), dpi? (default 150)}. Returns {path, width, height, bytes}.");
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
     json!({
         "concepts": "A sheet layer is a page (paper space: mm, scale 1:1). A viewport is an object on a sheet layer that shows design layers at a scale. Viewports are drawn live from the model. Annotations live inside the viewport, in paper mm. A title block is a parametric object with a border, a grid reference and fields from the project and the sheet.",
-        "override_precedence": "Inside a viewport: viewport class override, then the object's own attributes, then the class attributes, then defaults (black, no fill, 0.25 mm). Visibility: a viewport override of a layer or class replaces the document setting.",
+        "export": "export.file {path, format, options?, overwrite?} with format pdf (options: sheets? [layer ID or name], default all sheet layers, one page each), sheet_svg (options: sheet) or sheet_png (options: sheet, dpi? default 150, at most 64 megapixels). The extension must be .pdf, .svg or .png. The path rules of export.file apply. At most 64 megapixels of 3D viewport images per page and per PDF.",
+        "viewport_visibility": "A viewport stores the visibility of all design layers and classes when it is created. Later changes in the document do not reach it. Change it with viewport.set_override.",
+        "override_precedence": "Inside a viewport (as in Vectorworks, a class override acts on attributes that are by class only): the object's own attributes, then the viewport class override, then the class attributes, then defaults (black, no fill, 0.25 mm). Visibility is the viewport's own.",
         "examples": [
             {"method": "sheet.create", "params": {"name": "Planting plan", "paper": "a1", "number": "L-101", "title": "Planting plan"}},
             {"method": "viewport.create", "params": {"sheet": "Planting plan", "scale": "fit", "view": "plan"}},
@@ -55,7 +54,7 @@ pub fn describe() -> Value {
             {"method": "title_block.create", "params": {"sheet": "Planting plan", "grid_columns": 6, "grid_rows": 4}},
             {"method": "project.set", "params": {"name": "Riverside garden", "drawn_by": "NM", "date": "2026-10-10"}},
             {"method": "saved_view.save", "params": {"name": "Planting only"}},
-            {"method": "export.pdf", "params": {"path": "/tmp/plans.pdf"}}
+            {"method": "export.file", "params": {"format": "pdf", "path": "/tmp/plans.pdf", "options": {"sheets": ["Planting plan"]}}}
         ],
     })
 }
@@ -73,7 +72,7 @@ type Res = Result<Value, RpcError>;
 const KNOWN: &[&str] = &[
     "sheet.list", "sheet.create", "sheet.set", "sheet.render", "project.get", "project.set", "viewport.create", "viewport.get", "viewport.list",
     "viewport.update", "viewport.set_override", "viewport.annotate", "title_block.create", "title_block.update", "title_block.resolve", "saved_view.list",
-    "saved_view.save", "saved_view.restore", "saved_view.delete", "export.pdf", "export.svg", "export.png",
+    "saved_view.save", "saved_view.restore", "saved_view.delete",
 ];
 
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Res> {
@@ -112,7 +111,6 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
             s.editor.execute(&Command::DeleteView { name }).map_err(app)?;
             Ok(json!({"ok": true}))
         }
-        "export.pdf" | "export.svg" | "export.png" => export(s, method, p),
         _ => unreachable!("checked by KNOWN"),
     }
 }
@@ -341,7 +339,7 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
     let c: CreateViewport = parse(p.clone())?;
     let page = doc.sheet(sheet).expect("checked").size_mm();
     let layers = match p.get("layers") {
-        None | Some(Value::Null) => doc.layers.iter().filter(|l| l.kind == LayerKind::Design && l.visible).map(|l| l.id).collect(),
+        None | Some(Value::Null) => doc.layers.iter().filter(|l| l.kind == LayerKind::Design).map(|l| l.id).collect(),
         Some(v) => layer_list(doc, v)?,
     };
     let (min, max) = match (c.min, c.max, c.at, c.size) {
@@ -363,6 +361,7 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
     vp.name = c.name.unwrap_or_default();
     vp.crop = c.crop;
     vp.show_frame = c.show_frame.unwrap_or(false);
+    vp.snapshot_visibility(doc);
     let mut fitted = vp.clone();
     fitted.fit(doc);
     vp.center = c.center.unwrap_or(fitted.center);
@@ -666,56 +665,59 @@ fn png_size(b: &[u8]) -> (u32, u32) {
     (be(16), be(20))
 }
 
-/// The rules of `file.save` for a path, plus the extension of the format.
+/// The sheet formats of `export.file`.
 #[cfg(not(target_arch = "wasm32"))]
-fn export_path(p: &Value, ext: &str) -> Result<std::path::PathBuf, RpcError> {
-    let path = std::path::PathBuf::from(p.get("path").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or_else(|| bad("params.path is required"))?);
-    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
-        return Err(bad(format!("the file name must end with .{ext}")));
-    }
-    if path.is_dir() {
-        return Err(bad(format!("{} is a folder", path.display())));
-    }
-    Ok(path)
+pub(crate) fn is_sheet_format(f: &str) -> bool {
+    matches!(f, "pdf" | "sheet_svg" | "sheet_png")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn export(s: &mut Session, method: &str, p: &Value) -> Res {
-    use cadektor_print as print;
-    let ext = &method[7..];
-    let path = export_path(p, ext)?;
-    let doc = s.editor.doc();
-    let (bytes, extra) = match ext {
-        "pdf" => {
-            let ids: Option<Vec<LayerId>> = match p.get("sheets") {
+impl Session {
+    /// `export.file` with the format `pdf`, `sheet_svg` or `sheet_png`. The path rules are those of
+    /// the other formats: `check_path` for agents, and `overwrite` to replace a file in a restricted session.
+    pub(crate) fn export_sheet_file(&mut self, format: &str, path: std::path::PathBuf, options: &Value, overwrite: bool, checked: bool) -> Res {
+        use cadektor_print as print;
+        let ext = match format {
+            "pdf" => "pdf",
+            "sheet_svg" => "svg",
+            _ => "png",
+        };
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
+            return Err(bad(format!("the file name must end with .{ext}")));
+        }
+        if path.is_dir() {
+            return Err(bad(format!("{} is a folder", path.display())));
+        }
+        let path = if checked { self.check_path(&path, true, &[ext]).map_err(app)? } else { path };
+        if checked && self.paths.is_restricted() && path.exists() && !overwrite {
+            return Err(app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+        }
+        let options = if options.is_null() { json!({}) } else { options.clone() };
+        let doc = self.editor.doc();
+        let (bytes, extra) = if format == "pdf" {
+            let ids: Option<Vec<LayerId>> = match options.get("sheets") {
                 None | Some(Value::Null) => None,
                 Some(v) => Some(v.as_array().ok_or_else(|| bad("sheets is a list of sheet layer IDs or names"))?.iter().map(|x| sheet_ref(doc, x)).collect::<Result<_, _>>()?),
             };
             let list = print::select_sheets(doc, ids.as_deref()).map_err(bad)?;
-            let revision = s.editor.revision();
-            let bytes = print::export_pdf(s.editor.doc(), revision, &mut s.sheet_cache, &list).map_err(app)?;
+            let revision = self.editor.revision();
+            let bytes = print::export_pdf(self.editor.doc(), revision, &mut self.sheet_cache, &list).map_err(app)?;
             (bytes, json!({"pages": list.len()}))
-        }
-        _ => {
-            let layer = sheet_ref(doc, p.get("sheet").unwrap_or(&Value::Null))?;
-            let page = s.sheet_page(layer)?;
+        } else {
+            let layer = sheet_ref(doc, options.get("sheet").unwrap_or(&Value::Null))?;
+            let page = self.sheet_page(layer)?;
             if ext == "svg" {
-                (cadektor_print::svg::page_svg(&page).into_bytes(), json!({}))
+                (print::svg::page_svg(&page).into_bytes(), json!({}))
             } else {
-                let dpi = p.get("dpi").and_then(Value::as_f64).unwrap_or(150.0);
+                let dpi = options.get("dpi").and_then(Value::as_f64).unwrap_or(150.0);
                 let bytes = print::png::page_png(&page, dpi).map_err(bad)?;
                 let (w, h) = png_size(&bytes);
                 (bytes, json!({"width": w, "height": h}))
             }
-        }
-    };
-    print::write_file(&path, &bytes).map_err(app)?;
-    let mut out = json!({"path": path.display().to_string(), "bytes": bytes.len()});
-    out.as_object_mut().expect("object").extend(extra.as_object().cloned().unwrap_or_default());
-    Ok(out)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn export(_: &mut Session, _: &str, _: &Value) -> Res {
-    Err(app("export is not available in this build"))
+        };
+        print::write_file(&path, &bytes).map_err(app)?;
+        let mut out = json!({"path": path.display().to_string(), "bytes": bytes.len()});
+        out.as_object_mut().expect("object").extend(extra.as_object().cloned().unwrap_or_default());
+        Ok(out)
+    }
 }

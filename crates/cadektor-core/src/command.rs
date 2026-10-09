@@ -107,6 +107,8 @@ pub enum Command {
         #[serde(default)]
         class: Option<ClassId>,
     },
+    /// Set or clear the georeference of the document.
+    SetGeoreference { georef: Option<crate::georef::Georeference> },
     /// Add a resource, for example a plant style. Returns its ID in `created`.
     AddResource { name: String, body: ResourceBody },
     /// Change the name or content of a resource. Plants that use a plant style follow the change.
@@ -239,6 +241,7 @@ struct Meta {
     resources: Resources,
     active_layer: LayerId,
     active_class: ClassId,
+    georef: Option<crate::georef::Georeference>,
 }
 
 impl Meta {
@@ -250,6 +253,7 @@ impl Meta {
             resources: doc.resources.clone(),
             active_layer: doc.active_layer,
             active_class: doc.active_class,
+            georef: doc.georef.clone(),
         }
     }
 
@@ -260,6 +264,7 @@ impl Meta {
         doc.resources = self.resources.clone();
         doc.active_layer = self.active_layer;
         doc.active_class = self.active_class;
+        doc.georef = self.georef.clone();
     }
 
     fn is_finite(&self) -> bool {
@@ -437,7 +442,7 @@ impl<'a> Tx<'a> {
                 self.check_class(class)?;
                 validate_shape(shape)?;
                 self.check_shape_refs(shape)?;
-                self.check_sheet_rules(layer, shape)?;
+                self.check_sheet_rules(layer, shape, None)?;
                 validate_attrs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
@@ -507,7 +512,7 @@ impl<'a> Tx<'a> {
                 }
                 {
                     let o = self.doc.object(*id).expect("checked");
-                    self.check_sheet_rules(layer.unwrap_or(o.layer), shape.as_ref().unwrap_or(&o.shape))?;
+                    self.check_sheet_rules(layer.unwrap_or(o.layer), shape.as_ref().unwrap_or(&o.shape), Some(*id))?;
                 }
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
@@ -644,6 +649,12 @@ impl<'a> Tx<'a> {
                     self.check_class(*c)?;
                     self.doc.active_class = *c;
                 }
+            }
+            Command::SetGeoreference { georef } => {
+                if georef.as_ref().is_some_and(|g| !g.is_finite() || g.origin.abs().max_element() > MAX_COORD) {
+                    return Err(CommandError::Invalid(NOT_FINITE.into()));
+                }
+                self.doc.georef = georef.clone();
             }
             Command::AddResource { .. }
             | Command::ModifyResource { .. }
@@ -876,6 +887,24 @@ mod tests {
             class: None,
             attrs: Attributes::default(),
         }
+    }
+
+    #[test]
+    fn set_georeference_undoes_and_rejects_bad_numbers() {
+        use crate::georef::Georeference;
+        let g = Georeference { crs: "EPSG:3067".into(), origin: DVec2::new(1.0, 2.0), rotation: 0.0, user_origin: DVec2::ZERO };
+        let mut ed = Editor::default();
+        ed.execute(&Command::SetGeoreference { georef: Some(g.clone()) }).unwrap();
+        assert_eq!(ed.doc().georef, Some(g.clone()));
+        let json = serde_json::to_string(ed.doc()).unwrap();
+        assert_eq!(Document::from_json(&json).unwrap().georef, Some(g.clone()));
+        assert!(ed.undo());
+        assert_eq!(ed.doc().georef, None);
+        assert!(ed.redo());
+        let bad = Georeference { rotation: f64::NAN, ..g };
+        assert!(ed.execute(&Command::SetGeoreference { georef: Some(bad) }).is_err());
+        ed.execute(&Command::SetGeoreference { georef: None }).unwrap();
+        assert_eq!(ed.doc().georef, None);
     }
 
     #[test]

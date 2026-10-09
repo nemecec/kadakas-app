@@ -33,7 +33,7 @@ impl Tx<'_> {
 
     /// Viewports and title blocks belong on sheet layers. Sheet layers hold only 2D drawing
     /// shapes. A viewport shows design layers and uses classes that exist.
-    pub(super) fn check_sheet_rules(&self, layer: LayerId, shape: &Shape) -> Result<(), CommandError> {
+    pub(super) fn check_sheet_rules(&self, layer: LayerId, shape: &Shape, except: Option<ObjectId>) -> Result<(), CommandError> {
         let sheet = self.doc.layer(layer).is_some_and(|l| l.kind == LayerKind::Sheet);
         let sheet_only = matches!(shape, Shape::Viewport(_) | Shape::TitleBlock(_));
         if sheet_only && !sheet {
@@ -43,6 +43,12 @@ impl Tx<'_> {
             return Err(invalid(format!("a sheet layer cannot hold a {}. Put it on a design layer and show it in a viewport", shape.kind())));
         }
         if let Shape::Viewport(v) = shape {
+            if !v.is_plan() {
+                let others = self.doc.objects.values().filter(|o| o.layer == layer && Some(o.id) != except && matches!(&o.shape, Shape::Viewport(x) if !x.is_plan())).count();
+                if others >= crate::sheets::MAX_3D_VIEWPORTS {
+                    return Err(invalid(format!("a sheet layer holds at most {} 3D viewports", crate::sheets::MAX_3D_VIEWPORTS)));
+                }
+            }
             for l in &v.layers {
                 match self.doc.layer(*l) {
                     None => return Err(CommandError::NoLayer(*l)),

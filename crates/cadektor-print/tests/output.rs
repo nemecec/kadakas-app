@@ -146,13 +146,14 @@ fn visibility_and_graphic_overrides_change_the_drawing() {
     });
     assert_eq!(blue(&prims(&ed, sheet)), 0);
     assert!(ed.doc().class(trees).unwrap().visible, "the document is unchanged");
-    // A graphic override beats the class, and the object's own pen.
+    // A graphic override beats the class, but not an attribute that the object sets itself.
     set_viewport(&mut ed, vp, |v| {
         v.class_overrides.insert(trees, ClassOverride { pen: Some(Color([1, 2, 3, 255])), line_weight: Some(0.9), ..Default::default() });
     });
     let ps = prims(&ed, sheet);
     assert!(ps.iter().any(|p| matches!(p, Prim::Path(pp) if pp.stroke == Some([1, 2, 3, 255]) && pp.width == 0.9)));
-    assert_eq!(blue(&ps), 0);
+    // The circle with its own blue pen keeps it: an override acts on what is "by class" only.
+    assert_eq!(blue(&ps), 1);
     // Layer hidden in the viewport.
     set_viewport(&mut ed, vp, |v| {
         v.layer_overrides.insert(FIRST_LAYER, false);
@@ -566,4 +567,81 @@ fn display_helpers() {
     assert!(sample(&cw, 8).iter().all(|p| p.y <= 1e-9));
     assert_eq!(PathPrim::polyline(&[v(0.0, 0.0), v(1.0, 1.0)]).len(), 2);
     assert!(text_width("abcd", 10.0) > 0.0);
+}
+
+#[test]
+fn winansi_keeps_estonian_and_typographic_characters() {
+    use cadektor_print::pdf::winansi;
+    assert_eq!(winansi("Šõõr Žürii äöü"), vec![0x8A, 0xF5, 0xF5, b'r', b' ', 0x8E, 0xFC, b'r', b'i', b'i', b' ', 0xE4, 0xF6, 0xFC]);
+    assert_eq!(winansi("š ž Œ \u{2013} \u{2014} \u{201C}x\u{201D} \u{2019}"), vec![0x9A, b' ', 0x9E, b' ', 0x8C, b' ', 0x96, b' ', 0x97, b' ', 0x93, b'x', 0x94, b' ', 0x92]);
+    assert_eq!(winansi("\u{4e2d}\u{85}"), b"??");
+}
+
+#[test]
+fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
+    let mut ed = Editor::default();
+    let sheet = LayerId(run(&mut ed, Command::AddSheet { name: "S".into(), paper: Some(PaperSize::A0), orientation: None, number: None, title: None })[0]);
+    // A wide frame at a high dpi: both sides would be clamped. The picture must stay 4:1.
+    let mut vp = Viewport::new(v(10.0, 10.0), v(1100.0, 285.0), v(0.0, 0.0), 10.0, vec![FIRST_LAYER]);
+    vp.view = "top".into();
+    vp.dpi = 600.0;
+    add(&mut ed, Shape::Viewport(Box::new(vp.clone())), Some(sheet), Attributes::default());
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    let Some(Prim::Image(i)) = page.prims.get(1) else { panic!() };
+    assert!(i.width <= 3000 && i.height <= 3000);
+    let want = 1090.0 / 275.0;
+    assert!((i.width as f64 / i.height as f64 - want).abs() < 0.01, "{}x{}", i.width, i.height);
+    // Eight 3D viewports of 9 megapixels each share 64 megapixels: no page holds more.
+    for k in 1..8 {
+        vp.min = v(10.0, 10.0 + k as f64);
+        add(&mut ed, Shape::Viewport(Box::new(vp.clone())), Some(sheet), Attributes::default());
+    }
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    let total: u64 = page.prims.iter().filter_map(|p| if let Prim::Image(i) = p { Some(i.width as u64 * i.height as u64) } else { None }).sum();
+    assert!(total <= cadektor_print::compose::MAX_RASTER_PIXELS, "{total}");
+    // The export refuses a set of sheets with more image pixels than the limit.
+    let mut cache = SheetCache::default();
+    let ids: Vec<LayerId> = (0..12)
+        .map(|k| {
+            let l = LayerId(run(&mut ed, Command::AddSheet { name: format!("T{k}"), paper: Some(PaperSize::A0), orientation: None, number: None, title: None })[0]);
+            let mut v3 = vp.clone();
+            v3.min = v(10.0, 10.0);
+            v3.max = v(1100.0, 800.0);
+            add(&mut ed, Shape::Viewport(Box::new(v3)), Some(l), Attributes::default());
+            l
+        })
+        .collect();
+    let err = export_pdf(ed.doc(), ed.revision(), &mut cache, &ids).unwrap_err();
+    assert!(matches!(err, PrintError::Invalid(m) if m.contains("megapixels")));
+}
+
+#[test]
+fn the_cache_keeps_a_few_pages_and_forgets_the_oldest() {
+    let mut ed = Editor::default();
+    let ids: Vec<LayerId> = (0..10).map(|k| LayerId(run(&mut ed, Command::AddSheet { name: format!("S{k}"), paper: None, orientation: None, number: None, title: None })[0])).collect();
+    let mut cache = SheetCache::default();
+    let rev = ed.revision();
+    for id in &ids {
+        cache.page(ed.doc(), rev, *id).unwrap();
+    }
+    assert_eq!(cache.builds, 10);
+    // The newest pages are kept, the oldest was dropped.
+    cache.page(ed.doc(), rev, ids[9]).unwrap();
+    assert_eq!(cache.builds, 10);
+    cache.page(ed.doc(), rev, ids[0]).unwrap();
+    assert_eq!(cache.builds, 11);
+    // A page that is used again stays.
+    cache.page(ed.doc(), rev, ids[9]).unwrap();
+    assert_eq!(cache.builds, 11);
+}
+
+#[test]
+fn viewport_visibility_is_independent_of_the_document() {
+    let (mut ed, sheet, vp) = project();
+    let doc = ed.doc().clone();
+    set_viewport(&mut ed, vp, |v| v.snapshot_visibility(&doc));
+    let before = count_paths(&prims(&ed, sheet));
+    assert!(before > 5);
+    run(&mut ed, Command::ModifyLayer { id: FIRST_LAYER, name: None, visible: Some(false), locked: None, elevation: None, scale: None });
+    assert_eq!(count_paths(&prims(&ed, sheet)), before, "hiding in the document does not hide in the viewport");
 }

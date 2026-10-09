@@ -107,6 +107,7 @@ impl Tx<'_> {
                 let layer = layer.unwrap_or(self.doc.active_layer);
                 let class = class.unwrap_or(self.doc.active_class);
                 self.check_layer(layer)?;
+                self.check_sheet_rules(layer, &Shape::Plant { at: DVec2::ZERO, species: String::new(), spread: 1.0, height: 1.0 }, None)?;
                 self.check_class(class)?;
                 if positions.is_empty() {
                     return Err(invalid("give at least one position"));

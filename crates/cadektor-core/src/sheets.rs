@@ -3,14 +3,17 @@
 //! A sheet layer is a page. Its objects live in paper space: millimeters on paper, scale 1:1.
 //! A viewport is an object on a sheet layer. It shows design layers at a scale.
 //!
-//! Attribute precedence inside a viewport (first match wins), see `Viewport::resolve`:
-//! 1. the viewport class override of the class of the object (a field that it sets),
-//! 2. the attributes of the object itself,
+//! Attribute precedence inside a viewport (first match wins), see `Viewport::resolve`.
+//! As in Vectorworks, a class override acts on attributes that are "by class" only:
+//! 1. the attributes that the object sets itself (they are not by class),
+//! 2. the viewport class override of the class of the object (a field that it sets),
 //! 3. the attributes of the class of the object,
 //! 4. the defaults (black pen, no fill, 0.25 mm).
 //!
-//! Visibility inside a viewport: a viewport override of a layer or a class replaces the
-//! document setting. Without an override the document setting counts.
+//! Visibility inside a viewport does not follow the document. The API stores the visibility of
+//! every design layer and class in the viewport when it creates it (`snapshot_visibility`).
+//! Later changes of the document visibility do not reach the viewport. A layer or class
+//! that the viewport has no entry for (added later) is visible.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +26,8 @@ use crate::model::{Attributes, ClassId, Document, LayerId, LayerKind, Object, Sh
 pub const DEFAULT_WEIGHT: f64 = 0.25;
 /// Largest number of annotations in one viewport.
 pub const MAX_ANNOTATIONS: usize = 10_000;
+/// Most 3D (raster) viewports on one sheet layer. Each one is a rendered image.
+pub const MAX_3D_VIEWPORTS: usize = 8;
 /// Largest size of a sheet in mm (about 10 m).
 pub const MAX_PAPER: f64 = 10_000.0;
 
@@ -510,19 +515,24 @@ impl Viewport {
         point_in_polygon(p, &self.clip_polygon())
     }
 
-    /// Whether this viewport draws the design layer `layer`.
-    pub fn layer_visible(&self, doc: &Document, layer: LayerId) -> bool {
-        if !self.layers.contains(&layer) {
-            return false;
+    /// Stores the document visibility of all design layers and classes in the viewport.
+    /// After this the viewport keeps its own visibility.
+    pub fn snapshot_visibility(&mut self, doc: &Document) {
+        for l in doc.layers.iter().filter(|l| l.kind == LayerKind::Design) {
+            self.layer_overrides.insert(l.id, l.visible);
         }
-        match doc.layer(layer) {
-            Some(l) if l.kind == LayerKind::Design => self.layer_overrides.get(&layer).copied().unwrap_or(l.visible),
-            _ => false,
+        for c in &doc.classes {
+            self.class_overrides.entry(c.id).or_default().visible = Some(c.visible);
         }
     }
 
+    /// Whether this viewport draws the design layer `layer`. The document visibility does not count.
+    pub fn layer_visible(&self, doc: &Document, layer: LayerId) -> bool {
+        self.layers.contains(&layer) && doc.layer(layer).is_some_and(|l| l.kind == LayerKind::Design) && self.layer_overrides.get(&layer).copied().unwrap_or(true)
+    }
+
     pub fn class_visible(&self, doc: &Document, class: ClassId) -> bool {
-        self.class_overrides.get(&class).and_then(|o| o.visible).unwrap_or_else(|| doc.class(class).is_some_and(|c| c.visible))
+        doc.class(class).is_some() && self.class_overrides.get(&class).and_then(|o| o.visible).unwrap_or(true)
     }
 
     /// Whether the object shows in this viewport.
@@ -533,12 +543,12 @@ impl Viewport {
     /// The attributes that an object gets in this viewport, in the order of precedence
     /// described at the top of this module. `line_weight` is on paper in mm.
     pub fn resolve(&self, doc: &Document, obj: &Object) -> Attributes {
-        let base = doc.resolved_attrs(obj);
+        let class = doc.class(obj.class).map(|c| &c.attrs);
         let ov = self.class_overrides.get(&obj.class);
         Attributes {
-            pen: ov.and_then(|o| o.pen).or(base.pen).or(Some(crate::model::Color::BLACK)),
-            fill: ov.and_then(|o| o.fill).or(base.fill).or(Some(crate::model::Color::NONE)),
-            line_weight: ov.and_then(|o| o.line_weight).or(base.line_weight).or(Some(DEFAULT_WEIGHT)),
+            pen: obj.attrs.pen.or(ov.and_then(|o| o.pen)).or(class.and_then(|c| c.pen)).or(Some(crate::model::Color::BLACK)),
+            fill: obj.attrs.fill.or(ov.and_then(|o| o.fill)).or(class.and_then(|c| c.fill)).or(Some(crate::model::Color::NONE)),
+            line_weight: obj.attrs.line_weight.or(ov.and_then(|o| o.line_weight)).or(class.and_then(|c| c.line_weight)).or(Some(DEFAULT_WEIGHT)),
         }
     }
 
@@ -1106,10 +1116,10 @@ mod tests {
         assert_eq!(a.pen, Some(Color([1, 2, 3, 255])));
         assert_eq!(a.fill, Some(Color([0, 255, 0, 255])));
         assert_eq!(a.line_weight, Some(0.5));
-        // A viewport override beats the object and the class, for the fields that it sets.
+        // A viewport override beats the class but not the attributes that the object sets itself.
         p.class_overrides.insert(ClassId(9), ClassOverride { pen: Some(Color([9, 9, 9, 255])), line_weight: Some(0.1), ..Default::default() });
         let a = p.resolve(&doc, &o);
-        assert_eq!(a.pen, Some(Color([9, 9, 9, 255])));
+        assert_eq!(a.pen, Some(Color([1, 2, 3, 255])), "the object has its own pen");
         assert_eq!(a.fill, Some(Color([0, 255, 0, 255])));
         assert_eq!(a.line_weight, Some(0.1));
         // Defaults when nothing sets a field.
@@ -1129,23 +1139,26 @@ mod tests {
         let mut other = o.clone();
         other.layer = LayerId(77);
         assert!(!p.shows(&doc, &other));
-        // The document hides the class: hidden, until the viewport overrides it.
+        // The document visibility does not reach the viewport.
         doc.classes[1].visible = false;
+        doc.layers[0].visible = false;
+        assert!(p.shows(&doc, &o), "no entry in the viewport: visible");
+        // A snapshot stores the document visibility in the viewport. Later changes of the document do not reach it.
+        p.snapshot_visibility(&doc);
         assert!(!p.shows(&doc, &o));
+        doc.classes[1].visible = true;
+        doc.layers[0].visible = true;
+        assert!(!p.shows(&doc, &o), "the viewport keeps what it stored");
+        p.layer_overrides.insert(FIRST_LAYER, true);
+        assert!(!p.shows(&doc, &o), "the class is still off");
         p.class_overrides.insert(ClassId(9), ClassOverride { visible: Some(true), ..Default::default() });
         assert!(p.shows(&doc, &o));
         p.class_overrides.insert(ClassId(9), ClassOverride { visible: Some(false), ..Default::default() });
         assert!(!p.shows(&doc, &o));
-        // Layer override.
         p.class_overrides.clear();
-        doc.classes[1].visible = true;
-        doc.layers[0].visible = false;
-        assert!(!p.shows(&doc, &o));
-        p.layer_overrides.insert(FIRST_LAYER, true);
-        assert!(p.shows(&doc, &o));
         p.layer_overrides.insert(FIRST_LAYER, false);
-        doc.layers[0].visible = true;
         assert!(!p.shows(&doc, &o));
+        p.layer_overrides.clear();
         // A missing class is hidden. Sheet layers are never shown in a viewport.
         let mut gone = o.clone();
         gone.class = ClassId(1234);

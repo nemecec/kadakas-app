@@ -551,6 +551,9 @@ pub struct Document {
     pub objects: Objects,
     pub active_layer: LayerId,
     pub active_class: ClassId,
+    /// Where the drawing sits on the earth, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub georef: Option<crate::georef::Georeference>,
     /// Reusable definitions, such as plant styles. Older files have none.
     #[serde(default, skip_serializing_if = "Resources::is_empty")]
     pub resources: Resources,
@@ -569,6 +572,7 @@ impl PartialEq for Document {
             && self.classes == other.classes
             && self.active_layer == other.active_layer
             && self.active_class == other.active_class
+            && self.georef == other.georef
             && self.next_id == other.next_id
             && self.resources == other.resources
             && self.drawing == other.drawing
@@ -631,6 +635,7 @@ impl Default for Document {
             objects: Objects::new(),
             active_layer: FIRST_LAYER,
             active_class: NONE_CLASS,
+            georef: None,
             resources: Resources::default(),
             drawing: Default::default(),
             next_id: 2,
@@ -666,6 +671,12 @@ impl Document {
     #[cfg(test)]
     pub(crate) fn set_next_id(&mut self, n: u64) {
         self.next_id = n;
+    }
+
+    /// The ID that the next new object, layer or class gets. File importers use it
+    /// to plan the IDs of a batch of commands.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
     }
 
     /// Returns `None` when the IDs are used up.
@@ -709,6 +720,13 @@ impl Document {
                 || o.shape.vertices().is_some_and(|vs| vs.iter().any(|v| matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0)))
         }) {
             return Err(format!("object {} has an invalid shape", o.id));
+        }
+        if let Some(o) = self.objects.values().find(|o| {
+            let sheet = self.layer(o.layer).is_some_and(|l| l.kind == LayerKind::Sheet);
+            let paper_only = matches!(o.shape, Shape::Viewport(_) | Shape::TitleBlock(_));
+            (sheet && !crate::sheets::allowed_on_sheet(&o.shape)) || (paper_only && !sheet)
+        }) {
+            return Err(format!("object {} is on the wrong kind of layer", o.id));
         }
         self.resources.validate()?;
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {

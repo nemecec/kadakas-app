@@ -148,7 +148,7 @@ def test_export_pdf_has_the_page_size_vector_lines_and_text(garden, tmp_path):
     second = cad.result("sheet.create", {"name": "Detail", "paper": "a4", "orientation": "portrait", "number": "L-201", "title": "Detail sheet"})["layer"]
     cad.execute({"op": "add_object", "layer": second, "shape": {"kind": "text", "at": [20, 20], "text": "DETAIL-NOTE", "height": 5}})
     path = tmp_path / "plans.pdf"
-    r = cad.result("export.pdf", {"path": str(path)})
+    r = cad.result("export.file", {"format": "pdf", "path": str(path)})
     assert r["pages"] == 2 and r["bytes"] == path.stat().st_size
     data = path.read_bytes()
     assert data.startswith(b"%PDF-")
@@ -164,7 +164,7 @@ def test_export_pdf_has_the_page_size_vector_lines_and_text(garden, tmp_path):
     assert len(re.findall(r"\bc\n", text)) >= 4
     # One sheet only.
     one = tmp_path / "one.pdf"
-    assert cad.result("export.pdf", {"path": str(one), "sheets": ["Detail"]})["pages"] == 1
+    assert cad.result("export.file", {"format": "pdf", "path": str(one), "options": {"sheets": ["Detail"]}})["pages"] == 1
     assert len(media_boxes(one.read_bytes())) == 1
 
 
@@ -172,7 +172,7 @@ def test_export_pdf_with_a_3d_viewport_embeds_an_image(garden, tmp_path):
     cad = garden["cad"]
     cad.result("viewport.create", {"sheet": "Planting plan", "view": "right_isometric", "dpi": 40, "scale": 200})
     path = tmp_path / "3d.pdf"
-    cad.result("export.pdf", {"path": str(path)})
+    cad.result("export.file", {"format": "pdf", "path": str(path)})
     data = path.read_bytes()
     assert b"/Subtype /Image" in data or b"/Subtype/Image" in data
     assert " Do" in pdf_text(data)
@@ -182,22 +182,27 @@ def test_export_svg_and_png_per_sheet(garden, tmp_path):
     cad = garden["cad"]
     cad.result("viewport.create", {"sheet": "Planting plan"})
     svg, png = tmp_path / "s.svg", tmp_path / "s.png"
-    cad.result("export.svg", {"sheet": "Planting plan", "path": str(svg)})
+    cad.result("export.file", {"format": "sheet_svg", "path": str(svg), "options": {"sheet": "Planting plan"}})
     assert svg.read_text().startswith("<svg") and 'width="420mm"' in svg.read_text()
-    r = cad.result("export.png", {"sheet": "Planting plan", "path": str(png), "dpi": 50.8})
+    r = cad.result("export.file", {"format": "sheet_png", "path": str(png), "options": {"sheet": "Planting plan", "dpi": 50.8}})
     assert (r["width"], r["height"]) == (840, 594)
     assert png.read_bytes()[1:4] == b"PNG"
 
 
 def test_export_refuses_bad_paths_and_missing_sheets(garden, tmp_path):
     cad = garden["cad"]
-    assert "path" in cad.error("export.pdf", {})["message"]
-    assert ".pdf" in cad.error("export.pdf", {"path": str(tmp_path / "x.txt")})["message"]
-    assert cad.error("export.pdf", {"path": str(tmp_path / "no" / "such" / "x.pdf")})["code"] == 1
-    assert "not a sheet" in cad.error("export.pdf", {"path": str(tmp_path / "x.pdf"), "sheets": ["Layer 1"]})["message"]
-    fresh = JsonRpc()
+    assert "path" in cad.error("export.file", {"format": "pdf"})["message"]
+    assert ".pdf" in cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "x.txt")})["message"]
+    assert cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "no" / "such" / "x.pdf")})["code"] == 1
+    assert "not a sheet" in cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "x.pdf"), "options": {"sheets": ["Layer 1"]}})["message"]
+    outside = JsonRpc()
     try:
-        assert "no sheet layers" in fresh.error("export.pdf", {"path": str(tmp_path / "y.pdf")})["message"]
+        assert "--allow-dir" in outside.error("export.file", {"format": "pdf", "path": str(tmp_path / "y.pdf")})["message"]
+    finally:
+        outside.close()
+    fresh = JsonRpc(["serve", "--allow-dir", str(tmp_path)])
+    try:
+        assert "no sheet layers" in fresh.error("export.file", {"format": "pdf", "path": str(tmp_path / "y.pdf")})["message"]
     finally:
         fresh.close()
 
@@ -230,20 +235,55 @@ def test_undo_reverts_sheet_commands(garden):
 def test_describe_and_mcp_cover_the_new_methods(garden):
     cad = garden["cad"]
     names = {m["name"] for m in cad.result("describe")["methods"]}
-    for m in ("sheet.create", "viewport.create", "viewport.set_override", "viewport.annotate", "title_block.create", "saved_view.restore", "export.pdf"):
+    for m in ("sheet.create", "viewport.create", "viewport.set_override", "viewport.annotate", "title_block.create", "saved_view.restore", "export.file"):
         assert m in names
     assert "viewport class override" in cad.result("describe")["sheets"]["override_precedence"]
 
 
 def test_mcp_tools_make_a_sheet_and_export_it(mcp, tmp_path):
     names = {tool["name"] for tool in mcp.request("tools/list")["result"]["tools"]}
-    assert {"sheet_create", "viewport_create", "viewport_set_override", "viewport_annotate", "title_block_create", "saved_view_save", "export_pdf"} <= names
+    assert {"sheet_create", "viewport_create", "viewport_set_override", "viewport_annotate", "title_block_create", "saved_view_save", "export_file"} <= names
     mcp.tool_json("execute", {"command": rect_cmd(0, 0, 5000, 3000)})
     layer = mcp.tool_json("sheet_create", {"name": "A", "paper": "a4"})["layer"]
     assert mcp.tool_json("viewport_create", {"sheet": layer})["view"] == "plan"
     path = tmp_path / "mcp.pdf"
-    assert mcp.tool_json("export_pdf", {"path": str(path)})["pages"] == 1
+    assert mcp.tool_json("export_file", {"format": "pdf", "path": str(path)})["pages"] == 1
     assert path.read_bytes().startswith(b"%PDF-")
     # A rendered sheet comes back as an image the model can look at.
     result = mcp.tool("sheet_render", {"sheet": layer, "format": "png", "dpi": 20})
     assert result["content"][0]["type"] == "image" and result["content"][0]["mimeType"] == "image/png"
+
+
+def test_estonian_text_survives_in_the_pdf(garden, tmp_path):
+    import shutil
+    import subprocess
+
+    cad = garden["cad"]
+    second = cad.result("sheet.create", {"name": "Eesti", "number": "E-1", "title": "Šõõr Žürii äöü"})["layer"]
+    cad.execute({"op": "add_object", "layer": second, "shape": {"kind": "text", "at": [20, 20], "text": "Šõõr Žürii äöü \u2013 \u201cšž\u201d", "height": 6}})
+    path = tmp_path / "ee.pdf"
+    cad.result("export.file", {"format": "pdf", "path": str(path), "options": {"sheets": [second]}})
+    if shutil.which("pdftotext") is None:
+        pytest.skip("pdftotext is not installed")
+    text = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True, check=True).stdout
+    assert "Šõõr Žürii äöü" in text
+    assert "\u201cšž\u201d" in text and "\u2013" in text
+
+
+def test_viewport_visibility_does_not_follow_the_document(garden):
+    cad = garden["cad"]
+    cad.result("viewport.create", {"sheet": "Planting plan"})
+    cad.execute({"op": "modify_class", "id": garden["trees"], "visible": False})
+    assert "rgb(0,0,255)" in cad.result("sheet.render", {"sheet": "Planting plan"})["svg"]
+
+
+def test_plants_and_exports_leave_paper_space_alone(garden, tmp_path):
+    cad = garden["cad"]
+    err = cad.error("execute", {"command": {"op": "add_plants", "positions": [[1, 1]], "layer": garden["sheet"]}})
+    assert "design layer" in err["message"]
+    cad.execute({"op": "add_object", "layer": garden["sheet"], "shape": {"kind": "text", "at": [11, 11], "text": "PAPER-ONLY", "height": 5}})
+    cad.result("viewport.create", {"sheet": "Planting plan"})
+    dxf = tmp_path / "model.dxf"
+    cad.result("export.file", {"format": "dxf", "path": str(dxf)})
+    text = dxf.read_text()
+    assert "PAPER-ONLY" not in text and "Planting plan" not in text
