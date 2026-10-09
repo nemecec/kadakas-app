@@ -497,6 +497,15 @@ pub struct AreaReport {
     pub total_price: f64,
 }
 
+/// The draped surface area of an area over its whole outline, when the area drapes and the ground
+/// is there. The rule of the report.
+pub fn surface_area_on(obj: &Object, ground: &dyn crate::hardscape::TerrainSource) -> Option<f64> {
+    let at = |p: DVec2| ground.elevation(obj, p);
+    let first = obj.shape.vertices().and_then(|v| v.first()).map(|v| v.p);
+    let has_ground = first.is_some_and(|p| ground.covered(obj, p));
+    if data(obj).is_some_and(|d| d.drape) && has_ground { draped_area_m2(obj, &at) } else { None }
+}
+
 /// The report of all landscape areas, in document order.
 pub fn report(doc: &Document, ground: &dyn crate::hardscape::TerrainSource) -> AreaReport {
     let mut rows = Vec::new();
@@ -504,10 +513,7 @@ pub fn report(doc: &Document, ground: &dyn crate::hardscape::TerrainSource) -> A
         let Shape::LandscapeArea { name, .. } = &obj.shape else { continue };
         let Some(q) = quantities(doc, obj) else { continue };
         let style = style_of(doc, obj);
-        let at = |p: DVec2| ground.elevation(obj, p);
-        let first = obj.shape.vertices().and_then(|v| v.first()).map(|v| v.p);
-        let has_ground = first.is_some_and(|p| ground.covered(obj, p));
-        let surface_area_m2 = if data(obj).is_some_and(|d| d.drape) && has_ground { draped_area_m2(obj, &at) } else { None };
+        let surface_area_m2 = surface_area_on(obj, ground);
         rows.push(AreaRow {
             id: obj.id,
             name: name.clone(),

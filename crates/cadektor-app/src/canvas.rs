@@ -260,6 +260,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
+        if let Some(t) = cadektor_core::worksheet_table::data(o) {
+            crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
+        }
         if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
             crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
         }

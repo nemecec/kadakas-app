@@ -95,7 +95,7 @@ fn text(at: DVec2, t: &str, height: f64, color: Rgba) -> Prim {
 }
 
 /// Draws one shape. `attrs` are the final attributes (with viewport overrides applied).
-pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, out: &mut Vec<Prim>) {
+pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>) {
     let st = Style::of(attrs);
     let ink = st.stroke.unwrap_or([0, 0, 0, 255]);
     match &obj.shape {
@@ -103,6 +103,9 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
         Shape::Rect { min, max } => {
             let (lo, hi) = (min.min(*max), min.max(*max));
             out.push(path(mapped(&[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)], xf), true, &st));
+            if let Some(t) = cadektor_core::worksheet_table::data(obj) {
+                crate::table::table_prims(tables, lo, hi, &t, xf, ink, out);
+            }
         }
         Shape::Circle { center, radius } => out.push(path(circle_segs(xf.p(*center), xf.len(*radius)), true, &st)),
         Shape::Arc { center, radius, start, end } => {
@@ -232,7 +235,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
         AnnotationItem::Shape { shape } => {
             let obj = Object::new(cadektor_core::model::ObjectId(0), cadektor_core::model::FIRST_LAYER, a.class, (**shape).clone());
             let xf = Xf { model_center: DVec2::ZERO, paper_center: vp.min, k: 1.0 };
-            shape_prims(doc, &obj, &attrs, &xf, &TagCounts::new(), out);
+            shape_prims(doc, &obj, &attrs, &xf, &TagCounts::new(), &crate::table::Tables::default(), out);
         }
     }
 }

@@ -15,6 +15,8 @@ use crate::resource::{ResourceBody, ResourceId, Resources};
 mod area_ops;
 mod drawing_ops;
 mod plant_ops;
+mod record_ops;
+mod table_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -154,6 +156,18 @@ pub enum Command {
         #[serde(default)]
         unlink: bool,
     },
+    /// Attach a record to objects. `values` are checked against the record format. Fields
+    /// without a value get the default. Each object can have a record once.
+    AttachRecord {
+        ids: Vec<ObjectId>,
+        record: ResourceId,
+        #[serde(default)]
+        values: serde_json::Map<String, Value>,
+    },
+    /// Remove a record and its values from objects.
+    DetachRecord { ids: Vec<ObjectId>, record: ResourceId },
+    /// Change field values of a record that is attached. Other fields stay unchanged.
+    SetRecordFields { ids: Vec<ObjectId>, record: ResourceId, values: serde_json::Map<String, Value> },
     /// Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.
     /// The patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).
     AddHardscape {
@@ -232,6 +246,31 @@ pub enum Command {
     /// Apply a saved view: layer and class visibility and the active layer and class.
     /// The camera part (zoom, pan, 3D view) is for the host to apply.
     RestoreView { name: String },
+    /// Place a worksheet in the drawing as a table. `at` is the top left corner and `size` the
+    /// frame in mm (paper mm on a sheet layer). The table is drawn from the calculated worksheet.
+    AddWorksheetTable {
+        worksheet: ResourceId,
+        at: DVec2,
+        size: DVec2,
+        #[serde(default)]
+        text_height: Option<f64>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Change tables: the worksheet, the text height or the size of the frame (the top left corner stays).
+    SetWorksheetTable {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        worksheet: Option<ResourceId>,
+        #[serde(default)]
+        text_height: Option<f64>,
+        #[serde(default)]
+        size: Option<DVec2>,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -609,7 +648,10 @@ impl<'a> Tx<'a> {
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
-                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| self.is_record_key(k)) {
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is a record. Use the record commands")));
+                }
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str()) || k.as_str() == crate::worksheet_table::KEY) {
                     return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)")));
                 }
                 self.editable(*id)?;
@@ -712,6 +754,8 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            Command::AttachRecord { .. } | Command::DetachRecord { .. } | Command::SetRecordFields { .. } => self.run_record(cmd)?,
+            Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => self.run_table(cmd, out)?,
             Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
             Command::AddSheet { .. }
             | Command::SetSheet { .. }

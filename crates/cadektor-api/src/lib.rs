@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod data_api;
 mod hardscape_api;
 mod plants_api;
 mod sheets_api;
@@ -45,6 +46,8 @@ pub struct Session {
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
     site_cache: cadektor_site::SiteCache,
+    /// Worksheet results by document revision.
+    worksheet_cache: cadektor_sheet::SheetCache,
     /// Display lists of sheets, by document revision (see `sheet.render`).
     #[cfg(not(target_arch = "wasm32"))]
     sheet_cache: cadektor_print::SheetCache,
@@ -116,6 +119,39 @@ pub const METHODS: &[(&str, &str)] = &[
     plants_api::PLANTS_SET_STYLE,
     plants_api::REPORT_PLANT_SCHEDULE,
     plants_api::REPORT_EXISTING_TREES,
+    // Records, the Data Manager and worksheets (see data_api.rs).
+    data_api::RECORD_FORMAT_LIST,
+    data_api::RECORD_FORMAT_GET,
+    data_api::RECORD_FORMAT_CREATE,
+    data_api::RECORD_FORMAT_UPDATE,
+    data_api::RECORD_FORMAT_DELETE,
+    data_api::RECORD_ATTACH,
+    data_api::RECORD_DETACH,
+    data_api::RECORD_SET,
+    data_api::RECORD_GET,
+    data_api::DATA_MANAGER_LIST,
+    data_api::DATA_MANAGER_GET,
+    data_api::DATA_MANAGER_CREATE,
+    data_api::DATA_MANAGER_UPDATE,
+    data_api::DATA_MANAGER_DELETE,
+    data_api::DATA_MANAGER_CHECK,
+    data_api::DATA_MANAGER_EVALUATE,
+    data_api::DATA_MANAGER_APPLY,
+    data_api::DATA_MANAGER_PROPERTIES,
+    data_api::WORKSHEET_LIST,
+    data_api::WORKSHEET_TEMPLATES,
+    data_api::WORKSHEET_CREATE,
+    data_api::WORKSHEET_GET,
+    data_api::WORKSHEET_RENAME,
+    data_api::WORKSHEET_DELETE,
+    data_api::WORKSHEET_SET_CELL,
+    data_api::WORKSHEET_SET_CELLS,
+    data_api::WORKSHEET_SET_DATABASE,
+    data_api::WORKSHEET_REMOVE_DATABASE,
+    data_api::WORKSHEET_EVALUATE,
+    data_api::WORKSHEET_EXPORT,
+    data_api::WORKSHEET_PLACE,
+    data_api::WORKSHEET_FIT,
     // Hardscapes and landscape areas (see hardscape_api.rs).
     hardscape_api::HARDSCAPE_STYLE_LIST,
     hardscape_api::HARDSCAPE_STYLE_GET,
@@ -238,6 +274,7 @@ impl Session {
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
+                "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                     "sheets": sheets_api::describe(),
                 });
@@ -414,7 +451,10 @@ impl Session {
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
                     return r;
                 }
-                return plants_api::handle(self, method, p.clone()).or_else(|| sheets_api::handle(self, method, p)).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") }));
+                return plants_api::handle(self, method, p.clone())
+                    .or_else(|| sheets_api::handle(self, method, p.clone()))
+                    .or_else(|| data_api::handle(self, method, p))
+                    .unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") }));
             }
         })
     }
@@ -493,6 +533,12 @@ fn command_examples() -> Value {
         {"op": "add_object", "shape": {"kind": "plant", "at": [1000, 1000], "species": "Acer campestre", "spread": 4000, "height": 8000}},
         {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0,0],[3000,0],[3000,1200],[0,1200]], "material": "Granite setts"}},
         {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[0,0], {"p": [3000,0], "kind": "arc", "radius": 400}, {"p": [3000,2000], "kind": "arc", "radius": 400}, [0,2000]]}},
+        {"op": "add_resource", "name": "Soil", "body": {"type": "record_format", "fields": [{"name": "Depth", "type": "dimension", "default": 300}, {"name": "Grade", "type": "choice", "choices": ["A", "B"]}]}},
+        {"op": "attach_record", "ids": [2], "record": 1, "values": {"Depth": 250}},
+        {"op": "set_record_fields", "ids": [2], "record": 1, "values": {"Grade": "B"}},
+        {"op": "detach_record", "ids": [2], "record": 1},
+        {"op": "add_worksheet_table", "worksheet": 3, "at": [10, 280], "size": [120, 40], "text_height": 3.5},
+        {"op": "set_worksheet_table", "ids": [2], "size": [150, 60]},
         {"op": "set_vertex", "id": 2, "index": 1, "kind": {"kind": "arc", "radius": 250}},
         {"op": "move_objects", "ids": [2], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},

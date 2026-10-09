@@ -611,6 +611,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         *edit = InfoEdit::default();
         return;
     };
+    if crate::data_ui::info_tab(ui, session, &sel, status) {
+        *edit = InfoEdit::default();
+        return;
+    }
     if sel.len() > 1 {
         ui.label(format!("{} objects selected", sel.len()));
         *edit = InfoEdit::default();
@@ -652,6 +656,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
         crate::area_ui::object_info(ui, session, id, status);
     }
+    crate::data_ui::table_info(ui, session, id, status);
     crate::site_ui::cut_fill_readout(ui, session, id);
     ui.separator();
     class_layer_combos(ui, session, &sel, status);

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cadektor_core::hardscape::{NoTerrain, TerrainSource};
 use cadektor_core::mesh;
 use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
 use cadektor_core::plants::schedule;
@@ -12,6 +13,7 @@ use glam::DVec2;
 
 use crate::display::*;
 use crate::plan::{annotation_prims, shape_prims, Xf};
+use crate::table::Tables;
 use crate::PrintError;
 
 const INK: Rgba = [0, 0, 0, 255];
@@ -38,6 +40,12 @@ pub struct SheetCache {
 impl SheetCache {
     /// The page of a sheet layer for this revision of the document.
     pub fn page(&mut self, doc: &Document, revision: u64, layer: LayerId) -> Result<Arc<Page>, PrintError> {
+        self.page_on(doc, revision, layer, &NoTerrain)
+    }
+
+    /// Like `page`, with the ground of the site models for the worksheet tables. The ground must
+    /// belong to this revision.
+    pub fn page_on(&mut self, doc: &Document, revision: u64, layer: LayerId, ground: &dyn TerrainSource) -> Result<Arc<Page>, PrintError> {
         if self.revision != Some(revision) {
             self.pages.clear();
             self.used.clear();
@@ -48,7 +56,7 @@ impl SheetCache {
             self.used.push_back(layer);
             return Ok(p.clone());
         }
-        let page = Arc::new(compose_page(doc, layer)?);
+        let page = Arc::new(compose_page_on(doc, layer, ground)?);
         self.builds += 1;
         // Pages hold images, so the cache keeps a few of them only.
         while self.pages.len() >= MAX_CACHED_PAGES {
@@ -65,6 +73,12 @@ impl SheetCache {
 
 /// Builds the page of a sheet layer.
 pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> {
+    compose_page_on(doc, layer, &NoTerrain)
+}
+
+/// Builds the page of a sheet layer. `ground` gives the heights of the site models, for the
+/// worksheet tables on the page.
+pub fn compose_page_on(doc: &Document, layer: LayerId, ground: &dyn TerrainSource) -> Result<Page, PrintError> {
     let l = doc.layer(layer).ok_or(PrintError::NoSheet(layer))?;
     if l.kind != LayerKind::Sheet {
         return Err(PrintError::NoSheet(layer));
@@ -72,6 +86,7 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
     let sheet = doc.sheet(layer).ok_or(PrintError::NoSheet(layer))?;
     let size = sheet.size_mm();
     let counts = schedule::tag_counts(doc);
+    let tables = Tables::build(doc, ground);
     let mut prims = Vec::new();
     let mut budget = MAX_RASTER_PIXELS;
     let mut rasters = 0;
@@ -83,7 +98,7 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
                     rasters += 1;
                 }
                 let mut left = if rasters > cadektor_core::sheets::MAX_3D_VIEWPORTS { 0 } else { budget };
-                viewport_prims(doc, vp, &counts, &mut left, &mut prims);
+                viewport_prims(doc, vp, &counts, &tables, &mut left, &mut prims);
                 if rasters <= cadektor_core::sheets::MAX_3D_VIEWPORTS {
                     budget = left;
                 }
@@ -91,7 +106,7 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
             Shape::TitleBlock(tb) => title_block_prims(doc, layer, tb, size, &mut prims),
             _ => {
                 let attrs = doc.resolved_attrs(obj);
-                shape_prims(doc, obj, &attrs, &Xf::IDENTITY, &counts, &mut prims);
+                shape_prims(doc, obj, &attrs, &Xf::IDENTITY, &counts, &tables, &mut prims);
             }
         }
     }
@@ -104,12 +119,12 @@ fn rect_prim(lo: DVec2, hi: DVec2, width: f64) -> Prim {
 }
 
 /// The primitives of a viewport: the frame (if shown), the clipped view and the annotations.
-pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, budget: &mut u64, out: &mut Vec<Prim>) {
+pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, tables: &Tables, budget: &mut u64, out: &mut Vec<Prim>) {
     let clip = vp.clip_polygon();
     if clip.len() >= 3 {
         out.push(Prim::PushClip(clip.clone()));
         if vp.is_plan() {
-            plan_view(doc, vp, counts, out);
+            plan_view(doc, vp, counts, tables, out);
         } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
@@ -123,7 +138,7 @@ pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCount
     }
 }
 
-fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, out: &mut Vec<Prim>) {
+fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, tables: &Tables, out: &mut Vec<Prim>) {
     let xf = Xf::of(vp);
     let (lo, hi) = vp.model_window();
     for obj in doc.objects.values().filter(|o| vp.shows(doc, o)) {
@@ -132,7 +147,7 @@ fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, out: &
             continue;
         }
         let attrs = vp.resolve(doc, obj);
-        shape_prims(doc, obj, &attrs, &xf, counts, out);
+        shape_prims(doc, obj, &attrs, &xf, counts, tables, out);
     }
 }
 

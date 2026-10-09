@@ -137,20 +137,29 @@ pub struct Report {
     pub total_volume_m3: f64,
 }
 
+/// The quantities of a hardscape on the given ground, with the rules of the report: a hardscape that
+/// lies fully outside the site model, or on a layer without one, is not draped.
+pub fn quantities_on(doc: &Document, obj: &Object, ground: &dyn TerrainSource) -> Option<Quantities> {
+    if !matches!(obj.shape, Shape::Hardscape { .. }) {
+        return None;
+    }
+    let at = |p: DVec2| ground.elevation(obj, p);
+    let ring = curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, TOLERANCE);
+    let step = (ring.len() / 64).max(1);
+    let samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
+    let covered = samples.iter().filter(|p| ground.covered(obj, **p)).count();
+    let mut q = quantities(doc, obj, (covered > 0).then_some(&at as Terrain<'_>))?;
+    q.partially_draped = q.draped && covered < samples.len();
+    Some(q)
+}
+
 /// The report of all hardscapes in the document, in document order.
 pub fn report(doc: &Document, ground: &dyn TerrainSource) -> Report {
     let mut rows = Vec::new();
     let mut totals: BTreeMap<(&'static str, String), (f64, f64)> = BTreeMap::new();
     for obj in doc.objects.values() {
         let Shape::Hardscape { material, .. } = &obj.shape else { continue };
-        let at = |p: DVec2| ground.elevation(obj, p);
-        // A hardscape that lies fully outside the site model, or on a layer without one, is not draped.
-        let ring = curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, TOLERANCE);
-        let step = (ring.len() / 64).max(1);
-        let samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
-        let covered = samples.iter().filter(|p| ground.covered(obj, **p)).count();
-        let Some(mut q) = quantities(doc, obj, (covered > 0).then_some(&at as Terrain<'_>)) else { continue };
-        q.partially_draped = q.draped && covered < samples.len();
+        let Some(q) = quantities_on(doc, obj, ground) else { continue };
         let style = data::style_of(doc, obj).map(|(id, _)| id);
         let style_name = style.and_then(|id| doc.resources.get(id)).map(|r| r.name.clone());
         for l in &q.layers {

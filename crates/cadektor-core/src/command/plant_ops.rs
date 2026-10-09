@@ -39,6 +39,20 @@ impl Tx<'_> {
         if name.trim().is_empty() {
             return Err(invalid("a resource needs a name"));
         }
+        if matches!(body, ResourceBody::RecordFormat(_)) {
+            crate::record::check_name("record", name).map_err(invalid)?;
+            if crate::record::is_reserved_record_name(name) || name.trim().eq_ignore_ascii_case(crate::record::MARKER) {
+                return Err(invalid(format!("'{}' is reserved. Choose another record name", name.trim())));
+            }
+            // Plain data under this key would be taken over by the record.
+            let marker = except.map(|e| serde_json::Value::from(e.0));
+            let taken = self.doc.objects.values().any(|o| {
+                o.data.iter().any(|(k, v)| k.eq_ignore_ascii_case(name.trim()) && !(marker.is_some() && v.get(crate::record::MARKER) == marker.as_ref()))
+            });
+            if taken {
+                return Err(invalid(format!("objects already have data under the key '{}'. Choose another record name", name.trim())));
+            }
+        }
         let clash = self
             .doc
             .resources
@@ -49,6 +63,14 @@ impl Tx<'_> {
 
     /// Objects that use the resource: plants linked to the style, and plant tags.
     fn users_of(&self, id: ResourceId) -> Vec<ObjectId> {
+        if let Some(r) = self.doc.resources.get(id)
+            && matches!(r.body, ResourceBody::RecordFormat(_))
+        {
+            return self.record_users(id);
+        }
+        if self.doc.resources.get(id).is_some_and(|r| matches!(r.body, ResourceBody::Worksheet(_))) {
+            return crate::worksheet_table::users_of(self.doc, id);
+        }
         self.doc
             .objects
             .values()
@@ -85,6 +107,7 @@ impl Tx<'_> {
             }
             Command::ModifyResource { id, name, body } => {
                 let current = self.doc.resources.get(*id).ok_or(CommandError::NoResource(*id))?;
+                let old_name = current.name.clone();
                 let new_name = name.clone().unwrap_or_else(|| current.name.clone());
                 let new_body = body.clone().unwrap_or_else(|| current.body.clone());
                 if new_body.type_name() != current.body.type_name() {
@@ -96,6 +119,7 @@ impl Tx<'_> {
                 let r = self.doc.resources.get_mut(*id).expect("checked");
                 r.name = new_name.trim().to_string();
                 r.body = new_body;
+                self.conform_records(*id, &old_name);
                 let users = self.users_of(*id);
                 self.resync(&users);
             }
@@ -110,6 +134,9 @@ impl Tx<'_> {
                     }
                     if target.body.type_name() != current.body.type_name() {
                         return Err(invalid("reassign to a resource of the same type"));
+                    }
+                    if matches!(current.body, ResourceBody::RecordFormat(_)) {
+                        return Err(invalid("records cannot be reassigned. Detach the record first"));
                     }
                     for &uid in &users {
                         self.touch(uid);

@@ -284,15 +284,16 @@ Non-goals
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | RPT-01 | Plant and area reports through the API. | P0 | done |
-| RPT-02 | Record formats: define fields, attach to objects. | P0 | planned |
-| RPT-03 | Worksheet object with criteria and formulas. | P1 | planned |
+| RPT-02 | Record formats: typed fields (text, integer, number, boolean, dimension, area, choice list) with defaults and units, as resources. Attach, detach and edit records on objects (undoable, validated). Record format editor and Data tab of Object Info. | P0 | done |
+| RPT-03 | Worksheet resource (`cadektor-sheet`): cells, formulas (+ - * / ^ &, comparisons, references A1 and B2:C5, SUM AVERAGE MIN MAX COUNT IF ROUND CONCAT and more), formats (decimals, unit), live recalculation cached by revision, cycles give #CYCLE!. Worksheet window with grid and formula bar. | P1 | done |
 | RPT-04 | Preformatted reports: `report.plant_list`, `report.landscape_areas` and `report.hardscape` are done, with CSV. Printable layouts are not. | P0 | planned |
-| RPT-05 | Export worksheet to CSV. | P0 | planned |
+| RPT-05 | Export worksheet to CSV. | P0 | done |
 | RPT-06 | Data tag styles and tag placement. | P1 | planned |
 | RPT-07 | Data visualizations (color by criteria). | P1 | planned |
 | RPT-08 | Graphic legends. | P2 | planned |
-| RPT-09 | Worksheet database rows linked to live objects. | P1 | planned |
-| RPT-10 | Export worksheet to XLSX. | P2 | planned |
+| RPT-09 | Worksheet database rows linked to live objects: criteria (kind, layer, class, record, field comparisons, style), column expressions (Area, Length, Perimeter, Count, Layer, Class, Style, plant and record fields), sort, group, subtotals and totals. Database setup in the worksheet window. | P1 | done |
+| RPT-10 | Export worksheet to XLSX (values and number formats, own small writer, no extra crate). | P2 | done |
+| RPT-11 | Worksheet table object: place a worksheet on a design layer or a sheet layer (`worksheet.place`, `AddWorksheetTable`). It draws the calculated cells, follows the document, prints in PDF, sheet SVG and PNG, and obeys the sheet layer rules. Criteria builder in the worksheet window. | P1 | done |
 
 ### 4.13 Sheets, viewports, annotation
 
@@ -349,7 +350,7 @@ Non-goals
 | IOP-04 | IFC 2x3 import and export. | P1 | planned |
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
 | IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
-| IOP-07 | Data mapping rules to IFC fields. | P1 | planned |
+| IOP-07 | Data mapping rules to IFC fields: a Data Manager mapping table (resource) from object parameters to record fields and IFC property sets, with an evaluation function and API. The IFC writer itself is IOP-02. | P1 | done |
 | IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
 | IOP-10 | DWG import and export. | P2 | planned |
@@ -383,6 +384,7 @@ Non-goals
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
+| API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
 
 ### 4.18 Scripting
 
