@@ -30,6 +30,24 @@ fn polar(center: DVec2, f: impl Fn(f64) -> f64) -> GraphicPath {
 /// The strokes of a plant symbol with this outline, centered at `center`, within `radius`.
 /// The first path is always the closed outline.
 pub fn paths(graphic: PlantGraphic, center: DVec2, radius: f64) -> Vec<GraphicPath> {
+    paths_rotated(graphic, center, radius, 0.0)
+}
+
+/// Like `paths`, turned counterclockwise by `rotation` radians around the center.
+pub fn paths_rotated(graphic: PlantGraphic, center: DVec2, radius: f64, rotation: f64) -> Vec<GraphicPath> {
+    let mut out = outline(graphic, center, radius);
+    if rotation != 0.0 {
+        let turn = DVec2::from_angle(rotation);
+        for p in &mut out {
+            for q in &mut p.points {
+                *q = center + turn.rotate(*q - center);
+            }
+        }
+    }
+    out
+}
+
+fn outline(graphic: PlantGraphic, center: DVec2, radius: f64) -> Vec<GraphicPath> {
     let r = radius.max(0.0);
     match graphic {
         PlantGraphic::Circle => vec![polar(center, |_| r)],
@@ -86,6 +104,19 @@ mod tests {
             let far = p[0].points.iter().map(|q| q.length()).fold(0.0, f64::max);
             assert!(far > 990.0, "{g:?} reaches {far}");
         }
+    }
+
+    #[test]
+    fn rotation_turns_the_outline_around_the_center() {
+        let c = DVec2::new(10.0, 20.0);
+        let flat = paths(PlantGraphic::Star, c, 100.0);
+        let turned = paths_rotated(PlantGraphic::Star, c, 100.0, std::f64::consts::FRAC_PI_2);
+        for (a, b) in flat[0].points.iter().zip(&turned[0].points) {
+            let v = *a - c;
+            assert!((*b - (c + DVec2::new(-v.y, v.x))).length() < 1e-9);
+        }
+        assert_eq!(paths_rotated(PlantGraphic::Star, c, 100.0, 0.0), flat);
+        assert_eq!(paths_rotated(PlantGraphic::Spokes, c, 50.0, 1.0).len(), 9);
     }
 
     #[test]

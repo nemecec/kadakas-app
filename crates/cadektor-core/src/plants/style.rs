@@ -118,6 +118,26 @@ impl PlantForm {
     }
 }
 
+/// How the schedule counts a plant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityType {
+    /// By number of plants. The price is per plant.
+    #[default]
+    Count,
+    /// By covered area, for groundcovers. Each plant covers its canopy circle, and the price is per m2.
+    Area,
+}
+
+impl QuantityType {
+    pub fn id(self) -> &'static str {
+        match self {
+            QuantityType::Count => "count",
+            QuantityType::Area => "area",
+        }
+    }
+}
+
 /// A plant style. The style name is the name of the resource that holds it.
 /// Lengths are in mm.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,6 +167,18 @@ pub struct PlantStyle {
     pub root: String,
     /// Free fields, for example `water need`.
     pub custom: BTreeMap<String, String>,
+    /// Fields that plants cannot override (by style only). The other fields can be set per plant (by instance).
+    pub locked: Vec<String>,
+    /// Count plants, or add up their area (groundcovers).
+    pub quantity: QuantityType,
+    /// Trunk diameter in mm. Needed for the tree protection zone.
+    pub trunk_diameter: f64,
+    /// Draw a tree protection zone (category tree only). The radius follows the rule of existing trees.
+    pub protection_zone: bool,
+    /// Zone radius as a multiple of the trunk diameter (default 12).
+    pub rpz_factor: Option<f64>,
+    /// Largest zone radius in mm (default 15 000).
+    pub rpz_cap: Option<f64>,
 }
 
 impl Default for PlantStyle {
@@ -167,6 +199,12 @@ impl Default for PlantStyle {
             container: String::new(),
             root: String::new(),
             custom: BTreeMap::new(),
+            locked: Vec::new(),
+            quantity: QuantityType::default(),
+            trunk_diameter: 0.0,
+            protection_zone: false,
+            rpz_factor: None,
+            rpz_cap: None,
         }
     }
 }
@@ -185,7 +223,32 @@ impl PlantStyle {
         if !self.price.is_finite() || self.price < 0.0 || self.price > MAX_COORD {
             return Err("price must be a finite number of zero or more".into());
         }
+        for (name, v) in [("trunk_diameter", Some(self.trunk_diameter)), ("rpz_factor", self.rpz_factor), ("rpz_cap", self.rpz_cap)] {
+            if v.is_some_and(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(&v)) {
+                return Err(format!("{name} must be a finite number of zero or more"));
+            }
+        }
+        let names = Self::field_names();
+        if let Some(bad) = self.locked.iter().find(|f| !names.contains(f) || *f == "locked") {
+            return Err(format!("'{bad}' cannot be locked. Fields: {}", names.join(", ")));
+        }
         Ok(())
+    }
+
+    /// The names of all fields, as used in JSON, overrides and `locked`.
+    pub fn field_names() -> Vec<String> {
+        serde_json::to_value(PlantStyle::default()).expect("a style is JSON").as_object().expect("an object").keys().cloned().collect()
+    }
+
+    /// True if plants cannot override this field.
+    pub fn is_locked(&self, field: &str) -> bool {
+        self.locked.iter().any(|f| f == field)
+    }
+
+    /// Radius of the tree protection zone in mm, for a tree with a trunk diameter and the zone switched on.
+    pub fn protection_radius(&self) -> Option<f64> {
+        (self.category == PlantCategory::Tree && self.protection_zone && self.trunk_diameter > 0.0)
+            .then(|| super::tree::rpz_radius(self.trunk_diameter, self.rpz_factor, self.rpz_cap))
     }
 
     /// The name that a plant object shows as its species: the botanical name, else the common name.
@@ -247,6 +310,44 @@ mod tests {
         assert_eq!(s.spread, 5000.0);
         assert_eq!(s.height, 4000.0);
         assert_eq!(s.species("x"), "Acer");
+    }
+
+    #[test]
+    fn locked_fields_and_zone_settings_are_checked() {
+        let mut s = PlantStyle { locked: vec!["price".into(), "spread".into()], ..PlantStyle::default() };
+        assert!(s.validate().is_ok());
+        assert!(s.is_locked("price") && !s.is_locked("height"));
+        s.locked.push("nope".into());
+        assert!(s.validate().unwrap_err().contains("cannot be locked"));
+        s.locked = vec!["locked".into()];
+        assert!(s.validate().is_err());
+        let mut t = PlantStyle { trunk_diameter: -1.0, ..PlantStyle::default() };
+        assert!(t.validate().is_err());
+        t = PlantStyle { rpz_factor: Some(f64::NAN), ..PlantStyle::default() };
+        assert!(t.validate().is_err());
+        t = PlantStyle { rpz_cap: Some(-5.0), ..PlantStyle::default() };
+        assert!(t.validate().is_err());
+        assert!(PlantStyle::field_names().contains(&"locked".to_string()));
+    }
+
+    #[test]
+    fn protection_zone_needs_a_tree_a_switch_and_a_trunk() {
+        let mut s = PlantStyle { category: PlantCategory::Tree, trunk_diameter: 400.0, ..PlantStyle::default() };
+        assert_eq!(s.protection_radius(), None, "off by default");
+        s.protection_zone = true;
+        assert_eq!(s.protection_radius(), Some(4800.0));
+        s.trunk_diameter = 1500.0;
+        assert_eq!(s.protection_radius(), Some(15_000.0), "capped like existing trees");
+        s.rpz_cap = Some(20_000.0);
+        s.rpz_factor = Some(10.0);
+        assert_eq!(s.protection_radius(), Some(15_000.0));
+        s.category = PlantCategory::Shrub;
+        assert_eq!(s.protection_radius(), None);
+        s.category = PlantCategory::Tree;
+        s.trunk_diameter = 0.0;
+        assert_eq!(s.protection_radius(), None);
+        assert_eq!(QuantityType::Area.id(), "area");
+        assert_eq!(QuantityType::Count.id(), "count");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Drawing of plants, existing trees and plant tags in the plan view.
 
 use cadektor_core::plants::graphic::{self, GraphicPath};
+use cadektor_core::plants::link::Look;
 use cadektor_core::plants::style::PlantGraphic;
 use cadektor_core::plants::tree::{self, TreeAction};
 use cadektor_core::model::Shape;
@@ -38,8 +39,14 @@ fn screen_path(view: &View, p: &GraphicPath, offset: DVec2) -> Vec<Pos2> {
     p.points.iter().map(|q| view.to_screen(*q + offset)).collect()
 }
 
-/// Draws a plant with a generated outline. A circle graphic keeps the plain circle with a center mark.
-pub fn draw_plant(painter: &Painter, view: &View, graphic: PlantGraphic, at: DVec2, spread: f64, st: Style, offset: DVec2) {
+/// Draws a plant with a generated outline, turned by its rotation. A circle graphic keeps the plain
+/// circle with a center mark. A tree with a protection zone also gets the dashed zone circle.
+pub fn draw_plant(painter: &Painter, view: &View, look: &Look, at: DVec2, spread: f64, st: Style, offset: DVec2) {
+    let graphic = look.graphic;
+    if let Some(zone) = look.zone {
+        let thin = Stroke::new((st.width * 0.7).max(1.0), st.pen.gamma_multiply(0.7));
+        dashed_circle(painter, view.to_screen(at + offset), (zone * view.zoom) as f32, thin);
+    }
     let stroke = Stroke::new(st.width, st.pen);
     let c = view.to_screen(at + offset);
     let r = (spread / 2.0 * view.zoom) as f32;
@@ -50,7 +57,7 @@ pub fn draw_plant(painter: &Painter, view: &View, graphic: PlantGraphic, at: DVe
         painter.line_segment([c - egui::vec2(0.0, k), c + egui::vec2(0.0, k)], stroke);
         return;
     }
-    for (i, p) in graphic::paths(graphic, at, spread / 2.0).iter().enumerate() {
+    for (i, p) in graphic::paths_rotated(graphic, at, spread / 2.0, look.rotation).iter().enumerate() {
         let points = screen_path(view, p, offset);
         let fill = if i == 0 { st.fill } else { Color32::TRANSPARENT };
         painter.add(PathShape { points, closed: p.closed, fill, stroke: PathStroke::new(st.width, st.pen) });
@@ -133,7 +140,8 @@ mod tests {
         let view = View::default();
         let st = Style { pen: Color32::BLACK, fill: Color32::GREEN, width: 1.0 };
         for g in PlantGraphic::ALL {
-            draw_plant(&painter, &view, g, DVec2::ZERO, 2000.0, st, DVec2::new(5.0, 5.0));
+            let look = Look { graphic: g, rotation: 0.7, zone: Some(5000.0), ..Look::default() };
+            draw_plant(&painter, &view, &look, DVec2::ZERO, 2000.0, st, DVec2::new(5.0, 5.0));
         }
         for action in TreeAction::ALL {
             let shape = Shape::ExistingTree {

@@ -196,6 +196,11 @@ Non-goals
 | PLT-13 | Plant tool modes: single, along a path (spacing, count or both), rectangular grid, triangular grid, fill an area (spacing, count or density) and poly. One undo step per placement. The placement math is a pure, tested module. | P0 | done |
 | PLT-14 | Existing trees: trunk diameter (DBH), canopy spread, height, condition, action (retain, remove, relocate) and a root protection zone of 12 x DBH (configurable per tree). The zone is drawn dashed. Trees to remove are drawn dashed with a cross. `report.existing_trees` lists them. | P0 | done |
 | PLT-15 | Plant styles in files: a document `resources` list. Old files load unchanged. Plants without a style keep their own species, spread and height. | P0 | done |
+| PLT-21 | Locked style fields: a style lists fields that plants cannot override (by style). Other fields can be set per plant (by instance). | P1 | done |
+| PLT-22 | Seeded size and rotation variation on placement. The same seed gives the same plants. | P1 | done |
+| PLT-23 | Quantity by area for groundcovers in the plant schedule (price per m2). | P1 | done |
+| PLT-24 | Tree protection zone for plants of the tree category, with the rule and cap of existing trees (12 x trunk diameter, at most 15 m). | P1 | done |
+| PLT-25 | Fill an area with holes, and spacing equal to the plant spread. | P1 | done |
 | PLT-16 | Plant images, maintenance and irrigation fields in plant styles. | P1 | planned |
 | PLT-17 | Plant tags with three levels of fields and an ID bubble. | P1 | planned |
 | PLT-18 | Plant style spreadsheet view for batch editing. | P1 | planned |

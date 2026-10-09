@@ -103,7 +103,7 @@ impl Tx<'_> {
                 self.doc.resources.remove(*id);
                 self.resync(&users);
             }
-            Command::AddPlants { style, overrides, positions, layer, class } => {
+            Command::AddPlants { style, overrides, positions, layer, class, variation } => {
                 let layer = layer.unwrap_or(self.doc.active_layer);
                 let class = class.unwrap_or(self.doc.active_class);
                 self.check_layer(layer)?;
@@ -114,6 +114,9 @@ impl Tx<'_> {
                 if positions.len() > MAX_POINTS {
                     return Err(invalid(format!("too many plants. The limit is {MAX_POINTS}")));
                 }
+                if let Some(v) = variation {
+                    v.validate().map_err(invalid)?;
+                }
                 let (base, name) = match style {
                     Some(sid) => {
                         let r = self.doc.resources.get(*sid).ok_or(CommandError::NoResource(*sid))?;
@@ -121,17 +124,46 @@ impl Tx<'_> {
                     }
                     None => (PlantStyle::default(), "Plant".to_string()),
                 };
+                if style.is_some() {
+                    link::check_overrides(&base, overrides).map_err(invalid)?;
+                }
                 let eff = link::merge(&base, overrides).map_err(invalid)?;
                 let species = eff.species(&name);
-                for at in positions {
-                    let shape = Shape::Plant { at: *at, species: species.clone(), spread: eff.spread, height: eff.height };
+                let factors = variation.filter(|v| v.is_active()).map(|v| v.factors(positions.len()));
+                for (i, at) in positions.iter().enumerate() {
+                    let (scale, angle) = factors.as_ref().map_or((1.0, 0.0), |f| f[i]);
+                    // Size variation changes spread and height of this plant, unless the style locks them.
+                    let mut own = overrides.clone();
+                    let mut size = (eff.spread, eff.height);
+                    if scale != 1.0 {
+                        if !(style.is_some() && base.is_locked("spread")) {
+                            size.0 = eff.spread * scale;
+                        }
+                        if !(style.is_some() && base.is_locked("height")) {
+                            size.1 = eff.height * scale;
+                        }
+                        if style.is_some() {
+                            own.insert("spread".into(), size.0.into());
+                            own.insert("height".into(), size.1.into());
+                        }
+                    }
+                    let shape = Shape::Plant { at: *at, species: species.clone(), spread: size.0, height: size.1 };
                     validate_shape(&shape)?;
                     let id = ObjectId(self.alloc()?);
                     self.added.push(id);
                     self.added_set.insert(id);
                     let mut o = Object::new(id, layer, class, shape);
                     if let Some(sid) = style {
-                        link::set_link(&mut o, Some(&PlantLink { style: *sid, overrides: overrides.clone() }));
+                        // Locked sizes stay with the style: drop their override again.
+                        for f in ["spread", "height"] {
+                            if base.is_locked(f) {
+                                own.remove(f);
+                            }
+                        }
+                        link::set_link(&mut o, Some(&PlantLink { style: *sid, overrides: own }));
+                    }
+                    if angle != 0.0 {
+                        o.data.insert(link::ROTATION_KEY.into(), angle.into());
                     }
                     self.doc.objects.insert(id, o);
                     out.created.push(id.0);
@@ -170,7 +202,7 @@ impl Tx<'_> {
                         (None, _) => Default::default(),
                     };
                     let base = self.doc.resources.plant_style(sid).expect("checked");
-                    link::merge(base, &ov).map_err(invalid)?;
+                    link::check_overrides(base, &ov).map_err(invalid)?;
                     plan.push((id, Some(PlantLink { style: sid, overrides: ov })));
                 }
                 for (id, l) in plan {
@@ -213,7 +245,7 @@ mod tests {
 
     fn place(ed: &mut Editor, style: Option<ResourceId>, overrides: Value, n: usize) -> Vec<ObjectId> {
         let overrides = overrides.as_object().cloned().unwrap_or_default();
-        let out = ed.execute(&Command::AddPlants { style, overrides, positions: pts(n), layer: None, class: None }).unwrap();
+        let out = ed.execute(&Command::AddPlants { style, overrides, positions: pts(n), layer: None, class: None, variation: None }).unwrap();
         out.created.into_iter().map(ObjectId).collect()
     }
 
@@ -360,6 +392,7 @@ mod tests {
             positions,
             layer,
             class: None,
+            variation: None,
         };
         assert!(ed.execute(&cmd(Some(a), json!({}), vec![], None)).is_err());
         assert!(ed.execute(&cmd(Some(ResourceId(99)), json!({}), pts(1), None)).is_err());
@@ -472,6 +505,91 @@ mod tests {
         assert_eq!(link::link(ed.doc().object(ids[0]).unwrap()).unwrap().style, a);
         // Other keys still work.
         assert!(ed.execute(&set("note")).is_ok());
+    }
+
+    fn locked_style() -> (Editor, ResourceId) {
+        let mut ed = Editor::default();
+        let body = ResourceBody::plant_style(PlantStyle { locked: vec!["price".into(), "spread".into()], spread: 3000.0, price: 10.0, ..PlantStyle::default() });
+        let id = ResourceId(ed.execute(&Command::AddResource { name: "Locked".into(), body }).unwrap().created[0]);
+        (ed, id)
+    }
+
+    #[test]
+    fn locked_fields_cannot_be_overridden_by_any_command() {
+        let (mut ed, id) = locked_style();
+        let add = |o: Value| Command::AddPlants { style: Some(id), overrides: o.as_object().cloned().unwrap(), positions: pts(1), layer: None, class: None, variation: None };
+        assert!(matches!(ed.execute(&add(json!({"price": 1.0}))), Err(CommandError::Invalid(m)) if m.contains("locked")));
+        assert!(ed.execute(&add(json!({"spread": 1.0}))).is_err());
+        assert!(ed.doc().objects.is_empty());
+        let ids = place(&mut ed, Some(id), json!({"height": 123.0}), 1);
+        let set = |o: Value| Command::SetPlantStyle { ids: ids.clone(), style: None, overrides: Some(o.as_object().cloned().unwrap()), unlink: false };
+        assert!(ed.execute(&set(json!({"price": 2.0}))).is_err());
+        assert!(ed.execute(&set(json!({"height": 5.0}))).is_ok());
+        // Locking a field later makes old overrides inert, and the plant follows the style.
+        let mut body = ed.doc().resources.plant_style(id).unwrap().clone();
+        body.locked.push("height".into());
+        ed.execute(&Command::ModifyResource { id, name: None, body: Some(ResourceBody::plant_style(body)) }).unwrap();
+        assert_eq!(plant_fields(&ed, ids[0]).2, 4000.0);
+        // A direct edit of a locked field is undone by the style.
+        let mut shape = ed.doc().object(ids[0]).unwrap().shape.clone();
+        if let Shape::Plant { spread, .. } = &mut shape {
+            *spread = 99.0;
+        }
+        ed.execute(&Command::ModifyObject { id: ids[0], shape: Some(shape), layer: None, class: None, attrs: None }).unwrap();
+        assert_eq!(plant_fields(&ed, ids[0]).1, 3000.0);
+        // An unknown lock name is refused when the style is saved.
+        let mut bad = ed.doc().resources.plant_style(id).unwrap().clone();
+        bad.locked.push("nope".into());
+        assert!(ed.execute(&Command::ModifyResource { id, name: None, body: Some(ResourceBody::plant_style(bad)) }).is_err());
+    }
+
+    fn vary(ed: &mut Editor, style: Option<ResourceId>, v: crate::plants::placement::Variation, n: usize) -> Vec<ObjectId> {
+        let cmd = Command::AddPlants { style, overrides: Default::default(), positions: pts(n), layer: None, class: None, variation: Some(v) };
+        ed.execute(&cmd).unwrap().created.into_iter().map(ObjectId).collect()
+    }
+
+    #[test]
+    fn variation_changes_size_and_rotation_deterministically() {
+        use crate::plants::placement::Variation;
+        let mut ed = Editor::default();
+        let id = add_style(&mut ed, "A", 4000.0);
+        let v = Variation { seed: 7, size: 0.3, rotation: true };
+        let ids = vary(&mut ed, Some(id), v, 20);
+        let sizes: Vec<f64> = ids.iter().map(|i| plant_fields(&ed, *i).1).collect();
+        assert!(sizes.iter().all(|s| (2800.0..=5200.0).contains(s)) && sizes.windows(2).any(|w| w[0] != w[1]));
+        let angles: Vec<f64> = ids.iter().map(|i| link::rotation(ed.doc().object(*i).unwrap())).collect();
+        assert!(angles.iter().any(|a| *a > 0.0) && angles.iter().all(|a| (0.0..std::f64::consts::TAU).contains(a)));
+        // The same seed gives the same plants. A heights follow the same factor.
+        let again = vary(&mut ed, Some(id), v, 20);
+        assert_eq!(again.iter().map(|i| plant_fields(&ed, *i)).collect::<Vec<_>>(), ids.iter().map(|i| plant_fields(&ed, *i)).collect::<Vec<_>>());
+        let (s0, h0) = (plant_fields(&ed, ids[0]).1, plant_fields(&ed, ids[0]).2);
+        assert!((s0 / 4000.0 - h0 / 4000.0).abs() < 1e-9);
+        // The overrides explain the size of a styled plant, and the schedule still adds up.
+        assert!(link::link(ed.doc().object(ids[0]).unwrap()).unwrap().overrides.contains_key("spread"));
+        // Without a style the size is in the shape only.
+        let free = vary(&mut ed, None, Variation { size: 0.5, ..v }, 5);
+        assert!(ed.doc().object(free[0]).unwrap().data.contains_key(link::ROTATION_KEY));
+        assert!(!ed.doc().object(free[0]).unwrap().data.contains_key("plant"));
+        // Undo removes all of it in one step.
+        ed.undo();
+        ed.undo();
+        ed.undo();
+        assert!(ed.doc().objects.is_empty());
+    }
+
+    #[test]
+    fn variation_respects_locked_sizes_and_checks_its_values() {
+        use crate::plants::placement::Variation;
+        let (mut ed, id) = locked_style();
+        let ids = vary(&mut ed, Some(id), Variation { seed: 3, size: 0.4, rotation: false }, 10);
+        assert!(ids.iter().all(|i| plant_fields(&ed, *i).1 == 3000.0), "spread is locked");
+        assert!(ids.iter().any(|i| plant_fields(&ed, *i).2 != 4000.0), "height varies");
+        assert!(ids.iter().all(|i| !ed.doc().object(*i).unwrap().data.contains_key(link::ROTATION_KEY)));
+        let bad = Command::AddPlants { style: None, overrides: Default::default(), positions: pts(1), layer: None, class: None, variation: Some(Variation { size: 2.0, ..Default::default() }) };
+        assert!(ed.execute(&bad).is_err());
+        // An inactive variation changes nothing.
+        let same = vary(&mut ed, Some(id), Variation::default(), 2);
+        assert_eq!(plant_fields(&ed, same[0]), ("Plant".to_string().replace("Plant", "Locked"), 3000.0, 4000.0));
     }
 
     #[test]

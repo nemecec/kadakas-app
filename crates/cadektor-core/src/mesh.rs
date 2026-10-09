@@ -1221,7 +1221,7 @@ mod tests {
         let style = PlantStyle { form, spread, height, ..PlantStyle::default() };
         let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
         let out = ed
-            .execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::new(1000.0, 2000.0)], layer: None, class: None })
+            .execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::new(1000.0, 2000.0)], layer: None, class: None, variation: None })
             .unwrap();
         (ed, ObjectId(out.created[0]))
     }
@@ -1264,7 +1264,7 @@ mod tests {
         let mut ed = Editor::default();
         let style = PlantStyle { fill: Some(Color([200, 10, 20, 255])), ..PlantStyle::default() };
         let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
-        ed.execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None, variation: None }).unwrap();
         let scene = build(ed.doc());
         assert!(scene.mesh.colors.contains(&[200, 10, 20, 255]));
         let id = *ed.doc().objects.keys().next().unwrap();
@@ -1307,7 +1307,7 @@ mod tests {
         let make = |n: usize| {
             let (mut ed, _) = styled_plant(PlantForm::Tree, 3000.0, 6000.0);
             let positions = (0..n).map(|i| DVec2::new(i as f64 * 4000.0, 0.0)).collect();
-            ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions, layer: None, class: None }).unwrap();
+            ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions, layer: None, class: None, variation: None }).unwrap();
             build(ed.doc()).mesh.triangle_count() as f64 / (n + 1) as f64
         };
         let few = make(10);

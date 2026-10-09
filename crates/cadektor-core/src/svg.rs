@@ -184,6 +184,14 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 } else {
                     style
                 };
+                if let Some(zone) = look.zone {
+                    let dash = format!("{} {}", 4.0 * scale, 2.0 * scale);
+                    let _ = writeln!(
+                        s,
+                        r#"<circle cx="{}" cy="{}" r="{zone}" stroke="{stroke}" fill="none" stroke-width="{sw}" stroke-dasharray="{dash}" data-kind="tree_protection_zone" data-id="{}"/>"#,
+                        at.x, -at.y, o.id
+                    );
+                }
                 if look.graphic == PlantGraphic::Circle {
                     writeln!(
                         s,
@@ -194,7 +202,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                         esc(species)
                     )
                 } else {
-                    let d = graphic::paths(look.graphic, *at, spread / 2.0).iter().map(path_d).collect::<Vec<_>>().join(" ");
+                    let d = graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation).iter().map(path_d).collect::<Vec<_>>().join(" ");
                     writeln!(
                         s,
                         r#"<g data-kind="plant" data-graphic="{}"><path d="{d}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
@@ -492,19 +500,38 @@ mod tests {
     fn styled_plants_draw_their_graphic_and_colors() {
         use crate::plants::style::PlantGraphic;
         let (mut ed, id) = style_with(PlantGraphic::Star);
-        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(5.0, 5.0)], layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(5.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
         let svg = render(ed.doc(), 400);
         assert!(svg.contains(r#"data-graphic="star"><path d="M "#) && svg.contains(" Z"), "{svg}");
         assert!(svg.contains("rgba(1,2,3,1.000)") && svg.contains("rgba(4,5,6,1.000)"), "{svg}");
         // A circle graphic keeps the plain circle, with the style colors.
         let (mut ed, id) = style_with(PlantGraphic::Circle);
-        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(0.0, 5.0)], layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(0.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
         assert!(render(ed.doc(), 400).contains(r#"<circle cx="0" cy="-5" r="1000" stroke="rgba(4,5,6,1.000)""#));
         // Own colors on the object win.
         let pid = *ed.doc().objects.keys().next().unwrap();
         ed.execute(&Command::ModifyObject { id: pid, shape: None, layer: None, class: None, attrs: Some(Attributes { fill: Some(Color([9, 9, 9, 255])), ..Default::default() }) }).unwrap();
         let svg = render(ed.doc(), 400);
         assert!(svg.contains("rgba(9,9,9,1.000)") && !svg.contains("rgba(1,2,3"), "{svg}");
+    }
+
+    #[test]
+    fn plants_show_rotation_and_a_protection_zone() {
+        use crate::plants::style::{PlantCategory, PlantGraphic};
+        let (mut ed, id) = style_with(PlantGraphic::Star);
+        let mut style = ed.doc().resources.plant_style(id).unwrap().clone();
+        style.category = PlantCategory::Tree;
+        style.trunk_diameter = 300.0;
+        style.protection_zone = true;
+        ed.execute(&Command::ModifyResource { id, name: None, body: Some(crate::resource::ResourceBody::plant_style(style)) }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(0.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
+        let plain = render(ed.doc(), 400);
+        assert!(plain.contains(r#"data-kind="tree_protection_zone""#) && plain.contains(r#"r="3600""#), "{plain}");
+        let pid = *ed.doc().objects.keys().next().unwrap();
+        ed.execute(&Command::SetData { id: pid, set: [("rotation".to_string(), serde_json::json!(1.0))].into(), remove: vec![] }).unwrap();
+        let turned = render(ed.doc(), 400);
+        assert_ne!(plain, turned);
+        assert!(turned.contains(r#"data-graphic="star""#));
     }
 
     #[test]
@@ -553,7 +580,7 @@ mod tests {
     fn plant_tag_shows_code_count_and_leader() {
         use crate::resource::ResourceId;
         let (mut ed, id) = style_with(crate::plants::style::PlantGraphic::Circle);
-        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::ZERO; 3], layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::ZERO; 3], layer: None, class: None, variation: None }).unwrap();
         add(&mut ed, Shape::PlantTag { at: DVec2::new(100.0, 200.0), anchor: DVec2::new(0.0, 50.0), style: id, height: 300.0 });
         let svg = render(ed.doc(), 400);
         assert!(svg.contains(r#"<g data-kind="plant_tag"><line x1="0" y1="-50" x2="100" y2="-200""#), "{svg}");

@@ -61,7 +61,23 @@ pub fn set_link(obj: &mut Object, l: Option<&PlantLink>) {
     }
 }
 
-/// A style with the overrides applied. Fails if an override has an unknown key or a bad value.
+/// Checks overrides before a command stores them: known fields, fields that are not locked,
+/// and a valid result.
+pub fn check_overrides(style: &PlantStyle, overrides: &Map<String, Value>) -> Result<(), String> {
+    let names = PlantStyle::field_names();
+    for k in overrides.keys() {
+        if !names.contains(k) {
+            return Err(format!("unknown plant field '{k}'"));
+        }
+        if k == "locked" || style.is_locked(k) {
+            return Err(format!("the field '{k}' is locked by the style"));
+        }
+    }
+    merge(style, overrides).map(|_| ())
+}
+
+/// A style with the overrides applied. Overrides of locked fields have no effect, so a style that
+/// locks a field later wins over old overrides. Fails if an override has an unknown key or a bad value.
 pub fn merge(style: &PlantStyle, overrides: &Map<String, Value>) -> Result<PlantStyle, String> {
     let mut v = serde_json::to_value(style).expect("a style is JSON");
     let obj = v.as_object_mut().expect("a style is an object");
@@ -69,7 +85,9 @@ pub fn merge(style: &PlantStyle, overrides: &Map<String, Value>) -> Result<Plant
         if !obj.contains_key(k) {
             return Err(format!("unknown plant field '{k}'"));
         }
-        obj.insert(k.clone(), x.clone());
+        if k != "locked" && !style.is_locked(k) {
+            obj.insert(k.clone(), x.clone());
+        }
     }
     let merged: PlantStyle = serde_json::from_value(v).map_err(|e| e.to_string())?;
     merged.validate()?;
@@ -92,16 +110,22 @@ pub struct Look {
     pub form: PlantForm,
     pub fill: Option<Color>,
     pub pen: Option<Color>,
+    /// Radius of the tree protection zone in mm, if the plant has one.
+    pub zone: Option<f64>,
+    /// Rotation of the plan graphic in radians.
+    pub rotation: f64,
 }
 
 /// How a plant looks: graphic, form and colors, from its style and overrides. A plant without a
 /// style gets the default look. This is cheap, so drawing can call it for every plant in every frame.
 pub fn look(doc: &Document, obj: &Object) -> Look {
-    let Some(l) = link(obj) else { return Look::default() };
-    let Some(base) = doc.resources.plant_style(l.style) else { return Look::default() };
-    let mut look = Look { graphic: base.graphic, form: base.form, fill: base.fill, pen: base.pen };
+    let rotation = rotation(obj);
+    let Some(l) = link(obj) else { return Look { rotation, ..Look::default() } };
+    let Some(base) = doc.resources.plant_style(l.style) else { return Look { rotation, ..Look::default() } };
+    let mut look = Look { graphic: base.graphic, form: base.form, fill: base.fill, pen: base.pen, zone: None, rotation };
     // A bad override value is ignored here, like `effective` ignores a bad override set.
-    let get = |k: &str| l.overrides.get(k);
+    // Overrides of locked fields have no effect.
+    let get = |k: &str| l.overrides.get(k).filter(|_| !base.is_locked(k));
     if let Some(g) = get("graphic").and_then(|v| serde_json::from_value(v.clone()).ok()) {
         look.graphic = g;
     }
@@ -114,8 +138,25 @@ pub fn look(doc: &Document, obj: &Object) -> Look {
     if let Some(v) = get("pen") {
         look.pen = serde_json::from_value(v.clone()).ok().flatten();
     }
+    if l.overrides.keys().any(|k| ZONE_FIELDS.contains(&k.as_str())) {
+        // Rare: the plant overrides a zone field, so use the full merge.
+        look.zone = merge(base, &l.overrides).ok().and_then(|s| s.protection_radius());
+    } else {
+        look.zone = base.protection_radius();
+    }
     look
 }
+
+/// Fields that decide the tree protection zone.
+const ZONE_FIELDS: [&str; 5] = ["category", "trunk_diameter", "protection_zone", "rpz_factor", "rpz_cap"];
+
+/// The rotation of a plant's plan graphic in radians, from `data["rotation"]`. Zero if missing or not a number.
+pub fn rotation(obj: &Object) -> f64 {
+    obj.data.get(ROTATION_KEY).and_then(Value::as_f64).filter(|r| r.is_finite()).unwrap_or(0.0)
+}
+
+/// The key in `Object::data` that holds the rotation of a plant.
+pub const ROTATION_KEY: &str = "rotation";
 
 /// The effective fields of a plant object, or `None` if the object is not a plant.
 /// A plant without a style (or with a style that no longer exists) gives its shape fields.
@@ -164,16 +205,19 @@ pub fn adopt_shape_edit(doc: &Document, before: &Object, after: &mut Object) {
         set_link(after, None);
         return;
     };
-    if species != old_sp {
+    // A locked field cannot be overridden. The shape goes back to the style value (see `sync_shape`).
+    let locked = |f: &str| doc.resources.plant_style(l.style).is_some_and(|s| s.is_locked(f));
+    if species != old_sp && !locked("botanical_name") {
         l.overrides.insert("botanical_name".into(), Value::String(species.clone()));
     }
-    if spread != old_w {
+    if spread != old_w && !locked("spread") {
         l.overrides.insert("spread".into(), Value::from(*spread));
     }
-    if height != old_h {
+    if height != old_h && !locked("height") {
         l.overrides.insert("height".into(), Value::from(*height));
     }
     set_link(after, Some(&l));
+    sync_shape(doc, after);
 }
 
 #[cfg(test)]
@@ -281,6 +325,75 @@ mod tests {
         let o = linked(json!({"graphic": "rosette", "pen": [4, 4, 4, 255]}));
         let (e, l) = (effective(&doc, &o).unwrap(), look(&doc, &o));
         assert_eq!((e.style.graphic, e.style.form, e.style.fill, e.style.pen), (l.graphic, l.form, l.fill, l.pen));
+    }
+
+    fn lock(doc: &mut Document, fields: &[&str]) {
+        let r = doc.resources.get_mut(ResourceId(7)).unwrap();
+        let ResourceBody::PlantStyle(s) = &mut r.body else { panic!() };
+        s.locked = fields.iter().map(|f| f.to_string()).collect();
+    }
+
+    #[test]
+    fn locked_fields_refuse_and_ignore_overrides() {
+        let mut doc = doc_with_style();
+        lock(&mut doc, &["price", "spread"]);
+        let style = doc.resources.plant_style(ResourceId(7)).unwrap().clone();
+        let ov = |v: Value| v.as_object().unwrap().clone();
+        assert!(check_overrides(&style, &ov(json!({"height": 100.0}))).is_ok());
+        assert!(check_overrides(&style, &ov(json!({"price": 1.0}))).unwrap_err().contains("locked"));
+        assert!(check_overrides(&style, &ov(json!({"locked": []}))).unwrap_err().contains("locked"));
+        assert!(check_overrides(&style, &ov(json!({"bogus": 1}))).unwrap_err().contains("unknown"));
+        assert!(check_overrides(&style, &ov(json!({"height": -1.0}))).is_err());
+        // An old override of a field that is locked now has no effect.
+        let e = effective(&doc, &linked(json!({"spread": 1.0, "height": 123.0}))).unwrap();
+        assert_eq!((e.style.spread, e.style.height), (5000.0, 123.0));
+        assert_eq!(look(&doc, &linked(json!({"spread": 1.0}))).zone, None);
+    }
+
+    #[test]
+    fn editing_a_locked_field_of_the_shape_snaps_back_to_the_style() {
+        let mut doc = doc_with_style();
+        lock(&mut doc, &["spread"]);
+        let mut before = linked(json!({}));
+        sync_shape(&doc, &mut before);
+        let mut after = before.clone();
+        after.shape = Shape::Plant { at: DVec2::new(3.0, 3.0), species: "Acer campestre".into(), spread: 100.0, height: 777.0 };
+        adopt_shape_edit(&doc, &before, &mut after);
+        let l = link(&after).unwrap();
+        assert_eq!(l.overrides.keys().collect::<Vec<_>>(), vec!["height"]);
+        assert!(matches!(after.shape, Shape::Plant { at, spread, height, .. } if at == DVec2::new(3.0, 3.0) && spread == 5000.0 && height == 777.0));
+    }
+
+    #[test]
+    fn look_has_rotation_and_the_protection_zone() {
+        let mut doc = doc_with_style();
+        {
+            let r = doc.resources.get_mut(ResourceId(7)).unwrap();
+            let ResourceBody::PlantStyle(s) = &mut r.body else { panic!() };
+            s.category = crate::plants::style::PlantCategory::Tree;
+            s.trunk_diameter = 300.0;
+            s.protection_zone = true;
+        }
+        let mut o = linked(json!({}));
+        assert_eq!(look(&doc, &o).zone, Some(3600.0));
+        assert_eq!(look(&doc, &o).rotation, 0.0);
+        o.data.insert(ROTATION_KEY.into(), json!(1.5));
+        assert_eq!(look(&doc, &o).rotation, 1.5);
+        assert_eq!(rotation(&o), 1.5);
+        o.data.insert(ROTATION_KEY.into(), json!("x"));
+        assert_eq!(rotation(&o), 0.0);
+        // A plant can change the trunk or switch the zone off.
+        assert_eq!(look(&doc, &linked(json!({"trunk_diameter": 1500.0}))).zone, Some(15_000.0));
+        assert_eq!(look(&doc, &linked(json!({"protection_zone": false}))).zone, None);
+        assert_eq!(look(&doc, &linked(json!({"category": "shrub"}))).zone, None);
+        // Plants without a style have no zone, but keep their rotation.
+        let mut p = plant("a", 1.0, 1.0);
+        p.data.insert(ROTATION_KEY.into(), json!(0.5));
+        assert_eq!((look(&doc, &p).zone, look(&doc, &p).rotation), (None, 0.5));
+        let mut dangling = linked(json!({}));
+        set_link(&mut dangling, Some(&PlantLink { style: ResourceId(99), overrides: Map::new() }));
+        dangling.data.insert(ROTATION_KEY.into(), json!(0.25));
+        assert_eq!(look(&doc, &dangling).rotation, 0.25);
     }
 
     #[test]

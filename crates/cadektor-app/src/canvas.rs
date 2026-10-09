@@ -169,7 +169,7 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
             {
                 st.pen = color32(c);
             }
-            plant_draw::draw_plant(painter, view, look.graphic, *at, *spread, st, offset);
+            plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
         }
         Shape::PlantTag { at, anchor, height, .. } => {
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());

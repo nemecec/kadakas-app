@@ -7,7 +7,7 @@ use cadektor_core::model::{Color, Document, ObjectId, Shape};
 use cadektor_core::plants::link;
 use cadektor_core::plants::placement::Pattern;
 use cadektor_core::plants::schedule;
-use cadektor_core::plants::style::{PlantCategory, PlantForm, PlantGraphic, PlantStyle};
+use cadektor_core::plants::style::{PlantCategory, PlantForm, PlantGraphic, PlantStyle, QuantityType};
 use cadektor_core::plants::tree::{self, DEFAULT_RPZ_FACTOR};
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use egui::{DragValue, Ui};
@@ -104,6 +104,17 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
             ui.add(DragValue::new(&mut ps.margin).speed(25.0).range(0.0..=1.0e6).suffix(" mm"));
         });
     }
+    ui.horizontal(|ui| {
+        ui.label("Size variation");
+        let mut percent = ps.size_variation * 100.0;
+        if ui.add(DragValue::new(&mut percent).speed(1.0).range(0.0..=90.0).suffix(" %")).changed() {
+            ps.size_variation = percent / 100.0;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut ps.random_rotation, "Random rotation");
+        ui.add(DragValue::new(&mut ps.seed).speed(1.0).prefix("seed "));
+    });
     ui.add_enabled(ps.style.is_some(), egui::Checkbox::new(&mut ps.tag, "Add plant tag")).on_hover_text("A tag with the ID code and the count. Needs a plant style.");
     ps.mode != before
 }
@@ -210,6 +221,32 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             }
         });
         commit |= st.form != before;
+        ui.end_row();
+    });
+    egui::Grid::new("plant_style_more").num_columns(2).show(ui, |ui| {
+        ui.label("Quantity");
+        let before = st.quantity;
+        egui::ComboBox::from_id_salt("plant_quantity").selected_text(st.quantity.id()).show_ui(ui, |ui| {
+            for q in [QuantityType::Count, QuantityType::Area] {
+                ui.selectable_value(&mut st.quantity, q, q.id());
+            }
+        });
+        commit |= st.quantity != before;
+        ui.end_row();
+        ui.label("Trunk diameter (mm)");
+        let r = ui.add(DragValue::new(&mut st.trunk_diameter).speed(10.0).range(0.0..=1.0e5));
+        commit |= r.drag_stopped() || r.lost_focus();
+        ui.end_row();
+        ui.label("Tree protection zone");
+        commit |= ui.checkbox(&mut st.protection_zone, "").on_hover_text("Trees only. Radius is 12 x trunk diameter, at most 15 m.").changed();
+        ui.end_row();
+        ui.label("Locked fields");
+        let mut text = st.locked.join(", ");
+        let r = ui.text_edit_singleline(&mut text).on_hover_text("Fields that plants cannot override, for example: price, spread");
+        if r.changed() {
+            st.locked = text.split(',').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+        }
+        commit |= r.lost_focus();
         ui.end_row();
     });
     commit |= color_row(ui, "Fill color", &mut st.fill);
@@ -447,6 +484,15 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
         let effective = serde_json::to_value(&eff.style).unwrap_or_default();
         egui::Grid::new(("plant_overrides", id)).num_columns(2).show(ui, |ui| {
             for (key, label) in OVERRIDES {
+                if doc.resources.plant_style(l.style).is_some_and(|s| s.is_locked(key)) {
+                    ui.label(format!("{label} (locked)"));
+                    ui.label(match &effective[key] {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    });
+                    ui.end_row();
+                    continue;
+                }
                 let mut over = overrides.contains_key(key);
                 if ui.checkbox(&mut over, label).on_hover_text("Checked: this plant has its own value (by instance). Unchecked: the style gives it (by style).").changed() {
                     if over {

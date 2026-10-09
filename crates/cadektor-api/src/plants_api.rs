@@ -11,7 +11,7 @@ use cadektor_core::curve::{self, Vertex};
 use cadektor_core::model::*;
 use cadektor_core::plants::catalog::{self, ImportOptions, Unit};
 use cadektor_core::plants::link;
-use cadektor_core::plants::placement::{self, PlaceSpec};
+use cadektor_core::plants::placement::{self, PlaceSpec, Variation};
 use cadektor_core::plants::schedule;
 use cadektor_core::plants::style::PlantStyle;
 use cadektor_core::resource::{ResourceBody, ResourceId};
@@ -29,7 +29,7 @@ pub const PLANT_STYLE_DELETE: (&str, &str) = ("plant_style.delete", "Delete a pl
 pub const PLANT_STYLE_IMPORT_CSV: (&str, &str) = ("plant_style.import_csv", "Create plant styles from CSV text (columns are mapped by header). params: {csv, unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, warnings}.");
 pub const PLANT_STYLE_EXPORT_CSV: (&str, &str) = ("plant_style.export_csv", "Plant styles as CSV text. params: {ids?}. Returns {csv}.");
 pub const PLANT_STYLE_SAMPLE_CSV: (&str, &str) = ("plant_style.sample_csv", "A small sample plant catalog in CSV, to use with plant_style.import_csv.");
-pub const PLANTS_PLACE: (&str, &str) = ("plants.place", "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.");
+pub const PLANTS_PLACE: (&str, &str) = ("plants.place", "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.");
 pub const PLANTS_SET_STYLE: (&str, &str) = ("plants.set_style", "Link plants to a style, change their overrides, or unlink them. params: {ids, style? (ID or name), overrides?, unlink?}.");
 pub const REPORT_PLANT_SCHEDULE: (&str, &str) = ("report.plant_schedule", "Live plant schedule: a row per style with fields, count and prices, and totals. params: {format?: \"csv\"} adds {csv}.");
 pub const REPORT_EXISTING_TREES: (&str, &str) = ("report.existing_trees", "Existing trees with trunk diameter, condition, action and root protection radius.");
@@ -338,7 +338,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     if let Some(src) = spec.remove("source").filter(|v| !v.is_null()) {
         use_source(doc, serde_json::from_value(src).map_err(bad)?, &mut spec)?;
     }
-    for k in ["style", "overrides", "layer", "class", "tag"] {
+    for k in ["style", "overrides", "layer", "class", "tag", "variation"] {
         spec.remove(k);
     }
     // `"spacing": "spread"` means one canopy diameter, from the style and its overrides.
@@ -367,8 +367,12 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let layer = id_of("layer")?.map(LayerId);
     let class = id_of("class")?.map(ClassId);
+    let variation: Option<Variation> = match m.get("variation") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| bad(format!("'variation' must be {{seed?, size?, rotation?}}: {e}")))?),
+    };
     let count = positions.len();
-    let mut commands = vec![Command::AddPlants { style, overrides: overrides.clone(), positions: positions.clone(), layer, class }];
+    let mut commands = vec![Command::AddPlants { style, overrides: overrides.clone(), positions: positions.clone(), layer, class, variation }];
     let want_tag = match m.get("tag") {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
         Some(Value::Bool(true)) => true,
@@ -538,6 +542,39 @@ mod tests {
         assert_eq!(fail(&mut s, "plants.place", json!({"mode": "path", "path": [[0, 0], [9, 0]], "spacing": "spread", "overrides": 4})).code, -32602);
         // A path with the default style spread of 3000 mm.
         assert_eq!(n(&mut s, json!({"mode": "path", "path": [[0, 0], [6000, 0]], "spacing": "spread"})), 3);
+    }
+
+    #[test]
+    fn variation_locked_fields_area_and_zone_through_the_api() {
+        let mut s = Session::default();
+        let id = ok(&mut s, "plant_style.create", json!({"name": "Oak", "category": "tree", "spread": 6000, "height": 9000, "trunk_diameter": 400, "protection_zone": true, "locked": ["price"], "price": 50}))["id"].as_u64().unwrap();
+        let r = ok(&mut s, "plants.place", json!({"mode": "poly", "style": id, "points": [[0, 0], [9000, 0], [18000, 0], [27000, 0]], "variation": {"seed": 4, "size": 0.2, "rotation": true}}));
+        let first = ok(&mut s, "objects.get", json!({"id": r["created"][0]}));
+        assert!(first["data"]["rotation"].is_number());
+        let spreads: Vec<f64> = r["created"].as_array().unwrap().iter().map(|i| ok(&mut s, "objects.get", json!({"id": i}))["shape"]["spread"].as_f64().unwrap()).collect();
+        assert!(spreads.iter().all(|x| (4800.0..=7200.0).contains(x)) && spreads.windows(2).any(|w| w[0] != w[1]));
+        // Same seed, same plants.
+        let r2 = ok(&mut s, "plants.place", json!({"mode": "poly", "style": id, "points": [[0, 5000], [9000, 5000], [18000, 5000], [27000, 5000]], "variation": {"seed": 4, "size": 0.2, "rotation": true}}));
+        let spreads2: Vec<f64> = r2["created"].as_array().unwrap().iter().map(|i| ok(&mut s, "objects.get", json!({"id": i}))["shape"]["spread"].as_f64().unwrap()).collect();
+        assert_eq!(spreads, spreads2);
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "single", "at": [0, 0], "variation": {"size": 5}})).code, 1);
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "single", "at": [0, 0], "variation": 3})).code, -32602);
+        // Locked price.
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "single", "style": id, "at": [0, 0], "overrides": {"price": 1}})).code, 1);
+        assert_eq!(fail(&mut s, "plant_style.update", json!({"id": id, "locked": ["nope"]})).code, -32602);
+        // The schedule keeps varied plants in one row.
+        let sch = ok(&mut s, "report.plant_schedule", json!({}));
+        assert_eq!((sch["rows"].as_array().unwrap().len(), sch["total_count"].clone()), (1, json!(8)));
+        // Quantity by area.
+        let gc = ok(&mut s, "plant_style.create", json!({"name": "Thyme", "category": "groundcover", "spread": 1000, "price": 10, "quantity": "area"}))["id"].as_u64().unwrap();
+        ok(&mut s, "plants.place", json!({"mode": "single", "style": gc, "at": [0, 0]}));
+        let sch = ok(&mut s, "report.plant_schedule", json!({"format": "csv"}));
+        let row = sch["rows"].as_array().unwrap().iter().find(|r| r["name"] == "Thyme").unwrap().clone();
+        assert!((row["area_m2"].as_f64().unwrap() - std::f64::consts::PI / 4.0).abs() < 1e-9);
+        assert!(sch["total_area_m2"].as_f64().unwrap() > 0.7);
+        assert!(sch["csv"].as_str().unwrap().contains("area"));
+        // The protection zone is drawn at 12 x the trunk diameter.
+        assert!(ok(&mut s, "render.svg", json!({}))["svg"].as_str().unwrap().contains(r#"data-kind="tree_protection_zone""#));
     }
 
     #[test]

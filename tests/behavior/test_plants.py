@@ -506,3 +506,64 @@ def test_unknown_resource_types_survive_a_load_and_save(cad):
     sid = make_style(cad)
     assert sid != 90
     assert cad.doc()["resources"][0] == doc["resources"][0]
+
+
+# --- Locked fields, variation, area quantity, protection zone ------------------------------
+
+
+def test_locked_style_fields_refuse_overrides_and_snap_back(cad):
+    sid = make_style(cad, locked=["price", "spread"])
+    err = cad.error("plants.place", {"mode": "single", "style": sid, "at": [0, 0], "overrides": {"price": 1}})
+    assert "locked" in err["message"]
+    pid = place(cad, mode="single", style=sid, at=[0, 0], overrides={"height": 5000})["created"][0]
+    shape = cad.result("objects.get", {"id": pid})["shape"]
+    cad.execute({"op": "modify_object", "id": pid, "shape": {**shape, "spread": 99, "height": 6000}})
+    obj = cad.result("objects.get", {"id": pid})
+    assert obj["shape"]["spread"] == 7000 and obj["shape"]["height"] == 6000
+    assert obj["data"]["plant"]["overrides"] == {"height": 6000}
+    assert cad.error("plants.set_style", {"ids": [pid], "overrides": {"price": 2}})["code"] == 1
+    assert cad.error("plant_style.update", {"id": sid, "locked": ["colour"]})["code"] == -32602
+
+
+def test_size_and_rotation_variation_is_seeded(cad):
+    sid = make_style(cad)
+    pts = [[i * 9000, 0] for i in range(12)]
+    variation = {"seed": 11, "size": 0.25, "rotation": True}
+    a = place(cad, mode="poly", style=sid, points=pts, variation=variation)["created"]
+    b = place(cad, mode="poly", style=sid, points=pts, variation=variation)["created"]
+    c = place(cad, mode="poly", style=sid, points=pts, variation={**variation, "seed": 12})["created"]
+
+    def look(ids):
+        objs = [cad.result("objects.get", {"id": i}) for i in ids]
+        return [(o["shape"]["spread"], o["data"]["rotation"]) for o in objs]
+
+    assert look(a) == look(b) and look(a) != look(c)
+    assert all(7000 * 0.75 <= s <= 7000 * 1.25 and 0 <= r < 6.2832 for s, r in look(a))
+    assert len({s for s, _ in look(a)}) > 6
+    assert len(cad.result("report.plant_schedule")["rows"]) == 1, "variation keeps one row"
+    assert cad.error("plants.place", {"mode": "single", "style": sid, "at": [0, 0], "variation": {"size": 2}})["code"] == 1
+    assert 'data-graphic="cloud"' in cad.result("render.svg")["svg"]
+
+
+def test_groundcover_quantity_by_area(cad):
+    gc = make_style(cad, "Thyme", category="groundcover", spread=1000, price=12, quantity="area", graphic="clover", form="shrub_mound")
+    place(cad, mode="grid", style=gc, min=[0, 0], max=[1000, 1000], spacing=1000)
+    sched = cad.result("report.plant_schedule", {"format": "csv"})
+    row = sched["rows"][0]
+    assert row["quantity"] == "area" and row["count"] == 4
+    assert row["area_m2"] == approx(4 * 3.14159265 / 4)
+    assert row["total_price"] == approx(row["area_m2"] * 12)
+    assert sched["total_area_m2"] == approx(row["area_m2"])
+    assert "Area (m2)" in sched["csv"]
+
+
+def test_tree_plants_can_show_a_protection_zone(cad):
+    oak = make_style(cad, "Oak", trunk_diameter=400, protection_zone=True)
+    pid = place(cad, mode="single", style=oak, at=[0, 0])["created"][0]
+    svg = cad.result("render.svg")["svg"]
+    assert 'data-kind="tree_protection_zone"' in svg and 'r="4800"' in svg
+    cad.result("plants.set_style", {"ids": [pid], "overrides": {"trunk_diameter": 1500}})
+    assert 'r="15000"' in cad.result("render.svg")["svg"], "same 15 m cap as existing trees"
+    shrub = make_style(cad, "Box", category="shrub", trunk_diameter=400, protection_zone=True)
+    place(cad, mode="single", style=shrub, at=[50000, 0])
+    assert cad.result("render.svg")["svg"].count('data-kind="tree_protection_zone"') == 1

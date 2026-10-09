@@ -4,7 +4,7 @@
 use cadektor_core::command::Command;
 use cadektor_core::curve;
 use cadektor_core::model::{Attributes, Shape};
-use cadektor_core::plants::placement::{self, PlaceSpec, Pattern};
+use cadektor_core::plants::placement::{self, PlaceSpec, Pattern, Variation};
 use cadektor_core::plants::schedule::group_tag;
 use cadektor_core::resource::ResourceId;
 use glam::DVec2;
@@ -104,6 +104,12 @@ pub struct PlantSettings {
     pub margin: f64,
     /// Add a plant tag for the group.
     pub tag: bool,
+    /// Size changes by up to this fraction (0 to 0.9). Zero: all plants have the same size.
+    pub size_variation: f64,
+    /// Turn each plant by a random angle.
+    pub random_rotation: bool,
+    /// The same seed gives the same plants.
+    pub seed: u64,
 }
 
 impl Default for PlantSettings {
@@ -120,6 +126,9 @@ impl Default for PlantSettings {
             pattern: Pattern::Triangular,
             margin: 0.0,
             tag: false,
+            size_variation: 0.0,
+            random_rotation: false,
+            seed: 1,
         }
     }
 }
@@ -163,7 +172,9 @@ fn spread_now(cx: &Ctx) -> f64 {
 pub fn place_command(cx: &Ctx, positions: Vec<DVec2>) -> Command {
     let (style, overrides) = plant_params(cx);
     let spread = spread_now(cx);
-    let mut commands = vec![Command::AddPlants { style, overrides, positions: positions.clone(), layer: None, class: None }];
+    let ps = &cx.settings.plant;
+    let variation = Some(Variation { seed: ps.seed, size: ps.size_variation.clamp(0.0, 0.9), rotation: ps.random_rotation }).filter(Variation::is_active);
+    let mut commands = vec![Command::AddPlants { style, overrides, positions: positions.clone(), layer: None, class: None, variation }];
     if let (true, Some(id)) = (cx.settings.plant.tag, style) {
         commands.push(Command::AddObject { shape: group_tag(id, &positions, spread), layer: None, class: None, attrs: Attributes::default() });
     }
@@ -461,6 +472,31 @@ mod tests {
         f.click(0.0, 0.0);
         f.click(2000.0, 0.0);
         assert_eq!(f.plants(), 4 + 3);
+    }
+
+    #[test]
+    fn variation_settings_make_varied_plants() {
+        let mut f = Fx::new(PlantMode::Poly);
+        f.style();
+        f.settings.plant.size_variation = 0.3;
+        f.settings.plant.random_rotation = true;
+        f.settings.plant.seed = 9;
+        for i in 0..6 {
+            f.click(i as f64 * 2000.0, 0.0);
+        }
+        f.send(Input::Enter);
+        let objs: Vec<_> = f.s.editor.doc().objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. })).collect();
+        let sizes: std::collections::HashSet<u64> = objs.iter().map(|o| match o.shape { Shape::Plant { spread, .. } => spread.to_bits(), _ => 0 }).collect();
+        assert!(sizes.len() > 1);
+        assert!(objs.iter().any(|o| cadektor_core::plants::link::rotation(o) > 0.0));
+        // No variation: no rotation data.
+        f.settings.plant.size_variation = 0.0;
+        f.settings.plant.random_rotation = false;
+        f.click(0.0, 5000.0);
+        f.send(Input::Enter);
+        assert_eq!(f.plants(), 7);
+        let last = f.s.editor.doc().objects.values().last().unwrap();
+        assert!(!last.data.contains_key("rotation"));
     }
 
     #[test]

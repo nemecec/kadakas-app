@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use super::catalog::write_csv;
 use super::link;
-use super::style::{PlantCategory, PlantStyle};
+use super::style::{PlantCategory, PlantStyle, QuantityType};
 use super::tree::rpz_radius;
 use crate::model::{DEFAULT_TAG_HEIGHT, Document, LayerId, ObjectId, Shape};
 use std::collections::HashMap;
@@ -29,6 +29,10 @@ pub struct ScheduleRow {
     /// Average price of one plant, after overrides.
     pub unit_price: f64,
     pub total_price: f64,
+    /// How the row is counted. For `area`, the price is per m2.
+    pub quantity: QuantityType,
+    /// Covered area in m2 (canopy circles of the plants), for rows counted by area. Zero otherwise.
+    pub area_m2: f64,
     /// The effective style of a styled row. Plants of one style with different values (overrides)
     /// make different rows.
     #[serde(skip)]
@@ -40,6 +44,8 @@ pub struct Schedule {
     pub rows: Vec<ScheduleRow>,
     pub total_count: usize,
     pub total_price: f64,
+    /// Total area of the rows counted by area, in m2.
+    pub total_area_m2: f64,
 }
 
 /// The schedule of all plants in the document. Styled plants are grouped by style and by their
@@ -49,8 +55,10 @@ pub fn schedule(doc: &Document) -> Schedule {
     let mut rows: Vec<ScheduleRow> = Vec::new();
     for obj in doc.objects.values() {
         let Some(e) = link::effective(doc, obj) else { continue };
+        // Size variation does not split a row: plants of one style differ in spread and height only by chance.
+        let key = PlantStyle { spread: 0.0, height: 0.0, ..e.style.clone() };
         let found = rows.iter_mut().find(|r| match e.style_id {
-            Some(id) => r.style == Some(id) && r.key.as_ref() == Some(&e.style),
+            Some(id) => r.style == Some(id) && r.key.as_ref() == Some(&key),
             None => r.style.is_none() && r.name == e.style_name,
         });
         let row = match found {
@@ -68,18 +76,26 @@ pub fn schedule(doc: &Document) -> Schedule {
                     size: base.size.clone(),
                     container: base.container.clone(),
                     root: base.root.clone(),
-                    spread: base.spread,
-                    height: base.height,
+                    spread: e.style_id.and_then(|id| doc.resources.plant_style(id)).map_or(base.spread, |s| s.spread),
+                    height: e.style_id.and_then(|id| doc.resources.plant_style(id)).map_or(base.height, |s| s.height),
                     count: 0,
                     unit_price: 0.0,
                     total_price: 0.0,
-                    key: e.style_id.map(|_| e.style.clone()),
+                    quantity: base.quantity,
+                    area_m2: 0.0,
+                    key: e.style_id.map(|_| key.clone()),
                 });
                 rows.last_mut().unwrap()
             }
         };
         row.count += 1;
-        row.total_price += e.style.price;
+        if e.style.quantity == QuantityType::Area {
+            let area = std::f64::consts::PI * (e.style.spread / 2.0).powi(2) / 1e6;
+            row.area_m2 += area;
+            row.total_price += e.style.price * area;
+        } else {
+            row.total_price += e.style.price;
+        }
     }
     for r in &mut rows {
         r.unit_price = r.total_price / r.count as f64;
@@ -87,14 +103,15 @@ pub fn schedule(doc: &Document) -> Schedule {
     rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.style.cmp(&b.style)).then(a.size.cmp(&b.size)).then(a.container.cmp(&b.container)).then(a.root.cmp(&b.root)).then(a.unit_price.total_cmp(&b.unit_price)));
     let total_count = rows.iter().map(|r| r.count).sum();
     let total_price = rows.iter().map(|r| r.total_price).sum::<f64>() + 0.0;
-    Schedule { rows, total_count, total_price }
+    let total_area_m2 = rows.iter().map(|r| r.area_m2).sum::<f64>() + 0.0;
+    Schedule { rows, total_count, total_price, total_area_m2 }
 }
 
 /// The schedule as CSV text, with a total line.
 pub fn schedule_csv(s: &Schedule) -> String {
     let mut out = vec![[
         "Name", "ID", "Botanical name", "Common name", "Category", "Size", "Container", "Root", "Spread (mm)", "Height (mm)", "Count",
-        "Unit price", "Total price",
+        "Unit price", "Total price", "Quantity", "Area (m2)",
     ]
     .iter()
     .map(|h| h.to_string())
@@ -114,12 +131,17 @@ pub fn schedule_csv(s: &Schedule) -> String {
             r.count.to_string(),
             format!("{:.2}", r.unit_price),
             format!("{:.2}", r.total_price),
+            r.quantity.id().into(),
+            if r.quantity == QuantityType::Area { format!("{:.2}", r.area_m2) } else { String::new() },
         ]);
     }
-    let mut total = vec![String::new(); 13];
+    let mut total = vec![String::new(); 15];
     total[0] = "Total".into();
     total[10] = s.total_count.to_string();
     total[12] = format!("{:.2}", s.total_price);
+    if s.total_area_m2 > 0.0 {
+        total[14] = format!("{:.2}", s.total_area_m2);
+    }
     out.push(total);
     write_csv(&out)
 }
@@ -234,7 +256,7 @@ mod tests {
 
     fn put(ed: &mut Editor, style: Option<ResourceId>, overrides: serde_json::Map<String, serde_json::Value>, n: usize) {
         let positions = (0..n).map(|i| DVec2::new(i as f64 * 5000.0, 0.0)).collect();
-        ed.execute(&Command::AddPlants { style, overrides, positions, layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style, overrides, positions, layer: None, class: None, variation: None }).unwrap();
     }
 
     #[test]
@@ -252,6 +274,40 @@ mod tests {
         assert_eq!((s.total_count, s.total_price), (5, 400.0));
         assert_eq!(s.rows[1].id_code, "AC");
         assert_eq!(s.rows[1].size, "16-18");
+    }
+
+    #[test]
+    fn groundcovers_are_counted_by_area_and_priced_per_square_meter() {
+        let mut ed = Editor::default();
+        let style = PlantStyle { quantity: QuantityType::Area, spread: 1000.0, price: 20.0, id_code: "GC".into(), ..PlantStyle::default() };
+        let id = ResourceId(ed.execute(&Command::AddResource { name: "Thyme".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        put(&mut ed, Some(id), Default::default(), 4);
+        let s = schedule(ed.doc());
+        let one = std::f64::consts::PI * 0.25;
+        assert_eq!(s.rows.len(), 1);
+        assert!((s.rows[0].area_m2 - 4.0 * one).abs() < 1e-9);
+        assert!((s.rows[0].total_price - 4.0 * one * 20.0).abs() < 1e-9);
+        assert!((s.total_area_m2 - 4.0 * one).abs() < 1e-9);
+        assert_eq!((s.rows[0].count, s.total_count), (4, 4), "the plants are still counted");
+        let csv = schedule_csv(&s);
+        let rows = crate::plants::catalog::parse_csv(&csv).unwrap();
+        assert_eq!((rows[1][13].as_str(), rows[1][14].as_str(), rows[2][14].as_str()), ("area", "3.14", "3.14"));
+        // Count rows have no area.
+        let (mut ed2, id2) = setup();
+        put(&mut ed2, Some(id2), Default::default(), 2);
+        let s2 = schedule(ed2.doc());
+        assert_eq!((s2.rows[0].area_m2, s2.total_area_m2), (0.0, 0.0));
+        assert_eq!(crate::plants::catalog::parse_csv(&schedule_csv(&s2)).unwrap()[1][13], "count");
+    }
+
+    #[test]
+    fn size_variation_keeps_plants_in_one_row() {
+        let (mut ed, id) = setup();
+        let v = crate::plants::placement::Variation { seed: 5, size: 0.4, rotation: true };
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: (0..30).map(|i| DVec2::new(i as f64 * 9000.0, 0.0)).collect(), layer: None, class: None, variation: Some(v) }).unwrap();
+        let s = schedule(ed.doc());
+        assert_eq!((s.rows.len(), s.rows[0].count, s.total_price), (1, 30, 3000.0));
+        assert_eq!(s.rows[0].spread, 3000.0, "the row shows the style size");
     }
 
     #[test]

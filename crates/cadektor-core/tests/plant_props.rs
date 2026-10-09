@@ -68,6 +68,7 @@ fn run(ed: &mut Editor, op: &Op) {
             positions: (0..*n).map(|i| DVec2::new(i as f64 * 500.0, 0.0)).collect(),
             layer: None,
             class: None,
+            variation: None,
         }),
         Op::ModifyStyle { style, spread, rename } => pick(&styles, *style).map(|id| Command::ModifyResource {
             id,

@@ -136,6 +136,9 @@ pub enum Command {
         layer: Option<LayerId>,
         #[serde(default)]
         class: Option<ClassId>,
+        /// Random size and rotation, from a seed. Plant `i` gets the same values every time.
+        #[serde(default)]
+        variation: Option<crate::plants::placement::Variation>,
     },
     /// Link plants to a style, replace their overrides, or unlink them.
     SetPlantStyle {

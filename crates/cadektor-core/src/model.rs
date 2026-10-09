@@ -1319,7 +1319,7 @@ mod tests {
         use crate::resource::ResourceBody;
         let mut ed = Editor::default();
         let id = ed.execute(&Command::AddResource { name: "Oak".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0];
-        ed.execute(&Command::AddPlants { style: Some(ResourceId(id)), overrides: Default::default(), positions: vec![v(0.0, 0.0)], layer: None, class: None }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(ResourceId(id)), overrides: Default::default(), positions: vec![v(0.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
         let text = serde_json::to_string(ed.doc()).unwrap();
         let back = Document::from_json(&text).unwrap();
         assert_eq!(&back, ed.doc());

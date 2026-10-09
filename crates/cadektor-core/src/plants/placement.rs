@@ -104,6 +104,57 @@ pub enum PlaceSpec {
     Poly { points: Vec<Vertex> },
 }
 
+/// Random variation of placed plants. The same seed always gives the same plants.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Variation {
+    pub seed: u64,
+    /// Size changes by up to this fraction up or down: 0.2 is 80% to 120%. From 0 to 0.9.
+    pub size: f64,
+    /// Turn each plant by a random angle.
+    pub rotation: bool,
+}
+
+impl Default for Variation {
+    fn default() -> Self {
+        Variation { seed: 1, size: 0.0, rotation: false }
+    }
+}
+
+impl Variation {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.size.is_finite() && (0.0..=0.9).contains(&self.size) { Ok(()) } else { Err("size variation must be from 0 to 0.9".into()) }
+    }
+
+    /// True if the variation changes anything.
+    pub fn is_active(&self) -> bool {
+        self.size > 0.0 || self.rotation
+    }
+
+    /// For each of `n` plants: the size factor and the rotation in radians. Plant `i` always gets the
+    /// same values for the same seed, whatever `n` is.
+    pub fn factors(&self, n: usize) -> Vec<(f64, f64)> {
+        (0..n as u64)
+            .map(|i| {
+                let a = unit(self.seed, 2 * i);
+                let b = unit(self.seed, 2 * i + 1);
+                let scale = 1.0 + self.size * (2.0 * a - 1.0);
+                let angle = if self.rotation { b * std::f64::consts::TAU } else { 0.0 };
+                (scale, angle)
+            })
+            .collect()
+    }
+}
+
+/// A number from 0 (included) to 1 (excluded), the same for the same seed and index (splitmix64).
+fn unit(seed: u64, index: u64) -> f64 {
+    let mut z = seed.wrapping_add(index.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
 /// The plant positions for a request.
 pub fn place(spec: &PlaceSpec) -> Result<Vec<DVec2>, PlaceError> {
     let pts = match spec {
@@ -872,6 +923,40 @@ mod tests {
             }
             if pts.len() > 1 {
                 prop_assert!(min_distance(&pts) >= s - 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn variation_is_deterministic_and_stays_in_range() {
+        let v = Variation { seed: 42, size: 0.25, rotation: true };
+        let a = v.factors(500);
+        assert_eq!(a, v.factors(500));
+        assert_eq!(a[..10], v.factors(10)[..], "a plant keeps its values when more are added");
+        assert_ne!(a, Variation { seed: 43, ..v }.factors(500));
+        assert!(a.iter().all(|(s, r)| (0.75..=1.25).contains(s) && (0.0..std::f64::consts::TAU).contains(r)));
+        let mean = a.iter().map(|(s, _)| s).sum::<f64>() / 500.0;
+        assert!((mean - 1.0).abs() < 0.03, "{mean}");
+        assert!(a.iter().map(|(s, _)| (s * 1000.0) as i64).collect::<std::collections::HashSet<_>>().len() > 100, "values differ");
+        // No variation: all plants are the same, and there is no rotation.
+        let none = Variation::default();
+        assert!(!none.is_active());
+        assert!(none.factors(5).iter().all(|f| *f == (1.0, 0.0)));
+        assert!(v.is_active() && Variation { rotation: false, size: 0.1, seed: 1 }.is_active());
+        assert!(v.validate().is_ok());
+        assert!(Variation { size: 0.95, ..v }.validate().is_err());
+        assert!(Variation { size: -0.1, ..v }.validate().is_err());
+        assert!(Variation { size: f64::NAN, ..v }.validate().is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn variation_factors_are_in_range(seed in any::<u64>(), size in 0.0..0.9f64, n in 0usize..200) {
+            let f = Variation { seed, size, rotation: true }.factors(n);
+            prop_assert_eq!(f.len(), n);
+            for (s, r) in f {
+                prop_assert!(s >= 1.0 - size - 1e-12 && s <= 1.0 + size + 1e-12);
+                prop_assert!((0.0..std::f64::consts::TAU).contains(&r));
             }
         }
     }
