@@ -169,7 +169,7 @@ Non-goals
 | SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
-| SIT-11 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
+| SIT-18 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
 | SIT-12 | Aligned modifiers (to hardscape, wall, polygon). | P1 | planned |
 | SIT-13 | Stake / spot elevation object. | P1 | planned |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
