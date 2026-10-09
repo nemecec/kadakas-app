@@ -24,8 +24,8 @@ pub struct TreeParts {
 /// The parts of an existing tree, or `None` for another shape.
 pub fn tree_parts(shape: &Shape) -> Option<TreeParts> {
     match shape {
-        Shape::ExistingTree { dbh, spread, rpz_factor, action, .. } => Some(TreeParts {
-            rpz_radius: tree::rpz_radius(*dbh, *rpz_factor),
+        Shape::ExistingTree { dbh, spread, rpz_factor, rpz_cap, action, .. } => Some(TreeParts {
+            rpz_radius: tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap),
             canopy_radius: spread / 2.0,
             trunk_radius: dbh / 2.0,
             removed: *action == TreeAction::Remove,
@@ -114,6 +114,7 @@ mod tests {
             condition: TreeCondition::Good,
             action,
             rpz_factor: factor,
+            rpz_cap: None,
         };
         let p = tree_parts(&t(TreeAction::Retain, None)).unwrap();
         assert_eq!((p.rpz_radius, p.canopy_radius, p.trunk_radius, p.removed), (4800.0, 3000.0, 200.0, false));
@@ -144,6 +145,7 @@ mod tests {
                 condition: TreeCondition::Poor,
                 action,
                 rpz_factor: None,
+                rpz_cap: None,
             };
             draw_tree(&painter, &view, &shape, st, DVec2::ZERO);
         }

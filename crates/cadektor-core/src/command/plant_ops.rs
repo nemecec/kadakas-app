@@ -461,6 +461,20 @@ mod tests {
     }
 
     #[test]
+    fn set_data_cannot_touch_the_plant_link() {
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let ids = place(&mut ed, Some(a), json!({}), 1);
+        let set = |k: &str| Command::SetData { id: ids[0], set: [(k.to_string(), json!({"style": 999}))].into(), remove: vec![] };
+        assert!(matches!(ed.execute(&set("plant")), Err(CommandError::Invalid(m)) if m.contains("reserved")));
+        let rm = Command::SetData { id: ids[0], set: Default::default(), remove: vec!["plant".into()] };
+        assert!(matches!(ed.execute(&rm), Err(CommandError::Invalid(_))));
+        assert_eq!(link::link(ed.doc().object(ids[0]).unwrap()).unwrap().style, a);
+        // Other keys still work.
+        assert!(ed.execute(&set("note")).is_ok());
+    }
+
+    #[test]
     fn plant_tags_need_an_existing_style() {
         let mut ed = Editor::default();
         let tag = |style| Command::AddObject {
@@ -491,6 +505,7 @@ mod tests {
                 condition: Default::default(),
                 action: Default::default(),
                 rpz_factor: factor,
+                rpz_cap: None,
             },
             layer: None,
             class: None,

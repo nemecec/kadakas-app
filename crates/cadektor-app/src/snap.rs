@@ -172,6 +172,7 @@ mod tests {
                 condition: TreeCondition::Good,
                 action: TreeAction::Retain,
                 rpz_factor: None,
+                rpz_cap: None,
             },
             &mut out,
         );

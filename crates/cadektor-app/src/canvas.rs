@@ -6,6 +6,8 @@ use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
 
+use cadektor_core::plants::schedule::{TagCounts, tag_counts};
+
 use crate::plant_draw;
 use crate::snap::SnapResult;
 use crate::tess;
@@ -142,10 +144,10 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
 
 /// Draws an object. Plants and tags need the document: a plant draws the outline and colors
 /// of its style, and a tag shows the live ID code and count.
-pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, st: Style, offset: DVec2) {
+pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2) {
     match &o.shape {
         Shape::Plant { at, spread, .. } => {
-            let Some(e) = cadektor_core::plants::link::effective(doc, o) else { return };
+            let look = cadektor_core::plants::link::look(doc, o);
             // The colors of the style apply when the object has none of its own.
             let soft = |c: Color| {
                 let [r, g, b, a] = c.0;
@@ -153,19 +155,19 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, s
             };
             let mut st = st;
             if o.attrs.fill.is_none()
-                && let Some(c) = e.style.fill
+                && let Some(c) = look.fill
             {
                 st.fill = soft(c);
             }
             if o.attrs.pen.is_none()
-                && let Some(c) = e.style.pen
+                && let Some(c) = look.pen
             {
                 st.pen = color32(c);
             }
-            plant_draw::draw_plant(painter, view, e.style.graphic, *at, *spread, st, offset);
+            plant_draw::draw_plant(painter, view, look.graphic, *at, *spread, st, offset);
         }
         Shape::PlantTag { at, anchor, height, .. } => {
-            let text = cadektor_core::plants::schedule::tag_info(doc, o.id).map_or_else(|| "?".to_string(), |t| t.text());
+            let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
         }
         shape => draw_shape(painter, view, shape, st, offset),
@@ -224,12 +226,14 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    // Tag counts are made once per frame, not once per tag.
+    let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
         let st = object_style(f.doc, o, view.zoom);
         let selected = f.selection.contains(&o.id);
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
-        draw_object(&painter, view, f.doc, o, st, DVec2::ZERO);
+        draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
             draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
@@ -283,8 +287,9 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
             painter.rect(r, 0.0, c.gamma_multiply(0.1), Stroke::new(1.0, c), egui::StrokeKind::Middle);
         }
         Preview::Move { ids, delta } => {
+            let counts = tag_counts(f.doc);
             for o in f.doc.objects.values().filter(|o| ids.contains(&o.id)) {
-                draw_object(painter, view, f.doc, o, st, *delta);
+                draw_object(painter, view, f.doc, &counts, o, st, *delta);
             }
         }
     }

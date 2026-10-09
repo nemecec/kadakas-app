@@ -18,10 +18,37 @@ impl std::fmt::Display for ResourceId {
 }
 
 /// The content of a resource. The `type` key in JSON names the variant.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+/// A resource of a type that this version does not know (from a newer app) is kept as raw JSON
+/// and saved again unchanged.
+#[derive(Clone, Debug, PartialEq)]
 pub enum ResourceBody {
     PlantStyle(Box<PlantStyle>),
+    Unknown(serde_json::Value),
+}
+
+impl Serialize for ResourceBody {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ResourceBody::PlantStyle(style) => {
+                let mut v = serde_json::to_value(style).map_err(serde::ser::Error::custom)?;
+                v["type"] = "plant_style".into();
+                v.serialize(s)
+            }
+            ResourceBody::Unknown(v) => v.serialize(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceBody {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        match v.get("type").and_then(serde_json::Value::as_str) {
+            Some("plant_style") => {
+                serde_json::from_value::<PlantStyle>(v).map(|s| ResourceBody::PlantStyle(Box::new(s))).map_err(serde::de::Error::custom)
+            }
+            _ => Ok(ResourceBody::Unknown(v)),
+        }
+    }
 }
 
 impl ResourceBody {
@@ -30,17 +57,19 @@ impl ResourceBody {
         ResourceBody::PlantStyle(Box::new(style))
     }
 
-    /// The type name, as used in JSON.
+    /// The type name, as used in JSON. Unknown types all give `unknown`.
     pub fn type_name(&self) -> &'static str {
         match self {
             ResourceBody::PlantStyle(_) => "plant_style",
+            ResourceBody::Unknown(_) => "unknown",
         }
     }
 
-    /// Checks the numbers and rules of the content.
+    /// Checks the numbers and rules of the content. Unknown content is not checked.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             ResourceBody::PlantStyle(s) => s.validate(),
+            ResourceBody::Unknown(_) => Ok(()),
         }
     }
 }
@@ -92,13 +121,15 @@ impl Resources {
     pub fn plant_style(&self, id: ResourceId) -> Option<&PlantStyle> {
         match &self.get(id)?.body {
             ResourceBody::PlantStyle(s) => Some(s.as_ref()),
+            ResourceBody::Unknown(_) => None,
         }
     }
 
     /// All plant styles with their IDs and names.
     pub fn plant_styles(&self) -> impl Iterator<Item = (ResourceId, &str, &PlantStyle)> {
-        self.0.iter().map(|r| match &r.body {
-            ResourceBody::PlantStyle(s) => (r.id, r.name.as_str(), s.as_ref()),
+        self.0.iter().filter_map(|r| match &r.body {
+            ResourceBody::PlantStyle(s) => Some((r.id, r.name.as_str(), s.as_ref())),
+            ResourceBody::Unknown(_) => None,
         })
     }
 
@@ -115,7 +146,7 @@ impl Resources {
                 return Err(format!("resource {} has no name", r.id));
             }
             r.body.validate().map_err(|e| format!("resource {}: {e}", r.id))?;
-            if self.0[..i].iter().any(|o| o.body.type_name() == r.body.type_name() && o.name.eq_ignore_ascii_case(&r.name)) {
+            if !matches!(r.body, ResourceBody::Unknown(_)) && self.0[..i].iter().any(|o| o.body.type_name() == r.body.type_name() && o.name.eq_ignore_ascii_case(&r.name)) {
                 return Err(format!("two {} resources are named '{}'", r.body.type_name(), r.name));
             }
         }
@@ -164,10 +195,32 @@ mod tests {
         assert!(r.validate().unwrap_err().contains("no name"));
         r.remove(ResourceId(3));
         let mut bad = res(4, "Bad");
-        let ResourceBody::PlantStyle(s) = &mut bad.body;
+        let ResourceBody::PlantStyle(s) = &mut bad.body else { panic!() };
         s.spread = f64::NAN;
         r.push(bad);
         assert!(r.validate().unwrap_err().contains("resource 4"));
+    }
+
+    #[test]
+    fn unknown_types_are_kept_and_saved_again() {
+        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hatch", "angle": 45, "rows": [1, 2]}});
+        let r: Resource = serde_json::from_value(j.clone()).unwrap();
+        assert!(matches!(r.body, ResourceBody::Unknown(_)));
+        assert_eq!(r.body.type_name(), "unknown");
+        assert!(r.body.validate().is_ok());
+        assert_eq!(serde_json::to_value(&r).unwrap(), j);
+        let mut store = Resources::default();
+        store.push(r.clone());
+        store.push(Resource { id: ResourceId(10), name: "Hatch 1".into(), body: r.body.clone() });
+        assert!(store.validate().is_ok(), "unknown resources may share a name");
+        assert!(store.plant_style(ResourceId(9)).is_none());
+        assert_eq!(store.plant_styles().count(), 0);
+        // A body without a type is also kept.
+        let r: Resource = serde_json::from_value(serde_json::json!({"id": 1, "name": "x", "body": 5})).unwrap();
+        assert_eq!(r.body, ResourceBody::Unknown(serde_json::json!(5)));
+        // A plant style with a bad field is an error.
+        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "plant_style", "spread": "wide"}});
+        assert!(serde_json::from_value::<Resource>(bad).is_err());
     }
 
     #[test]

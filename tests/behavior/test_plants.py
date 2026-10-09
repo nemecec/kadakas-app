@@ -258,19 +258,20 @@ def test_schedule_counts_and_prices_including_overrides(cad):
     place(cad, mode="grid", style=lav, min=[0, 0], max=[1000, 1000], spacing=500)
     cad.execute({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Quercus robur", "spread": 8000, "height": 15000}})
     sched = cad.result("report.plant_schedule")
-    by_name = {r["name"]: r for r in sched["rows"]}
-    assert by_name["Field maple"]["count"] == 4
-    assert by_name["Field maple"]["total_price"] == approx(340)
-    assert by_name["Field maple"]["id_code"] == "AC"
+    maples = [r for r in sched["rows"] if r["name"] == "Field maple"]
+    assert sorted((r["unit_price"], r["count"]) for r in maples) == [(40, 1), (100, 3)], "an override makes its own row"
+    by_name = {r["name"]: r for r in sched["rows"] if r["name"] != "Field maple"}
+    assert sum(r["total_price"] for r in maples) == approx(340)
+    assert maples[0]["id_code"] == "AC"
     assert by_name["Lavender"]["count"] == 9 and by_name["Lavender"]["total_price"] == approx(57.6)
     assert by_name["Lavender"]["size"] == "P9" and by_name["Lavender"]["category"] == "perennial"
     assert by_name["Quercus robur"]["style"] is None and by_name["Quercus robur"]["total_price"] == 0
     assert sched["total_count"] == 14
     assert sched["total_price"] == approx(397.6)
     plants = cad.result("report.plants")["rows"]
-    assert {(r["species"], r["count"]) for r in plants} == {("Acer campestre", 4), ("Lavandula", 9), ("Quercus robur", 1)}
-    assert {r["species"]: r["total_price"] for r in plants if "total_price" in r}["Acer campestre"] == approx(340)
-    assert plants[-1] == {"species": "Quercus robur", "count": 1}, "plants without a style keep the old row format"
+    assert sorted((r["species"], r["count"]) for r in plants) == [("Acer campestre", 1), ("Acer campestre", 3), ("Lavandula", 9), ("Quercus robur", 1)]
+    assert sum(r["total_price"] for r in plants if r["species"] == "Acer campestre") == approx(340)
+    assert [r for r in plants if r["species"] == "Quercus robur"] == [{"species": "Quercus robur", "count": 1}], "plants without a style keep the old row format"
 
 
 def test_schedule_csv_export(cad):
@@ -440,3 +441,68 @@ def test_mcp_offers_the_plant_tools(mcp):
     placed = mcp.tool_json("plants_place", {"mode": "single", "style": created["id"], "at": [0, 0]})
     assert placed["count"] == 1
     assert mcp.tool_json("report_plant_schedule")["total_count"] == 1
+
+
+def test_schedule_rows_split_by_size_container_and_root(cad):
+    sid = make_style(cad)
+    place(cad, mode="poly", style=sid, points=[[0, 0]], overrides={"size": "20-25"})
+    place(cad, mode="poly", style=sid, points=[[1, 1]], overrides={"container": "C30"})
+    place(cad, mode="poly", style=sid, points=[[2, 2], [3, 3]], overrides={"root": "bare root"})
+    place(cad, mode="poly", style=sid, points=[[4, 4]])
+    rows = cad.result("report.plant_schedule")["rows"]
+    assert len(rows) == 4 and sum(r["count"] for r in rows) == 5
+
+
+def test_set_data_cannot_change_the_plant_link(cad):
+    sid = make_style(cad)
+    pid = place(cad, mode="single", style=sid, at=[0, 0])["created"][0]
+    err = cad.error("execute", {"command": {"op": "set_data", "id": pid, "set": {"plant": {"style": 999}}}})
+    assert "reserved" in err["message"]
+    assert cad.error("execute", {"command": {"op": "set_data", "id": pid, "remove": ["plant"]}})["code"] == 1
+    assert cad.result("objects.get", {"id": pid})["data"]["plant"]["style"] == sid
+    cad.execute({"op": "set_data", "id": pid, "set": {"note": "ok"}})
+
+
+def test_huge_counts_are_refused_quickly(cad):
+    sid = make_style(cad)
+    err = cad.error("plants.place", {"mode": "path", "style": sid, "path": [[0, 0], [1000, 0]], "count": 400000000})
+    assert err["code"] == -32602 and "too many" in err["message"]
+    err = cad.error("plants.place", {"mode": "fill", "style": sid, "boundary": SQUARE, "count": 400000000})
+    assert "too many" in err["message"]
+
+
+def test_fill_with_holes_and_spacing_from_spread(cad):
+    sid = make_style(cad, spread=500)
+    hole = [[1000, 1000], [3000, 1000], [3000, 3000], [1000, 3000]]
+    full = place(cad, mode="fill", style=sid, boundary=SQUARE, spacing="spread", pattern="rectangular")["count"]
+    holed = place(cad, mode="fill", style=sid, boundary=SQUARE, holes=[hole], spacing="spread", pattern="rectangular")["count"]
+    assert full == 81 and full - holed == 9
+    for o in plant_objects(cad)[full:]:
+        x, y = o["shape"]["at"]
+        assert not (1000 < x < 3000 and 1000 < y < 3000)
+
+
+def test_root_protection_radius_is_capped_at_15_m(cad):
+    cad.execute(tree(dbh=1500))
+    cad.execute(tree(at=[50000, 0], dbh=1500, rpz_cap=20000))
+    rows = cad.result("report.existing_trees")["rows"]
+    assert [r["rpz_radius"] for r in rows] == [15000, 18000]
+
+
+def test_catalog_numbers_with_both_separators_and_ambiguous_ones(cad):
+    r = cad.result("plant_style.import_csv", {"csv": "name;price;spread\nA;1.234,50;1,234\n", "unit": "m"})
+    assert r["created_count"] == 1
+    a = cad.result("plant_style.get", {"id": "A"})
+    assert a["price"] == 1234.5 and a["spread"] == 1234
+    assert any("1,234" in w for w in r["warnings"])
+
+
+def test_unknown_resource_types_survive_a_load_and_save(cad):
+    doc = cad.doc()
+    doc["resources"] = [{"id": 90, "name": "Hatch", "body": {"type": "hatch", "angle": 45}}]
+    cad.result("document.load", {"document": doc})
+    assert cad.doc()["resources"] == doc["resources"]
+    assert cad.result("plant_style.list")["styles"] == []
+    sid = make_style(cad)
+    assert sid != 90
+    assert cad.doc()["resources"][0] == doc["resources"][0]

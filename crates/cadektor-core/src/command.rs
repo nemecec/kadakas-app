@@ -493,6 +493,9 @@ impl<'a> Tx<'a> {
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
+                }
                 self.editable(*id)?;
                 self.touch(*id);
                 let o = self.doc.object_mut(*id).expect("checked");

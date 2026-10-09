@@ -92,6 +92,8 @@ pub struct PlantSettings {
     pub style: Option<ResourceId>,
     pub by: By,
     pub spacing: f64,
+    /// Use the spread of the plant as the spacing, so canopies just touch.
+    pub spacing_is_spread: bool,
     /// Spacing between rows of a rectangular grid.
     pub spacing_y: f64,
     pub count: usize,
@@ -111,6 +113,7 @@ impl Default for PlantSettings {
             style: None,
             by: By::Spacing,
             spacing: 2000.0,
+            spacing_is_spread: false,
             spacing_y: 2000.0,
             count: 10,
             density: 2.0,
@@ -168,8 +171,9 @@ pub fn place_command(cx: &Ctx, positions: Vec<DVec2>) -> Command {
 }
 
 /// The placement request for the clicked points, or an error text.
-pub fn spec_for(ps: &PlantSettings, pts: &[DVec2]) -> Result<PlaceSpec, String> {
+pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceSpec, String> {
     let vertices = curve::corners(pts);
+    let (spacing_x, spacing_y) = if ps.spacing_is_spread { (spread, spread) } else { (ps.spacing, ps.spacing_y) };
     let by = ps.effective_by();
     Ok(match ps.mode {
         PlantMode::Single => PlaceSpec::Single { at: *pts.first().ok_or("click a point")? },
@@ -177,7 +181,7 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2]) -> Result<PlaceSpec, String> 
             if pts.len() < 2 {
                 return Err("a path needs 2 or more points".into());
             }
-            let spacing = matches!(by, By::Spacing | By::SpacingAndCount).then_some(ps.spacing);
+            let spacing = matches!(by, By::Spacing | By::SpacingAndCount).then_some(spacing_x);
             let count = matches!(by, By::Count | By::SpacingAndCount).then_some(ps.count);
             PlaceSpec::Path { path: vertices, closed: false, spacing, count }
         }
@@ -185,9 +189,9 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2]) -> Result<PlaceSpec, String> 
             let [a, b] = pts else { return Err("click two corners".into()) };
             let (min, max) = (a.min(*b), a.max(*b));
             if ps.mode == PlantMode::Grid {
-                PlaceSpec::Grid { min, max, spacing: None, spacing_x: Some(ps.spacing), spacing_y: Some(ps.spacing_y), margin: ps.margin }
+                PlaceSpec::Grid { min, max, spacing: None, spacing_x: Some(spacing_x), spacing_y: Some(spacing_y), margin: ps.margin }
             } else {
-                PlaceSpec::Triangular { min, max, spacing: ps.spacing, margin: ps.margin }
+                PlaceSpec::Triangular { min, max, spacing: spacing_x, margin: ps.margin }
             }
         }
         PlantMode::Fill => {
@@ -196,11 +200,12 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2]) -> Result<PlaceSpec, String> 
             }
             PlaceSpec::Fill {
                 boundary: vertices,
-                spacing: (by == By::Spacing).then_some(ps.spacing),
+                spacing: (by == By::Spacing).then_some(spacing_x),
                 count: (by == By::Count).then_some(ps.count),
                 density: (by == By::Density).then_some(ps.density),
                 pattern: ps.pattern,
                 margin: ps.margin,
+                holes: vec![],
             }
         }
         PlantMode::Poly => PlaceSpec::Poly { points: vertices },
@@ -208,7 +213,7 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2]) -> Result<PlaceSpec, String> 
 }
 
 fn finish(cx: &Ctx, pts: &[DVec2]) -> Vec<Effect> {
-    let result = spec_for(&cx.settings.plant, pts).and_then(|spec| placement::place(&spec).map_err(|e| e.0));
+    let result = spec_for(&cx.settings.plant, pts, spread_now(cx)).and_then(|spec| placement::place(&spec).map_err(|e| e.0));
     match result {
         Ok(positions) => vec![Effect::Exec(place_command(cx, positions))],
         Err(e) => vec![Effect::Notice(format!("Plant: {e}"))],
@@ -443,6 +448,22 @@ mod tests {
     }
 
     #[test]
+    fn spacing_can_follow_the_spread_of_the_style() {
+        let mut f = Fx::new(PlantMode::Path);
+        f.style(); // spread 1000
+        f.settings.plant.spacing = 250.0;
+        f.settings.plant.spacing_is_spread = true;
+        f.click(0.0, 0.0);
+        f.click(3000.0, 0.0);
+        f.send(Input::Enter);
+        assert_eq!(f.plants(), 4, "plants 1000 apart on 3000 mm");
+        f.settings.plant.mode = PlantMode::Triangular;
+        f.click(0.0, 0.0);
+        f.click(2000.0, 0.0);
+        assert_eq!(f.plants(), 4 + 3);
+    }
+
+    #[test]
     fn poly_places_a_plant_at_each_click() {
         let mut f = Fx::new(PlantMode::Poly);
         f.click(0.0, 0.0);
@@ -509,10 +530,10 @@ mod tests {
         assert_eq!(ps.effective_by(), By::Spacing);
         ps.mode = PlantMode::Fill;
         assert_eq!(ps.by_choices().len(), 3);
-        assert!(spec_for(&ps, &[]).is_err());
+        assert!(spec_for(&ps, &[], 1.0).is_err());
         ps.mode = PlantMode::Single;
-        assert!(spec_for(&ps, &[]).is_err());
+        assert!(spec_for(&ps, &[], 1.0).is_err());
         ps.mode = PlantMode::Grid;
-        assert!(spec_for(&ps, &[DVec2::ZERO]).is_err());
+        assert!(spec_for(&ps, &[DVec2::ZERO], 1.0).is_err());
     }
 }

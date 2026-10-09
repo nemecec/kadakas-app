@@ -20,6 +20,15 @@ use crate::tools::{By, PlantMode, ToolSettings};
 // ---------------------------------------------------------------------------
 // Tool bar
 
+/// The spacing field, with the choice to use the spread of the plant as spacing.
+fn spacing_row(ui: &mut Ui, ps: &mut crate::tools::PlantSettings, label: &str) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add_enabled(!ps.spacing_is_spread, mm(&mut ps.spacing));
+    });
+    ui.checkbox(&mut ps.spacing_is_spread, "Spacing = spread").on_hover_text("Plants are placed one canopy diameter apart");
+}
+
 fn mm(v: &mut f64) -> DragValue<'_> {
     DragValue::new(v).speed(25.0).range(10.0..=1.0e6).suffix(" mm")
 }
@@ -57,11 +66,8 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
                     ui.selectable_value(&mut ps.by, *b, b.label());
                 }
             });
-            if matches!(ps.by, By::Spacing | By::SpacingAndCount) || (ps.mode == PlantMode::Fill && ps.by == By::Spacing) {
-                ui.horizontal(|ui| {
-                    ui.label("Spacing");
-                    ui.add(mm(&mut ps.spacing));
-                });
+            if matches!(ps.by, By::Spacing | By::SpacingAndCount) {
+                spacing_row(ui, ps, "Spacing");
             }
             if matches!(ps.by, By::Count | By::SpacingAndCount) {
                 ui.horizontal(|ui| {
@@ -77,11 +83,8 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
             }
         }
         PlantMode::Grid | PlantMode::Triangular => {
-            ui.horizontal(|ui| {
-                ui.label(if ps.mode == PlantMode::Grid { "Spacing X" } else { "Spacing" });
-                ui.add(mm(&mut ps.spacing));
-            });
-            if ps.mode == PlantMode::Grid {
+            spacing_row(ui, ps, if ps.mode == PlantMode::Grid { "Spacing X" } else { "Spacing" });
+            if ps.mode == PlantMode::Grid && !ps.spacing_is_spread {
                 ui.horizontal(|ui| {
                     ui.label("Spacing Y");
                     ui.add(mm(&mut ps.spacing_y));
@@ -490,9 +493,9 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
 }
 
 fn existing_tree_info(ui: &mut Ui, shape: &Shape) {
-    if let Shape::ExistingTree { dbh, rpz_factor, .. } = shape {
+    if let Shape::ExistingTree { dbh, rpz_factor, rpz_cap, .. } = shape {
         ui.separator();
-        let r = tree::rpz_radius(*dbh, *rpz_factor);
+        let r = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
         ui.label(format!("Root protection radius {:.0} mm ({} x trunk diameter)", r, rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR)));
     }
 }

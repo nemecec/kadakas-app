@@ -222,15 +222,43 @@ fn parse_color(s: &str) -> Result<Option<Color>, String> {
     Err(format!("'{s}' is not a color. Use #RRGGBB"))
 }
 
-fn parse_number(s: &str) -> Result<Option<f64>, String> {
+/// Reads a number. Returns the value, and true if the text is ambiguous.
+///
+/// - Spaces and apostrophes are thousands marks.
+/// - With both `.` and `,`, the last one is the decimal mark: `1.234,50` and `1,234.50` are both 1234.5.
+/// - A mark that appears more than once is a thousands mark: `1,234,567`.
+/// - A single `,` is a decimal comma (`1,5` is 1.5). If exactly three digits follow it, such as
+///   `1,234`, the text could also be a thousands mark. It is read as a decimal comma and flagged.
+fn parse_number(s: &str) -> Result<Option<(f64, bool)>, String> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(None);
     }
-    // Accept a decimal comma and thousands marks like `1 200`.
     let t: String = s.chars().filter(|c| !c.is_whitespace() && *c != '\'').collect();
-    let t = if t.contains(',') && !t.contains('.') { t.replace(',', ".") } else { t.replace(',', "") };
-    t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some).ok_or_else(|| format!("'{s}' is not a number"))
+    let (dots, commas) = (t.matches('.').count(), t.matches(',').count());
+    let mut ambiguous = false;
+    let clean = match (dots, commas) {
+        (0, 0) => t.clone(),
+        (_, 0) if dots == 1 => t.clone(),
+        (_, 0) => t.replace('.', ""),
+        (0, 1) => {
+            let (head, tail) = t.split_once(',').expect("one comma");
+            ambiguous = tail.len() == 3 && tail.chars().all(|c| c.is_ascii_digit()) && !head.is_empty() && head.len() <= 3;
+            t.replace(',', ".")
+        }
+        (0, _) => t.replace(',', ""),
+        _ => {
+            // Both marks: the one that comes last is the decimal mark.
+            let decimal = if t.rfind('.') > t.rfind(',') { '.' } else { ',' };
+            let thousands = if decimal == '.' { ',' } else { '.' };
+            // The decimal mark must appear once, and the thousands mark must not come after it.
+            if t.matches(decimal).count() != 1 || t.rfind(thousands) > t.rfind(decimal) {
+                return Err(format!("'{s}' is not a number"));
+            }
+            t.replace(thousands, "").replace(',', ".")
+        }
+    };
+    clean.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| Some((v, ambiguous))).ok_or_else(|| format!("'{s}' is not a number"))
 }
 
 // ---------------------------------------------------------------------------
@@ -342,8 +370,19 @@ fn read_row(row: &[String], cols: &[Column], head: &[String], unit: Unit) -> Res
             Column::Field(f, u) => {
                 let warned = warns.len();
                 let num = |warns: &mut Vec<String>| -> Result<Option<f64>, String> {
-                    parse_number(cell).map_err(|e| format!("{} {e}", head[i]))
-                        .inspect_err(|e| warns.push(e.clone()))
+                    match parse_number(cell).map_err(|e| format!("{} {e}", head[i])) {
+                        Ok(Some((v, ambiguous))) => {
+                            if ambiguous {
+                                warns.push(format!("{} '{cell}' could be {} or {v}. Read as {v}", head[i], v * 1000.0));
+                            }
+                            Ok(Some(v))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(e) => {
+                            warns.push(e.clone());
+                            Err(e)
+                        }
+                    }
                 };
                 match *f {
                     "name" => name = cell.to_string(),
@@ -486,9 +525,26 @@ mod tests {
 
     #[test]
     fn numbers_and_colors() {
-        assert_eq!(parse_number("1,5"), Ok(Some(1.5)));
-        assert_eq!(parse_number("1,200.5"), Ok(Some(1200.5)));
-        assert_eq!(parse_number(" 7 "), Ok(Some(7.0)));
+        let n = |s: &str| parse_number(s).unwrap().unwrap();
+        assert_eq!(n("1,5"), (1.5, false));
+        assert_eq!(n("1,200.5"), (1200.5, false));
+        assert_eq!(n("1.234,50"), (1234.5, false));
+        assert_eq!(n("1.234.567,5"), (1_234_567.5, false));
+        assert_eq!(n("1,234,567.25"), (1_234_567.25, false));
+        assert_eq!(n("1,234,567"), (1_234_567.0, false));
+        assert_eq!(n("1.234.567"), (1_234_567.0, false));
+        assert_eq!(n("1 234,5"), (1234.5, false));
+        assert_eq!(n("1'234.5"), (1234.5, false));
+        assert_eq!(n("0.5"), (0.5, false));
+        // One comma and three digits could be a thousands mark.
+        assert_eq!(n("1,234"), (1.234, true));
+        assert_eq!(n("12,345"), (12.345, true));
+        assert_eq!(n("1,2345"), (1.2345, false));
+        assert_eq!(n("0,123"), (0.123, true));
+        assert!(parse_number("1,234.5,6").is_err());
+        assert!(parse_number("1.2,3.4").is_err());
+        assert!(parse_number("1,5.5,5").is_err());
+        assert_eq!(n(" 7 "), (7.0, false));
         assert_eq!(parse_number(""), Ok(None));
         assert!(parse_number("abc").is_err());
         assert!(parse_number("inf").is_err());
@@ -554,6 +610,19 @@ mod tests {
         assert!(import(csv, &ImportOptions { mapping: m, ..Default::default() }).unwrap_err().contains("unknown field"));
         assert!(import("", &ImportOptions::default()).is_err());
         assert!(import("price\n3\n", &ImportOptions::default()).unwrap_err().contains("name"));
+    }
+
+    #[test]
+    fn european_numbers_import_and_ambiguous_ones_warn() {
+        let csv = "name;spread;height;price\nA;2,5;3,000;1.234,50\nB;1,234;1;2\n";
+        let r = import(csv, &ImportOptions { unit: Unit::M, ..Default::default() }).unwrap();
+        assert_eq!(r.styles[0].style.price, 1234.5);
+        assert_eq!(r.styles[0].style.spread, 2500.0);
+        assert_eq!(r.styles[1].style.spread, 1234.0);
+        let w = r.warnings.join("\n");
+        assert_eq!(r.warnings.len(), 2, "{w}");
+        assert!(w.contains("row 2") && w.contains("'3,000' could be 3000 or 3"), "{w}");
+        assert!(w.contains("row 3") && w.contains("'1,234'"), "{w}");
     }
 
     #[test]

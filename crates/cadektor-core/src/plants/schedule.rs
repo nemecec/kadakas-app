@@ -4,9 +4,10 @@ use serde::Serialize;
 
 use super::catalog::write_csv;
 use super::link;
-use super::style::PlantCategory;
+use super::style::{PlantCategory, PlantStyle};
 use super::tree::rpz_radius;
-use crate::model::{DEFAULT_TAG_HEIGHT, Document, ObjectId, Shape};
+use crate::model::{DEFAULT_TAG_HEIGHT, Document, LayerId, ObjectId, Shape};
+use std::collections::HashMap;
 use glam::DVec2;
 use crate::resource::ResourceId;
 
@@ -28,6 +29,10 @@ pub struct ScheduleRow {
     /// Average price of one plant, after overrides.
     pub unit_price: f64,
     pub total_price: f64,
+    /// The effective style of a styled row. Plants of one style with different values (overrides)
+    /// make different rows.
+    #[serde(skip)]
+    key: Option<PlantStyle>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -37,21 +42,22 @@ pub struct Schedule {
     pub total_price: f64,
 }
 
-/// The schedule of all plants in the document. Styled plants are grouped by style, and the
-/// others by species. Rows are sorted by name.
+/// The schedule of all plants in the document. Styled plants are grouped by style and by their
+/// effective values, so plants with different overrides (price, size, container, root) get
+/// their own rows. The others are grouped by species. Rows are sorted by name.
 pub fn schedule(doc: &Document) -> Schedule {
     let mut rows: Vec<ScheduleRow> = Vec::new();
     for obj in doc.objects.values() {
         let Some(e) = link::effective(doc, obj) else { continue };
         let found = rows.iter_mut().find(|r| match e.style_id {
-            Some(id) => r.style == Some(id),
+            Some(id) => r.style == Some(id) && r.key.as_ref() == Some(&e.style),
             None => r.style.is_none() && r.name == e.style_name,
         });
         let row = match found {
             Some(r) => r,
             None => {
-                // The row shows the style as it is, without the overrides of the first plant.
-                let base = e.style_id.and_then(|id| doc.resources.plant_style(id)).unwrap_or(&e.style);
+                // The row shows the effective values of its plants.
+                let base = &e.style;
                 rows.push(ScheduleRow {
                     style: e.style_id,
                     name: e.style_name.clone(),
@@ -67,6 +73,7 @@ pub fn schedule(doc: &Document) -> Schedule {
                     count: 0,
                     unit_price: 0.0,
                     total_price: 0.0,
+                    key: e.style_id.map(|_| e.style.clone()),
                 });
                 rows.last_mut().unwrap()
             }
@@ -77,7 +84,7 @@ pub fn schedule(doc: &Document) -> Schedule {
     for r in &mut rows {
         r.unit_price = r.total_price / r.count as f64;
     }
-    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.style.cmp(&b.style)));
+    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.style.cmp(&b.style)).then(a.size.cmp(&b.size)).then(a.container.cmp(&b.container)).then(a.root.cmp(&b.root)).then(a.unit_price.total_cmp(&b.unit_price)));
     let total_count = rows.iter().map(|r| r.count).sum();
     let total_price = rows.iter().map(|r| r.total_price).sum::<f64>() + 0.0;
     Schedule { rows, total_count, total_price }
@@ -144,14 +151,35 @@ impl TagInfo {
     }
 }
 
+/// Number of plants per layer and style. Count once, then ask `tag_info_with` for each tag.
+pub type TagCounts = HashMap<(LayerId, ResourceId), usize>;
+
+/// The plants of each style on each layer.
+pub fn tag_counts(doc: &Document) -> TagCounts {
+    let mut counts = TagCounts::new();
+    for o in doc.objects.values() {
+        if matches!(o.shape, Shape::Plant { .. })
+            && let Some(style) = link::style_of(o)
+        {
+            *counts.entry((o.layer, style)).or_default() += 1;
+        }
+    }
+    counts
+}
+
 /// The ID code and count for a tag object. `None` if the object is not a tag or its style is gone.
 pub fn tag_info(doc: &Document, tag: ObjectId) -> Option<TagInfo> {
+    tag_info_with(doc, tag, &tag_counts(doc))
+}
+
+/// Like `tag_info`, with the counts given. Use it to draw many tags.
+pub fn tag_info_with(doc: &Document, tag: ObjectId, counts: &TagCounts) -> Option<TagInfo> {
     let obj = doc.object(tag)?;
     let Shape::PlantTag { style, .. } = &obj.shape else { return None };
     let res = doc.resources.get(*style)?;
     let s = doc.resources.plant_style(*style)?;
     let code = if s.id_code.trim().is_empty() { res.name.clone() } else { s.id_code.clone() };
-    let count = doc.objects.values().filter(|o| o.layer == obj.layer && link::link(o).is_some_and(|l| l.style == *style)).count();
+    let count = counts.get(&(obj.layer, *style)).copied().unwrap_or(0);
     Some(TagInfo { code, count })
 }
 
@@ -173,7 +201,7 @@ pub fn existing_trees(doc: &Document) -> Vec<TreeRow> {
     doc.objects
         .values()
         .filter_map(|o| match &o.shape {
-            Shape::ExistingTree { species, dbh, spread, height, condition, action, rpz_factor, .. } => Some(TreeRow {
+            Shape::ExistingTree { species, dbh, spread, height, condition, action, rpz_factor, rpz_cap, .. } => Some(TreeRow {
                 id: o.id,
                 species: species.clone(),
                 dbh: *dbh,
@@ -181,7 +209,7 @@ pub fn existing_trees(doc: &Document) -> Vec<TreeRow> {
                 height: *height,
                 condition: condition.id(),
                 action: action.id(),
-                rpz_radius: rpz_radius(*dbh, *rpz_factor),
+                rpz_radius: rpz_radius(*dbh, *rpz_factor, *rpz_cap),
             }),
             _ => None,
         })
@@ -217,13 +245,34 @@ mod tests {
         o.insert("price".into(), 50.0.into());
         put(&mut ed, Some(id), o, 2);
         let s = schedule(ed.doc());
-        assert_eq!(s.rows.len(), 1);
-        assert_eq!(s.rows[0].count, 5);
-        assert_eq!(s.rows[0].total_price, 400.0);
-        assert_eq!(s.rows[0].unit_price, 80.0);
+        // The two prices make two rows.
+        assert_eq!(s.rows.len(), 2);
+        let by_price: Vec<_> = s.rows.iter().map(|r| (r.unit_price, r.count, r.total_price)).collect();
+        assert_eq!(by_price, vec![(50.0, 2, 100.0), (100.0, 3, 300.0)]);
         assert_eq!((s.total_count, s.total_price), (5, 400.0));
-        assert_eq!(s.rows[0].id_code, "AC");
-        assert_eq!(s.rows[0].size, "16-18");
+        assert_eq!(s.rows[1].id_code, "AC");
+        assert_eq!(s.rows[1].size, "16-18");
+    }
+
+    #[test]
+    fn plants_with_different_sizes_containers_and_roots_get_their_own_rows() {
+        let (mut ed, id) = setup();
+        for (field, value) in [("size", "20-25"), ("container", "C30"), ("root", "bare root")] {
+            let mut o = serde_json::Map::new();
+            o.insert(field.into(), value.into());
+            put(&mut ed, Some(id), o, 1);
+        }
+        put(&mut ed, Some(id), Default::default(), 2);
+        let s = schedule(ed.doc());
+        assert_eq!(s.rows.len(), 4);
+        assert_eq!(s.total_count, 5);
+        let plain = s.rows.iter().find(|r| r.size == "16-18" && r.container.is_empty() && r.root.is_empty()).unwrap();
+        assert_eq!(plain.count, 2);
+        assert!(s.rows.iter().any(|r| r.size == "20-25" && r.count == 1));
+        assert!(s.rows.iter().any(|r| r.container == "C30" && r.count == 1));
+        assert!(s.rows.iter().any(|r| r.root == "bare root" && r.count == 1));
+        let csv = schedule_csv(&s);
+        assert!(csv.contains("C30") && csv.contains("bare root"));
     }
 
     #[test]
@@ -297,6 +346,24 @@ mod tests {
     }
 
     #[test]
+    fn counts_agree_with_tag_info_on_many_tags() {
+        let (mut ed, id) = setup();
+        put(&mut ed, Some(id), Default::default(), 3);
+        let mut tags = Vec::new();
+        for _ in 0..5 {
+            let out = ed.execute(&Command::AddObject { shape: group_tag(id, &[DVec2::ZERO], 1000.0), layer: None, class: None, attrs: Attributes::default() }).unwrap();
+            tags.push(ObjectId(out.created[0]));
+        }
+        let counts = tag_counts(ed.doc());
+        assert_eq!(counts.values().sum::<usize>(), 3);
+        for t in tags {
+            assert_eq!(tag_info_with(ed.doc(), t, &counts), tag_info(ed.doc(), t));
+            assert_eq!(tag_info(ed.doc(), t).unwrap().count, 3);
+        }
+        assert!(tag_info_with(ed.doc(), ObjectId(1), &counts).is_none());
+    }
+
+    #[test]
     fn group_tag_sits_above_the_group() {
         let pts = [DVec2::new(0.0, 0.0), DVec2::new(4000.0, 2000.0)];
         let Shape::PlantTag { at, anchor, style, height } = group_tag(ResourceId(5), &pts, 1000.0) else { panic!() };
@@ -320,6 +387,7 @@ mod tests {
                 condition: crate::plants::tree::TreeCondition::Good,
                 action: crate::plants::tree::TreeAction::Remove,
                 rpz_factor: None,
+                rpz_cap: None,
             },
             layer: None,
             class: None,

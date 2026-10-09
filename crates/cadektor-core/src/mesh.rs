@@ -241,7 +241,8 @@ pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
             None => break,
         }
     }
-    let area2: f64 = (0..pts.len()).map(|i| pts[i].perp_dot(pts[(i + 1) % pts.len()])).sum();
+    let o = pts[0];
+    let area2: f64 = (0..pts.len()).map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % pts.len()] - o)).sum();
     if area2 < 0.0 {
         pts.reverse();
     }
@@ -261,7 +262,8 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
     if n < 3 {
         return Vec::new();
     }
-    let area2: f64 = (0..n).map(|i| pts[i].perp_dot(pts[(i + 1) % n])).sum();
+    let o = pts[0];
+    let area2: f64 = (0..n).map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % n] - o)).sum();
     let mut idx: Vec<usize> = if area2 >= 0.0 { (0..n).collect() } else { (0..n).rev().collect() };
     let mut out = Vec::with_capacity(n - 2);
     let (mut i, mut misses) = (0usize, 0usize);
@@ -359,29 +361,35 @@ fn circle_points(center: DVec2, radius: f64) -> Vec<DVec2> {
 struct UnitSphere {
     verts: Vec<Vec3>,
     tris: Vec<[u32; 3]>,
+    segments: usize,
+    rings: usize,
 }
 
-const SPHERE_SEGMENTS: usize = 12;
-const SPHERE_RINGS: usize = 8;
+/// Canopy detail of a normal scene, and of a scene with many plants.
+const SPHERE_DETAIL: (usize, usize) = (12, 8);
+const SPHERE_COARSE: (usize, usize) = (8, 4);
+/// More plants than this get the coarse canopy.
+pub const COARSE_PLANT_COUNT: usize = 1500;
 
 impl UnitSphere {
-    fn new() -> Self {
+    /// A sphere of `segments` around and `rings` from pole to pole. `segments` must divide by 4 or be even.
+    fn new((segments, rings): (usize, usize)) -> Self {
         let mut verts = Vec::new();
-        for r in 0..=SPHERE_RINGS {
-            let phi = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * r as f32 / SPHERE_RINGS as f32;
-            for s in 0..SPHERE_SEGMENTS {
-                let th = std::f32::consts::TAU * s as f32 / SPHERE_SEGMENTS as f32;
+        for r in 0..=rings {
+            let phi = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * r as f32 / rings as f32;
+            for s in 0..segments {
+                let th = std::f32::consts::TAU * s as f32 / segments as f32;
                 // Exact values on the axes keep the bounds exact.
-                let (sin_t, cos_t) = if s * 4 % SPHERE_SEGMENTS == 0 {
-                    [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)][s * 4 / SPHERE_SEGMENTS]
+                let (sin_t, cos_t) = if s * 4 % segments == 0 {
+                    [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)][s * 4 / segments]
                 } else {
                     th.sin_cos()
                 };
                 let (sin_p, cos_p) = if r == 0 {
                     (-1.0, 0.0)
-                } else if r == SPHERE_RINGS {
+                } else if r == rings {
                     (1.0, 0.0)
-                } else if r * 2 == SPHERE_RINGS {
+                } else if r * 2 == rings {
                     (0.0, 1.0)
                 } else {
                     phi.sin_cos()
@@ -390,20 +398,20 @@ impl UnitSphere {
             }
         }
         let mut tris = Vec::new();
-        for r in 0..SPHERE_RINGS {
-            for s in 0..SPHERE_SEGMENTS {
-                let s2 = (s + 1) % SPHERE_SEGMENTS;
-                let at = |r: usize, s: usize| (r * SPHERE_SEGMENTS + s) as u32;
+        for r in 0..rings {
+            for s in 0..segments {
+                let s2 = (s + 1) % segments;
+                let at = |r: usize, s: usize| (r * segments + s) as u32;
                 let (a, b, c, d) = (at(r, s), at(r, s2), at(r + 1, s2), at(r + 1, s));
                 if r > 0 {
                     tris.push([a, b, c]);
                 }
-                if r + 1 < SPHERE_RINGS {
+                if r + 1 < rings {
                     tris.push([a, c, d]);
                 }
             }
         }
-        UnitSphere { verts, tris }
+        UnitSphere { verts, tris, segments, rings }
     }
 }
 
@@ -457,10 +465,10 @@ impl Builder<'_> {
             }
             Shape::Plant { at, spread, height, species } => {
                 // A plant with a style takes its form and colors from the effective style.
-                let e = link::effective(self.doc, obj).expect("a plant");
-                let color = fill.or(e.style.fill.map(rgba)).unwrap_or_else(|| species_color(species));
-                let edge = if pen.is_none() { e.style.pen.map(rgba).unwrap_or(edge) } else { edge };
-                let build = PlantBuild { at: *at, spread: *spread, height: *height, form: e.style.form, color, trunk_radius: None };
+                let look = link::look(self.doc, obj);
+                let color = fill.or(look.fill.map(rgba)).unwrap_or_else(|| species_color(species));
+                let edge = if pen.is_none() { look.pen.map(rgba).unwrap_or(edge) } else { edge };
+                let build = PlantBuild { at: *at, spread: *spread, height: *height, form: look.form, color, trunk_radius: None };
                 self.plant(&build, z, edge, id);
             }
             Shape::ExistingTree { at, species, dbh, spread, height, .. } => {
@@ -629,8 +637,9 @@ impl Builder<'_> {
             mesh.tri(base + a, base + b, base + c, id);
         }
         // Edges: the canopy at its widest.
-        let ring_index = if form == PlantForm::Conical { 1 } else { SPHERE_RINGS / 2 };
-        let ring: Vec<Vec3> = (0..SPHERE_SEGMENTS).map(|s| place(self.sphere.verts[ring_index * SPHERE_SEGMENTS + s]).0).collect();
+        let (segments, rings) = (self.sphere.segments, self.sphere.rings);
+        let ring_index = if form == PlantForm::Conical { 1 } else { rings / 2 };
+        let ring: Vec<Vec3> = (0..segments).map(|s| place(self.sphere.verts[ring_index * segments + s]).0).collect();
         self.scene.lines.polyline(&ring, true, edge, id);
     }
 }
@@ -680,7 +689,10 @@ pub fn build(doc: &Document) -> Scene {
 
 /// Like `build`, with the scene origin given.
 pub fn build_at(doc: &Document, origin: DVec3) -> Scene {
-    let mut b = Builder { doc, origin, scene: Scene { origin, ..Scene::default() }, sphere: UnitSphere::new() };
+    // Many plants get a coarser canopy, to keep the scene small.
+    let plants = doc.objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. })).count();
+    let detail = if plants > COARSE_PLANT_COUNT { SPHERE_COARSE } else { SPHERE_DETAIL };
+    let mut b = Builder { doc, origin, scene: Scene { origin, ..Scene::default() }, sphere: UnitSphere::new(detail) };
     b.scene.ranges.reserve(doc.objects.len());
     for (obj, layer) in visible_objects(doc) {
         let (t0, s0) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
@@ -1200,6 +1212,7 @@ mod tests {
                     condition: Default::default(),
                     action: Default::default(),
                     rpz_factor: None,
+                    rpz_cap: None,
                 },
                 layer: None,
                 class: None,
@@ -1212,6 +1225,23 @@ mod tests {
         // The trunk vertices are 300 mm from the axis.
         let on_trunk = scene.mesh.positions.iter().filter(|p| (p.x as f64).hypot(p.y as f64).round() == 300.0).count();
         assert!(on_trunk >= 16, "{on_trunk}");
+    }
+
+    #[test]
+    fn many_plants_get_a_coarser_canopy() {
+        let make = |n: usize| {
+            let (mut ed, _) = styled_plant(PlantForm::Tree, 3000.0, 6000.0);
+            let positions = (0..n).map(|i| DVec2::new(i as f64 * 4000.0, 0.0)).collect();
+            ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions, layer: None, class: None }).unwrap();
+            build(ed.doc()).mesh.triangle_count() as f64 / (n + 1) as f64
+        };
+        let few = make(10);
+        let many = make(COARSE_PLANT_COUNT + 10);
+        assert!(many < few * 0.6, "triangles per plant: {few} for few, {many} for many");
+        // The coarse canopy is still a closed shape of the right size.
+        let sphere = UnitSphere::new(SPHERE_COARSE);
+        assert_eq!(sphere.verts.len(), 8 * 5);
+        assert!(sphere.verts.iter().all(|v| (v.length() - 1.0).abs() < 1e-5));
     }
 
     #[test]

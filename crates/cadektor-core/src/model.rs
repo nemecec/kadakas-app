@@ -101,7 +101,7 @@ pub enum Shape {
     /// Plant instance. `spread` is the canopy diameter.
     Plant { at: DVec2, species: String, spread: f64, height: f64 },
     /// Existing (survey) tree. `dbh` is the trunk diameter, `spread` the canopy diameter.
-    /// The root protection zone has a radius of `rpz_factor` times `dbh` (default 12, see `plants::tree`).
+    /// The root protection zone has a radius of `rpz_factor` times `dbh` (default 12), at most `rpz_cap` (see `plants::tree`).
     ExistingTree {
         at: DVec2,
         #[serde(default)]
@@ -115,6 +115,9 @@ pub enum Shape {
         action: TreeAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rpz_factor: Option<f64>,
+        /// Largest root protection radius in mm (default 15 000, see `plants::tree`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rpz_cap: Option<f64>,
     },
     /// Plant tag: a label at `at` with a leader line to `anchor`. It shows the ID code and the
     /// number of plants of the style on its layer. `height` is the text height.
@@ -219,8 +222,8 @@ impl Shape {
             Shape::Arc { center, radius, start, end } => v(center) && radius.is_finite() && start.is_finite() && end.is_finite(),
             Shape::Text { at, height, .. } => v(at) && height.is_finite(),
             Shape::Plant { at, spread, height, .. } => v(at) && spread.is_finite() && height.is_finite(),
-            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, .. } => {
-                v(at) && dbh.is_finite() && spread.is_finite() && height.is_finite() && rpz_factor.is_none_or(f64::is_finite)
+            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
+                v(at) && dbh.is_finite() && spread.is_finite() && height.is_finite() && rpz_factor.is_none_or(f64::is_finite) && rpz_cap.is_none_or(f64::is_finite)
             }
             Shape::PlantTag { at, anchor, height, .. } => v(at) && v(anchor) && height.is_finite(),
             Shape::Hardscape { boundary, thickness, elevation, .. } => {
@@ -271,9 +274,9 @@ impl Shape {
                 f(*spread);
                 f(*height);
             }
-            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, .. } => {
+            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
                 v(at);
-                [*dbh, *spread, *height].into_iter().chain(rpz_factor.iter().copied()).for_each(&mut *f);
+                [*dbh, *spread, *height].into_iter().chain(rpz_factor.iter().copied()).chain(rpz_cap.iter().copied()).for_each(&mut *f);
             }
             Shape::PlantTag { at, anchor, height, .. } => {
                 v(at);
@@ -370,8 +373,8 @@ impl Shape {
                 let r = DVec2::splat(spread / 2.0);
                 (*at - r, *at + r)
             }
-            Shape::ExistingTree { at, spread, dbh, rpz_factor, .. } => {
-                let r = DVec2::splat((spread / 2.0).max(tree::rpz_radius(*dbh, *rpz_factor)));
+            Shape::ExistingTree { at, spread, dbh, rpz_factor, rpz_cap, .. } => {
+                let r = DVec2::splat((spread / 2.0).max(tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap)));
                 (*at - r, *at + r)
             }
             Shape::PlantTag { at, anchor, height, .. } => {
@@ -1203,6 +1206,7 @@ mod tests {
             condition: TreeCondition::Poor,
             action: TreeAction::Relocate,
             rpz_factor: None,
+            rpz_cap: None,
         };
         let tag = Shape::PlantTag { at: v(0.0, 100.0), anchor: v(-50.0, 0.0), style: ResourceId(3), height: 400.0 };
         assert_eq!((tree.kind(), tag.kind()), ("existing_tree", "plant_tag"));
@@ -1227,6 +1231,7 @@ mod tests {
             condition: Default::default(),
             action: Default::default(),
             rpz_factor: factor,
+            rpz_cap: None,
         };
         assert!(!odd(f64::NAN, None).is_finite());
         assert!(!odd(1.0, Some(f64::INFINITY)).is_finite());

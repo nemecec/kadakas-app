@@ -55,6 +55,7 @@ pub fn render(doc: &Document, width_px: u32) -> String {
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" viewBox="{} {} {} {}">"#,
         lo.x, -hi.y, size.x, size.y
     );
+    let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
         let a = doc.resolved_attrs(o);
@@ -122,15 +123,15 @@ pub fn render(doc: &Document, width_px: u32) -> String {
             ),
             Shape::Plant { at, spread, species, .. } => {
                 // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
-                let e = link::effective(doc, o).expect("a plant");
+                let look = link::look(doc, o);
                 let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
-                    let stroke = e.style.pen.map_or(stroke.clone(), |c| c.to_css());
-                    let fill = e.style.fill.map_or(fill.clone(), |c| c.to_css());
+                    let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
+                    let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
                     format!(r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id)
                 } else {
                     style
                 };
-                if e.style.graphic == PlantGraphic::Circle {
+                if look.graphic == PlantGraphic::Circle {
                     writeln!(
                         s,
                         r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
@@ -140,17 +141,17 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                         esc(species)
                     )
                 } else {
-                    let d = graphic::paths(e.style.graphic, *at, spread / 2.0).iter().map(path_d).collect::<Vec<_>>().join(" ");
+                    let d = graphic::paths(look.graphic, *at, spread / 2.0).iter().map(path_d).collect::<Vec<_>>().join(" ");
                     writeln!(
                         s,
                         r#"<g data-kind="plant" data-graphic="{}"><path d="{d}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
-                        e.style.graphic.id(),
+                        look.graphic.id(),
                         esc(species)
                     )
                 }
             }
-            Shape::ExistingTree { at, species, dbh, spread, condition, action, rpz_factor, .. } => {
-                let rpz = tree::rpz_radius(*dbh, *rpz_factor);
+            Shape::ExistingTree { at, species, dbh, spread, condition, action, rpz_factor, rpz_cap, .. } => {
+                let rpz = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
                 let fill_style = style.clone();
                 let style = format!(r#"stroke="{stroke}" fill="none" stroke-width="{sw}" data-id="{}""#, o.id);
                 let removed = *action == TreeAction::Remove;
@@ -178,7 +179,7 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                 )
             }
             Shape::PlantTag { at, anchor, height, .. } => {
-                let text = schedule::tag_info(doc, o.id).map_or_else(|| "?".to_string(), |t| t.text());
+                let text = schedule::tag_info_with(doc, o.id, &tag_counts).map_or_else(|| "?".to_string(), |t| t.text());
                 writeln!(
                     s,
                     r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
@@ -465,6 +466,7 @@ mod tests {
             condition: Default::default(),
             action,
             rpz_factor: None,
+            rpz_cap: None,
         };
         let svg = one(tree(TreeAction::Retain));
         assert!(svg.contains(r#"data-kind="existing_tree" data-action="retain""#), "{svg}");
@@ -474,6 +476,24 @@ mod tests {
         let removed = one(tree(TreeAction::Remove));
         assert!(removed.matches("stroke-dasharray").count() > kept, "{removed}");
         assert!(removed.contains(r#"data-action="remove""#) && removed.contains("M -3990"), "{removed}");
+    }
+
+    #[test]
+    fn the_root_protection_zone_stops_at_15_m_unless_the_cap_is_changed() {
+        let tree = |cap| Shape::ExistingTree {
+            at: DVec2::ZERO,
+            species: String::new(),
+            dbh: 1500.0,
+            spread: 8000.0,
+            height: 12000.0,
+            condition: Default::default(),
+            action: Default::default(),
+            rpz_factor: None,
+            rpz_cap: cap,
+        };
+        assert!(one(tree(None)).contains(r#"r="15000""#));
+        assert!(one(tree(Some(20_000.0))).contains(r#"r="18000""#));
+        assert!(one(tree(Some(6_000.0))).contains(r#"r="6000""#));
     }
 
     #[test]

@@ -97,6 +97,9 @@ pub enum PlaceSpec {
         pattern: Pattern,
         #[serde(default)]
         margin: f64,
+        /// Areas inside the boundary that stay empty.
+        #[serde(default)]
+        holes: Vec<Vec<Vertex>>,
     },
     Poly { points: Vec<Vertex> },
 }
@@ -116,11 +119,15 @@ pub fn place(spec: &PlaceSpec) -> Result<Vec<DVec2>, PlaceError> {
             rect_grid(*min, *max, sx, sy, *margin)?
         }
         PlaceSpec::Triangular { min, max, spacing, margin } => triangular_grid(*min, *max, *spacing, *margin)?,
-        PlaceSpec::Fill { boundary, spacing, count, density, pattern, margin } => {
+        PlaceSpec::Fill { boundary, spacing, count, density, pattern, margin, holes } => {
             let ring = flat(boundary, true)?;
-            fill(&ring, *spacing, *count, *density, *pattern, *margin)?
+            let holes = holes.iter().map(|h| flat(h, true)).collect::<Result<Vec<_>, _>>()?;
+            fill_with_holes(&ring, &holes, *spacing, *count, *density, *pattern, *margin)?
         }
         PlaceSpec::Poly { points } => {
+            if points.len() > MAX_POINTS {
+                return bad(format!("too many plants ({}). The limit is {MAX_POINTS}", points.len()));
+            }
             if points.is_empty() {
                 return bad("poly mode needs at least one point");
             }
@@ -181,6 +188,10 @@ fn point_at(pts: &[DVec2], cum: &[f64], d: f64) -> DVec2 {
 pub fn along_path(path: &[DVec2], closed: bool, spacing: Option<f64>, count: Option<usize>) -> Result<Vec<DVec2>, PlaceError> {
     if path.len() < 2 {
         return bad("a path needs 2 or more points");
+    }
+    // Check the size first: a huge count must not allocate anything.
+    if let Some(n) = count.filter(|n| *n > MAX_POINTS) {
+        return bad(format!("too many plants ({n}). The limit is {MAX_POINTS}"));
     }
     let mut pts = path.to_vec();
     if closed && pts.first() != pts.last() {
@@ -288,6 +299,96 @@ fn dist_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     p.distance(a + ab * t)
 }
 
+/// A closed ring with an index for fast point tests. The edges are sorted into horizontal
+/// bands, so a test looks at a few edges and not at all of them.
+pub struct Ring {
+    pts: Vec<DVec2>,
+    lo: DVec2,
+    hi: DVec2,
+    band: f64,
+    bands: Vec<Vec<u32>>,
+}
+
+impl Ring {
+    pub fn new(pts: &[DVec2]) -> Ring {
+        let (lo, hi) = ring_bounds(pts);
+        let n = pts.len();
+        let count = (n / 2).clamp(1, 4096);
+        let band = if hi.y > lo.y { (hi.y - lo.y) / count as f64 } else { 1.0 };
+        let mut ring = Ring { pts: pts.to_vec(), lo, hi, band, bands: vec![Vec::new(); count] };
+        for i in 0..n {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            let (from, to) = (ring.band_of(a.y.min(b.y)), ring.band_of(a.y.max(b.y)));
+            for k in from..=to {
+                ring.bands[k].push(i as u32);
+            }
+        }
+        ring
+    }
+
+    fn band_of(&self, y: f64) -> usize {
+        (((y - self.lo.y) / self.band).floor().max(0.0) as usize).min(self.bands.len() - 1)
+    }
+
+    fn edge(&self, i: u32) -> (DVec2, DVec2) {
+        let i = i as usize;
+        (self.pts[i], self.pts[(i + 1) % self.pts.len()])
+    }
+
+    /// Distance to the nearest edge, if it is within `limit`. Otherwise some larger number.
+    fn distance_within(&self, p: DVec2, limit: f64) -> f64 {
+        if p.y + limit < self.lo.y || p.y - limit > self.hi.y {
+            return f64::INFINITY;
+        }
+        let (from, to) = (self.band_of(p.y - limit), self.band_of(p.y + limit));
+        let mut best = f64::INFINITY;
+        for k in from..=to {
+            for &i in &self.bands[k] {
+                let (a, b) = self.edge(i);
+                best = best.min(dist_to_segment(p, a, b));
+            }
+        }
+        best
+    }
+
+    /// Even-odd test: true if `p` is inside the ring.
+    fn parity(&self, p: DVec2) -> bool {
+        if p.y < self.lo.y || p.y > self.hi.y {
+            return false;
+        }
+        let mut odd = false;
+        for &i in &self.bands[self.band_of(p.y)] {
+            let (a, b) = self.edge(i);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                odd = !odd;
+            }
+        }
+        odd
+    }
+
+    /// True if `p` is inside the ring or on its edge, and at least `margin` from every edge.
+    pub fn contains(&self, p: DVec2, margin: f64) -> bool {
+        let edge = self.distance_within(p, margin.max(1e-7));
+        if edge < 1e-7 {
+            return margin <= 1e-7;
+        }
+        if edge < margin {
+            return false;
+        }
+        self.parity(p)
+    }
+
+    /// True if `p` is outside the ring (a hole) and at least `margin` from its edge.
+    /// A point on the edge counts as clear when the margin is zero.
+    pub fn clear_of(&self, p: DVec2, margin: f64) -> bool {
+        let edge = self.distance_within(p, margin.max(1e-7));
+        if edge < 1e-7 {
+            return margin <= 1e-7;
+        }
+        edge >= margin && !self.parity(p)
+    }
+}
+
 /// Distance from `p` to the edges of the ring.
 pub fn distance_to_ring(ring: &[DVec2], p: DVec2) -> f64 {
     (0..ring.len()).map(|i| dist_to_segment(p, ring[i], ring[(i + 1) % ring.len()])).fold(f64::INFINITY, f64::min)
@@ -295,36 +396,34 @@ pub fn distance_to_ring(ring: &[DVec2], p: DVec2) -> f64 {
 
 /// True if `p` is inside the ring or on its edge, and at least `margin` from every edge.
 pub fn inside(ring: &[DVec2], p: DVec2, margin: f64) -> bool {
-    let edge = distance_to_ring(ring, p);
-    if edge < 1e-7 {
-        return margin <= 1e-7;
-    }
-    if edge < margin {
-        return false;
-    }
-    let mut odd = false;
-    for i in 0..ring.len() {
-        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            odd = !odd;
-        }
-    }
-    odd
+    Ring::new(ring).contains(p, margin)
 }
 
 fn ring_bounds(ring: &[DVec2]) -> (DVec2, DVec2) {
     ring.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
 }
 
-/// Grid points of `pattern` at `spacing` that lie inside the ring.
-fn fill_by_spacing(ring: &[DVec2], spacing: f64, pattern: Pattern, margin: f64) -> Result<Vec<DVec2>, PlaceError> {
-    let (lo, hi) = ring_bounds(ring);
+/// The area to fill: an outer ring and holes.
+struct Area {
+    outer: Ring,
+    holes: Vec<Ring>,
+}
+
+impl Area {
+    fn accepts(&self, p: DVec2, margin: f64) -> bool {
+        self.outer.contains(p, margin) && self.holes.iter().all(|h| h.clear_of(p, margin))
+    }
+}
+
+/// Grid points of `pattern` at `spacing` that lie in the area.
+fn fill_by_spacing(area: &Area, spacing: f64, pattern: Pattern, margin: f64) -> Result<Vec<DVec2>, PlaceError> {
+    let (lo, hi) = (area.outer.lo, area.outer.hi);
     let grid = match pattern {
         // The grid starts `margin` inside the bounding box, so a margin does not cut the first row.
         Pattern::Rectangular => rect_grid(lo, hi, spacing, spacing, margin)?,
         Pattern::Triangular => triangular_grid(lo, hi, spacing, margin)?,
     };
-    Ok(grid.into_iter().filter(|p| inside(ring, *p, margin)).collect())
+    Ok(grid.into_iter().filter(|p| area.accepts(*p, margin)).collect())
 }
 
 /// Spacing that gives `density` plants per square meter in a pattern.
@@ -346,59 +445,101 @@ pub fn fill(
     pattern: Pattern,
     margin: f64,
 ) -> Result<Vec<DVec2>, PlaceError> {
+    fill_with_holes(ring, &[], spacing, count, density, pattern, margin)
+}
+
+/// Like `fill`, with holes: no plant goes inside a hole, or closer to its edge than `margin`.
+pub fn fill_with_holes(
+    ring: &[DVec2],
+    holes: &[Vec<DVec2>],
+    spacing: Option<f64>,
+    count: Option<usize>,
+    density: Option<f64>,
+    pattern: Pattern,
+    margin: f64,
+) -> Result<Vec<DVec2>, PlaceError> {
     if ring.len() < 3 {
         return bad("a boundary needs 3 or more points");
     }
+    if holes.iter().any(|h| h.len() < 3) {
+        return bad("a hole needs 3 or more points");
+    }
     let margin = check_margin(margin)?;
+    let area = Area { outer: Ring::new(ring), holes: holes.iter().map(|h| Ring::new(h)).collect() };
     match (spacing, count, density) {
-        (Some(s), None, None) => fill_by_spacing(ring, check_spacing(s)?, pattern, margin),
+        (Some(s), None, None) => fill_by_spacing(&area, check_spacing(s)?, pattern, margin),
         (None, None, Some(d)) => {
             if !(d.is_finite() && d > 0.0) {
                 return bad("density must be more than zero");
             }
-            fill_by_spacing(ring, check_spacing(spacing_for_density(d, pattern))?, pattern, margin)
+            fill_by_spacing(&area, check_spacing(spacing_for_density(d, pattern))?, pattern, margin)
         }
-        (None, Some(n), None) => fill_by_count(ring, n, pattern, margin),
+        (None, Some(n), None) => {
+            let size = crate::geom::polygon_area(ring) - holes.iter().map(|h| crate::geom::polygon_area(h)).sum::<f64>();
+            fill_by_count(&area, size.max(0.0), n, pattern, margin)
+        }
         _ => bad("give exactly one of spacing, count or density"),
     }
 }
 
 /// Exactly `n` points: finds the widest spacing that fits at least `n`, then thins evenly.
-fn fill_by_count(ring: &[DVec2], n: usize, pattern: Pattern, margin: f64) -> Result<Vec<DVec2>, PlaceError> {
+/// The first guess comes from the area, so only a few grids are made.
+fn fill_by_count(area: &Area, size: f64, n: usize, pattern: Pattern, margin: f64) -> Result<Vec<DVec2>, PlaceError> {
     if n == 0 {
         return bad("count must be 1 or more");
     }
     if n > MAX_POINTS {
         return bad(format!("too many plants ({n}). The limit is {MAX_POINTS}"));
     }
-    let (lo, hi) = ring_bounds(ring);
-    let count_at = |s: f64| fill_by_spacing(ring, s, pattern, margin).map(|v| v.len());
-    let size = hi - lo;
-    let mut high = size.max_element().max(2.0 * MIN_SPACING);
-    // Start with a spacing that should give about 16 times too many points, and halve it until it fits n.
-    let mut good = (0.25 * (size.x * size.y / n as f64).sqrt()).max(MIN_SPACING);
-    while !matches!(count_at(good), Ok(c) if c >= n) {
-        if good <= MIN_SPACING {
-            return bad(format!("{n} plants do not fit in this area"));
+    let count_at = |s: f64| fill_by_spacing(area, s, pattern, margin).map(|v| v.len());
+    let cell = match pattern {
+        Pattern::Rectangular => 1.0,
+        Pattern::Triangular => 3f64.sqrt() / 2.0,
+    };
+    let no_fit = || PlaceError(format!("{n} plants do not fit in this area"));
+    let mut guess = (size / (n as f64 * cell)).sqrt().max(MIN_SPACING);
+    let mut limit = 60;
+    // Find a spacing that gives enough points (`good`) and one that gives too few (`high`).
+    let (mut good, mut high);
+    if matches!(count_at(guess), Ok(c) if c >= n) {
+        good = guess;
+        high = guess * 1.25;
+        while matches!(count_at(high), Ok(c) if c >= n) && limit > 0 {
+            good = high;
+            high *= 1.25;
+            limit -= 1;
         }
-        good = (good / 2.0).max(MIN_SPACING);
+    } else {
+        high = guess;
+        loop {
+            if guess <= MIN_SPACING || limit == 0 {
+                return Err(no_fit());
+            }
+            guess = (guess / 1.25).max(MIN_SPACING);
+            limit -= 1;
+            if matches!(count_at(guess), Ok(c) if c >= n) {
+                good = guess;
+                break;
+            }
+            high = guess;
+        }
     }
-    // Bisection: the largest spacing that still gives n points or more.
-    for _ in 0..40 {
+    // Bisection: the widest spacing that still gives n points or more.
+    for _ in 0..8 {
         let mid = (good + high) / 2.0;
         match count_at(mid) {
             Ok(c) if c >= n => good = mid,
             _ => high = mid,
         }
     }
-    let mut points = fill_by_spacing(ring, good, pattern, margin)?;
+    let mut points = fill_by_spacing(area, good, pattern, margin)?;
     // Counts are not exactly monotonic in the spacing. Step down until enough points fit.
     while points.len() < n {
         good *= 0.99;
         if good < MIN_SPACING {
-            return bad(format!("{n} plants do not fit in this area"));
+            return Err(no_fit());
         }
-        points = fill_by_spacing(ring, good, pattern, margin)?;
+        points = fill_by_spacing(area, good, pattern, margin)?;
     }
     if points.len() > n {
         // Thinning keeps the points of a subset, so no pair gets closer.
@@ -612,7 +753,7 @@ mod tests {
         assert!(fill(&ring, Some(100.0), Some(3), None, Pattern::Triangular, 0.0).is_err());
         assert!(fill(&ring, Some(100.0), None, None, Pattern::Triangular, -1.0).is_err());
         // A boundary with nothing inside the margin.
-        assert!(place(&PlaceSpec::Fill { boundary: corners(&ring), spacing: Some(100.0), count: None, density: None, pattern: Pattern::Triangular, margin: 600.0 }).is_err());
+        assert!(place(&PlaceSpec::Fill { boundary: corners(&ring), spacing: Some(100.0), count: None, density: None, pattern: Pattern::Triangular, margin: 600.0, holes: vec![] }).is_err());
     }
 
     #[test]
@@ -631,7 +772,7 @@ mod tests {
             Vertex::new(v(4000.0, 4000.0), crate::curve::VertexKind::Arc { radius: 1500.0 }),
             Vertex::corner(v(0.0, 4000.0)),
         ];
-        let pts = place(&PlaceSpec::Fill { boundary, spacing: Some(500.0), count: None, density: None, pattern: Pattern::Rectangular, margin: 0.0 }).unwrap();
+        let pts = place(&PlaceSpec::Fill { boundary, spacing: Some(500.0), count: None, density: None, pattern: Pattern::Rectangular, margin: 0.0, holes: vec![] }).unwrap();
         // The rounded corner at (4000, 4000) cuts off the grid point there.
         assert!(!pts.contains(&v(4000.0, 4000.0)));
         assert!(pts.contains(&v(0.0, 0.0)));
@@ -733,5 +874,94 @@ mod tests {
                 prop_assert!(min_distance(&pts) >= s - 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn huge_counts_are_refused_before_anything_is_made() {
+        let path = [v(0.0, 0.0), v(1000.0, 0.0)];
+        for spacing in [None, Some(10.0)] {
+            let e = along_path(&path, false, spacing, Some(400_000_000)).unwrap_err();
+            assert!(e.0.contains("too many"), "{e}");
+        }
+        let spec = PlaceSpec::Path { path: corners(&path), closed: true, spacing: None, count: Some(usize::MAX) };
+        assert!(place(&spec).is_err());
+        let spec = PlaceSpec::Fill { boundary: corners(&square(1000.0)), spacing: None, count: Some(400_000_000), density: None, pattern: Pattern::Triangular, margin: 0.0, holes: vec![] };
+        assert!(place(&spec).unwrap_err().0.contains("too many"));
+        let many = corners(&vec![v(1.0, 1.0); MAX_POINTS + 1]);
+        assert!(place(&PlaceSpec::Poly { points: many }).unwrap_err().0.contains("too many"));
+        assert!(along_path(&path, false, None, Some(MAX_POINTS)).is_ok());
+    }
+
+    /// A wavy ring with many vertices, like a curved boundary that was flattened.
+    fn wavy(n: usize, r: f64) -> Vec<DVec2> {
+        (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                DVec2::from_angle(a) * (r + r * 0.1 * (7.0 * a).sin())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filling_a_big_curved_boundary_by_count_is_fast() {
+        let ring = wavy(4000, 60_000.0);
+        let start = std::time::Instant::now();
+        let pts = fill(&ring, None, Some(MAX_POINTS), None, Pattern::Triangular, 0.0).unwrap();
+        let took = start.elapsed();
+        assert_eq!(pts.len(), MAX_POINTS);
+        let index = Ring::new(&ring);
+        assert!(pts.iter().all(|p| index.contains(*p, -1e-6)));
+        // The goal is 200 ms in a release build. A debug build gets a loose limit.
+        assert!(took.as_secs_f64() < 5.0, "took {took:?}");
+    }
+
+    #[test]
+    fn the_ring_index_agrees_with_a_plain_scan() {
+        let ring = wavy(300, 1000.0);
+        let index = Ring::new(&ring);
+        for i in 0..60 {
+            for j in 0..60 {
+                let p = v(-1300.0 + i as f64 * 45.0, -1300.0 + j as f64 * 45.0);
+                for margin in [0.0, 30.0] {
+                    let plain = {
+                        let edge = distance_to_ring(&ring, p);
+                        edge >= margin && crate::geom::point_in_polygon(p, &ring)
+                    };
+                    assert_eq!(index.contains(p, margin), plain, "{p:?} {margin}");
+                }
+            }
+        }
+        // A flat ring still has one band.
+        let flat = Ring::new(&[v(0.0, 0.0), v(5.0, 0.0), v(10.0, 0.0)]);
+        assert!(!flat.contains(v(5.0, 1.0), 0.0));
+    }
+
+    #[test]
+    fn holes_stay_empty_and_keep_the_margin() {
+        let outer = square(4000.0);
+        let hole = vec![v(1000.0, 1000.0), v(3000.0, 1000.0), v(3000.0, 3000.0), v(1000.0, 3000.0)];
+        let pts = fill_with_holes(&outer, std::slice::from_ref(&hole), Some(500.0), None, None, Pattern::Rectangular, 0.0).unwrap();
+        assert!(!pts.is_empty());
+        let in_hole = Ring::new(&hole);
+        // The edge of a hole is not inside it.
+        assert!(pts.iter().all(|p| in_hole.clear_of(*p, 0.0)));
+        assert!(pts.iter().all(|p| !(p.x > 1000.0 + 1e-6 && p.x < 3000.0 - 1e-6 && p.y > 1000.0 + 1e-6 && p.y < 3000.0 - 1e-6)));
+        let without = fill(&outer, Some(500.0), None, None, Pattern::Rectangular, 0.0).unwrap();
+        assert_eq!(without.len() - pts.len(), 9, "the 3 x 3 points inside the hole");
+        // A margin keeps plants away from the hole edge.
+        let pts = fill_with_holes(&outer, std::slice::from_ref(&hole), Some(500.0), None, None, Pattern::Rectangular, 200.0).unwrap();
+        assert!(pts.iter().all(|p| in_hole.clear_of(*p, 200.0 - 1e-6)));
+        // By count, the area of the hole does not count.
+        let pts = fill_with_holes(&outer, std::slice::from_ref(&hole), None, Some(40), None, Pattern::Triangular, 0.0).unwrap();
+        assert_eq!(pts.len(), 40);
+        assert!(pts.iter().all(|p| in_hole.clear_of(*p, 0.0)));
+        assert!(fill_with_holes(&outer, &[hole[..2].to_vec()], Some(500.0), None, None, Pattern::Rectangular, 0.0).is_err());
+        // Through the JSON spec.
+        let spec: PlaceSpec = serde_json::from_value(serde_json::json!({
+            "mode": "fill", "boundary": [[0,0],[4000,0],[4000,4000],[0,4000]], "spacing": 500, "pattern": "rectangular",
+            "holes": [[[1000,1000],[3000,1000],[3000,3000],[1000,3000]]]
+        }))
+        .unwrap();
+        assert_eq!(place(&spec).unwrap().len(), 81 - 9);
     }
 }

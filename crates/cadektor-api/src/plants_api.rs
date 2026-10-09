@@ -29,7 +29,7 @@ pub const PLANT_STYLE_DELETE: (&str, &str) = ("plant_style.delete", "Delete a pl
 pub const PLANT_STYLE_IMPORT_CSV: (&str, &str) = ("plant_style.import_csv", "Create plant styles from CSV text (columns are mapped by header). params: {csv, unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, warnings}.");
 pub const PLANT_STYLE_EXPORT_CSV: (&str, &str) = ("plant_style.export_csv", "Plant styles as CSV text. params: {ids?}. Returns {csv}.");
 pub const PLANT_STYLE_SAMPLE_CSV: (&str, &str) = ("plant_style.sample_csv", "A small sample plant catalog in CSV, to use with plant_style.import_csv.");
-pub const PLANTS_PLACE: (&str, &str) = ("plants.place", "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?}; poly {points}. Returns {created: [id], count, tag?}.");
+pub const PLANTS_PLACE: (&str, &str) = ("plants.place", "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.");
 pub const PLANTS_SET_STYLE: (&str, &str) = ("plants.set_style", "Link plants to a style, change their overrides, or unlink them. params: {ids, style? (ID or name), overrides?, unlink?}.");
 pub const REPORT_PLANT_SCHEDULE: (&str, &str) = ("report.plant_schedule", "Live plant schedule: a row per style with fields, count and prices, and totals. params: {format?: \"csv\"} adds {csv}.");
 pub const REPORT_EXISTING_TREES: (&str, &str) = ("report.existing_trees", "Existing trees with trunk diameter, condition, action and root protection radius.");
@@ -96,7 +96,7 @@ fn patched(base: &PlantStyle, patch: &Map<String, Value>) -> Result<PlantStyle, 
 
 fn style_json(doc: &Document, id: ResourceId) -> Value {
     let r = doc.resources.get(id).expect("exists");
-    let ResourceBody::PlantStyle(s) = &r.body;
+    let s = doc.resources.plant_style(id).expect("a plant style");
     let used = doc.objects.values().filter(|o| link::link(o).is_some_and(|l| l.style == id)).count();
     let mut v = serde_json::to_value(s).unwrap();
     v["id"] = json!(id);
@@ -128,7 +128,6 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             | "plant_style.sample_csv"
             | "plants.place"
             | "plants.set_style"
-            | "report.plants"
             | "report.plant_schedule"
             | "report.existing_trees"
     );
@@ -220,7 +219,6 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
             s.editor.execute(&Command::SetPlantStyle { ids, style, overrides, unlink }).map_err(app)?;
             Ok(json!({ "ok": true }))
         }
-        "report.plants" => Ok(report_plants(s.editor.doc())),
         "report.plant_schedule" => {
             let sch = schedule::schedule(s.editor.doc());
             let mut v = serde_json::to_value(&sch).unwrap();
@@ -322,6 +320,18 @@ fn use_source(doc: &Document, id: ObjectId, m: &mut Map<String, Value>) -> Resul
     Ok(())
 }
 
+/// The spread of the plants that a `plants.place` request makes.
+fn spread_of(doc: &Document, m: &Map<String, Value>) -> Result<f64, RpcError> {
+    let style = m.get("style").filter(|v| !v.is_null()).map(|v| style_ref(doc, v)).transpose()?;
+    let overrides = match m.get("overrides") {
+        None | Some(Value::Null) => Map::new(),
+        Some(Value::Object(o)) => o.clone(),
+        Some(_) => return Err(bad("'overrides' must be an object")),
+    };
+    let base = style.and_then(|id| doc.resources.plant_style(id)).cloned().unwrap_or_default();
+    Ok(link::merge(&base, &overrides).map_err(bad)?.spread)
+}
+
 fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let doc = s.editor.doc();
     let mut spec = m.clone();
@@ -330,6 +340,15 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     for k in ["style", "overrides", "layer", "class", "tag"] {
         spec.remove(k);
+    }
+    // `"spacing": "spread"` means one canopy diameter, from the style and its overrides.
+    if ["spacing", "spacing_x", "spacing_y"].iter().any(|k| spec.get(*k).and_then(Value::as_str) == Some("spread")) {
+        let spread = spread_of(doc, m)?;
+        for k in ["spacing", "spacing_x", "spacing_y"] {
+            if spec.get(k).and_then(Value::as_str) == Some("spread") {
+                spec.insert(k.into(), json!(spread));
+            }
+        }
     }
     if !spec.contains_key("mode") {
         return Err(bad("missing 'mode'. Modes: single, path, grid, triangular, fill, poly"));
@@ -497,6 +516,28 @@ mod tests {
         assert_eq!(ok(&mut s, "objects.list", json!({})).as_array().unwrap().len(), 0);
         ok(&mut s, "redo", json!({}));
         assert_eq!(ok(&mut s, "objects.list", json!({})).as_array().unwrap().len() as u64, n + 1);
+    }
+
+    #[test]
+    fn spacing_can_be_the_spread_and_fill_can_have_holes() {
+        let mut s = Session::default();
+        let id = ok(&mut s, "plant_style.create", json!({"name": "Box", "spread": 500}))["id"].as_u64().unwrap();
+        let n = |s: &mut Session, p: Value| ok(s, "plants.place", p)["count"].as_u64().unwrap();
+        assert_eq!(n(&mut s, json!({"mode": "path", "style": id, "path": [[0, 0], [2000, 0]], "spacing": "spread"})), 5);
+        // Overrides change the spread.
+        assert_eq!(n(&mut s, json!({"mode": "path", "style": id, "overrides": {"spread": 1000}, "path": [[0, 0], [2000, 0]], "spacing": "spread"})), 3);
+        assert_eq!(n(&mut s, json!({"mode": "grid", "style": "Box", "min": [0, 0], "max": [1000, 1000], "spacing_x": "spread", "spacing_y": 1000})), 6);
+        assert_eq!(n(&mut s, json!({"mode": "single", "at": [0, 0], "overrides": {"spread": 700}})), 1);
+        let hole = json!([[1000, 1000], [3000, 1000], [3000, 3000], [1000, 3000]]);
+        let sq = json!([[0, 0], [4000, 0], [4000, 4000], [0, 4000]]);
+        let full = n(&mut s, json!({"mode": "fill", "style": id, "boundary": sq, "spacing": 500, "pattern": "rectangular"}));
+        let holed = n(&mut s, json!({"mode": "fill", "style": id, "boundary": sq, "holes": [hole], "spacing": 500, "pattern": "rectangular"}));
+        assert_eq!(full - holed, 9);
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "path", "path": [[0, 0], [9, 0]], "spacing": "spread", "overrides": {"spread": -1}})).code, -32602);
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "path", "style": 999, "path": [[0, 0], [9, 0]], "spacing": "spread"})).code, -32602);
+        assert_eq!(fail(&mut s, "plants.place", json!({"mode": "path", "path": [[0, 0], [9, 0]], "spacing": "spread", "overrides": 4})).code, -32602);
+        // A path with the default style spread of 3000 mm.
+        assert_eq!(n(&mut s, json!({"mode": "path", "path": [[0, 0], [6000, 0]], "spacing": "spread"})), 3);
     }
 
     #[test]

@@ -234,6 +234,7 @@ mod tests {
             condition: TreeCondition::Good,
             action: TreeAction::Retain,
             rpz_factor: None,
+            rpz_cap: None,
         };
         assert!(shape_hit(&tree, false, DVec2::new(1900.0, 0.0), 5.0));
         // The root protection zone (6000 mm) does not pick the tree.

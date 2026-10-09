@@ -8,7 +8,7 @@ use cadektor_render::{Projection, RenderMode, StandardView, ViewSettings};
 use egui::{DragValue, Ui};
 use glam::DVec2;
 
-use cadektor_core::plants::tree::{DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
+use cadektor_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
 
 use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
@@ -467,7 +467,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             f.scalar(ui, "Spread", spread, 50.0);
             f.scalar(ui, "Height", height, 50.0);
         }
-        Shape::ExistingTree { at, species, dbh, spread, height, condition, action, rpz_factor } => {
+        Shape::ExistingTree { at, species, dbh, spread, height, condition, action, rpz_factor, rpz_cap } => {
             f.xy(ui, "Position", at);
             f.text(ui, "Species", species);
             f.scalar(ui, "Trunk diameter", dbh, 10.0);
@@ -496,6 +496,14 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             let r = ui.add(DragValue::new(&mut factor).speed(0.1).range(0.0..=100.0).suffix(" x DBH"));
             if r.changed() {
                 *rpz_factor = Some(factor);
+            }
+            f.commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+            ui.label("Root zone cap");
+            let mut cap = rpz_cap.unwrap_or(DEFAULT_RPZ_CAP);
+            let r = ui.add(DragValue::new(&mut cap).speed(100.0).range(0.0..=1.0e6).suffix(" mm"));
+            if r.changed() {
+                *rpz_cap = Some(cap);
             }
             f.commit |= r.drag_stopped() || r.lost_focus();
             ui.end_row();

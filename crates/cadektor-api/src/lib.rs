@@ -267,6 +267,7 @@ impl Session {
                 self.view_changed = true;
                 view_json(self.view)
             }
+            "report.plants" => plants_api::report_plants(doc),
             "report.areas" => {
                 let rows: Vec<Value> = doc
                     .objects
