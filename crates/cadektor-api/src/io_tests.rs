@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -54,4 +54,70 @@ fn errors_are_reported() {
     assert_eq!(call(&mut s, "export.file", json!({"path": "x.shp"})).unwrap_err().code, 1);
     assert_eq!(call(&mut s, "export.file", json!({"path": "x.dxf", "options": {"tolerance": -1}})).unwrap_err().code, -32602);
     assert_eq!(describe()["examples"].as_array().unwrap().len(), 3);
+}
+
+fn policy_dirs(name: &str) -> (PathBuf, PathBuf) {
+    let base = tmp(name);
+    let _ = std::fs::remove_dir_all(&base);
+    let (inside, outside) = (base.join("inside"), base.join("outside"));
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    (inside, outside)
+}
+
+#[test]
+fn restricted_sessions_only_use_allowed_folders() {
+    let (inside, outside) = policy_dirs("policy");
+    let line = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nA\n10\n0\n20\n0\n11\n1000\n21\n0\n0\nENDSEC\n0\nEOF\n";
+    std::fs::write(inside.join("in.dxf"), line).unwrap();
+    std::fs::write(outside.join("secret.dxf"), line).unwrap();
+    std::fs::write(inside.join("notes.txt"), line).unwrap();
+    let mut s = Session { paths: crate::PathPolicy::restricted([inside.clone()]), ..Session::default() };
+    // Inside works. Outside, `..` and a wrong extension do not.
+    assert_eq!(call(&mut s, "import.file", json!({"path": inside.join("in.dxf")})).unwrap()["imported"], 1);
+    let e = call(&mut s, "import.file", json!({"path": outside.join("secret.dxf")})).unwrap_err();
+    assert!(e.message.contains("--allow-dir"), "{}", e.message);
+    assert!(call(&mut s, "import.file", json!({"path": inside.join("..").join("outside").join("secret.dxf")})).is_err());
+    let e = call(&mut s, "import.file", json!({"path": inside.join("notes.txt")})).unwrap_err();
+    assert!(e.message.contains("unknown file type"), "{}", e.message);
+    let e = call(&mut s, "import.file", json!({"path": inside.join("notes.txt"), "format": "dxf"})).unwrap_err();
+    assert!(e.message.contains("extension"), "{}", e.message);
+    assert_eq!(s.editor.doc().objects.len(), 1);
+    // Export: new files work, existing ones need overwrite, other folders and extensions do not.
+    let out = inside.join("out.dxf");
+    assert_eq!(call(&mut s, "export.file", json!({"path": out})).unwrap()["exported"], 1);
+    let first = std::fs::read(&out).unwrap();
+    let e = call(&mut s, "export.file", json!({"path": out})).unwrap_err();
+    assert!(e.message.contains("overwrite"), "{}", e.message);
+    assert_eq!(call(&mut s, "export.file", json!({"path": out, "options": {"unit": "m"}, "overwrite": true})).unwrap()["exported"], 1);
+    assert_ne!(std::fs::read(&out).unwrap(), first);
+    // The write is atomic: no temporary files stay, and the old file is the backup.
+    let names: Vec<String> = std::fs::read_dir(&inside).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    assert_eq!(std::fs::read(inside.join("out.dxf.bak")).unwrap(), first);
+    assert!(call(&mut s, "export.file", json!({"path": outside.join("x.dxf")})).is_err());
+    assert!(!outside.join("x.dxf").exists());
+    assert!(call(&mut s, "export.file", json!({"path": inside.join("x.txt"), "format": "dxf"})).is_err());
+    assert!(call(&mut s, "export.file", json!({"path": inside.join("x.shp")})).is_err());
+    // The folder of the document is allowed too, and survives `document.load`.
+    s.doc_dir = Some(outside.clone());
+    assert!(call(&mut s, "import.file", json!({"path": outside.join("secret.dxf")})).is_ok());
+    let doc = serde_json::to_value(s.editor.doc()).unwrap();
+    call(&mut s, "document.load", json!({"document": doc})).unwrap();
+    assert!(call(&mut s, "import.file", json!({"path": outside.join("secret.dxf")})).is_ok());
+    assert!(s.paths.is_restricted());
+    // The user's own dialogs are not limited.
+    s.doc_dir = None;
+    assert!(call(&mut s, "import.file", json!({"path": outside.join("secret.dxf")})).is_err());
+    assert_eq!(s.import_file_trusted(json!({"path": outside.join("secret.dxf")})).unwrap()["imported"], 1);
+    assert!(s.export_file_trusted(json!({"path": outside.join("by-user.dxf")})).is_ok());
+    assert!(s.check_path(&outside.join("a.json"), true, &["json"]).is_err());
+    assert!(s.check_path(&inside.join("a.txt"), true, &["json"]).is_err());
+    assert!(s.check_path(&inside.join("a.json"), true, &["json"]).is_ok());
+    assert_eq!(Session::default().check_path(Path::new("rel/x.txt"), true, &["json"]).unwrap(), PathBuf::from("rel/x.txt"));
+    // Without a policy any path works.
+    let mut free = Session::default();
+    assert!(free.import_file_trusted(json!({"path": outside.join("secret.dxf")})).is_ok());
+    assert!(call(&mut free, "export.file", json!({"path": outside.join("free.txt"), "format": "dxf"})).is_ok());
+    let _ = std::fs::remove_dir_all(inside.parent().unwrap());
 }

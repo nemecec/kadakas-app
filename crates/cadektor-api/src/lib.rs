@@ -12,6 +12,10 @@ use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;
+#[cfg(not(target_arch = "wasm32"))]
+mod paths;
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::PathPolicy;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 
@@ -27,6 +31,13 @@ pub struct Session {
     replaced: bool,
     view_changed: bool,
     mesh_cache: MeshCache,
+    /// Which files requests may read and write (`import.file`, `export.file`, `file.open`, `file.save`).
+    /// A host that serves agents restricts it. Default: any path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub paths: PathPolicy,
+    /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub doc_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug)]
@@ -89,7 +100,30 @@ impl Session {
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag.
     pub fn replace_document(&mut self, doc: Document) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         *self = Session { replaced: true, view: self.view, ..Session::with_document(doc) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.paths = paths;
+            self.doc_dir = doc_dir;
+        }
+    }
+
+    /// The canonical path for a file request, if the path policy allows it. `exts` are the allowed
+    /// extensions (lower case, without the dot); the check applies to restricted sessions only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn check_path(&self, path: &std::path::Path, write: bool, exts: &[&str]) -> Result<std::path::PathBuf, String> {
+        if !self.paths.is_restricted() {
+            return Ok(path.to_path_buf());
+        }
+        {
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            if !ext.as_deref().is_some_and(|e| exts.contains(&e)) {
+                return Err(format!("{} must have the extension {}", path.display(), exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" or ")));
+            }
+        }
+        self.paths.resolve(path, self.doc_dir.as_deref(), write)
     }
 
     /// The 3D scene of the current document. It is rebuilt only when the document changed.

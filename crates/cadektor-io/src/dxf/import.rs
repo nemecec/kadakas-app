@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{PI, TAU};
 
 use cadektor_core::curve::{corners, Vertex, VertexKind};
+use cadektor_core::georef::Georeference;
 use cadektor_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 use cadektor_core::DVec2;
 use cadektor_core::DVec3;
@@ -16,7 +17,7 @@ use cadektor_core::DVec3;
 use super::parse::{self, Dxf, Entity, LayerDef};
 use super::{aci_rgb, true_color};
 use crate::builder::Builder;
-use crate::options::{LayerMode, PointMode, Unit};
+use crate::options::{LayerMode, OriginMode, PointMode, Unit};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
 
 /// Most entities that one import visits, counting every copy of an exploded block.
@@ -47,28 +48,70 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
         b.report.note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
+
+    // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
+    // and the shift goes into the document georeference so that the geometry stays near the origin.
+    let doc_has_georef = ctx.georef.is_some();
+    if doc_has_georef || opts.origin == OriginMode::Center {
+        let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
+        probe.set_probe();
+        walk(&dxf, opts, &mut probe, scale)?;
+        if let Some((lo, hi)) = probe.bounds() {
+            let center = (lo + hi) / 2.0;
+            if center.is_finite() && center.abs().max_element() > FAR_MM {
+                if let Some(g) = &ctx.georef {
+                    b.set_offset(g.origin * 1000.0);
+                    b.report.georeferenced = !g.crs.trim().is_empty();
+                    b.report.note("the drawing is far from the origin: its coordinates are taken as map coordinates of the document");
+                } else if opts.origin == OriginMode::Center && center.abs().max_element() <= 1.0e12 {
+                    // The georeference origin is in meters and must be below 1e9.
+                    let shift = (center / 1000.0).round();
+                    b.set_offset(shift * 1000.0);
+                    b.set_georef(Georeference { crs: String::new(), origin: shift, rotation: 0.0, user_origin: DVec2::ZERO });
+                    b.report.georeferenced = false;
+                    b.report.note(&format!("the drawing is far from the origin: it is centered, the shift ({}, {}) m is saved in the document", shift.x, shift.y));
+                }
+            }
+        }
+    }
+    walk(&dxf, opts, &mut b, scale)?;
+    Ok(b.finish())
+}
+
+/// A drawing whose center is farther from (0, 0) than this (mm) is shifted. This is 1 km.
+const FAR_MM: f64 = 1_000_000.0;
+
+/// Converts all entities of the drawing into `b`.
+fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<(), IoError> {
     let target_layer = match &opts.layer {
         Some(name) => b.layer(name, true),
         None => b.default_layer,
     };
     let mut w = Walker {
-        dxf: &dxf,
+        dxf,
         opts,
-        b: &mut b,
+        b,
         defs: dxf.layers.iter().map(|l| (l.name.as_str(), l)).collect(),
         mapped: HashMap::new(),
         target_layer,
         visits: 0,
-        text_rotation_noted: false,
+        exploded: 0,
+        overflow: false,
     };
     let root = Cx { xf: Xf::scale(scale), layer: None, pen: None, weight: None, depth: 0 };
     for e in &dxf.entities {
         w.entity(e, &root);
     }
-    if w.visits >= MAX_VISITS {
-        b.report.note("import stopped: too many entities (a block may contain itself)");
+    if w.overflow {
+        return Err(IoError::Format(format!(
+            "the blocks make more than {} objects (nested or array INSERTs): raise the max_exploded option or turn off explode_blocks",
+            opts.max_exploded
+        )));
     }
-    Ok(b.finish())
+    if w.visits >= MAX_VISITS {
+        w.b.report.note("import stopped: too many entities (a block may contain itself)");
+    }
+    Ok(())
 }
 
 /// A 2D transform with a scale and offset for Z.
@@ -135,11 +178,13 @@ struct Cx {
 struct Item {
     shape: Shape,
     fill: Option<Color>,
+    /// Object data. Text keeps its rotation here (`rotation_deg`), because a text shape has none.
+    data: BTreeMap<String, serde_json::Value>,
 }
 
 impl Item {
     fn new(shape: Shape) -> Item {
-        Item { shape, fill: None }
+        Item { shape, fill: None, data: BTreeMap::new() }
     }
 }
 
@@ -154,7 +199,9 @@ struct Walker<'a> {
     mapped: HashMap<String, (LayerId, ClassId, Attributes)>,
     target_layer: LayerId,
     visits: usize,
-    text_rotation_noted: bool,
+    /// Entities visited inside blocks. The import fails above `max_exploded`.
+    exploded: usize,
+    overflow: bool,
 }
 
 fn layer_pen(def: &LayerDef) -> Option<Color> {
@@ -196,8 +243,15 @@ impl Walker<'_> {
 
     fn entity(&mut self, e: &Entity, cx: &Cx) {
         self.visits += 1;
-        if self.visits > MAX_VISITS || self.b.is_full() {
+        if self.visits > MAX_VISITS || self.b.is_full() || self.overflow {
             return;
+        }
+        if cx.depth > 0 {
+            self.exploded += 1;
+            if self.exploded > self.opts.max_exploded {
+                self.overflow = true;
+                return;
+            }
         }
         if e.int(67) == Some(1) {
             self.b.report.skip(&e.kind, "in paper space");
@@ -227,7 +281,7 @@ impl Walker<'_> {
             if item.fill.is_some() {
                 a.fill = item.fill;
             }
-            self.b.add(&e.kind, item.shape, layer, class, a, BTreeMap::new());
+            self.b.add(&e.kind, item.shape, layer, class, a, item.data);
         }
     }
 
@@ -434,11 +488,23 @@ impl Walker<'_> {
                 let p = if aligned { DVec2::new(e.fd(11, 0.0), e.fd(21, 0.0)) } else { DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)) };
                 let p = if mtext { p } else { flipx(p, flip) };
                 let height = e.f(40).filter(|h| *h > 0.0).map(|h| h * xf.length_scale()).unwrap_or(self.opts.default_text_height);
-                if e.fd(50, 0.0) != 0.0 && !self.text_rotation_noted {
-                    self.text_rotation_noted = true;
-                    self.b.report.note("text rotation is not supported: text is imported horizontal");
+                // Direction of the baseline: MTEXT has a vector (11, 21) or an angle in radians, TEXT degrees.
+                let dir = if mtext {
+                    match (e.f(11), e.f(21)) {
+                        (Some(x), Some(y)) if x != 0.0 || y != 0.0 => DVec2::new(x, y).normalize(),
+                        _ => DVec2::from_angle(e.fd(50, 0.0)),
+                    }
+                } else {
+                    DVec2::from_angle(e.fd(50, 0.0).to_radians())
+                };
+                let dir = xf.cols[0] * flipx(dir, flip).x + xf.cols[1] * flipx(dir, flip).y;
+                let mut item = Item::new(Shape::Text { at: xf.apply(p), text, height });
+                let deg = dir.y.atan2(dir.x).to_degrees();
+                if deg.is_finite() && deg.abs() > 1e-9 {
+                    let deg = (deg * 1e6).round() / 1e6;
+                    item.data.insert("rotation_deg".into(), serde_json::Value::from(deg.rem_euclid(360.0)));
                 }
-                out.push(Item::new(Shape::Text { at: xf.apply(p), text, height }));
+                out.push(item);
             }
             "POINT" => {
                 let z = e.fd(30, 0.0);
@@ -479,7 +545,7 @@ impl Walker<'_> {
                         .into_iter()
                         .map(|v| Vertex::new(xf.apply(flipx(v.p, flip)), v.kind))
                         .collect();
-                    out.push(Item { shape: Shape::Polyline { points: pts, closed: true }, fill });
+                    out.push(Item { shape: Shape::Polyline { points: pts, closed: true }, fill, data: BTreeMap::new() });
                 }
             }
             "ATTRIB" | "ATTDEF" | "VIEWPORT" => return Err("not drawing geometry"),
@@ -1065,7 +1131,10 @@ mod tests {
         assert!(matches!(s[1], Shape::Text { at, .. } if *at == DVec2::new(50.0, 60.0)));
         assert!(matches!(s[2], Shape::Text { text, height, .. } if text == "Hello\nsecond 1/2 line x\\" && *height == 180.0));
         assert!(matches!(s[3], Shape::Text { height, .. } if *height == 250.0));
-        assert_eq!(report.notes.iter().filter(|n| n.contains("rotation")).count(), 1);
+        let first = doc.objects.values().next().unwrap();
+        assert_eq!(first.data["rotation_deg"], 30.0);
+        assert_eq!(doc.objects.values().filter(|o| o.data.contains_key("rotation_deg")).count(), 1);
+        assert!(report.notes.iter().all(|n| !n.contains("rotation")));
     }
 
     #[test]
@@ -1238,5 +1307,62 @@ mod tests {
                 assert!((center.distance(*p) - radius).abs() < 1e-6, "bulge {b}");
             }
         }
+    }
+
+    #[test]
+    fn far_drawings_are_centered_and_the_shift_is_recorded() {
+        // L-EST97-like survey coordinates in meters.
+        let ents = "0\nLINE\n8\nA\n10\n6589000\n20\n540000\n11\n6589100\n21\n540050\n\
+0\nCIRCLE\n8\nA\n10\n6589050\n20\n540025\n40\n2\n";
+        let text = dxf_text("9\n$INSUNITS\n70\n6\n", "", "", ents);
+        let (doc, report) = run(&text, &ImportOptions::default());
+        assert_eq!(doc.objects.len(), 2, "{:?}", report.skipped);
+        let g = doc.georef.clone().unwrap();
+        assert_eq!((g.crs.as_str(), g.origin), ("", DVec2::new(6_589_050.0, 540_025.0)));
+        let Shape::Circle { center, radius } = shapes(&doc)[1] else { panic!() };
+        assert_eq!((*center, *radius), (DVec2::ZERO, 2000.0));
+        assert!(report.notes.iter().any(|n| n.contains("centered")));
+        // Keep the file origin: objects are out of range and skipped.
+        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let (doc, report) = run(&text, &keep);
+        assert_eq!(doc.objects.len(), 0);
+        assert_eq!(report.skipped_total(), 2);
+        assert!(doc.georef.is_none());
+        // A document with a georeference keeps its own origin.
+        let mut base = Document::default();
+        base.georef = Some(Georeference { crs: "EPSG:3301".into(), origin: DVec2::new(6_589_000.0, 540_000.0), rotation: 0.0, user_origin: DVec2::ZERO });
+        let src = Source { name: "t".into(), data: text.into_bytes(), extra: Default::default() };
+        let r = import(&src, &Context::of(&base), &ImportOptions::default()).unwrap();
+        let mut ed = Editor::new(base.clone());
+        ed.execute(&r.command).unwrap();
+        assert_eq!(ed.doc().georef, base.georef);
+        let Shape::Circle { center, .. } = shapes(ed.doc())[1] else { panic!() };
+        assert_eq!(*center, DVec2::new(50_000.0, 25_000.0));
+        assert!(r.report.georeferenced);
+        // A drawing near the origin is not touched.
+        let near = dxf_text("", "", "", "0\nLINE\n8\nA\n10\n0\n20\n0\n11\n10\n21\n0\n");
+        let (doc, _) = run(&near, &ImportOptions::default());
+        assert!(doc.georef.is_none());
+    }
+
+    #[test]
+    fn nested_array_inserts_hit_the_exploded_limit() {
+        // 100 x 100 array of block A, which holds a 100 x 100 array of block B: 100 million lines.
+        let blocks = "0\nBLOCK\n2\nB\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n\
+0\nBLOCK\n2\nA\n10\n0\n20\n0\n0\nINSERT\n2\nB\n70\n100\n71\n100\n44\n2\n45\n2\n0\nENDBLK\n";
+        let ents = "0\nINSERT\n2\nA\n70\n100\n71\n100\n44\n300\n45\n300\n";
+        let text = dxf_text("", "", blocks, ents);
+        assert!(text.len() < 500);
+        let doc = Document::default();
+        let src = Source { name: "t".into(), data: text.into_bytes(), extra: Default::default() };
+        let err = import(&src, &Context::of(&doc), &ImportOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("max_exploded"), "{err}");
+        // A smaller drawing within the limit still works, and so does a higher limit.
+        let small = dxf_text("", "", "0\nBLOCK\n2\nB\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n", "0\nINSERT\n2\nB\n70\n10\n71\n10\n44\n5\n45\n5\n");
+        let (doc, _) = run(&small, &ImportOptions::default());
+        assert_eq!(doc.objects.len(), 100);
+        let opts = ImportOptions { max_exploded: 50, ..ImportOptions::default() };
+        let src = Source { name: "t".into(), data: small.into_bytes(), extra: Default::default() };
+        assert!(import(&src, &Context::of(&Document::default()), &opts).is_err());
     }
 }

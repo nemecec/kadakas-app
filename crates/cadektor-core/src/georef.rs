@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 /// Links the model space (millimeters) to a map CRS (normally in meters).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Georeference {
-    /// CRS of the map coordinates: `EPSG:<code>` or a WKT string.
+    /// CRS of the map coordinates: `EPSG:<code>` or a WKT string. Empty: no CRS is known, and
+    /// `origin` only records the shift of a local frame (an import that centered the drawing).
     pub crs: String,
     /// Map position (CRS units, normally meters) of the model origin.
     pub origin: DVec2,

@@ -38,6 +38,8 @@ pub struct ImportForm {
     pub source_crs: String,
     pub target_crs: String,
     pub class_field: String,
+    /// Keep the coordinates of the file instead of centering the drawing.
+    pub keep_origin: bool,
 }
 
 impl ImportForm {
@@ -53,6 +55,7 @@ impl ImportForm {
             source_crs: String::new(),
             target_crs: String::new(),
             class_field: String::new(),
+            keep_origin: false,
         }
     }
 
@@ -65,6 +68,9 @@ impl ImportForm {
             }
         };
         text(&mut o, "layer", &self.layer);
+        if self.keep_origin {
+            o.insert("origin".into(), json!("file"));
+        }
         match kind_of(&self.path) {
             Kind::Dxf => {
                 if self.layers_as_layers {
@@ -194,6 +200,7 @@ impl IoUi {
                         }
                     }
                 }
+                ui.checkbox(&mut form.keep_origin, "Keep the coordinates of the file (default: center the drawing)");
                 ui.horizontal(|ui| {
                     ui.label("Design layer");
                     ui.text_edit_singleline(&mut form.layer);
@@ -205,7 +212,7 @@ impl IoUi {
             });
             if run {
                 let params = form.params();
-                match session.handle("import.file", params) {
+                match session.import_file_trusted(params) {
                     Ok(r) => {
                         *status = format!("Imported {} objects, skipped {}", r["imported"], r["skipped"]);
                         event = IoEvent::Imported;
@@ -242,7 +249,7 @@ impl IoUi {
             });
             if run {
                 let params = form.params();
-                *status = match session.handle("export.file", params) {
+                *status = match session.export_file_trusted(params) {
                     Ok(r) => format!("Exported {} objects to {}", r["exported"], form.path.display()),
                     Err(e) => format!("Export failed: {}", e.message),
                 };
@@ -268,12 +275,14 @@ mod tests {
         f.layer = " Site ".into();
         f.only_points_with_z = true;
         f.source_crs = "ignored".into();
+        f.keep_origin = true;
         let p = f.params();
         assert_eq!(p["path"], "/a/site.DXF");
         assert_eq!(p["options"]["layer_mode"], "layers");
         assert_eq!(p["options"]["unit"], "m");
         assert_eq!(p["options"]["layer"], "Site");
         assert_eq!(p["options"]["points"], "with_z");
+        assert_eq!(p["options"]["origin"], "file");
         assert!(p["options"].get("source_crs").is_none());
     }
 

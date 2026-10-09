@@ -205,11 +205,16 @@ proptest! {
             if pts[w].kind == VertexKind::PointOnArc {
                 let (a, b, c) = (pts[w - 1].p, pts[w].p, pts[w + 1].p);
                 prop_assume!((b - a).perp_dot(c - b).abs() > 1.0e4);
+                // The arc must not turn back: otherwise it runs around a huge circle (kilometers wide), which
+                // makes the comparison slow and says nothing about the writer.
+                prop_assume!((b - a).dot(c - b) > 0.0);
             }
         }
         let mut doc = Document::default();
         add(&mut doc, Shape::Polyline { points: pts.clone(), closed });
-        let back = roundtrip(&doc, &ExportOptions::default(), &ImportOptions::default());
+        // A nearly straight arc has a huge bounding box, which could make the default `center` shift the drawing.
+        let keep = ImportOptions { origin: cadektor_io::OriginMode::File, ..ImportOptions::default() };
+        let back = roundtrip(&doc, &ExportOptions::default(), &keep);
         let Shape::Polyline { points: p2, closed: c2 } = &back.objects.values().next().unwrap().shape else { panic!() };
         let (pa, pb) = (outline(&pts, closed), outline(p2, *c2));
         prop_assert!(deviation(&pa, &pb) < 1.5, "{}", deviation(&pa, &pb));
@@ -220,7 +225,9 @@ proptest! {
     fn random_survey_points_round_trip(x in -1.0e7..1.0e7f64, y in -1.0e7..1.0e7f64, z in -1.0e5..1.0e5f64) {
         let mut doc = Document::default();
         add(&mut doc, Shape::Locus3d { p: DVec3::new(x, y, z) });
-        let back = roundtrip(&doc, &ExportOptions::default(), &ImportOptions::default());
+        // `file` keeps the coordinates. With the default (`center`) a point 6 km from the origin is shifted.
+        let keep = ImportOptions { origin: cadektor_io::OriginMode::File, ..ImportOptions::default() };
+        let back = roundtrip(&doc, &ExportOptions::default(), &keep);
         let Shape::Locus3d { p } = back.objects.values().next().unwrap().shape else { panic!() };
         prop_assert!(p.distance(DVec3::new(x, y, z)) < 1e-6);
     }

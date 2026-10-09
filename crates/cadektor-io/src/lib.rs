@@ -11,6 +11,7 @@
 mod builder;
 pub mod crs;
 pub mod dxf;
+mod encoding;
 pub mod geojson;
 mod gis;
 pub mod options;
@@ -23,7 +24,7 @@ use std::path::Path;
 use cadektor_core::command::Command;
 use cadektor_core::model::{ClassId, Document, Layer, LayerId};
 
-pub use options::{ExportOptions, ImportOptions, LayerMode, Unit};
+pub use options::{ExportOptions, ImportOptions, LayerMode, OriginMode, Unit};
 pub use report::{Report, Skipped};
 
 /// A file format that this crate can read or write.
@@ -189,7 +190,8 @@ pub fn export_file(path: &Path, format: Option<Format>, opts: &ExportOptions, do
         .ok_or_else(|| IoError::Format("unknown file type: give a format (dxf or geojson)".into()))?;
     let ex = exporter(format).ok_or_else(|| IoError::Format(format!("export to {} is not supported", format.name())))?;
     let out = ex.export(doc, opts)?;
-    std::fs::write(path, &out.bytes).map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
+    // Atomic: a crash never leaves a half-written file. An old file stays as `<name>.bak`.
+    cadektor_core::fsio::write_atomic(path, &out.bytes).map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
     Ok(out.report)
 }
 

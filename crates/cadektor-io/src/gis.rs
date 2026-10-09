@@ -14,7 +14,11 @@ use serde_json::Value;
 
 use crate::builder::Builder;
 use crate::crs::{utm_epsg, Crs, Transformer};
+use crate::options::OriginMode;
 use crate::{Context, ImportOptions, ImportResult, IoError};
+
+/// A drawing whose center is farther from (0, 0) than this (meters) gets an origin shift.
+const FAR_M: f64 = 1000.0;
 
 /// A point with an optional Z value, in the units of the file.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,20 +100,32 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
         lo = lo.min(DVec2::new(p.x, p.y));
         hi = hi.max(DVec2::new(p.x, p.y));
     }
-    let center = (lo + hi) / 2.0;
+    let mut center = (lo + hi) / 2.0;
+    if geographic_source && first.is_some() {
+        // Longitudes wrap at the antimeridian: use the mean direction, not the middle of the range.
+        let (mut sin, mut cos) = (0.0, 0.0);
+        for p in data.features.iter().flat_map(points_of).filter(usable) {
+            sin += p.x.to_radians().sin();
+            cos += p.x.to_radians().cos();
+        }
+        if sin != 0.0 || cos != 0.0 {
+            center.x = sin.atan2(cos).to_degrees();
+        }
+    }
     let mut transform: Option<(Crs, Crs)> = None;
     let georef: Option<Georeference>;
+    let doc_has_crs = ctx.georef.as_ref().is_some_and(|g| !g.crs.trim().is_empty());
     match (&ctx.georef, source) {
-        (Some(g), Some(src)) => {
+        (Some(g), Some(src)) if doc_has_crs => {
             let target = Crs::parse(&g.crs).map_err(|e| IoError::Option(format!("the document CRS cannot be used: {e}")))?;
             georef = Some(g.clone());
             transform = Some((src, target));
             b.report.georeferenced = true;
         }
-        (Some(g), None) => {
-            b.report.note("the document CRS is assumed for the file");
+        (Some(g), _) => {
+            b.report.note("the document CRS is assumed for the file (the document has no CRS, or the file has none): coordinates are taken as meters in the document frame");
             georef = Some(g.clone());
-            b.report.georeferenced = true;
+            b.report.georeferenced = doc_has_crs;
         }
         (None, Some(src)) => {
             let target = match &opts.target_crs {
@@ -124,7 +140,7 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
             }
             let origin = if first.is_some() {
                 let (x, y, _) = Transformer::new(&src, &target).apply(center.x, center.y, 0.0).map_err(IoError::Format)?;
-                DVec2::new(x.round(), y.round())
+                DVec2::new((x * target.to_meter()).round(), (y * target.to_meter()).round())
             } else {
                 DVec2::ZERO
             };
@@ -136,7 +152,21 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
             georef = Some(g);
             transform = Some((src, target));
         }
-        (None, None) => georef = None,
+        (None, None) => {
+            // No CRS anywhere. The numbers are meters, and real-world values are far from 0: center the
+            // drawing and record the shift as the origin of a local frame (a georeference without CRS).
+            let far = center.is_finite() && center.abs().max_element() > FAR_M;
+            let origin = if first.is_some() && far && opts.origin == OriginMode::Center { center.round() } else { DVec2::ZERO };
+            if origin != DVec2::ZERO && origin.is_finite() && origin.abs().max_element() <= 1.0e9 {
+                let g = Georeference { crs: String::new(), origin, rotation: 0.0, user_origin: DVec2::ZERO };
+                b.set_georef(g.clone());
+                b.report.georeferenced = false;
+                b.report.note(&format!("the file has no CRS: the drawing is centered, the origin shift ({}, {}) m is saved in the document", origin.x, origin.y));
+                georef = Some(g);
+            } else {
+                georef = None;
+            }
+        }
     }
 
     // 3. The objects.
@@ -147,7 +177,10 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
     let class_attrs = Attributes { pen: Some(Color::BLACK), fill: Some(Color::NONE), line_weight: Some(0.25) };
     let to_model = |p: &Pt| -> Result<DVec3, String> {
         let (x, y, z) = match &transform {
-            Some((s, t)) => Transformer::new(s, t).apply(p.x, p.y, p.z.unwrap_or(0.0))?,
+            Some((s, t)) => {
+                let (x, y, z) = Transformer::new(s, t).apply(p.x, p.y, p.z.unwrap_or(0.0))?;
+                (x * t.to_meter(), y * t.to_meter(), z)
+            }
             None => (p.x, p.y, p.z.unwrap_or(0.0)),
         };
         let m = match &georef {
@@ -163,6 +196,8 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
             Some(other) => other.to_string(),
         };
         let class = b.class(&class_name, &class_attrs, true);
+        // The last outer ring that was imported: holes that follow it belong to it.
+        let mut outer: Option<u64> = None;
         for part in &f.parts {
             if b.is_full() {
                 break 'features;
@@ -173,8 +208,14 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
                 Part::Point(p) => ("point", std::slice::from_ref(p), false, true),
                 Part::Line(v) => ("line", v.as_slice(), false, false),
                 Part::Ring(v, hole) => {
-                    if *hole {
-                        data.insert("_ring".into(), Value::from("hole"));
+                    // A shape has no holes, so a hole stays a closed polyline that points to its outer ring.
+                    // The GeoJSON export puts it back into the polygon.
+                    match (*hole, outer) {
+                        (true, Some(o)) => {
+                            data.insert("_ring".into(), Value::from("hole"));
+                            data.insert("_hole_of".into(), Value::from(o));
+                        }
+                        _ => outer = None,
                     }
                     ("polygon", v.as_slice(), true, false)
                 }
@@ -211,7 +252,11 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
                 }
                 s => s,
             };
-            b.add(kind, shape, layer, class, Attributes::default(), data);
+            let is_outer = matches!(part, Part::Ring(_, false)) || (matches!(part, Part::Ring(_, true)) && outer.is_none());
+            let added = b.add(kind, shape, layer, class, Attributes::default(), data);
+            if is_outer && added {
+                outer = Some(b.last_id());
+            }
         }
     }
     Ok(b.finish())
@@ -351,7 +396,8 @@ mod tests {
             notes: vec!["hello".into()],
             file_crs: Some("garbage".into()),
         };
-        let (d, report) = run(data, Document::default(), &ImportOptions::default(), None).unwrap();
+        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let (d, report) = run(data, Document::default(), &keep, None).unwrap();
         assert!(d.georef.is_none());
         assert!(!report.georeferenced);
         assert_eq!(d.objects.len(), 1);
@@ -380,5 +426,68 @@ mod tests {
         let (d, report) = run(data, Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
         assert!(d.objects.len() <= 2);
         let _ = report;
+    }
+
+    #[test]
+    fn real_world_numbers_without_crs_are_centered() {
+        // L-EST97-like meters, and a shapefile without .prj.
+        let line = |x: f64, y: f64| Part::Line(vec![pt(x, y), pt(x + 100.0, y + 50.0)]);
+        let data = || GisData { features: vec![feature(vec![line(6_589_000.0, 540_000.0)], "k", Value::Null)], ..GisData::default() };
+        let (d, report) = run(data(), Document::default(), &ImportOptions::default(), None).unwrap();
+        assert_eq!(d.objects.len(), 1, "{:?}", report.skipped);
+        let g = d.georef.clone().unwrap();
+        assert_eq!(g.crs, "");
+        assert_eq!(g.origin, DVec2::new(6_589_050.0, 540_025.0));
+        assert!(report.notes.iter().any(|n| n.contains("centered")));
+        let (lo, hi) = d.objects.values().next().unwrap().shape.bounds();
+        assert!(lo.abs().max_element() < 1.0e5 && hi.abs().max_element() < 1.0e5);
+        // The shift maps back to the file coordinates.
+        assert!((g.to_map(lo).x - 6_589_000.0).abs() < 1e-6);
+        // `file` keeps the numbers, and the object is out of range.
+        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let (d, report) = run(data(), Document::default(), &keep, None).unwrap();
+        assert_eq!(d.objects.len(), 0);
+        assert_eq!(report.skipped_total(), 1);
+        // Small numbers stay as they are.
+        let small = GisData { features: vec![feature(vec![line(10.0, 20.0)], "k", Value::Null)], ..GisData::default() };
+        let (d, _) = run(small, Document::default(), &ImportOptions::default(), None).unwrap();
+        assert!(d.georef.is_none());
+        // A second import into the local frame lands in the same place.
+        let (d2, _) = run(data(), d.clone(), &ImportOptions::default(), None).unwrap();
+        assert_eq!(d2.objects.len(), 2);
+    }
+
+    #[test]
+    fn holes_know_their_outer_ring_and_orphans_are_islands() {
+        let ring = |x: f64, hole: bool| Part::Ring(vec![pt(x, 0.0), pt(x + 10.0, 0.0), pt(x + 10.0, 10.0), pt(x, 10.0)], hole);
+        let data = GisData { features: vec![feature(vec![ring(0.0, true), ring(0.0, false), ring(2.0, true), ring(20.0, false), ring(22.0, true)], "k", Value::Null)], ..GisData::default() };
+        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let (d, _) = run(data, Document::default(), &keep, None).unwrap();
+        let objs: Vec<_> = d.objects.values().collect();
+        assert_eq!(objs.len(), 5);
+        // A hole with no outer ring before it is a plain polygon.
+        assert!(!objs[0].data.contains_key("_ring"));
+        assert!(!objs[1].data.contains_key("_ring"));
+        assert_eq!(objs[2].data["_hole_of"], objs[1].id.0);
+        assert!(!objs[3].data.contains_key("_ring"));
+        assert_eq!(objs[4].data["_hole_of"], objs[3].id.0);
+    }
+
+    #[test]
+    fn antimeridian_picks_the_zone_from_the_mean_longitude() {
+        let data = GisData { features: vec![feature(vec![Part::Line(vec![pt(179.9, 10.0), pt(-179.9, 10.0)])], "k", Value::Null)], ..GisData::default() };
+        let (d, _) = run(data, Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
+        let crs = d.georef.unwrap().crs;
+        assert!(crs == "EPSG:32660" || crs == "EPSG:32601", "{crs}");
+    }
+
+    #[test]
+    fn feet_crs_origin_is_in_meters() {
+        let data = GisData { features: vec![feature(vec![Part::Point(pt(986_000.0, 212_000.0))], "k", Value::Null)], ..GisData::default() };
+        let opts = ImportOptions { source_crs: Some("EPSG:2263".into()), ..ImportOptions::default() };
+        let (d, _) = run(data, Document::default(), &opts, None).unwrap();
+        let g = d.georef.unwrap();
+        // 986000 ft is about 300 km, not 986 km.
+        assert!((g.origin.x - 300_533.0).abs() < 2.0 && (g.origin.y - 64_617.0).abs() < 2.0, "{:?}", g.origin);
     }
 }

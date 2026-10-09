@@ -90,6 +90,10 @@ struct RemoteArgs {
     /// The app's access token, if it is not in the runtime file.
     #[arg(long, requires = "connect")]
     token: Option<String>,
+    /// A folder that agents may read and write (repeat for more). Default: the current folder.
+    /// The folder of the open document is always allowed. Not used with --connect: the app decides.
+    #[arg(long = "allow-dir", value_name = "DIR")]
+    allow_dir: Vec<PathBuf>,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -106,8 +110,12 @@ impl Backend {
             return connect_remote(&addr, &token).map(Backend::Remote);
         }
         let mut session = Session::default();
+        // Requests come from agents: they may only use the allowed folders.
+        let dirs = if remote.allow_dir.is_empty() { vec![PathBuf::from(".")] } else { remote.allow_dir };
+        session.paths = cadektor_api::PathPolicy::restricted(dirs);
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
+            session.doc_dir = doc_dir_of(&f);
         }
         Ok(Backend::Local(Box::new(session)))
     }
@@ -168,23 +176,36 @@ fn load(path: &PathBuf) -> Result<Document, String> {
     Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// `file.save {path}` and `file.open {path}` for a headless session.
+/// The folder of a document file.
+fn doc_dir_of(file: &std::path::Path) -> Option<PathBuf> {
+    let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    std::fs::canonicalize(dir).ok()
+}
+
+/// `file.save {path}` and `file.open {path}` for a headless session. The path policy of the session applies.
 fn file_method(s: &mut Session, req: &Value) -> String {
     let id = req["id"].clone();
     let path = req["params"]["path"].as_str().map(PathBuf::from);
     let result = match (req["method"].as_str(), path) {
         (_, None) => Err((-32602, "params.path is required".to_string())),
-        (Some("file.save"), Some(p)) => serde_json::to_string_pretty(&s.editor.doc())
-            .map_err(|e| (1, e.to_string()))
-            .and_then(|t| fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))),
-        (_, Some(p)) => load(&p).map_err(|e| (1, e)).and_then(|d| {
+        (Some("file.save"), Some(p)) => s
+            .check_path(&p, true, &["json"])
+            .map_err(|e| (1, e))
+            .and_then(|p| {
+                let t = serde_json::to_string_pretty(&s.editor.doc()).map_err(|e| (1, e.to_string()))?;
+                fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))?;
+                s.doc_dir = doc_dir_of(&p);
+                Ok(())
+            }),
+        (_, Some(p)) => s.check_path(&p, false, &["json"]).map_err(|e| (1, e)).and_then(|p| load(&p).map_err(|e| (1, e)).and_then(|d| {
+            s.doc_dir = doc_dir_of(&p);
             let line = json!({"id": 0, "method": "document.load", "params": {"document": d}}).to_string();
             let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
             match r.get("error") {
                 Some(e) => Err((1, e["message"].as_str().unwrap_or("load failed").to_string())),
                 None => Ok(()),
             }
-        }),
+        })),
     };
     match result {
         Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),

@@ -62,8 +62,10 @@ pub struct CadektorApp {
 
 impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(cc: &eframe::CreationContext<'_>, agent_port: Option<u16>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, agent_port: Option<u16>, allow_dirs: Vec<std::path::PathBuf>) -> Self {
         let mut app = Self::blank();
+        // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
+        app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
@@ -557,6 +559,7 @@ impl eframe::App for CadektorApp {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
+            self.session.doc_dir = self.path.as_ref().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
             agent.poll(&mut |line| file_io::agent_line(&mut self.session, &mut self.path, line, &mut fx));
             if fx.replaced {
                 self.machine.cancel();

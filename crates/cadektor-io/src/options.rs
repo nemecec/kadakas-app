@@ -71,6 +71,18 @@ pub enum LayerMode {
     Layers,
 }
 
+/// Where the imported geometry sits in the model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginMode {
+    /// Center the drawing on (0, 0). The shift is saved as the origin of the document georeference.
+    /// This is the default, because real-world coordinates are too large for model millimeters.
+    #[default]
+    Center,
+    /// Keep the coordinates of the file. Objects beyond 1e9 mm are skipped.
+    File,
+}
+
 /// Which DXF points to import.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +106,10 @@ pub struct ImportOptions {
     pub unit: Option<Unit>,
     /// DXF: explode blocks (INSERT) into objects. Blocks that are not exploded are skipped.
     pub explode_blocks: bool,
+    /// Where the geometry sits: `center` (default) or `file`. A document that has a georeference keeps its origin.
+    pub origin: OriginMode,
+    /// DXF: most objects that exploded blocks may make. The import fails above it.
+    pub max_exploded: usize,
     pub points: PointMode,
     /// DXF: import HATCH boundaries as closed polylines.
     pub hatches: bool,
@@ -118,6 +134,8 @@ impl Default for ImportOptions {
             layer: None,
             unit: None,
             explode_blocks: true,
+            origin: OriginMode::Center,
+            max_exploded: 100_000,
             points: PointMode::All,
             hatches: true,
             tolerance: 2.0,
@@ -125,7 +143,7 @@ impl Default for ImportOptions {
             source_crs: None,
             target_crs: None,
             class_field: None,
-            max_objects: 2_000_000,
+            max_objects: 500_000,
         }
     }
 }

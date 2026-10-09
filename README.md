@@ -44,6 +44,20 @@ cadektor export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
 
 An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the
 document CRS with `proj4rs`. The document keeps a georeference (CRS and origin offset), so geometry stays near (0, 0).
+A drawing whose center is more than 1 km from (0, 0) is centered, also when the file has no CRS (DXF in meters, a
+shapefile without `.prj`). The shift is saved as the georeference origin, with an empty CRS. Use the option
+`"origin": "file"` to keep the numbers of the file. Holes of polygons stay as closed polylines that point to their outer
+ring (`_hole_of`), and the GeoJSON export writes them back as interior rings. DXF text keeps its rotation in the object
+data (`rotation_deg`). Old files are decoded with their code page (`$DWGCODEPAGE`, shapefile `.cpg`).
+
+The DXF export writes a release 2004 file with all tables, handles and owner handles, and snaps line weights to the values
+that DXF allows. To check it with ezdxf: `uv run --with pytest --with ezdxf pytest tests/behavior -q`.
+
+A server for agents (`cadektor serve`, `cadektor mcp`, the app with `--agent-port`) only reads and writes in the folder of
+the open document and in the folders given with `--allow-dir DIR` (repeat the flag; default: the folder where it started).
+This covers `import.file`, `export.file`, `file.open` and `file.save`. Paths are resolved first, so `..` and links do not
+leave those folders. The extension must match the format, and `export.file` needs `"overwrite": true` to replace a file
+(the old file stays as `<name>.bak`). The File > Import and Export dialogs of the app are not limited.
 
 Saves are atomic: the app and the CLI write a temporary file and rename it. The previous file stays as `<name>.bak`.
 

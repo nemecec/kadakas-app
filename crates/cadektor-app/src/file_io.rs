@@ -57,13 +57,17 @@ pub fn agent_line(session: &mut Session, path: &mut Option<PathBuf>, line: &str,
         }
         return resp;
     };
-    let result = match req["params"]["path"].as_str().map(PathBuf::from) {
+    // An agent may only use the allowed folders (see `Session::paths`), and only `.json` documents.
+    let write = method == "file.save";
+    let checked = req["params"]["path"].as_str().map(|t| session.check_path(Path::new(t), write, &["json"]).map_err(|e| (1, e)));
+    let result = match checked {
         None => Err((-32602, "params.path is required".to_string())),
-        Some(p) if method == "file.save" => write_document(&p, session.editor.doc()).map_err(|e| (1, e)).map(|()| {
+        Some(Err(e)) => Err(e),
+        Some(Ok(p)) if write => write_document(&p, session.editor.doc()).map_err(|e| (1, e)).map(|()| {
             *path = Some(p);
             fx.path_changed = true;
         }),
-        Some(p) => read_document(&p).map_err(|e| (1, e)).map(|doc| {
+        Some(Ok(p)) => read_document(&p).map_err(|e| (1, e)).map(|doc| {
             session.replace_document(doc);
             session.take_replaced();
             *path = Some(p);
@@ -71,6 +75,7 @@ pub fn agent_line(session: &mut Session, path: &mut Option<PathBuf>, line: &str,
             fx.path_changed = true;
         }),
     };
+    session.doc_dir = path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf);
     let id = req.get("id")?.clone();
     Some(match result {
         Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),

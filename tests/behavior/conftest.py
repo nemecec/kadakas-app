@@ -2,10 +2,16 @@
 
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
 
 from helpers import BIN, REPO, JsonRpc, McpClient
+
+
+# Agents may only use some folders. The tests use pytest's temp folders and the files of the repository.
+ALLOW = ["--allow-dir", str(Path(tempfile.gettempdir()).resolve()), "--allow-dir", str(REPO)]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -22,7 +28,7 @@ def make_serve():
     started = []
 
     def make(*args) -> JsonRpc:
-        client = JsonRpc(["serve", *map(str, args)])
+        client = JsonRpc(["serve", *ALLOW, *map(str, args)])
         started.append(client)
         return client
 
@@ -46,7 +52,7 @@ def rpc(cad):
 @pytest.fixture
 def mcp() -> McpClient:
     """A fresh `cadektor mcp` process, already initialized."""
-    client = McpClient(["mcp"])
+    client = McpClient(["mcp", *ALLOW])
     client.initialize()
     yield client
     client.close()
@@ -55,6 +61,6 @@ def mcp() -> McpClient:
 @pytest.fixture
 def mcp_raw():
     """A `cadektor mcp` process that has not been initialized yet, for handshake tests."""
-    client = McpClient(["mcp"])
+    client = McpClient(["mcp", *ALLOW])
     yield client
     client.close()

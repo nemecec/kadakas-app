@@ -281,6 +281,25 @@ fn serve_client(stream: TcpStream, token: &str, limits: Limits, tx: Sender<Reque
     }
 }
 
+/// Folders from `--allow-dir DIR` (or `--allow-dir=DIR`), which agents may read and write. Default: the current folder.
+pub fn parse_allow_dirs(args: &[String]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--allow-dir" {
+            if let Some(v) = it.next() {
+                dirs.push(PathBuf::from(v));
+            }
+        } else if let Some(v) = a.strip_prefix("--allow-dir=") {
+            dirs.push(PathBuf::from(v));
+        }
+    }
+    if dirs.is_empty() {
+        dirs.push(PathBuf::from("."));
+    }
+    dirs
+}
+
 /// Port from `--agent-port N` (or `--agent-port=N`), else from the env value.
 pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
     let mut it = args.iter();
@@ -416,6 +435,13 @@ mod tests {
         let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
         (Ui::start(server), addr, token)
+    }
+
+    #[test]
+    fn allow_dirs_from_arguments() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_allow_dirs(&a(&["app"])), vec![PathBuf::from(".")]);
+        assert_eq!(parse_allow_dirs(&a(&["app", "--allow-dir", "/a", "--allow-dir=/b", "--allow-dir"])), vec![PathBuf::from("/a"), PathBuf::from("/b")]);
     }
 
     #[test]

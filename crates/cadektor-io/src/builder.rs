@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use cadektor_core::command::Command;
 use cadektor_core::georef::Georeference;
 use cadektor_core::model::{arc_sweep, Attributes, ClassId, LayerId, ObjectId, Shape, VertexKind};
+use cadektor_core::DVec2;
 use serde_json::Value;
 
 use crate::{Context, ImportResult, Report};
@@ -23,6 +24,11 @@ pub struct Builder {
     pub default_layer: LayerId,
     pub default_class: ClassId,
     full: bool,
+    last_id: u64,
+    /// Probe mode: shapes are not stored, only their bounds (mm) are collected.
+    probe: Option<(DVec2, DVec2)>,
+    /// Shift (mm) that every added shape gets. Imports use it to keep geometry near the origin.
+    offset: DVec2,
 }
 
 /// Checks the rules that `Command::AddObject` enforces, so one bad entity
@@ -64,6 +70,9 @@ impl Builder {
             default_layer: ctx.active_layer,
             default_class: ctx.active_class,
             full: false,
+            last_id: 0,
+            probe: None,
+            offset: DVec2::ZERO,
         }
     }
 
@@ -108,13 +117,33 @@ impl Builder {
         self.report.georeferenced = true;
     }
 
+    /// Shifts every shape added from now on by `-offset` (mm).
+    pub fn set_offset(&mut self, offset: DVec2) {
+        self.offset = offset;
+    }
+
+    /// Switches to probe mode: nothing is stored and no range is checked. See [`Builder::bounds`].
+    pub fn set_probe(&mut self) {
+        self.probe = Some((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)));
+    }
+
+    /// The box (mm) around all shapes that a probe saw. `None` if it saw none.
+    pub fn bounds(&self) -> Option<(DVec2, DVec2)> {
+        self.probe.filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
+    }
+
+    /// ID of the object that the last successful `add` made.
+    pub fn last_id(&self) -> u64 {
+        self.last_id
+    }
+
     /// True when `max_objects` is reached.
     pub fn is_full(&self) -> bool {
         self.full
     }
 
     /// Adds an object. Returns false if it was skipped (and reports why).
-    pub fn add(&mut self, entity: &str, shape: Shape, layer: LayerId, class: ClassId, attrs: Attributes, data: BTreeMap<String, Value>) -> bool {
+    pub fn add(&mut self, entity: &str, mut shape: Shape, layer: LayerId, class: ClassId, attrs: Attributes, data: BTreeMap<String, Value>) -> bool {
         if self.report.total() >= self.max_objects {
             if !self.full {
                 self.full = true;
@@ -123,11 +152,26 @@ impl Builder {
             self.report.skip(entity, "object limit reached");
             return false;
         }
+        if let Some((lo, hi)) = self.probe.as_mut() {
+            if shape.is_finite() {
+                let (a, b) = shape.bounds();
+                if a.is_finite() && b.is_finite() {
+                    *lo = lo.min(a);
+                    *hi = hi.max(b);
+                }
+            }
+            self.report.count(shape.kind());
+            return true;
+        }
+        if self.offset != DVec2::ZERO && shape.is_finite() {
+            shape.translate(-self.offset);
+        }
         if let Err(why) = check_shape(&shape) {
             self.report.skip(entity, why);
             return false;
         }
         let id = ObjectId(self.take_id());
+        self.last_id = id.0;
         let kind = shape.kind();
         self.cmds.push(Command::AddObject { shape, layer: Some(layer), class: Some(class), attrs });
         if !data.is_empty() {

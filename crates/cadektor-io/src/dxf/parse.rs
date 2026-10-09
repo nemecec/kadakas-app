@@ -100,12 +100,26 @@ impl Dxf {
     }
 }
 
-/// Text of the file. UTF-8 when valid, else Latin-1 (older DXF files use a code page).
+/// The code page that `$DWGCODEPAGE` names, found in the raw bytes of the header.
+fn header_code_page(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    const KEY: &[u8] = b"$DWGCODEPAGE";
+    let at = bytes.windows(KEY.len()).position(|w| w == KEY)?;
+    let rest = &bytes[at + KEY.len()..bytes.len().min(at + KEY.len() + 64)];
+    let text: String = rest.iter().map(|&b| b as char).collect();
+    // After the name come the group code (3) and the value, one per line.
+    let value = text.lines().filter(|l| !l.trim().is_empty()).nth(1)?;
+    crate::encoding::from_dwg_code_page(value)
+}
+
+/// Text of the file. UTF-8 when valid. Older files use the code page of `$DWGCODEPAGE`, else Latin-1.
 fn decode(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+        Err(_) => match header_code_page(bytes) {
+            Some(enc) => enc.decode_without_bom_handling(bytes).0.into_owned(),
+            None => bytes.iter().map(|&b| b as char).collect(),
+        },
     }
 }
 
@@ -325,6 +339,22 @@ mod tests {
         assert_eq!(d.entities[0].get(1), Some("K\u{e4}"));
         let utf = parse("0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\nKä\n0\nENDSEC\n0\nEOF\n".as_bytes()).unwrap();
         assert_eq!(utf.entities[0].get(1), Some("Kä"));
+    }
+
+    #[test]
+    fn decodes_the_header_code_page() {
+        // CP1257 "\u{160}\u{f5}\u{f5}": bytes D0 F5 F5. Latin-1 would give "D\u{f5}\u{f5}" with a different first letter.
+        let mut bytes = b"0\nSECTION\n2\nHEADER\n9\n$DWGCODEPAGE\n3\nANSI_1257\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\n".to_vec();
+        bytes.extend_from_slice(&[0xD0, 0xF5, 0xF5]);
+        bytes.extend_from_slice(b"\n0\nENDSEC\n0\nEOF\n");
+        let d = parse(&bytes).unwrap();
+        assert_eq!(d.entities[0].get(1), Some("\u{160}\u{f5}\u{f5}"));
+        // An unknown code page falls back to Latin-1.
+        let mut b2 = Vec::new();
+        b2.extend_from_slice(b"0\nSECTION\n2\nHEADER\n9\n$DWGCODEPAGE\n3\nDOS437\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\n");
+        b2.push(0xE4);
+        b2.extend_from_slice(b"\n0\nENDSEC\n0\nEOF\n");
+        assert_eq!(parse(&b2).unwrap().entities[0].get(1), Some("\u{e4}"));
     }
 
     #[test]

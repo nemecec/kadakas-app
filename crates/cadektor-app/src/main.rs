@@ -23,11 +23,12 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     let env = std::env::var("CADEKTOR_AGENT_PORT").ok();
     let port = agent::parse_agent_port(&args, env.as_deref());
+    let allow_dirs = agent::parse_allow_dirs(&args);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]).with_title("Cadektor"),
         ..Default::default()
     };
-    eframe::run_native("Cadektor", options, Box::new(move |cc| Ok(Box::new(app::CadektorApp::new(cc, port)))))
+    eframe::run_native("Cadektor", options, Box::new(move |cc| Ok(Box::new(app::CadektorApp::new(cc, port, allow_dirs.clone())))))
 }
 
 // The web entry point is not set up yet. The modules above are wasm compatible.

@@ -19,7 +19,8 @@ impl Importer for ShapefileFormat {
     }
 
     fn import(&self, src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
-        let mut data = read(&src.data, src.extra.get("dbf").map(Vec::as_slice))?;
+        let enc = src.extra.get("cpg").and_then(|b| crate::encoding::from_cpg(&String::from_utf8_lossy(b)));
+        let mut data = read_with(&src.data, src.extra.get("dbf").map(Vec::as_slice), enc)?;
         data.file_crs = src.extra.get("prj").map(|b| String::from_utf8_lossy(b).trim().to_string()).filter(|s| !s.is_empty());
         let name = if src.name.is_empty() { "Shapefile" } else { &src.name };
         gis::build("shapefile", name, data, ctx, opts, None)
@@ -123,6 +124,12 @@ fn read_points(b: &Bytes, at: usize, n: usize, has_z: bool, z_block: usize) -> R
 
 /// Reads the shapes of a `.shp` file and the records of its `.dbf`.
 pub fn read(shp: &[u8], dbf: Option<&[u8]>) -> Result<GisData, IoError> {
+    read_with(shp, dbf, None)
+}
+
+/// Like [`read`]. `enc` is the encoding of dbf text (from the `.cpg` file). Without it, the language
+/// driver byte of the dbf decides, else UTF-8 or Latin-1.
+pub fn read_with(shp: &[u8], dbf: Option<&[u8]>, enc: Option<&'static encoding_rs::Encoding>) -> Result<GisData, IoError> {
     let b = Bytes(shp);
     if shp.len() < 100 || b.i32be(0) != Some(9994) {
         return Err(IoError::Format("not a shapefile: wrong file code".into()));
@@ -131,7 +138,7 @@ pub fn read(shp: &[u8], dbf: Option<&[u8]>) -> Result<GisData, IoError> {
         return Err(IoError::Format("not a shapefile: wrong version".into()));
     }
     let mut data = GisData::default();
-    let attrs = dbf.map(read_dbf).transpose()?;
+    let attrs = dbf.map(|d| read_dbf(d, enc)).transpose()?;
     let mut pos = 100usize;
     let mut index = 0usize;
     while pos + 8 <= shp.len() {
@@ -171,8 +178,11 @@ pub fn read(shp: &[u8], dbf: Option<&[u8]>) -> Result<GisData, IoError> {
     Ok(data)
 }
 
-/// Text from a dbf field: UTF-8 when valid, else Latin-1.
-fn text(bytes: &[u8]) -> String {
+/// Text from a dbf field. With an encoding, that one. Without, UTF-8 when valid, else Latin-1.
+fn text(bytes: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> String {
+    if let Some(e) = enc {
+        return e.decode_without_bom_handling(bytes).0.into_owned();
+    }
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
         Err(_) => bytes.iter().map(|&b| b as char).collect(),
@@ -180,8 +190,9 @@ fn text(bytes: &[u8]) -> String {
 }
 
 /// The records of a dbf file. A deleted record is `None`.
-fn read_dbf(d: &[u8]) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
+fn read_dbf(d: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
     let b = Bytes(d);
+    let enc = enc.or_else(|| d.get(29).and_then(|id| crate::encoding::from_dbf_language_driver(*id)));
     let bad = || IoError::Format("the dbf file is damaged".into());
     let count = b.i32le(4).filter(|c| *c >= 0).ok_or_else(bad)? as usize;
     let header_len = b.arr::<2>(8).map(u16::from_le_bytes).ok_or_else(bad)? as usize;
@@ -198,7 +209,7 @@ fn read_dbf(d: &[u8]) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
     let mut at = 32;
     while at + 32 <= header_len && d[at] != 0x0D {
         let raw = &d[at..at + 11];
-        let name = text(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(11)]);
+        let name = text(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(11)], enc);
         fields.push(Field { name, kind: d[at + 11], len: d[at + 16] as usize });
         at += 32;
     }
@@ -215,7 +226,7 @@ fn read_dbf(d: &[u8]) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
         for f in &fields {
             let Some(raw) = rec.get(off..off + f.len) else { break };
             off += f.len;
-            let s = text(raw);
+            let s = text(raw, enc);
             let s = s.trim_matches(|c: char| c == ' ' || c == '\0');
             let v = match f.kind {
                 b'N' | b'F' | b'O' | b'I' => match s.parse::<i64>() {
@@ -364,6 +375,36 @@ pub(crate) mod tests {
         let data = read(&shp, Some(&d)).unwrap();
         assert_eq!(data.features[0].props["N"], "\u{e4}bc");
         assert!(data.notes[0].contains("2 records"));
+    }
+
+    #[test]
+    fn cpg_and_language_driver_choose_the_encoding() {
+        let shp = point_shp(&[(1.0, 2.0)]);
+        let mut d = dbf(&[("N", b'C', 3)], &[(true, vec!["abc"])]);
+        // CP1257 "\u{160}\u{f5}\u{f5}".
+        let at = d.len() - 4;
+        d[at + 1..at + 4].copy_from_slice(&[0xD0, 0xF5, 0xF5]);
+        let src = |extra: &[(&str, &[u8])]| Source {
+            name: "s".into(),
+            data: shp.clone(),
+            extra: [("dbf".to_string(), d.clone())].into_iter().chain(extra.iter().map(|(k, v)| (k.to_string(), v.to_vec()))).collect(),
+        };
+        let name = |s: Source| ShapefileFormat.import(&s, &Context::of(&cadektor_core::model::Document::default()), &ImportOptions::default()).unwrap();
+        for cpg in ["1257", "CP1257\n", "windows-1257", "ANSI 1257"] {
+            let data = read_with(&shp, Some(&d), crate::encoding::from_cpg(cpg)).unwrap();
+            assert_eq!(data.features[0].props["N"], "\u{160}\u{f5}\u{f5}", "{cpg}");
+        }
+        // The same through the importer, with a .cpg file next to the .shp.
+        let r = name(src(&[("cpg", b"1257")]));
+        assert_eq!(r.report.skipped_total(), 0);
+        // The language driver byte of the dbf (0xCC is CP1257) works without a .cpg file.
+        let mut d2 = d.clone();
+        d2[29] = 0xCC;
+        assert_eq!(read(&shp, Some(&d2)).unwrap().features[0].props["N"], "\u{160}\u{f5}\u{f5}");
+        // UTF-8 stays UTF-8.
+        let mut d3 = dbf(&[("N", b'C', 4)], &[(true, vec!["\u{e4}x"])]);
+        d3[29] = 0;
+        assert_eq!(read_with(&shp, Some(&d3), crate::encoding::from_cpg("UTF-8")).unwrap().features[0].props["N"], "\u{e4}x");
     }
 
     #[test]

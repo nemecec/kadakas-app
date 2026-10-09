@@ -68,6 +68,11 @@ impl Crs {
         self.geographic
     }
 
+    /// Meters per unit of a projected CRS (1 for geographic CRSs).
+    pub fn to_meter(&self) -> f64 {
+        self.to_meter
+    }
+
     /// The EPSG code, if `spec` is one.
     pub fn epsg(&self) -> Option<u32> {
         epsg_code(&self.spec)
@@ -76,6 +81,7 @@ impl Crs {
 
 /// The UTM zone (WGS 84) for a longitude and latitude in degrees, as an EPSG code.
 pub fn utm_epsg(lon: f64, lat: f64) -> u32 {
+    let lon = if lon.is_finite() && lon.abs() > 180.0 { (lon + 180.0).rem_euclid(360.0) - 180.0 } else { lon };
     let zone = ((lon + 180.0) / 6.0).floor().clamp(0.0, 59.0) as u32 + 1;
     if lat >= 0.0 { 32600 + zone } else { 32700 + zone }
 }
@@ -97,22 +103,21 @@ fn epsg_code(t: &str) -> Option<u32> {
     digits.trim().parse().ok()
 }
 
-/// The EPSG code in `AUTHORITY["EPSG","n"]` or `ID["EPSG",n]` (the last one is the whole CRS in WKT 1).
+/// The EPSG code of the whole CRS: the `AUTHORITY["EPSG","n"]` (WKT 1) or `ID["EPSG",n]` (WKT 2)
+/// that is a direct child of the root node. Codes of the base geographic CRS or the datum are not used.
 fn wkt_authority(wkt: &str) -> Option<u32> {
-    let up = wkt.to_ascii_uppercase();
-    let mut best = None;
-    for key in ["AUTHORITY[\"EPSG\"", "ID[\"EPSG\""] {
-        let mut from = 0;
-        while let Some(pos) = up[from..].find(key) {
-            let after = &wkt[from + pos + key.len()..];
-            let digits: String = after.trim_start_matches([',', ' ', '"']).chars().take_while(char::is_ascii_digit).collect();
-            if let Ok(code) = digits.parse::<u32>() {
-                best = Some((from + pos, code));
-            }
-            from += pos + key.len();
+    let root = parse_wkt(wkt).ok()?;
+    ["AUTHORITY", "ID"].iter().find_map(|key| {
+        let n = root.child(key)?;
+        if !n.string(0)?.eq_ignore_ascii_case("EPSG") {
+            return None;
         }
-    }
-    best.map(|(_, c)| c)
+        match n.args.get(1)? {
+            Arg::Num(v) if *v >= 0.0 && v.fract() == 0.0 => Some(*v as u32),
+            Arg::Str(t) => t.trim().parse().ok(),
+            _ => None,
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -318,8 +323,9 @@ impl<'a> Transformer<'a> {
         Transformer { from, to }
     }
 
-    /// Converts a point. Degrees for geographic CRSs, meters for projected ones
-    /// (the unit of the CRS is converted to meters).
+    /// Converts a point. The coordinates are in the unit of each CRS, as they are in a file:
+    /// degrees for geographic CRSs, and for projected CRSs the unit of the CRS (meters, feet, ...).
+    /// `proj4rs` applies the unit of the CRS itself. Use [`Crs::to_meter`] to get meters.
     pub fn apply(&self, x: f64, y: f64, z: f64) -> Result<(f64, f64, f64), String> {
         if !(x.is_finite() && y.is_finite() && z.is_finite()) {
             return Err("coordinate is not finite".into());
@@ -328,11 +334,10 @@ impl<'a> Transformer<'a> {
         if f.geographic && (x.abs() > 180.0 || y.abs() > 90.0) {
             return Err("longitude or latitude is out of range".into());
         }
-        let (sx, sy) = if f.geographic { (x.to_radians(), y.to_radians()) } else { (x / f.to_meter, y / f.to_meter) };
+        let (sx, sy) = if f.geographic { (x.to_radians(), y.to_radians()) } else { (x, y) };
         let mut p = (sx, sy, z);
         proj4rs::transform::transform(&f.proj, &self.to.proj, &mut p).map_err(|e| format!("cannot project coordinate: {e}"))?;
-        let t = self.to;
-        let (ox, oy) = if t.geographic { (p.0.to_degrees(), p.1.to_degrees()) } else { (p.0 * t.to_meter, p.1 * t.to_meter) };
+        let (ox, oy) = if self.to.geographic { (p.0.to_degrees(), p.1.to_degrees()) } else { (p.0, p.1) };
         if ox.is_finite() && oy.is_finite() && p.2.is_finite() { Ok((ox, oy, p.2)) } else { Err("cannot project coordinate".into()) }
     }
 }
@@ -370,6 +375,8 @@ mod tests {
         assert_eq!(utm_epsg(151.2, -33.9), 32756);
         assert_eq!(utm_epsg(180.0, 0.0), 32660);
         assert_eq!(utm_epsg(-180.0, 0.0), 32601);
+        assert_eq!(utm_epsg(181.0, 0.0), 32601);
+        assert_eq!(utm_epsg(-181.0, 0.0), 32660);
     }
 
     #[test]
@@ -408,9 +415,9 @@ mod tests {
         let c = Crs::parse(lcc).unwrap();
         let wgs = Crs::parse("EPSG:4326").unwrap();
         let (x, _, _) = Transformer::new(&wgs, &c).apply(3.0, 46.5, 0.0).unwrap();
-        // The false easting of 700000 in feet is 213360 m, given in meters here.
-        assert!((x - 700_000.0 * 0.3048).abs() < 1.0, "{x}");
-        let (lon, lat, _) = Transformer::new(&c, &wgs).apply(x, 6_600_000.0 * 0.3048, 0.0).unwrap();
+        // The coordinates of a feet CRS are in feet: the false easting is 700000.
+        assert!((x - 700_000.0).abs() < 1.0, "{x}");
+        let (lon, lat, _) = Transformer::new(&c, &wgs).apply(x, 6_600_000.0, 0.0).unwrap();
         assert!((lon - 3.0).abs() < 1e-6 && (lat - 46.5).abs() < 1e-6);
         for proj in ["Mercator_1SP", "Albers", "Stereographic", "Oblique_Stereographic", "Lambert_Azimuthal_Equal_Area"] {
             let w = format!("PROJCS[\"p\",GEOGCS[\"g\",DATUM[\"d\",SPHEROID[\"s\",6378137,0]]],PROJECTION[\"{proj}\"],PARAMETER[\"standard_parallel_1\",30],UNIT[\"m\",1]]");
@@ -425,5 +432,35 @@ mod tests {
         assert!(Crs::parse("GEOGCS[1.2.3]").is_err());
         assert!(Crs::parse("[").is_err());
         assert!(Crs::parse(&format!("{}{}", "A[".repeat(40), "]".repeat(40))).is_err());
+    }
+
+    #[test]
+    fn feet_crs_keeps_its_units() {
+        // New York Long Island, NAD83, US survey feet (EPSG:2263).
+        let ny = Crs::parse("EPSG:2263").unwrap();
+        let wgs = Crs::parse("EPSG:4326").unwrap();
+        assert!((ny.to_meter() - 0.3048006).abs() < 1e-6);
+        let (x, y, _) = Transformer::new(&wgs, &ny).apply(-74.0, 40.743, 0.0).unwrap();
+        // Feet, not meters: pyproj gives about (986000, 212000).
+        assert!((x - 985_900.0).abs() < 3000.0 && (y - 212_800.0).abs() < 3000.0, "{x} {y}");
+        let (lon, lat, _) = Transformer::new(&ny, &wgs).apply(x, y, 0.0).unwrap();
+        assert!((lon + 74.0).abs() < 1e-6 && (lat - 40.743).abs() < 1e-6, "{lon} {lat}");
+    }
+
+    #[test]
+    fn only_the_root_authority_counts() {
+        // A custom TM CRS on a WGS 84 base: the GEOGCS authority 4326 must not win.
+        let custom = "PROJCS[\"custom\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"4326\"]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"False_Easting\",500000.0],PARAMETER[\"False_Northing\",0.0],PARAMETER[\"Central_Meridian\",25.0],PARAMETER[\"Scale_Factor\",1.0],PARAMETER[\"Latitude_Of_Origin\",0.0],UNIT[\"Meter\",1.0]]";
+        let c = Crs::parse(custom).unwrap();
+        assert!(!c.is_geographic());
+        assert_eq!(c.epsg(), None);
+        let wgs = Crs::parse("EPSG:4326").unwrap();
+        let (x, _, _) = Transformer::new(&wgs, &c).apply(25.0, 60.0, 0.0).unwrap();
+        assert!((x - 500_000.0).abs() < 1.0, "{x}");
+        assert_eq!(wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]]"), Some(4326));
+        assert_eq!(wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]"), None);
+        assert_eq!(wkt_authority("PROJCS[\"p\",AUTHORITY[\"EPSG\",\"3067\"]]"), Some(3067));
+        assert_eq!(wkt_authority("PROJCS[\"p\",ID[\"EPSG\",3067]]"), Some(3067));
+        assert_eq!(wkt_authority("PROJCS[\"p\",AUTHORITY[\"ESRI\",\"1\"]]"), None);
     }
 }

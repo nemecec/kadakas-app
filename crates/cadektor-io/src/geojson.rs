@@ -171,6 +171,9 @@ fn outline(shape: &Shape, tol: f64) -> Option<(Vec<[f64; 3]>, bool, bool)> {
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => flat(curve::flatten(boundary, true, tol), true),
         Shape::Polyline3d { points, closed } => Some((points.iter().map(|p| [p.x, p.y, p.z]).collect(), *closed, true)),
         Shape::Text { .. } | Shape::Plant { .. } | Shape::Locus3d { .. } => None,
+        // Other crates add shape kinds. They are reported as skipped, not guessed.
+        #[allow(unreachable_patterns)]
+        _ => None,
     }
 }
 
@@ -178,7 +181,11 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
     let mut report = Report::new("geojson");
     let wgs = Crs::from_epsg(4326).map_err(IoError::Format)?;
     let target = match &doc.georef {
-        Some(g) => Some((g, Crs::parse(&g.crs).map_err(|e| IoError::Format(format!("the document CRS cannot be used: {e}")))?)),
+        Some(g) if g.crs.trim().is_empty() => {
+            report.note("the document georeference has no CRS: coordinates are map meters of the local frame, not longitude and latitude");
+            Some((g, None))
+        }
+        Some(g) => Some((g, Some(Crs::parse(&g.crs).map_err(|e| IoError::Format(format!("the document CRS cannot be used: {e}")))?))),
         None => {
             report.note("the document has no georeference: coordinates are local meters, not longitude and latitude");
             None
@@ -187,25 +194,54 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
     // Model mm to the coordinates of the file.
     let conv = |p: [f64; 3]| -> Option<Value> {
         let (x, y) = match &target {
-            Some((g, crs)) => {
+            Some((g, Some(crs))) => {
                 let m = g.to_map(DVec2::new(p[0], p[1]));
-                let (lon, lat, _) = Transformer::new(crs, &wgs).apply(m.x, m.y, 0.0).ok()?;
+                // The map position is in meters. A CRS in feet wants feet.
+                let (lon, lat, _) = Transformer::new(crs, &wgs).apply(m.x / crs.to_meter(), m.y / crs.to_meter(), 0.0).ok()?;
                 (lon, lat)
+            }
+            Some((g, None)) => {
+                let m = g.to_map(DVec2::new(p[0], p[1]));
+                (m.x, m.y)
             }
             None => (p[0] / 1000.0, p[1] / 1000.0),
         };
+        if !(x.is_finite() && y.is_finite()) {
+            return None;
+        }
         Some(json!([x, y, p[2] / 1000.0]))
     };
+    // Holes belong to the polygon of their outer ring (see `_hole_of`): they are written as its interior rings.
+    let mut holes: BTreeMap<u64, Vec<&Object>> = BTreeMap::new();
+    for o in doc.objects.values() {
+        if o.data.get("_ring").and_then(Value::as_str) != Some("hole") || (opts.visible_only && !doc.is_visible(o)) {
+            continue;
+        }
+        let outer = o.data.get("_hole_of").and_then(Value::as_u64).and_then(|id| doc.object(cadektor_core::model::ObjectId(id)));
+        let closed_outer = outer.is_some_and(|ou| outline(&ou.shape, opts.tolerance).is_some_and(|(pts, closed, _)| closed && pts.len() >= 3));
+        if closed_outer && outer.is_some_and(|ou| !opts.visible_only || doc.is_visible(ou)) && outline(&o.shape, opts.tolerance).is_some_and(|(p, c, _)| c && p.len() >= 3) {
+            holes.entry(o.data["_hole_of"].as_u64().unwrap_or(0)).or_default().push(o);
+        }
+    }
+    let absorbed: std::collections::BTreeSet<u64> = holes.values().flatten().map(|o| o.id.0).collect();
     let mut features = Vec::new();
     for o in doc.objects.values() {
         if opts.visible_only && !doc.is_visible(o) {
             continue;
         }
-        let Some(geometry) = geometry_of(o, opts.tolerance, &conv) else {
-            report.skip(o.shape.kind(), "coordinates could not be converted");
+        if absorbed.contains(&o.id.0) {
+            report.count(o.shape.kind());
             continue;
+        }
+        let mine: Vec<&Object> = holes.get(&o.id.0).cloned().unwrap_or_default();
+        let geometry = match geometry_of(o, opts.tolerance, &conv, &mine) {
+            Ok(g) => g,
+            Err(why) => {
+                report.skip(o.shape.kind(), why);
+                continue;
+            }
         };
-        let mut props: Map<String, Value> = o.data.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut props: Map<String, Value> = o.data.iter().filter(|(k, _)| !matches!(k.as_str(), "_ring" | "_hole_of")).map(|(k, v)| (k.clone(), v.clone())).collect();
         props.insert("kind".into(), json!(o.shape.kind()));
         props.insert("id".into(), json!(o.id.0));
         if let Some(c) = doc.class(o.class) {
@@ -234,31 +270,45 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
     Ok(ExportResult { bytes, report })
 }
 
-fn geometry_of(o: &Object, tol: f64, conv: &dyn Fn([f64; 3]) -> Option<Value>) -> Option<Value> {
+/// Closed ring, counterclockwise for exteriors and clockwise for holes (RFC 7946).
+fn oriented(mut pts: Vec<[f64; 3]>, ccw: bool) -> Vec<[f64; 3]> {
+    let area: f64 = (0..pts.len())
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    if (area < 0.0) == ccw {
+        pts.reverse();
+    }
+    pts
+}
+
+fn geometry_of(o: &Object, tol: f64, conv: &dyn Fn([f64; 3]) -> Option<Value>, holes: &[&Object]) -> Result<Value, &'static str> {
     let anchor = match &o.shape {
         Shape::Text { at, .. } | Shape::Plant { at, .. } => Some([at.x, at.y, 0.0]),
         Shape::Locus3d { p } => Some([p.x, p.y, p.z]),
         _ => None,
     };
     if let Some(a) = anchor {
-        return Some(json!({"type": "Point", "coordinates": conv(a)?}));
+        return Ok(json!({"type": "Point", "coordinates": conv(a).ok_or("coordinates could not be converted")?}));
     }
-    let (mut pts, closed, _) = outline(&o.shape, tol)?;
-    if closed && pts.len() >= 3 {
-        // Exterior rings run counterclockwise (RFC 7946).
-        let area: f64 = (0..pts.len()).map(|i| {
-            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-            a[0] * b[1] - b[0] * a[1]
-        }).sum();
-        if area < 0.0 {
-            pts.reverse();
-        }
-        let mut ring: Vec<Value> = pts.iter().map(|p| conv(*p)).collect::<Option<_>>()?;
+    let (pts, closed, _) = outline(&o.shape, tol).ok_or("unsupported kind")?;
+    let ring = |pts: Vec<[f64; 3]>, ccw: bool| -> Option<Vec<Value>> {
+        let mut ring: Vec<Value> = oriented(pts, ccw).iter().map(|p| conv(*p)).collect::<Option<_>>()?;
         ring.push(ring[0].clone());
-        Some(json!({"type": "Polygon", "coordinates": [ring]}))
+        Some(ring)
+    };
+    if closed && pts.len() >= 3 {
+        let mut rings = vec![ring(pts, true).ok_or("coordinates could not be converted")?];
+        for h in holes {
+            let (hp, _, _) = outline(&h.shape, tol).ok_or("unsupported kind")?;
+            rings.push(ring(hp, false).ok_or("coordinates could not be converted")?);
+        }
+        Ok(json!({"type": "Polygon", "coordinates": rings}))
     } else {
-        let line: Vec<Value> = pts.iter().map(|p| conv(*p)).collect::<Option<_>>()?;
-        Some(json!({"type": "LineString", "coordinates": line}))
+        let line: Vec<Value> = pts.iter().map(|p| conv(*p)).collect::<Option<_>>().ok_or("coordinates could not be converted")?;
+        Ok(json!({"type": "LineString", "coordinates": line}))
     }
 }
 
@@ -441,5 +491,54 @@ mod tests {
         doc.georef.as_mut().unwrap().origin = DVec2::new(1.0e12, 1.0e12);
         let out = export(&doc, &ExportOptions::default()).unwrap();
         assert!(out.report.skipped_total() > 0 || out.report.total() == 11);
+    }
+
+    #[test]
+    fn holes_are_exported_as_interior_rings() {
+        let (doc, _) = import(SAMPLE, Document::default(), &ImportOptions::default()).unwrap();
+        let rings_before = doc.objects.values().filter(|o| o.data.contains_key("_ring")).count();
+        assert_eq!(rings_before, 1);
+        let out = export(&doc, &ExportOptions::default()).unwrap();
+        let v: Value = serde_json::from_slice(&out.bytes).unwrap();
+        let feats = v["features"].as_array().unwrap();
+        // One feature fewer than objects: the hole is part of its polygon.
+        assert_eq!(feats.len(), doc.objects.len() - 1);
+        let with_hole: Vec<_> = feats.iter().filter(|f| f["geometry"]["type"] == "Polygon" && f["geometry"]["coordinates"].as_array().unwrap().len() == 2).collect();
+        assert_eq!(with_hole.len(), 1);
+        assert!(with_hole[0]["properties"].get("_ring").is_none() && with_hole[0]["properties"].get("_hole_of").is_none());
+        // The interior ring is clockwise and closed.
+        let hole = with_hole[0]["geometry"]["coordinates"][1].as_array().unwrap();
+        assert_eq!(hole.first(), hole.last());
+        let pts: Vec<(f64, f64)> = hole.iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+        let area: f64 = pts.windows(2).map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1).sum();
+        assert!(area < 0.0);
+        // Round trip: the hole is a hole again, not an island.
+        let mut empty = Document::default();
+        empty.georef = doc.georef.clone();
+        let (back, _) = import(&String::from_utf8(out.bytes).unwrap(), empty, &ImportOptions::default()).unwrap();
+        assert_eq!(back.objects.values().filter(|o| o.data.contains_key("_ring")).count(), 1);
+        // A hole whose outer ring is gone is exported on its own (not lost).
+        let mut doc2 = doc.clone();
+        let outer = doc2.objects.values().find(|o| o.data.contains_key("_hole_of")).map(|o| o.data["_hole_of"].as_u64().unwrap()).unwrap();
+        doc2.objects.shift_remove(&cadektor_core::model::ObjectId(outer));
+        let out2 = export(&doc2, &ExportOptions::default()).unwrap();
+        let v2: Value = serde_json::from_slice(&out2.bytes).unwrap();
+        assert_eq!(v2["features"].as_array().unwrap().len(), doc2.objects.len());
+    }
+
+    #[test]
+    fn local_frame_and_feet_crs_export() {
+        let mut doc = sample_doc();
+        doc.georef = Some(Georeference { crs: String::new(), origin: DVec2::new(1000.0, 2000.0), rotation: 0.0, user_origin: DVec2::ZERO });
+        let out = export(&doc, &ExportOptions::default()).unwrap();
+        assert!(out.report.notes[0].contains("no CRS"));
+        let v: Value = serde_json::from_slice(&out.bytes).unwrap();
+        assert_eq!(v["features"][8]["geometry"]["coordinates"], json!([1001.0, 2002.0, 3.0]));
+        // A feet CRS (NY Long Island, EPSG:2263): the map origin is in meters.
+        doc.georef = Some(Georeference { crs: "EPSG:2263".into(), origin: DVec2::new(300_533.0, 64_617.0), rotation: 0.0, user_origin: DVec2::ZERO });
+        let out = export(&doc, &ExportOptions::default()).unwrap();
+        let v: Value = serde_json::from_slice(&out.bytes).unwrap();
+        let c = &v["features"][8]["geometry"]["coordinates"];
+        assert!((c[0].as_f64().unwrap() + 74.0).abs() < 0.01 && (c[1].as_f64().unwrap() - 40.743).abs() < 0.01, "{c}");
     }
 }
