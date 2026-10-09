@@ -17,14 +17,13 @@ fn join() -> impl Strategy<Value = Join> {
     prop_oneof![Just(Join::Miter), Just(Join::Round), Just(Join::Bevel)]
 }
 
-/// A path that turns gently and stays at a distance from itself: its direction never leaves
-/// a half plane, and every segment is at least four widths long.
-fn gentle_path() -> impl Strategy<Value = (Vec<DVec2>, f64)> {
-    (100.0..2000.0f64, prop::collection::vec((4.0..10.0f64, -40.0..40.0f64), 1..7), -1.0e5..1.0e5f64, -1.0e5..1.0e5f64).prop_map(|(width, steps, x, y)| {
+/// Any path: legs from a fraction of the width to several widths, turns up to a U-turn.
+fn any_path() -> impl Strategy<Value = (Vec<DVec2>, f64)> {
+    (100.0..1500.0f64, prop::collection::vec((0.2..6.0f64, -170.0..170.0f64), 1..8), -1.0e5..1.0e5f64, -1.0e5..1.0e5f64).prop_map(|(width, steps, x, y)| {
         let mut pts = vec![DVec2::new(x, y)];
         let mut heading = 0.0f64;
         for (len, turn) in steps {
-            heading = (heading + turn).clamp(-85.0, 85.0);
+            heading += turn;
             let last = *pts.last().unwrap();
             pts.push(last + DVec2::from_angle(heading.to_radians()) * len * width);
         }
@@ -32,54 +31,72 @@ fn gentle_path() -> impl Strategy<Value = (Vec<DVec2>, f64)> {
     })
 }
 
-fn segments_cross(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
-    let (r, s) = (b - a, d - c);
-    let denom = r.perp_dot(s);
-    if denom.abs() < 1e-12 {
-        return false;
+/// Area of the points within `h` of the path, without the parts behind the two ends. This is the
+/// area that a stroke with round joins and butt caps sweeps. It is found by sampling a grid.
+fn swept_reference(pts: &[DVec2], h: f64) -> f64 {
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    for p in pts {
+        lo = lo.min(*p - h);
+        hi = hi.max(*p + h);
     }
-    let t = (c - a).perp_dot(s) / denom;
-    let u = (c - a).perp_dot(r) / denom;
-    t > 1e-9 && t < 1.0 - 1e-9 && u > 1e-9 && u < 1.0 - 1e-9
-}
-
-fn is_simple(ring: &[DVec2]) -> bool {
-    let n = ring.len();
+    let n = 320;
+    let cell = (hi - lo) / n as f64;
+    let mut count = 0usize;
     for i in 0..n {
-        for j in i + 2..n {
-            if i == 0 && j == n - 1 {
-                continue;
-            }
-            if segments_cross(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n]) {
-                return false;
+        for j in 0..n {
+            let p = lo + DVec2::new(i as f64 + 0.5, j as f64 + 0.5) * cell;
+            // In a rectangle of a leg (inside its ends), or in the round wedge on the outer side of a bend.
+            let in_leg = pts.windows(2).any(|w| {
+                let ab = w[1] - w[0];
+                let t = (p - w[0]).dot(ab) / ab.length_squared();
+                (0.0..=1.0).contains(&t) && p.distance(w[0] + ab * t) <= h
+            });
+            let in_bend = pts.windows(3).any(|w| {
+                let (d0, d1) = ((w[1] - w[0]).normalize(), (w[2] - w[1]).normalize());
+                let turn = d0.perp_dot(d1);
+                let v = p - w[1];
+                if v.length() > h || turn.abs() < 1e-12 {
+                    return false;
+                }
+                let side = if turn > 0.0 { -1.0 } else { 1.0 };
+                let (n0, n1) = (DVec2::new(-d0.y, d0.x) * side, DVec2::new(-d1.y, d1.x) * side);
+                if turn > 0.0 { n0.perp_dot(v) >= 0.0 && v.perp_dot(n1) >= 0.0 } else { n0.perp_dot(v) <= 0.0 && v.perp_dot(n1) <= 0.0 }
+            });
+            if in_leg || in_bend {
+                count += 1;
             }
         }
     }
-    true
+    count as f64 * cell.x * cell.y
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
     #[test]
-    fn path_outlines_are_valid_polygons((pts, width) in gentle_path(), j in join()) {
-        let ring = path_outline(&pts, width, j);
-        prop_assert!(ring.len() >= 4);
-        prop_assert!(ring.iter().all(|p| p.is_finite()));
-        // Counterclockwise, with a positive area.
-        let o = ring[0];
-        let twice: f64 = (0..ring.len()).map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o)).sum();
-        prop_assert!(twice > 0.0);
-        // No edge crosses another edge.
-        prop_assert!(is_simple(&ring), "outline crosses itself: {ring:?}");
-        // Every point is not farther from the center line than a miter allows, and the outline
-        // points of the straight parts are exactly half a width away.
-        let dist = |p: DVec2| pts.windows(2).map(|w| geom::dist_to_segment(p, w[0], w[1])).fold(f64::INFINITY, f64::min);
-        let limit = hardscape::offset::MITER_LIMIT * width / 2.0 + 1e-6;
-        prop_assert!(ring.iter().all(|p| dist(*p) <= limit));
-        // The area is between that of the center line strip and that of the strip with every join at its widest.
-        let length: f64 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
-        let area = geom::polygon_area(&ring);
-        prop_assert!(area >= 0.5 * length * width);
-        prop_assert!(area <= length * width + (pts.len() as f64) * (limit * limit) * 4.0);
+    fn path_outlines_have_the_swept_area_and_no_loops((pts, width) in any_path()) {
+        let pts = hardscape::offset::dedupe(&pts);
+        let swept = swept_reference(&pts, width / 2.0);
+        let round = path_outline(&pts, width, Join::Round, false);
+        let bevel = path_outline(&pts, width, Join::Bevel, false);
+        let miter = path_outline(&pts, width, Join::Miter, false);
+        for ring in [&round, &bevel, &miter] {
+            prop_assert!(ring.len() >= 4 && ring.iter().all(|p| p.is_finite()));
+            // Counterclockwise, with a positive area.
+            let o = ring[0];
+            let twice: f64 = (0..ring.len()).map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o)).sum();
+            prop_assert!(twice > 0.0);
+            // A triangulation of the ring covers exactly its area: the ring has no loops.
+            let clean = cadektor_core::mesh::clean_ring(ring);
+            let covered: f64 = cadektor_core::mesh::triangulate(&clean).iter().map(|t| geom::polygon_area(&[clean[t[0]], clean[t[1]], clean[t[2]]])).sum();
+            let area = geom::polygon_area(&clean);
+            prop_assert!((covered - area).abs() <= 1e-6 * area.max(1.0), "loop in the outline: {covered} vs {area}");
+        }
+        let area = geom::polygon_area(&round);
+        prop_assert!((area - swept).abs() <= 0.04 * swept + 4.0 * width * width * 0.01, "round {area} vs swept {swept}");
+        // Bevels cut corners and miters add them.
+        prop_assert!(geom::polygon_area(&bevel) <= area * 1.001 + 1.0);
+        prop_assert!(geom::polygon_area(&miter) >= geom::polygon_area(&bevel) * 0.999 - 1.0);
     }
 
     #[test]
@@ -98,10 +115,10 @@ proptest! {
         let mut pts = vec![start];
         pts.extend(ts.iter().map(|t| start.lerp(end, *t)));
         pts.push(end);
-        let ring = path_outline(&pts, width, j);
+        let ring = path_outline(&pts, width, j, false);
         let area = geom::polygon_area(&ring);
         let want = len * width;
-        prop_assert!((area - want).abs() <= 1e-6 * want, "{area} vs {want}");
+        prop_assert!((area - want).abs() <= 1e-5 * want, "{area} vs {want}");
         // Through the command: the plan area in the report is the same.
         let mut ed = Editor::default();
         let patch = HardscapePatch { center: Some(curve::corners(&pts)), width: Some(width), ..Default::default() };

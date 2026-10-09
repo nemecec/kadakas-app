@@ -184,11 +184,59 @@ fn scatter_edge_cases() {
     // The whole area is a hole.
     set(&mut ed, id, LandscapePatch { holes: Some(vec![rect(10_000.0, 10_000.0)]), ..Default::default() });
     assert!(scatter(ed.doc(), ed.doc().object(id).unwrap()).is_empty());
-    // A huge, thin area is refused rather than slow.
+    // A huge, thin area draws a few symbols, and quickly.
     let thin = area(&mut ed, 1.0e9, 1.0);
     let style = ed.doc().resources.find_landscape_area_style("Meadow");
     set(&mut ed, thin, LandscapePatch { style, ..Default::default() });
-    assert!(scatter(ed.doc(), ed.doc().object(thin).unwrap()).is_empty());
+    let start = std::time::Instant::now();
+    let few = scatter(ed.doc(), ed.doc().object(thin).unwrap());
+    assert!(!few.is_empty() && few.len() <= MAX_SCATTER);
+    assert!(start.elapsed().as_secs() < 5);
+}
+
+#[test]
+fn a_large_l_shaped_area_still_draws_symbols() {
+    let (mut ed, ..) = setup();
+    let style = ed.doc().resources.find_landscape_area_style("Meadow");
+    // An L with arms of 200 m by 2 m: the box is 200 m by 200 m, and the area only 800 m2.
+    let l = curve::corners(&[
+        DVec2::ZERO,
+        DVec2::new(200_000.0, 0.0),
+        DVec2::new(200_000.0, 2000.0),
+        DVec2::new(2000.0, 2000.0),
+        DVec2::new(2000.0, 200_000.0),
+        DVec2::new(0.0, 200_000.0),
+    ]);
+    let shape = Shape::LandscapeArea { boundary: l, name: "L".into() };
+    let id = ObjectId(ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0]);
+    set(&mut ed, id, LandscapePatch { style, ..Default::default() });
+    let placed = scatter(ed.doc(), ed.doc().object(id).unwrap());
+    assert!(placed.len() > 50, "{} symbols", placed.len());
+    let (a, b) = (ed.doc().resources.find_plant_style("Lavender").unwrap(), ed.doc().resources.find_plant_style("Sedge").unwrap());
+    assert!(placed.iter().any(|p| p.plant == a) && placed.iter().any(|p| p.plant == b), "every plant of the mix is drawn");
+}
+
+#[test]
+fn holes_count_as_the_union_cut_to_the_boundary() {
+    let (mut ed, id, ..) = setup();
+    let hole = |x0: f64, y0: f64, x1: f64, y1: f64| curve::corners(&[DVec2::new(x0, y0), DVec2::new(x1, y0), DVec2::new(x1, y1), DVec2::new(x0, y1)]);
+    // Two holes of 4 m2 that overlap in 1 m2 take 7 m2 away. The area is 100 m2.
+    set(&mut ed, id, LandscapePatch { holes: Some(vec![hole(1000.0, 1000.0, 3000.0, 3000.0), hole(2000.0, 2000.0, 4000.0, 4000.0)]), ..Default::default() });
+    let q = quantities(ed.doc(), ed.doc().object(id).unwrap()).unwrap();
+    assert!((q.holes_area_m2 - 7.0).abs() < 1e-6 && (q.net_area_m2 - 93.0).abs() < 1e-6, "{q:?}");
+    // The boundary can shrink only while it holds the holes.
+    let small = Shape::LandscapeArea { boundary: rect(2500.0, 2500.0), name: "Bed".into() };
+    let err = ed.execute(&Command::ModifyObject { id, shape: Some(small), layer: None, class: None, attrs: None }).unwrap_err();
+    assert!(err.to_string().contains("holes"), "{err}");
+    let err = ed.execute(&Command::SetVertex { id, index: 2, kind: None, p: Some(DVec2::new(2500.0, 2500.0)) }).unwrap_err();
+    assert!(err.to_string().contains("holes"), "{err}");
+    // A hole that sticks out of the boundary (a file edited by hand) counts only inside.
+    let o = ed.doc().object(id).unwrap();
+    let Shape::LandscapeArea { boundary, .. } = &o.shape else { panic!() };
+    let sticking = vec![hole(9000.0, 9000.0, 11_000.0, 11_000.0)];
+    assert!((holes_area(boundary, &sticking) - 1.0e6).abs() < 1.0, "1 m2 of the 4 m2 hole is inside");
+    assert!(!holes_fit(boundary, &sticking));
+    assert_eq!(holes_area(boundary, &[]), 0.0);
 }
 
 #[test]

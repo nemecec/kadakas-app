@@ -221,7 +221,7 @@ Non-goals
 | LND-08 | Quantities per plant style from the net area (`report.landscape_areas`). The plant list (`report.plant_list`) adds them to the single plants, one row per style. Groundcovers counted by area keep their price per m2. | P0 | done |
 | LND-09 | Hedgerow mode (staggered rows). | P1 | planned |
 | LND-10 | Hydrozone and water budget reports. Data fields of the style are in the report. | P2 | planned |
-| LND-11 | Holes: parts of an area that stay empty (`landscape_area.set` with holes or exclude). They move with the area. | P1 | done |
+| LND-11 | Holes: parts of an area that stay empty (`landscape_area.set` with holes or exclude). They move with the area. Overlapping holes count once, and holes must stay inside the boundary. | P1 | done |
 | LND-12 | Draped landscape area: a 3D face on the site model, and the draped surface area in the report. | P1 | done |
 | LND-13 | Edit modes in Object Info (style, show plants, drape, holes) and a style picker in the Landscape Area tool. | P1 | done |
 
@@ -232,11 +232,11 @@ Non-goals
 | HRD-01 | Hardscape shape: boundary (corners and curved vertices) and material. | P0 | done |
 | HRD-02 | Hardscape style resource: surface material and thickness, build-up components (layers with material and thickness), border (width, material, both sides or one) and a joint pattern. Undoable add, edit and delete. | P1 | done |
 | HRD-03 | Quantities (`report.hardscape`): plan area, surface area (slope or draped), perimeter, and the volume of every layer. Materials are added up. | P1 | done |
-| HRD-04 | Edge offsets from the drawn line: a path outline is measured from the center line. Slab edge offsets are not done. | P1 | planned |
-| HRD-05 | Path hardscape: a center line (curves allowed) with a width and miter, round or bevel joins. The area of a straight path is exactly length times width. | P1 | done |
-| HRD-06 | Slope: none, by edge elevations (a plane through the corner heights; start and end heights of a path) or a cross slope in percent. | P2 | done |
+| HRD-04 | Path alignment and offset: the drawn line is the center or the left or right edge of the path, with a sideways offset. Slab edge offsets are not done. | P1 | done |
+| HRD-05 | Path hardscape: a center line (curves allowed, open or closed) with a width and miter, round or bevel joins. The outline is a union of the legs and the joins, so tight curves and short legs make no loops. The area of a straight path is exactly length times width. | P1 | done |
+| HRD-06 | Slope: none, by edge elevations (a plane through the corner heights; start and end heights of a path), a fall in percent, a fall by angle, or a rise over a run. Edge heights follow an outline edit. | P2 | done |
 | HRD-08 | Joint patterns in 2D: running bond, stack, herringbone and basket weave, with unit size, joint width and angle. | P1 | done |
-| HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground) and in the area report. | P1 | done |
+| HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground, a few mm above it) and in the area report. Beyond the edge of the model the height of the nearest edge counts, and the report says `partially_draped`. | P1 | done |
 | HRD-10 | Site modifier option: the hardscape acts as a pad at its formation level (top minus build-up), sloped as the hardscape. | P2 | done |
 | HRD-11 | Edit modes in Object Info (style, slab or path, width, join, slope, elevation, drape, site modifier) and style, path and width options in the Hardscape tool. | P1 | done |
 | HRD-07 | Landscape walls. | P2 | planned |

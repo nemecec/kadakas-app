@@ -12,6 +12,9 @@ use crate::model::{Object, Shape};
 /// Ground height at a point, or `None` outside the terrain. Same frame as the layer.
 pub type Terrain<'a> = &'a dyn Fn(DVec2) -> Option<f64>;
 
+/// How far a draped surface lies above the ground, in mm. This avoids flicker where the surface
+/// and the terrain meet in 3D.
+pub const LIFT: f64 = 5.0;
 /// Largest edge of a triangle on a draped surface, in mm.
 pub const DRAPE_STEP: f64 = 500.0;
 /// Most triangles of one draped surface.
@@ -105,15 +108,16 @@ pub fn surface_of<'a>(obj: &Object, data: Option<&HardscapeData>, terrain: Optio
         let center = d.center_points();
         let chord = (center.len() >= 2).then(|| (center[0], center[center.len() - 1]));
         match (&d.slope, d.mode) {
-            (Slope::Cross { percent, angle_deg }, Mode::Slab) => {
-                plane = Plane::falling(elevation, mid, DVec2::from_angle(angle_deg.to_radians()), *percent);
+            (s, Mode::Path) if s.fall().is_some() && chord.is_some() && !d.closed => {
+                let (percent, _) = s.fall().expect("falls");
+                let (s0, e) = chord.expect("checked");
+                let dir = (e - s0).normalize_or_zero();
+                // To the right of the direction of travel.
+                plane = Plane::falling(elevation, (s0 + e) / 2.0, DVec2::new(dir.y, -dir.x), percent);
             }
-            (Slope::Cross { percent, .. }, Mode::Path) => {
-                if let Some((s, e)) = chord {
-                    let dir = (e - s).normalize_or_zero();
-                    // To the right of the direction of travel.
-                    plane = Plane::falling(elevation, (s + e) / 2.0, DVec2::new(dir.y, -dir.x), *percent);
-                }
+            (s, _) if s.fall().is_some() => {
+                let (percent, angle_deg) = s.fall().expect("falls");
+                plane = Plane::falling(elevation, mid, DVec2::from_angle(angle_deg.to_radians()), percent);
             }
             (Slope::Edges { elevations }, Mode::Slab) if elevations.len() == ring.len() => {
                 let pts: Vec<DVec3> = ring.iter().zip(elevations).map(|(p, z)| p.extend(*z)).collect();
@@ -132,7 +136,7 @@ pub fn surface_of<'a>(obj: &Object, data: Option<&HardscapeData>, terrain: Optio
         }
     }
     let drape = data.is_some_and(|d| d.drape);
-    Surface { plane, offset: elevation, terrain: if drape { terrain } else { None } }
+    Surface { plane, offset: elevation + LIFT, terrain: if drape { terrain } else { None } }
 }
 
 /// Points and triangles of the top surface over a ring. Every point has the height of the
@@ -338,7 +342,7 @@ mod tests {
         d.drape = true;
         let s = surface_of(&o, Some(&d), Some(&ground));
         assert!(s.is_draped());
-        assert_eq!(s.z(DVec2::new(100.0, 0.0)), 30.0);
+        assert_eq!(s.z(DVec2::new(100.0, 0.0)), 10.0 + 20.0 + LIFT, "ground, the height above it, and the lift");
         // Outside the terrain the plane is used.
         assert_eq!(s.z(DVec2::new(950.0, 0.0)), 20.0);
         assert!(!surface_of(&o, Some(&d), None).is_draped());

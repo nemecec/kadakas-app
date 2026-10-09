@@ -236,7 +236,14 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     let terrain = SiteTerrain::new(session.site_cache(), session.editor.revision(), doc);
     use cadektor_core::hardscape::TerrainSource;
     let at = |p: DVec2| terrain.elevation(obj, p);
-    if let Some(q) = hardscape::report::quantities(doc, obj, Some(&at)) {
+    let rev = session.editor.revision();
+    let cached = QUANTITIES.with(|c| c.borrow().as_ref().filter(|(r, i, h, _)| *r == rev && *i == id && h.is_some()).and_then(|(_, _, h, _)| h.clone()));
+    let computed = cached.or_else(|| {
+        let q = hardscape::report::quantities(doc, obj, Some(&at));
+        QUANTITIES.with(|c| *c.borrow_mut() = Some((rev, id, q.clone(), None)));
+        q
+    });
+    if let Some(q) = computed {
         egui::Grid::new(("hardscape_qty", id)).num_columns(2).show(ui, |ui| {
             ui.label("Plan area");
             ui.label(format!("{:.2} m\u{b2}", q.plan_area_m2));
@@ -297,7 +304,14 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
             }
         });
     }
-    if let Some(q) = landscape::quantities(doc, obj) {
+    let rev = session.editor.revision();
+    let cached = QUANTITIES.with(|c| c.borrow().as_ref().filter(|(r, i, _, l)| *r == rev && *i == id && l.is_some()).and_then(|(_, _, _, l)| l.clone()));
+    let computed = cached.or_else(|| {
+        let q = landscape::quantities(doc, obj);
+        QUANTITIES.with(|c| *c.borrow_mut() = Some((rev, id, None, q.clone())));
+        q
+    });
+    if let Some(q) = computed {
         egui::Grid::new(("landscape_qty", id)).num_columns(2).show(ui, |ui| {
             ui.label("Net area");
             ui.label(format!("{:.2} m\u{b2}  (holes {:.2})", q.net_area_m2, q.holes_area_m2));
@@ -325,14 +339,31 @@ struct Extras {
     plants: Vec<(DVec2, f64, Option<cadektor_core::model::Color>, Option<f64>)>,
 }
 
+type QuantityCache = Option<(u64, ObjectId, Option<hardscape::report::Quantities>, Option<landscape::AreaQuantities>)>;
+
 thread_local! {
     static CACHE: RefCell<HashMap<ObjectId, (u64, Rc<Extras>)>> = RefCell::new(HashMap::new());
+    /// The revision of the document that is drawn now, set by the canvas for each frame.
+    static REVISION: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The quantities that Object Info shows, for one object and one document revision.
+    static QUANTITIES: RefCell<QuantityCache> = const { RefCell::new(None) };
+}
+
+/// Tells the drawing which document revision it draws. With it, the extras are computed again
+/// only after the document changed. Without it (`None`), the object and the styles are compared.
+pub fn set_revision(revision: Option<u64>) {
+    REVISION.with(|r| r.set(revision));
 }
 
 fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
-    let mut h = DefaultHasher::new();
-    format!("{:?}|{:?}", o, doc.resources).hash(&mut h);
-    let key = h.finish();
+    let key = match REVISION.with(|r| r.get()) {
+        Some(rev) => rev,
+        None => {
+            let mut h = DefaultHasher::new();
+            format!("{:?}|{:?}", o, doc.resources).hash(&mut h);
+            h.finish()
+        }
+    };
     if let Some(found) = CACHE.with(|c| c.borrow().get(&o.id).filter(|(k, _)| *k == key).map(|(_, e)| e.clone())) {
         return found;
     }
@@ -380,9 +411,26 @@ pub fn draw_extras(painter: &Painter, view: &View, doc: &Document, o: &Object, s
             }
             if let Some(b) = &style.border {
                 let color = b.color.map_or(st.pen, color32);
-                let ring: Vec<egui::Pos2> = curve::flatten(boundary, true, (0.25 / view.zoom).max(1e-3)).iter().map(|p| s(*p)).collect();
                 let w = (b.width * view.zoom * 0.5).clamp(1.5, 8.0) as f32;
-                painter.add(egui::epaint::PathShape { points: ring, closed: true, fill: Color32::TRANSPARENT, stroke: egui::epaint::PathStroke::new(w, color.gamma_multiply(0.6)) });
+                let stroke = egui::epaint::PathStroke::new(w, color.gamma_multiply(0.6));
+                let d = hardscape::data(o).unwrap_or_default();
+                let line = |pts: Vec<DVec2>, closed: bool| {
+                    painter.add(egui::epaint::PathShape { points: pts.iter().map(|p| s(*p)).collect(), closed, fill: Color32::TRANSPARENT, stroke: stroke.clone() });
+                };
+                if d.mode == Mode::Path && !d.closed {
+                    // A path has the border along the chosen edges only.
+                    let (left, right) = hardscape::offset::sides(&d.axis(), d.width);
+                    match b.sides {
+                        hardscape::Sides::Both => {
+                            line(left, false);
+                            line(right, false);
+                        }
+                        hardscape::Sides::Left => line(left, false),
+                        hardscape::Sides::Right => line(right, false),
+                    }
+                } else {
+                    line(curve::flatten(boundary, true, (0.25 / view.zoom).max(1e-3)), true);
+                }
             }
         }
         Shape::LandscapeArea { .. } => {

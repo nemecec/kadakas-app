@@ -237,6 +237,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {

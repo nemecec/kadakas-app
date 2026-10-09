@@ -60,7 +60,7 @@ proptest! {
         let result = SiteResult::compute(ed.doc(), site_id).unwrap();
         for p in &points {
             let want = result.elevation_at(p.truncate()).unwrap() + lift;
-            prop_assert_eq!(p.z, want);
+            prop_assert!((p.z - (want + hardscape::surface::LIFT)).abs() < 1e-9, "{} vs {}", p.z, want);
         }
         let plan = hardscape::surface::plan_mesh_area(&points, &indices);
         prop_assert!((plan - size.0 * size.1).abs() < 1e-3 * size.0 * size.1);
@@ -77,7 +77,7 @@ proptest! {
                 let i = scene.mesh.indices[t * 3 + k] as usize;
                 let (p, n) = (scene.mesh.positions[i], scene.mesh.normals[i]);
                 if n.z > 0.3 {
-                    let want = result.elevation_at(DVec2::new(p.x as f64, p.y as f64)).unwrap() + lift;
+                    let want = result.elevation_at(DVec2::new(p.x as f64, p.y as f64)).unwrap() + lift + hardscape::surface::LIFT;
                     prop_assert!((p.z as f64 - want).abs() < 0.05, "{} vs {}", p.z, want);
                     checked += 1;
                 }
@@ -125,4 +125,33 @@ fn draped_landscape_area_follows_the_ground_in_3d_and_in_the_report() {
     let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
     let report = hardscape::report::report(ed.doc(), &terrain);
     assert!(!report.rows[0].quantities.draped);
+}
+
+#[test]
+fn a_hardscape_half_on_the_site_model_reports_sensible_quantities() {
+    let mut ed = Editor::default();
+    // A ramp of 10 percent over x = 0 to 6000. The model ends at x = 6000.
+    let heights: Vec<f64> = (0..N * N).map(|k| (k / N) as f64 * 100.0).collect();
+    add(&mut ed, site(&heights));
+    // A slab of 2 m by 2 m from x = 5000 to 7000: half on the model, half beyond its edge.
+    let h = add(&mut ed, Shape::Hardscape { boundary: rect(DVec2::new(5000.0, 1000.0), DVec2::new(7000.0, 3000.0)), material: "m".into(), thickness: Some(100.0), elevation: None });
+    ed.execute(&Command::SetHardscape { ids: vec![h], patch: HardscapePatch { drape: Some(true), ..Default::default() } }).unwrap();
+    let cache = SiteCache::default();
+    let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
+    let q = &hardscape::report::report(ed.doc(), &terrain).rows[0].quantities;
+    assert!(q.draped && q.partially_draped);
+    // 1 m by 2 m on the ramp, and 1 m by 2 m level at the height of the edge.
+    let want = 2.0 * (1.0f64 + 0.01).sqrt() + 2.0;
+    assert!((q.surface_area_m2 - want).abs() < 1e-6, "{} vs {want}", q.surface_area_m2);
+    assert!((q.volume_m3 - want * 0.1).abs() < 1e-6, "{}", q.volume_m3);
+    // The terrain answers beyond the edge with the edge height.
+    let o = ed.doc().object(h).unwrap();
+    assert_eq!(terrain.elevation(o, DVec2::new(6500.0, 2000.0)), Some(600.0));
+    assert!(!terrain.covered(o, DVec2::new(6500.0, 2000.0)) && terrain.covered(o, DVec2::new(5500.0, 2000.0)));
+    // The 3D solid follows the ramp and then stays level at the edge height.
+    let ext = scene_ext(&cache, ed.revision());
+    let scene = mesh::build_with(ed.doc(), DVec3::ZERO, Some(&ext));
+    let (lo, hi) = scene.object_bounds(h).unwrap();
+    assert!((hi.z - (600.0 + hardscape::surface::LIFT as f32)).abs() < 1e-2, "{hi:?}");
+    assert!(lo.z < 600.0 - 99.0, "the walls go down the thickness of 100 mm: {lo:?}");
 }

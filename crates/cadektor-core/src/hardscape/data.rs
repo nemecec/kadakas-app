@@ -12,7 +12,7 @@ use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::offset::{self, Join};
+use super::offset::{self, Align, Join};
 use crate::curve::{self, Vertex};
 use crate::model::{Document, MAX_COORD, Object, Shape};
 use crate::resource::ResourceId;
@@ -24,6 +24,8 @@ pub const KEY: &str = "hardscape";
 pub const MAX_SLOPE_PERCENT: f64 = 1000.0;
 /// Flattening tolerance of curves, in mm.
 pub const TOLERANCE: f64 = 1.0;
+/// Most vertices of a boundary, a center line or a hole that an object may have.
+pub const MAX_VERTICES: usize = 50_000;
 
 /// A closed area, or a line with a width.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,6 +66,19 @@ pub enum Slope {
         #[serde(default)]
         angle_deg: f64,
     },
+    /// A fall by an angle in degrees (0 to 45), toward `angle_deg` like `Cross`.
+    Angle {
+        degrees: f64,
+        #[serde(default)]
+        angle_deg: f64,
+    },
+    /// A fall of `rise` over `run` (for example 1 over 20), toward `angle_deg` like `Cross`.
+    RiseRun {
+        rise: f64,
+        run: f64,
+        #[serde(default)]
+        angle_deg: f64,
+    },
 }
 
 impl Slope {
@@ -72,6 +87,19 @@ impl Slope {
             Slope::None => "none",
             Slope::Edges { .. } => "edges",
             Slope::Cross { .. } => "cross",
+            Slope::Angle { .. } => "angle",
+            Slope::RiseRun { .. } => "rise_run",
+        }
+    }
+
+    /// The fall in percent and the direction of the fall in degrees, for the slopes that fall
+    /// toward a direction. `None` for no slope and for edge elevations.
+    pub fn fall(&self) -> Option<(f64, f64)> {
+        match self {
+            Slope::Cross { percent, angle_deg } => Some((*percent, *angle_deg)),
+            Slope::Angle { degrees, angle_deg } => Some((100.0 * degrees.to_radians().tan(), *angle_deg)),
+            Slope::RiseRun { rise, run, angle_deg } => Some((100.0 * rise / run, *angle_deg)),
+            Slope::None | Slope::Edges { .. } => None,
         }
     }
 }
@@ -91,6 +119,12 @@ pub struct HardscapeData {
     /// The width of a path.
     pub width: f64,
     pub join: Join,
+    /// A closed path has no ends. Its center line is a ring.
+    pub closed: bool,
+    /// Which part of the path the center line is.
+    pub align: Align,
+    /// Moves the path sideways from the line, to the left of the direction of the line (mm).
+    pub offset: f64,
     pub slope: Slope,
     /// Follow the site model on the layer. The elevation is then the height above the ground.
     pub drape: bool,
@@ -106,6 +140,9 @@ impl Default for HardscapeData {
             center: Vec::new(),
             width: default_width(),
             join: Join::Miter,
+            closed: false,
+            align: Align::Center,
+            offset: 0.0,
             slope: Slope::None,
             drape: false,
             site_modifier: false,
@@ -122,8 +159,14 @@ impl HardscapeData {
         if self.center.iter().any(|v| !v.is_finite()) {
             return Err("numbers must be finite".into());
         }
-        if self.mode == Mode::Path && self.center.len() < 2 {
-            return Err("a path needs a center line of 2 or more points".into());
+        if self.mode == Mode::Path && self.center.len() < if self.closed { 3 } else { 2 } {
+            return Err(format!("a path needs a center line of {} or more points", if self.closed { 3 } else { 2 }));
+        }
+        if !self.offset.is_finite() || self.offset.abs() > MAX_COORD {
+            return Err("the offset must be a finite number".into());
+        }
+        if self.center.len() > MAX_VERTICES {
+            return Err(format!("a path has at most {MAX_VERTICES} points"));
         }
         match &self.slope {
             Slope::None => {}
@@ -136,8 +179,19 @@ impl HardscapeData {
                     return Err(format!("a slope by edge elevations needs {need} or more elevations"));
                 }
             }
-            Slope::Cross { percent, angle_deg } => {
-                if !percent.is_finite() || percent.abs() > MAX_SLOPE_PERCENT || !angle_deg.is_finite() {
+            Slope::Cross { .. } | Slope::Angle { .. } | Slope::RiseRun { .. } => {
+                if let Slope::Angle { degrees, .. } = &self.slope
+                    && (degrees.is_nan() || degrees.abs() > 45.0 + 1e-9)
+                {
+                    return Err("the slope angle must be between -45 and 45 degrees".into());
+                }
+                if let Slope::RiseRun { run, .. } = &self.slope
+                    && !(run.is_finite() && *run > 0.0)
+                {
+                    return Err("the run of a slope must be a positive number".into());
+                }
+                let (percent, angle) = self.slope.fall().expect("falls");
+                if !percent.is_finite() || percent.abs() > MAX_SLOPE_PERCENT || !angle.is_finite() {
                     return Err(format!("the slope must be a finite number, at most {MAX_SLOPE_PERCENT} percent"));
                 }
             }
@@ -147,7 +201,24 @@ impl HardscapeData {
 
     /// The center line as points.
     pub fn center_points(&self) -> Vec<DVec2> {
-        offset::dedupe(&curve::flatten(&self.center, false, TOLERANCE))
+        let mut pts = offset::dedupe(&curve::flatten(&self.center, self.closed, TOLERANCE));
+        if self.closed && pts.len() > 1 {
+            // A closed ring: repeat the first point so that the last leg is part of the line.
+            pts.push(pts[0]);
+        }
+        pts
+    }
+
+    /// The line the path is built around: the center line moved by the alignment and the offset.
+    pub fn axis(&self) -> Vec<DVec2> {
+        let shift = self.offset
+            + match self.align {
+                Align::Center => 0.0,
+                // The line is the left edge: the path lies to its right.
+                Align::Left => -self.width / 2.0,
+                Align::Right => self.width / 2.0,
+            };
+        offset::shifted(&self.center_points(), shift)
     }
 
     /// The outline of a path, as corner vertices. Empty for a slab or a path without length.
@@ -155,7 +226,7 @@ impl HardscapeData {
         if self.mode != Mode::Path {
             return Vec::new();
         }
-        curve::corners(&offset::path_outline(&self.center_points(), self.width, self.join))
+        curve::corners(&offset::path_outline(&self.axis(), self.width, self.join, self.closed))
     }
 }
 
@@ -210,6 +281,9 @@ pub struct HardscapePatch {
     pub center: Option<Vec<Vertex>>,
     pub width: Option<f64>,
     pub join: Option<Join>,
+    pub closed: Option<bool>,
+    pub align: Option<Align>,
+    pub offset: Option<f64>,
     pub slope: Option<Slope>,
     pub drape: Option<bool>,
     pub site_modifier: Option<bool>,
@@ -257,6 +331,15 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
     if let Some(j) = patch.join {
         d.join = j;
     }
+    if let Some(v) = patch.closed {
+        d.closed = v;
+    }
+    if let Some(v) = patch.align {
+        d.align = v;
+    }
+    if let Some(v) = patch.offset {
+        d.offset = v;
+    }
     if let Some(s) = &patch.slope {
         d.slope = s.clone();
     }
@@ -272,6 +355,15 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
     }
     if let Some(s) = patch.style {
         d.style = Some(s);
+    }
+    // The outline changed after the slope was set (or the file is old): keep the surface.
+    if let (Slope::Edges { elevations }, Shape::Hardscape { boundary, .. }) = (&d.slope, &shape)
+        && d.mode == Mode::Slab
+        && patch.slope.is_none()
+        && elevations.len() != boundary.len()
+    {
+        let plane = super::surface::surface_of(obj, data(obj).as_ref(), None).plane;
+        d.slope = Slope::Edges { elevations: curve::positions(boundary).iter().map(|p| plane.z(*p)).collect() };
     }
     d.validate()?;
     let Shape::Hardscape { boundary, material, thickness, elevation } = &mut shape else { unreachable!("checked above") };
@@ -309,6 +401,21 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
     set_data(obj, &d);
     sync_shape(doc, obj);
     Ok(())
+}
+
+/// After the outline of a slab was edited: a slope by edge elevations has one height per corner.
+/// When the number of corners changed, the heights are read again from the surface that the
+/// object had before, so the slope stays as it was. `before` is the object before the edit.
+pub fn fix_edge_elevations(before: &Object, after: &mut Object) {
+    let Some(mut d) = data(after) else { return };
+    let Slope::Edges { elevations } = &d.slope else { return };
+    let Shape::Hardscape { boundary, .. } = &after.shape else { return };
+    if d.mode != Mode::Slab || elevations.len() == boundary.len() {
+        return;
+    }
+    let plane = super::surface::surface_of(before, data(before).as_ref(), None).plane;
+    d.slope = Slope::Edges { elevations: curve::positions(boundary).iter().map(|p| plane.z(*p)).collect() };
+    set_data(after, &d);
 }
 
 /// Moves the center line of a path with the object.

@@ -40,6 +40,9 @@ pub struct Quantities {
     pub thickness_mm: f64,
     pub volume_m3: f64,
     pub draped: bool,
+    /// The hardscape drapes, but only part of it lies on the site model. The rest follows the
+    /// height of the nearest edge of the model.
+    pub partially_draped: bool,
     pub layers: Vec<LayerQty>,
 }
 
@@ -88,6 +91,7 @@ pub fn quantities(doc: &Document, obj: &Object, terrain: Option<Terrain<'_>>) ->
         thickness_mm: total_thickness,
         volume_m3: volume,
         draped: surf.is_draped(),
+        partially_draped: false,
         layers,
     })
 }
@@ -140,7 +144,13 @@ pub fn report(doc: &Document, ground: &dyn TerrainSource) -> Report {
     for obj in doc.objects.values() {
         let Shape::Hardscape { material, .. } = &obj.shape else { continue };
         let at = |p: DVec2| ground.elevation(obj, p);
-        let Some(q) = quantities(doc, obj, Some(&at)) else { continue };
+        // A hardscape that lies fully outside the site model, or on a layer without one, is not draped.
+        let ring = curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, TOLERANCE);
+        let step = (ring.len() / 64).max(1);
+        let samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
+        let covered = samples.iter().filter(|p| ground.covered(obj, **p)).count();
+        let Some(mut q) = quantities(doc, obj, (covered > 0).then_some(&at as Terrain<'_>)) else { continue };
+        q.partially_draped = q.draped && covered < samples.len();
         let style = data::style_of(doc, obj).map(|(id, _)| id);
         let style_name = style.and_then(|id| doc.resources.get(id)).map(|r| r.name.clone());
         for l in &q.layers {

@@ -12,6 +12,9 @@ pub mod style;
 use std::fmt::Write;
 
 use glam::{DVec2, DVec3};
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::float::single::SingleFloatOverlay;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,7 +23,7 @@ pub use style::{LandscapeAreaStyle, MixEntry};
 
 use crate::curve::{self, Vertex};
 use crate::geom;
-use crate::hardscape::surface::{self, DRAPE_STEP, Terrain};
+use crate::hardscape::surface::{self, DRAPE_STEP, LIFT, Terrain};
 use crate::mesh::SceneSink;
 use crate::model::{Color, Document, MAX_COORD, Object, ObjectId, Shape};
 use crate::plants::graphic;
@@ -36,11 +39,11 @@ pub const MAX_SCATTER: usize = 1500;
 /// An area with at most this many symbols draws the real plant graphic. Larger areas draw circles.
 const DETAILED_SYMBOLS: usize = 300;
 const TOLERANCE: f64 = 1.0;
+/// Most grid cells that the scatter of one area tries.
+const SCATTER_CELLS: usize = 250_000;
 /// Default fill of an area in 3D.
 const DEFAULT_COLOR: [u8; 4] = [128, 176, 104, 255];
 const EDGE_COLOR: [u8; 4] = [45, 48, 56, 255];
-/// How far above the ground a draped area lies, in mm. This avoids z-fighting with the terrain.
-const LIFT: f64 = 5.0;
 
 /// The settings of a landscape area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -158,6 +161,50 @@ pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), Strin
     Ok(())
 }
 
+/// True if every hole lies inside the boundary (or on its edge).
+pub fn holes_fit(boundary: &[Vertex], holes: &[Vec<Vertex>]) -> bool {
+    if holes.is_empty() {
+        return true;
+    }
+    let ring = curve::flatten(boundary, true, TOLERANCE);
+    holes.iter().all(|h| curve::flatten(h, true, TOLERANCE).iter().all(|p| inside_or_on(&ring, *p)))
+}
+
+fn ccw(ring: &[DVec2]) -> Vec<[f64; 2]> {
+    let mut pts: Vec<[f64; 2]> = ring.iter().map(|p| [p.x, p.y]).collect();
+    let o = ring.first().copied().unwrap_or_default();
+    let twice: f64 = (0..ring.len()).map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o)).sum();
+    if twice < 0.0 {
+        pts.reverse();
+    }
+    pts
+}
+
+fn shape_area(shape: &[Vec<[f64; 2]>]) -> f64 {
+    let a = |r: &Vec<[f64; 2]>| -> f64 { (0..r.len()).map(|i| r[i][0] * r[(i + 1) % r.len()][1] - r[(i + 1) % r.len()][0] * r[i][1]).sum::<f64>() / 2.0 };
+    shape.iter().enumerate().map(|(i, r)| if i == 0 { a(r).abs() } else { -a(r).abs() }).sum()
+}
+
+/// Area in model units squared that the holes take from the boundary: the area of the union of
+/// the holes, cut to the boundary. Overlapping holes count once, and a part of a hole outside
+/// the boundary counts not at all.
+pub fn holes_area(boundary: &[Vertex], holes: &[Vec<Vertex>]) -> f64 {
+    if holes.is_empty() {
+        return 0.0;
+    }
+    // The common case: holes inside the boundary that do not touch each other.
+    let boxes: Vec<(DVec2, DVec2)> = holes.iter().map(|h| curve::bounds(h, true)).collect();
+    let apart = (0..boxes.len()).all(|i| (i + 1..boxes.len()).all(|j| boxes[i].1.x < boxes[j].0.x || boxes[j].1.x < boxes[i].0.x || boxes[i].1.y < boxes[j].0.y || boxes[j].1.y < boxes[i].0.y));
+    if apart && holes_fit(boundary, holes) {
+        return holes.iter().map(|h| curve::area(h)).sum();
+    }
+    let rings: Vec<Vec<[f64; 2]>> = holes.iter().map(|h| ccw(&curve::flatten(h, true, TOLERANCE))).collect();
+    let union = rings.overlay(&Vec::<Vec<[f64; 2]>>::new(), OverlayRule::Union, FillRule::NonZero);
+    let pieces: Vec<Vec<[f64; 2]>> = union.into_iter().flatten().collect();
+    let cut = pieces.overlay(&vec![ccw(&curve::flatten(boundary, true, TOLERANCE))], OverlayRule::Intersect, FillRule::NonZero);
+    cut.iter().map(|s| shape_area(s)).sum()
+}
+
 /// The quantity of one plant of the mix in an area.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PlantQty {
@@ -194,7 +241,7 @@ pub fn quantities(doc: &Document, obj: &Object) -> Option<AreaQuantities> {
     let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return None };
     let gross = curve::area(boundary) / 1e6;
     let d = data(obj).unwrap_or_default();
-    let holes: f64 = d.holes.iter().map(|h| curve::area(h) / 1e6).sum();
+    let holes = holes_area(boundary, &d.holes) / 1e6;
     let net = (gross - holes).max(0.0);
     let mut rows = Vec::new();
     if let Some((_, s)) = style_of(doc, obj) {
@@ -278,17 +325,19 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
     let ring = curve::flatten(boundary, true, TOLERANCE);
     let holes: Vec<Vec<DVec2>> = data(obj).unwrap_or_default().holes.iter().map(|h| curve::flatten(h, true, TOLERANCE)).collect();
     let want = total.min(MAX_SCATTER);
-    let cell = (q.net_area_m2 * 1e6 / want as f64).sqrt();
+    let mut cell = (q.net_area_m2 * 1e6 / want as f64).sqrt();
     let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
     for p in &ring {
         lo = lo.min(*p);
         hi = hi.max(*p);
     }
     let mut rng = Rng(obj.id.0.wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0xA5A5);
-    let (nx, ny) = (((hi.x - lo.x) / cell).ceil() as usize + 1, ((hi.y - lo.y) / cell).ceil() as usize + 1);
-    if nx.saturating_mul(ny) > 4 * MAX_SCATTER * 40 {
-        return Vec::new();
+    // A thin shape in a big box: a coarser grid keeps the work small and thins the symbols evenly.
+    let grid = |cell: f64| (((hi.x - lo.x) / cell).ceil() as usize + 1, ((hi.y - lo.y) / cell).ceil() as usize + 1);
+    while grid(cell).0.saturating_mul(grid(cell).1) > SCATTER_CELLS {
+        cell *= 1.5;
     }
+    let (nx, ny) = grid(cell);
     let mut candidates: Vec<DVec2> = Vec::new();
     for i in 0..nx {
         for j in 0..ny {
@@ -299,6 +348,20 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
             }
         }
     }
+    if candidates.is_empty() {
+        // The grid missed a narrow shape. Use the middle of its triangles instead.
+        let clean = crate::mesh::clean_ring(&ring);
+        let mut tris: Vec<(f64, DVec2)> = crate::mesh::triangulate(&clean)
+            .iter()
+            .map(|t| {
+                let (a, b, c) = (clean[t[0]], clean[t[1]], clean[t[2]]);
+                (geom::polygon_area(&[a, b, c]), (a + b + c) / 3.0)
+            })
+            .filter(|(_, p)| !holes.iter().any(|h| geom::point_in_polygon(*p, h)))
+            .collect();
+        tris.sort_by(|a, b| b.0.total_cmp(&a.0));
+        candidates = tris.into_iter().take(want).map(|(_, p)| p).collect();
+    }
     for i in (1..candidates.len()).rev() {
         candidates.swap(i, rng.below(i + 1));
     }
@@ -306,7 +369,8 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
     let mut out = Vec::new();
     let mut next = 0;
     for r in &q.rows {
-        let take = ((r.count as f64 * scale).round() as usize).min(candidates.len() - next);
+        // Every plant of the mix that has plants gets at least one symbol.
+        let take = (((r.count as f64 * scale).round() as usize).max(usize::from(r.count > 0))).min(candidates.len() - next);
         out.extend(candidates[next..next + take].iter().map(|p| Placed { plant: r.plant, at: *p }));
         next += take;
     }
@@ -442,7 +506,7 @@ pub fn report(doc: &Document, ground: &dyn crate::hardscape::TerrainSource) -> A
         let style = style_of(doc, obj);
         let at = |p: DVec2| ground.elevation(obj, p);
         let first = obj.shape.vertices().and_then(|v| v.first()).map(|v| v.p);
-        let has_ground = first.is_some_and(|p| ground.elevation(obj, p).is_some());
+        let has_ground = first.is_some_and(|p| ground.covered(obj, p));
         let surface_area_m2 = if data(obj).is_some_and(|d| d.drape) && has_ground { draped_area_m2(obj, &at) } else { None };
         rows.push(AreaRow {
             id: obj.id,

@@ -177,3 +177,27 @@ fn add_landscape_area_with_settings() {
     assert!(matches!(ed.execute(&bad_class), Err(CommandError::NoClass(_))));
     assert!(ed.doc().objects.is_empty());
 }
+
+#[test]
+fn relinking_plants_to_a_style_that_now_locks_a_field_drops_the_old_override() {
+    let mut ed = Editor::default();
+    let sid = ResourceId(ed.execute(&Command::AddResource { name: "P".into(), body: ResourceBody::plant_style(PlantStyle::default()) }).unwrap().created[0]);
+    let mut overrides = serde_json::Map::new();
+    overrides.insert("spread".into(), 1234.0.into());
+    overrides.insert("price".into(), 7.0.into());
+    let out = ed
+        .execute(&Command::AddPlants { style: Some(sid), overrides, positions: vec![DVec2::ZERO], layer: None, class: None, variation: None })
+        .unwrap();
+    let plant = ObjectId(out.created[0]);
+    // The style locks the spread afterwards.
+    let locked = PlantStyle { locked: vec!["spread".into()], ..PlantStyle::default() };
+    ed.execute(&Command::ModifyResource { id: sid, name: None, body: Some(ResourceBody::plant_style(locked)) }).unwrap();
+    // Linking the plant to the same style again keeps the price override and drops the spread.
+    ed.execute(&Command::SetPlantStyle { ids: vec![plant], style: Some(sid), overrides: None, unlink: false }).unwrap();
+    let link = crate::plants::link::link(ed.doc().object(plant).unwrap()).unwrap();
+    assert!(!link.overrides.contains_key("spread") && link.overrides.contains_key("price"));
+    // Overrides that are given on purpose are still checked.
+    let mut bad = serde_json::Map::new();
+    bad.insert("spread".into(), 5.0.into());
+    assert!(ed.execute(&Command::SetPlantStyle { ids: vec![plant], style: Some(sid), overrides: Some(bad), unlink: false }).is_err());
+}

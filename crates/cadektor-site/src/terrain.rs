@@ -8,13 +8,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use cadektor_core::hardscape::{self, TerrainSource};
 use cadektor_core::model::{Document, LayerId, Object, Shape};
 use cadektor_core::site::boundary_points;
 
-use crate::model::{SiteCache, SiteResult};
+use crate::model::{SiteCache, SiteResult, Surface};
 use crate::modifier::{Modifier, PadSlope};
 
 /// The ground of a document, from its site models. A site model serves the objects on its layer.
@@ -22,7 +22,34 @@ pub struct SiteTerrain<'a> {
     cache: &'a SiteCache,
     revision: u64,
     doc: &'a Document,
-    hosts: RefCell<HashMap<LayerId, Vec<Arc<SiteResult>>>>,
+    hosts: RefCell<HashMap<LayerId, Vec<Arc<Host>>>>,
+}
+
+/// A site model with the edge of its surface, for points outside the model.
+struct Host {
+    result: Arc<SiteResult>,
+    edges: Vec<[DVec3; 2]>,
+}
+
+impl Host {
+    fn new(result: Arc<SiteResult>) -> Self {
+        let tin = result.surface(Surface::Proposed);
+        let edges = tin.boundary_edges().into_iter().map(|(a, b)| [tin.vertices[a as usize], tin.vertices[b as usize]]).collect();
+        Host { result, edges }
+    }
+
+    /// The height of the model at the nearest point of its edge.
+    fn edge_height(&self, p: DVec2) -> Option<(f64, f64)> {
+        self.edges
+            .iter()
+            .map(|[a, b]| {
+                let ab = (b - a).truncate();
+                let t = if ab.length_squared() == 0.0 { 0.0 } else { ((p - a.truncate()).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) };
+                let q = a.truncate() + ab * t;
+                (p.distance_squared(q), a.z + (b.z - a.z) * t)
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+    }
 }
 
 impl<'a> SiteTerrain<'a> {
@@ -31,7 +58,7 @@ impl<'a> SiteTerrain<'a> {
         SiteTerrain { cache, revision, doc, hosts: RefCell::new(HashMap::new()) }
     }
 
-    fn hosts(&self, layer: LayerId) -> Vec<Arc<SiteResult>> {
+    fn hosts(&self, layer: LayerId) -> Vec<Arc<Host>> {
         self.hosts
             .borrow_mut()
             .entry(layer)
@@ -41,6 +68,7 @@ impl<'a> SiteTerrain<'a> {
                     .values()
                     .filter(|o| o.layer == layer && matches!(o.shape, Shape::SiteModel { .. }) && self.doc.is_visible(o))
                     .filter_map(|o| self.cache.get(self.revision, self.doc, o.id).ok())
+                    .map(|r| Arc::new(Host::new(r)))
                     .collect()
             })
             .clone()
@@ -48,8 +76,19 @@ impl<'a> SiteTerrain<'a> {
 }
 
 impl TerrainSource for SiteTerrain<'_> {
+    /// The height of the ground. Outside every site model on the layer it is the height of the
+    /// nearest edge of the nearest model, so a hardscape that reaches over the edge stays level
+    /// with the edge there.
     fn elevation(&self, obj: &Object, p: DVec2) -> Option<f64> {
-        self.hosts(obj.layer).iter().find_map(|h| h.elevation_at(p))
+        let hosts = self.hosts(obj.layer);
+        if let Some(z) = hosts.iter().find_map(|h| h.result.elevation_at(p)) {
+            return Some(z);
+        }
+        hosts.iter().filter_map(|h| h.edge_height(p)).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, z)| z)
+    }
+
+    fn covered(&self, obj: &Object, p: DVec2) -> bool {
+        self.hosts(obj.layer).iter().any(|h| h.result.elevation_at(p).is_some())
     }
 }
 
@@ -102,7 +141,9 @@ mod tests {
         let t = SiteTerrain::new(&cache, ed.revision(), ed.doc());
         let o = ed.doc().object(id).unwrap();
         assert_eq!(t.elevation(o, DVec2::new(3000.0, 3000.0)), Some(300.0));
-        assert_eq!(t.elevation(o, DVec2::new(30_000.0, 0.0)), None, "outside the model");
+        // Outside the model the height of the nearest edge counts (the ramp ends at x = 8000: z = 800).
+        assert_eq!(t.elevation(o, DVec2::new(30_000.0, 0.0)), Some(800.0));
+        assert!(t.covered(o, DVec2::new(3000.0, 3000.0)) && !t.covered(o, DVec2::new(30_000.0, 0.0)));
         // Another layer has no ground.
         let mut other = o.clone();
         other.layer = LayerId(77);

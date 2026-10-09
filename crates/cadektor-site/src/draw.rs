@@ -83,10 +83,13 @@ pub fn scene_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, 
             // Core sends only the objects that drape. They follow the site models on their layer.
             let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
             let at = |p| terrain.elevation(obj, p);
+            // Fully outside the site models there is no ground to follow.
+            let ring = cadektor_core::curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, 2.0);
+            let ground: Option<cadektor_core::hardscape::Terrain<'_>> = ring.iter().step_by((ring.len() / 64).max(1)).any(|p| terrain.covered(obj, *p)).then_some(&at);
             if matches!(obj.shape, Shape::Hardscape { .. }) {
-                cadektor_core::hardscape::emit_object(doc, obj, Some(&at), sink);
+                cadektor_core::hardscape::emit_object(doc, obj, ground, sink);
             } else {
-                cadektor_core::landscape::emit_object(doc, obj, Some(&at), sink);
+                cadektor_core::landscape::emit_object(doc, obj, ground, sink);
             }
         } else if let Shape::SiteModifier { boundary, .. } = &obj.shape {
             // The outline of a modifier, at the height of the proposed surface where it can be found.

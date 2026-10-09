@@ -489,6 +489,9 @@ impl<'a> Tx<'a> {
                     validate_shape(s)?;
                     self.check_shape_refs(s)?;
                     self.guard_path(*id, Some(s))?;
+                    if let Shape::LandscapeArea { boundary, .. } = s {
+                        self.check_holes(*id, boundary)?;
+                    }
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
@@ -496,6 +499,7 @@ impl<'a> Tx<'a> {
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
                 let linked_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| crate::plants::link::link(o).is_some()).cloned();
+                let area_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| matches!(o.shape, Shape::Hardscape { .. })).cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
                     o.shape = s.clone();
@@ -512,6 +516,11 @@ impl<'a> Tx<'a> {
                 if let Some(prev) = linked_before {
                     let mut now = self.doc.object(*id).expect("checked").clone();
                     crate::plants::link::adopt_shape_edit(self.doc, &prev, &mut now);
+                    *self.doc.object_mut(*id).expect("checked") = now;
+                }
+                if let Some(prev) = area_before {
+                    let mut now = self.doc.object(*id).expect("checked").clone();
+                    crate::hardscape::data::fix_edge_elevations(&prev, &mut now);
                     *self.doc.object_mut(*id).expect("checked") = now;
                 }
             }
@@ -534,6 +543,11 @@ impl<'a> Tx<'a> {
                     v.p = *p;
                 }
                 validate_vertex(&v)?;
+                if let Some(vs) = self.doc.object(*id).and_then(|o| o.shape.vertices()) {
+                    let mut moved = vs.clone();
+                    moved[*index] = v;
+                    self.check_holes(*id, &moved)?;
+                }
                 self.touch(*id);
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
@@ -723,6 +737,9 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     }
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
+    }
+    if matches!(shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) && shape.vertices().is_some_and(|v| v.len() > crate::hardscape::data::MAX_VERTICES) {
+        return bad("a boundary has at most 50000 points");
     }
     if !shape.has_valid_thickness() {
         return bad("thickness must be positive");

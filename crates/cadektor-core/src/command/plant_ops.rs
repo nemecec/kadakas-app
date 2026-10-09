@@ -246,6 +246,11 @@ impl Tx<'_> {
                         (None, _) => Default::default(),
                     };
                     let base = self.doc.resources.plant_style(sid).expect("checked");
+                    // Overrides that are carried over drop the fields that the style locks now.
+                    let mut ov = ov;
+                    if overrides.is_none() {
+                        ov.retain(|k, _| !base.is_locked(k));
+                    }
                     link::check_overrides(base, &ov).map_err(invalid)?;
                     plan.push((id, Some(PlantLink { style: sid, overrides: ov })));
                 }

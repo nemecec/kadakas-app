@@ -38,6 +38,12 @@ const FLATTEN_TOLERANCE: f64 = 2.0;
 pub trait TerrainSource {
     /// Height of the ground at `p` for this object, or `None` if there is no ground there.
     fn elevation(&self, obj: &Object, p: DVec2) -> Option<f64>;
+
+    /// True if the point lies on the ground itself. Outside, `elevation` may still give the height
+    /// of the nearest edge.
+    fn covered(&self, obj: &Object, p: DVec2) -> bool {
+        self.elevation(obj, p).is_some()
+    }
 }
 
 /// No ground: nothing drapes.
@@ -167,7 +173,7 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
         let color = b.color.map_or_else(|| stroke.to_string(), Color::to_css);
         let clip = format!("hs{}", obj.id);
         let lines: Vec<Vec<DVec2>> = if d.mode == Mode::Path {
-            let (l, r) = offset::sides(&d.center_points(), d.width, d.join);
+            let (l, r) = offset::sides(&d.axis(), d.width);
             match b.sides {
                 Sides::Both => vec![l, r],
                 Sides::Left => vec![l],
@@ -303,3 +309,6 @@ mod tests {
         assert_eq!(ed.doc().object(id).unwrap().shape.vertices().unwrap(), &again);
     }
 }
+
+#[cfg(test)]
+mod review_tests;

@@ -295,3 +295,111 @@ def test_describe_lists_the_methods_and_examples(cad):
                  "landscape_area.set", "report.hardscape", "report.landscape_areas", "report.plant_list"]:
         assert name in names
     assert len(d["hardscapes"]["examples"]) >= 6
+
+
+# --- Review fixes: path geometry, alignment, partial drape, limits -------------------------
+
+
+def test_tight_curves_give_a_clean_outline_and_closed_paths_are_rings(cad):
+    # A U-turn with a radius of 300 mm and a width of 1000 mm: the old outline crossed itself.
+    pts = [[-3000, 300], [0, 300]]
+    n = 48
+    pts += [[300 * math.cos(math.pi / 2 - math.pi * k / n), 300 * math.sin(math.pi / 2 - math.pi * k / n)] for k in range(1, n)]
+    pts += [[0, -300], [-3000, -300]]
+    cad.result("hardscape.add", {"center": pts, "width": 1000, "join": "round"})
+    area = cad.result("report.hardscape")["rows"][0]["plan_area_m2"]
+    # Two strips of 3 x 1 m fold over each other on 0.6 m: 4.8 m2 plus the half disc of the turn.
+    assert 5.5 < area < 6.5, area
+    ring = cad.result("hardscape.add", {"center": [[0, 0], [4000, 0], [4000, 4000], [0, 4000]], "width": 1000, "closed": True})["id"]
+    row = [r for r in cad.result("report.hardscape")["rows"] if r["id"] == ring][0]
+    assert row["plan_area_m2"] == approx(16.0, rel=1e-4)  # 5 x 5 m minus 3 x 3 m
+
+
+def test_path_alignment_and_offset(cad):
+    h = cad.result("hardscape.add", {"center": [[0, 0], [10000, 0]], "width": 1000})["id"]
+
+    def ys():
+        pts = cad.result("objects.get", {"id": h})["shape"]["boundary"]
+        values = [p[1] if isinstance(p, list) else p["p"][1] for p in pts]
+        return round(min(values)), round(max(values))
+
+    assert ys() == (-500, 500)
+    cad.result("hardscape.set", {"id": h, "align": "left"})
+    assert ys() == (-1000, 0)
+    cad.result("hardscape.set", {"id": h, "align": "right"})
+    assert ys() == (0, 1000)
+    cad.result("hardscape.set", {"id": h, "align": "center", "offset": 300})
+    assert ys() == (-200, 800)
+    assert cad.error("hardscape.set", {"id": h, "align": "top"})["code"] == -32602
+
+
+def test_slope_by_angle_and_by_rise_and_run(cad):
+    h = cad.result("hardscape.add", {"boundary": [[0, 0], [2000, 0], [2000, 2000], [0, 2000]],
+                                     "slope": {"type": "rise_run", "rise": 1, "run": 1}})["id"]
+    assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(4 * math.sqrt(2))
+    cad.result("hardscape.set", {"id": h, "slope": {"type": "angle", "degrees": 30, "angle_deg": 90}})
+    assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(4 * math.sqrt(1 + math.tan(math.radians(30)) ** 2))
+    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "rise_run", "rise": 1, "run": 0}})["code"] == 1
+    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "angle", "degrees": 80}})["code"] == 1
+
+
+def test_edge_elevations_survive_an_outline_edit(cad):
+    h = cad.result("hardscape.add", {"boundary": [[0, 0], [2000, 0], [2000, 2000], [0, 2000]],
+                                     "slope": {"type": "edges", "elevations": [0, 0, 200, 200]}})["id"]
+    before = cad.result("report.hardscape")["rows"][0]["surface_area_m2"]
+    shape = cad.result("objects.get", {"id": h})["shape"]
+    shape["boundary"].insert(1, [1000, 0])
+    cad.execute({"op": "modify_object", "id": h, "shape": shape})
+    obj = cad.result("objects.get", {"id": h})
+    assert len(obj["data"]["hardscape"]["slope"]["elevations"]) == 5
+    assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(before)
+    cad.result("hardscape.set", {"id": h, "elevation": 5})  # later changes still work
+
+
+def test_a_hardscape_half_on_the_site_model_is_partially_draped(cad):
+    ramp(cad)  # z = x / 10 over x = 0 to 6000
+    cad.result("hardscape.add", {"boundary": [[5000, 1000], [7000, 1000], [7000, 3000], [5000, 3000]], "thickness": 100, "drape": True})
+    row = cad.result("report.hardscape")["rows"][0]
+    assert row["draped"] and row["partially_draped"]
+    assert row["surface_area_m2"] == approx(2 * math.sqrt(1.01) + 2, rel=1e-6)
+    assert row["volume_m3"] == approx(row["surface_area_m2"] * 0.1, rel=1e-6)
+
+
+def test_overlapping_holes_count_once_and_holes_stay_inside(cad):
+    meadow(cad)
+    area = bed(cad)
+    cad.result("landscape_area.set", {"id": area, "holes": [
+        [[1000, 1000], [5000, 1000], [5000, 5000], [1000, 5000]],
+        [[3000, 3000], [7000, 3000], [7000, 7000], [3000, 7000]]]})
+    row = cad.result("report.landscape_areas")["rows"][0]
+    assert row["holes_area_m2"] == approx(16 + 16 - 4)
+    assert row["net_area_m2"] == approx(100 - 28)
+    # The area cannot shrink so that a hole falls outside.
+    shape = cad.result("objects.get", {"id": area})["shape"]
+    shape["boundary"] = [[0, 0], [4000, 0], [4000, 4000], [0, 4000]]
+    err = cad.error("execute", {"command": {"op": "modify_object", "id": area, "shape": shape}})
+    assert "holes" in err["message"]
+
+
+def test_a_huge_boundary_is_refused_and_fine_joints_stay_fast(cad):
+    import time
+    n = 60000
+    boundary = [[1000 * math.cos(2 * math.pi * k / n), 1000 * math.sin(2 * math.pi * k / n)] for k in range(n)]
+    assert "at most" in cad.error("hardscape.add", {"boundary": boundary})["message"]
+    sid = cad.result("hardscape_style.create", {"name": "Fine", "joints": {"kind": "running_bond", "unit_length": 12, "unit_width": 10, "spacing": 1}})["id"]
+    n = 20000
+    ring = [[50000 * math.cos(2 * math.pi * k / n), 50000 * math.sin(2 * math.pi * k / n)] for k in range(n)]
+    cad.result("hardscape.add", {"boundary": ring, "style": sid})
+    start = time.monotonic()
+    cad.result("render.svg", {"width": 400})
+    assert time.monotonic() - start < 5
+
+
+def test_relinking_a_plant_to_a_style_that_now_locks_a_field(cad):
+    plants(cad)
+    cad.result("plants.place", {"mode": "single", "style": "Lavender", "at": [0, 0], "overrides": {"spread": 777, "price": 9}})
+    plant_id = cad.result("objects.list", {"kind": "plant"})[0]["id"]
+    cad.result("plant_style.update", {"id": "Lavender", "locked": ["spread"]})
+    cad.result("plants.set_style", {"ids": [plant_id], "style": "Lavender"})
+    overrides = cad.result("objects.get", {"id": plant_id})["data"]["plant"]["overrides"]
+    assert "spread" not in overrides and overrides["price"] == 9

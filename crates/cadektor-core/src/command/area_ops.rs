@@ -33,6 +33,16 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// The holes of a landscape area must stay inside its boundary when the boundary is edited.
+    pub(super) fn check_holes(&self, id: ObjectId, boundary: &[Vertex]) -> Result<(), CommandError> {
+        let Some(d) = self.doc.object(id).and_then(landscape::data) else { return Ok(()) };
+        if landscape::holes_fit(boundary, &d.holes) {
+            Ok(())
+        } else {
+            Err(invalid("the area has holes that would lie outside the new boundary. Move or clear the holes first"))
+        }
+    }
+
     pub(super) fn run_area(&mut self, cmd: &Command, out: &mut Outcome) -> Result<(), CommandError> {
         match cmd {
             Command::AddHardscape { boundary, patch, layer, class, attrs } => {
