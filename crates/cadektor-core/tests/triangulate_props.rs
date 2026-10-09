@@ -6,10 +6,11 @@ use glam::DVec2;
 use proptest::prelude::*;
 
 /// A simple polygon: a star-shaped ring around the origin (sorted angles, random radii).
-/// It is concave whenever the radii differ, and it can have collinear points when a
-/// radius repeats along a ray.
+/// It is concave whenever the radii differ. Each angle step is below 180 degrees
+/// (weights 1.0..1.9 with 3 or more points), so the origin stays inside and the ring
+/// never crosses itself.
 fn star() -> impl Strategy<Value = Vec<DVec2>> {
-    prop::collection::vec((0.05..1.0f64, 0.5..100.0f64), 3..40).prop_map(|items| {
+    prop::collection::vec((1.0..1.9f64, 0.5..100.0f64), 3..40).prop_map(|items| {
         let total: f64 = items.iter().map(|(w, _)| w).sum();
         let mut angle = 0.0;
         items
