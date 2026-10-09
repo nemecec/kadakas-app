@@ -547,6 +547,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "cadektor-core",
+ "cadektor-ifc",
  "cadektor-io",
  "cadektor-print",
  "cadektor-render",
@@ -595,6 +596,20 @@ dependencies = [
  "glam",
  "i_overlay",
  "indexmap",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadektor-ifc"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "cadektor-io",
+ "cadektor-site",
+ "glam",
  "proptest",
  "serde",
  "serde_json",

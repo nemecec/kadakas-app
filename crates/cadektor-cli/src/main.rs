@@ -67,15 +67,16 @@ enum Cmd {
         #[arg(long)]
         options: Option<String>,
     },
-    /// Export a document to DXF or GeoJSON. Prints the report.
+    /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The first IFC export stores a
+    /// project GUID in the document file, so the GlobalIds stay the same in later exports.
     Export {
         file: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
-        /// dxf or geojson. Default: from the file name.
+        /// dxf, geojson or ifc. Default: from the file name.
         #[arg(long)]
         format: Option<String>,
-        /// Export options as JSON, for example '{"unit": "m"}'.
+        /// Export options as JSON, for example '{"unit": "m"}' or, for IFC, '{"layers_as_storeys": true}'.
         #[arg(long)]
         options: Option<String>,
     },
@@ -363,7 +364,13 @@ fn import_command(file: &std::path::Path, output: &std::path::Path, base: Option
 
 fn export_command(file: &std::path::Path, output: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<(), String> {
     let mut session = Session::with_document(load(&file.to_path_buf())?);
+    let guid_before = session.editor.doc().drawing.project.guid.clone();
     let result = io_call(&mut session, "export.file", output, format, options)?;
+    // An IFC export stores a project GUID once. Keep it in the file, so the next export has the same GlobalIds.
+    if session.editor.doc().drawing.project.guid != guid_before {
+        save(session.editor.doc(), file)?;
+        eprintln!("cadektor: stored a project GUID in {}", file.display());
+    }
     println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
     Ok(())
 }

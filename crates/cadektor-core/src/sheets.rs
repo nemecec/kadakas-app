@@ -176,6 +176,10 @@ pub struct ProjectInfo {
     pub date: String,
     #[serde(default)]
     pub revision: String,
+    /// Stable project identity as an IFC GUID (22 characters). IFC export derives the GlobalId
+    /// of every entity from it. Empty until the first IFC export.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guid: String,
 }
 
 /// A stored view: what is visible, which layer is active, and the camera.

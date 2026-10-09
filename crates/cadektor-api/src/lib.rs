@@ -19,6 +19,8 @@ use cadektor_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;
 #[cfg(not(target_arch = "wasm32"))]
+mod ifc_api;
+#[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;

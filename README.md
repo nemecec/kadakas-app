@@ -5,6 +5,7 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 
 - `crates/cadektor-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
 - `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. The core never parses files.
+- `crates/cadektor-ifc`: IFC4 export (writer only; the STEP entity model and parser are shared for a later reader).
 - `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/cadektor-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
@@ -40,6 +41,7 @@ cadektor import site.dxf -o drawing.cdk.json                                # DX
 cadektor import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS data sets the georeference
 cadektor import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
 cadektor export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
+cadektor export drawing.cdk.json -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
 ```
 
 An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the
@@ -141,3 +143,17 @@ cargo llvm-cov -p cadektor-io --summary-only
 
 Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) or MIT license
 ([LICENSE-MIT](LICENSE-MIT)) at your option.
+
+## IFC4 export
+
+`export.file` with format `ifc` (or a `.ifc` file name) writes IFC4 ADD2 TC1 as a STEP file, one entity at a time.
+It is a writer only. The file has an `IfcProject` (mm, m2, m3), an `IfcSite` with `IfcMapConversion`, `IfcProjectedCRS` and
+latitude and longitude from the document georeference, and no `IfcBuilding` (with the option `layers_as_storeys`, a default
+building holds one storey per design layer). Site models become `IfcGeographicElement` TERRAIN (triangulated face set),
+hardscapes `IfcSlab` BASESLAB like the Vectorworks default (extruded solid, or a mesh when sloped or draped; style
+components are an `IfcMaterialLayerSet`), landscape areas and plants `IfcGeographicElement` with ObjectType VEGETATION
+(IFC4 has no VEGETATION type). 2D objects are skipped and listed in the report (option `include_2d` writes `IfcAnnotation`).
+Classes become presentation layers, fill colors become surface styles. Property sets come from the Data Manager map, record
+formats (`ePset_<record>`), `Pset_SlabCommon` and `Qto_SlabBaseQuantities`. GlobalIds come from the project GUID and the
+object IDs and stay the same in every export. Check a file with IfcOpenShell:
+`uv run --with pytest --with ezdxf pytest tests/behavior/test_ifc_export.py -q` (it runs `ifcopenshell.validate`).

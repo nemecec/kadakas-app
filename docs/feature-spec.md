@@ -266,7 +266,7 @@ Non-goals
 | GIS-08 | Georeferenced images (world file, GeoTIFF). | P1 | planned |
 | GIS-09 | Web map tiles and WMS as backdrop. | P2 | planned |
 | GIS-10 | Northing/Easting grid display. | P1 | planned |
-| GIS-11 | Georeference carried through IFC and DXF export. | P1 | planned |
+| GIS-11 | Georeference carried through IFC and DXF export. IFC: `IfcMapConversion`, `IfcProjectedCRS` and site latitude/longitude are done. DXF: planned. | P1 | partly done |
 
 ### 4.11 Irrigation
 
@@ -345,12 +345,13 @@ Non-goals
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | IOP-01 | DXF import and export (2D, layers, blocks). ASCII DXF. Bulges stay exact arcs. | P0 | done |
-| IOP-02 | IFC4 export with property sets. | P0 | planned |
+| IOP-02 | IFC4 export (IFC4 ADD2 TC1) with property sets, quantities, materials, styles and georeference. Crate `cadektor-ifc`, `export.file` with format `ifc`. Terrain, hardscape (`IfcSlab`), landscape areas and plants (`IfcGeographicElement`). Validated with IfcOpenShell. IFC4 has no VEGETATION type, so vegetation is USERDEFINED with ObjectType VEGETATION. | P0 | done |
 | IOP-03 | IFC4 import (geometry, property sets, spatial tree). | P0 | planned |
 | IOP-04 | IFC 2x3 import and export. | P1 | planned |
 | IOP-05 | IFC4x3 (site, terrain, georeference). | P1 | planned |
 | IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
 | IOP-07 | Data mapping rules to IFC fields: a Data Manager mapping table (resource) from object parameters to record fields and IFC property sets, with an evaluation function and API. The IFC writer itself is IOP-02. | P1 | done |
+| IOP-15 | IFC export options: classes become presentation layers, 2D annotations on or off, design layers as building storeys on or off, a named data map. GlobalIds stay stable (project GUID in the document). | P1 | done |
 | IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
 | IOP-10 | DWG import and export. | P2 | planned |
