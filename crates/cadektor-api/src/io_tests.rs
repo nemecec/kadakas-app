@@ -53,7 +53,7 @@ fn errors_are_reported() {
     assert_eq!(call(&mut s, "import.file", json!({})).unwrap_err().code, -32602);
     assert_eq!(call(&mut s, "export.file", json!({"path": "x.shp"})).unwrap_err().code, 1);
     assert_eq!(call(&mut s, "export.file", json!({"path": "x.dxf", "options": {"tolerance": -1}})).unwrap_err().code, -32602);
-    assert_eq!(describe()["examples"].as_array().unwrap().len(), 3);
+    assert_eq!(describe()["examples"].as_array().unwrap().len(), 4);
 }
 
 fn policy_dirs(name: &str) -> (PathBuf, PathBuf) {
@@ -120,4 +120,34 @@ fn restricted_sessions_only_use_allowed_folders() {
     assert!(free.import_file_trusted(json!({"path": outside.join("secret.dxf")})).is_ok());
     assert!(call(&mut free, "export.file", json!({"path": outside.join("free.txt"), "format": "dxf"})).is_ok());
     let _ = std::fs::remove_dir_all(inside.parent().unwrap());
+}
+
+#[test]
+fn ifc_export_follows_the_path_policy_and_stores_a_project_guid() {
+    let (inside, outside) = policy_dirs("ifc");
+    let mut s = Session { paths: crate::PathPolicy::restricted([inside.clone()]), ..Session::default() };
+    s.handle("execute", json!({"command": {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [1000, 0], [1000, 1000], [0, 1000]], "material": "Stone"}}})).unwrap();
+    assert!(s.editor.doc().drawing.project.guid.is_empty());
+    // Other folders and extensions fail. Bad options are invalid params.
+    assert!(call(&mut s, "export.file", json!({"path": outside.join("x.ifc")})).is_err());
+    assert!(call(&mut s, "export.file", json!({"path": inside.join("x.txt"), "format": "ifc"})).is_err());
+    assert_eq!(call(&mut s, "export.file", json!({"path": inside.join("x.ifc"), "options": {"version": "IFC2X3"}})).unwrap_err().code, -32602);
+    assert!(!inside.join("x.ifc").exists());
+    let out = inside.join("site.ifc");
+    let r = call(&mut s, "export.file", json!({"path": out})).unwrap();
+    assert_eq!(r["exported"], 1);
+    let guid = s.editor.doc().drawing.project.guid.clone();
+    assert_eq!(guid.len(), 22);
+    assert_eq!(r["project_guid"], guid.as_str());
+    let first = std::fs::read(&out).unwrap();
+    assert!(String::from_utf8_lossy(&first).contains("FILE_SCHEMA(('IFC4'))"));
+    let e = call(&mut s, "export.file", json!({"path": out, "format": "ifc"})).unwrap_err();
+    assert!(e.message.contains("overwrite"), "{}", e.message);
+    call(&mut s, "export.file", json!({"path": out, "format": "ifc", "overwrite": true})).unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), first);
+    assert_eq!(s.editor.doc().drawing.project.guid, guid);
+    // The user's own dialog is not limited.
+    let free = outside.join("free.ifc");
+    s.export_file_trusted(json!({"path": free, "format": "ifc"})).unwrap();
+    assert!(free.exists());
 }
