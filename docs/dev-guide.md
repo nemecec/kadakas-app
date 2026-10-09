@@ -38,7 +38,7 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 ```
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p cadektor-core -p cadektor-render -p cadektor-api --target wasm32-unknown-unknown
+cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest pytest tests/behavior -q
 ```
 

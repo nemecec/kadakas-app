@@ -175,6 +175,59 @@ impl BoundsAcc {
     }
 }
 
+/// Adds triangles and lines of one object to a scene. An extension gets one of these for
+/// each object that core cannot draw itself (a site model), so core needs no other crate.
+/// Positions are world coordinates in mm, relative to the layer elevation in Z.
+pub struct SceneSink<'a> {
+    scene: &'a mut Scene,
+    object: ObjectId,
+    z0: f64,
+}
+
+impl SceneSink<'_> {
+    fn local(&self, p: DVec3) -> Vec3 {
+        let o = self.scene.origin;
+        Vec3::new((p.x - o.x) as f32, (p.y - o.y) as f32, (self.z0 + p.z - o.z) as f32)
+    }
+
+    /// Adds a triangle mesh with one color. Indices are three per triangle. Normals are smooth.
+    /// Triangles that are not counterclockwise seen from above are flipped to face up.
+    pub fn mesh(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4]) {
+        let pts: Vec<Vec3> = positions.iter().map(|p| self.local(*p)).collect();
+        let mut normals = vec![Vec3::ZERO; pts.len()];
+        let mut tris = Vec::with_capacity(indices.len() / 3);
+        for t in indices.chunks_exact(3) {
+            let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
+            if a >= pts.len() || b >= pts.len() || c >= pts.len() {
+                continue;
+            }
+            let n = (pts[b] - pts[a]).cross(pts[c] - pts[a]);
+            let (b, c, n) = if n.z < 0.0 { (c, b, -n) } else { (b, c, n) };
+            for i in [a, b, c] {
+                normals[i] += n;
+            }
+            tris.push([a, b, c]);
+        }
+        let base = self.scene.mesh.positions.len() as u32;
+        for (p, n) in pts.iter().zip(&normals) {
+            self.scene.mesh.vertex(*p, n.normalize_or_zero(), color);
+        }
+        for [a, b, c] in tris {
+            self.scene.mesh.tri(base + a as u32, base + b as u32, base + c as u32, self.object);
+        }
+    }
+
+    /// Adds a 3D line.
+    pub fn polyline(&mut self, points: &[DVec3], closed: bool, color: [u8; 4]) {
+        let pts: Vec<Vec3> = points.iter().map(|p| self.local(*p)).collect();
+        self.scene.lines.polyline(&pts, closed, color, self.object);
+    }
+}
+
+/// Draws objects that core does not know how to draw. Gets the document and the object, and
+/// adds geometry to the sink. It is called for site models and site modifiers only.
+pub type SceneExt<'a> = &'a dyn Fn(&Document, &Object, &mut SceneSink<'_>);
+
 /// Keeps the scene of the latest document revision. `get` rebuilds it only when
 /// the revision changed, so a viewer can call it every frame. The revision comes from
 /// `Editor::revision`; this module does not know the editor.
@@ -189,8 +242,13 @@ pub struct MeshCache {
 impl MeshCache {
     /// The scene of `doc`, which must be the document of `revision`.
     pub fn get(&mut self, revision: u64, doc: &Document) -> Arc<Scene> {
+        self.get_with(revision, doc, None)
+    }
+
+    /// Like `get`, with an extension that draws site models.
+    pub fn get_with(&mut self, revision: u64, doc: &Document, ext: Option<SceneExt<'_>>) -> Arc<Scene> {
         if self.revision != Some(revision) || self.scene.is_none() {
-            self.scene = Some(Arc::new(build(doc)));
+            self.scene = Some(Arc::new(build_with(doc, scene_origin(doc), ext)));
             self.revision = Some(revision);
             self.builds += 1;
         }
@@ -418,6 +476,7 @@ impl UnitSphere {
 const TRUNK_SIDES: usize = 8;
 
 struct Builder<'a> {
+    ext: Option<SceneExt<'a>>,
     doc: &'a Document,
     origin: DVec3,
     scene: Scene,
@@ -494,6 +553,16 @@ impl Builder<'_> {
             Shape::Polyline3d { points, closed } => {
                 let pts: Vec<Vec3> = points.iter().map(|p| v3(o, p.truncate(), z + p.z)).collect();
                 self.scene.lines.polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
+            }
+            Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
+                if let Some(ext) = self.ext {
+                    let mut sink = SceneSink { scene: &mut self.scene, object: id, z0: z };
+                    ext(self.doc, obj, &mut sink);
+                } else if let Shape::SiteModifier { boundary, .. } = &obj.shape {
+                    let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
+                    let pts: Vec<Vec3> = ring.into_iter().map(|p| v3(o, p, z)).collect();
+                    self.scene.lines.polyline(&pts, true, pen.unwrap_or([0, 0, 0, 255]), id);
+                }
             }
         }
     }
@@ -689,10 +758,16 @@ pub fn build(doc: &Document) -> Scene {
 
 /// Like `build`, with the scene origin given.
 pub fn build_at(doc: &Document, origin: DVec3) -> Scene {
+    build_with(doc, origin, None)
+}
+
+/// Like `build_at`, with an extension that draws site models. Without one, a site model has no
+/// 3D geometry.
+pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> Scene {
     // Many plants get a coarser canopy, to keep the scene small.
     let plants = doc.objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. })).count();
     let detail = if plants > COARSE_PLANT_COUNT { SPHERE_COARSE } else { SPHERE_DETAIL };
-    let mut b = Builder { doc, origin, scene: Scene { origin, ..Scene::default() }, sphere: UnitSphere::new(detail) };
+    let mut b = Builder { ext, doc, origin, scene: Scene { origin, ..Scene::default() }, sphere: UnitSphere::new(detail) };
     b.scene.ranges.reserve(doc.objects.len());
     for (obj, layer) in visible_objects(doc) {
         let (t0, s0) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());

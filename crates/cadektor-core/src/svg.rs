@@ -21,6 +21,42 @@ pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
         .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
 }
 
+/// The outline that a site model or modifier draws in 2D: the convex hull of a site model's
+/// source data, or the flattened boundary of a modifier. Empty for other shapes.
+pub fn site_outline(shape: &Shape) -> Vec<DVec2> {
+    match shape {
+        Shape::SiteModel { points, lines, .. } => {
+            let all: Vec<DVec2> = points.iter().chain(lines.iter().flat_map(|l| &l.points)).map(|p| p.truncate()).collect();
+            convex_hull(&all)
+        }
+        Shape::SiteModifier { boundary, .. } => crate::site::boundary_points(boundary),
+        _ => Vec::new(),
+    }
+}
+
+/// Convex hull, counterclockwise (monotone chain).
+pub fn convex_hull(points: &[DVec2]) -> Vec<DVec2> {
+    let mut p: Vec<DVec2> = points.iter().copied().filter(|p| p.is_finite()).collect();
+    p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    p.dedup();
+    if p.len() < 3 {
+        return p;
+    }
+    let mut hull: Vec<DVec2> = Vec::new();
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &DVec2>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for &q in iter {
+            while hull.len() >= start + 2 && (hull[hull.len() - 1] - hull[hull.len() - 2]).perp_dot(q - hull[hull.len() - 2]) <= 0.0 {
+                hull.pop();
+            }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    hull
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -44,6 +80,15 @@ fn path_d(p: &GraphicPath) -> String {
 /// Renders the drawing with the model Y axis pointing up.
 /// `width_px` sets the pixel width. The height follows the aspect ratio.
 pub fn render(doc: &Document, width_px: u32) -> String {
+    render_with(doc, width_px, None)
+}
+
+/// Adds the SVG of one site model or site modifier to the output. It gets the document, the
+/// object and a style string for the attributes of the elements.
+pub type SvgExt<'a> = &'a dyn Fn(&Document, &Object, &str, &mut String);
+
+/// Like `render`, with an extension that draws site models (contours) after their outline.
+pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> String {
     let (lo, hi) = drawing_bounds(doc).unwrap_or((DVec2::ZERO, DVec2::splat(1000.0)));
     let margin = ((hi - lo).max_element() * 0.05).max(1.0);
     let (lo, hi) = (lo - margin, hi + margin);
@@ -112,6 +157,14 @@ pub fn render(doc: &Document, width_px: u32) -> String {
                 let points = points.iter().map(|p| p.truncate()).collect::<Vec<_>>();
                 let tag = if *closed { "polygon" } else { "polyline" };
                 writeln!(s, r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#, points_attr(&points))
+            }
+            Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
+                let outline = site_outline(&o.shape);
+                let res = writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&outline), o.shape.kind());
+                if let Some(ext) = ext {
+                    ext(doc, o, &style, &mut s);
+                }
+                res
             }
             Shape::Text { at, text, height } => writeln!(
                 s,

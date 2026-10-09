@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::curve::{Vertex, VertexKind};
+pub use crate::site::{ModifierKind, PadSlope, SiteLine, SiteSettings};
 use crate::curve;
 use crate::plants::tree::{self, TreeAction, TreeCondition};
 use crate::resource::{ResourceId, Resources};
@@ -145,6 +146,18 @@ pub enum Shape {
     Locus3d { p: DVec3 },
     /// Polygon or contour with a Z value per vertex.
     Polyline3d { points: Vec<DVec3>, closed: bool },
+    /// Terrain. The source data (3D points and 3D polygons) lives inside the site model.
+    /// The TIN, contours and volumes are derived by `cadektor-site` and never saved.
+    SiteModel {
+        #[serde(default)]
+        points: Vec<DVec3>,
+        #[serde(default)]
+        lines: Vec<SiteLine>,
+        #[serde(default)]
+        settings: SiteSettings,
+    },
+    /// A pad or grade limits that change the proposed surface of the site models on the same layer.
+    SiteModifier { modifier: ModifierKind, boundary: Vec<Vertex> },
 }
 
 /// Default text height of a plant tag, in mm.
@@ -190,6 +203,8 @@ impl Shape {
             Shape::Hardscape { .. } => "hardscape",
             Shape::Locus3d { .. } => "locus3d",
             Shape::Polyline3d { .. } => "polyline3d",
+            Shape::SiteModel { .. } => "site_model",
+            Shape::SiteModifier { .. } => "site_modifier",
         }
     }
 
@@ -197,7 +212,7 @@ impl Shape {
     pub fn vertices(&self) -> Option<&Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -205,7 +220,7 @@ impl Shape {
     pub fn vertices_mut(&mut self) -> Option<&mut Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -216,6 +231,10 @@ impl Shape {
         match self {
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
+            Shape::SiteModel { points, lines, settings } => {
+                points.iter().all(|p| p.is_finite()) && lines.iter().all(|l| l.points.iter().all(|p| p.is_finite())) && settings.is_finite()
+            }
+            Shape::SiteModifier { modifier, boundary } => modifier.is_finite() && boundary.iter().all(Vertex::is_finite),
             Shape::Line { a, b } => v(a) && v(b),
             Shape::Rect { min, max } => v(min) && v(max),
             Shape::Circle { center, radius } => v(center) && radius.is_finite(),
@@ -249,6 +268,15 @@ impl Shape {
         match self {
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
             Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
+            Shape::SiteModel { points, lines, settings } => {
+                points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                lines.iter().flat_map(|l| &l.points).for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                [settings.minor_interval, settings.major_interval, settings.datum].into_iter().for_each(&mut *f);
+            }
+            Shape::SiteModifier { modifier, boundary } => {
+                modifier.numbers().into_iter().for_each(&mut *f);
+                boundary.iter().for_each(|x| vertex(x, f));
+            }
             Shape::Line { a, b } => {
                 v(a);
                 v(b);
@@ -314,6 +342,12 @@ impl Shape {
                 p.x += d.x;
                 p.y += d.y;
             }),
+            Shape::SiteModel { points, lines, .. } => {
+                points.iter_mut().chain(lines.iter_mut().flat_map(|l| l.points.iter_mut())).for_each(|p| {
+                    p.x += d.x;
+                    p.y += d.y;
+                });
+            }
             Shape::Line { a, b } => {
                 mv(a);
                 mv(b);
@@ -330,6 +364,7 @@ impl Shape {
             }
             Shape::Polyline { points, .. }
             | Shape::LandscapeArea { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. }
             | Shape::Hardscape { boundary: points, .. } => points.iter_mut().for_each(|x| mv(&mut x.p)),
         }
     }
@@ -346,6 +381,10 @@ impl Shape {
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
+            }
+            Shape::SiteModel { points, lines, .. } => {
+                let all: Vec<DVec2> = points.iter().chain(lines.iter().flat_map(|l| &l.points)).map(|p| p.truncate()).collect();
+                from_points(&all)
             }
             Shape::Line { a, b } => from_points(&[*a, *b]),
             Shape::Rect { min, max } => from_points(&[*min, *max]),
@@ -382,7 +421,9 @@ impl Shape {
                 from_points(&[*at, *at + DVec2::new(*height * 0.6 * 8.0, *height), *anchor])
             }
             Shape::Polyline { points, closed } => curve::bounds(points, *closed),
-            Shape::LandscapeArea { boundary: points, .. } | Shape::Hardscape { boundary: points, .. } => curve::bounds(points, true),
+            Shape::LandscapeArea { boundary: points, .. }
+            | Shape::Hardscape { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. } => curve::bounds(points, true),
         }
     }
 
@@ -394,6 +435,7 @@ impl Shape {
             Shape::Polyline3d { points, closed: true } => Some(polygon_area_xy(points)),
             Shape::Polyline { points, closed: true }
             | Shape::LandscapeArea { boundary: points, .. }
+            | Shape::SiteModifier { boundary: points, .. }
             | Shape::Hardscape { boundary: points, .. } => Some(curve::area(points)),
             _ => None,
         }

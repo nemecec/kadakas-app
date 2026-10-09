@@ -25,7 +25,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api --target wasm32-unknown-unknown
+      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site --target wasm32-unknown-unknown
   coverage:
     runs-on: ubuntu-latest
     steps:

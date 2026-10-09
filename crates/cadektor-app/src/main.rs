@@ -11,6 +11,7 @@ mod keymap;
 mod panels;
 mod plant_draw;
 mod plant_ui;
+mod site_ui;
 mod snap;
 mod tess;
 mod tools;

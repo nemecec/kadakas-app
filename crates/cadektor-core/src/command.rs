@@ -692,7 +692,12 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
         Shape::Text { height, .. } if *height <= 0.0 => bad("text height must be positive"),
         Shape::Polyline { points, .. } if points.len() < 2 => bad("polyline needs 2 or more points"),
         Shape::Polyline3d { points, .. } if points.len() < 2 => bad("polyline3d needs 2 or more points"),
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } if boundary.len() < 3 => {
+        Shape::SiteModel { settings, lines, .. } => match settings.problem() {
+            Some(m) => bad(m),
+            None if lines.iter().any(|l| l.points.len() < 2) => bad("a site model line needs 2 or more points"),
+            None => Ok(()),
+        },
+        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } if boundary.len() < 3 => {
             bad("boundary needs 3 or more points")
         }
         _ => Ok(()),

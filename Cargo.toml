@@ -6,3 +6,10 @@ members = ["crates/*"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 version = "0.1.0"
+
+# Keep build folders small: line tables for our code, no debug info for dependencies.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -18,7 +18,9 @@ ADVERTISED_METHODS = [
 def test_describe_lists_every_method_with_a_description(cad):
     desc = cad.result("describe")
     names = [m["name"] for m in desc["methods"]]
-    assert names == ADVERTISED_METHODS
+    # Feature areas add their methods after the core ones.
+    assert names[: len(ADVERTISED_METHODS)] == ADVERTISED_METHODS
+    assert {"site.create", "site.update", "site.elevation", "site.cut_fill", "site.contours"} <= set(names)
     assert all(m["doc"] for m in desc["methods"])
 
 
