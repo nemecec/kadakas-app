@@ -232,3 +232,45 @@ proptest! {
         prop_assert!(p.distance(DVec3::new(x, y, z)) < 1e-6);
     }
 }
+
+#[test]
+fn survey_in_lest97_keeps_its_real_world_coordinates() {
+    let text = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\
+0\nLINE\n8\nA\n10\n6589000\n20\n540000\n11\n6589100\n21\n540050\n\
+0\nPOINT\n8\nA\n10\n6589050.25\n20\n540025.5\n30\n12.5\n0\nENDSEC\n0\nEOF\n";
+    let src = Source { name: "s".into(), data: text.as_bytes().to_vec(), extra: Default::default() };
+    let r = DxfFormat.import(&src, &Context::of(&Document::default()), &ImportOptions::default()).unwrap();
+    let mut ed = Editor::new(Document::default());
+    ed.execute(&r.command).unwrap();
+    let doc = ed.doc().clone();
+    assert!(doc.georef.is_some());
+    // Model coordinates are small.
+    for o in doc.objects.values() {
+        let (lo, hi) = o.shape.bounds();
+        assert!(lo.abs().max_element() < 1.0e6 && hi.abs().max_element() < 1.0e6);
+    }
+    // Default export: real-world numbers in meters. `document`: model numbers.
+    let meters = ExportOptions { unit: Unit::M, ..ExportOptions::default() };
+    let out = String::from_utf8(DxfFormat.export(&doc, &meters).unwrap().bytes).unwrap();
+    for v in ["6589000", "540050", "6589100", "6589050.25", "540025.5", "12.5"] {
+        assert!(out.lines().any(|l| l.trim().parse::<f64>().is_ok_and(|x| (x - v.parse::<f64>().unwrap()).abs() < 1e-6)), "{v}");
+    }
+    let local = ExportOptions { unit: Unit::M, origin: cadektor_io::ExportOrigin::Document, ..ExportOptions::default() };
+    let out = String::from_utf8(DxfFormat.export(&doc, &local).unwrap().bytes).unwrap();
+    assert!(!out.lines().any(|l| l.trim() == "6589000"));
+    // Import the export again: the same georeference and the same shapes.
+    let again = DxfFormat.export(&doc, &meters).unwrap().bytes;
+    let src = Source { name: "s".into(), data: again, extra: Default::default() };
+    let r = DxfFormat.import(&src, &Context::of(&Document::default()), &ImportOptions::default()).unwrap();
+    let mut ed2 = Editor::new(Document::default());
+    ed2.execute(&r.command).unwrap();
+    assert_eq!(ed2.doc().georef, doc.georef);
+    let back: Vec<_> = ed2.doc().objects.values().map(|o| o.shape.clone()).collect();
+    let orig: Vec<_> = doc.objects.values().map(|o| o.shape.clone()).collect();
+    assert_eq!(back.len(), orig.len());
+    for (a, b) in back.iter().zip(&orig) {
+        let (la, ha) = a.bounds();
+        let (lb, hb) = b.bounds();
+        assert!(la.distance(lb) < 1e-3 && ha.distance(hb) < 1e-3);
+    }
+}

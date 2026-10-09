@@ -58,6 +58,7 @@ pub(crate) fn describe() -> Value {
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",
             "unit": "mm (default) | cm | m | km | inch | foot | yard | mile. DXF only",
+            "origin": "file (default): real-world coordinates, the origin shift of the georeference is added back (a rotation is not applied in DXF). document: model coordinates",
             "visible_only": "false (default)",
             "tolerance": "mm, curve approximation. Default 1"
         },

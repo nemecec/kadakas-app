@@ -180,14 +180,15 @@ fn outline(shape: &Shape, tol: f64) -> Option<(Vec<[f64; 3]>, bool, bool)> {
 fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let mut report = Report::new("geojson");
     let wgs = Crs::from_epsg(4326).map_err(IoError::Format)?;
-    let target = match &doc.georef {
+    let georef = if opts.origin == crate::options::ExportOrigin::File { doc.georef.as_ref() } else { None };
+    let target = match georef {
         Some(g) if g.crs.trim().is_empty() => {
             report.note("the document georeference has no CRS: coordinates are map meters of the local frame, not longitude and latitude");
             Some((g, None))
         }
         Some(g) => Some((g, Some(Crs::parse(&g.crs).map_err(|e| IoError::Format(format!("the document CRS cannot be used: {e}")))?))),
         None => {
-            report.note("the document has no georeference: coordinates are local meters, not longitude and latitude");
+            report.note("the document has no georeference (or origin is document): coordinates are local meters, not longitude and latitude");
             None
         }
     };

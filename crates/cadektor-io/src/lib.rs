@@ -24,7 +24,7 @@ use std::path::Path;
 use cadektor_core::command::Command;
 use cadektor_core::model::{ClassId, Document, Layer, LayerId};
 
-pub use options::{ExportOptions, ImportOptions, LayerMode, OriginMode, Unit};
+pub use options::{ExportOptions, ImportOptions, LayerMode, OriginMode, Unit, ExportOrigin};
 pub use report::{Report, Skipped};
 
 /// A file format that this crate can read or write.

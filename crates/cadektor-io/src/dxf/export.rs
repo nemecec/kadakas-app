@@ -19,7 +19,7 @@ use cadektor_core::model::{arc_sweep, Attributes, Color, Document, Object, Shape
 use cadektor_core::DVec2;
 
 use super::nearest_aci;
-use crate::options::LayerMode;
+use crate::options::{ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
 /// Longest text that one TEXT entity holds. Longer text becomes MTEXT.
@@ -215,6 +215,14 @@ const FIRST_HANDLE: u64 = 0x100;
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let mut report = Report::new("dxf");
     let mut cx = Ctx { unit: opts.unit.mm_per_unit(), tol: opts.tolerance, layer_mode: opts.layer_mode, doc, plant_blocks: BTreeSet::new() };
+    // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
+    let mut shift = DVec2::ZERO;
+    if let (Some(g), ExportOrigin::File) = (&doc.georef, opts.origin) {
+        shift = g.origin * 1000.0;
+        if g.rotation != 0.0 {
+            report.note("the georeference is rotated: the rotation is not applied to the coordinates");
+        }
+    }
     let mut ents = W::new(FIRST_HANDLE);
     ents.owner = H_MODEL_RECORD.into();
     for o in doc.objects.values() {
@@ -223,6 +231,15 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
         let layer = cx.layer_name(o);
         let hidden_layer = doc.layer(o.layer).is_some_and(|l| !l.visible);
+        let shifted;
+        let o = if shift != DVec2::ZERO {
+            let mut c = o.clone();
+            c.shape.translate(shift);
+            shifted = c;
+            &shifted
+        } else {
+            o
+        };
         if write_object(&mut ents, &mut cx, o, &layer, hidden_layer) {
             report.count(o.shape.kind());
         } else {

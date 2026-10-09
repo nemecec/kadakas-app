@@ -162,9 +162,23 @@ impl ImportOptions {
     }
 }
 
+/// Which coordinates an export writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportOrigin {
+    /// The map coordinates of the document georeference: the origin shift of an import is added back, so a survey
+    /// keeps its real-world numbers. Without a georeference this is the same as `document`. This is the default.
+    #[default]
+    File,
+    /// The coordinates of the model, relative to the document origin.
+    Document,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportOptions {
+    /// `file` (default): real-world coordinates. `document`: model coordinates.
+    pub origin: ExportOrigin,
     /// DXF: layer names come from classes (default) or from design layers.
     pub layer_mode: LayerMode,
     /// Unit of the written coordinates (DXF). Default: millimeters.
@@ -177,7 +191,7 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { layer_mode: LayerMode::Classes, unit: Unit::Mm, visible_only: false, tolerance: 1.0 }
+        ExportOptions { origin: ExportOrigin::File, layer_mode: LayerMode::Classes, unit: Unit::Mm, visible_only: false, tolerance: 1.0 }
     }
 }
 
