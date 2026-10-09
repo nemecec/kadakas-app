@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [24.9384, 60.1699, 12.5] },
+      "properties": { "species": "Betula pendula", "trunk_cm": 32, "protected": true }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [24.9390, 60.1701, 12.9] },
+      "properties": { "species": "Quercus robur", "trunk_cm": 54, "protected": false }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [[24.9380, 60.1695], [24.9400, 60.1695], [24.9400, 60.1705], [24.9380, 60.1705], [24.9380, 60.1695]],
+          [[24.9388, 60.1698], [24.9392, 60.1698], [24.9392, 60.1702], [24.9388, 60.1702], [24.9388, 60.1698]]
+        ]
+      },
+      "properties": { "name": "Plot 1" }
+    }
+  ]
+}

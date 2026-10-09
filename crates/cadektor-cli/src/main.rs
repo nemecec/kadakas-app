@@ -3,6 +3,8 @@
 //! - `cadektor serve`: JSON-RPC 2.0 on stdin/stdout, one request per line.
 //! - `cadektor mcp`: Model Context Protocol server on stdio, for Claude Code.
 //! - `cadektor render <file> -o out.svg`: render a document to SVG.
+//! - `cadektor import <file> -o doc.json`: import a DXF, Shapefile or GeoJSON file into a document.
+//! - `cadektor export <doc> -o out.dxf`: export a document to DXF or GeoJSON.
 //!
 //! With `--connect`, `serve` and `mcp` forward every request to a running
 //! desktop app instead of a headless document. `--connect` alone finds the
@@ -49,6 +51,34 @@ enum Cmd {
         #[arg(long, default_value_t = 1200)]
         width: u32,
     },
+    /// Import a DXF, Shapefile (.shp) or GeoJSON file. Saves the document and prints the report.
+    Import {
+        file: PathBuf,
+        /// The document to write.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Import into this document instead of an empty one.
+        #[arg(long)]
+        into: Option<PathBuf>,
+        /// dxf, shp or geojson. Default: from the file name.
+        #[arg(long)]
+        format: Option<String>,
+        /// Import options as JSON, for example '{"layer_mode": "layers"}'.
+        #[arg(long)]
+        options: Option<String>,
+    },
+    /// Export a document to DXF or GeoJSON. Prints the report.
+    Export {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// dxf or geojson. Default: from the file name.
+        #[arg(long)]
+        format: Option<String>,
+        /// Export options as JSON, for example '{"unit": "m"}'.
+        #[arg(long)]
+        options: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -60,6 +90,10 @@ struct RemoteArgs {
     /// The app's access token, if it is not in the runtime file.
     #[arg(long, requires = "connect")]
     token: Option<String>,
+    /// A folder that agents may read and write (repeat for more). Default: the current folder.
+    /// The folder of the open document is always allowed. Not used with --connect: the app decides.
+    #[arg(long = "allow-dir", value_name = "DIR")]
+    allow_dir: Vec<PathBuf>,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -76,8 +110,12 @@ impl Backend {
             return connect_remote(&addr, &token).map(Backend::Remote);
         }
         let mut session = Session::default();
+        // Requests come from agents: they may only use the allowed folders.
+        let dirs = if remote.allow_dir.is_empty() { vec![PathBuf::from(".")] } else { remote.allow_dir };
+        session.paths = cadektor_api::PathPolicy::restricted(dirs);
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
+            session.doc_dir = doc_dir_of(&f);
         }
         Ok(Backend::Local(Box::new(session)))
     }
@@ -138,23 +176,36 @@ fn load(path: &PathBuf) -> Result<Document, String> {
     Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// `file.save {path}` and `file.open {path}` for a headless session.
+/// The folder of a document file.
+fn doc_dir_of(file: &std::path::Path) -> Option<PathBuf> {
+    let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    std::fs::canonicalize(dir).ok()
+}
+
+/// `file.save {path}` and `file.open {path}` for a headless session. The path policy of the session applies.
 fn file_method(s: &mut Session, req: &Value) -> String {
     let id = req["id"].clone();
     let path = req["params"]["path"].as_str().map(PathBuf::from);
     let result = match (req["method"].as_str(), path) {
         (_, None) => Err((-32602, "params.path is required".to_string())),
-        (Some("file.save"), Some(p)) => serde_json::to_string_pretty(&s.editor.doc())
-            .map_err(|e| (1, e.to_string()))
-            .and_then(|t| fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))),
-        (_, Some(p)) => load(&p).map_err(|e| (1, e)).and_then(|d| {
+        (Some("file.save"), Some(p)) => s
+            .check_path(&p, true, &["json"])
+            .map_err(|e| (1, e))
+            .and_then(|p| {
+                let t = serde_json::to_string_pretty(&s.editor.doc()).map_err(|e| (1, e.to_string()))?;
+                fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))?;
+                s.doc_dir = doc_dir_of(&p);
+                Ok(())
+            }),
+        (_, Some(p)) => s.check_path(&p, false, &["json"]).map_err(|e| (1, e)).and_then(|p| load(&p).map_err(|e| (1, e)).and_then(|d| {
+            s.doc_dir = doc_dir_of(&p);
             let line = json!({"id": 0, "method": "document.load", "params": {"document": d}}).to_string();
             let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
             match r.get("error") {
                 Some(e) => Err((1, e["message"].as_str().unwrap_or("load failed").to_string())),
                 None => Ok(()),
             }
-        }),
+        })),
     };
     match result {
         Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),
@@ -281,11 +332,49 @@ fn mcp(mut backend: Backend) {
     }
 }
 
+/// Calls `import.file` or `export.file` on a session and returns the result.
+fn io_call(session: &mut Session, method: &str, path: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<Value, String> {
+    let options = match options {
+        Some(t) => serde_json::from_str::<Value>(&t).map_err(|e| format!("--options is not JSON: {e}"))?,
+        None => Value::Null,
+    };
+    let mut params = json!({"path": path, "options": options});
+    if let Some(f) = format {
+        params["format"] = json!(f);
+    }
+    session.handle(method, params).map_err(|e| e.message)
+}
+
+fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
+    fsio::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn import_command(file: &std::path::Path, output: &std::path::Path, base: Option<PathBuf>, format: Option<String>, options: Option<String>) -> Result<(), String> {
+    let mut session = Session::default();
+    if let Some(base) = base {
+        session.editor = cadektor_core::command::Editor::new(load(&base)?);
+    }
+    let result = io_call(&mut session, "import.file", file, format, options)?;
+    save(session.editor.doc(), output)?;
+    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    Ok(())
+}
+
+fn export_command(file: &std::path::Path, output: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<(), String> {
+    let mut session = Session::with_document(load(&file.to_path_buf())?);
+    let result = io_call(&mut session, "export.file", output, format, options)?;
+    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    Ok(())
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
         Cmd::Mcp { file, remote } => Backend::new(file, remote).map(mcp),
+        Cmd::Import { file, output, into, format, options } => import_command(&file, &output, into, format, options),
+        Cmd::Export { file, output, format, options } => export_command(&file, &output, format, options),
         Cmd::Render { file, output, width } => load(&file).and_then(|doc| {
             fsio::write_atomic(&output, cadektor_core::svg::render(&doc, width).as_bytes()).map_err(|e| e.to_string())
         }),
@@ -378,6 +467,29 @@ mod tests {
         h.join().unwrap();
         let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
         assert!(connect_remote(&free, "t").unwrap_err().contains("cannot connect"));
+    }
+
+    #[test]
+    fn import_and_export_commands() {
+        let dir = std::env::temp_dir().join(format!("cadektor-cli-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.geojson");
+        std::fs::write(&src, r#"{"type":"Point","coordinates":[24.9,60.1,3]}"#).unwrap();
+        let doc = dir.join("doc.cdk.json");
+        import_command(&src, &doc, None, None, None).unwrap();
+        let loaded = load(&doc).unwrap();
+        assert_eq!(loaded.objects.len(), 1);
+        assert!(loaded.georef.is_some());
+        // Import a second time into the saved document.
+        import_command(&src, &doc, Some(doc.clone()), Some("geojson".into()), Some(r#"{"layer": "GIS"}"#.into())).unwrap();
+        assert_eq!(load(&doc).unwrap().objects.len(), 2);
+        let out = dir.join("out.dxf");
+        export_command(&doc, &out, None, Some(r#"{"unit": "m"}"#.into())).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().contains("ENTITIES"));
+        assert!(import_command(&src, &doc, None, None, Some("{nope".into())).unwrap_err().contains("--options"));
+        assert!(import_command(&dir.join("missing.dxf"), &doc, None, None, None).is_err());
+        assert!(export_command(&dir.join("missing.json"), &out, None, None).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

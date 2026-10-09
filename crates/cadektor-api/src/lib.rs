@@ -12,6 +12,14 @@ use serde_json::{json, Value};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+#[cfg(not(target_arch = "wasm32"))]
+mod io;
+#[cfg(not(target_arch = "wasm32"))]
+mod paths;
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::PathPolicy;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod io_tests;
 mod site;
 
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
@@ -26,6 +34,13 @@ pub struct Session {
     replaced: bool,
     view_changed: bool,
     mesh_cache: MeshCache,
+    /// Which files requests may read and write (`import.file`, `export.file`, `file.open`, `file.save`).
+    /// A host that serves agents restricts it. Default: any path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub paths: PathPolicy,
+    /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub doc_dir: Option<std::path::PathBuf>,
     site_cache: cadektor_site::SiteCache,
 }
 
@@ -75,6 +90,10 @@ pub const METHODS: &[(&str, &str)] = &[
     ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
     ("report.plants", "Plant schedule: count by species. Rows of plants with a style also have style, style_name, id_code and prices (see report.plant_schedule)."),
     ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("import.file", "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}."),
+    #[cfg(not(target_arch = "wasm32"))]
+    ("export.file", "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}."),
     // Plants (see plants_api.rs).
     plants_api::PLANT_STYLE_LIST,
     plants_api::PLANT_STYLE_GET,
@@ -106,7 +125,30 @@ impl Session {
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag.
     pub fn replace_document(&mut self, doc: Document) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         *self = Session { replaced: true, view: self.view, ..Session::with_document(doc) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.paths = paths;
+            self.doc_dir = doc_dir;
+        }
+    }
+
+    /// The canonical path for a file request, if the path policy allows it. `exts` are the allowed
+    /// extensions (lower case, without the dot); the check applies to restricted sessions only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn check_path(&self, path: &std::path::Path, write: bool, exts: &[&str]) -> Result<std::path::PathBuf, String> {
+        if !self.paths.is_restricted() {
+            return Ok(path.to_path_buf());
+        }
+        {
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            if !ext.as_deref().is_some_and(|e| exts.contains(&e)) {
+                return Err(format!("{} must have the extension {}", path.display(), exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" or ")));
+            }
+        }
+        self.paths.resolve(path, self.doc_dir.as_deref(), write)
     }
 
     /// The 3D scene of the current document. It is rebuilt only when the document changed.
@@ -140,13 +182,21 @@ impl Session {
         }
         let doc = self.editor.doc();
         Ok(match method {
-            "describe" => json!({
+            "describe" => {
+                #[allow(unused_mut)]
+                let mut d = json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
                 "units": "millimeters, Y axis up, angles in radians",
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
-            }),
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    d["io"] = io::describe();
+                }
+                d
+            }
             "execute" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -181,6 +231,7 @@ impl Session {
                     "object_count": doc.objects.len(),
                     "objects_by_kind": kinds,
                     "bounds": bounds,
+                    "georeference": doc.georef,
                     "can_undo": self.editor.can_undo(),
                     "can_redo": self.editor.can_redo(),
                 })
@@ -305,6 +356,10 @@ impl Session {
                     .collect();
                 json!({ "rows": rows })
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            "import.file" => self.import_file(p)?,
+            #[cfg(not(target_arch = "wasm32"))]
+            "export.file" => self.export_file(p)?,
             _ => return plants_api::handle(self, method, p).unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") })),
         })
     }

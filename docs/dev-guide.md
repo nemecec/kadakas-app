@@ -15,7 +15,8 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 |---|---|---|
 | `cadektor-core` | Document model, commands, undo, geometry, curves, mesh | none of ours |
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render |
+| `cadektor-io` | DXF, Shapefile and GeoJSON import and export, CRS conversion (native only) | core |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io (native only) |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 
