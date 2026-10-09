@@ -6,6 +6,8 @@ pub mod command;
 pub mod curve;
 pub mod fsio;
 pub mod geom;
+pub mod hardscape;
+pub mod landscape;
 pub mod mesh;
 pub mod model;
 pub mod plants;

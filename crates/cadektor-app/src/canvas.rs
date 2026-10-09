@@ -30,7 +30,7 @@ pub struct Style {
 }
 
 fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
-    let a = doc.resolved_attrs(o);
+    let a = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let pen = color32(a.pen.unwrap_or(Color::BLACK));
     let mut fill = a.fill.map_or(Color32::TRANSPARENT, color32);
@@ -174,6 +174,10 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
         Shape::PlantTag { at, anchor, height, .. } => {
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
+        }
+        Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
+            draw_shape(painter, view, &o.shape, st, offset);
+            crate::area_ui::draw_extras(painter, view, doc, o, st, offset);
         }
         shape => draw_shape(painter, view, shape, st, offset),
     }

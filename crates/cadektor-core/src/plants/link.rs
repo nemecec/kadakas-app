@@ -23,7 +23,7 @@ pub const KEY: &str = "plant";
 
 /// Keys in `Object::data` that only commands may write. `SetData` refuses them, so a link cannot
 /// point to a missing style or skip the checks of the style commands.
-pub const RESERVED_DATA_KEYS: [&str; 1] = [KEY];
+pub const RESERVED_DATA_KEYS: [&str; 3] = [KEY, crate::hardscape::data::KEY, crate::landscape::KEY];
 
 /// A plant's link to a style, with its overrides.
 #[derive(Clone, Debug, PartialEq)]

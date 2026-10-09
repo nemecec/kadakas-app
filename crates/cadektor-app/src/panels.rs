@@ -195,6 +195,9 @@ pub fn tool_panel(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, settings: &mu
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
     }
+    if matches!(m.tool(), Tool::Hardscape | Tool::LandscapeArea) {
+        crate::area_ui::tool_options(ui, m.tool(), settings, doc);
+    }
     if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
         // A new mode starts a new placement.
         m.cancel();
@@ -626,6 +629,9 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
         crate::plant_ui::plant_object_info(ui, session, id, status);
+    }
+    if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
+        crate::area_ui::object_info(ui, session, id, status);
     }
     crate::site_ui::cut_fill_readout(ui, session, id);
     ui.separator();

@@ -442,7 +442,7 @@ impl CadektorApp {
                 Effect::SetSelection(s) => self.session.selection = s,
                 Effect::Notice(m) => self.status = m,
                 Effect::Exec(cmd) => {
-                    let is_add = matches!(cmd, Command::AddObject { .. });
+                    let is_add = matches!(cmd, Command::AddObject { .. } | Command::AddHardscape { .. } | Command::AddLandscapeArea { .. });
                     if let Some(out) = panels::run_command(&mut self.session, &cmd, &mut self.status)
                         && is_add
                         && !out.created.is_empty()

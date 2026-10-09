@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
+mod area_ops;
 mod plant_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -150,6 +151,38 @@ pub enum Command {
         #[serde(default)]
         unlink: bool,
     },
+    /// Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.
+    /// The patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).
+    AddHardscape {
+        #[serde(default)]
+        boundary: Option<Vec<Vertex>>,
+        #[serde(default)]
+        patch: Box<crate::hardscape::HardscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Add a landscape area with a boundary, a name and settings (style, holes, drape).
+    AddLandscapeArea {
+        boundary: Vec<Vertex>,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        patch: Box<crate::landscape::LandscapePatch>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Change hardscape settings of one or more hardscapes. Missing fields stay unchanged.
+    SetHardscape { ids: Vec<ObjectId>, patch: crate::hardscape::HardscapePatch },
+    /// Change the style, holes or options of landscape areas.
+    SetLandscapeArea { ids: Vec<ObjectId>, patch: crate::landscape::LandscapePatch },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -434,7 +467,9 @@ impl<'a> Tx<'a> {
                 }
                 for id in ids {
                     self.touch(id);
-                    self.doc.object_mut(id).expect("checked").shape.translate(*delta);
+                    let o = self.doc.object_mut(id).expect("checked");
+                    o.shape.translate(*delta);
+                    crate::hardscape::translate_object_data(o, *delta);
                 }
             }
             Command::ModifyObject { id, shape, layer, class, attrs } => {
@@ -448,6 +483,7 @@ impl<'a> Tx<'a> {
                 if let Some(s) = shape {
                     validate_shape(s)?;
                     self.check_shape_refs(s)?;
+                    self.guard_path(*id, Some(s))?;
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
@@ -484,6 +520,7 @@ impl<'a> Tx<'a> {
                     }
                     Some(_) => {}
                 }
+                self.guard_path(*id, None)?;
                 let mut v = self.doc.object(*id).expect("checked").shape.vertices().expect("checked")[*index];
                 if let Some(k) = kind {
                     v.kind = *k;
@@ -497,7 +534,7 @@ impl<'a> Tx<'a> {
             }
             Command::SetData { id, set, remove } => {
                 if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
-                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)")));
                 }
                 self.editable(*id)?;
                 self.touch(*id);
@@ -591,6 +628,7 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;

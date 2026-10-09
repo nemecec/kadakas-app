@@ -4,6 +4,7 @@ use super::*;
 use crate::plants::link::{self, PlantLink};
 use crate::plants::placement::MAX_POINTS;
 use crate::plants::style::PlantStyle;
+use crate::landscape::style::MixEntry;
 use crate::resource::Resource;
 
 fn invalid(m: impl Into<String>) -> CommandError {
@@ -17,6 +18,21 @@ impl Tx<'_> {
             Shape::PlantTag { style, .. } if self.doc.resources.plant_style(*style).is_none() => Err(CommandError::NoResource(*style)),
             _ => Ok(()),
         }
+    }
+
+    /// A landscape area style may only use plant styles that exist.
+    fn check_body_refs(&self, body: &ResourceBody) -> Result<(), CommandError> {
+        if let ResourceBody::LandscapeAreaStyle(s) = body {
+            for e in &s.mix {
+                if self.doc.resources.plant_style(e.plant).is_none() {
+                    return Err(match self.doc.resources.get(e.plant) {
+                        Some(_) => invalid(format!("resource {} is not a plant style", e.plant)),
+                        None => CommandError::NoResource(e.plant),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn check_resource_name(&self, name: &str, body: &ResourceBody, except: Option<ResourceId>) -> Result<(), CommandError> {
@@ -36,7 +52,12 @@ impl Tx<'_> {
         self.doc
             .objects
             .values()
-            .filter(|o| link::link(o).is_some_and(|l| l.style == id) || matches!(o.shape, Shape::PlantTag { style, .. } if style == id))
+            .filter(|o| {
+                link::link(o).is_some_and(|l| l.style == id)
+                    || matches!(o.shape, Shape::PlantTag { style, .. } if style == id)
+                    || crate::hardscape::style_id(o) == Some(id)
+                    || crate::landscape::style_id(o) == Some(id)
+            })
             .map(|o| o.id)
             .collect()
     }
@@ -47,6 +68,7 @@ impl Tx<'_> {
             self.touch(id);
             let mut o = self.doc.object(id).expect("exists").clone();
             link::sync_shape(self.doc, &mut o);
+            crate::hardscape::data::sync_shape(self.doc, &mut o);
             *self.doc.object_mut(id).expect("exists") = o;
         }
     }
@@ -55,6 +77,7 @@ impl Tx<'_> {
         match cmd {
             Command::AddResource { name, body } => {
                 body.validate().map_err(invalid)?;
+                self.check_body_refs(body)?;
                 self.check_resource_name(name, body, None)?;
                 let id = ResourceId(self.alloc()?);
                 self.doc.resources.push(Resource { id, name: name.trim().to_string(), body: body.clone() });
@@ -68,6 +91,7 @@ impl Tx<'_> {
                     return Err(invalid("the type of a resource cannot change"));
                 }
                 new_body.validate().map_err(invalid)?;
+                self.check_body_refs(&new_body)?;
                 self.check_resource_name(&new_name, &new_body, Some(*id))?;
                 let r = self.doc.resources.get_mut(*id).expect("checked");
                 r.name = new_name.trim().to_string();
@@ -78,6 +102,7 @@ impl Tx<'_> {
             Command::DeleteResource { id, reassign } => {
                 let current = self.doc.resources.get(*id).ok_or(CommandError::NoResource(*id))?;
                 let users = self.users_of(*id);
+                let mixes = self.doc.resources.mixes_using(*id);
                 if let Some(to) = reassign {
                     let target = self.doc.resources.get(*to).ok_or(CommandError::NoResource(*to))?;
                     if to == id {
@@ -96,9 +121,28 @@ impl Tx<'_> {
                             l.style = *to;
                             link::set_link(o, Some(&l));
                         }
+                        if let Some(mut d) = crate::hardscape::data(o).filter(|d| d.style == Some(*id)) {
+                            d.style = Some(*to);
+                            crate::hardscape::data::set_data(o, &d);
+                        }
+                        if let Some(mut d) = crate::landscape::data(o).filter(|d| d.style == Some(*id)) {
+                            d.style = Some(*to);
+                            crate::landscape::set_data(o, &d);
+                        }
                     }
-                } else if !users.is_empty() {
-                    return Err(CommandError::ResourceInUse(*id, users.len()));
+                    // Landscape area styles that use a plant style take the other plant style.
+                    for sid in &mixes {
+                        if let Some(Resource { body: ResourceBody::LandscapeAreaStyle(s), .. }) = self.doc.resources.get_mut(*sid) {
+                            let Some(i) = s.mix.iter().position(|e| e.plant == *id) else { continue };
+                            let old = s.mix.remove(i);
+                            match s.mix.iter_mut().find(|e| e.plant == *to) {
+                                Some(e) => e.percent = (e.percent + old.percent).min(100.0),
+                                None => s.mix.insert(i, MixEntry { plant: *to, ..old }),
+                            }
+                        }
+                    }
+                } else if !users.is_empty() || !mixes.is_empty() {
+                    return Err(CommandError::ResourceInUse(*id, users.len() + mixes.len()));
                 }
                 self.doc.resources.remove(*id);
                 self.resync(&users);

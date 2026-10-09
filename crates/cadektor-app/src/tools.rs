@@ -174,6 +174,8 @@ pub struct ToolSettings {
     pub pad_end_elevation: Option<f64>,
     /// The direction in which a sloped pad falls, in degrees counterclockwise from +X.
     pub pad_direction_deg: f64,
+    /// Style, path and width options of the Hardscape and Landscape Area tools.
+    pub areas: crate::area_ui::AreaToolSettings,
 }
 
 impl Default for ToolSettings {
@@ -193,6 +195,7 @@ impl Default for ToolSettings {
             modifier_mode: ModifierMode::Pad,
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
+            areas: Default::default(),
         }
     }
 }
@@ -339,6 +342,25 @@ impl ToolMachine {
             if let Some(last) = pts.last_mut() {
                 last.kind = VertexKind::Corner;
             }
+        }
+        // A path or a style makes a hardscape with settings, a style makes a landscape area with a mix.
+        if self.tool == Tool::Hardscape && s.areas.path {
+            if pts.len() < 2 {
+                return vec![];
+            }
+            // The ends of a center line are on the curve, so their kind has no meaning.
+            let last = pts.len() - 1;
+            pts[0].kind = VertexKind::Corner;
+            pts[last].kind = VertexKind::Corner;
+            return s.areas.hardscape_command(&pts).map(Effect::Exec).into_iter().collect();
+        }
+        let styled = match self.tool {
+            Tool::Hardscape if pts.len() >= 3 => s.areas.hardscape_command(&pts),
+            Tool::LandscapeArea if pts.len() >= 3 => s.areas.landscape_command(&pts, &s.area_name),
+            _ => None,
+        };
+        if let Some(cmd) = styled {
+            return vec![Effect::Exec(cmd)];
         }
         let shape = match self.tool {
             Tool::Polyline if pts.len() >= 2 => Shape::Polyline { points: pts, closed: false },
@@ -695,6 +717,58 @@ mod tests {
         }
         f.send(Input::Enter);
         assert!(matches!(&f.shapes()[0], Shape::Hardscape { boundary, material, .. } if boundary.len() == 3 && material == "Paving"));
+    }
+
+    #[test]
+    fn hardscape_tool_makes_styled_slabs_and_paths() {
+        use cadektor_core::hardscape;
+        use cadektor_core::resource::ResourceId;
+        let mut f = Fixture::new(Tool::Hardscape);
+        let style = ResourceId(
+            f.session
+                .editor
+                .execute(&Command::AddResource { name: "S".into(), body: cadektor_core::resource::ResourceBody::HardscapeStyle(Default::default()) })
+                .unwrap()
+                .created[0],
+        );
+        // A style makes a hardscape with settings.
+        f.settings.areas.hardscape_style = Some(style);
+        for (x, y) in [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        let o = f.session.editor.doc().objects.values().next().unwrap().clone();
+        assert_eq!(hardscape::data(&o).unwrap().style, Some(style));
+        // Path mode needs two points and makes a path with the width.
+        f.settings.areas.path = true;
+        f.settings.areas.width = 800.0;
+        f.click(0.0, 0.0);
+        f.send(Input::Enter);
+        assert_eq!(f.session.editor.doc().objects.len(), 1, "one point is not a path");
+        f.click(0.0, 0.0);
+        f.click(5000.0, 0.0);
+        f.send(Input::Enter);
+        let path = f.session.editor.doc().objects.values().nth(1).unwrap().clone();
+        let d = hardscape::data(&path).unwrap();
+        assert_eq!((d.mode, d.width), (hardscape::Mode::Path, 800.0));
+        assert!((path.shape.area().unwrap() - 4.0e6).abs() < 1.0);
+        // A landscape area with a style.
+        let mut g = Fixture::new(Tool::LandscapeArea);
+        let ls = ResourceId(
+            g.session
+                .editor
+                .execute(&Command::AddResource { name: "L".into(), body: cadektor_core::resource::ResourceBody::LandscapeAreaStyle(Default::default()) })
+                .unwrap()
+                .created[0],
+        );
+        g.settings.areas.landscape_style = Some(ls);
+        for (x, y) in [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)] {
+            g.click(x, y);
+        }
+        g.send(Input::Enter);
+        let a = g.session.editor.doc().objects.values().next().unwrap().clone();
+        assert_eq!(cadektor_core::landscape::data(&a).unwrap().style, Some(ls));
+        assert!(matches!(a.shape, Shape::LandscapeArea { ref name, .. } if name == "Planting bed"));
     }
 
     #[test]
