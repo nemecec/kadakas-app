@@ -13,6 +13,7 @@ use crate::databar::{self, DataEntry};
 use crate::file_io;
 use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
+use crate::plant_ui::{self, PlantUi};
 use crate::snap::{self, SnapConfig, SnapResult};
 use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
 use crate::canvas3d;
@@ -46,6 +47,7 @@ pub struct CadektorApp {
     title_dirty: bool,
     info: InfoEdit,
     nav: NavState,
+    plant_ui: PlantUi,
     keys: Keymap,
     entry: DataEntry,
     /// Cursor before Data bar values are applied.
@@ -109,6 +111,7 @@ impl CadektorApp {
             title_dirty: false,
             info: InfoEdit::default(),
             nav: NavState::default(),
+            plant_ui: PlantUi::default(),
             keys: Keymap::defaults(),
             entry: DataEntry::default(),
             live_cursor: DVec2::ZERO,
@@ -396,7 +399,11 @@ impl CadektorApp {
     /// have one group (the vertex modes), so only group 1 does anything for them.
     fn mode_group(&mut self, group: usize) {
         let tool = self.machine.tool();
-        if !has_vertex_modes(tool) {
+        if tool == Tool::Plant && group == 1 {
+            self.settings.plant.mode = self.settings.plant.mode.next();
+            self.machine.cancel();
+            self.status = format!("Placement mode: {}", self.settings.plant.mode.label());
+        } else if !has_vertex_modes(tool) {
             self.status = format!("The {} tool has no mode buttons", tool.name());
         } else if group == 1 {
             self.settings.vertex_mode = self.settings.vertex_mode.next();
@@ -433,6 +440,7 @@ impl CadektorApp {
         for e in effects {
             match e {
                 Effect::SetSelection(s) => self.session.selection = s,
+                Effect::Notice(m) => self.status = m,
                 Effect::Exec(cmd) => {
                     let is_add = matches!(cmd, Command::AddObject { .. });
                     if let Some(out) = panels::run_command(&mut self.session, &cmd, &mut self.status)
@@ -624,12 +632,16 @@ impl eframe::App for CadektorApp {
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings));
+        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings, self.session.editor.doc()));
         egui::Panel::right("palettes").default_size(280.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
                 ui.add_space(12.0);
                 panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
+                ui.add_space(12.0);
+                plant_ui::resource_manager(ui, &mut self.session, &mut self.plant_ui, &mut self.status);
+                ui.add_space(12.0);
+                plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
             });
         });
         egui::CentralPanel::no_frame().show(ui, |ui| {

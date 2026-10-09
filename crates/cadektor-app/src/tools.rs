@@ -9,6 +9,9 @@ use glam::DVec2;
 
 use crate::hit;
 
+mod plant_tool;
+pub use plant_tool::{By, PlantMode, PlantSettings};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Select,
@@ -161,6 +164,8 @@ pub struct ToolSettings {
     pub vertex_mode: VertexMode,
     /// Radius for new arc vertices in mm. It stays until the user changes it.
     pub arc_radius: f64,
+    /// Placement mode and style of the Plant tool.
+    pub plant: PlantSettings,
     /// Elevation of new pads in mm.
     pub pad_elevation: f64,
     /// What the Site Modifiers tool makes.
@@ -183,6 +188,7 @@ impl Default for ToolSettings {
             material: "Paving".into(),
             vertex_mode: VertexMode::Corner,
             arc_radius: DEFAULT_ARC_RADIUS,
+            plant: PlantSettings::default(),
             pad_elevation: 0.0,
             modifier_mode: ModifierMode::Pad,
             pad_end_elevation: None,
@@ -213,6 +219,8 @@ pub enum Input {
 pub enum Effect {
     Exec(Command),
     SetSelection(Vec<ObjectId>),
+    /// A message for the status line.
+    Notice(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -353,10 +361,11 @@ impl ToolMachine {
         match self.tool {
             Tool::Select => self.handle_select(input, cx),
             Tool::Line | Tool::Rect | Tool::Circle => self.handle_two_click(input),
-            Tool::Text | Tool::Plant => match input {
+            Tool::Text => match input {
                 Input::Press { p, .. } => self.place(p, cx),
                 _ => vec![],
             },
+            Tool::Plant => self.handle_plant(input, cx),
             Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => match input {
                 Input::Press { p, .. } => {
                     let s = cx.settings;
@@ -381,12 +390,6 @@ impl ToolMachine {
             Tool::Text if !s.text.is_empty() && s.text_height > 0.0 => {
                 vec![add(Shape::Text { at: p, text: s.text.clone(), height: s.text_height })]
             }
-            Tool::Plant if s.spread > 0.0 => vec![add(Shape::Plant {
-                at: p,
-                species: s.species.clone(),
-                spread: s.spread,
-                height: s.plant_height,
-            })],
             _ => vec![],
         }
     }
@@ -480,6 +483,7 @@ impl ToolMachine {
             (State::Points(pts), Tool::Line | Tool::Rect | Tool::Circle) => {
                 Self::two_click_shape(self.tool, pts[0], cursor).map_or(Preview::None, Preview::Shape)
             }
+            (_, Tool::Plant) => self.plant_preview(cursor, cx),
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
@@ -490,12 +494,6 @@ impl ToolMachine {
             (State::Box { start, .. }, _) => {
                 Preview::Box { min: start.min(cursor), max: start.max(cursor), crossing: cursor.x < start.x }
             }
-            (State::Idle, Tool::Plant) if cx.settings.spread > 0.0 => Preview::Shape(Shape::Plant {
-                at: cursor,
-                species: cx.settings.species.clone(),
-                spread: cx.settings.spread,
-                height: cx.settings.plant_height,
-            }),
             (State::Idle, Tool::Text) if !cx.settings.text.is_empty() => Preview::Shape(Shape::Text {
                 at: cursor,
                 text: cx.settings.text.clone(),
@@ -547,7 +545,8 @@ impl ToolMachine {
             (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
-            (Tool::Text | Tool::Plant, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Plant, _) => "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels.",
         }
     }
 }
@@ -582,6 +581,7 @@ mod tests {
                         self.session.editor.execute(c).unwrap();
                     }
                     Effect::SetSelection(s) => self.session.selection = s.clone(),
+                    Effect::Notice(_) => {}
                 }
             }
             fx

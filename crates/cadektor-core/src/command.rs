@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::*;
+use crate::resource::{ResourceBody, ResourceId, Resources};
+
+mod plant_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -103,6 +106,50 @@ pub enum Command {
         #[serde(default)]
         class: Option<ClassId>,
     },
+    /// Add a resource, for example a plant style. Returns its ID in `created`.
+    AddResource { name: String, body: ResourceBody },
+    /// Change the name or content of a resource. Plants that use a plant style follow the change.
+    ModifyResource {
+        id: ResourceId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        body: Option<ResourceBody>,
+    },
+    /// Delete a resource. If objects use it, the command fails unless `reassign` names
+    /// another resource of the same type that takes over.
+    DeleteResource {
+        id: ResourceId,
+        #[serde(default)]
+        reassign: Option<ResourceId>,
+    },
+    /// Add one plant per position, as one step. A plant refers to `style` (if given) and
+    /// `overrides` replace style fields. Without a style the plants are by instance, with
+    /// the default style fields and the overrides.
+    AddPlants {
+        #[serde(default)]
+        style: Option<ResourceId>,
+        #[serde(default)]
+        overrides: serde_json::Map<String, Value>,
+        positions: Vec<DVec2>,
+        #[serde(default)]
+        layer: Option<LayerId>,
+        #[serde(default)]
+        class: Option<ClassId>,
+        /// Random size and rotation, from a seed. Plant `i` gets the same values every time.
+        #[serde(default)]
+        variation: Option<crate::plants::placement::Variation>,
+    },
+    /// Link plants to a style, replace their overrides, or unlink them.
+    SetPlantStyle {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        style: Option<ResourceId>,
+        #[serde(default)]
+        overrides: Option<serde_json::Map<String, Value>>,
+        #[serde(default)]
+        unlink: bool,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch { commands: Vec<Command> },
 }
@@ -121,6 +168,10 @@ pub enum CommandError {
     LayerNotEmpty(LayerId),
     #[error("a document must keep at least one layer")]
     LastLayer,
+    #[error("resource {0} does not exist")]
+    NoResource(ResourceId),
+    #[error("resource {0} is used by {1} object(s). Reassign them to another resource first")]
+    ResourceInUse(ResourceId, usize),
     #[error("invalid value: {0}")]
     Invalid(String),
 }
@@ -137,6 +188,7 @@ pub struct Outcome {
 struct Meta {
     layers: Vec<Layer>,
     classes: Vec<Class>,
+    resources: Resources,
     active_layer: LayerId,
     active_class: ClassId,
 }
@@ -146,6 +198,7 @@ impl Meta {
         Meta {
             layers: doc.layers.clone(),
             classes: doc.classes.clone(),
+            resources: doc.resources.clone(),
             active_layer: doc.active_layer,
             active_class: doc.active_class,
         }
@@ -154,6 +207,7 @@ impl Meta {
     fn restore(&self, doc: &mut Document) {
         doc.layers = self.layers.clone();
         doc.classes = self.classes.clone();
+        doc.resources = self.resources.clone();
         doc.active_layer = self.active_layer;
         doc.active_class = self.active_class;
     }
@@ -331,6 +385,7 @@ impl<'a> Tx<'a> {
                 self.check_layer(layer)?;
                 self.check_class(class)?;
                 validate_shape(shape)?;
+                self.check_shape_refs(shape)?;
                 validate_attrs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
@@ -392,11 +447,14 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(s) = shape {
                     validate_shape(s)?;
+                    self.check_shape_refs(s)?;
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
                 }
                 self.touch(*id);
+                // A linked plant keeps its style when its shape is edited (see `plants::link`).
+                let linked_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| crate::plants::link::link(o).is_some()).cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
                     o.shape = s.clone();
@@ -409,6 +467,11 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(a) = attrs {
                     o.attrs = a.clone();
+                }
+                if let Some(prev) = linked_before {
+                    let mut now = self.doc.object(*id).expect("checked").clone();
+                    crate::plants::link::adopt_shape_edit(self.doc, &prev, &mut now);
+                    *self.doc.object_mut(*id).expect("checked") = now;
                 }
             }
             Command::SetVertex { id, index, kind, p } => {
@@ -433,6 +496,9 @@ impl<'a> Tx<'a> {
                 self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())) {
+                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the plant style commands")));
+                }
                 self.editable(*id)?;
                 self.touch(*id);
                 let o = self.doc.object_mut(*id).expect("checked");
@@ -520,6 +586,11 @@ impl<'a> Tx<'a> {
                     self.doc.active_class = *c;
                 }
             }
+            Command::AddResource { .. }
+            | Command::ModifyResource { .. }
+            | Command::DeleteResource { .. }
+            | Command::AddPlants { .. }
+            | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;
@@ -611,6 +682,16 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
         Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => bad("radius must be positive"),
         Shape::Arc { start, end, .. } if arc_sweep(*start, *end) == 0.0 => bad("arc sweep must not be zero"),
         Shape::Plant { spread, .. } if *spread <= 0.0 => bad("spread must be positive"),
+        Shape::ExistingTree { dbh, spread, height, rpz_factor, .. } => {
+            if *dbh <= 0.0 || *spread <= 0.0 || *height <= 0.0 {
+                bad("trunk diameter, spread and height must be positive")
+            } else if rpz_factor.is_some_and(|f| f < 0.0) {
+                bad("the root protection factor must be zero or more")
+            } else {
+                Ok(())
+            }
+        }
+        Shape::PlantTag { height, .. } if *height <= 0.0 => bad("tag text height must be positive"),
         Shape::Text { height, .. } if *height <= 0.0 => bad("text height must be positive"),
         Shape::Polyline { points, .. } if points.len() < 2 => bad("polyline needs 2 or more points"),
         Shape::Polyline3d { points, .. } if points.len() < 2 => bad("polyline3d needs 2 or more points"),

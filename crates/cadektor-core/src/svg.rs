@@ -6,6 +6,11 @@ use glam::DVec2;
 
 use crate::curve;
 use crate::model::*;
+use crate::plants::graphic::{self, GraphicPath};
+use crate::plants::link;
+use crate::plants::schedule;
+use crate::plants::style::PlantGraphic;
+use crate::plants::tree::{self, TreeAction};
 
 /// Bounds of all visible objects, or `None` for an empty drawing.
 pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
@@ -60,6 +65,18 @@ fn points_attr(pts: &[DVec2]) -> String {
     pts.iter().map(|p| format!("{},{}", p.x, -p.y)).collect::<Vec<_>>().join(" ")
 }
 
+/// SVG path data for a stroke, with the Y axis flipped.
+fn path_d(p: &GraphicPath) -> String {
+    let mut d = String::new();
+    for (i, q) in p.points.iter().enumerate() {
+        let _ = write!(d, "{}{} {}", if i == 0 { "M " } else { " L " }, q.x, -q.y);
+    }
+    if p.closed {
+        d.push_str(" Z");
+    }
+    d
+}
+
 /// Renders the drawing with the model Y axis pointing up.
 /// `width_px` sets the pixel width. The height follows the aspect ratio.
 pub fn render(doc: &Document, width_px: u32) -> String {
@@ -83,6 +100,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" viewBox="{} {} {} {}">"#,
         lo.x, -hi.y, size.x, size.y
     );
+    let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
         let a = doc.resolved_attrs(o);
@@ -156,14 +174,85 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 o.id,
                 esc(text)
             ),
-            Shape::Plant { at, spread, species, .. } => writeln!(
-                s,
-                r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
-                at.x,
-                -at.y,
-                spread / 2.0,
-                esc(species)
-            ),
+            Shape::Plant { at, spread, species, .. } => {
+                // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
+                let look = link::look(doc, o);
+                let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
+                    let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
+                    let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
+                    format!(r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id)
+                } else {
+                    style
+                };
+                if let Some(zone) = look.zone {
+                    let dash = format!("{} {}", 4.0 * scale, 2.0 * scale);
+                    let _ = writeln!(
+                        s,
+                        r#"<circle cx="{}" cy="{}" r="{zone}" stroke="{stroke}" fill="none" stroke-width="{sw}" stroke-dasharray="{dash}" data-kind="tree_protection_zone" data-id="{}"/>"#,
+                        at.x, -at.y, o.id
+                    );
+                }
+                if look.graphic == PlantGraphic::Circle {
+                    writeln!(
+                        s,
+                        r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
+                        at.x,
+                        -at.y,
+                        spread / 2.0,
+                        esc(species)
+                    )
+                } else {
+                    let d = graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation).iter().map(path_d).collect::<Vec<_>>().join(" ");
+                    writeln!(
+                        s,
+                        r#"<g data-kind="plant" data-graphic="{}"><path d="{d}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
+                        look.graphic.id(),
+                        esc(species)
+                    )
+                }
+            }
+            Shape::ExistingTree { at, species, dbh, spread, condition, action, rpz_factor, rpz_cap, .. } => {
+                let rpz = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
+                let fill_style = style.clone();
+                let style = format!(r#"stroke="{stroke}" fill="none" stroke-width="{sw}" data-id="{}""#, o.id);
+                let removed = *action == TreeAction::Remove;
+                let dash = format!(r#"stroke-dasharray="{} {}""#, 4.0 * scale, 2.0 * scale);
+                let canopy_dash = if removed { dash.clone() } else { String::new() };
+                let cross = if removed {
+                    let r = spread / 2.0;
+                    format!(
+                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} {dash}/>"#,
+                        at.x - r, -at.y - r, at.x + r, -at.y + r, at.x - r, -at.y + r, at.x + r, -at.y - r
+                    )
+                } else {
+                    String::new()
+                };
+                writeln!(
+                    s,
+                    r#"<g data-kind="existing_tree" data-action="{}" data-condition="{}"><circle cx="{x}" cy="{y}" r="{rpz}" {style} {dash} data-part="rpz"/><circle cx="{x}" cy="{y}" r="{}" {fill_style} fill-opacity="0.2" {canopy_dash} data-part="canopy"/><circle cx="{x}" cy="{y}" r="{}" {style} data-part="trunk"/>{cross}<title>{}</title></g>"#,
+                    action.id(),
+                    condition.id(),
+                    spread / 2.0,
+                    dbh / 2.0,
+                    esc(species),
+                    x = at.x,
+                    y = -at.y
+                )
+            }
+            Shape::PlantTag { at, anchor, height, .. } => {
+                let text = schedule::tag_info_with(doc, o.id, &tag_counts).map_or_else(|| "?".to_string(), |t| t.text());
+                writeln!(
+                    s,
+                    r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
+                    anchor.x,
+                    -anchor.y,
+                    at.x,
+                    -at.y,
+                    at.x,
+                    -at.y,
+                    esc(&text)
+                )
+            }
             Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } if !curve::all_straight(boundary) => {
                 writeln!(s, r#"<path d="{}" {style} data-kind="{}"/>"#, curve::path(boundary, true).svg_d(), o.shape.kind())
             }
@@ -396,5 +485,109 @@ mod tests {
         ];
         let svg = one(Shape::Polyline { points: curves, closed: false });
         assert!(svg.contains(" Q ") && svg.contains(" C ") && !svg.contains(" Z"), "{svg}");
+    }
+
+    fn style_with(graphic: crate::plants::style::PlantGraphic) -> (Editor, crate::resource::ResourceId) {
+        use crate::plants::style::PlantStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::default();
+        let style = PlantStyle { graphic, spread: 2000.0, fill: Some(Color([1, 2, 3, 255])), pen: Some(Color([4, 5, 6, 255])), id_code: "ZZ".into(), ..PlantStyle::default() };
+        let id = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        (ed, id)
+    }
+
+    #[test]
+    fn styled_plants_draw_their_graphic_and_colors() {
+        use crate::plants::style::PlantGraphic;
+        let (mut ed, id) = style_with(PlantGraphic::Star);
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(5.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
+        let svg = render(ed.doc(), 400);
+        assert!(svg.contains(r#"data-graphic="star"><path d="M "#) && svg.contains(" Z"), "{svg}");
+        assert!(svg.contains("rgba(1,2,3,1.000)") && svg.contains("rgba(4,5,6,1.000)"), "{svg}");
+        // A circle graphic keeps the plain circle, with the style colors.
+        let (mut ed, id) = style_with(PlantGraphic::Circle);
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(0.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
+        assert!(render(ed.doc(), 400).contains(r#"<circle cx="0" cy="-5" r="1000" stroke="rgba(4,5,6,1.000)""#));
+        // Own colors on the object win.
+        let pid = *ed.doc().objects.keys().next().unwrap();
+        ed.execute(&Command::ModifyObject { id: pid, shape: None, layer: None, class: None, attrs: Some(Attributes { fill: Some(Color([9, 9, 9, 255])), ..Default::default() }) }).unwrap();
+        let svg = render(ed.doc(), 400);
+        assert!(svg.contains("rgba(9,9,9,1.000)") && !svg.contains("rgba(1,2,3"), "{svg}");
+    }
+
+    #[test]
+    fn plants_show_rotation_and_a_protection_zone() {
+        use crate::plants::style::{PlantCategory, PlantGraphic};
+        let (mut ed, id) = style_with(PlantGraphic::Star);
+        let mut style = ed.doc().resources.plant_style(id).unwrap().clone();
+        style.category = PlantCategory::Tree;
+        style.trunk_diameter = 300.0;
+        style.protection_zone = true;
+        ed.execute(&Command::ModifyResource { id, name: None, body: Some(crate::resource::ResourceBody::plant_style(style)) }).unwrap();
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::new(0.0, 5.0)], layer: None, class: None, variation: None }).unwrap();
+        let plain = render(ed.doc(), 400);
+        assert!(plain.contains(r#"data-kind="tree_protection_zone""#) && plain.contains(r#"r="3600""#), "{plain}");
+        let pid = *ed.doc().objects.keys().next().unwrap();
+        ed.execute(&Command::SetData { id: pid, set: [("rotation".to_string(), serde_json::json!(1.0))].into(), remove: vec![] }).unwrap();
+        let turned = render(ed.doc(), 400);
+        assert_ne!(plain, turned);
+        assert!(turned.contains(r#"data-graphic="star""#));
+    }
+
+    #[test]
+    fn existing_tree_shows_its_zone_and_dashes_removed_trees() {
+        use crate::plants::tree::TreeAction;
+        let tree = |action| Shape::ExistingTree {
+            at: DVec2::new(10.0, 20.0),
+            species: "Oak <old>".into(),
+            dbh: 500.0,
+            spread: 8000.0,
+            height: 12000.0,
+            condition: Default::default(),
+            action,
+            rpz_factor: None,
+            rpz_cap: None,
+        };
+        let svg = one(tree(TreeAction::Retain));
+        assert!(svg.contains(r#"data-kind="existing_tree" data-action="retain""#), "{svg}");
+        assert!(svg.contains(r#"r="6000""#) && svg.contains(r#"data-part="rpz""#), "{svg}");
+        assert!(svg.contains("stroke-dasharray") && svg.contains("Oak &lt;old&gt;"));
+        let kept = svg.matches("stroke-dasharray").count();
+        let removed = one(tree(TreeAction::Remove));
+        assert!(removed.matches("stroke-dasharray").count() > kept, "{removed}");
+        assert!(removed.contains(r#"data-action="remove""#) && removed.contains("M -3990"), "{removed}");
+    }
+
+    #[test]
+    fn the_root_protection_zone_stops_at_15_m_unless_the_cap_is_changed() {
+        let tree = |cap| Shape::ExistingTree {
+            at: DVec2::ZERO,
+            species: String::new(),
+            dbh: 1500.0,
+            spread: 8000.0,
+            height: 12000.0,
+            condition: Default::default(),
+            action: Default::default(),
+            rpz_factor: None,
+            rpz_cap: cap,
+        };
+        assert!(one(tree(None)).contains(r#"r="15000""#));
+        assert!(one(tree(Some(20_000.0))).contains(r#"r="18000""#));
+        assert!(one(tree(Some(6_000.0))).contains(r#"r="6000""#));
+    }
+
+    #[test]
+    fn plant_tag_shows_code_count_and_leader() {
+        use crate::resource::ResourceId;
+        let (mut ed, id) = style_with(crate::plants::style::PlantGraphic::Circle);
+        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: vec![DVec2::ZERO; 3], layer: None, class: None, variation: None }).unwrap();
+        add(&mut ed, Shape::PlantTag { at: DVec2::new(100.0, 200.0), anchor: DVec2::new(0.0, 50.0), style: id, height: 300.0 });
+        let svg = render(ed.doc(), 400);
+        assert!(svg.contains(r#"<g data-kind="plant_tag"><line x1="0" y1="-50" x2="100" y2="-200""#), "{svg}");
+        assert!(svg.contains(">ZZ (3)</text>"), "{svg}");
+        // A tag whose style is gone shows a question mark, if a file was edited by hand.
+        let mut doc = ed.doc().clone();
+        doc.resources.remove(ResourceId(id.0));
+        assert!(render(&doc, 400).contains(">?</text>"));
     }
 }
