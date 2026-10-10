@@ -9,7 +9,7 @@
 
 use glam::DVec2;
 
-use crate::tools::{Tool, has_vertex_modes};
+use kadakas_ui_core::tools::{Tool, has_vertex_modes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {

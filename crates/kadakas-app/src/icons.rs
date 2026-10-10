@@ -9,7 +9,7 @@ use egui::{Context, TextureHandle, Ui, Vec2};
 
 use crate::icon_size::{self, IconRole, IconSize};
 use crate::panels::MenuAction;
-use crate::tools::Tool;
+use kadakas_ui_core::tools::Tool;
 
 /// All icons: the name and the SVG text. Tabler Icons (MIT) are in `assets/icons/tabler/`, ours in
 /// `assets/icons/kadakas/`.

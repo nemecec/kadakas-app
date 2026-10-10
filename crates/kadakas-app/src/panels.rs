@@ -14,10 +14,10 @@ use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::icon_size::{IconRole, IconSize};
 use crate::keymap::{Action, Keymap};
-use crate::tools::{
+use kadakas_ui_core::snap::SnapResult;
+use kadakas_ui_core::tools::{
     DEFAULT_ARC_RADIUS, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
-use kadakas_ui_core::snap::SnapResult;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
@@ -478,7 +478,7 @@ pub fn tool_panel(
     for t in Tool::MODIFY {
         tool_button(ui, m, keys, t);
     }
-    if crate::tools::is_modify(m.tool()) {
+    if kadakas_ui_core::tools::is_modify(m.tool()) {
         modify_options(ui, m, settings);
     }
     ui.add_space(8.0);
@@ -526,10 +526,10 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
     ui.add_space(4.0);
     ui.label("Selection mode");
     ui.horizontal_wrapped(|ui| {
-        for mode in crate::tools::SelectMode::ALL {
+        for mode in kadakas_ui_core::tools::SelectMode::ALL {
             let icon = match mode {
-                crate::tools::SelectMode::Rectangle => "rectangle",
-                crate::tools::SelectMode::Lasso => "lasso",
+                kadakas_ui_core::tools::SelectMode::Rectangle => "rectangle",
+                kadakas_ui_core::tools::SelectMode::Lasso => "lasso",
             };
             let r = crate::icons::select_button_for(
                 ui,
@@ -539,10 +539,10 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
                 settings.select_mode == mode,
             );
             let tip = match mode {
-                crate::tools::SelectMode::Rectangle => {
+                kadakas_ui_core::tools::SelectMode::Rectangle => {
                     "Drag a box. Left to right selects what is inside, right to left what the box touches."
                 }
-                crate::tools::SelectMode::Lasso => {
+                kadakas_ui_core::tools::SelectMode::Lasso => {
                     "Drag a free-hand shape. It ends to the right of its start: objects inside. To the left: objects it touches."
                 }
             };
@@ -639,8 +639,11 @@ fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings)
         Tool::Trim | Tool::Extend => {
             ui.horizontal_wrapped(|ui| {
                 for (mode, label) in [
-                    (crate::tools::CutTo::AllObjects, "All objects"),
-                    (crate::tools::CutTo::SelectedObjects, "Selected objects"),
+                    (kadakas_ui_core::tools::CutTo::AllObjects, "All objects"),
+                    (
+                        kadakas_ui_core::tools::CutTo::SelectedObjects,
+                        "Selected objects",
+                    ),
                 ] {
                     if ui.selectable_label(s.cut_to == mode, label).clicked() {
                         s.cut_to = mode;
@@ -719,12 +722,12 @@ pub fn data_bar(
                 ui.label("Material");
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
             }
-            Tool::Massing => s.massing.bar(ui),
+            Tool::Massing => crate::gis_ui::massing_bar(&mut s.massing, ui),
             Tool::SiteModifier => {
-                for mode in crate::tools::ModifierMode::ALL {
+                for mode in kadakas_ui_core::tools::ModifierMode::ALL {
                     ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
                 }
-                if s.modifier_mode == crate::tools::ModifierMode::Pad {
+                if s.modifier_mode == kadakas_ui_core::tools::ModifierMode::Pad {
                     ui.label("Elevation");
                     ui.add(
                         DragValue::new(&mut s.pad_elevation)

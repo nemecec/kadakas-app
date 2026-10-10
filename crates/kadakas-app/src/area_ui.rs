@@ -20,83 +20,8 @@ use kadakas_site::SiteTerrain;
 
 use crate::canvas::{Style, color32};
 use crate::panels::run_command;
-use crate::tools::{Tool, ToolSettings};
 use crate::view::View;
-
-/// Settings of the Hardscape tool and the Landscape Area tool.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AreaToolSettings {
-    /// Hardscape style of new hardscapes. `None`: a plain slab with the material of the Data bar.
-    pub hardscape_style: Option<ResourceId>,
-    /// Draw a path (a center line with a width) instead of a slab.
-    pub path: bool,
-    pub width: f64,
-    pub join: Join,
-    /// Landscape area style of new areas.
-    pub landscape_style: Option<ResourceId>,
-}
-
-impl Default for AreaToolSettings {
-    fn default() -> Self {
-        AreaToolSettings {
-            hardscape_style: None,
-            path: false,
-            width: 1200.0,
-            join: Join::Miter,
-            landscape_style: None,
-        }
-    }
-}
-
-impl AreaToolSettings {
-    /// The command that adds a hardscape drawn with these settings. `None` means: add the plain
-    /// shape, as before hardscape styles.
-    pub fn hardscape_command(&self, points: &[kadakas_core::curve::Vertex]) -> Option<Command> {
-        if !self.path && self.hardscape_style.is_none() {
-            return None;
-        }
-        let mut patch = HardscapePatch {
-            style: self.hardscape_style,
-            ..Default::default()
-        };
-        let boundary = if self.path {
-            patch.center = Some(points.to_vec());
-            patch.width = Some(self.width);
-            patch.join = Some(self.join);
-            None
-        } else {
-            Some(points.to_vec())
-        };
-        Some(Command::AddHardscape {
-            boundary,
-            patch: Box::new(patch),
-            layer: None,
-            class: None,
-            attrs: Default::default(),
-        })
-    }
-
-    /// The command that adds a landscape area drawn with these settings, or `None` for a plain area.
-    pub fn landscape_command(
-        &self,
-        points: &[kadakas_core::curve::Vertex],
-        name: &str,
-    ) -> Option<Command> {
-        let style = self.landscape_style?;
-        let patch = LandscapePatch {
-            style: Some(style),
-            ..Default::default()
-        };
-        Some(Command::AddLandscapeArea {
-            boundary: points.to_vec(),
-            name: name.into(),
-            patch: Box::new(patch),
-            layer: None,
-            class: None,
-            attrs: Default::default(),
-        })
-    }
-}
+use kadakas_ui_core::tools::{Tool, ToolSettings};
 
 fn style_combo(
     ui: &mut Ui,

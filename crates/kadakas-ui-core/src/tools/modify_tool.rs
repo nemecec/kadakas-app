@@ -12,7 +12,7 @@ use kadakas_core::edit2d::plan::{self, Corner, OffsetTo};
 use kadakas_core::model::ObjectId;
 
 use super::{Ctx, Effect, Input, Preview, State, Tool, ToolMachine};
-use kadakas_ui_core::hit;
+use crate::hit;
 
 /// How the Trim and Extend tools pick the objects they cut to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

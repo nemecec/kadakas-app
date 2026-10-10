@@ -10,9 +10,9 @@ use kadakas_core::plants::tag::{TagCounts, tag_counts};
 
 use crate::plant_draw;
 use crate::tess;
-use crate::tools::Preview;
 use crate::view::{View, grid_step};
 use kadakas_ui_core::snap::SnapResult;
+use kadakas_ui_core::tools::Preview;
 
 pub const SELECT_COLOR: Color32 = Color32::from_rgb(30, 120, 255);
 const PREVIEW_COLOR: Color32 = Color32::from_rgb(230, 120, 20);

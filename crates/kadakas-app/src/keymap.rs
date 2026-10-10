@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use egui::{Key, Modifiers};
 use kadakas_render::StandardView;
 
-use crate::tools::Tool;
+use kadakas_ui_core::tools::Tool;
 
 /// One key plus modifiers. `command` is Cmd on macOS and Ctrl elsewhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

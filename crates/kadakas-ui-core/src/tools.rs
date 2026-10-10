@@ -9,7 +9,7 @@ use kadakas_core::model::{
     Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind,
 };
 
-use kadakas_ui_core::hit;
+use crate::hit;
 
 mod annot_tool;
 mod irrigation_tool;
@@ -275,13 +275,13 @@ pub struct ToolSettings {
     /// The direction in which a sloped pad falls, in degrees counterclockwise from +X.
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
-    pub areas: crate::area_ui::AreaToolSettings,
+    pub areas: crate::area::AreaToolSettings,
     /// Height, floors and roof of the Massing Model tool.
-    pub massing: crate::gis_ui::MassingToolSettings,
+    pub massing: crate::massing::MassingToolSettings,
     /// Mode and options of the Irrigation tool.
     pub irrigation: IrrSettings,
     /// Mode and options of the Grading tool.
-    pub grading: crate::grading_ui::GradingSettings,
+    pub grading: crate::grading::GradingSettings,
     /// Style and options of the annotation tools.
     pub annot: AnnotSettings,
     /// Options of Rotate, Mirror, Scale, Offset, Fillet, Chamfer, Trim, Extend and Split.
@@ -658,7 +658,7 @@ impl ToolMachine {
             _ => return vec![],
         }
         self.state = State::Idle;
-        crate::grading_ui::command(cx.doc, &cx.settings.grading, &pts)
+        crate::grading::command(cx.doc, &cx.settings.grading, &pts)
             .map(Effect::Exec)
             .into_iter()
             .collect()
@@ -833,7 +833,7 @@ impl ToolMachine {
             (State::Points(pts), Tool::Grading) => {
                 let mut v: Vec<DVec2> = pts.clone();
                 v.push(cursor);
-                if cx.settings.grading.mode == crate::grading_ui::GradingMode::Wall {
+                if cx.settings.grading.mode == crate::grading::GradingMode::Wall {
                     Preview::Path {
                         vertices: curve::corners(&v),
                         closed: false,
@@ -1056,7 +1056,7 @@ mod tests {
 
     #[test]
     fn grading_tool_makes_the_object_of_its_mode() {
-        use crate::grading_ui::GradingMode;
+        use crate::grading::GradingMode;
         let mut f = Fixture::new(Tool::Grading);
         // A wall takes any number of clicks; a double click does not repeat the point.
         f.click(0.0, 0.0);

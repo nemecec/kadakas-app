@@ -9,8 +9,8 @@ use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 
 use crate::canvas::{Style, color32};
-use crate::tools::{DimToolMode, Tool, ToolSettings};
 use crate::view::View;
+use kadakas_ui_core::tools::{DimToolMode, Tool, ToolSettings};
 
 use kadakas_ui_core::annot_pick::object_prims;
 
@@ -244,7 +244,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
 
 /// The commands of the Annotation part of the tool panel: the Graphic Legend command and default
 /// styles. The app runs what is left in `pending` and places the legend when `legend_requested` is set.
-pub fn panel_buttons(ui: &mut Ui, doc: &Document, s: &mut crate::tools::AnnotSettings) {
+pub fn panel_buttons(ui: &mut Ui, doc: &Document, s: &mut kadakas_ui_core::tools::AnnotSettings) {
     let cmds = &mut s.pending;
     if ui
         .button("Graphic Legend")

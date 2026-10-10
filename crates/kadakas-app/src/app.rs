@@ -24,15 +24,15 @@ use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
 use crate::screenshot;
 use crate::theme::{self, ThemeChoice};
-use crate::tools::{
-    Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
-};
 use crate::view::{View, grid_step};
 use crate::view_history::{self, ViewHistory};
 use crate::view3d::{self, View3d};
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
 use kadakas_ui_core::snap::{self, SnapResult};
+use kadakas_ui_core::tools::{
+    Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
+};
 
 /// Pan step of an arrow key, in px.
 const PAN_STEP_PX: f32 = 60.0;
@@ -1235,7 +1235,7 @@ impl KadakasApp {
         let preview = if resp.hovered() || self.machine.is_busy() {
             self.machine.preview(self.cursor, &cx)
         } else {
-            crate::tools::Preview::None
+            kadakas_ui_core::tools::Preview::None
         };
         let frame = canvas::Frame {
             doc: self.session.editor.doc(),

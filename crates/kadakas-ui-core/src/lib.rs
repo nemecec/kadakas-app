@@ -9,5 +9,9 @@
 //! - [`snap`]: the geometry that the pointer snaps to, and the snap result.
 
 pub mod annot_pick;
+pub mod area;
+pub mod grading;
 pub mod hit;
+pub mod massing;
 pub mod snap;
+pub mod tools;

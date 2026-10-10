@@ -15,8 +15,8 @@ use kadakas_irrigation::{Catalog, DEFAULT_TOLERANCE, analyze, zone_commands};
 
 use crate::canvas::Style;
 use crate::panels::{Fields, run_command};
-use crate::tools::{IrrMode, ToolSettings};
 use crate::view::View;
+use kadakas_ui_core::tools::{IrrMode, ToolSettings};
 
 fn color(c: [u8; 3], alpha: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha)

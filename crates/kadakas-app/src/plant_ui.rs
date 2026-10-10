@@ -17,13 +17,13 @@ use serde_json::{Map, Value, json};
 
 use crate::canvas::color32;
 use crate::panels::run_command;
-use crate::tools::{By, PlantMode, ToolSettings};
+use kadakas_ui_core::tools::{By, PlantMode, ToolSettings};
 
 // ---------------------------------------------------------------------------
 // Tool bar
 
 /// The spacing field, with the choice to use the spread of the plant as spacing.
-fn spacing_row(ui: &mut Ui, ps: &mut crate::tools::PlantSettings, label: &str) {
+fn spacing_row(ui: &mut Ui, ps: &mut kadakas_ui_core::tools::PlantSettings, label: &str) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add_enabled(!ps.spacing_is_spread, mm(&mut ps.spacing));

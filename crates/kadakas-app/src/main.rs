@@ -47,7 +47,6 @@ mod site_ui;
 mod snap_ui;
 mod tess;
 mod theme;
-mod tools;
 mod vertex;
 mod view;
 mod view3d;

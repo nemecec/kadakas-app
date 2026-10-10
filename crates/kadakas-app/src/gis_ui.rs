@@ -11,6 +11,7 @@ use kadakas_core::massing::{Massing, RoofStyle};
 use kadakas_core::underlay::Underlay;
 
 use crate::view::View;
+use kadakas_ui_core::massing::MassingToolSettings;
 
 /// Longest side of the texture of an underlay in pixels. Bigger rasters are reduced.
 const TEXTURE_SIDE: u32 = 2048;
@@ -185,82 +186,43 @@ pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
     commit
 }
 
-/// Settings of the Massing Model tool.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MassingToolSettings {
-    /// True: the height is floors times the floor height. False: an eave height.
-    pub by_floors: bool,
-    pub height: f64,
-    pub floors: u32,
-    pub floor_height: f64,
-    pub roof: RoofStyle,
-    pub pitch_deg: f64,
-}
-
-impl Default for MassingToolSettings {
-    fn default() -> Self {
-        MassingToolSettings {
-            by_floors: true,
-            height: kadakas_core::massing::DEFAULT_HEIGHT,
-            floors: 2,
-            floor_height: kadakas_core::massing::DEFAULT_FLOOR_HEIGHT,
-            roof: RoofStyle::Flat,
-            pitch_deg: kadakas_core::massing::DEFAULT_PITCH_DEG,
-        }
+/// The options in the Data bar.
+pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
+    ui.radio_value(&mut s.by_floors, false, "Height");
+    ui.radio_value(&mut s.by_floors, true, "Floors");
+    if s.by_floors {
+        let mut n = s.floors as i64;
+        ui.add(DragValue::new(&mut n).range(1..=300));
+        s.floors = n.clamp(1, 300) as u32;
+        ui.label("x");
+        ui.add(
+            DragValue::new(&mut s.floor_height)
+                .speed(50.0)
+                .range(500.0..=20000.0)
+                .suffix(" mm"),
+        );
+    } else {
+        ui.add(
+            DragValue::new(&mut s.height)
+                .speed(50.0)
+                .range(100.0..=500000.0)
+                .suffix(" mm"),
+        );
     }
-}
-
-impl MassingToolSettings {
-    /// The massing model for a footprint drawn with the tool.
-    pub fn massing(&self, footprint: Vec<kadakas_core::curve::Vertex>) -> Massing {
-        let mut m = Massing::new(footprint, self.height.max(1.0));
-        m.floors = self.by_floors.then_some(self.floors.max(1));
-        m.floor_height = self.floor_height.max(1.0);
-        m.roof = self.roof;
-        m.pitch_deg = self
-            .pitch_deg
-            .clamp(0.0, kadakas_core::massing::MAX_PITCH_DEG);
-        m
-    }
-
-    /// The options in the Data bar.
-    pub fn bar(&mut self, ui: &mut Ui) {
-        ui.radio_value(&mut self.by_floors, false, "Height");
-        ui.radio_value(&mut self.by_floors, true, "Floors");
-        if self.by_floors {
-            let mut n = self.floors as i64;
-            ui.add(DragValue::new(&mut n).range(1..=300));
-            self.floors = n.clamp(1, 300) as u32;
-            ui.label("x");
-            ui.add(
-                DragValue::new(&mut self.floor_height)
-                    .speed(50.0)
-                    .range(500.0..=20000.0)
-                    .suffix(" mm"),
-            );
-        } else {
-            ui.add(
-                DragValue::new(&mut self.height)
-                    .speed(50.0)
-                    .range(100.0..=500000.0)
-                    .suffix(" mm"),
-            );
-        }
-        egui::ComboBox::from_id_salt("massing_tool_roof")
-            .selected_text(format!("Roof: {}", self.roof.name()))
-            .show_ui(ui, |ui| {
-                for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
-                    ui.selectable_value(&mut self.roof, r, r.name());
-                }
-            });
-        if self.roof != RoofStyle::Flat {
-            ui.add(
-                DragValue::new(&mut self.pitch_deg)
-                    .speed(1.0)
-                    .range(1.0..=80.0)
-                    .suffix("\u{b0}"),
-            );
-        }
+    egui::ComboBox::from_id_salt("massing_tool_roof")
+        .selected_text(format!("Roof: {}", s.roof.name()))
+        .show_ui(ui, |ui| {
+            for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
+                ui.selectable_value(&mut s.roof, r, r.name());
+            }
+        });
+    if s.roof != RoofStyle::Flat {
+        ui.add(
+            DragValue::new(&mut s.pitch_deg)
+                .speed(1.0)
+                .range(1.0..=80.0)
+                .suffix("\u{b0}"),
+        );
     }
 }
 
@@ -311,31 +273,7 @@ impl ReadoutState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kadakas_core::curve::corners;
     use kadakas_core::georef::Georeference;
-
-    #[test]
-    fn tool_settings_make_a_valid_model() {
-        let ring = corners(&[
-            DVec2::ZERO,
-            DVec2::new(5000.0, 0.0),
-            DVec2::new(5000.0, 4000.0),
-        ]);
-        let mut s = MassingToolSettings::default();
-        let m = s.massing(ring.clone());
-        assert_eq!((m.floors, m.roof), (Some(2), RoofStyle::Flat));
-        assert!(m.problem().is_none());
-        s.by_floors = false;
-        s.roof = RoofStyle::Hip;
-        s.pitch_deg = 200.0;
-        s.height = 0.0;
-        let m = s.massing(ring);
-        assert_eq!(
-            (m.floors, m.pitch_deg),
-            (None, kadakas_core::massing::MAX_PITCH_DEG)
-        );
-        assert!(m.height >= 1.0);
-    }
 
     #[test]
     fn the_readout_follows_the_georeference() {
