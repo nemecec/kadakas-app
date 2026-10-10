@@ -119,12 +119,12 @@ def test_update_adds_sources_and_checks_input(cad):
 
 
 def test_site_methods_reach_mcp(mcp):
-    names = {t["name"] for t in mcp.request("tools/list")["result"]["tools"]}
-    assert {"site_create", "site_update", "site_elevation", "site_cut_fill", "site_contours"} <= names
+    tools = {t["name"]: t for t in mcp.request("tools/list")["result"]["tools"]}
+    assert {"site.create", "site.update", "site.elevation", "site.cut_fill", "site.contours"} <= set(tools["site"]["inputSchema"]["properties"]["method"]["enum"])
     ids = []
     for p in [[0, 0, 0], [10000, 0, 1000], [0, 10000, 2000], [10000, 10000, 3000]]:
-        r = mcp.tool_json("execute", {"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": p}}})
+        r = mcp.method_json("document", "execute", {"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": p}}})
         ids += r["created"]
-    site = mcp.tool_json("site_create", {"source_ids": ids})["id"]
-    z = mcp.tool_json("site_elevation", {"id": site, "x": 5000, "y": 5000})["z"]
+    site = mcp.method_json("site", "site.create", {"source_ids": ids})["id"]
+    z = mcp.method_json("site", "site.elevation", {"id": site, "x": 5000, "y": 5000})["z"]
     assert z == approx(1500)

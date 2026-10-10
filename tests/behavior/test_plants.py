@@ -437,10 +437,10 @@ def test_styles_survive_save_and_open(make_serve, tmp_path):
 
 
 def test_mcp_offers_the_plant_tools(mcp):
-    created = mcp.tool_json("plant_style_create", {"name": "Box", "spread": 1000, "height": 800})
-    placed = mcp.tool_json("plants_place", {"mode": "single", "style": created["id"], "at": [0, 0]})
+    created = mcp.method_json("plants", "plant_style.create", {"name": "Box", "spread": 1000, "height": 800})
+    placed = mcp.method_json("plants", "plants.place", {"mode": "single", "style": created["id"], "at": [0, 0]})
     assert placed["count"] == 1
-    assert mcp.tool_json("report_plant_schedule")["total_count"] == 1
+    assert mcp.method_json("reports", "report.plant_schedule")["total_count"] == 1
 
 
 def test_schedule_rows_split_by_size_container_and_root(cad):
