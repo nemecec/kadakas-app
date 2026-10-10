@@ -24,6 +24,8 @@
 //! - an empty resource name becomes `Resource <last 8 characters of the ID>`; when two resources
 //!   of one type have the same name (without case), the one with the smaller ID keeps it and
 //!   the others get ` (<last 8 characters of the ID>)` added;
+//! - the order of objects and layers comes from their keys (see `order`): the lists are sorted by
+//!   key, then by ID, and every thing carries its key in the field `order`;
 //! - **quarantine**: a thing that does not read as its type, or fails the checks of the file
 //!   format (`validate_entity`), is left out and reported. It stays in the replica, so nothing
 //!   is lost: when a later edit makes it valid, it appears. Objects that need a quarantined
@@ -132,7 +134,7 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
 
     // Layers and classes.
     let mut layers: Vec<Layer> = Vec::new();
-    for (id, props) in ordered(view, Kind::Layer, base.layers.iter().map(|l| l.id.0)) {
+    for (id, props) in ordered(view, Kind::Layer, std::iter::empty()) {
         let parsed = validate_entity(Kind::Layer, id, &props)
             .and_then(|()| read::<Layer>(Kind::Layer, id, &props));
         match parsed {
@@ -140,6 +142,7 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
             Err(e) => cx.quarantine(Kind::Layer, id, e),
         }
     }
+    sort_by_key(&mut layers, |l| (&l.extra, l.id.0));
     if !layers.iter().any(|l| l.id == FIRST_LAYER) {
         layers.insert(0, defaults.layers[0].clone());
         cx.repair("the first layer was not valid: the default layer is used".into());
@@ -163,7 +166,7 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
 
     // Objects.
     let mut objects: Vec<Object> = Vec::new();
-    for (id, props) in ordered(view, Kind::Object, base.objects.keys().map(|o| o.0)) {
+    for (id, props) in ordered(view, Kind::Object, std::iter::empty()) {
         let parsed = validate_entity(Kind::Object, id, &props)
             .and_then(|()| read::<Object>(Kind::Object, id, &props));
         match parsed {
@@ -171,6 +174,8 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
             Err(e) => cx.quarantine(Kind::Object, id, e),
         }
     }
+
+    sort_by_key(&mut objects, |o| (&o.extra, o.id.0));
 
     // The settings of the document.
     let settings = unflatten(
@@ -235,6 +240,21 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
         quarantined: cx.quarantined,
         repairs: cx.repairs,
     }
+}
+
+/// Sorts a list by the stacking key (the field `order` in `extra`), then by ID. A thing without a
+/// key comes first.
+fn sort_by_key<T>(list: &mut [T], key: impl Fn(&T) -> (&Map<String, Value>, Uid)) {
+    let text = |m: &Map<String, Value>| {
+        m.get("order")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    list.sort_by_cached_key(|x| {
+        let (extra, id) = key(x);
+        (text(extra), id)
+    });
 }
 
 /// The core refused the document with this message. Leaves out the thing that the message names

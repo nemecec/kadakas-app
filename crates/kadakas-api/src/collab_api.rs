@@ -414,6 +414,38 @@ fn apply_remote(s: &mut Session) -> bool {
     changed
 }
 
+/// Copies the stacking keys that the client's view has into the document, silently (see
+/// `Editor::stamp_order_keys`). A local edit gets its keys from the client, and the document must
+/// carry them so that it matches what the others build.
+fn stamp_keys(s: &mut Session) {
+    use kadakas_collab::{Kind, Target};
+    let Some(link) = s.collab.link.as_ref() else {
+        return;
+    };
+    if !link.client.has_state() {
+        return;
+    }
+    let view = link.client.view();
+    let key = |kind, id: Uid| {
+        view.alive(Target::new(kind, id))
+            .and_then(|e| e.get("order"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let doc = s.editor.doc();
+    let objects = doc
+        .objects
+        .keys()
+        .filter_map(|id| key(Kind::Object, id.0).map(|k| (*id, k)))
+        .collect();
+    let layers = doc
+        .layers
+        .iter()
+        .filter_map(|l| key(Kind::Layer, l.id.0).map(|k| (l.id, k)))
+        .collect();
+    s.editor.stamp_order_keys(&objects, &layers);
+}
+
 struct Moved {
     received: usize,
     sent: usize,
@@ -450,6 +482,9 @@ struct Cycle {
 fn sync_cycle(s: &mut Session, now: u64) -> Result<Cycle, RpcError> {
     let (pushed, problems) = push_local(s);
     let moved = pump(s, now);
+    if !pushed.is_empty() {
+        stamp_keys(s);
+    }
     let changed = apply_remote(s);
     if let Some(l) = s.collab.link.as_mut() {
         let events = l.client.take_events();

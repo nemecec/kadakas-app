@@ -1806,6 +1806,36 @@ impl Editor {
         Some(cs)
     }
 
+    /// Writes stacking keys into the objects and layers (the field `order` in `extra`) without a
+    /// command, a revision or a change set. The keys are bookkeeping for collaboration (see
+    /// `kadakas-collab`): the document must carry them so that a saved file keeps them, but they
+    /// are not a change that a user made or that anything draws. Returns true if a key changed.
+    pub fn stamp_order_keys(
+        &mut self,
+        objects: &std::collections::HashMap<ObjectId, String>,
+        layers: &std::collections::HashMap<LayerId, String>,
+    ) -> bool {
+        let mut changed = false;
+        let set = |extra: &mut serde_json::Map<String, Value>, key: &String| {
+            if extra.get("order").and_then(Value::as_str) == Some(key.as_str()) {
+                return false;
+            }
+            extra.insert("order".into(), Value::String(key.clone()));
+            true
+        };
+        for (id, key) in objects {
+            if let Some(o) = self.doc.object_mut(*id) {
+                changed |= set(&mut o.extra, key);
+            }
+        }
+        for l in &mut self.doc.layers {
+            if let Some(key) = layers.get(&l.id) {
+                changed |= set(&mut l.extra, key);
+            }
+        }
+        changed
+    }
+
     /// Who makes the changes from now on. The change sets say it (see `crate::change`). A new
     /// editor starts with `Origin::User`.
     pub fn set_origin(&mut self, origin: Origin) {

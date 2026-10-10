@@ -42,7 +42,7 @@
 //! Limits: the z-order of objects and the order of layers are not shared (see `replica`). The
 //! active layer and the active class are personal settings: they are not shared.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kadakas_core::change::ChangeSet;
 use kadakas_core::model::{Document, ObjectId};
@@ -55,7 +55,15 @@ use crate::replica::{Replica, same_json};
 /// The properties of a thing as JSON, without its `id`. `None` if the document has no such
 /// thing.
 fn props_of(doc: &Document, target: Target) -> Option<Map<String, Value>> {
-    props_of_whole(doc, target).map(|m| flatten(target.kind, m))
+    props_of_whole(doc, target).map(|m| {
+        let mut m = flatten(target.kind, m);
+        // The key of the stacking order is not compared with the document: `order_ops` finds
+        // out of the list order what keys are needed.
+        if matches!(target.kind, Kind::Object | Kind::Layer) {
+            m.remove("order");
+        }
+        m
+    })
 }
 
 /// The top-level fields of a thing.
@@ -257,13 +265,119 @@ pub fn diff_replicas(base: &Replica, target: &Replica) -> Vec<Op> {
 
 /// Reads a whole document into a replica. All content has the baseline writer.
 pub fn replica_of(doc: &Document) -> Replica {
+    let keys = document_keys(doc);
     let mut r = Replica::new();
     for t in all_targets(doc) {
-        if let Some(props) = props_of(doc, t) {
+        if let Some(mut props) = props_of(doc, t) {
+            if let Some(k) = keys.get(&t) {
+                props.insert("order".into(), Value::String(k.clone()));
+            }
             r.insert_baseline(t, props);
         }
     }
     r
+}
+
+/// The key in the `order` field of an object or layer (kept in `extra`), if it has one.
+fn stored_key(extra: &Map<String, Value>) -> Option<String> {
+    extra
+        .get("order")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+}
+
+/// The stacking keys of a document: the keys that its objects and layers carry, if every one of a
+/// list has a key and the keys are increasing; else new keys by position.
+fn document_keys(doc: &Document) -> BTreeMap<Target, String> {
+    fn lists_keys(items: Vec<(Target, Option<String>)>, out: &mut BTreeMap<Target, String>) {
+        let given: Vec<Option<String>> = items.iter().map(|(_, k)| k.clone()).collect();
+        let sorted = given.iter().all(Option::is_some) && given.windows(2).all(|w| w[0] < w[1]);
+        let keys: Vec<String> = if sorted {
+            given.into_iter().flatten().collect()
+        } else {
+            crate::order::keys_between(None, None, items.len())
+        };
+        for ((t, _), k) in items.into_iter().zip(keys) {
+            out.insert(t, k);
+        }
+    }
+    let mut out = BTreeMap::new();
+    lists_keys(
+        doc.layers
+            .iter()
+            .map(|l| (Target::new(Kind::Layer, l.id.0), stored_key(&l.extra)))
+            .collect(),
+        &mut out,
+    );
+    let mut per_layer: BTreeMap<kadakas_core::model::LayerId, Vec<(Target, Option<String>)>> =
+        BTreeMap::new();
+    for o in doc.objects.values() {
+        per_layer
+            .entry(o.layer)
+            .or_default()
+            .push((Target::new(Kind::Object, o.id.0), stored_key(&o.extra)));
+    }
+    for items in per_layer.into_values() {
+        lists_keys(items, &mut out);
+    }
+    out
+}
+
+/// The key of a thing in a replica, if it has one.
+fn key_in(r: &Replica, t: Target) -> Option<String> {
+    r.alive(t)
+        .and_then(|e| e.get("order"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// The operations that give a new key to every object that is out of place in the list of its
+/// layer (and to every layer out of place in the list of layers, if `layers_too`). `only` limits
+/// the objects to these layers. The keys of the others stay.
+fn order_ops(
+    shadow: &Replica,
+    doc: &Document,
+    only: Option<&BTreeSet<kadakas_core::model::LayerId>>,
+    layers_too: bool,
+) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let mut emit = |items: Vec<Target>| {
+        // A thing that the replica has deleted stays deleted: it takes no key.
+        let items: Vec<Target> = items
+            .into_iter()
+            .filter(|t| shadow.alive(*t).is_some() || !shadow.contains(*t))
+            .collect();
+        let keys: Vec<Option<String>> = items.iter().map(|t| key_in(shadow, *t)).collect();
+        for (i, k) in crate::order::rekey(&keys) {
+            ops.push(Op::Set {
+                target: items[i],
+                prop: "order".into(),
+                value: Value::String(k),
+            });
+        }
+    };
+    if layers_too {
+        emit(
+            doc.layers
+                .iter()
+                .map(|l| Target::new(Kind::Layer, l.id.0))
+                .collect(),
+        );
+    }
+    let mut per_layer: BTreeMap<kadakas_core::model::LayerId, Vec<Target>> = BTreeMap::new();
+    for o in doc.objects.values() {
+        if only.is_none_or(|s| s.contains(&o.layer)) {
+            per_layer
+                .entry(o.layer)
+                .or_default()
+                .push(Target::new(Kind::Object, o.id.0));
+        }
+    }
+    for items in per_layer.into_values() {
+        emit(items);
+    }
+    ops
 }
 
 /// The operations that turn the thing in the replica into the thing in the document.
@@ -296,7 +410,7 @@ fn diff_thing(view: &Replica, target: Target, new: Option<Map<String, Value>>) -
                 }
             }
             for k in e.visible().keys() {
-                if !props.contains_key(k) {
+                if !props.contains_key(k) && !(k == "order" && target.kind != Kind::Class) {
                     ops.push(Op::Unset {
                         target,
                         prop: k.clone(),
@@ -344,12 +458,24 @@ pub fn ops_from_change(view: &Replica, doc: &Document, cs: &ChangeSet) -> Vec<Op
     if cs.document.georef || cs.document.drawing {
         targets.insert(Target::DOCUMENT);
     }
-    order(
-        targets
-            .into_iter()
-            .flat_map(|t| diff_thing(view, t, props_of(doc, t)))
-            .collect(),
-    )
+    let mut ops: Vec<Op> = targets
+        .into_iter()
+        .flat_map(|t| diff_thing(view, t, props_of(doc, t)))
+        .collect();
+    // Objects that were added or changed may have a new place in the stacking order.
+    let layers: BTreeSet<kadakas_core::model::LayerId> = cs
+        .added
+        .objects
+        .iter()
+        .chain(&cs.changed.objects)
+        .filter_map(|id| doc.object(*id).map(|o| o.layer))
+        .collect();
+    let layers_too = cs.op == "move_layer"
+        || [&cs.added, &cs.changed, &cs.removed]
+            .iter()
+            .any(|ids| !ids.layers.is_empty());
+    ops.extend(order_ops(view, doc, Some(&layers), layers_too));
+    order(ops)
 }
 
 fn uids<T: Copy + Into<Uid>>(ids: &[T]) -> Vec<Uid> {
@@ -369,6 +495,7 @@ pub fn ops_from_diff(view: &Replica, doc: &Document) -> Vec<Op> {
             ops.extend(diff_thing(view, *t, None));
         }
     }
+    ops.extend(order_ops(view, doc, None, true));
     order(ops)
 }
 
@@ -420,8 +547,10 @@ mod tests {
         let id = add_line(&mut ed, 0.0);
         let cs = last_change(&ed, rev);
         let ops = ops_from_change(&view, ed.doc(), &cs);
-        assert_eq!(ops.len(), 1);
+        // The object, and its key in the stacking order.
+        assert_eq!(ops.len(), 2);
         assert!(matches!(&ops[0], Op::Create { target, .. } if target.id == id.0));
+        assert!(matches!(&ops[1], Op::Set { prop, .. } if prop == "order"));
         view.apply_all(crate::op::Writer::BASELINE, &ops);
 
         // A move changes the shape property only.
@@ -463,7 +592,7 @@ mod tests {
         let a = add_line(&mut ed, 0.0);
         let b = add_line(&mut ed, 20.0);
         let ops = ops_from_diff(&view, ed.doc());
-        assert_eq!(ops.len(), 2);
+        assert_eq!(ops.len(), 4, "two objects and their keys");
         view.apply_all(crate::op::Writer::BASELINE, &ops);
         assert_eq!(view, replica_of(ed.doc()));
         // Remove a prop (a record entry cleared) and delete one object.

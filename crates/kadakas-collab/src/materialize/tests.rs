@@ -92,7 +92,15 @@ fn a_clean_replica_gives_the_same_document() {
     ed.execute(&cmd).unwrap();
     let r = replica_of(ed.doc());
     let m = materialize(&r, ed.doc());
-    assert_eq!(&m.doc, ed.doc());
+    // The document is the same, with the keys of the stacking order added.
+    let mut without = m.doc.clone();
+    for o in without.objects.values_mut() {
+        assert!(o.extra.remove("order").is_some());
+    }
+    for l in &mut without.layers {
+        assert!(l.extra.remove("order").is_some());
+    }
+    assert_eq!(&without, ed.doc());
     assert!(m.quarantined.is_empty() && m.repairs.is_empty());
     // A new document gets the content, in the order of the IDs.
     let m = materialize(&r, &Document::default());
@@ -614,4 +622,118 @@ fn an_older_whole_property_and_a_cut_one_merge() {
     let m = run(&r);
     let o = m.doc.object(ObjectId(n(5))).unwrap();
     assert!(o.attrs.fill.is_some() && o.attrs.pen.is_some());
+}
+
+#[test]
+fn objects_and_layers_follow_their_keys_and_ties_go_by_id() {
+    let mut r = replica_of(&base());
+    for (id, key) in [(30, "m"), (31, "c"), (32, "m"), (33, "x")] {
+        let mut o = rect(FIRST_LAYER.0);
+        o["order"] = json!(key);
+        make(&mut r, w(1, 1), Kind::Object, id, o);
+    }
+    let order = |m: &Materialized| -> Vec<Uid> { m.doc.objects.keys().map(|k| k.0).collect() };
+    let m = run(&r);
+    // c, then the two m (by ID), then x.
+    assert_eq!(order(&m), vec![n(31), n(30), n(32), n(33)]);
+    // The key is in the document, so a saved file keeps it.
+    let o = m.doc.object(ObjectId(n(31))).unwrap();
+    assert_eq!(o.extra["order"], json!("c"));
+    // The order of the host's own document does not matter.
+    let other = materialize(&r, &m.doc);
+    assert_eq!(order(&other), order(&m));
+    // Layers too.
+    let mut l = layer("design");
+    l["order"] = json!("0a");
+    make(&mut r, w(1, 2), Kind::Layer, 40, l);
+    let m = run(&r);
+    assert_eq!(m.doc.layers[0].id.0, n(40), "a small key comes first");
+}
+
+#[test]
+fn a_local_change_of_the_order_becomes_new_keys_between_neighbours() {
+    use kadakas_core::command::{Arrange, Command, Editor};
+    let mut ed = Editor::with_sequential_ids();
+    let ids: Vec<ObjectId> = (0..4)
+        .map(|i| {
+            let cmd: Command = serde_json::from_value(json!({
+                "op": "add_object", "shape": {"kind": "rect", "min": [i, 0], "max": [i + 1, 1]}
+            }))
+            .unwrap();
+            ObjectId(ed.execute(&cmd).unwrap().created[0])
+        })
+        .collect();
+    let mut shadow = replica_of(ed.doc());
+    let key = |r: &Replica, id: ObjectId| -> String {
+        r.alive(Target::new(Kind::Object, id.0))
+            .unwrap()
+            .get("order")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let before: Vec<String> = ids.iter().map(|i| key(&shadow, *i)).collect();
+    assert!(before.windows(2).all(|p| p[0] < p[1]));
+    // Send the first object to the front: one new key, the others keep theirs.
+    let rev = ed.revision();
+    ed.execute(&Command::Arrange {
+        ids: vec![ids[0]],
+        how: Arrange::Front,
+    })
+    .unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    shadow.apply_all(Writer::BASELINE, &ops);
+    assert!(key(&shadow, ids[0]) > key(&shadow, ids[3]));
+    for i in &ids[1..] {
+        assert_eq!(
+            key(&shadow, *i),
+            before[ids.iter().position(|x| x == i).unwrap()]
+        );
+    }
+    // A layer move is a change of the layer order.
+    ed.execute(&Command::AddLayer {
+        name: "B".into(),
+        elevation: 0.0,
+        scale: None,
+        kind: None,
+    })
+    .unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    shadow.apply_all(Writer::BASELINE, &ops);
+    let second = ed.doc().layers[1].id;
+    let rev = ed.revision();
+    ed.execute(&Command::MoveLayer {
+        id: second,
+        index: 0,
+    })
+    .unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    assert_eq!(cs.op, "move_layer");
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    assert_eq!(ops.len(), 1);
+    shadow.apply_all(Writer::BASELINE, &ops);
+    let m = materialize(&shadow, ed.doc());
+    assert_eq!(m.doc.layers[0].id, second);
 }

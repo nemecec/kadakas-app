@@ -550,11 +550,20 @@ impl Client {
         let mut applied = Vec::new();
         let mut inverse = Vec::new();
         let total = ops.len();
+        let mut created: Vec<crate::op::Target> = Vec::new();
         for op in ops {
             let (out, inv) = self.view.apply_inverse(w, &op);
             if out.is_applied() {
+                // The key of a new thing is part of its creation: undo deletes the thing, and the
+                // key goes with it.
+                let own_key = op.prop() == Some("order") && created.contains(&op.target());
+                if let Op::Create { target, .. } = &op {
+                    created.push(*target);
+                }
                 applied.push(op);
-                inverse.extend(inv);
+                if !own_key {
+                    inverse.extend(inv);
+                }
             }
         }
         if applied.len() < total {

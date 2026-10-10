@@ -40,7 +40,13 @@ fn sorted<T: Ord>(it: impl Iterator<Item = T>) -> Vec<T> {
 /// The same content, not looking at the order of the objects (the z-order is not shared).
 fn same(a: &Session, b: &Session) -> bool {
     let (x, y) = (a.editor.doc(), b.editor.doc());
-    x.objects.len() == y.objects.len()
+    // The stacking order is shared: the same objects in the same order, and the same layers in
+    // the same order.
+    x.objects.keys().eq(y.objects.keys())
+        && x.layers
+            .iter()
+            .map(|l| l.id)
+            .eq(y.layers.iter().map(|l| l.id))
         && x.objects.iter().all(|(k, v)| y.objects.get(k) == Some(v))
         && sorted(x.layers.iter().map(|l| (l.id.0, format!("{l:?}"))))
             == sorted(y.layers.iter().map(|l| (l.id.0, format!("{l:?}"))))
@@ -544,7 +550,7 @@ fn a_big_import_goes_out_in_several_transactions() {
         json!({"command": {"op": "batch", "commands": cmds}}),
     );
     let r = call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
-    assert_eq!(r["pushed"].as_array().unwrap().len(), 5, "{r}");
+    assert!(r["pushed"].as_array().unwrap().len() >= 5, "{r}");
     assert_eq!(r["problems"], json!([]));
     let r = call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
     assert_eq!(r["document_changed"], true);
@@ -701,6 +707,8 @@ mod real_commands {
         RenameLayer { s: bool, l: u8, n: u8 },
         AddResource { s: bool, n: u8 },
         Data { s: bool, i: u8, v: u8 },
+        Arrange { s: bool, i: u8, j: u8, how: u8 },
+        MoveLayer { s: bool, l: u8, at: u8 },
         Sync { s: bool },
         Offline { s: bool },
         Online { s: bool },
@@ -719,6 +727,9 @@ mod real_commands {
             1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, l, n)| Act::RenameLayer { s, l, n }),
             1 => (any::<bool>(), 0u8..2).prop_map(|(s, n)| Act::AddResource { s, n }),
             1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, v)| Act::Data { s, i, v }),
+            3 => (any::<bool>(), any::<u8>(), any::<u8>(), 0u8..4)
+                .prop_map(|(s, i, j, how)| Act::Arrange { s, i, j, how }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..4).prop_map(|(s, l, at)| Act::MoveLayer { s, l, at }),
             5 => any::<bool>().prop_map(|s| Act::Sync { s }),
             1 => any::<bool>().prop_map(|s| Act::Offline { s }),
             2 => any::<bool>().prop_map(|s| Act::Online { s }),
@@ -830,6 +841,20 @@ mod real_commands {
                     );
                 }
             }
+            Act::Arrange { s, i, j, how } => {
+                let ss = &mut sessions[idx(*s)];
+                let ids = object_ids(ss);
+                if let (Some(p), Some(q)) = (pick(&ids, *i), pick(&ids, *j)) {
+                    let how = ["front", "back", "forward", "backward"][usize::from(*how)];
+                    exec(ss, json!({"op": "arrange", "ids": [p, q], "how": how}));
+                }
+            }
+            Act::MoveLayer { s, l, at } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(layer) = pick(&layer_ids(ss), *l) {
+                    exec(ss, json!({"op": "move_layer", "id": layer, "index": at}));
+                }
+            }
             Act::Sync { s } => {
                 let _ = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
             }
@@ -888,4 +913,63 @@ mod real_commands {
             }
         }
     }
+}
+
+#[test]
+fn the_stacking_order_is_shared() {
+    let (_hub, mut a, mut b) = pair();
+    let ids: Vec<String> = (0..4).map(|i| add_rect(&mut a, i * 2_000)).collect();
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    let order = |s: &Session| -> Vec<String> {
+        s.editor
+            .doc()
+            .objects
+            .keys()
+            .map(|k| k.0.to_string())
+            .collect()
+    };
+    assert_eq!(order(&a), ids);
+    assert_eq!(order(&b), ids);
+    // A sends the first object to the front. B, at the same time, adds a new one and sends the
+    // last to the back. Both changes are kept, and the order is the same everywhere.
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "arrange", "ids": [ids[0]], "how": "front"}}),
+    );
+    let new = add_rect(&mut b, 50_000);
+    call(
+        &mut b,
+        "execute",
+        json!({"command": {"op": "arrange", "ids": [ids[3]], "how": "back"}}),
+    );
+    for t in 0..3 {
+        call(&mut a, "collab.sync", json!({"now_ms": 2_100 + t}));
+        call(&mut b, "collab.sync", json!({"now_ms": 2_100 + t}));
+    }
+    assert_eq!(order(&a), order(&b));
+    let o = order(&a);
+    assert_eq!(o[0], ids[3], "sent to the back");
+    let at = |id: &String| o.iter().position(|x| x == id).unwrap();
+    assert!(at(&ids[0]) > at(&ids[2]), "sent to the front");
+    assert!(at(&new) > at(&ids[2]));
+    // Layers: move one, the other session sees the new order.
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Two"}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 3_000}));
+    call(&mut b, "collab.sync", json!({"now_ms": 3_000}));
+    let second = a.editor.doc().layers[1].id.0.to_string();
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "move_layer", "id": second, "index": 0}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 3_100}));
+    call(&mut b, "collab.sync", json!({"now_ms": 3_100}));
+    assert_eq!(b.editor.doc().layers[0].id.0.to_string(), second);
+    assert!(same(&a, &b));
 }

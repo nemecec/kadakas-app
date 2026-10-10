@@ -24,6 +24,7 @@ pub mod client;
 pub mod docsync;
 pub mod materialize;
 pub mod op;
+pub mod order;
 pub mod presence;
 pub mod protocol;
 pub mod replica;
