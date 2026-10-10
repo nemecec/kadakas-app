@@ -34,7 +34,7 @@ pub const TEMPLATES: &[TemplateInfo] = &[
     TemplateInfo {
         id: "irrigation_heads",
         title: "Irrigation heads",
-        description: "Irrigation outlets per model and zone: count and the spray angle of the first.",
+        description: "Irrigation outlets per model and zone, with the count.",
     },
     TemplateInfo {
         id: "irrigation_pipes",
@@ -144,15 +144,13 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
         "irrigation_heads" => DatabaseDef {
             name: "Irrigation heads".into(),
             criteria: "Kind = \"irrigation_outlet\"".into(),
+            // One row per model and zone: the first column is the key to group by.
             columns: vec![
+                col("Model and zone", "Model & \" / zone \" & Zone"),
                 col("Model", "Model"),
                 col("Zone", "Zone"),
                 sum("Count", "Count", None, ""),
             ],
-            sort: vec![SortKey {
-                column: 1,
-                descending: false,
-            }],
             group_by: Some(0),
             group_mode: GroupMode::Summary,
             ..DatabaseDef::default()
@@ -479,6 +477,7 @@ mod tests {
         irr(outlet(0.0, "Spray-4.0", Some(1)));
         irr(outlet(1.0, "Spray-4.0", Some(1)));
         irr(outlet(2.0, "Rotor-8", Some(2)));
+        irr(outlet(3.0, "Spray-4.0", Some(3)));
         let line = |len: f64, t: LineType, size: &str| IrrigationShape::Line {
             points: vec![DVec2::ZERO, DVec2::new(len, 0.0)],
             line_type: t,
@@ -492,10 +491,12 @@ mod tests {
         irr(line(7_500.0, LineType::Lateral, "32"));
         let c = compute(&template("irrigation_heads").unwrap(), ed.doc());
         assert!(c.problems.is_empty(), "{:?}", c.problems);
-        assert_eq!(c.grid()[1][0], "Rotor-8");
-        assert_eq!(c.value(2, 3), Value::Number(1.0));
-        assert_eq!(c.value(3, 3), Value::Number(2.0));
-        assert_eq!(c.value(c.rows, 3), Value::Number(3.0));
+        assert_eq!(c.grid()[1][..3], ["Rotor-8 / zone 2", "Rotor-8", "2"]);
+        assert_eq!(c.value(2, 4), Value::Number(1.0));
+        assert_eq!(c.grid()[2][..3], ["Spray-4.0 / zone 1", "Spray-4.0", "1"]);
+        assert_eq!(c.value(3, 4), Value::Number(2.0));
+        assert_eq!(c.grid()[3][..3], ["Spray-4.0 / zone 3", "Spray-4.0", "3"]);
+        assert_eq!(c.value(c.rows, 4), Value::Number(4.0));
         let c = compute(&template("irrigation_pipes").unwrap(), ed.doc());
         assert!(c.problems.is_empty(), "{:?}", c.problems);
         assert_eq!(c.grid()[1][..3], ["lateral", "PE", "32"]);

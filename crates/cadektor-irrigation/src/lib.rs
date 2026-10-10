@@ -17,7 +17,7 @@ pub mod network;
 pub mod report;
 
 pub use catalog::{Catalog, HeadKind, HeadModel, PipeMaterial, PipeSize};
-pub use extract::{Analysis, DEFAULT_TOLERANCE, analyze};
+pub use extract::{Analysis, DEFAULT_TOLERANCE, ExtractOptions, analyze, analyze_with};
 pub use network::{Warning, WarningKind};
 
 use cadektor_core::command::Command;

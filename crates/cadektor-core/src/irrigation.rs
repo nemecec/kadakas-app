@@ -85,12 +85,19 @@ pub enum IrrigationShape {
         emitter_flow: Option<f64>,
     },
     /// Point of connection: the water supply. `static_pressure` in kPa, `available_flow` in l/min.
+    /// `supply_loss` is the pressure lost in the supply line at the available flow (kPa), and
+    /// `meter_loss` the loss in the meter and backflow preventer at that flow. Without them the
+    /// pressure while water runs is the static pressure.
     Poc {
         at: DVec2,
         #[serde(default)]
         name: String,
         static_pressure: f64,
         available_flow: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        supply_loss: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meter_loss: Option<f64>,
     },
     /// Control valve of a zone. `kv` is the flow factor in m3/h at 1 bar of pressure loss.
     Valve {
@@ -204,10 +211,15 @@ impl IrrigationShape {
                 at,
                 static_pressure,
                 available_flow,
+                supply_loss,
+                meter_loss,
                 ..
             } => {
                 v(at);
                 v(&DVec2::new(*static_pressure, *available_flow));
+                for x in supply_loss.iter().chain(meter_loss.iter()) {
+                    f(*x);
+                }
             }
             IrrigationShape::Valve { at, kv, .. } => {
                 v(at);
@@ -304,6 +316,8 @@ impl IrrigationShape {
             IrrigationShape::Poc {
                 static_pressure,
                 available_flow,
+                supply_loss,
+                meter_loss,
                 ..
             } => {
                 if *static_pressure <= 0.0 || *available_flow <= 0.0 {
@@ -311,6 +325,10 @@ impl IrrigationShape {
                         "the static pressure and the available flow of a POC must be positive"
                             .into(),
                     )
+                } else if supply_loss.is_some_and(|x| x < 0.0)
+                    || meter_loss.is_some_and(|x| x < 0.0)
+                {
+                    Some("the supply loss and the meter loss of a POC must not be negative".into())
                 } else {
                     None
                 }
@@ -504,6 +522,8 @@ mod tests {
             name: String::new(),
             static_pressure: 400.0,
             available_flow: 100.0,
+            supply_loss: None,
+            meter_loss: None,
         };
         let valve = IrrigationShape::Valve {
             at: DVec2::Y,
@@ -620,8 +640,19 @@ mod tests {
             name: String::new(),
             static_pressure: 0.0,
             available_flow: 10.0,
+            supply_loss: None,
+            meter_loss: None,
         };
         assert!(poc.problem().unwrap().contains("POC"));
+        let lossy = IrrigationShape::Poc {
+            at: DVec2::ZERO,
+            name: String::new(),
+            static_pressure: 100.0,
+            available_flow: 10.0,
+            supply_loss: Some(-1.0),
+            meter_loss: None,
+        };
+        assert!(lossy.problem().unwrap().contains("negative"));
         let valve = IrrigationShape::Valve {
             at: DVec2::ZERO,
             zone: 1,
@@ -692,6 +723,8 @@ mod tests {
                 name: String::new(),
                 static_pressure: 1.0,
                 available_flow: 1.0,
+                supply_loss: None,
+                meter_loss: None,
             },
             IrrigationShape::Valve {
                 at,

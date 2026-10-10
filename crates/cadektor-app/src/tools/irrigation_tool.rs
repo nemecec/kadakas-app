@@ -136,6 +136,8 @@ pub fn shape_at(s: &IrrSettings, doc: &Document, at: DVec2) -> Option<Irrigation
             name: s.name.clone(),
             static_pressure: s.static_pressure,
             available_flow: s.available_flow,
+            supply_loss: None,
+            meter_loss: None,
         },
         IrrMode::Valve => IrrigationShape::Valve {
             at,

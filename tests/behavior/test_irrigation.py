@@ -101,11 +101,22 @@ def test_unconnected_outlets_and_catalog_gaps_warn(cad):
     assert "not in the catalog" in err["message"]
 
 
+def test_heads_connect_in_the_middle_of_a_lateral(cad):
+    cad.result("irrigation.poc.add", {"at": [0, 0], "static_pressure": 400, "available_flow": 100})
+    cad.result("irrigation.valve.add", {"at": [0, 0], "zone": 1})
+    cad.result("irrigation.line.add", {"points": [[0, 0], [20000, 0]], "size": "32", "material": "PE"})
+    for k in range(1, 11):
+        cad.result("irrigation.outlet.add", {"at": [k * 2000, 20], "model": "Spray-2.5"})
+    result = cad.result("irrigation.calculate", {})
+    assert not [w for w in result["warnings"] if w["kind"] == "unconnected"]
+    assert result["zones"][0]["flow_lpm"] == approx(40.0)
+
+
 def test_connection_comes_from_geometry_within_the_tolerance(cad):
     cad.result("irrigation.poc.add", {"at": [0, 0], "static_pressure": 300, "available_flow": 80})
     cad.result("irrigation.valve.add", {"at": [10000, 0], "zone": 4, "kv": 5})
-    cad.result("irrigation.line.add", {"points": [[0, 0], [10030, 0]], "line_type": "mainline", "size": "50", "material": "PVC"})
-    cad.result("irrigation.line.add", {"points": [[9970, 0], [15000, 0]], "size": "32", "material": "PE"})
+    cad.result("irrigation.line.add", {"points": [[0, 0], [10030, 30]], "line_type": "mainline", "size": "50", "material": "PVC"})
+    cad.result("irrigation.line.add", {"points": [[9970, -30], [15000, 0]], "size": "32", "material": "PE"})
     cad.result("irrigation.outlet.add", {"at": [15000, 0], "model": "Rotor-8", "arc": 180})
     assert cad.result("irrigation.calculate", {})["zones"][0]["zone"] == 4
     # With a small tolerance the ends no longer meet the valve.
@@ -123,9 +134,9 @@ def test_reports_zone_schedule_pipe_schedule_pressure_and_materials(cad):
     assert row["precipitation_mm_h"] == approx(12.0)
     assert row["run_time_min"] == approx(30.0)
     assert row["valves"] == ["Beds"]
-    # Without a given area the area comes from the coverage of the heads.
+    # Without a given area the area comes from the spacing of the heads.
     row = cad.result("irrigation.report.zones", {})["rows"][0]
-    assert row["area_source"] == "coverage"
+    assert row["area_source"] == "layout"
     assert row["precipitation_mm_h"] == approx(60 * 32 / row["area_m2"])
 
     pipes = cad.result("irrigation.report.pipes", {})

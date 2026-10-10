@@ -22,12 +22,30 @@ use crate::hydraulics::{MAX_VELOCITY_MS, pipe_loss_kpa, valve_loss_kpa, velocity
 pub type NodeId = usize;
 
 /// The water supply.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Poc {
     /// Pressure with no flow, in kPa.
     pub static_kpa: f64,
     /// The most flow the supply gives, in l/min.
     pub available_lpm: f64,
+    /// Loss in the supply line at the available flow, in kPa. The loss at another flow `Q`
+    /// follows the Hazen-Williams exponent: `supply_loss * (Q / available)^1.852`. The pressure
+    /// at the POC while water runs (the dynamic pressure) is the static pressure minus this loss.
+    pub supply_loss_kpa: f64,
+    /// Loss in the meter and backflow preventer at the available flow, in kPa. It grows with the
+    /// square of the flow.
+    pub meter_loss_kpa: f64,
+}
+
+impl Poc {
+    /// Pressure at the POC while `flow_lpm` runs: static pressure minus supply and meter losses.
+    pub fn dynamic_kpa(&self, flow_lpm: f64) -> f64 {
+        if self.available_lpm <= 0.0 || flow_lpm <= 0.0 {
+            return self.static_kpa;
+        }
+        let r = flow_lpm / self.available_lpm;
+        self.static_kpa - self.supply_loss_kpa * r.powf(1.852) - self.meter_loss_kpa * r * r
+    }
 }
 
 /// A control valve.
@@ -55,10 +73,24 @@ pub struct Node {
     pub poc: Option<Poc>,
     pub valve: Option<ValveSpec>,
     pub demand: Option<Demand>,
+    /// Ground height in m, when the document has a site model there.
+    pub z_m: Option<f64>,
+}
+
+/// Emitters spread evenly along a drip line (the edge). The flow is taken from the line as it
+/// goes, whichever end is connected. The pressure loss uses the Christiansen factor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DripInfo {
+    /// Total flow of the emitters in l/min.
+    pub flow_lpm: f64,
+    /// Number of emitters.
+    pub emitters: usize,
+    /// The lowest pressure at the last emitter, in kPa.
+    pub min_kpa: f64,
 }
 
 /// A pipe between two nodes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Edge {
     pub a: NodeId,
     pub b: NodeId,
@@ -67,12 +99,17 @@ pub struct Edge {
     /// Hazen-Williams coefficient.
     pub c: f64,
     pub object: Option<u64>,
+    /// A mainline passes a valve: it is not on the lateral side of the valve.
+    pub through: bool,
+    pub drip: Option<DripInfo>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Network {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Allowance for fittings as a percentage of the pipe losses (for example 10).
+    pub fittings_pct: f64,
 }
 
 impl Network {
@@ -174,6 +211,8 @@ pub struct PathStep {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ZoneResult {
     pub zone: u32,
+    /// Pressure at the POC while the zone runs, in kPa.
+    pub dynamic_kpa: f64,
     /// Total flow of the zone in l/min.
     pub flow_lpm: f64,
     /// Flow that the supply gives, in l/min (the smallest one of the POCs that feed the zone).
@@ -209,6 +248,43 @@ impl Solution {
     pub fn zone(&self, zone: u32) -> Option<&ZoneResult> {
         self.zones.iter().find(|z| z.zone == zone)
     }
+}
+
+/// Pressure per metre of height, in kPa.
+const KPA_PER_M: f64 = crate::hydraulics::KPA_PER_M_HEAD;
+
+/// Christiansen factor for a line with `n` equally spaced outlets and the Hazen-Williams exponent
+/// 1.852: the loss of the line is this factor times the loss of the whole flow in the whole pipe.
+/// `F = 1 / 2.852 + 1 / (2 n) + sqrt(0.852) / (6 n^2)`.
+pub fn christiansen(n: usize) -> f64 {
+    let n = n.max(1) as f64;
+    1.0 / 2.852 + 1.0 / (2.0 * n) + 0.852f64.sqrt() / (6.0 * n * n)
+}
+
+/// Loss of a pipe in kPa for the flow at its inlet, with the fittings allowance.
+fn edge_loss(net: &Network, e: &Edge, flow: f64) -> f64 {
+    let fit = 1.0 + net.fittings_pct.max(0.0) / 100.0;
+    let loss = |q: f64| pipe_loss_kpa(q, e.inner_diameter_mm, e.c, e.length_m);
+    let base = match &e.drip {
+        Some(d) => {
+            let qd = d.flow_lpm.min(flow);
+            christiansen(d.emitters) * loss(qd) + (loss(flow) - loss(qd))
+        }
+        None => loss(flow),
+    };
+    base * fit
+}
+
+/// The flow that the node and the drip line that ends at it use in a zone.
+fn own_flow(net: &Network, parent: &[Option<(NodeId, usize)>], i: NodeId) -> f64 {
+    let d = net.nodes[i]
+        .demand
+        .as_ref()
+        .map_or(0.0, |d| d.flow_lpm.max(0.0));
+    let drip = parent[i]
+        .and_then(|(_, ei)| net.edges[ei].drip.as_ref())
+        .map_or(0.0, |d| d.flow_lpm.max(0.0));
+    d + drip
 }
 
 /// Solves the network for every zone, one zone at a time.
@@ -268,24 +344,24 @@ pub fn solve(net: &Network) -> Solution {
         }
     }
 
-    // The zone of each reachable demand node: the nearest valve on the way to the POC.
+    // The zone of each reachable node with water use: the nearest valve on the way to the POC,
+    // entered from its lateral side (a mainline that passes a valve does not belong to it).
     let zone_of = |start: NodeId| -> u32 {
-        let mut cur = Some(start);
-        while let Some(c) = cur {
-            if let Some(v) = net.nodes[c].valve {
+        let mut cur = start;
+        while let Some((p, ei)) = parent[cur] {
+            if let Some(v) = net.nodes[p].valve
+                && !net.edges[ei].through
+            {
                 return v.zone;
             }
-            cur = parent[c].map(|p| p.0);
+            cur = p;
         }
         0
     };
     let mut zones: Vec<u32> = Vec::new();
     let mut node_zone: Vec<u32> = vec![0; n];
     for i in 0..n {
-        let Some(d) = &net.nodes[i].demand else {
-            continue;
-        };
-        if d.flow_lpm <= 0.0 {
+        if own_flow(net, &parent, i) <= 0.0 {
             continue;
         }
         if root[i].is_none() {
@@ -316,6 +392,17 @@ pub fn solve(net: &Network) -> Solution {
             zones.push(node_zone[i]);
         }
     }
+    // A drip line with no water path.
+    for e in &net.edges {
+        if e.drip.is_some() && root[e.a].is_none() && root[e.b].is_none() {
+            sol.warnings.push(Warning {
+                kind: WarningKind::Unconnected,
+                object: e.object,
+                zone: None,
+                message: "a drip line has no water path from a point of connection".into(),
+            });
+        }
+    }
     zones.sort_unstable();
 
     for z in zones {
@@ -343,38 +430,48 @@ fn solve_zone(
     node_zone: &[u32],
 ) -> ZoneResult {
     let n = net.nodes.len();
-    // Flow below each node (the demand of the zone downstream, itself included).
+    let active = |i: NodeId| node_zone[i] == zone && root[i].is_some();
+    // Flow below each node (the use of the zone downstream, itself included), and the flow that
+    // leaves each valve on its lateral side.
     let mut below = vec![0.0f64; n];
+    let mut valve_flow = vec![0.0f64; n];
     for &i in order.iter().rev() {
-        if let Some(d) = &net.nodes[i].demand
-            && node_zone[i] == zone
-            && root[i].is_some()
-        {
-            below[i] += d.flow_lpm.max(0.0);
+        if active(i) {
+            below[i] += own_flow(net, parent, i);
         }
-        if let Some((p, _)) = parent[i] {
+        if let Some((p, ei)) = parent[i] {
             let b = below[i];
             below[p] += b;
+            if net.nodes[p].valve.is_some() && !net.edges[ei].through {
+                valve_flow[p] += b;
+            }
         }
     }
-    // Pressures from the POCs down.
+    // Pressures from the POCs down: pipe loss, valve loss on the lateral side, height.
     let mut pressure = vec![f64::NAN; n];
     for &i in order {
-        let p_in = match parent[i] {
-            None => net.nodes[i].poc.map_or(f64::NAN, |p| p.static_kpa),
+        pressure[i] = match parent[i] {
+            None => net.nodes[i]
+                .poc
+                .map_or(f64::NAN, |p| p.dynamic_kpa(below[i])),
             Some((p, ei)) => {
                 let e = &net.edges[ei];
-                pressure[p] - pipe_loss_kpa(below[i], e.inner_diameter_mm, e.c, e.length_m)
+                let vloss = match net.nodes[p].valve {
+                    Some(v) if !e.through && below[i] > 0.0 => valve_loss_kpa(valve_flow[p], v.kv),
+                    _ => 0.0,
+                };
+                let dz = match (net.nodes[i].z_m, net.nodes[p].z_m) {
+                    (Some(a), Some(b)) => (a - b) * KPA_PER_M,
+                    _ => 0.0,
+                };
+                pressure[p] - edge_loss(net, e, below[i]) - vloss - dz
             }
-        };
-        pressure[i] = match net.nodes[i].valve {
-            Some(v) if below[i] > 0.0 => p_in - valve_loss_kpa(below[i], v.kv),
-            _ => p_in,
         };
     }
 
     let mut res = ZoneResult {
         zone,
+        dynamic_kpa: f64::INFINITY,
         flow_lpm: 0.0,
         available_lpm: f64::INFINITY,
         static_kpa: f64::INFINITY,
@@ -385,37 +482,60 @@ fn solve_zone(
         max_velocity_ms: 0.0,
         warnings: vec![],
     };
+    let add_outlet = |res: &mut ZoneResult,
+                      i: NodeId,
+                      object: Option<u64>,
+                      label: String,
+                      flow: f64,
+                      min: f64| {
+        res.flow_lpm += flow;
+        let margin = pressure[i] - min;
+        if margin < -1e-9 {
+            res.warnings.push(Warning {
+                kind: WarningKind::LowPressure,
+                object,
+                zone: Some(zone),
+                message: format!(
+                    "{label}: the pressure {:.1} kPa is below the minimum {:.1} kPa",
+                    pressure[i], min
+                ),
+            });
+        }
+        res.outlets.push(OutletResult {
+            node: i,
+            object,
+            label,
+            flow_lpm: flow,
+            pressure_kpa: pressure[i],
+            min_kpa: min,
+            margin_kpa: margin,
+        });
+    };
     for &i in order {
         let node = &net.nodes[i];
         if let Some(d) = &node.demand
-            && node_zone[i] == zone
-            && root[i].is_some()
+            && active(i)
             && d.flow_lpm > 0.0
         {
-            res.flow_lpm += d.flow_lpm;
-            let margin = pressure[i] - d.min_kpa;
-            res.outlets.push(OutletResult {
-                node: i,
-                object: node.object,
-                label: label(net, i),
-                flow_lpm: d.flow_lpm,
-                pressure_kpa: pressure[i],
-                min_kpa: d.min_kpa,
-                margin_kpa: margin,
-            });
-            if margin < -1e-9 {
-                res.warnings.push(Warning {
-                    kind: WarningKind::LowPressure,
-                    object: node.object,
-                    zone: Some(zone),
-                    message: format!(
-                        "{}: the pressure {:.1} kPa is below the minimum {:.1} kPa",
-                        label(net, i),
-                        pressure[i],
-                        d.min_kpa
-                    ),
-                });
-            }
+            add_outlet(
+                &mut res,
+                i,
+                node.object,
+                label(net, i),
+                d.flow_lpm,
+                d.min_kpa,
+            );
+        }
+        if let Some((_, ei)) = parent[i]
+            && let Some(d) = &net.edges[ei].drip
+            && active(i)
+            && d.flow_lpm > 0.0
+        {
+            let e = &net.edges[ei];
+            let name = e
+                .object
+                .map_or("Drip line".to_string(), |o| format!("Drip line #{o}"));
+            add_outlet(&mut res, i, e.object, name, d.flow_lpm, d.min_kpa);
         }
         // The supplies of the trees that carry flow of this zone.
         if let Some(p) = node.poc
@@ -423,13 +543,14 @@ fn solve_zone(
         {
             res.available_lpm = res.available_lpm.min(p.available_lpm);
             res.static_kpa = res.static_kpa.min(p.static_kpa);
+            res.dynamic_kpa = res.dynamic_kpa.min(pressure[i]);
         }
         if let Some((_, ei)) = parent[i]
             && below[i] > 0.0
         {
             let e = &net.edges[ei];
             let v = velocity_ms(below[i], e.inner_diameter_mm);
-            let loss = pipe_loss_kpa(below[i], e.inner_diameter_mm, e.c, e.length_m);
+            let loss = edge_loss(net, e, below[i]);
             res.max_velocity_ms = res.max_velocity_ms.max(v);
             if e.length_m > 0.0 && v > MAX_VELOCITY_MS {
                 res.warnings.push(Warning {
@@ -455,6 +576,7 @@ fn solve_zone(
     if !res.available_lpm.is_finite() {
         res.available_lpm = 0.0;
         res.static_kpa = 0.0;
+        res.dynamic_kpa = 0.0;
     }
     if res.flow_lpm > res.available_lpm + 1e-9 {
         res.warnings.push(Warning {
@@ -513,6 +635,7 @@ mod tests {
             inner_diameter_mm: d,
             c: 150.0,
             object: Some(100 + a as u64 * 10 + b as u64),
+            ..Edge::default()
         }
     }
 
@@ -547,6 +670,7 @@ mod tests {
             poc: Some(Poc {
                 static_kpa: 400.0,
                 available_lpm: 100.0,
+                ..Poc::default()
             }),
             ..node("POC")
         });
@@ -590,8 +714,9 @@ mod tests {
         let labels: Vec<&str> = z.critical_path.iter().map(|s| s.label.as_str()).collect();
         assert_eq!(labels, ["POC", "V", "J", "A"]);
         assert_eq!(z.critical_path[0].pressure_kpa, 400.0);
-        // The valve step shows the pressure after the valve: 400 - 1.6296 - 2.25.
-        assert!((z.critical_path[1].pressure_kpa - 396.1204).abs() < 1e-3);
+        // The valve loss is charged on its lateral side, so the valve node shows 400 - 1.6296.
+        assert!((z.critical_path[1].pressure_kpa - 398.3704).abs() < 1e-3);
+        assert!((z.critical_path[2].pressure_kpa - (398.3704 - 2.25 - 44.1079)).abs() < 1e-3);
         assert!(z.warnings.is_empty());
         assert_eq!(z.edges.len(), 4);
         let sum_loss: f64 = z.edges[..].iter().map(|e| e.loss_kpa).sum();
@@ -721,6 +846,7 @@ mod tests {
             poc: Some(Poc {
                 static_kpa: 300.0,
                 available_lpm: 50.0,
+                ..Poc::default()
             }),
             valve: Some(ValveSpec { zone: 4, kv: 6.0 }),
             ..node("P")
@@ -745,5 +871,172 @@ mod tests {
         net.nodes[3].demand.as_mut().unwrap().min_kpa = 1000.0;
         let sol = solve(&net);
         assert!(sol.zone(1).unwrap().warnings[0].message.contains("node 3"));
+    }
+
+    fn mainline(a: NodeId, b: NodeId, length_m: f64) -> Edge {
+        Edge {
+            through: true,
+            ..edge(a, b, length_m, 50.0)
+        }
+    }
+
+    /// A mainline POC - V1 - V2 with laterals. Valve 1 sits on the through mainline: zone 2
+    /// does not pay its loss, and a tap past valve 1 does not belong to zone 1.
+    #[test]
+    fn a_valve_on_a_through_mainline_acts_only_on_its_lateral_side() {
+        let mut net = Network::default();
+        let poc = net.add_node(Node {
+            poc: Some(Poc {
+                static_kpa: 400.0,
+                available_lpm: 100.0,
+                ..Poc::default()
+            }),
+            ..node("POC")
+        });
+        let v1 = net.add_node(Node {
+            valve: Some(ValveSpec { zone: 1, kv: 2.0 }),
+            ..node("V1")
+        });
+        let v2 = net.add_node(Node {
+            valve: Some(ValveSpec { zone: 2, kv: 12.0 }),
+            ..node("V2")
+        });
+        let tap = net.add_node(outlet("tap", 6.0, 100.0, 5));
+        let a = net.add_node(outlet("A", 10.0, 100.0, 6));
+        let b = net.add_node(outlet("B", 20.0, 100.0, 7));
+        net.add_edge(mainline(poc, v1, 50.0));
+        net.add_edge(mainline(v1, v2, 50.0));
+        // A tap on the mainline after valve 1 (a link to the mainline node): the edge is through.
+        net.add_edge(Edge {
+            through: true,
+            ..edge(v2, tap, 0.0, 50.0)
+        });
+        net.add_edge(edge(v1, a, 10.0, 25.4));
+        net.add_edge(edge(v2, b, 10.0, 25.4));
+        let sol = solve(&net);
+        let z1 = sol.zone(1).unwrap();
+        let z2 = sol.zone(2).unwrap();
+        assert_eq!(z1.outlets.len(), 1);
+        assert_eq!(z1.outlets[0].label, "A");
+        assert_eq!(z2.outlets[0].label, "B");
+        // The tap is on a through pipe after valve 1 and before valve 2 (also through): zone 0.
+        assert!(sol.zone(0).is_some_and(|z| z.outlets[0].label == "tap"));
+        // Zone 2 does not pay the loss of valve 1 (kv 2 is a very tight valve).
+        let expect = 400.0
+            - pipe_loss_kpa(20.0, 50.0, 150.0, 100.0)
+            - valve_loss_kpa(20.0, 12.0)
+            - pipe_loss_kpa(20.0, 25.4, 150.0, 10.0);
+        assert!((z2.outlets[0].pressure_kpa - expect).abs() < 1e-9);
+        // Zone 1 pays the loss of valve 1 for its own flow: 10 l/min = 0.6 m3/h, kv 2: 9 kPa.
+        let expect = 400.0
+            - pipe_loss_kpa(10.0, 50.0, 150.0, 50.0)
+            - valve_loss_kpa(10.0, 2.0)
+            - pipe_loss_kpa(10.0, 25.4, 150.0, 10.0);
+        assert!((z1.outlets[0].pressure_kpa - expect).abs() < 1e-9);
+        assert!((valve_loss_kpa(10.0, 2.0) - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn height_fittings_meter_and_dynamic_pressure() {
+        let mut net = example();
+        // Outlet A is 3 m higher than J: 3 * 9.80665 = 29.42 kPa less.
+        let base = solve(&net).zone(1).unwrap().outlets[0].pressure_kpa;
+        net.nodes[2].z_m = Some(10.0);
+        net.nodes[3].z_m = Some(13.0);
+        let high = solve(&net).zone(1).unwrap().outlets[0].pressure_kpa;
+        assert!((base - high - 3.0 * 9.80665).abs() < 1e-9);
+        // 10 percent fittings on all pipes: the pipe losses grow by 10 percent.
+        let mut net = example();
+        net.fittings_pct = 10.0;
+        let fit = solve(&net).zone(1).unwrap().outlets[0].pressure_kpa;
+        let pipes = 1.6296 + 44.1079 + 6.1091;
+        assert!((base - fit - 0.1 * pipes).abs() < 1e-3);
+        // Supply loss 20 kPa and meter loss 8 kPa at 100 l/min; the zone runs 30 l/min:
+        // 20 * 0.3^1.852 + 8 * 0.3^2 = 2.1396 + 0.72.
+        let mut net = example();
+        if let Some(p) = &mut net.nodes[0].poc {
+            p.supply_loss_kpa = 20.0;
+            p.meter_loss_kpa = 8.0;
+        }
+        let z = solve(&net).zone(1).unwrap().clone();
+        let loss = 20.0 * 0.3f64.powf(1.852) + 8.0 * 0.09;
+        assert!((z.dynamic_kpa - (400.0 - loss)).abs() < 1e-9);
+        assert!((z.outlets[0].pressure_kpa - (base - loss)).abs() < 1e-6);
+        assert_eq!(z.static_kpa, 400.0);
+        // No flow: the dynamic pressure is the static pressure.
+        let p = net.nodes[0].poc.unwrap();
+        assert_eq!(p.dynamic_kpa(0.0), 400.0);
+    }
+
+    /// Christiansen factor for 10 emitters: 1/2.852 + 1/20 + 0.9230/600 = 0.4021.
+    #[test]
+    fn drip_lines_lose_pressure_with_the_christiansen_factor_in_both_directions() {
+        assert!((christiansen(10) - 0.40214).abs() < 1e-4);
+        assert!((christiansen(1) - (1.0 / 2.852 + 0.5 + 0.852f64.sqrt() / 6.0)).abs() < 1e-12);
+        let build = |flip: bool| {
+            let mut net = Network::default();
+            let poc = net.add_node(Node {
+                poc: Some(Poc {
+                    static_kpa: 300.0,
+                    available_lpm: 50.0,
+                    ..Poc::default()
+                }),
+                ..node("POC")
+            });
+            let v = net.add_node(Node {
+                valve: Some(ValveSpec { zone: 1, kv: 6.0 }),
+                ..node("V")
+            });
+            let far = net.add_node(node("far"));
+            net.add_edge(edge(poc, v, 5.0, 25.4));
+            let (a, b) = if flip { (far, v) } else { (v, far) };
+            net.add_edge(Edge {
+                drip: Some(DripInfo {
+                    flow_lpm: 3.0,
+                    emitters: 10,
+                    min_kpa: 70.0,
+                }),
+                ..edge(a, b, 30.0, 16.0)
+            });
+            solve(&net)
+        };
+        for flip in [false, true] {
+            let sol = build(flip);
+            let z = sol.zone(1).unwrap();
+            assert_eq!(z.flow_lpm, 3.0);
+            let o = &z.outlets[0];
+            assert!(o.label.contains("Drip line"));
+            let expect = 300.0
+                - pipe_loss_kpa(3.0, 25.4, 150.0, 5.0)
+                - valve_loss_kpa(3.0, 6.0)
+                - christiansen(10) * pipe_loss_kpa(3.0, 16.0, 150.0, 30.0);
+            assert!((o.pressure_kpa - expect).abs() < 1e-9, "{flip}");
+        }
+        // A drip line with no water path warns.
+        let mut net = Network::default();
+        net.add_node(Node {
+            poc: Some(Poc {
+                static_kpa: 300.0,
+                available_lpm: 50.0,
+                ..Poc::default()
+            }),
+            ..node("POC")
+        });
+        let a = net.add_node(node("a"));
+        let b = net.add_node(node("b"));
+        net.add_edge(Edge {
+            drip: Some(DripInfo {
+                flow_lpm: 1.0,
+                emitters: 2,
+                min_kpa: 70.0,
+            }),
+            ..edge(a, b, 10.0, 16.0)
+        });
+        let sol = solve(&net);
+        assert!(
+            sol.warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::Unconnected)
+        );
     }
 }

@@ -6,7 +6,9 @@
 //!
 //! Units: radius and diameter in mm, flow in l/min, pressure in kPa, price per piece or per m.
 //!
-//! CSV import reuses the reader of the plant catalog. The first row names the columns (any
+//! CSV import reuses the reader of the plant catalog. A file with semicolons as delimiters and
+//! decimal commas (`1,5`) is read too. Names that appear twice in one file are reported by
+//! `duplicate_heads`, `duplicate_pipes` and `duplicate_materials` (the later row wins). The first row names the columns (any
 //! order, upper or lower case). Heads: `name, kind, radius, min_arc, max_arc, flow, pressure,
 //! min_pressure, price`. Pipes: `size, material, inner_diameter, price`. Materials: `name, c`.
 
@@ -416,6 +418,15 @@ impl Catalog {
         write_csv(&rows)
     }
 
+    /// Pipe materials as CSV text.
+    pub fn materials_csv(&self) -> String {
+        let mut rows = vec![vec!["name".to_string(), "c".into()]];
+        for m in &self.materials {
+            rows.push(vec![m.name.clone(), m.c.to_string()]);
+        }
+        write_csv(&rows)
+    }
+
     /// Pipes as CSV text.
     pub fn pipes_csv(&self) -> String {
         let mut rows = vec![vec![
@@ -436,6 +447,29 @@ impl Catalog {
     }
 }
 
+/// True if the header line has semicolons and no commas (a European CSV file).
+fn is_semicolon_file(text: &str) -> bool {
+    let first = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    first.contains(';') && !first.contains(',')
+}
+
+/// Reads a file with semicolons as delimiters. A field may be in double quotes.
+fn parse_semicolon(text: &str) -> Vec<Vec<String>> {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            l.split(';')
+                .map(|f| f.trim().trim_matches('"').replace("\"\"", "\""))
+                .collect()
+        })
+        .collect()
+}
+
 /// The columns of a CSV table: header names to indexes.
 struct Table {
     header: Vec<String>,
@@ -444,7 +478,11 @@ struct Table {
 
 impl Table {
     fn parse(text: &str, required: &[&str]) -> Result<Table, String> {
-        let mut rows = parse_csv(text)?;
+        let mut rows = if is_semicolon_file(text) {
+            parse_semicolon(text)
+        } else {
+            parse_csv(text)?
+        };
         if rows.is_empty() {
             return Err("the CSV text is empty".into());
         }
@@ -474,6 +512,8 @@ impl Table {
             None => Ok(None),
             Some(s) => s
                 .parse::<f64>()
+                // A decimal comma, as in "1,5".
+                .or_else(|_| s.replace(',', ".").parse::<f64>())
                 .ok()
                 .filter(|x| x.is_finite())
                 .map(Some)
@@ -485,6 +525,41 @@ impl Table {
         self.num(row, col, line)?
             .ok_or_else(|| format!("row {line}: column '{col}' is empty"))
     }
+}
+
+fn duplicates(keys: impl Iterator<Item = String>) -> Vec<String> {
+    let mut seen: Vec<String> = vec![];
+    let mut out: Vec<String> = vec![];
+    for k in keys {
+        let low = k.to_ascii_lowercase();
+        if seen.contains(&low) {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(&k)) {
+                out.push(k);
+            }
+        } else {
+            seen.push(low);
+        }
+    }
+    out
+}
+
+/// Names that appear more than once in a list of heads.
+pub fn duplicate_heads(heads: &[HeadModel]) -> Vec<String> {
+    duplicates(heads.iter().map(|h| h.name.trim().to_string()))
+}
+
+/// Pipes (as "material size") that appear more than once.
+pub fn duplicate_pipes(pipes: &[PipeSize]) -> Vec<String> {
+    duplicates(
+        pipes
+            .iter()
+            .map(|p| format!("{} {}", p.material.trim(), p.size.trim())),
+    )
+}
+
+/// Names that appear more than once in a list of materials.
+pub fn duplicate_materials(materials: &[PipeMaterial]) -> Vec<String> {
+    duplicates(materials.iter().map(|m| m.name.trim().to_string()))
 }
 
 /// Reads head models from CSV text.
@@ -773,5 +848,42 @@ mod tests {
         assert_eq!(HeadKind::from_name("sprinkler"), Some(HeadKind::Spray));
         assert!(HeadKind::Rotor.flow_scales_with_arc());
         assert!(!HeadKind::Drip.flow_scales_with_arc());
+    }
+
+    #[test]
+    fn semicolon_files_with_decimal_commas() {
+        let h = import_heads_csv(
+            "\u{feff}name;radius;flow;pressure;price\n\"Euro, spray\";3000;5,5;200;2,25\n",
+        )
+        .unwrap();
+        assert_eq!(h[0].name, "Euro, spray");
+        assert_eq!((h[0].flow, h[0].price), (5.5, 2.25));
+        // In a comma file a quoted decimal comma works too.
+        let h = import_heads_csv("name,radius,flow,pressure\nA,3000,\"5,5\",200\n").unwrap();
+        assert_eq!(h[0].flow, 5.5);
+        let p = import_pipes_csv("size;material;inner_diameter\n32;PE;26,2\n").unwrap();
+        assert_eq!(p[0].inner_diameter, 26.2);
+        let m = import_materials_csv("name;c\nPE;140,5\n").unwrap();
+        assert_eq!(m[0].c, 140.5);
+        assert!(import_heads_csv("name;radius;flow;pressure\nA;x;1;1\n").is_err());
+    }
+
+    #[test]
+    fn duplicates_are_found_and_materials_export() {
+        let h = import_heads_csv(
+            "name,radius,flow,pressure\nA,1000,1,100\na,2000,2,100\nB,1000,1,100\nA,3000,3,100\n",
+        )
+        .unwrap();
+        assert_eq!(duplicate_heads(&h), ["a"]);
+        assert!(duplicate_heads(&h[2..3]).is_empty());
+        let p = import_pipes_csv("size,material,inner_diameter\n32,PE,26\n32,pe,27\n25,PE,20\n")
+            .unwrap();
+        assert_eq!(duplicate_pipes(&p), ["pe 32"]);
+        let m = import_materials_csv("name,c\nPE,140\npe,141\n").unwrap();
+        assert_eq!(duplicate_materials(&m), ["pe"]);
+        let c = Catalog::builtin();
+        let csv = c.materials_csv();
+        assert!(csv.starts_with("name,c\n"));
+        assert_eq!(import_materials_csv(&csv).unwrap(), c.materials);
     }
 }

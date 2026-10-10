@@ -1068,6 +1068,8 @@ mod tests {
                 name: "Meter".into(),
                 static_pressure: 400.0,
                 available_flow: 90.0,
+                supply_loss: None,
+                meter_loss: None,
             })),
         );
         let valve = add(

@@ -18,7 +18,7 @@ use cadektor_core::model::*;
 use cadektor_core::plants::catalog::write_csv;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_irrigation::catalog::{self, Catalog};
-use cadektor_irrigation::extract::{DEFAULT_TOLERANCE, analyze};
+use cadektor_irrigation::extract::{DEFAULT_TOLERANCE, ExtractOptions, analyze_with};
 use cadektor_irrigation::layout::{self, Pattern};
 use cadektor_irrigation::report;
 use cadektor_irrigation::{Analysis, zone_commands};
@@ -35,7 +35,7 @@ pub const LINE_ADD: (&str, &str) = (
 );
 pub const POC_ADD: (&str, &str) = (
     "irrigation.poc.add",
-    "Add a point of connection (the water supply). params: {at, static_pressure (kPa), available_flow (l/min), name?, layer?, class?}. Returns {id}.",
+    "Add a point of connection (the water supply). params: {at, static_pressure (kPa), available_flow (l/min), supply_loss? (kPa lost in the supply line at the available flow), meter_loss? (kPa lost in the meter and backflow preventer at the available flow), name?, layer?, class?}. While water runs the pressure at the POC is the static pressure minus the supply loss (grows with flow^1.852) and the meter loss (grows with flow^2). Returns {id}.",
 );
 pub const VALVE_ADD: (&str, &str) = (
     "irrigation.valve.add",
@@ -59,15 +59,15 @@ pub const CATALOG_SET: (&str, &str) = (
 );
 pub const CATALOG_IMPORT_CSV: (&str, &str) = (
     "irrigation.catalog.import_csv",
-    "Import catalog parts from CSV text. params: {kind: heads | pipes | materials, text, replace?}. The first row names the columns. Heads: name, radius, flow, pressure (required), kind, min_arc, max_arc, min_pressure, price. Pipes: size, material, inner_diameter (required), price. Materials: name, c. Returns {id, imported}.",
+    "Import catalog parts from CSV text. params: {kind: heads | pipes | materials, text, replace?}. The first row names the columns. Heads: name, radius, flow, pressure (required), kind, min_arc, max_arc, min_pressure, price. Pipes: size, material, inner_diameter (required), price. Materials: name, c. A file with semicolons and decimal commas is read too. Returns {id, imported, warnings} (warnings name rows that appear twice).",
 );
 pub const CATALOG_EXPORT_CSV: (&str, &str) = (
     "irrigation.catalog.export_csv",
-    "Catalog parts as CSV text. params: {kind: heads | pipes, document_only?}. Returns {csv}.",
+    "Catalog parts as CSV text. params: {kind: heads | pipes | materials, document_only?}. Returns {csv}.",
 );
 pub const CALCULATE: (&str, &str) = (
     "irrigation.calculate",
-    "Calculate the irrigation network: flow per zone, pressure at every outlet, the critical outlet and path, and warnings (low pressure, velocity above 1.5 m/s, flow above the supply, unconnected outlets, loops, catalog gaps). params: {tolerance? (mm, default 50), assign_zones? (default true: store the zone in the outlets, one undo step), areas? ({zone: m2}, real areas for the precipitation rate), target_depth? (mm, default 10)}. Returns {zones: [{zone, flow_lpm, available_lpm, static_kpa, max_velocity_ms, critical, critical_path, outlets, warnings}], zone_schedule, warnings: [{kind, object, zone, message}], assigned, ok}.",
+    "Calculate the irrigation network: flow per zone, pressure at every outlet, the critical outlet and path, and warnings (low pressure, velocity above 1.5 m/s, flow above the supply, unconnected outlets, loops, catalog gaps). params: {tolerance? (mm, default 50), fittings? (percent added to the pipe losses, default 0), use_site_model? (default true: the height of the site model counts, 9.81 kPa per m), assign_zones? (default true: store the zone in the outlets, one undo step), areas? ({zone: m2}, real areas for the precipitation rate), target_depth? (mm, default 10)}. Returns {zones: [{zone, flow_lpm, available_lpm, static_kpa, max_velocity_ms, critical, critical_path, outlets, warnings}], zone_schedule, warnings: [{kind, object, zone, message}], assigned, ok}.",
 );
 pub const LAYOUT_FILL: (&str, &str) = (
     "irrigation.layout.fill",
@@ -196,6 +196,32 @@ fn tolerance(m: &Map<String, Value>) -> Result<f64, RpcError> {
         Some(t) if t >= 0.0 => Ok(t),
         Some(_) => Err(bad("'tolerance' must not be negative")),
     }
+}
+
+/// Reads the network of the document with the options of the parameters: `tolerance` (mm),
+/// `fittings` (percent of the pipe losses) and `use_site_model` (default true: water climbs
+/// with the ground of the site model, when there is one).
+fn analysis(s: &Session, m: &Map<String, Value>) -> Result<Analysis, RpcError> {
+    let fittings_pct = match num(m, "fittings")? {
+        None => 0.0,
+        Some(f) if (0.0..=100.0).contains(&f) => f,
+        Some(_) => return Err(bad("'fittings' is a percentage from 0 to 100")),
+    };
+    let doc = s.editor.doc();
+    let has_site = doc
+        .objects
+        .values()
+        .any(|o| matches!(o.shape, Shape::SiteModel { .. }));
+    let use_site = has_site && m.get("use_site_model").and_then(Value::as_bool) != Some(false);
+    let terrain = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+    Ok(analyze_with(
+        doc,
+        &ExtractOptions {
+            tolerance: tolerance(m)?,
+            fittings_pct,
+            ground: use_site.then_some(&terrain as &dyn cadektor_core::hardscape::TerrainSource),
+        },
+    ))
 }
 
 fn areas(m: &Map<String, Value>) -> Result<HashMap<u32, f64>, RpcError> {
@@ -343,17 +369,21 @@ fn catalog_import(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
     let csv = text(m, "text")?.ok_or_else(|| bad("missing 'text'"))?;
     let replace = m.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let mut extra = Catalog::default();
+    let mut duplicates: Vec<String> = vec![];
     let imported = match kind.as_str() {
         "heads" => {
             extra.heads = catalog::import_heads_csv(&csv).map_err(bad)?;
+            duplicates = catalog::duplicate_heads(&extra.heads);
             extra.heads.len()
         }
         "pipes" => {
             extra.pipes = catalog::import_pipes_csv(&csv).map_err(bad)?;
+            duplicates = catalog::duplicate_pipes(&extra.pipes);
             extra.pipes.len()
         }
         "materials" => {
             extra.materials = catalog::import_materials_csv(&csv).map_err(bad)?;
+            duplicates = catalog::duplicate_materials(&extra.materials);
             extra.materials.len()
         }
         other => {
@@ -370,6 +400,11 @@ fn catalog_import(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
     cat.merge(&extra);
     let mut out = store_catalog(s, &cat)?;
     out["imported"] = imported.into();
+    out["warnings"] = duplicates
+        .iter()
+        .map(|d| format!("'{d}' appears more than once in the file; the last row is used"))
+        .collect::<Vec<_>>()
+        .into();
     Ok(out)
 }
 
@@ -560,7 +595,14 @@ const LINE_KEYS: &[&str] = &[
     "emitter_spacing",
     "emitter_flow",
 ];
-const POC_KEYS: &[&str] = &["at", "name", "static_pressure", "available_flow"];
+const POC_KEYS: &[&str] = &[
+    "at",
+    "name",
+    "static_pressure",
+    "available_flow",
+    "supply_loss",
+    "meter_loss",
+];
 const VALVE_KEYS: &[&str] = &["at", "zone", "name", "kv", "controller", "station"];
 const CONTROLLER_KEYS: &[&str] = &["at", "name", "stations"];
 
@@ -647,14 +689,13 @@ fn warnings_json(a: &Analysis) -> Vec<Value> {
 }
 
 fn calculate(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
-    let tol = tolerance(m)?;
     let depth = num(m, "target_depth")?.unwrap_or(10.0);
     let given = areas(m)?;
     let assign = m
         .get("assign_zones")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let a = analyze(s.editor.doc(), tol);
+    let a = analysis(s, m)?;
     let mut assigned = 0;
     if assign {
         let cmds = zone_commands(s.editor.doc(), &a);
@@ -676,7 +717,7 @@ fn calculate(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError>
 }
 
 fn reports(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, RpcError> {
-    let a = analyze(s.editor.doc(), tolerance(m)?);
+    let a = analysis(s, m)?;
     let csv = csv_requested(m);
     Ok(match method {
         "irrigation.report.zones" => {
@@ -787,6 +828,8 @@ fn add_methods(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<
                 .ok_or_else(|| bad("missing 'static_pressure'"))?,
             available_flow: num(m, "available_flow")?
                 .ok_or_else(|| bad("missing 'available_flow'"))?,
+            supply_loss: num(m, "supply_loss")?,
+            meter_loss: num(m, "meter_loss")?,
         },
         "irrigation.valve.add" => IrrigationShape::Valve {
             at: at()?,
@@ -845,7 +888,8 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             match text(m, "kind") {
                 Ok(Some(k)) if k == "heads" => Ok(json!({"csv": c.heads_csv()})),
                 Ok(Some(k)) if k == "pipes" => Ok(json!({"csv": c.pipes_csv()})),
-                Ok(_) => Err(bad("'kind' is heads or pipes")),
+                Ok(Some(k)) if k == "materials" => Ok(json!({"csv": c.materials_csv()})),
+                Ok(_) => Err(bad("'kind' is heads, pipes or materials")),
                 Err(e) => Err(e),
             }
         }

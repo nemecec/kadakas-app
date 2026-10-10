@@ -356,11 +356,21 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             name,
             static_pressure,
             available_flow,
+            supply_loss,
+            meter_loss,
         } => {
             f.xy(ui, "Position", at);
             f.text(ui, "Name", name);
             f.scalar(ui, "Static pressure (kPa)", static_pressure, 5.0);
             f.scalar(ui, "Available flow (l/min)", available_flow, 1.0);
+            for (label, v) in [
+                ("Supply loss (kPa)", supply_loss),
+                ("Meter loss (kPa)", meter_loss),
+            ] {
+                let mut x = v.unwrap_or(0.0);
+                f.scalar(ui, label, &mut x, 1.0);
+                *v = (x > 0.0).then_some(x);
+            }
         }
         IrrigationShape::Valve {
             at,
@@ -636,6 +646,8 @@ mod tests {
                 name: String::new(),
                 static_pressure: 400.0,
                 available_flow: 100.0,
+                supply_loss: None,
+                meter_loss: None,
             },
         );
         add(
@@ -702,6 +714,8 @@ mod tests {
             name: String::new(),
             static_pressure: 1.0,
             available_flow: 1.0,
+            supply_loss: None,
+            meter_loss: None,
         };
         assert!(hit(&poc, DVec2::new(8.0, 0.0), 5.0));
         assert!(!hit(&poc, DVec2::new(11.0, 0.0), 5.0));
@@ -768,6 +782,8 @@ mod tests {
                 name: String::new(),
                 static_pressure: 120.0,
                 available_flow: 100.0,
+                supply_loss: None,
+                meter_loss: None,
             };
             if let IrrigationShape::Poc { at, .. } = &mut shape {
                 *at = DVec2::ZERO;
@@ -816,6 +832,8 @@ mod tests {
                 name: "M".into(),
                 static_pressure: 400.0,
                 available_flow: 90.0,
+                supply_loss: None,
+                meter_loss: None,
             },
             IrrigationShape::Valve {
                 at: v(0.0, 0.0),

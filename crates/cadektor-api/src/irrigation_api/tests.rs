@@ -554,12 +554,12 @@ fn catalog_get_set_and_csv() {
             json!({"kind": "x"})
         )
         .1
-        .contains("heads or pipes")
+        .contains("heads, pipes or materials")
     );
     assert!(
         fail(&mut s, "irrigation.catalog.export_csv", json!({}))
             .1
-            .contains("heads or pipes")
+            .contains("heads, pipes or materials")
     );
 }
 
@@ -934,4 +934,101 @@ fn rotate_and_move_irrigation_objects() {
         json!({"command": {"op": "add_object", "shape": {"kind": "irrigation", "type": "outlet", "at": [0, 0], "model": "x", "arc": 0}}}),
     );
     assert!(r.unwrap_err().message.contains("arc"));
+}
+
+#[test]
+fn fittings_supply_and_meter_losses_and_the_site_model_change_the_pressure() {
+    let (mut s, ids) = zone();
+    let far = |s: &mut Session, extra: Value| -> f64 {
+        let mut p = json!({"assign_zones": false});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        ok(s, "irrigation.calculate", p)["zones"][0]["critical"]["pressure_kpa"]
+            .as_f64()
+            .unwrap()
+    };
+    let base = far(&mut s, json!({}));
+    // 10 percent fittings on the pipes only (the valve loss stays).
+    let fit = far(&mut s, json!({"fittings": 10}));
+    let pipes = 400.0 - valve_loss_kpa(32.0, 6.0) - base;
+    assert!((base - fit - 0.1 * pipes).abs() < 1e-6);
+    assert!(
+        fail(&mut s, "irrigation.calculate", json!({"fittings": 500}))
+            .1
+            .contains("fittings")
+    );
+    // Supply loss 30 kPa and meter loss 10 kPa at 100 l/min; the zone runs 32 l/min.
+    let poc = ok(&mut s, "objects.list", json!({"kind": "irrigation_poc"}))[0]["id"].clone();
+    ok(
+        &mut s,
+        "irrigation.set",
+        json!({"id": poc, "supply_loss": 30, "meter_loss": 10}),
+    );
+    let loss = 30.0 * 0.32f64.powf(1.852) + 10.0 * 0.32 * 0.32;
+    let dynamic = far(&mut s, json!({}));
+    assert!((base - dynamic - loss).abs() < 1e-6);
+    assert!(
+        fail(
+            &mut s,
+            "irrigation.set",
+            json!({"id": poc, "meter_loss": -1})
+        )
+        .1
+        .contains("negative")
+    );
+    // A site model: the ground rises 2 m between the POC and the far head, 2 * 9.80665 kPa.
+    ok(
+        &mut s,
+        "irrigation.set",
+        json!({"id": poc, "supply_loss": null, "meter_loss": null}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "site_model",
+        "points": [[-1000, -1000, 0], [60000, -1000, 0], [60000, 20000, 0], [-1000, 20000, 0],
+                   [60000, 10000, 2000]]}}}),
+    );
+    let high = far(&mut s, json!({}));
+    assert!(high < base, "{high} {base}");
+    let flat = far(&mut s, json!({"use_site_model": false}));
+    assert!((flat - base).abs() < 1e-9);
+    let _ = ids;
+}
+
+#[test]
+fn csv_import_reads_semicolons_decimal_commas_and_warns_about_duplicates() {
+    let mut s = Session::default();
+    let r = ok(
+        &mut s,
+        "irrigation.catalog.import_csv",
+        json!({"kind": "heads", "text": "name;radius;flow;pressure\nA;3000;5,5;200\na;3500;6,5;200\nB;3000;5;200\n"}),
+    );
+    assert_eq!(r["imported"], 3);
+    assert!(
+        r["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("more than once")
+    );
+    let heads = ok(
+        &mut s,
+        "irrigation.catalog.get",
+        json!({"document_only": true}),
+    );
+    // The later row wins.
+    assert_eq!(heads["heads"][0]["flow"], 6.5);
+    let r = ok(
+        &mut s,
+        "irrigation.catalog.import_csv",
+        json!({"kind": "materials", "text": "name,c\nHDPE,150\n"}),
+    );
+    assert!(r["warnings"].as_array().unwrap().is_empty());
+    let csv = ok(
+        &mut s,
+        "irrigation.catalog.export_csv",
+        json!({"kind": "materials", "document_only": true}),
+    );
+    assert_eq!(csv["csv"], "name,c\nHDPE,150\n");
 }

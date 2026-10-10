@@ -8,6 +8,9 @@ use cadektor_core::DVec2;
 /// Most points one call returns.
 pub const MAX_POINTS: usize = 100_000;
 
+/// Most corners an area may have. Every head is tested against every edge.
+pub const MAX_VERTICES: usize = 2_000;
+
 /// How heads are arranged in an area.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Pattern {
@@ -34,6 +37,11 @@ const EPS: f64 = 1e-6;
 fn check_polygon(poly: &[DVec2]) -> Result<(), String> {
     if poly.len() < 3 {
         return Err("an area needs 3 or more points".into());
+    }
+    if poly.len() > MAX_VERTICES {
+        return Err(format!(
+            "an area has at most {MAX_VERTICES} corners (simplify the outline)"
+        ));
     }
     if poly.iter().any(|p| !p.is_finite()) {
         return Err("the area has a point that is not finite".into());
@@ -378,6 +386,32 @@ mod tests {
         assert!(pts.iter().all(|p| contains(&l, *p)));
         assert!(!pts.contains(&DVec2::new(10_000.0, 10_000.0)));
         assert!(pts.contains(&DVec2::new(5_000.0, 5_000.0)));
+    }
+
+    #[test]
+    fn a_boundary_with_too_many_corners_is_refused_quickly() {
+        let n = 20_000;
+        let ring: Vec<DVec2> = (0..n)
+            .map(|k| {
+                let a = k as f64 / n as f64 * std::f64::consts::TAU;
+                DVec2::new(a.cos() * 50_000.0, a.sin() * 50_000.0)
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        assert!(
+            fill_area(&ring, 1000.0, Pattern::Square, 0.0, 0.0)
+                .unwrap_err()
+                .contains("at most")
+        );
+        assert!(drip_lines(&ring, 1000.0, 0.0, 0.0).is_err());
+        assert!(t.elapsed().as_secs_f64() < 1.0);
+        // A ring at the limit works.
+        let ring: Vec<DVec2> = ring.into_iter().step_by(10).collect();
+        assert_eq!(ring.len(), MAX_VERTICES);
+        let t = std::time::Instant::now();
+        let pts = fill_area(&ring, 2000.0, Pattern::Triangular, 0.0, 100.0).unwrap();
+        assert!(pts.len() > 1000);
+        assert!(t.elapsed().as_secs_f64() < 5.0);
     }
 
     #[test]

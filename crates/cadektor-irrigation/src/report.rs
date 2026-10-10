@@ -93,6 +93,94 @@ pub fn coverage_area_m2(fans: &[Fan]) -> f64 {
     seen.iter().filter(|s| **s).count() as f64 * h * h / 1e6
 }
 
+/// Heads closer than this (mm) are one spot, not neighbors.
+const SAME_SPOT_MM: f64 = 300.0;
+
+/// Area in m2 that the heads and drip lines of a zone water, read from their spacing:
+///
+/// * A head waters the square of its distance to the nearest head (head-to-head spacing `S`),
+///   times its share of a circle (`arc / 360`). A full circle waters `S * S`, a half circle at an
+///   edge `S * S / 2`. With the flow in proportion to the arc, every head then gives
+///   `60 * flow / (S * S)` mm/h, as for a square layout.
+/// * A drip line waters its length times the distance to the nearest other drip line (the
+///   emitter spacing when there is no other line).
+///
+/// `None` when there is nothing to read (a single head, or no neighbors apart).
+pub fn layout_area_m2(
+    heads: &[&crate::extract::OutletInfo],
+    drips: &[&crate::extract::LineInfo],
+) -> Option<f64> {
+    if heads.len() > 20_000 {
+        return None;
+    }
+    let mut total = 0.0;
+    for (i, h) in heads.iter().enumerate() {
+        let nn = heads
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, o)| o.at.distance(h.at))
+            .filter(|d| *d >= SAME_SPOT_MM)
+            .fold(f64::INFINITY, f64::min);
+        if !nn.is_finite() {
+            return None;
+        }
+        let share = if h.kind.is_some_and(|k| k.flow_scales_with_arc()) {
+            h.arc.clamp(0.0, 360.0) / 360.0
+        } else {
+            1.0
+        };
+        total += nn * nn * share / 1e6;
+    }
+    for l in drips {
+        if l.points.len() < 2 {
+            continue;
+        }
+        let mid = path_midpoint(&l.points);
+        let row = drips
+            .iter()
+            .filter(|o| o.id != l.id)
+            .map(|o| polyline_distance(mid, &o.points))
+            .filter(|d| *d > 1.0)
+            .fold(f64::INFINITY, f64::min);
+        let row = if row.is_finite() {
+            row
+        } else {
+            l.emitter_spacing.unwrap_or(300.0)
+        };
+        total += l.length_m * row / 1000.0;
+    }
+    (total > 0.0).then_some(total)
+}
+
+fn path_midpoint(p: &[DVec2]) -> DVec2 {
+    let half: f64 = p.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / 2.0;
+    let mut walked = 0.0;
+    for w in p.windows(2) {
+        let l = w[0].distance(w[1]);
+        if walked + l >= half && l > 0.0 {
+            return w[0] + (w[1] - w[0]) * ((half - walked) / l);
+        }
+        walked += l;
+    }
+    p[0]
+}
+
+fn polyline_distance(q: DVec2, p: &[DVec2]) -> f64 {
+    p.windows(2)
+        .map(|w| {
+            let ab = w[1] - w[0];
+            let l2 = ab.length_squared();
+            let t = if l2 == 0.0 {
+                0.0
+            } else {
+                ((q - w[0]).dot(ab) / l2).clamp(0.0, 1.0)
+            };
+            q.distance(w[0] + ab * t)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HeadCount {
     pub model: String,
@@ -112,7 +200,8 @@ pub struct ZoneRow {
     /// Flow of the zone in l/min, including drip lines.
     pub flow_lpm: f64,
     pub area_m2: f64,
-    /// `coverage` (from the fans) or `given`.
+    /// `given`, `layout` (from the spacing of the heads and drip lines) or `coverage` (the union
+    /// of the fans, when there is no spacing to read).
     pub area_source: &'static str,
     pub precipitation_mm_h: f64,
     /// Minutes of running time for the target depth. `None` without a precipitation rate.
@@ -163,9 +252,18 @@ pub fn zone_schedule(
             .iter()
             .filter_map(|o| o.radius.map(|r| (o.at, r, o.arc, o.direction)))
             .collect();
+        let drips: Vec<&crate::extract::LineInfo> = a
+            .extraction
+            .lines
+            .iter()
+            .filter(|l| l.line_type == LineType::Drip && zones.get(&l.id) == Some(&z.zone))
+            .collect();
         let (area, source) = match areas.get(&z.zone) {
             Some(x) if *x > 0.0 => (*x, "given"),
-            _ => (coverage_area_m2(&fans), "coverage"),
+            _ => match layout_area_m2(&mine, &drips) {
+                Some(x) => (x, "layout"),
+                None => (coverage_area_m2(&fans), "coverage"),
+            },
         };
         let rate = precipitation_rate(z.flow_lpm, area);
         let valves: Vec<&crate::extract::ValveInfo> = a
@@ -619,22 +717,117 @@ mod tests {
     }
 
     #[test]
-    fn zone_schedule_uses_coverage_without_given_area() {
+    fn zone_schedule_reads_the_layout_without_given_area() {
         let a = analysis();
         let s = zone_schedule(&a, &HashMap::new(), 10.0);
         let r = &s.rows[0];
-        assert_eq!(r.area_source, "coverage");
-        // Three fan positions (two heads share one): three circles of 4 m radius, far apart or
-        // overlapping a little. The area is at most 3 circles.
-        assert!(r.area_m2 > 0.0 && r.area_m2 <= 3.0 * std::f64::consts::PI * 16.0 + 0.5);
+        assert_eq!(r.area_source, "layout");
+        // Four heads, each 10 m from its nearest neighbor (two spots): about 4 * 100 m2.
+        assert!(close(r.area_m2, 400.0, 0.01), "{}", r.area_m2);
         assert!(close(r.precipitation_mm_h, 60.0 * 32.0 / r.area_m2, 1e-9));
         // A bad given area is ignored.
         let mut bad = HashMap::new();
         bad.insert(1, -4.0);
-        assert_eq!(
-            zone_schedule(&a, &bad, 10.0).rows[0].area_source,
-            "coverage"
-        );
+        assert_eq!(zone_schedule(&a, &bad, 10.0).rows[0].area_source, "layout");
+    }
+
+    fn head(x: f64, y: f64, arc: f64) -> crate::extract::OutletInfo {
+        crate::extract::OutletInfo {
+            id: 1,
+            at: DVec2::new(x, y),
+            model: "Spray-4.0".into(),
+            kind: Some(crate::catalog::HeadKind::Spray),
+            arc,
+            direction: 0.0,
+            radius: Some(4000.0),
+            flow_lpm: 8.0 * arc / 360.0,
+            min_kpa: 140.0,
+            price: 0.0,
+            node: None,
+        }
+    }
+
+    /// A 3 x 3 grid of full-circle heads at 4 m: every head waters 16 m2 and uses 8 l/min,
+    /// so the zone gets 60 * 72 / 144 = 30 mm/h (the union of the fans would give 19 mm/h).
+    /// Half-circle heads on an edge row use half the flow over half the area: still 30.
+    #[test]
+    fn precipitation_from_the_head_spacing() {
+        let mut heads = vec![];
+        for i in 0..3 {
+            for j in 0..3 {
+                heads.push(head(i as f64 * 4000.0, j as f64 * 4000.0, 360.0));
+            }
+        }
+        let refs: Vec<&crate::extract::OutletInfo> = heads.iter().collect();
+        let area = layout_area_m2(&refs, &[]).unwrap();
+        assert!(close(area, 144.0, 1e-12));
+        assert!(close(60.0 * 72.0 / area, 30.0, 1e-12));
+        // A row of half circles along an edge.
+        let row: Vec<crate::extract::OutletInfo> = (0..4)
+            .map(|i| head(i as f64 * 4000.0, 0.0, 180.0))
+            .collect();
+        let refs: Vec<&crate::extract::OutletInfo> = row.iter().collect();
+        let area = layout_area_m2(&refs, &[]).unwrap();
+        assert!(close(60.0 * 4.0 * 4.0 / area, 30.0, 1e-12));
+        // A single head, or heads on one spot, give no layout.
+        assert_eq!(layout_area_m2(&refs[..1], &[]), None);
+        let same = [head(0.0, 0.0, 360.0), head(10.0, 0.0, 360.0)];
+        let refs: Vec<&crate::extract::OutletInfo> = same.iter().collect();
+        assert_eq!(layout_area_m2(&refs, &[]), None);
+        assert_eq!(layout_area_m2(&[], &[]), None);
+    }
+
+    fn drip(id: u64, y: f64) -> crate::extract::LineInfo {
+        crate::extract::LineInfo {
+            id,
+            line_type: LineType::Drip,
+            size: "16".into(),
+            material: "PE".into(),
+            length_m: 10.0,
+            inner_diameter_mm: Some(12.4),
+            price_per_m: 0.0,
+            emitter_flow_lpm: 0.0,
+            emitter_spacing: Some(400.0),
+            points: vec![DVec2::new(0.0, y), DVec2::new(10_000.0, y)],
+        }
+    }
+
+    /// Drip lines 0.5 m apart: each waters 10 m x 0.5 m = 5 m2. Emitters every 0.4 m with
+    /// 2 l/h make 25 emitters per line, 50 l/h = 0.8333 l/min: 60 * 0.8333 / 5 = 10 mm/h, which is
+    /// the emitter flow / (emitter spacing * line spacing) = 2 / (0.4 * 0.5).
+    #[test]
+    fn precipitation_of_drip_lines_from_emitter_and_line_spacing() {
+        let lines = [drip(1, 0.0), drip(2, 500.0), drip(3, 1000.0)];
+        let refs: Vec<&crate::extract::LineInfo> = lines.iter().collect();
+        let area = layout_area_m2(&[], &refs).unwrap();
+        assert!(close(area, 15.0, 1e-9));
+        let flow = 3.0 * 25.0 * 2.0 / 60.0;
+        assert!(close(60.0 * flow / area, 10.0, 1e-9));
+        // One line alone uses its emitter spacing as the row width: 10 m x 0.4 m.
+        assert!(close(layout_area_m2(&[], &refs[..1]).unwrap(), 4.0, 1e-9));
+        // A line with one point adds nothing; a bent line has a middle on its second leg.
+        let mut one = drip(4, 0.0);
+        one.points.truncate(1);
+        assert_eq!(layout_area_m2(&[], &[&one]), None);
+        let p = path_midpoint(&[
+            DVec2::ZERO,
+            DVec2::new(1000.0, 0.0),
+            DVec2::new(1000.0, 3000.0),
+        ]);
+        assert_eq!(p, DVec2::new(1000.0, 1000.0));
+        assert_eq!(path_midpoint(&[DVec2::ZERO]), DVec2::ZERO);
+    }
+
+    #[test]
+    fn a_zone_of_one_head_falls_back_to_the_coverage_of_the_fan() {
+        let mut ed = cadektor_core::command::Editor::default();
+        add(&mut ed, poc(v(0.0, 0.0), 300.0, 50.0));
+        add(&mut ed, valve(v(0.0, 0.0), 1, 5.0));
+        add(&mut ed, outlet(v(0.0, 0.0), "Spray-4.0", 360.0));
+        let a = analyze(ed.doc(), 50.0);
+        let r = &zone_schedule(&a, &HashMap::new(), 5.0).rows[0];
+        assert_eq!(r.area_source, "coverage");
+        assert!(close(r.area_m2, std::f64::consts::PI * 16.0, 0.02));
     }
 
     #[test]
