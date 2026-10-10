@@ -1,0 +1,12 @@
+[package]
+name = "kadakas-plugin-abi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The versioned ABI between Kadakas and its WebAssembly plug-ins: the manifest, the messages and helpers for plug-in authors. Pure and wasm-compatible."
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
