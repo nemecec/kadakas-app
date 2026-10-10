@@ -23,6 +23,7 @@ impl<W: Write> Exporter<'_, W> {
             Shape::Plant { .. } | Shape::ExistingTree { .. } => self.plant(obj),
             Shape::SiteModel { .. } => self.terrain(obj),
             Shape::Massing(_) => self.massing(obj),
+            Shape::Mesh3d(_) => self.mesh3d(obj),
             Shape::Underlay(_) => skip("map underlay (a picture)"),
             Shape::SiteModifier { .. } => skip("site modifier: its effect is in the terrain"),
             Shape::Viewport(_) | Shape::TitleBlock(_) => skip("sheet object (paper space)"),
@@ -548,6 +549,66 @@ impl<W: Write> Exporter<'_, W> {
                 ],
             );
         }
+        self.data_psets(obj, &mapped)?;
+        Ok(None)
+    }
+
+    // ------------------------------------------------------------ generic 3D mesh
+
+    /// A generic 3D mesh (for example from an IFC import) as a closed or open `IfcTriangulatedFaceSet`.
+    /// The class is `IfcBuildingElementProxy`, or the class in the object data when the writer can make it.
+    fn mesh3d(&mut self, obj: &Object) -> Outcome {
+        let Shape::Mesh3d(m) = &obj.shape else {
+            return skip("not a mesh");
+        };
+        if let Some(why) = m.problem() {
+            return skip(&why);
+        }
+        let mut mapped = datamap::evaluate(self.doc, &self.map, obj);
+        if mapped.ifc_class.is_none() {
+            // The class of the source file, when this writer can make it.
+            let class = obj.data.get("ifc_class").and_then(|v| v.as_str());
+            if let Some(c) = class.filter(|c| ["IfcSlab", "IfcCovering"].contains(c)) {
+                mapped.ifc_class = Some(c.to_string());
+                mapped.predefined_type = obj
+                    .data
+                    .get("ifc")
+                    .and_then(|i| i.get("predefined_type"))
+                    .and_then(|p| p.as_str())
+                    .map(String::from);
+            }
+        }
+        let placement = self.place_in_layer(obj.layer, [0.0; 3])?;
+        // The vertices are absolute; the placement carries the elevation of the layer.
+        let base = self.base_z(obj.layer);
+        let points: Vec<DVec3> = m
+            .vertices
+            .iter()
+            .map(|p| DVec3::new(p.x, p.y, p.z - base))
+            .collect();
+        let idx: Vec<u32> = m.triangles.iter().flatten().copied().collect();
+        let item = self.tessellation(&points, &idx)?;
+        let default = m.color.map_or(MESH_GREY, |c| c.0);
+        self.style_items(&[item], self.color_of(obj, default))?;
+        let rep = self.body_rep("Tessellation", &[item])?;
+        let name = if m.name.trim().is_empty() {
+            self.object_name(obj)
+        } else {
+            m.name.trim().to_string()
+        };
+        self.element(
+            ElementIn {
+                obj,
+                kind: "mesh3d",
+                name,
+                placement,
+                body: Body {
+                    reps: vec![rep],
+                    main: Some(rep),
+                },
+            },
+            &mapped,
+        )?;
         self.data_psets(obj, &mapped)?;
         Ok(None)
     }

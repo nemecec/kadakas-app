@@ -10,6 +10,7 @@ use cadektor_core::DVec2;
 use cadektor_core::command::Command;
 use cadektor_core::georef::Georeference;
 use cadektor_core::model::{Attributes, ClassId, LayerId, ObjectId, Shape, VertexKind, arc_sweep};
+use cadektor_core::resource::{ResourceBody, ResourceId};
 use serde_json::Value;
 
 use crate::{Context, ImportResult, Report};
@@ -39,6 +40,9 @@ pub fn check_shape(shape: &Shape) -> Result<(), &'static str> {
     }
     if !shape.is_in_range() {
         return Err("coordinate is out of range (more than 1e9 mm)");
+    }
+    if shape.problem().is_some() {
+        return Err("the shape is not valid");
     }
     if let Some(vs) = shape.vertices()
         && vs
@@ -145,6 +149,33 @@ impl Builder {
         self.classes.push((name.into(), id));
         self.report.classes_created.push(name.into());
         id
+    }
+
+    /// Adds a resource (a symbol, a record format) and returns the ID that it will get.
+    pub fn resource(&mut self, name: &str, body: ResourceBody) -> ResourceId {
+        let id = ResourceId(self.take_id());
+        self.cmds.push(Command::AddResource {
+            name: name.into(),
+            body,
+        });
+        id
+    }
+
+    /// Adds a command that creates nothing, for example `AttachRecord`.
+    pub fn push(&mut self, cmd: Command) {
+        self.cmds.push(cmd);
+    }
+
+    /// Sets the elevation of a layer that this import made.
+    pub fn set_elevation(&mut self, layer: LayerId, elevation: f64) {
+        self.cmds.push(Command::ModifyLayer {
+            id: layer,
+            name: None,
+            visible: None,
+            locked: None,
+            elevation: Some(elevation),
+            scale: None,
+        });
     }
 
     pub fn set_georef(&mut self, g: Georeference) {

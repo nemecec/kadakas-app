@@ -13,8 +13,10 @@ const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
 /// Which kind of file an import has, by its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
+    /// DXF, and DWG (read through a converter that becomes DXF first).
     Dxf,
     Gis,
+    Ifc,
 }
 
 fn kind_of(path: &Path) -> Kind {
@@ -24,7 +26,8 @@ fn kind_of(path: &Path) -> Kind {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("dxf") => Kind::Dxf,
+        Some("dxf" | "dwg") => Kind::Dxf,
+        Some("ifc") => Kind::Ifc,
         _ => Kind::Gis,
     }
 }
@@ -45,6 +48,10 @@ pub struct ImportForm {
     pub class_field: String,
     /// Keep the coordinates of the file instead of centering the drawing.
     pub keep_origin: bool,
+    /// IFC: one design layer per building storey.
+    pub ifc_storeys: bool,
+    /// IFC: terrain as a 3D mesh instead of a site model.
+    pub ifc_terrain_mesh: bool,
 }
 
 impl ImportForm {
@@ -61,6 +68,8 @@ impl ImportForm {
             target_crs: String::new(),
             class_field: String::new(),
             keep_origin: false,
+            ifc_storeys: true,
+            ifc_terrain_mesh: false,
         }
     }
 
@@ -72,6 +81,13 @@ impl ImportForm {
                 o.insert(key.into(), json!(v.trim()));
             }
         };
+        if kind_of(&self.path) == Kind::Ifc {
+            o.insert("layers_from_storeys".into(), json!(self.ifc_storeys));
+            if self.ifc_terrain_mesh {
+                o.insert("terrain".into(), json!("mesh"));
+            }
+            return json!({"path": self.path, "options": o});
+        }
         text(&mut o, "layer", &self.layer);
         if self.keep_origin {
             o.insert("origin".into(), json!("file"));
@@ -90,6 +106,7 @@ impl ImportForm {
                     o.insert("points".into(), json!("with_z"));
                 }
             }
+            Kind::Ifc => {}
             Kind::Gis => {
                 text(&mut o, "source_crs", &self.source_crs);
                 text(&mut o, "target_crs", &self.target_crs);
@@ -175,10 +192,12 @@ impl IoUi {
     pub fn start_import(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
-                "DXF, Shapefile, GeoJSON",
-                &["dxf", "shp", "geojson", "json"],
+                "DXF, DWG, IFC, Shapefile, GeoJSON",
+                &["dxf", "dwg", "ifc", "shp", "geojson", "json"],
             )
             .add_filter("DXF", &["dxf"])
+            .add_filter("DWG (needs a converter, see docs/dwg.md)", &["dwg"])
+            .add_filter("IFC", &["ifc"])
             .add_filter("Shapefile", &["shp"])
             .add_filter("GeoJSON", &["geojson", "json"])
             .pick_file();
@@ -193,6 +212,7 @@ impl IoUi {
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
             .add_filter("IFC4", &["ifc"])
+            .add_filter("DWG (needs a converter, see docs/dwg.md)", &["dwg"])
             .set_file_name("drawing.dxf")
             .save_file();
         if let Some(p) = picked {
@@ -239,6 +259,17 @@ impl IoUi {
                             ui.checkbox(&mut form.hatches, "Import hatch boundaries");
                             ui.checkbox(&mut form.only_points_with_z, "Only points with a Z value");
                         }
+                        Kind::Ifc => {
+                            ui.label("IFC2x3, IFC4 or IFC4x3");
+                            ui.checkbox(
+                                &mut form.ifc_storeys,
+                                "Building storeys become design layers (default: all on the layer Site)",
+                            );
+                            ui.checkbox(
+                                &mut form.ifc_terrain_mesh,
+                                "Terrain as a 3D mesh (default: a site model)",
+                            );
+                        }
                         Kind::Gis => {
                             for (label, value) in [
                                 ("File CRS (if the file has none)", &mut form.source_crs),
@@ -252,14 +283,16 @@ impl IoUi {
                             }
                         }
                     }
-                    ui.checkbox(
-                        &mut form.keep_origin,
-                        "Keep the coordinates of the file (default: center the drawing)",
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Design layer");
-                        ui.text_edit_singleline(&mut form.layer);
-                    });
+                    if kind_of(&form.path) != Kind::Ifc {
+                        ui.checkbox(
+                            &mut form.keep_origin,
+                            "Keep the coordinates of the file (default: center the drawing)",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("Design layer");
+                            ui.text_edit_singleline(&mut form.layer);
+                        });
+                    }
                     ui.horizontal(|ui| {
                         run = ui.button("Import").clicked();
                         close = ui.button("Cancel").clicked();
@@ -354,6 +387,26 @@ mod tests {
         assert_eq!(p["options"]["points"], "with_z");
         assert_eq!(p["options"]["origin"], "file");
         assert!(p["options"].get("source_crs").is_none());
+    }
+
+    #[test]
+    fn ifc_and_dwg_import_params() {
+        let mut f = ImportForm::new("/a/site.IFC".into());
+        f.layer = "ignored".into();
+        f.keep_origin = true;
+        assert_eq!(f.params()["options"], json!({"layers_from_storeys": true}));
+        f.ifc_storeys = false;
+        f.ifc_terrain_mesh = true;
+        assert_eq!(
+            f.params()["options"],
+            json!({"layers_from_storeys": false, "terrain": "mesh"})
+        );
+        // DWG goes through the DXF options.
+        let f = ImportForm::new("/a/survey.dwg".into());
+        assert_eq!(
+            f.params()["options"],
+            json!({"explode_blocks": true, "hatches": true})
+        );
     }
 
     #[test]

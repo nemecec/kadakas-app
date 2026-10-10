@@ -158,6 +158,7 @@ impl Mapper<'_> {
             | Shape::SiteModifier { boundary, .. } => self.vertices(boundary)?,
             Shape::Massing(m) => self.vertices(&mut m.footprint)?,
             Shape::Locus3d { p } => *p = self.point3(*p)?,
+            Shape::Mesh3d(m) => self.vec3(&mut m.vertices)?,
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
             Shape::SiteModel { points, lines, .. } => {
                 self.vec3(points)?;

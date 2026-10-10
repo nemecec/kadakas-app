@@ -1,7 +1,7 @@
-//! IFC4 export for Cadektor (IFC4 ADD2 TC1, STEP physical file, ISO 10303-21).
+//! IFC for Cadektor: export of IFC4 (IFC4 ADD2 TC1) and import of IFC2x3, IFC4 and IFC4x3 (STEP physical file, ISO 10303-21).
 //!
-//! This crate only writes. The entity model ([`step::Entity`], [`step::Value`]) and the parser
-//! ([`step::parse`]) are shared, so an IFC reader can be added later without a new model.
+//! The entity model ([`step::Entity`], [`step::Value`]) is shared. The import ([`import`]) reads files with
+//! a streaming reader ([`reader::StepIndex`]) and plans one `Command::Batch`. See [`import`] for the mapping.
 //!
 //! # What the file contains
 //!
@@ -35,7 +35,9 @@
 pub mod geo;
 pub mod geom;
 pub use cadektor_core::guid;
+pub mod import;
 pub mod options;
+pub mod reader;
 pub mod step;
 
 mod export;
@@ -52,6 +54,7 @@ use cadektor_core::model::Document;
 use cadektor_io::Report;
 use cadektor_site::SiteCache;
 
+pub use import::{IfcImportError, IfcImportOptions, import_bytes, import_file};
 pub use options::IfcOptions;
 
 /// Why an export failed.

@@ -688,6 +688,36 @@ impl Builder<'_> {
                 self.plant(&build, z, edge, id);
             }
             Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Underlay(_) => {}
+            Shape::Mesh3d(m) => {
+                // Absolute coordinates: the layer elevation does not apply.
+                let color = m.color.map(rgba).or(fill).unwrap_or([190, 190, 190, 255]);
+                let pts: Vec<Vec3> = m
+                    .vertices
+                    .iter()
+                    .map(|p| Vec3::new((p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32))
+                    .collect();
+                let mut normals = vec![Vec3::ZERO; pts.len()];
+                let mut tris = Vec::with_capacity(m.triangles.len());
+                for t in &m.triangles {
+                    let [a, b, c] = t.map(|i| i as usize);
+                    if a >= pts.len() || b >= pts.len() || c >= pts.len() {
+                        continue;
+                    }
+                    let n = (pts[b] - pts[a]).cross(pts[c] - pts[a]);
+                    for i in [a, b, c] {
+                        normals[i] += n;
+                    }
+                    tris.push([a as u32, b as u32, c as u32]);
+                }
+                self.scene.mesh.part = PART_MAIN;
+                let base = self.scene.mesh.positions.len() as u32;
+                for (p, n) in pts.iter().zip(&normals) {
+                    self.scene.mesh.vertex(*p, n.normalize_or_zero(), color);
+                }
+                for [a, b, c] in tris {
+                    self.scene.mesh.tri(base + a, base + b, base + c, id);
+                }
+            }
             Shape::Massing(m) => {
                 let color = fill.unwrap_or(crate::massing::DEFAULT_COLOR);
                 let mut sink = SceneSink {

@@ -28,6 +28,8 @@ use cadektor_core::model::*;
 use cadektor_core::present::RenderStyle;
 use cadektor_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
+mod dwg_api;
+#[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;

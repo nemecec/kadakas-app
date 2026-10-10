@@ -31,7 +31,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
         None => Ok(None),
         Some(n) => Format::from_name(n).map(Some).ok_or_else(|| {
             RpcError::invalid_params(format!(
-                "unknown format '{n}'. Use dxf, shp or geojson (export also: ifc)"
+                "unknown format '{n}'. Use dxf, shp, geojson, ifc or dwg"
             ))
         }),
     }
@@ -40,8 +40,8 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 /// Formats, options and examples, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson"],
-        "export_formats": ["dxf (ASCII)", "geojson", "ifc (IFC4, see describe.io.ifc)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)"],
+        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, see describe.io.ifc)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed)",
@@ -65,6 +65,7 @@ pub(crate) fn describe() -> Value {
             "tolerance": "mm, curve approximation. Default 1"
         },
         "ifc": crate::ifc_api::describe(),
+        "dwg": crate::dwg_api::describe(),
         "examples": [
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
             {"method": "import.file", "params": {"path": "/data/trees.geojson", "options": {"class_field": "species"}}},
@@ -129,6 +130,12 @@ impl Session {
             options,
             ..
         } = params(p)?;
+        if crate::dwg_api::is_dwg(format.as_deref(), &path) {
+            return self.import_dwg_file(path, &options, checked);
+        }
+        if crate::ifc_api::is_ifc(format.as_deref(), &path) {
+            return self.import_ifc_file(path, &options, checked);
+        }
         let opts = ImportOptions::from_json(&options).map_err(rpc)?;
         let format = format_of(format.as_deref())?;
         let path = if checked {
@@ -157,6 +164,9 @@ impl Session {
             options,
             overwrite,
         } = params(p)?;
+        if crate::dwg_api::is_dwg(format.as_deref(), &path) {
+            return self.export_dwg_file(path, &options, overwrite, checked);
+        }
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.export_ifc_file(path, &options, overwrite, checked);
         }

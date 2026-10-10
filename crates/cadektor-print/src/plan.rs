@@ -521,6 +521,19 @@ fn shape_core(
                 out.push(Prim::Image(img));
             }
         }
+        Shape::Mesh3d(m) => {
+            // Plan view: the box around the mesh.
+            let (lo, hi) = m.bounds3();
+            let (lo, hi) = (lo.truncate(), hi.truncate());
+            out.push(path(
+                mapped(
+                    &[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
+                    xf,
+                ),
+                true,
+                &st,
+            ));
+        }
         Shape::Massing(m) => {
             let segs = if curve::all_straight(&m.footprint) {
                 mapped(&curve::positions(&m.footprint), xf)

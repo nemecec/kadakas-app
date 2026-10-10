@@ -3,8 +3,8 @@
 //! - `cadektor serve`: JSON-RPC 2.0 on stdin/stdout, one request per line.
 //! - `cadektor mcp`: Model Context Protocol server on stdio, for Claude Code.
 //! - `cadektor render <file> -o out.svg`: render a document to SVG.
-//! - `cadektor import <file> -o doc.json`: import a DXF, Shapefile or GeoJSON file into a document.
-//! - `cadektor export <doc> -o out.dxf`: export a document to DXF or GeoJSON.
+//! - `cadektor import <file> -o doc.json`: import a DXF, DWG (needs a converter), IFC, Shapefile or GeoJSON file into a document.
+//! - `cadektor export <doc> -o out.dxf`: export a document to DXF, DWG (needs a converter), IFC or GeoJSON.
 //!
 //! With `--connect`, `serve` and `mcp` forward every request to a running
 //! desktop app instead of a headless document. `--connect` alone finds the

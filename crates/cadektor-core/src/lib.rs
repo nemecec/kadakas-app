@@ -19,6 +19,7 @@ pub mod library;
 pub mod massing;
 pub mod massing_batch;
 pub mod mesh;
+pub mod mesh3d;
 pub mod model;
 pub mod pattern;
 pub mod plants;

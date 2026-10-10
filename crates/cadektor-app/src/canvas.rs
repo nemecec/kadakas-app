@@ -174,6 +174,19 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
                 painter.line_segment(seg, stroke);
             }
         }
+        Shape::Mesh3d(m) => {
+            // Plan view: the box around the mesh. The 3D view shows the triangles.
+            let (lo, hi) = m.bounds3();
+            let flat = [
+                lo.truncate(),
+                DVec2::new(hi.x, lo.y),
+                hi.truncate(),
+                DVec2::new(lo.x, hi.y),
+            ];
+            let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+            fill_polygon(painter, &flat, &sp, st.fill);
+            path(&flat, true);
+        }
         Shape::Underlay(u) => crate::gis_ui::draw_underlay(painter, view, u, offset),
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag {

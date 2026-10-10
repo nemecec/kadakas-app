@@ -85,6 +85,14 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
             boundary: points, ..
         } => out.extend(points.iter().map(|v| (v.p, Vertex))),
         Shape::Massing(m) => out.extend(m.footprint.iter().map(|v| (v.p, Vertex))),
+        Shape::Mesh3d(m) => {
+            let (lo, hi) = m.bounds3();
+            out.extend(
+                rect_corners(lo.truncate(), hi.truncate())
+                    .into_iter()
+                    .map(|p| (p, Vertex)),
+            )
+        }
         Shape::Underlay(u) => {
             out.extend(rect_corners(u.min, u.max).into_iter().map(|p| (p, Vertex)))
         }
