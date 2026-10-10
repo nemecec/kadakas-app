@@ -535,3 +535,13 @@ Crate `cadektor-x3d` (pure Rust, no file access, builds for wasm). It writes glT
 | X3D-18 | Section and elevation of 2D symbols and of objects that are only 2D (no 3D geometry). | P2 | planned |
 | X3D-19 | Massing models (ARC-09) export to glTF, GLB and OBJ (kind `massing` in the extras) and are cut by section viewports. The scene mesh of a massing model is closed, with a floor face. | P2 | done |
 
+### 4.21 Shipping quality
+
+| ID | Feature | Pri | Status |
+|---|---|---|---|
+| SHIP-01 | Autosave to a per-user recovery folder (not the file of the user): every N minutes (default 5) or M operations (default 50), compact JSON made on the UI thread and written atomically on a worker thread. The last K versions stay (default 5). The JSON is made on the writer thread, and files are flushed to disk (recovery folder 0700, files 0600). Opt-in: also save over the open file; this write shares one lock with Save, a late autosave never replaces a newer Save, and `.bak` is never touched. After "open recovered copy" the recovery files stay until the recovered document is autosaved. Preferences dialog (File > Preferences...). | P1 | done |
+| SHIP-02 | Crash recovery: a lock file (it holds the process id) with an exclusive file lock marks a running session. At start, a lock that nobody holds, whose process is gone or that is older than 10 s, and that has versions next to it, is an unclean shutdown. A dialog offers: open the recovered copy, discard it, show its location. A clean exit deletes the copies. | P1 | done |
+| SHIP-03 | Installers with cargo-packager (`packager.toml`): macOS `.app` and `.dmg`, Windows NSIS and WiX `.msi`, Linux AppImage and `.deb`. Own icon (`packaging/icons`). `.cdk` file association (one document extension; `.cdk.json` still opens). The `cadektor` CLI is bundled next to the app. Nothing is signed. | P1 | partial (.app checked on macOS; other formats and the Finder step of `.dmg` not run) |
+| SHIP-04 | GitHub release workflow on tag push. | P1 | partial (not run on GitHub yet) |
+| SHIP-05 | Web build (eframe on WebGPU, WebGL2 fallback). Open and save through the browser, autosave in local storage. No agent server, scripting, GIS or native import and export. See `docs/web.md`. | P2 | partial (compiles; not run in a browser) |
+| SHIP-06 | Signing and notarization, auto update. | P2 | missing |

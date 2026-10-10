@@ -41,6 +41,7 @@ pub enum MenuAction {
     ZoomFit,
     CreateSiteModel,
     UpdateSiteModel,
+    Preferences,
 }
 
 /// Runs a command on the session. Errors go to the status line.
@@ -83,12 +84,13 @@ pub fn menu_bar(
             };
         ui.menu_button("File", |ui| {
             item(ui, "New", true, New, &mut out);
+            // In the browser, Open picks a file and Save downloads it.
+            item(ui, "Open...", true, Open, &mut out);
+            item(ui, "Save", true, Save, &mut out);
+            item(ui, "Save As...", true, SaveAs, &mut out);
+            item(ui, "Export SVG...", true, ExportSvg, &mut out);
             #[cfg(not(target_arch = "wasm32"))]
             {
-                item(ui, "Open...", true, Open, &mut out);
-                item(ui, "Save", true, Save, &mut out);
-                item(ui, "Save As...", true, SaveAs, &mut out);
-                item(ui, "Export SVG...", true, ExportSvg, &mut out);
                 item(ui, "Export PDF...", true, ExportPdf, &mut out);
                 ui.separator();
                 item(ui, "Import...", true, Import, &mut out);
@@ -99,6 +101,8 @@ pub fn menu_bar(
                 ui.separator();
                 item(ui, "Scripts...", true, Scripts, &mut out);
             }
+            ui.separator();
+            item(ui, "Preferences...", true, Preferences, &mut out);
         });
         ui.menu_button("Edit", |ui| {
             item(ui, "Undo", can_undo, Undo, &mut out);
@@ -205,6 +209,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::ChangeCrs
         | MenuAction::Scripts
         | MenuAction::CreateSiteModel
+        | MenuAction::Preferences
         | MenuAction::UpdateSiteModel => return None,
     })
 }

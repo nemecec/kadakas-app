@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cadektor</title>
+    <!-- Trunk builds the app crate for the browser and adds the loader script here. -->
+    <link data-trunk rel="rust" data-bin="cadektor-app" href="../crates/cadektor-app/Cargo.toml" data-wasm-opt="z" />
+    <link data-trunk rel="copy-file" href="../packaging/icons/icon.svg" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #1b1b1b; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #loading_text {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #ddd; font: 16px system-ui, sans-serif; text-align: center; padding: 1em;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="cadektor_canvas"></canvas>
+    <div id="loading_text">Loading Cadektor...</div>
+  </body>
+</html>

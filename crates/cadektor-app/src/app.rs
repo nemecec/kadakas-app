@@ -74,6 +74,14 @@ pub struct CadektorApp {
     script_ui: crate::script_ui::ScriptUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
+    /// Autosave, crash recovery and the Preferences dialog.
+    autosave: crate::autosave_ui::AutosaveUi,
+    /// Files that the browser has picked, waiting for the next frame.
+    #[cfg(target_arch = "wasm32")]
+    web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
+    /// Set when a download of the document has finished. Then the browser copy is not needed.
+    #[cfg(target_arch = "wasm32")]
+    web_saved: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl CadektorApp {
@@ -114,6 +122,7 @@ impl CadektorApp {
             }
         };
         app.status = key_note.clone();
+        app.autosave.begin();
         if let Some(port) = agent_port {
             let ctx = cc.egui_ctx.clone();
             let info_path = cadektor_core::fsio::agent_info_path();
@@ -132,6 +141,20 @@ impl CadektorApp {
                 Err(e) => app.status = format!("Agent server failed on port {port}: {e}"),
             }
         }
+        app
+    }
+
+    /// The start of the web build: no agent server, no files, no Python.
+    #[cfg(target_arch = "wasm32")]
+    pub fn new_web(cc: &eframe::CreationContext<'_>) -> Self {
+        let mut app = Self::blank();
+        if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
+            rs.renderer.write().callback_resources.insert(gpu);
+            app.gpu_ready = true;
+        }
+        app.status = "Web build: files open and save through the browser".into();
+        app.autosave.begin();
         app
     }
 
@@ -170,6 +193,11 @@ impl CadektorApp {
             #[cfg(not(target_arch = "wasm32"))]
             script_ui: Default::default(),
             readout: Default::default(),
+            autosave: crate::autosave_ui::AutosaveUi::inert(),
+            #[cfg(target_arch = "wasm32")]
+            web_inbox: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            web_saved: Default::default(),
         }
     }
 
@@ -367,13 +395,10 @@ impl CadektorApp {
             MenuAction::ZoomFit => self.zoom_fit(),
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
-            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::Preferences => self.autosave.open_preferences(),
             MenuAction::Open => self.open_file(ctx),
-            #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Save => self.save(false, ctx),
-            #[cfg(not(target_arch = "wasm32"))]
             MenuAction::SaveAs => self.save(true, ctx),
-            #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ExportSvg => self.export_svg(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ExportPdf => self.export_pdf(),
@@ -421,10 +446,91 @@ impl CadektorApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} - Cadektor")));
     }
 
+    /// Web: the browser asks for a file. The bytes arrive in `web_inbox` and `take_web_files` reads them.
+    #[cfg(target_arch = "wasm32")]
+    fn open_file(&mut self, ctx: &egui::Context) {
+        let (inbox, ctx) = (self.web_inbox.clone(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(f) = rfd::AsyncFileDialog::new()
+                .add_filter("Cadektor", &["cdk", "json"])
+                .pick_file()
+                .await
+            {
+                let bytes = f.read().await;
+                inbox.borrow_mut().push((f.file_name(), bytes));
+                ctx.request_repaint();
+            }
+        });
+    }
+
+    /// Web: Save always downloads a file, because a browser page has no path to write to.
+    #[cfg(target_arch = "wasm32")]
+    fn save(&mut self, _as_new: bool, _ctx: &egui::Context) {
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or("drawing.cdk".into(), |n| n.to_string_lossy().into_owned());
+        match serde_json::to_vec_pretty(self.session.editor.doc()) {
+            Ok(bytes) => self.download(&name, bytes, Some(self.web_saved.clone())),
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn export_svg(&mut self) {
+        let svg = cadektor_core::svg::render(self.session.editor.doc(), 1600);
+        self.download("drawing.svg", svg.into_bytes(), None);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn download(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+        done: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+    ) {
+        let name = name.to_string();
+        self.status = format!("Downloading {name}");
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(h) = rfd::AsyncFileDialog::new()
+                .set_file_name(&name)
+                .save_file()
+                .await
+                && h.write(&bytes).await.is_ok()
+                && let Some(done) = done
+            {
+                done.set(true);
+            }
+        });
+    }
+
+    /// Web: opens the files that the browser handed over.
+    #[cfg(target_arch = "wasm32")]
+    fn take_web_files(&mut self) {
+        // The browser copy goes only after a download really worked.
+        if self.web_saved.take() {
+            self.autosave.saved();
+        }
+        let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
+        for (name, bytes) in files {
+            let parsed = String::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|t| file_io::parse_document(&t));
+            match parsed {
+                Ok(doc) => {
+                    self.status = format!("Opened {name}");
+                    self.replace_document(doc, Some(name.into()));
+                }
+                Err(e) => self.status = format!("Cannot open {name}: {e}"),
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Cadektor", &["json"])
+            .add_filter("Cadektor", &["cdk", "json"])
             .pick_file()
         else {
             return;
@@ -445,8 +551,8 @@ impl CadektorApp {
             (Some(p), false) => p.clone(),
             _ => {
                 let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Cadektor", &["json"])
-                    .set_file_name("drawing.cdk.json")
+                    .add_filter("Cadektor", &["cdk"])
+                    .set_file_name("drawing.cdk")
                     .save_file()
                 else {
                     return;
@@ -456,7 +562,14 @@ impl CadektorApp {
         };
         match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
-                self.status = format!("Saved {}", path.display());
+                self.status = if file_io::is_legacy_name(&path) {
+                    format!(
+                        "Saved {}. File > Save As makes a file with the new .cdk extension.",
+                        path.display()
+                    )
+                } else {
+                    format!("Saved {}", path.display())
+                };
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -853,7 +966,11 @@ impl CadektorApp {
             self.nav.sheets.last_sheet = sheet;
             self.needs_fit = true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         let page = sheet.and_then(|l| self.session.sheet_page(l).ok());
+        // Sheet output needs the print crate, which the web build leaves out.
+        #[cfg(target_arch = "wasm32")]
+        let page: Option<std::sync::Arc<cadektor_print::Page>> = None;
         self.canvas_rect = Some(rect);
         if self.needs_fit {
             self.fit_view(rect);
@@ -986,6 +1103,8 @@ impl eframe::App for CadektorApp {
     fn on_exit(&mut self) {
         // Stops the agent server and deletes its runtime file.
         self.agent = None;
+        // A clean exit: the recovery copies are not needed any more.
+        self.autosave.finish();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1016,6 +1135,18 @@ impl eframe::App for CadektorApp {
         #[cfg(not(target_arch = "wasm32"))]
         if std::mem::take(&mut self.title_dirty) {
             self.set_title(&ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.take_web_files();
+        self.autosave.tick(
+            &ctx,
+            self.session.editor.revision(),
+            self.path.as_deref(),
+            self.session.editor.doc(),
+        );
+        if let Some(r) = self.autosave.show(&ctx) {
+            self.replace_document(r.doc, None);
+            self.status = r.status;
         }
         self.entry.sync(
             self.machine.tool(),
