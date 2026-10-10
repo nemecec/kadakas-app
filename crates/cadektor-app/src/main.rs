@@ -1,8 +1,8 @@
 // The web build leaves out the native features (agent server, files, GIS, scripts); their code is then unused.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 
-#[cfg(not(target_arch = "wasm32"))]
 mod about;
+#[cfg(not(target_arch = "wasm32"))]
 mod agent;
 mod annot_ui;
 mod app;
