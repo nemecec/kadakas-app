@@ -11,6 +11,7 @@ pub mod display;
 pub mod pdf;
 pub mod plan;
 pub mod png;
+pub mod section;
 pub mod svg;
 pub mod table;
 pub mod underlay;

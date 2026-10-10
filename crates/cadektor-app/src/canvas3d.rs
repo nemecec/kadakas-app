@@ -51,7 +51,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     }
     let size = glam::Vec2::new(rect.width().max(1.0), rect.height().max(1.0));
     let aspect = size.x / size.y;
-    let scene = session.scene();
+    // Plants far from the camera turn into coarse meshes and billboards (`lod_for`).
+    let pixel_size = f64::from(view3d.camera.half_height() * 2.0 / size.y);
+    let scene = session.scene_for_pixel_size(pixel_size);
     let rev = session.editor.revision();
     if view3d.fit_pending() {
         view3d.fit(scene.bounds, aspect);

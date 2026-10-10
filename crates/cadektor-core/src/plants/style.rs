@@ -115,15 +115,30 @@ pub enum PlantForm {
     Spreading,
     /// A low dome that sits on the ground.
     ShrubMound,
+    /// A dome with a skirt of branches that hang down.
+    Weeping,
+    /// A slender trunk with a crown of arching fronds.
+    Palm,
+    /// A narrow conifer with tiers.
+    ColumnarConifer,
+    /// Several stems that lean outward, each with a lobe of canopy.
+    MultiStem,
+    /// A clipped block. A plant makes a short block. A hedge path (a polyline) makes a long one.
+    Hedge,
 }
 
 impl PlantForm {
-    pub const ALL: [PlantForm; 5] = [
+    pub const ALL: [PlantForm; 10] = [
         PlantForm::Tree,
         PlantForm::Columnar,
         PlantForm::Conical,
         PlantForm::Spreading,
         PlantForm::ShrubMound,
+        PlantForm::Weeping,
+        PlantForm::Palm,
+        PlantForm::ColumnarConifer,
+        PlantForm::MultiStem,
+        PlantForm::Hedge,
     ];
 
     pub fn id(self) -> &'static str {
@@ -133,6 +148,11 @@ impl PlantForm {
             PlantForm::Conical => "conical",
             PlantForm::Spreading => "spreading",
             PlantForm::ShrubMound => "shrub_mound",
+            PlantForm::Weeping => "weeping",
+            PlantForm::Palm => "palm",
+            PlantForm::ColumnarConifer => "columnar_conifer",
+            PlantForm::MultiStem => "multi_stem",
+            PlantForm::Hedge => "hedge",
         }
     }
 

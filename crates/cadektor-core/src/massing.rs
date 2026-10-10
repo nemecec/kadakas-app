@@ -418,19 +418,25 @@ pub fn emit(
     edge: [u8; 4],
     sink: &mut crate::mesh::SceneSink<'_>,
 ) {
-    let solid = m.solid(base, false);
+    let solid = m.solid(base, true);
     let roof_color = [
         (f64::from(color[0]) * ROOF_TINT) as u8,
         (f64::from(color[1]) * ROOF_TINT) as u8,
         (f64::from(color[2]) * ROOF_TINT) as u8,
         color[3],
     ];
-    let (mut walls, mut roofs) = ((Vec::new(), Vec::new()), (Vec::new(), Vec::new()));
+    let (mut walls, mut roofs, mut floors) = (
+        (Vec::new(), Vec::new()),
+        (Vec::new(), Vec::new()),
+        (Vec::new(), Vec::new()),
+    );
     for t in &solid.tris {
         let pts = t.map(|i| solid.positions[i as usize]);
         let n = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
         let part = if n.z > 1e-9 * n.length() {
             &mut roofs
+        } else if n.z < -1e-9 * n.length() {
+            &mut floors
         } else {
             &mut walls
         };
@@ -439,8 +445,10 @@ pub fn emit(
         part.1.extend([at, at + 1, at + 2]);
     }
     // Each face has its own vertices, so the shading stays flat.
-    sink.mesh(&walls.0, &walls.1, color);
-    sink.mesh(&roofs.0, &roofs.1, roof_color);
+    sink.mesh_oriented(&walls.0, &walls.1, color);
+    sink.mesh_oriented(&roofs.0, &roofs.1, roof_color);
+    // The floor faces down, so that the solid is closed.
+    sink.mesh_oriented(&floors.0, &floors.1, color);
     let ring = m.ring();
     let eave = base + m.eave_height();
     for z in [base, eave] {
