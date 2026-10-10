@@ -267,6 +267,7 @@ impl Session {
         Session {
             editor: Editor::default(),
             selection: Vec::new(),
+            context: Vec::new(),
             view: ViewSettings::default(),
             replaced: false,
             view_changed: false,
