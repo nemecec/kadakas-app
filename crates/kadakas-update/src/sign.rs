@@ -6,7 +6,8 @@
 use crate::error::Result;
 use crate::hex;
 use crate::manifest::{Manifest, SIGN_PREFIX, SignedManifest};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::Signer;
+pub use ed25519_dalek::SigningKey;
 
 /// The key for a 32-byte seed.
 pub fn key_from_seed(seed: [u8; 32]) -> SigningKey {

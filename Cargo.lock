@@ -2520,6 +2520,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-sign-manifest"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "kadakas-sys",
+ "kadakas-update",
+ "serde_json",
+]
+
+[[package]]
 name = "kadakas-site"
 version = "0.1.0"
 dependencies = [
