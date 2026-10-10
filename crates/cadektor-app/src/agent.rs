@@ -563,7 +563,13 @@ mod tests {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(parse_allow_urls(&a(&["app"])).is_empty());
         assert_eq!(
-            parse_allow_urls(&a(&["app", "--allow-url", "maps.example.org", "--allow-url=*.gov.fi", "--allow-url"])),
+            parse_allow_urls(&a(&[
+                "app",
+                "--allow-url",
+                "maps.example.org",
+                "--allow-url=*.gov.fi",
+                "--allow-url"
+            ])),
             vec!["maps.example.org".to_string(), "*.gov.fi".to_string()]
         );
     }

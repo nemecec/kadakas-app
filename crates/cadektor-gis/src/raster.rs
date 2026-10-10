@@ -112,8 +112,9 @@ pub fn blit(dst: &mut Rgba, src: &Rgba, x: i64, y: i64) {
             } else if sp[3] > 0 {
                 let (sa, da) = (f64::from(sp[3]) / 255.0, f64::from(dst.data[d + 3]) / 255.0);
                 let oa = sa + da * (1.0 - sa);
-                for c in 0..3 {
-                    let v = (f64::from(sp[c]) * sa + f64::from(dst.data[d + c]) * da * (1.0 - sa)) / oa;
+                for (c, s) in sp.iter().enumerate().take(3) {
+                    let v =
+                        (f64::from(*s) * sa + f64::from(dst.data[d + c]) * da * (1.0 - sa)) / oa;
                     dst.data[d + c] = v.round().clamp(0.0, 255.0) as u8;
                 }
                 dst.data[d + 3] = (oa * 255.0).round() as u8;
@@ -212,7 +213,12 @@ mod tests {
         Rgba {
             width: w,
             height: h,
-            data: c.iter().copied().cycle().take(w as usize * h as usize * 4).collect(),
+            data: c
+                .iter()
+                .copied()
+                .cycle()
+                .take(w as usize * h as usize * 4)
+                .collect(),
         }
     }
 
@@ -280,13 +286,26 @@ mod tests {
         assert_eq!(a.apply(0.0, 0.0), DVec2::new(100.0, 200.0));
         assert_eq!(a.apply(10.0, 10.0), DVec2::new(120.0, 170.0));
         let b = a.bounds(10, 10);
-        assert_eq!((b.min, b.max), (DVec2::new(100.0, 170.0), DVec2::new(120.0, 200.0)));
+        assert_eq!(
+            (b.min, b.max),
+            (DVec2::new(100.0, 170.0), DVec2::new(120.0, 200.0))
+        );
         assert_eq!(a.pixel_size(), DVec2::new(2.0, 3.0));
         let inv = a.inverse().unwrap();
         assert!(inv.apply(120.0, 170.0).distance(DVec2::new(10.0, 10.0)) < 1e-9);
-        let flat = Affine { a: 1.0, b: 2.0, c: 0.0, d: 2.0, e: 4.0, f: 0.0 };
+        let flat = Affine {
+            a: 1.0,
+            b: 2.0,
+            c: 0.0,
+            d: 2.0,
+            e: 4.0,
+            f: 0.0,
+        };
         assert!(flat.inverse().is_none());
-        let g = GeoRaster { image: blank(10, 10), affine: a };
+        let g = GeoRaster {
+            image: blank(10, 10),
+            affine: a,
+        };
         assert_eq!(g.bounds(), b);
     }
 

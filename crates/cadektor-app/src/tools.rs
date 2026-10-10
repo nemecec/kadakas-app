@@ -111,11 +111,7 @@ pub const DEFAULT_ARC_RADIUS: f64 = 500.0;
 pub fn has_vertex_modes(tool: Tool) -> bool {
     matches!(
         tool,
-        Tool::Polyline
-            | Tool::LandscapeArea
-            | Tool::Hardscape
-            | Tool::SiteModifier
-            | Tool::Massing
+        Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier | Tool::Massing
     )
 }
 
@@ -505,28 +501,26 @@ impl ToolMachine {
             | Tool::LandscapeArea
             | Tool::Hardscape
             | Tool::SiteModifier
-            | Tool::Massing => {
-                match input {
-                    Input::Press { p, .. } => {
-                        let s = cx.settings;
-                        if !matches!(self.state, State::Path(_)) {
-                            self.state = State::Path(vec![]);
-                        }
-                        if let State::Path(history) = &mut self.state {
-                            let next = extend_path(
-                                history.last().map_or(&[], |v| v.as_slice()),
-                                p,
-                                s.vertex_mode,
-                                s.arc_radius,
-                            );
-                            history.push(next);
-                        }
-                        vec![]
+            | Tool::Massing => match input {
+                Input::Press { p, .. } => {
+                    let s = cx.settings;
+                    if !matches!(self.state, State::Path(_)) {
+                        self.state = State::Path(vec![]);
                     }
-                    Input::DoubleClick | Input::Enter => self.finish_polygon(cx),
-                    _ => vec![],
+                    if let State::Path(history) = &mut self.state {
+                        let next = extend_path(
+                            history.last().map_or(&[], |v| v.as_slice()),
+                            p,
+                            s.vertex_mode,
+                            s.arc_radius,
+                        );
+                        history.push(next);
+                    }
+                    vec![]
                 }
-            }
+                Input::DoubleClick | Input::Enter => self.finish_polygon(cx),
+                _ => vec![],
+            },
         }
     }
 
@@ -1518,11 +1512,29 @@ mod tests {
             f.click(x, y);
         }
         f.send(Input::Enter);
-        let o = f.session.editor.doc().objects.values().next().unwrap().clone();
-        let Shape::Massing(m) = &o.shape else { panic!("{:?}", o.shape) };
-        assert_eq!((m.floors, m.floor_height, m.roof), (Some(3), 2800.0, cadektor_core::massing::RoofStyle::Gable));
+        let o = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let Shape::Massing(m) = &o.shape else {
+            panic!("{:?}", o.shape)
+        };
+        assert_eq!(
+            (m.floors, m.floor_height, m.roof),
+            (Some(3), 2800.0, cadektor_core::massing::RoofStyle::Gable)
+        );
         assert_eq!(m.footprint.len(), 4);
-        assert!(m.footprint.iter().any(|v| matches!(v.kind, VertexKind::Arc { .. })), "vertex modes work");
+        assert!(
+            m.footprint
+                .iter()
+                .any(|v| matches!(v.kind, VertexKind::Arc { .. })),
+            "vertex modes work"
+        );
         assert_eq!(m.eave_height(), 8400.0);
         // Two points are not a building.
         let mut g = Fixture::new(Tool::Massing);
@@ -1541,7 +1553,18 @@ mod tests {
             h.click(x, y);
         }
         h.send(Input::Enter);
-        let Shape::Massing(m) = &h.session.editor.doc().objects.values().next().unwrap().shape else { panic!() };
+        let Shape::Massing(m) = &h
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .next()
+            .unwrap()
+            .shape
+        else {
+            panic!()
+        };
         assert_eq!((m.floors, m.height), (None, 7000.0));
     }
 }

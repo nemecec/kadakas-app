@@ -47,7 +47,9 @@ impl Reader {
             (m.x, m.y)
         } else {
             let u = m / self.crs.to_meter();
-            let (x, y, _) = Transformer::new(&self.crs, &self.wgs).apply(u.x, u.y, 0.0).ok()?;
+            let (x, y, _) = Transformer::new(&self.crs, &self.wgs)
+                .apply(u.x, u.y, 0.0)
+                .ok()?;
             (x, y)
         };
         (m.is_finite() && lon.is_finite() && lat.is_finite()).then(|| Readout {
@@ -90,13 +92,19 @@ mod tests {
         assert_eq!(r.crs(), "EPSG:3067");
         let o = r.at(DVec2::new(10_500.0, 250.0)).unwrap();
         assert_eq!((o.easting, o.northing), (385_010.5, 6_672_000.25));
-        assert!(o.lat > 60.0 && o.lat < 60.3 && o.lon > 24.0 && o.lon < 25.5, "{o:?}");
+        assert!(
+            o.lat > 60.0 && o.lat < 60.3 && o.lon > 24.0 && o.lon < 25.5,
+            "{o:?}"
+        );
         assert_eq!(o.text(false), "N 6672000.250  E 385010.500");
         assert!(o.text(true).starts_with("lat 60."));
         // Rotation is part of the georeference.
         let mut rot = g("EPSG:3067");
         rot.rotation = std::f64::consts::FRAC_PI_2;
-        let o = Reader::new(&rot).unwrap().at(DVec2::new(1000.0, 0.0)).unwrap();
+        let o = Reader::new(&rot)
+            .unwrap()
+            .at(DVec2::new(1000.0, 0.0))
+            .unwrap();
         assert!((o.northing - 6_672_001.0).abs() < 1e-6 && (o.easting - 385_000.0).abs() < 1e-6);
     }
 
@@ -108,10 +116,20 @@ mod tests {
         bad.origin = DVec2::NAN;
         assert!(Reader::new(&bad).is_none());
         // A geographic document CRS gives its own numbers as lon and lat.
-        let geo = Georeference { crs: "EPSG:4326".into(), origin: DVec2::new(24.0, 60.0), rotation: 0.0, user_origin: DVec2::ZERO };
+        let geo = Georeference {
+            crs: "EPSG:4326".into(),
+            origin: DVec2::new(24.0, 60.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
         let o = Reader::new(&geo).unwrap().at(DVec2::ZERO).unwrap();
         assert_eq!((o.lon, o.lat), (24.0, 60.0));
         // A position that cannot be converted gives nothing.
-        assert!(Reader::new(&g("EPSG:3067")).unwrap().at(DVec2::new(f64::INFINITY, 0.0)).is_none());
+        assert!(
+            Reader::new(&g("EPSG:3067"))
+                .unwrap()
+                .at(DVec2::new(f64::INFINITY, 0.0))
+                .is_none()
+        );
     }
 }

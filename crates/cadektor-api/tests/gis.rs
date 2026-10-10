@@ -24,7 +24,8 @@ fn err(s: &mut Session, method: &str, params: Value) -> String {
 fn session_for(m: &Mock) -> Session {
     let mut s = Session::default();
     s.gis.urls = UrlPolicy::allow_list([m.base.clone()]);
-    s.gis.cache_dir = Some(std::env::temp_dir().join(format!("cadektor-api-gis-{}", std::process::id())));
+    s.gis.cache_dir =
+        Some(std::env::temp_dir().join(format!("cadektor-api-gis-{}", std::process::id())));
     s
 }
 
@@ -75,7 +76,11 @@ fn services() -> Mock {
 }
 
 fn set_crs(s: &mut Session) {
-    let r = ok(s, "gis.georef.set", json!({"crs": "EPSG:3067", "origin": [385000, 6672000]}));
+    let r = ok(
+        s,
+        "gis.georef.set",
+        json!({"crs": "EPSG:3067", "origin": [385000, 6672000]}),
+    );
     assert_eq!(r["georeference"]["crs"], "EPSG:3067");
 }
 
@@ -83,30 +88,73 @@ fn set_crs(s: &mut Session) {
 fn the_default_policy_allows_no_address() {
     let mut s = Session::default();
     let m = services();
-    let e = err(&mut s, "gis.wms.capabilities", json!({"url": format!("{}/wms", m.base)}));
-    assert!(e.contains("not on the list") && e.contains("--allow-url"), "{e}");
+    let e = err(
+        &mut s,
+        "gis.wms.capabilities",
+        json!({"url": format!("{}/wms", m.base)}),
+    );
+    assert!(
+        e.contains("not on the list") && e.contains("--allow-url"),
+        "{e}"
+    );
     assert_eq!(m.hit_count(), 0, "no request left the session");
     let info = ok(&mut s, "gis.sources", json!({}));
     assert_eq!(info["restricted"], true);
     assert_eq!(info["allowed_urls"], json!([]));
     // A bad address is a parameter error.
-    assert!(err(&mut s, "gis.wms.capabilities", json!({"url": "file:///etc/passwd"})).contains("http"));
-    assert!(err(&mut s, "gis.wfs.import", json!({"url": "ftp://x/", "type_name": "t"})).contains("http"));
+    assert!(
+        err(
+            &mut s,
+            "gis.wms.capabilities",
+            json!({"url": "file:///etc/passwd"})
+        )
+        .contains("http")
+    );
+    assert!(
+        err(
+            &mut s,
+            "gis.wfs.import",
+            json!({"url": "ftp://x/", "type_name": "t"})
+        )
+        .contains("http")
+    );
 }
 
 #[test]
 fn capabilities_through_the_api() {
     let m = services();
     let mut s = session_for(&m);
-    let c = ok(&mut s, "gis.wms.capabilities", json!({"url": format!("{}/wms", m.base)}));
+    let c = ok(
+        &mut s,
+        "gis.wms.capabilities",
+        json!({"url": format!("{}/wms", m.base)}),
+    );
     assert_eq!(c["title"], "Mock WMS");
-    assert!(c["layers"].as_array().unwrap().iter().any(|l| l["name"] == "ortho"));
-    let w = ok(&mut s, "gis.wfs.capabilities", json!({"url": format!("{}/wfs", m.base)}));
+    assert!(
+        c["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["name"] == "ortho")
+    );
+    let w = ok(
+        &mut s,
+        "gis.wfs.capabilities",
+        json!({"url": format!("{}/wfs", m.base)}),
+    );
     assert_eq!(w["feature_types"][0]["name"], "ns:buildings");
     // A server that answers with something else.
-    let e = err(&mut s, "gis.wmts.capabilities", json!({"url": format!("{}/wms", m.base)}));
+    let e = err(
+        &mut s,
+        "gis.wmts.capabilities",
+        json!({"url": format!("{}/wms", m.base)}),
+    );
     assert!(e.contains("not a WMTS"), "{e}");
-    let e = err(&mut s, "gis.wms.capabilities", json!({"url": format!("{}/other", m.base)}));
+    let e = err(
+        &mut s,
+        "gis.wms.capabilities",
+        json!({"url": format!("{}/other", m.base)}),
+    );
     assert!(e.contains("404"), "{e}");
     assert!(err(&mut s, "gis.nonsense", json!({})).contains("unknown method"));
 }
@@ -116,11 +164,19 @@ fn wms_underlay_in_the_document_and_refresh() {
     let m = services();
     let mut s = session_for(&m);
     // No CRS: a clear message.
-    let e = err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000]}));
+    let e = err(
+        &mut s,
+        "gis.wms.add",
+        json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000]}),
+    );
     assert!(e.contains("gis.georef.set"), "{e}");
     set_crs(&mut s);
     // An empty drawing needs a box.
-    let e = err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"]}));
+    let e = err(
+        &mut s,
+        "gis.wms.add",
+        json!({"url": format!("{}/wms", m.base), "layers": ["ortho"]}),
+    );
     assert!(e.contains("bbox"), "{e}");
     let r = ok(
         &mut s,
@@ -128,35 +184,68 @@ fn wms_underlay_in_the_document_and_refresh() {
         json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 200000, 100000], "max_px": 400, "name": "Aerial", "opacity": 0.8}),
     );
     let id = r["id"].as_u64().unwrap();
-    assert_eq!((r["width"].as_u64().unwrap(), r["height"].as_u64().unwrap()), (400, 200));
+    assert_eq!(
+        (r["width"].as_u64().unwrap(), r["height"].as_u64().unwrap()),
+        (400, 200)
+    );
     assert_eq!(r["stats"]["service"], "wms");
     assert_eq!(r["stats"]["crs"], "EPSG:3857");
     let list = ok(&mut s, "objects.list", json!({"kind": "underlay"}));
     assert_eq!(list.as_array().map(Vec::len), Some(1));
     // The picture itself is not in the list.
-    assert!(list[0]["shape"]["png"].as_str().unwrap().contains("not shown"));
-    assert!(ok(&mut s, "objects.get", json!({"id": id}))["shape"]["png"].as_str().unwrap().contains("not shown"));
+    assert!(
+        list[0]["shape"]["png"]
+            .as_str()
+            .unwrap()
+            .contains("not shown")
+    );
+    assert!(
+        ok(&mut s, "objects.get", json!({"id": id}))["shape"]["png"]
+            .as_str()
+            .unwrap()
+            .contains("not shown")
+    );
     let doc = s.editor.doc();
     let o = doc.object(cadektor_core::model::ObjectId(id)).unwrap();
-    let cadektor_core::model::Shape::Underlay(u) = &o.shape else { panic!() };
+    let cadektor_core::model::Shape::Underlay(u) = &o.shape else {
+        panic!()
+    };
     assert_eq!((u.name.as_str(), u.opacity), ("Aerial", 0.8));
     assert_eq!(o.data["gis_source"]["kind"], "wms");
     // Undo removes it in one step.
     assert!(ok(&mut s, "undo", json!({}))["done"].as_bool().unwrap());
-    assert!(s.editor.doc().object(cadektor_core::model::ObjectId(id)).is_none());
+    assert!(
+        s.editor
+            .doc()
+            .object(cadektor_core::model::ObjectId(id))
+            .is_none()
+    );
     ok(&mut s, "redo", json!({}));
     // Refresh for a new box keeps the object and its id.
-    let r2 = ok(&mut s, "gis.wms.refresh", json!({"id": id, "bbox": [0, 0, 100000, 100000], "max_px": 200}));
+    let r2 = ok(
+        &mut s,
+        "gis.wms.refresh",
+        json!({"id": id, "bbox": [0, 0, 100000, 100000], "max_px": 200}),
+    );
     assert_eq!(r2["id"].as_u64().unwrap(), id);
-    let o = s.editor.doc().object(cadektor_core::model::ObjectId(id)).unwrap();
-    let cadektor_core::model::Shape::Underlay(u) = &o.shape else { panic!() };
+    let o = s
+        .editor
+        .doc()
+        .object(cadektor_core::model::ObjectId(id))
+        .unwrap();
+    let cadektor_core::model::Shape::Underlay(u) = &o.shape else {
+        panic!()
+    };
     assert_eq!((u.width, u.height, u.name.as_str()), (200, 200, "Aerial"));
     // The second request for the same tiles comes from the cache.
     let before = m.hit_count();
     let r3 = ok(&mut s, "gis.wms.refresh", json!({"id": id}));
     assert_eq!(r3["stats"]["from_cache"], r3["stats"]["tiles"]);
     let after = m.hit_count();
-    assert!(after - before <= 1, "only the capabilities were asked again: {before} {after}");
+    assert!(
+        after - before <= 1,
+        "only the capabilities were asked again: {before} {after}"
+    );
     // Errors.
     let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
     assert!(err(&mut s, "gis.wms.refresh", json!({"id": c})).contains("not an underlay"));
@@ -165,7 +254,12 @@ fn wms_underlay_in_the_document_and_refresh() {
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["nope"], "bbox": [0, 0, 1000, 1000]})).contains("no layer named nope"));
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000], "layer": "Missing"})).contains("no layer named Missing"));
     // Clearing the cache.
-    assert!(ok(&mut s, "gis.cache.clear", json!({}))["removed"].as_u64().unwrap() >= 1);
+    assert!(
+        ok(&mut s, "gis.cache.clear", json!({}))["removed"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
     let _ = std::fs::remove_dir_all(s.gis.cache_dir.clone().unwrap());
 }
 
@@ -175,22 +269,45 @@ fn jobs_do_not_wait_when_blocking_is_off() {
     let mut s = session_for(&m);
     s.gis.blocking = false;
     let t = std::time::Instant::now();
-    let r = ok(&mut s, "gis.wfs.capabilities", json!({"url": format!("{}/wfs", m.base)}));
-    assert!(t.elapsed() < std::time::Duration::from_millis(250), "the call returned at once");
+    let r = ok(
+        &mut s,
+        "gis.wfs.capabilities",
+        json!({"url": format!("{}/wfs", m.base)}),
+    );
+    assert!(
+        t.elapsed() < std::time::Duration::from_millis(250),
+        "the call returned at once"
+    );
     assert_eq!(r["status"], "running");
     let job = r["job"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "gis.job.status", json!({"job": job}))["status"], "running");
+    assert_eq!(
+        ok(&mut s, "gis.job.status", json!({"job": job}))["status"],
+        "running"
+    );
     // The server sends junk, so the job fails with a message.
     let done = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
     assert_eq!(done["status"], "failed");
-    assert!(done["error"].as_str().unwrap().contains("not an XML"), "{done}");
+    assert!(
+        done["error"].as_str().unwrap().contains("not an XML"),
+        "{done}"
+    );
     assert!(err(&mut s, "gis.job.status", json!({"job": 777})).contains("no job"));
     assert!(err(&mut s, "gis.job.status", json!({})).contains("missing"));
     // Cancel.
-    let r = ok(&mut s, "gis.wfs.capabilities", json!({"url": format!("{}/wfs", m.base)}));
+    let r = ok(
+        &mut s,
+        "gis.wfs.capabilities",
+        json!({"url": format!("{}/wfs", m.base)}),
+    );
     let job = r["job"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "gis.job.cancel", json!({"job": job}))["cancelled"], true);
-    assert_eq!(ok(&mut s, "gis.job.status", json!({"job": job}))["status"], "failed");
+    assert_eq!(
+        ok(&mut s, "gis.job.cancel", json!({"job": job}))["cancelled"],
+        true
+    );
+    assert_eq!(
+        ok(&mut s, "gis.job.status", json!({"job": job}))["status"],
+        "failed"
+    );
     assert!(err(&mut s, "gis.job.cancel", json!({"job": 777})).contains("no job"));
 }
 
@@ -199,7 +316,8 @@ fn user_dialog_jobs_apply_through_the_poll() {
     let m = services();
     // The agent policy is empty, but the user's own dialog is trusted.
     let mut s = Session::default();
-    s.gis.cache_dir = Some(std::env::temp_dir().join(format!("cadektor-api-gis-ui-{}", std::process::id())));
+    s.gis.cache_dir =
+        Some(std::env::temp_dir().join(format!("cadektor-api-gis-ui-{}", std::process::id())));
     set_crs(&mut s);
     let r = s
         .gis_call_trusted("gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 50000, 50000], "max_px": 128}))
@@ -217,7 +335,13 @@ fn user_dialog_jobs_apply_through_the_poll() {
     assert_eq!(done.len(), 1);
     assert!(done[0].2.is_ok(), "{:?}", done[0]);
     assert!(s.gis_jobs().is_empty());
-    assert!(s.editor.doc().objects.values().any(|o| matches!(o.shape, cadektor_core::model::Shape::Underlay(_))));
+    assert!(
+        s.editor
+            .doc()
+            .objects
+            .values()
+            .any(|o| matches!(o.shape, cadektor_core::model::Shape::Underlay(_)))
+    );
     // The same call as an agent is refused.
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 5000, 5000]})).contains("not on the list"));
     let _ = std::fs::remove_dir_all(s.gis.cache_dir.clone().unwrap());
@@ -228,45 +352,104 @@ fn wfs_import_then_massing_from_shapes() {
     let m = services();
     let mut s = session_for(&m);
     set_crs(&mut s);
-    let r = ok(&mut s, "gis.wfs.import", json!({"url": format!("{}/wfs", m.base), "type_name": "ns:buildings", "options": {"layer": "Buildings"}}));
+    let r = ok(
+        &mut s,
+        "gis.wfs.import",
+        json!({"url": format!("{}/wfs", m.base), "type_name": "ns:buildings", "options": {"layer": "Buildings"}}),
+    );
     assert_eq!(r["imported"], 3);
     // The properties are in the object data.
-    let tall = s.editor.doc().objects.values().find(|o| o.data.get("name") == Some(&json!("Tall"))).unwrap();
+    let tall = s
+        .editor
+        .doc()
+        .objects
+        .values()
+        .find(|o| o.data.get("name") == Some(&json!("Tall")))
+        .unwrap();
     assert_eq!(tall.data["height"], json!(12.5));
     let ids: Vec<u64> = s.editor.doc().objects.keys().map(|k| k.0).collect();
-    let dry = ok(&mut s, "massing.from_shapes", json!({"ids": ids, "dry_run": true, "roof": "gable"}));
+    let dry = ok(
+        &mut s,
+        "massing.from_shapes",
+        json!({"ids": ids, "dry_run": true, "roof": "gable"}),
+    );
     assert_eq!(dry["created"].as_array().unwrap().len(), 3);
     assert_eq!(s.editor.doc().objects.len(), 3, "a dry run changes nothing");
-    let r = ok(&mut s, "massing.from_shapes", json!({"ids": ids, "roof": "gable", "pitch": 35, "name_field": "name"}));
+    let r = ok(
+        &mut s,
+        "massing.from_shapes",
+        json!({"ids": ids, "roof": "gable", "pitch": 35, "name_field": "name"}),
+    );
     let created = r["created"].as_array().unwrap();
     assert_eq!(created.len(), 3);
     assert_eq!(created[0]["how"], "height from height");
     assert_eq!(created[1]["how"], "floors from levels");
-    assert!(created[2]["how"].as_str().unwrap().starts_with("default height"));
+    assert!(
+        created[2]["how"]
+            .as_str()
+            .unwrap()
+            .starts_with("default height")
+    );
     assert_eq!(s.editor.doc().objects.len(), 3, "the sources were replaced");
     let rep = ok(&mut s, "massing.report", json!({}));
     assert_eq!(rep["totals"]["count"], 3);
-    let tall = rep["rows"].as_array().unwrap().iter().find(|r| r["name"] == "Tall").unwrap();
+    let tall = rep["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Tall")
+        .unwrap();
     assert_eq!(tall["roof"], "gable");
     assert!((tall["footprint_m2"].as_f64().unwrap() - 400.0).abs() < 0.01);
     assert!((tall["eave_height_m"].as_f64().unwrap() - 12.5).abs() < 1e-9);
     assert!(tall["volume_m3"].as_f64().unwrap() > 400.0 * 12.5);
-    let low = rep["rows"].as_array().unwrap().iter().find(|r| r["name"] == "Low").unwrap();
+    let low = rep["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Low")
+        .unwrap();
     assert_eq!(low["floors"], 2);
     assert!((low["gross_floor_area_m2"].as_f64().unwrap() - 200.0).abs() < 0.01);
     let csv = ok(&mut s, "massing.report", json!({"format": "csv"}));
-    assert!(csv["csv"].as_str().unwrap().starts_with("id,name,layer,floors,roof,"));
+    assert!(
+        csv["csv"]
+            .as_str()
+            .unwrap()
+            .starts_with("id,name,layer,floors,roof,")
+    );
     assert!(err(&mut s, "massing.report", json!({"format": "xls"})).contains("csv"));
     // One undo brings the footprints back.
     ok(&mut s, "undo", json!({}));
-    assert!(s.editor.doc().objects.values().all(|o| matches!(o.shape, cadektor_core::model::Shape::Polyline { .. })));
+    assert!(
+        s.editor
+            .doc()
+            .objects
+            .values()
+            .all(|o| matches!(o.shape, cadektor_core::model::Shape::Polyline { .. }))
+    );
     assert!(err(&mut s, "massing.from_shapes", json!({"ids": []})).contains("select"));
-    assert!(err(&mut s, "massing.from_shapes", json!({"ids": ids, "default_height": -1})).contains("positive"));
+    assert!(
+        err(
+            &mut s,
+            "massing.from_shapes",
+            json!({"ids": ids, "default_height": -1})
+        )
+        .contains("positive")
+    );
     // Another type name is refused by the capabilities check.
-    let e = err(&mut s, "gis.wfs.import", json!({"url": format!("{}/wfs", m.base), "type_name": "ns:rivers"}));
+    let e = err(
+        &mut s,
+        "gis.wfs.import",
+        json!({"url": format!("{}/wfs", m.base), "type_name": "ns:rivers"}),
+    );
     assert!(e.contains("no feature type ns:rivers"), "{e}");
     // Without the capabilities call the same request works too.
-    let r = ok(&mut s, "gis.wfs.import", json!({"url": format!("{}/wfs", m.base), "type_name": "ns:rivers", "caps": false, "format": "geojson"}));
+    let r = ok(
+        &mut s,
+        "gis.wfs.import",
+        json!({"url": format!("{}/wfs", m.base), "type_name": "ns:rivers", "caps": false, "format": "geojson"}),
+    );
     assert_eq!(r["imported"], 3);
 }
 
@@ -285,33 +468,81 @@ fn massing_methods() {
     let t = 30f64.to_radians().tan();
     let rise = 4.0 * t;
     let want = 96.0 * 8.4 + 8.0 * rise * (36.0 - 8.0) / 6.0;
-    assert!((q["volume_m3"].as_f64().unwrap() - want).abs() < 1e-6, "{q}");
+    assert!(
+        (q["volume_m3"].as_f64().unwrap() - want).abs() < 1e-6,
+        "{q}"
+    );
     let g = ok(&mut s, "massing.get", json!({"id": id}));
     assert_eq!(g["roof"], "hip");
     assert_eq!(g["pitch"], 30.0);
     assert_eq!(g["base_elevation_mm"], 0.0);
-    ok(&mut s, "massing.set", json!({"id": id, "roof": "gable", "floors": null, "height": 7000, "pitch": 40, "base": 500, "ridge_angle": 0.0}));
+    ok(
+        &mut s,
+        "massing.set",
+        json!({"id": id, "roof": "gable", "floors": null, "height": 7000, "pitch": 40, "base": 500, "ridge_angle": 0.0}),
+    );
     let g = ok(&mut s, "massing.get", json!({"id": id}));
-    assert_eq!((g["roof"].clone(), g["height"].clone(), g["floors"].clone()), (json!("gable"), json!(7000.0), Value::Null));
+    assert_eq!(
+        (g["roof"].clone(), g["height"].clone(), g["floors"].clone()),
+        (json!("gable"), json!(7000.0), Value::Null)
+    );
     assert_eq!(g["base"], 500.0);
     assert_eq!(g["base_elevation_mm"], 500.0);
-    ok(&mut s, "massing.set", json!({"ids": [id], "base": null, "ridge_angle": null}));
+    ok(
+        &mut s,
+        "massing.set",
+        json!({"ids": [id], "base": null, "ridge_angle": null}),
+    );
     // Errors.
     assert!(err(&mut s, "massing.add", json!({"height": 3000})).contains("footprint"));
-    assert!(err(&mut s, "massing.add", json!({"footprint": [[0, 0], [1, 1]]})).contains("3"));
-    assert!(err(&mut s, "massing.add", json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "roof": "dome"})).contains("flat, gable or hip"));
-    assert!(err(&mut s, "massing.add", json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "color": 1})).contains("unknown field"));
-    assert!(err(&mut s, "massing.add", json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "pitch": 95})).contains("pitch"));
+    assert!(
+        err(
+            &mut s,
+            "massing.add",
+            json!({"footprint": [[0, 0], [1, 1]]})
+        )
+        .contains("3")
+    );
+    assert!(
+        err(
+            &mut s,
+            "massing.add",
+            json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "roof": "dome"})
+        )
+        .contains("flat, gable or hip")
+    );
+    assert!(
+        err(
+            &mut s,
+            "massing.add",
+            json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "color": 1})
+        )
+        .contains("unknown field")
+    );
+    assert!(
+        err(
+            &mut s,
+            "massing.add",
+            json!({"footprint": [[0, 0], [1000, 0], [0, 1000]], "pitch": 95})
+        )
+        .contains("pitch")
+    );
     assert!(err(&mut s, "massing.set", json!({"id": id, "floors": 0})).contains("floors"));
     assert!(err(&mut s, "massing.set", json!({})).contains("id or ids"));
-    assert!(err(&mut s, "massing.set", json!({"id": 99999, "roof": "flat"})).contains("does not exist"));
+    assert!(
+        err(&mut s, "massing.set", json!({"id": 99999, "roof": "flat"})).contains("does not exist")
+    );
     assert!(err(&mut s, "massing.get", json!({"id": 99999})).contains("does not exist"));
     let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
     assert!(err(&mut s, "massing.get", json!({"id": c})).contains("not a massing"));
     assert!(err(&mut s, "massing.set", json!({"id": c, "roof": "flat"})).contains("not a massing"));
     assert!(err(&mut s, "massing.add", json!([1])).contains("object"));
     // The model is also a normal shape for the generic commands.
-    let r = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "massing", "footprint": [[0, 0], [5000, 0], [5000, 5000]], "height": 4000}}}));
+    let r = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "massing", "footprint": [[0, 0], [5000, 0], [5000, 5000]], "height": 4000}}}),
+    );
     assert!(r["created"][0].as_u64().is_some());
 }
 
@@ -323,12 +554,20 @@ fn reproject_and_coords_through_the_api() {
     assert!(err(&mut s, "gis.georef.set", json!({"crs": "EPSG:4326"})).contains("projected"));
     assert!(err(&mut s, "gis.georef.set", json!({"crs": "nonsense"})).len() > 5);
     set_crs(&mut s);
-    ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [20000, 10000]}}}));
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [20000, 10000]}}}),
+    );
     let c = ok(&mut s, "gis.coords", json!({"x": 10500, "y": 250}));
     assert_eq!(c["easting"], 385010.5);
     assert_eq!(c["northing"], 6672000.25);
     assert!(c["lat"].as_f64().unwrap() > 60.0);
-    let dry = ok(&mut s, "gis.reproject", json!({"crs": "EPSG:32635", "dry_run": true}));
+    let dry = ok(
+        &mut s,
+        "gis.reproject",
+        json!({"crs": "EPSG:32635", "dry_run": true}),
+    );
     assert_eq!(dry["applied"], false);
     assert_eq!(dry["report"]["objects_changed"], 1);
     assert_eq!(s.editor.doc().georef.as_ref().unwrap().crs, "EPSG:3067");
@@ -355,26 +594,71 @@ fn geoimage_import_follows_the_path_policy() {
     std::fs::write(dir.join("note.txt"), "x").unwrap();
     let mut s = Session::default();
     // Into a document without a georeference: it gets one.
-    let r = ok(&mut s, "gis.geoimage.import", json!({"path": dir.join("plan.png"), "crs": "EPSG:3067", "name": "Plan", "opacity": 0.5}));
+    let r = ok(
+        &mut s,
+        "gis.geoimage.import",
+        json!({"path": dir.join("plan.png"), "crs": "EPSG:3067", "name": "Plan", "opacity": 0.5}),
+    );
     assert_eq!(r["georeference"]["crs"], "EPSG:3067");
     assert_eq!(r["width"], 10);
     let id = r["id"].as_u64().unwrap();
-    assert!(s.editor.doc().object(cadektor_core::model::ObjectId(id)).is_some());
+    assert!(
+        s.editor
+            .doc()
+            .object(cadektor_core::model::ObjectId(id))
+            .is_some()
+    );
     // Without a CRS anywhere there is a hint.
     let mut s2 = Session::default();
-    let e = err(&mut s2, "gis.geoimage.import", json!({"path": dir.join("plan.png")}));
+    let e = err(
+        &mut s2,
+        "gis.geoimage.import",
+        json!({"path": dir.join("plan.png")}),
+    );
     assert!(e.contains("Name the CRS"), "{e}");
     // A restricted session only reads allowed folders and picture types.
     let mut s3 = Session::default();
     s3.paths = cadektor_api::PathPolicy::restricted([dir.clone()]);
-    ok(&mut s3, "gis.geoimage.import", json!({"path": dir.join("plan.png"), "crs": "EPSG:3067"}));
-    assert!(err(&mut s3, "gis.geoimage.import", json!({"path": dir.join("note.txt")})).contains("extension"));
+    ok(
+        &mut s3,
+        "gis.geoimage.import",
+        json!({"path": dir.join("plan.png"), "crs": "EPSG:3067"}),
+    );
+    assert!(
+        err(
+            &mut s3,
+            "gis.geoimage.import",
+            json!({"path": dir.join("note.txt")})
+        )
+        .contains("extension")
+    );
     let other = std::env::temp_dir().join(format!("cadektor-api-img-other-{}", std::process::id()));
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("p.png"), png(2, 2, [1, 2, 3, 255])).unwrap();
-    assert!(err(&mut s3, "gis.geoimage.import", json!({"path": other.join("p.png")})).contains("outside"));
-    assert!(err(&mut s, "gis.geoimage.import", json!({"path": dir.join("plan.png"), "crs": "EPSG:3067", "max_px": 0})).contains("max_px"));
-    assert!(err(&mut s, "gis.geoimage.import", json!({"path": dir.join("plan.png"), "layer": 9999})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s3,
+            "gis.geoimage.import",
+            json!({"path": other.join("p.png")})
+        )
+        .contains("outside")
+    );
+    assert!(
+        err(
+            &mut s,
+            "gis.geoimage.import",
+            json!({"path": dir.join("plan.png"), "crs": "EPSG:3067", "max_px": 0})
+        )
+        .contains("max_px")
+    );
+    assert!(
+        err(
+            &mut s,
+            "gis.geoimage.import",
+            json!({"path": dir.join("plan.png"), "layer": 9999})
+        )
+        .contains("does not exist")
+    );
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
 }
@@ -383,20 +667,51 @@ fn geoimage_import_follows_the_path_policy() {
 fn describe_lists_the_new_methods_and_examples() {
     let mut s = Session::default();
     let d = ok(&mut s, "describe", json!({}));
-    let names: Vec<&str> = d["methods"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = d["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
     for n in [
-        "gis.sources", "gis.cache.clear", "gis.georef.set", "gis.coords", "gis.reproject", "gis.wms.capabilities",
-        "gis.wms.add", "gis.wms.refresh", "gis.wmts.capabilities", "gis.wmts.add", "gis.wfs.capabilities",
-        "gis.wfs.import", "gis.geoimage.import", "gis.job.status", "gis.job.cancel", "massing.add",
-        "massing.set", "massing.get", "massing.from_shapes", "massing.report",
+        "gis.sources",
+        "gis.cache.clear",
+        "gis.georef.set",
+        "gis.coords",
+        "gis.reproject",
+        "gis.wms.capabilities",
+        "gis.wms.add",
+        "gis.wms.refresh",
+        "gis.wmts.capabilities",
+        "gis.wmts.add",
+        "gis.wfs.capabilities",
+        "gis.wfs.import",
+        "gis.geoimage.import",
+        "gis.job.status",
+        "gis.job.cancel",
+        "massing.add",
+        "massing.set",
+        "massing.get",
+        "massing.from_shapes",
+        "massing.report",
     ] {
         assert!(names.contains(&n), "{n}");
     }
-    assert!(d["gis"]["network_policy"].as_str().unwrap().contains("--allow-url"));
+    assert!(
+        d["gis"]["network_policy"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-url")
+    );
     assert!(d["gis"]["examples"].as_array().unwrap().len() >= 6);
     assert!(d["massing"]["examples"].as_array().unwrap().len() >= 3);
     // Every example names a listed method.
-    for e in d["gis"]["examples"].as_array().unwrap().iter().chain(d["massing"]["examples"].as_array().unwrap()) {
+    for e in d["gis"]["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(d["massing"]["examples"].as_array().unwrap())
+    {
         assert!(names.contains(&e["method"].as_str().unwrap()), "{e}");
     }
 }

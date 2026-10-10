@@ -15,9 +15,12 @@ use crate::view::View;
 /// Longest side of the texture of an underlay in pixels. Bigger rasters are reduced.
 const TEXTURE_SIDE: u32 = 2048;
 
+/// A texture with the PNG bytes it was made from (kept so the address stays this raster).
+type KeptTexture = (Arc<Vec<u8>>, TextureHandle);
+
 thread_local! {
     /// Textures by the address of the PNG bytes. The bytes are shared between clones of the object.
-    static TEXTURES: RefCell<HashMap<usize, (Arc<Vec<u8>>, TextureHandle)>> = RefCell::new(HashMap::new());
+    static TEXTURES: RefCell<HashMap<usize, KeptTexture>> = RefCell::new(HashMap::new());
 }
 
 fn texture(painter: &Painter, u: &Underlay) -> Option<TextureHandle> {
@@ -206,7 +209,9 @@ impl MassingToolSettings {
         m.floors = self.by_floors.then_some(self.floors.max(1));
         m.floor_height = self.floor_height.max(1.0);
         m.roof = self.roof;
-        m.pitch_deg = self.pitch_deg.clamp(0.0, cadektor_core::massing::MAX_PITCH_DEG);
+        m.pitch_deg = self
+            .pitch_deg
+            .clamp(0.0, cadektor_core::massing::MAX_PITCH_DEG);
         m
     }
 
@@ -219,9 +224,19 @@ impl MassingToolSettings {
             ui.add(DragValue::new(&mut n).range(1..=300));
             self.floors = n.clamp(1, 300) as u32;
             ui.label("x");
-            ui.add(DragValue::new(&mut self.floor_height).speed(50.0).range(500.0..=20000.0).suffix(" mm"));
+            ui.add(
+                DragValue::new(&mut self.floor_height)
+                    .speed(50.0)
+                    .range(500.0..=20000.0)
+                    .suffix(" mm"),
+            );
         } else {
-            ui.add(DragValue::new(&mut self.height).speed(50.0).range(100.0..=500000.0).suffix(" mm"));
+            ui.add(
+                DragValue::new(&mut self.height)
+                    .speed(50.0)
+                    .range(100.0..=500000.0)
+                    .suffix(" mm"),
+            );
         }
         egui::ComboBox::from_id_salt("massing_tool_roof")
             .selected_text(format!("Roof: {}", self.roof.name()))
@@ -231,7 +246,12 @@ impl MassingToolSettings {
                 }
             });
         if self.roof != RoofStyle::Flat {
-            ui.add(DragValue::new(&mut self.pitch_deg).speed(1.0).range(1.0..=80.0).suffix("\u{b0}"));
+            ui.add(
+                DragValue::new(&mut self.pitch_deg)
+                    .speed(1.0)
+                    .range(1.0..=80.0)
+                    .suffix("\u{b0}"),
+            );
         }
     }
 }
@@ -239,14 +259,21 @@ impl MassingToolSettings {
 /// The coordinate readout of the Data bar: prepared conversions that follow the georeference.
 #[derive(Default)]
 pub struct ReadoutState {
-    reader: Option<(cadektor_core::georef::Georeference, cadektor_gis::coords::Reader)>,
+    reader: Option<(
+        cadektor_core::georef::Georeference,
+        cadektor_gis::coords::Reader,
+    )>,
     /// Show longitude and latitude instead of northing and easting.
     pub lonlat: bool,
 }
 
 impl ReadoutState {
     /// The text for the cursor position (model mm), or `None` if the document has no CRS.
-    pub fn text(&mut self, georef: Option<&cadektor_core::georef::Georeference>, cursor: DVec2) -> Option<String> {
+    pub fn text(
+        &mut self,
+        georef: Option<&cadektor_core::georef::Georeference>,
+        cursor: DVec2,
+    ) -> Option<String> {
         let g = georef?;
         if self.reader.as_ref().is_none_or(|(old, _)| old != g) {
             self.reader = cadektor_gis::coords::Reader::new(g).map(|r| (g.clone(), r));
@@ -264,7 +291,11 @@ mod tests {
 
     #[test]
     fn tool_settings_make_a_valid_model() {
-        let ring = corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0), DVec2::new(5000.0, 4000.0)]);
+        let ring = corners(&[
+            DVec2::ZERO,
+            DVec2::new(5000.0, 0.0),
+            DVec2::new(5000.0, 4000.0),
+        ]);
         let mut s = MassingToolSettings::default();
         let m = s.massing(ring.clone());
         assert_eq!((m.floors, m.roof), (Some(2), RoofStyle::Flat));
@@ -274,7 +305,10 @@ mod tests {
         s.pitch_deg = 200.0;
         s.height = 0.0;
         let m = s.massing(ring);
-        assert_eq!((m.floors, m.pitch_deg), (None, cadektor_core::massing::MAX_PITCH_DEG));
+        assert_eq!(
+            (m.floors, m.pitch_deg),
+            (None, cadektor_core::massing::MAX_PITCH_DEG)
+        );
         assert!(m.height >= 1.0);
     }
 
@@ -288,14 +322,30 @@ mod tests {
             rotation: 0.0,
             user_origin: DVec2::ZERO,
         };
-        assert_eq!(r.text(Some(&g), DVec2::new(1000.0, 2000.0)).unwrap(), "N 6672002.000  E 385001.000");
+        assert_eq!(
+            r.text(Some(&g), DVec2::new(1000.0, 2000.0)).unwrap(),
+            "N 6672002.000  E 385001.000"
+        );
         r.lonlat = true;
-        assert!(r.text(Some(&g), DVec2::ZERO).unwrap().starts_with("lat 60."));
+        assert!(
+            r.text(Some(&g), DVec2::ZERO)
+                .unwrap()
+                .starts_with("lat 60.")
+        );
         // A new georeference is picked up.
-        let g2 = Georeference { origin: DVec2::new(386_000.0, 6_672_000.0), ..g.clone() };
+        let g2 = Georeference {
+            origin: DVec2::new(386_000.0, 6_672_000.0),
+            ..g.clone()
+        };
         r.lonlat = false;
-        assert_eq!(r.text(Some(&g2), DVec2::ZERO).unwrap(), "N 6672000.000  E 386000.000");
-        let none = Georeference { crs: String::new(), ..g };
+        assert_eq!(
+            r.text(Some(&g2), DVec2::ZERO).unwrap(),
+            "N 6672000.000  E 386000.000"
+        );
+        let none = Georeference {
+            crs: String::new(),
+            ..g
+        };
         assert!(r.text(Some(&none), DVec2::ZERO).is_none());
     }
 }

@@ -180,7 +180,12 @@ impl GisDialogs {
     }
 
     /// Draws the open dialogs and handles the answers of the jobs. Returns true when the document changed.
-    pub fn show(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) -> bool {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+    ) -> bool {
         let mut changed = self.poll(session, status);
         if self.sources_open {
             self.sources_window(ctx, session, status, &mut changed);
@@ -205,9 +210,16 @@ impl GisDialogs {
                         self.entries = entries_of(self.kind, &v);
                         self.message = format!(
                             "{}: {} {}",
-                            v["title"].as_str().filter(|t| !t.is_empty()).unwrap_or("Server"),
+                            v["title"]
+                                .as_str()
+                                .filter(|t| !t.is_empty())
+                                .unwrap_or("Server"),
                             self.entries.len(),
-                            if self.kind == Kind::Wfs { "feature types" } else { "layers" }
+                            if self.kind == Kind::Wfs {
+                                "feature types"
+                            } else {
+                                "layers"
+                            }
                         );
                         self.selected.clear();
                     }
@@ -230,7 +242,13 @@ impl GisDialogs {
         changed
     }
 
-    fn sources_window(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String, changed: &mut bool) {
+    fn sources_window(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+        changed: &mut bool,
+    ) {
         if !self.allow_loaded {
             self.allow_text = session.gis.urls.entries().join("\n");
             self.allow_loaded = true;
@@ -384,7 +402,13 @@ impl GisDialogs {
         self.sources_open = open;
     }
 
-    fn crs_window(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String, changed: &mut bool) {
+    fn crs_window(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+        changed: &mut bool,
+    ) {
         let mut open = true;
         egui::Window::new("Change CRS")
             .open(&mut open)
@@ -472,7 +496,9 @@ fn done_text(v: &Value) -> String {
     if let Some(s) = v.get("stats") {
         format!(
             "Map added: {} tiles ({} from the cache), CRS {}",
-            s["tiles"], s["from_cache"], s["crs"].as_str().unwrap_or("")
+            s["tiles"],
+            s["from_cache"],
+            s["crs"].as_str().unwrap_or("")
         )
     } else if let Some(n) = v.get("imported") {
         format!("{n} objects imported")
@@ -490,7 +516,13 @@ mod tests {
     #[test]
     fn layer_lists_come_from_the_capabilities_answers() {
         let wms = json!({"layers": [{"name": null, "title": "Group"}, {"name": "ortho", "title": "Orthophoto"}]});
-        assert_eq!(entries_of(Kind::Wms, &wms), vec![Entry { name: "ortho".into(), title: "Orthophoto".into() }]);
+        assert_eq!(
+            entries_of(Kind::Wms, &wms),
+            vec![Entry {
+                name: "ortho".into(),
+                title: "Orthophoto".into()
+            }]
+        );
         let wmts = json!({"layers": [{"id": "base", "title": "Base"}]});
         assert_eq!(entries_of(Kind::Wmts, &wmts)[0].name, "base");
         let wfs = json!({"feature_types": [{"name": "ns:b", "title": "Buildings"}]});
@@ -501,14 +533,20 @@ mod tests {
 
     #[test]
     fn the_add_call_follows_the_form() {
-        let mut d = GisDialogs { url: " http://x/wms ".into(), ..Default::default() };
+        let mut d = GisDialogs {
+            url: " http://x/wms ".into(),
+            ..Default::default()
+        };
         assert!(add_params(&d).unwrap_err().contains("layer"));
         d.selected = vec!["a".into(), "b".into()];
         d.crs = "EPSG:3857".into();
         let (m, p) = add_params(&d).unwrap();
         assert_eq!(m, "gis.wms.add");
         assert_eq!(p["layers"], json!(["a", "b"]));
-        assert_eq!((p["url"].as_str(), p["crs"].as_str(), p["max_px"].as_u64()), (Some("http://x/wms"), Some("EPSG:3857"), Some(2048)));
+        assert_eq!(
+            (p["url"].as_str(), p["crs"].as_str(), p["max_px"].as_u64()),
+            (Some("http://x/wms"), Some("EPSG:3857"), Some(2048))
+        );
         assert!(p.get("format").is_none());
         d.kind = Kind::Wmts;
         let (m, p) = add_params(&d).unwrap();
@@ -529,7 +567,10 @@ mod tests {
 
     #[test]
     fn finished_calls_have_text() {
-        assert!(done_text(&json!({"stats": {"tiles": 4, "from_cache": 1, "crs": "EPSG:3857"}})).contains("4 tiles"));
+        assert!(
+            done_text(&json!({"stats": {"tiles": 4, "from_cache": 1, "crs": "EPSG:3857"}}))
+                .contains("4 tiles")
+        );
         assert_eq!(done_text(&json!({"imported": 12})), "12 objects imported");
         assert!(done_text(&json!({"width": 10, "height": 5})).contains("10 x 5"));
         assert_eq!(done_text(&json!({})), "Done");

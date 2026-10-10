@@ -302,6 +302,7 @@ pub fn tool_panel(
 }
 
 /// Draws the Data bar. Returns true when Enter was pressed in an entry field.
+#[allow(clippy::too_many_arguments)]
 pub fn data_bar(
     ui: &mut Ui,
     m: &ToolMachine,
@@ -310,18 +311,20 @@ pub fn data_bar(
     cursor: DVec2,
     snap: Option<SnapResult>,
     snap_cfg: SnapConfig,
-    readout: Option<&str>,
-    lonlat: &mut bool,
+    readout: Option<(&str, &mut bool)>,
 ) -> bool {
     let mut commit = false;
     ui.horizontal_wrapped(|ui| {
         ui.monospace(format!("X {:>10.1}  Y {:>10.1} mm", cursor.x, cursor.y));
-        if let Some(t) = readout {
+        if let Some((t, lonlat)) = readout {
             ui.separator();
-            let label = egui::Label::new(egui::RichText::new(t).monospace()).sense(egui::Sense::click());
+            let label =
+                egui::Label::new(egui::RichText::new(t).monospace()).sense(egui::Sense::click());
             if ui
                 .add(label)
-                .on_hover_text("Map position of the cursor. Click to switch between N/E and lat/lon.")
+                .on_hover_text(
+                    "Map position of the cursor. Click to switch between N/E and lat/lon.",
+                )
                 .clicked()
             {
                 *lonlat = !*lonlat;

@@ -40,7 +40,9 @@ fn is_geometry(n: Node<'_, '_>) -> bool {
 /// True if the srsName is in the long form that follows the axis order of the EPSG database.
 fn long_form(srs: &str) -> bool {
     let s = srs.to_ascii_lowercase();
-    s.starts_with("urn:") || s.starts_with("http://www.opengis.net/def/crs") || s.starts_with("https://www.opengis.net/def/crs")
+    s.starts_with("urn:")
+        || s.starts_with("http://www.opengis.net/def/crs")
+        || s.starts_with("https://www.opengis.net/def/crs")
 }
 
 /// Whether positions in this srsName come as y, x.
@@ -64,7 +66,9 @@ fn attr<'a>(n: Node<'a, '_>, name: &str) -> Option<&'a str> {
 }
 
 fn srs_of(n: Node<'_, '_>, inherited: &Option<String>) -> Option<String> {
-    attr(n, "srsName").map(str::to_string).or_else(|| inherited.clone())
+    attr(n, "srsName")
+        .map(str::to_string)
+        .or_else(|| inherited.clone())
 }
 
 fn numbers(s: &str) -> Vec<f64> {
@@ -85,7 +89,11 @@ fn positions(n: Node<'_, '_>, ctx: &Ctx, srs: &Option<String>) -> Vec<Pt> {
     let mut push = |v: &[f64]| {
         if v.len() >= 2 {
             let (x, y) = if swap { (v[1], v[0]) } else { (v[0], v[1]) };
-            out.push(Pt { x, y, z: v.get(2).copied().filter(|z| z.is_finite()) });
+            out.push(Pt {
+                x,
+                y,
+                z: v.get(2).copied().filter(|z| z.is_finite()),
+            });
         }
     };
     match n.tag_name().name() {
@@ -144,7 +152,13 @@ fn polygon(n: Node<'_, '_>, ctx: &Ctx, srs: &Option<String>, parts: &mut Vec<Par
     }
 }
 
-fn geometry(n: Node<'_, '_>, ctx: &mut Ctx, srs: &Option<String>, parts: &mut Vec<Part>, depth: usize) {
+fn geometry(
+    n: Node<'_, '_>,
+    ctx: &mut Ctx,
+    srs: &Option<String>,
+    parts: &mut Vec<Part>,
+    depth: usize,
+) {
     if depth > 8 {
         ctx.problems.push("geometries are nested too deep".into());
         return;
@@ -165,11 +179,15 @@ fn geometry(n: Node<'_, '_>, ctx: &mut Ctx, srs: &Option<String>, parts: &mut Ve
         }
         "Polygon" => polygon(n, ctx, &srs, parts),
         "Surface" => {
-            for p in n.descendants().filter(|d| d.is_element() && d.tag_name().name() == "PolygonPatch") {
+            for p in n
+                .descendants()
+                .filter(|d| d.is_element() && d.tag_name().name() == "PolygonPatch")
+            {
                 polygon(p, ctx, &srs, parts);
             }
         }
-        "MultiPoint" | "MultiCurve" | "MultiLineString" | "MultiSurface" | "MultiPolygon" | "MultiGeometry" => {
+        "MultiPoint" | "MultiCurve" | "MultiLineString" | "MultiSurface" | "MultiPolygon"
+        | "MultiGeometry" => {
             for member in n.children().filter(|c| c.is_element()) {
                 for g in member.children().filter(|g| is_geometry(*g)) {
                     geometry(g, ctx, &srs, parts, depth + 1);
@@ -183,11 +201,15 @@ fn geometry(n: Node<'_, '_>, ctx: &mut Ctx, srs: &Option<String>, parts: &mut Ve
 /// A property value: a number when it reads as one (and has no leading zero, so codes stay text).
 fn value_of(text: &str) -> Value {
     let t = text.trim();
-    let plain = !(t.len() > 1 && t.starts_with('0') && !t.starts_with("0.")) && !t.starts_with('+');
+    let leading_zero = t.len() > 1 && t.starts_with('0') && !t.starts_with("0.");
+    let plain = !leading_zero && !t.starts_with('+');
     if plain && let Ok(i) = t.parse::<i64>() {
         return Value::from(i);
     }
-    if plain && let Ok(f) = t.parse::<f64>() && f.is_finite() {
+    if plain
+        && let Ok(f) = t.parse::<f64>()
+        && f.is_finite()
+    {
         return Value::from(f);
     }
     match t {
@@ -206,15 +228,23 @@ pub fn read_gml(xml: &str) -> Result<GisData> {
     let doc = roxmltree::Document::parse_with_options(xml.trim_start_matches('\u{feff}'), opts)
         .map_err(|e| GisError::Format(format!("the answer is not XML: {e}")))?;
     let root = doc.root_element();
-    if matches!(root.tag_name().name(), "ExceptionReport" | "ServiceExceptionReport") {
+    if matches!(
+        root.tag_name().name(),
+        "ExceptionReport" | "ServiceExceptionReport"
+    ) {
         let msg = root
             .descendants()
-            .find(|n| n.is_element() && matches!(n.tag_name().name(), "ExceptionText" | "ServiceException"))
+            .find(|n| {
+                n.is_element()
+                    && matches!(n.tag_name().name(), "ExceptionText" | "ServiceException")
+            })
             .and_then(|n| n.text())
             .unwrap_or("")
             .trim()
             .to_string();
-        return Err(GisError::Format(format!("the server reports an error: {msg}")));
+        return Err(GisError::Format(format!(
+            "the server reports an error: {msg}"
+        )));
     }
     let mut data = GisData::default();
     let default_srs = root
@@ -230,7 +260,12 @@ pub fn read_gml(xml: &str) -> Result<GisData> {
     let members: Vec<Node<'_, '_>> = root
         .descendants()
         .filter(|n| n.is_element())
-        .filter(|n| matches!(n.tag_name().name(), "member" | "featureMember" | "featureMembers"))
+        .filter(|n| {
+            matches!(
+                n.tag_name().name(),
+                "member" | "featureMember" | "featureMembers"
+            )
+        })
         .flat_map(|m| {
             if m.tag_name().name() == "featureMembers" {
                 m.children().filter(|c| c.is_element()).collect::<Vec<_>>()
@@ -267,12 +302,17 @@ pub fn read_gml(xml: &str) -> Result<GisData> {
             }
         }
         if parts.is_empty() {
-            data.skipped.push((m.tag_name().name().into(), "no geometry".into()));
+            data.skipped
+                .push((m.tag_name().name().into(), "no geometry".into()));
         } else {
             data.features.push(Feature { parts, props });
         }
     }
-    data.skipped.extend(ctx.problems.into_iter().map(|p| ("geometry".to_string(), p)));
+    data.skipped.extend(
+        ctx.problems
+            .into_iter()
+            .map(|p| ("geometry".to_string(), p)),
+    );
     // The CRS of the coordinates, as `EPSG:n`, so the importer converts them.
     data.file_crs = default_srs.and_then(|s| Crs::parse(&s).ok().map(|c| c.spec));
     Ok(data)
@@ -340,7 +380,9 @@ mod tests {
             Part::Point(p) => assert_eq!((p.x, p.y), (24.94, 60.17)),
             other => panic!("{other:?}"),
         }
-        let short = POINT_4326_LONG.replace("urn:ogc:def:crs:EPSG::4326", "EPSG:4326").replace("60.17 24.94", "24.94 60.17");
+        let short = POINT_4326_LONG
+            .replace("urn:ogc:def:crs:EPSG::4326", "EPSG:4326")
+            .replace("60.17 24.94", "24.94 60.17");
         match &read_gml(&short).unwrap().features[0].parts[0] {
             Part::Point(p) => assert_eq!((p.x, p.y), (24.94, 60.17)),
             other => panic!("{other:?}"),
@@ -364,7 +406,9 @@ mod tests {
 </gml:FeatureCollection>"#;
         let d = read_gml(xml).unwrap();
         assert_eq!(d.features.len(), 5);
-        assert!(matches!(&d.features[0].parts[0], Part::Line(l) if l.len() == 2 && l[1].z == Some(6.0)));
+        assert!(
+            matches!(&d.features[0].parts[0], Part::Line(l) if l.len() == 2 && l[1].z == Some(6.0))
+        );
         assert_eq!(d.features[0].props["note"], Value::Bool(true));
         assert!(matches!(&d.features[1].parts[0], Part::Line(l) if l.len() == 2));
         assert!(matches!(&d.features[2].parts[0], Part::Ring(r, false) if r.len() == 4));
@@ -375,21 +419,32 @@ mod tests {
     #[test]
     fn reports_problems() {
         assert!(read_gml("nonsense").is_err());
-        assert!(read_gml("<html/>").unwrap_err().to_string().contains("not a feature collection"));
+        assert!(
+            read_gml("<html/>")
+                .unwrap_err()
+                .to_string()
+                .contains("not a feature collection")
+        );
         let e = read_gml(r#"<ows:ExceptionReport xmlns:ows="x"><ows:Exception><ows:ExceptionText>Unknown type</ows:ExceptionText></ows:Exception></ows:ExceptionReport>"#)
             .unwrap_err()
             .to_string();
         assert!(e.contains("Unknown type"));
         // A collection with no members is fine.
-        let empty = read_gml(r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0"/>"#).unwrap();
+        let empty =
+            read_gml(r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0"/>"#)
+                .unwrap();
         assert!(empty.features.is_empty());
         // Geometry nested without end.
         let mut nested = String::from("<a xmlns:gml='g'>");
         let mut inner = String::from("<gml:Point><gml:pos>1 1</gml:pos></gml:Point>");
         for _ in 0..12 {
-            inner = format!("<gml:MultiGeometry><gml:geometryMember>{inner}</gml:geometryMember></gml:MultiGeometry>");
+            inner = format!(
+                "<gml:MultiGeometry><gml:geometryMember>{inner}</gml:geometryMember></gml:MultiGeometry>"
+            );
         }
-        nested.push_str(&format!("<gml:featureMember><r><g>{inner}</g></r></gml:featureMember></a>"));
+        nested.push_str(&format!(
+            "<gml:featureMember><r><g>{inner}</g></r></gml:featureMember></a>"
+        ));
         let d = read_gml(&nested).unwrap();
         assert!(d.features.is_empty());
         assert!(!d.skipped.is_empty());

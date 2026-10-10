@@ -317,9 +317,17 @@ mod tests {
     #[test]
     fn fills_templates() {
         let v = [("TileCol", "3".to_string()), ("TileRow", "4".to_string())];
-        assert_eq!(fill_template("http://t/{tilecol}/{TileRow}.png", &v).unwrap(), "http://t/3/4.png");
+        assert_eq!(
+            fill_template("http://t/{tilecol}/{TileRow}.png", &v).unwrap(),
+            "http://t/3/4.png"
+        );
         assert_eq!(fill_template("plain", &v).unwrap(), "plain");
-        assert!(fill_template("{Time}", &v).unwrap_err().to_string().contains("{Time}"));
+        assert!(
+            fill_template("{Time}", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("{Time}")
+        );
         assert!(fill_template("{open", &v).is_err());
     }
 
@@ -335,7 +343,12 @@ mod tests {
         s2.matrix_set = Some("WebMercator".into());
         assert!(choose_set(&s2, l, &c, &utm).is_ok());
         s2.matrix_set = Some("Nope".into());
-        assert!(choose_set(&s2, l, &c, &utm).unwrap_err().to_string().contains("no tile matrix set Nope"));
+        assert!(
+            choose_set(&s2, l, &c, &utm)
+                .unwrap_err()
+                .to_string()
+                .contains("no tile matrix set Nope")
+        );
         // The set that matches the document CRS wins.
         let mut c3 = c.clone();
         c3.matrix_sets[0].crs = "urn:ogc:def:crs:EPSG::32635".into();
@@ -369,7 +382,11 @@ mod tests {
         let (used, plans) = plan_tiles(&s, &c, &crs, &g, &view).unwrap();
         assert_eq!(used.epsg(), Some(3857));
         // Only two levels exist (0 and 1): the finest is used.
-        assert!(plans.iter().all(|p| p.url.starts_with("http://tiles.test/WebMercator/1/")));
+        assert!(
+            plans
+                .iter()
+                .all(|p| p.url.starts_with("http://tiles.test/WebMercator/1/"))
+        );
         assert!(plans.len() <= 4);
         assert!(plans.iter().all(|p| p.width == 256));
         // A layer without a template for this format uses KVP.
@@ -377,13 +394,26 @@ mod tests {
         s2.format = Some("image/jpeg".into());
         s2.style = Some("normal".into());
         let (_, plans) = plan_tiles(&s2, &c, &crs, &g, &view).unwrap();
-        assert!(plans[0].url.starts_with("http://tiles.test/kvp?SERVICE=WMTS&REQUEST=GetTile"));
-        assert!(plans[0].url.contains("LAYER=base") && plans[0].url.contains("FORMAT=image%2Fjpeg"));
-        assert!(plans[0].url.contains("TILEMATRIXSET=WebMercator") && plans[0].url.contains("STYLE=normal"));
+        assert!(
+            plans[0]
+                .url
+                .starts_with("http://tiles.test/kvp?SERVICE=WMTS&REQUEST=GetTile")
+        );
+        assert!(
+            plans[0].url.contains("LAYER=base") && plans[0].url.contains("FORMAT=image%2Fjpeg")
+        );
+        assert!(
+            plans[0].url.contains("TILEMATRIXSET=WebMercator")
+                && plans[0].url.contains("STYLE=normal")
+        );
         let mut c2 = c.clone();
         c2.kvp_url = None;
         let (_, plans) = plan_tiles(&s2, &c2, &crs, &g, &view).unwrap();
-        assert!(plans[0].url.starts_with("http://tiles.test/wmts?SERVICE=WMTS"));
+        assert!(
+            plans[0]
+                .url
+                .starts_with("http://tiles.test/wmts?SERVICE=WMTS")
+        );
     }
 
     #[test]
@@ -396,12 +426,31 @@ mod tests {
             ..ViewRequest::new(DVec2::splat(-5000.0), DVec2::splat(5000.0))
         };
         let bad = WmtsSource::new("http://tiles.test/wmts", "nope");
-        assert!(plan_tiles(&bad, &c, &crs, &g, &view).unwrap_err().to_string().contains("no layer named nope"));
-        assert!(plan_tiles(&s, &c, &crs, &g, &ViewRequest::new(DVec2::ZERO, DVec2::ZERO)).is_err());
+        assert!(
+            plan_tiles(&bad, &c, &crs, &g, &view)
+                .unwrap_err()
+                .to_string()
+                .contains("no layer named nope")
+        );
+        assert!(
+            plan_tiles(
+                &s,
+                &c,
+                &crs,
+                &g,
+                &ViewRequest::new(DVec2::ZERO, DVec2::ZERO)
+            )
+            .is_err()
+        );
         // Too many tiles at every level: the limit error.
         let mut tight = view;
         tight.max_tiles = 0;
-        assert!(plan_tiles(&s, &c, &crs, &g, &tight).unwrap_err().to_string().contains("too many"));
+        assert!(
+            plan_tiles(&s, &c, &crs, &g, &tight)
+                .unwrap_err()
+                .to_string()
+                .contains("too many")
+        );
         // One tile at most: the coarse level 0 serves.
         let mut one = view;
         one.max_tiles = 1;
@@ -410,7 +459,10 @@ mod tests {
         // A view that lies off the map: a geographic set with a small area.
         let mut c2 = c.clone();
         c2.layers[0].matrix_sets = vec!["Geo".into()];
-        let far = ViewRequest { target_px: 512, ..ViewRequest::new(DVec2::splat(-5000.0), DVec2::splat(5000.0)) };
+        let far = ViewRequest {
+            target_px: 512,
+            ..ViewRequest::new(DVec2::splat(-5000.0), DVec2::splat(5000.0))
+        };
         // Geo: x -180..180 at level 0 (2 by 1 tiles of 180 degrees). The view is near 24E, 60N and
         // the set only reaches latitudes 90 to -90 in one row: it is inside, so tiles are found.
         let (crs4326, plans) = plan_tiles(&s, &c2, &crs, &g, &far).unwrap();
@@ -431,7 +483,8 @@ mod tests {
         let (_, plans) = plan_tiles(&s, &c, &crs, &g, &view).unwrap();
         let mut fake = Fake::default();
         for p in &plans {
-            fake.answers.insert(p.url.clone(), png(256, 256, [10, 200, 30, 255]));
+            fake.answers
+                .insert(p.url.clone(), png(256, 256, [10, 200, 30, 255]));
         }
         let out = fetch_map(&fake, None, &s, &c, &crs, &g, &view).unwrap();
         assert_eq!(out.stats.service, "wmts");
@@ -440,8 +493,17 @@ mod tests {
         assert!(img.data.chunks(4).all(|p| p == [10, 200, 30, 255]));
         assert!(out.underlay.source.contains("base"));
         // Capabilities.
-        fake.answers.insert(capabilities_url("http://tiles.test/wmts"), text(WMTS, "text/xml"));
-        assert_eq!(fetch_capabilities(&fake, "http://tiles.test/wmts").unwrap().layers.len(), 1);
+        fake.answers.insert(
+            capabilities_url("http://tiles.test/wmts"),
+            text(WMTS, "text/xml"),
+        );
+        assert_eq!(
+            fetch_capabilities(&fake, "http://tiles.test/wmts")
+                .unwrap()
+                .layers
+                .len(),
+            1
+        );
         assert!(fetch_capabilities(&fake, "http://tiles.test/x").is_err());
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<WmtsSource>(&j).unwrap(), s);

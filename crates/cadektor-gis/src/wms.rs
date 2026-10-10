@@ -104,13 +104,17 @@ pub fn choose_crs(source: &WmsSource, caps: &WmsCaps, doc_crs: &Crs) -> Result<C
         return Ok(c);
     }
     let candidates = std::iter::once(doc_crs.spec.clone())
-        .chain(["EPSG:3857".to_string(), "EPSG:4326".to_string(), "CRS:84".to_string()])
+        .chain([
+            "EPSG:3857".to_string(),
+            "EPSG:4326".to_string(),
+            "CRS:84".to_string(),
+        ])
         .chain(offered.iter().cloned());
     for c in candidates {
-        if has(&c) || (offered.is_empty() && c == doc_crs.spec) {
-            if let Ok(parsed) = Crs::parse(&c.replace("CRS:84", "EPSG:4326")) {
-                return Ok(parsed);
-            }
+        if (has(&c) || (offered.is_empty() && c == doc_crs.spec))
+            && let Ok(parsed) = Crs::parse(&c.replace("CRS:84", "EPSG:4326"))
+        {
+            return Ok(parsed);
         }
     }
     Err(GisError::Param(
@@ -119,7 +123,10 @@ pub fn choose_crs(source: &WmsSource, caps: &WmsCaps, doc_crs: &Crs) -> Result<C
 }
 
 fn version_of(source: &WmsSource, caps: &WmsCaps) -> String {
-    source.version.clone().unwrap_or_else(|| caps.version.clone())
+    source
+        .version
+        .clone()
+        .unwrap_or_else(|| caps.version.clone())
 }
 
 /// The GetMap address for one tile.
@@ -155,7 +162,14 @@ pub fn getmap_url(
     if source.transparent {
         params.push(("TRANSPARENT", "TRUE".into()));
     }
-    params.push(("EXCEPTIONS", encode(if v13 { "XML" } else { "application/vnd.ogc.se_xml" })));
+    params.push((
+        "EXCEPTIONS",
+        encode(if v13 {
+            "XML"
+        } else {
+            "application/vnd.ogc.se_xml"
+        }),
+    ));
     with_query(base, &params)
 }
 
@@ -222,7 +236,15 @@ pub fn plan_tiles(
                 bbox: b,
                 width: grid.tile_px,
                 height: grid.tile_px,
-                url: getmap_url(&base, source, &version, &format, &crs, &b, (grid.tile_px, grid.tile_px)),
+                url: getmap_url(
+                    &base,
+                    source,
+                    &version,
+                    &format,
+                    &crs,
+                    &b,
+                    (grid.tile_px, grid.tile_px),
+                ),
             });
         }
     }
@@ -291,7 +313,15 @@ mod tests {
         let s = WmsSource::new("http://example.test/wms", &["ortho", "roads"]);
         let crs = Crs::parse("EPSG:4326").unwrap();
         let b = Bbox::new(DVec2::new(24.0, 60.0), DVec2::new(25.0, 61.0));
-        let u = getmap_url(&c.getmap_url.clone().unwrap(), &s, "1.3.0", "image/png", &crs, &b, (256, 128));
+        let u = getmap_url(
+            &c.getmap_url.clone().unwrap(),
+            &s,
+            "1.3.0",
+            "image/png",
+            &crs,
+            &b,
+            (256, 128),
+        );
         assert_eq!(
             u,
             "http://example.test/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ortho,roads&STYLES=,&CRS=EPSG%3A4326&BBOX=60,24,61,25&WIDTH=256&HEIGHT=128&FORMAT=image%2Fpng&TRANSPARENT=TRUE&EXCEPTIONS=XML"
@@ -299,7 +329,15 @@ mod tests {
         let mut s2 = s.clone();
         s2.transparent = false;
         s2.styles = vec!["default".into()];
-        let u = getmap_url("http://old.test/cgi?map=a", &s2, "1.1.1", "image/gif", &crs, &b, (10, 10));
+        let u = getmap_url(
+            "http://old.test/cgi?map=a",
+            &s2,
+            "1.1.1",
+            "image/gif",
+            &crs,
+            &b,
+            (10, 10),
+        );
         assert!(u.starts_with("http://old.test/cgi?map=a&SERVICE=WMS&VERSION=1.1.1"));
         assert!(u.contains("&SRS=EPSG%3A4326&BBOX=24,60,25,61&"));
         assert!(u.contains("STYLES=default,&"));
@@ -330,11 +368,13 @@ mod tests {
         s.crs = Some("nonsense".into());
         assert!(choose_crs(&s, &c, &doc_crs).is_err());
         // A server with 4326 only.
-        let old = crate::caps::parse_wms(&WMS_111.replace("EPSG:4326 EPSG:3857", "EPSG:4326")).unwrap();
+        let old =
+            crate::caps::parse_wms(&WMS_111.replace("EPSG:4326 EPSG:3857", "EPSG:4326")).unwrap();
         let s3 = WmsSource::new("http://old.test/cgi", &["countries"]);
         assert_eq!(choose_crs(&s3, &old, &doc_crs).unwrap().spec, "EPSG:4326");
         // A server with a CRS that is not known: no choice.
-        let odd = crate::caps::parse_wms(&WMS_111.replace("EPSG:4326 EPSG:3857", "EPSG:1")).unwrap();
+        let odd =
+            crate::caps::parse_wms(&WMS_111.replace("EPSG:4326 EPSG:3857", "EPSG:1")).unwrap();
         assert!(choose_crs(&s3, &odd, &doc_crs).is_err());
         // A layer list with no layers in the document: the document CRS is tried.
         let none = WmsSource::new("http://x", &[]);
@@ -352,19 +392,34 @@ mod tests {
         assert_eq!(used.spec, "EPSG:3067");
         assert!(!plans.is_empty() && plans.len() <= 64);
         // The tiles cover the view.
-        let all = plans.iter().skip(1).fold(plans[0].bbox, |b, p| b.union(&p.bbox));
+        let all = plans
+            .iter()
+            .skip(1)
+            .fold(plans[0].bbox, |b, p| b.union(&p.bbox));
         assert!(all.min.x <= 385_000.0 && all.max.x >= 386_000.0);
         assert!(all.min.y <= 6_672_000.0 && all.max.y >= 6_672_600.0);
-        assert!(plans.iter().all(|p| p.url.contains("CRS=EPSG%3A3067") && p.url.contains("WIDTH=512")));
+        assert!(
+            plans
+                .iter()
+                .all(|p| p.url.contains("CRS=EPSG%3A3067") && p.url.contains("WIDTH=512"))
+        );
         // The same view gives the same addresses (so the cache works).
         let (_, again) = plan_tiles(&s, &c, &crs, &g, &view).unwrap();
-        assert_eq!(plans.iter().map(|p| &p.url).collect::<Vec<_>>(), again.iter().map(|p| &p.url).collect::<Vec<_>>());
+        assert_eq!(
+            plans.iter().map(|p| &p.url).collect::<Vec<_>>(),
+            again.iter().map(|p| &p.url).collect::<Vec<_>>()
+        );
         // A small pan inside the same tiles changes nothing.
         let mut panned = view;
         panned.min += DVec2::new(5.0, 5.0);
         panned.max += DVec2::new(5.0, 5.0);
         let (_, p2) = plan_tiles(&s, &c, &crs, &g, &panned).unwrap();
-        assert!(p2.iter().filter(|p| plans.iter().any(|q| q.url == p.url)).count() >= plans.len() - 3);
+        assert!(
+            p2.iter()
+                .filter(|p| plans.iter().any(|q| q.url == p.url))
+                .count()
+                >= plans.len() - 3
+        );
     }
 
     #[test]
@@ -377,7 +432,12 @@ mod tests {
         let (_, plans) = plan_tiles(&s, &c, &crs, &g, &view).unwrap();
         assert_eq!(plans.len(), 1);
         let bad_layer = WmsSource::new("http://example.test/wms", &["nope"]);
-        assert!(plan_tiles(&bad_layer, &c, &crs, &g, &view).unwrap_err().to_string().contains("no layer named nope"));
+        assert!(
+            plan_tiles(&bad_layer, &c, &crs, &g, &view)
+                .unwrap_err()
+                .to_string()
+                .contains("no layer named nope")
+        );
         let none = WmsSource::new("http://example.test/wms", &[]);
         assert!(plan_tiles(&none, &c, &crs, &g, &view).is_err());
         let zero = ViewRequest::new(DVec2::ZERO, DVec2::ZERO);
@@ -406,7 +466,8 @@ mod tests {
         assert_eq!(used.spec, "EPSG:3857");
         let mut fake = Fake::default();
         for p in &plans {
-            fake.answers.insert(p.url.clone(), png(512, 512, [200, 100, 50, 255]));
+            fake.answers
+                .insert(p.url.clone(), png(512, 512, [200, 100, 50, 255]));
         }
         let out = fetch_map(&fake, None, &s, &c, &crs, &g, &view).unwrap();
         assert_eq!(out.stats.service, "wms");
@@ -446,6 +507,10 @@ mod tests {
         assert!(fetch_capabilities(&fake, "http://example.test/other").is_err());
         let s = serde_json::to_string(&WmsSource::new("http://x", &["a"])).unwrap();
         assert!(!s.contains("crs"));
-        assert!(serde_json::from_str::<WmsSource>(r#"{"url":"http://x","layers":["a"]}"#).unwrap().transparent);
+        assert!(
+            serde_json::from_str::<WmsSource>(r#"{"url":"http://x","layers":["a"]}"#)
+                .unwrap()
+                .transparent
+        );
     }
 }

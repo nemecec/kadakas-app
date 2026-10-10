@@ -14,7 +14,9 @@ pub const STANDARD_PIXEL_M: f64 = 0.00028;
 pub fn lonlat_to_mercator(lon: f64, lat: f64) -> DVec2 {
     let lat = lat.clamp(-85.051_128_78, 85.051_128_78);
     let x = lon * MERCATOR_HALF / 180.0;
-    let y = (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln()
+    let y = (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.0)
+        .tan()
+        .ln()
         * (MERCATOR_HALF / std::f64::consts::PI);
     DVec2::new(x, y)
 }
@@ -82,7 +84,10 @@ impl Bbox {
     }
 
     pub fn intersects(&self, o: &Bbox) -> bool {
-        self.min.x <= o.max.x && o.min.x <= self.max.x && self.min.y <= o.max.y && o.min.y <= self.max.y
+        self.min.x <= o.max.x
+            && o.min.x <= self.max.x
+            && self.min.y <= o.max.y
+            && o.min.y <= self.max.y
     }
 
     pub fn union(&self, o: &Bbox) -> Bbox {
@@ -107,10 +112,7 @@ impl Bbox {
 pub fn wms_bbox(b: &Bbox, epsg: Option<u32>, geographic: bool, version: &str) -> String {
     let swap = version.starts_with("1.3") && northing_first(epsg, geographic);
     let (a, c) = if swap {
-        (
-            DVec2::new(b.min.y, b.min.x),
-            DVec2::new(b.max.y, b.max.x),
-        )
+        (DVec2::new(b.min.y, b.min.x), DVec2::new(b.max.y, b.max.x))
     } else {
         (b.min, b.max)
     };
@@ -209,7 +211,10 @@ impl TileMatrix {
     /// Size of a tile in CRS units: (width, height).
     pub fn tile_span(&self, meters_per_unit: f64) -> DVec2 {
         let p = self.pixel_size(meters_per_unit);
-        DVec2::new(p * f64::from(self.tile_width), p * f64::from(self.tile_height))
+        DVec2::new(
+            p * f64::from(self.tile_width),
+            p * f64::from(self.tile_height),
+        )
     }
 
     /// The tiles that cover the box, clamped to the matrix: (col0, col1, row0, row1). `None` if the
@@ -246,7 +251,11 @@ impl TileMatrix {
 
 /// The matrix to use for a wanted pixel size: the coarsest one that is at least as fine as wanted,
 /// or the finest if none is.
-pub fn pick_matrix(matrices: &[TileMatrix], wanted_pixel: f64, meters_per_unit: f64) -> Option<usize> {
+pub fn pick_matrix(
+    matrices: &[TileMatrix],
+    wanted_pixel: f64,
+    meters_per_unit: f64,
+) -> Option<usize> {
     let mut best: Option<(usize, f64)> = None;
     let mut finest: Option<(usize, f64)> = None;
     for (i, m) in matrices.iter().enumerate() {
@@ -347,11 +356,20 @@ mod tests {
     #[test]
     fn matrix_range_clamps_and_rejects() {
         let m = web_mercator_matrix(2);
-        let all = Bbox::new(DVec2::splat(-MERCATOR_HALF * 2.0), DVec2::splat(MERCATOR_HALF * 2.0));
+        let all = Bbox::new(
+            DVec2::splat(-MERCATOR_HALF * 2.0),
+            DVec2::splat(MERCATOR_HALF * 2.0),
+        );
         assert_eq!(m.range(&all, 1.0), Some((0, 3, 0, 3)));
-        let outside = Bbox::new(DVec2::splat(MERCATOR_HALF * 2.0), DVec2::splat(MERCATOR_HALF * 3.0));
+        let outside = Bbox::new(
+            DVec2::splat(MERCATOR_HALF * 2.0),
+            DVec2::splat(MERCATOR_HALF * 3.0),
+        );
         assert_eq!(m.range(&outside, 1.0), None);
-        let left = Bbox::new(DVec2::new(-MERCATOR_HALF * 3.0, 0.0), DVec2::new(-MERCATOR_HALF * 2.0, 1.0));
+        let left = Bbox::new(
+            DVec2::new(-MERCATOR_HALF * 3.0, 0.0),
+            DVec2::new(-MERCATOR_HALF * 2.0, 1.0),
+        );
         assert_eq!(m.range(&left, 1.0), None);
     }
 
@@ -383,7 +401,10 @@ mod tests {
         assert_eq!(Bbox::from_points([]), None);
         assert_eq!(
             Bbox::from_points([DVec2::new(1.0, 5.0), DVec2::new(-2.0, 3.0)]).unwrap(),
-            Bbox { min: DVec2::new(-2.0, 3.0), max: DVec2::new(1.0, 5.0) }
+            Bbox {
+                min: DVec2::new(-2.0, 3.0),
+                max: DVec2::new(1.0, 5.0)
+            }
         );
     }
 

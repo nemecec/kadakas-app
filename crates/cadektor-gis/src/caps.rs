@@ -56,7 +56,9 @@ fn parse_doc(xml: &str) -> Result<Document<'_>> {
             })
             .map(text)
             .unwrap_or_default();
-        return Err(GisError::Format(format!("the server reports an error: {msg}")));
+        return Err(GisError::Format(format!(
+            "the server reports an error: {msg}"
+        )));
     }
     Ok(doc)
 }
@@ -178,7 +180,9 @@ fn read_wms_layers(n: Node<'_, '_>, inherited: &[String], depth: usize, out: &mu
         });
     let bboxes = children(n, "BoundingBox")
         .filter_map(|b| {
-            let crs = attr(b, "CRS").or_else(|| attr(b, "SRS"))?.to_ascii_uppercase();
+            let crs = attr(b, "CRS")
+                .or_else(|| attr(b, "SRS"))?
+                .to_ascii_uppercase();
             let v = |k| attr(b, k)?.parse::<f64>().ok();
             Some((crs, [v("minx")?, v("miny")?, v("maxx")?, v("maxy")?]))
         })
@@ -452,9 +456,8 @@ pub fn parse_wfs(xml: &str) -> Result<WfsCaps> {
             root.tag_name().name()
         )));
     }
-    let op = child(root, "OperationsMetadata").and_then(|om| {
-        children(om, "Operation").find(|o| attr(*o, "name") == Some("GetFeature"))
-    });
+    let op = child(root, "OperationsMetadata")
+        .and_then(|om| children(om, "Operation").find(|o| attr(*o, "name") == Some("GetFeature")));
     let output_formats = op
         .and_then(|o| {
             children(o, "Parameter")
@@ -621,7 +624,10 @@ mod tests {
         assert_eq!(ortho.styles, vec!["default"]);
         assert_eq!(ortho.depth, 1);
         assert_eq!(c.layers[0].geographic_bbox, Some([19.0, 59.0, 32.0, 70.0]));
-        assert_eq!(layer_bbox_in(&c.layers[0], "epsg:3857").unwrap().min.x, 2_100_000.0);
+        assert_eq!(
+            layer_bbox_in(&c.layers[0], "epsg:3857").unwrap().min.x,
+            2_100_000.0
+        );
         assert!(layer_bbox_in(&c.layers[0], "EPSG:1").is_none());
         assert!(c.layers[0].name.is_none());
         assert!(c.layers[3].opaque);
@@ -644,7 +650,10 @@ mod tests {
         assert_eq!(l.bboxes[0].0, "EPSG:4326");
         // Only GIF: the format is still offered.
         assert_eq!(c.pick_format().as_deref(), Some("image/gif"));
-        let none = WmsCaps { formats: vec!["application/x".into(), "image/tiff".into()], ..c };
+        let none = WmsCaps {
+            formats: vec!["application/x".into(), "image/tiff".into()],
+            ..c
+        };
         assert_eq!(none.pick_format().as_deref(), Some("image/tiff"));
     }
 
@@ -674,7 +683,10 @@ mod tests {
     fn reads_wfs() {
         let c = parse_wfs(WFS).unwrap();
         assert_eq!(c.version, "2.0.0");
-        assert_eq!(c.getfeature_url.as_deref(), Some("http://features.test/wfs?"));
+        assert_eq!(
+            c.getfeature_url.as_deref(),
+            Some("http://features.test/wfs?")
+        );
         assert_eq!(c.feature_types.len(), 2);
         let b = c.feature_type("ns:buildings").unwrap();
         assert_eq!(b.default_crs, "urn:ogc:def:crs:EPSG::3067");
@@ -682,7 +694,10 @@ mod tests {
         assert_eq!(b.wgs84_bbox, Some([19.0, 59.0, 32.0, 70.0]));
         assert_eq!(c.pick_format(), "application/json");
         assert_eq!(c.json_format(), Some("application/json"));
-        let gml_only = WfsCaps { output_formats: vec!["text/xml; subtype=gml/3.2".into()], ..c.clone() };
+        let gml_only = WfsCaps {
+            output_formats: vec!["text/xml; subtype=gml/3.2".into()],
+            ..c.clone()
+        };
         assert_eq!(gml_only.pick_format(), "application/gml+xml; version=3.2");
         assert_eq!(gml_only.json_format(), None);
         assert!(c.feature_type("none").is_none());
@@ -692,9 +707,24 @@ mod tests {
     #[test]
     fn rejects_other_documents_and_reports_server_errors() {
         assert!(parse_wms("not xml").is_err());
-        assert!(parse_wms("<html/>").unwrap_err().to_string().contains("not a WMS"));
-        assert!(parse_wmts("<html/>").unwrap_err().to_string().contains("not a WMTS"));
-        assert!(parse_wfs("<html/>").unwrap_err().to_string().contains("not a WFS"));
+        assert!(
+            parse_wms("<html/>")
+                .unwrap_err()
+                .to_string()
+                .contains("not a WMS")
+        );
+        assert!(
+            parse_wmts("<html/>")
+                .unwrap_err()
+                .to_string()
+                .contains("not a WMTS")
+        );
+        assert!(
+            parse_wfs("<html/>")
+                .unwrap_err()
+                .to_string()
+                .contains("not a WFS")
+        );
         assert!(detect("<html/>").is_err());
         let err = parse_wms(r#"<ServiceExceptionReport><ServiceException code="X">Layer missing</ServiceException></ServiceExceptionReport>"#)
             .unwrap_err()
@@ -704,8 +734,18 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Denied"));
-        assert!(parse_wms("<WMS_Capabilities/>").unwrap_err().to_string().contains("Capability"));
-        assert!(parse_wmts("<Capabilities/>").unwrap_err().to_string().contains("Contents"));
+        assert!(
+            parse_wms("<WMS_Capabilities/>")
+                .unwrap_err()
+                .to_string()
+                .contains("Capability")
+        );
+        assert!(
+            parse_wmts("<Capabilities/>")
+                .unwrap_err()
+                .to_string()
+                .contains("Contents")
+        );
         // A DTD is refused (entity expansion attacks).
         assert!(parse_wms("<!DOCTYPE a [<!ENTITY b \"c\">]><WMS_Capabilities/>").is_err());
     }

@@ -107,11 +107,23 @@ fn massing_models_are_building_element_proxies_on_the_ground() {
     assert_eq!(report.objects["massing"], 2);
     // The flat roof is an extrusion, the gable roof a closed face set.
     assert!(!named(&f, "IFCEXTRUDEDAREASOLID").is_empty());
-    assert_eq!(named(&f, "IFCTRIANGULATEDFACESET").len(), 2, "the terrain and the gable block");
+    assert_eq!(
+        named(&f, "IFCTRIANGULATEDFACESET").len(),
+        2,
+        "the terrain and the gable block"
+    );
     // Standard predefined type and the property sets.
     let proxies = named(&f, "IFCBUILDINGELEMENTPROXY");
-    assert!(proxies.iter().all(|e| matches!(&e.attrs[8], Value::Enum(s) if s == "NOTDEFINED")));
-    assert!(proxies.iter().any(|e| matches!(&e.attrs[2], Value::Str(s) if s == "Block")));
+    assert!(
+        proxies
+            .iter()
+            .all(|e| matches!(&e.attrs[8], Value::Enum(s) if s == "NOTDEFINED"))
+    );
+    assert!(
+        proxies
+            .iter()
+            .any(|e| matches!(&e.attrs[2], Value::Str(s) if s == "Block"))
+    );
     let sets: Vec<String> = named(&f, "IFCPROPERTYSET")
         .iter()
         .filter_map(|e| match &e.attrs[2] {
@@ -128,7 +140,13 @@ fn massing_models_are_building_element_proxies_on_the_ground() {
             _ => None,
         })
         .collect();
-    assert_eq!(quantity_sets.iter().filter(|s| *s == "Cadektor_MassingQuantities").count(), 2);
+    assert_eq!(
+        quantity_sets
+            .iter()
+            .filter(|s| *s == "Cadektor_MassingQuantities")
+            .count(),
+        2
+    );
     let names: Vec<String> = named(&f, "IFCQUANTITYVOLUME")
         .iter()
         .filter_map(|e| match &e.attrs[0] {
@@ -138,7 +156,11 @@ fn massing_models_are_building_element_proxies_on_the_ground() {
         .collect();
     assert_eq!(names.iter().filter(|n| *n == "GrossVolume").count(), 2);
     // The flat block stands on the lowest ground under its footprint: x from 2000 mm, 200 + 100 mm.
-    assert!(z_values(&f).iter().any(|z| (*z - 300.0).abs() < 1e-3), "{:?}", z_values(&f));
+    assert!(
+        z_values(&f).iter().any(|z| (*z - 300.0).abs() < 1e-3),
+        "{:?}",
+        z_values(&f)
+    );
     // The gable block starts at 1000 mm: 250 mm.
     assert!(z_values(&f).iter().any(|z| (*z - 250.0).abs() < 1e-3));
     // The same input gives the same bytes.
@@ -157,11 +179,18 @@ fn massing_as_building_and_storeys() {
     let buildings = named(&f, "IFCBUILDING");
     assert_eq!(buildings.len(), 2);
     assert!(named(&f, "IFCBUILDINGELEMENTPROXY").is_empty());
-    assert!(buildings.iter().all(|b| b.attrs.len() == 12 && matches!(&b.attrs[4], Value::Str(s) if s == "MASSING")));
+    assert!(
+        buildings
+            .iter()
+            .all(|b| b.attrs.len() == 12 && matches!(&b.attrs[4], Value::Str(s) if s == "MASSING"))
+    );
     // The site aggregates the buildings.
     let rel = named(&f, "IFCRELAGGREGATES");
     assert_eq!(rel.len(), 2, "project to site, site to the two buildings");
-    assert!(rel.iter().any(|r| matches!(&r.attrs[5], Value::List(v) if v.len() == 2)));
+    assert!(
+        rel.iter()
+            .any(|r| matches!(&r.attrs[5], Value::List(v) if v.len() == 2))
+    );
     let sets: Vec<String> = named(&f, "IFCELEMENTQUANTITY")
         .iter()
         .filter_map(|e| match &e.attrs[2] {
@@ -169,7 +198,12 @@ fn massing_as_building_and_storeys() {
             _ => None,
         })
         .collect();
-    assert_eq!(sets.iter().filter(|s| *s == "Qto_BuildingBaseQuantities").count(), 2);
+    assert_eq!(
+        sets.iter()
+            .filter(|s| *s == "Qto_BuildingBaseQuantities")
+            .count(),
+        2
+    );
     // With storeys for the layers, the proxies belong to the storey; the buildings stay aggregated in the site.
     let f = parsed(
         &d,
@@ -190,7 +224,11 @@ fn massing_as_building_and_storeys() {
         },
     );
     assert!(f.dangling().is_empty());
-    assert_eq!(named(&f, "IFCBUILDING").len(), 3, "the storey building and two massing buildings");
+    assert_eq!(
+        named(&f, "IFCBUILDING").len(),
+        3,
+        "the storey building and two massing buildings"
+    );
 }
 
 #[test]
@@ -201,11 +239,20 @@ fn bad_models_and_underlays_are_skipped_with_a_reason() {
         m.floors = Some(0);
     }
     let (_, report) = export(&d, &IfcOptions::default());
-    assert!(report.skipped.iter().any(|s| s.entity == "massing" && s.reason.contains("floors")));
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.entity == "massing" && s.reason.contains("floors"))
+    );
     assert_eq!(report.objects["massing"], 1);
     // An underlay is a picture, not a building element.
     let mut ed = Editor::new(d);
-    let img = cadektor_core::underlay::Rgba { width: 1, height: 1, data: vec![1, 2, 3, 255] };
+    let img = cadektor_core::underlay::Rgba {
+        width: 1,
+        height: 1,
+        data: vec![1, 2, 3, 255],
+    };
     ed.execute(&Command::AddObject {
         shape: Shape::Underlay(Box::new(cadektor_core::underlay::Underlay {
             name: "map".into(),

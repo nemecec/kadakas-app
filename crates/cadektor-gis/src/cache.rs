@@ -88,7 +88,11 @@ impl TileCache {
             .filter(|e| e.path().extension().is_some_and(|x| x == "tile"))
             .filter_map(|e| {
                 let m = e.metadata().ok()?;
-                Some((e.path(), m.len(), m.modified().unwrap_or(SystemTime::UNIX_EPOCH)))
+                Some((
+                    e.path(),
+                    m.len(),
+                    m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                ))
             })
             .collect()
     }
@@ -149,7 +153,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cadektor-gis-cache-{}-{name}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("cadektor-gis-cache-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

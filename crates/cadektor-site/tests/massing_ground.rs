@@ -55,18 +55,26 @@ fn block(x: f64, y: f64, w: f64, d: f64, height: f64) -> Massing {
 fn the_building_stands_on_the_lowest_ground_under_it() {
     let mut ed = Editor::default();
     add(&mut ed, site(200.0, 0.1));
-    let id = add(&mut ed, Shape::Massing(Box::new(block(2000.0, 2000.0, 3000.0, 2000.0, 6000.0))));
+    let id = add(
+        &mut ed,
+        Shape::Massing(Box::new(block(2000.0, 2000.0, 3000.0, 2000.0, 6000.0))),
+    );
     let cache = SiteCache::default();
     let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
     let o = ed.doc().object(id).unwrap();
-    let Shape::Massing(m) = &o.shape else { panic!() };
+    let Shape::Massing(m) = &o.shape else {
+        panic!()
+    };
     // The ground under x from 2000 mm is at 200 + 200 = 400 mm.
     assert!((terrain.massing_base(o, m) - 400.0).abs() < 1e-6);
     // The 3D scene agrees: the lowest point of the building is the lowest ground.
     let ext = scene_ext(&cache, ed.revision());
     let scene = mesh::build_with(ed.doc(), mesh::build(ed.doc()).origin, Some(&ext));
     let (lo, hi) = scene.object_bounds(id).expect("the building has geometry");
-    assert!((scene.origin.z + f64::from(lo.z) - 400.0).abs() < 1e-3, "{lo:?}");
+    assert!(
+        (scene.origin.z + f64::from(lo.z) - 400.0).abs() < 1e-3,
+        "{lo:?}"
+    );
     assert!((f64::from(hi.z - lo.z) - 6000.0).abs() < 1e-3);
 }
 
@@ -79,7 +87,9 @@ fn an_own_base_wins_and_no_site_means_the_layer() {
     let cache = SiteCache::default();
     let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
     let o = ed.doc().object(id).unwrap();
-    let Shape::Massing(m) = &o.shape else { panic!() };
+    let Shape::Massing(m) = &o.shape else {
+        panic!()
+    };
     assert_eq!(terrain.massing_base(o, m), -250.0);
     // Without a base and without a site model: the layer.
     let free = Massing::new(m.footprint.clone(), 3000.0);
@@ -90,7 +100,9 @@ fn an_own_base_wins_and_no_site_means_the_layer() {
     let id = add(&mut ed, Shape::Massing(Box::new(out)));
     let terrain = SiteTerrain::new(&cache, ed.revision(), ed.doc());
     let o = ed.doc().object(id).unwrap();
-    let Shape::Massing(m) = &o.shape else { panic!() };
+    let Shape::Massing(m) = &o.shape else {
+        panic!()
+    };
     assert!((terrain.massing_base(o, m) - 100.0).abs() < 1e-6);
 }
 

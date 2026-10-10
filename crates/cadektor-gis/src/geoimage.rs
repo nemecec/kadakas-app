@@ -37,9 +37,11 @@ pub fn parse_world_file(text: &str) -> Result<Affine> {
         .filter(|l| !l.is_empty())
         .take(6)
         .map(|l| {
-            l.replace(',', ".")
-                .parse::<f64>()
-                .map_err(|_| GisError::Format(format!("the world file has a line that is not a number: {l}")))
+            l.replace(',', ".").parse::<f64>().map_err(|_| {
+                GisError::Format(format!(
+                    "the world file has a line that is not a number: {l}"
+                ))
+            })
         })
         .collect::<Result<_>>()?;
     if v.len() < 6 {
@@ -48,11 +50,15 @@ pub fn parse_world_file(text: &str) -> Result<Affine> {
         ));
     }
     if v.iter().any(|x| !x.is_finite()) {
-        return Err(GisError::Format("the world file has a number that is not finite".into()));
+        return Err(GisError::Format(
+            "the world file has a number that is not finite".into(),
+        ));
     }
     let (a, d, b, e, c, f) = (v[0], v[1], v[2], v[3], v[4], v[5]);
     if (a * e - b * d).abs() < 1e-300 {
-        return Err(GisError::Format("the world file does not describe a picture (zero pixel size)".into()));
+        return Err(GisError::Format(
+            "the world file does not describe a picture (zero pixel size)".into(),
+        ));
     }
     // C and F are the center of the first pixel: move to its corner.
     Ok(Affine {
@@ -97,7 +103,12 @@ pub fn world_file_candidates(path: &Path) -> Vec<PathBuf> {
 }
 
 /// A picture with the text of its world file.
-pub fn from_picture(name: &str, bytes: &[u8], world: &str, crs: Option<String>) -> Result<GeoImage> {
+pub fn from_picture(
+    name: &str,
+    bytes: &[u8],
+    world: &str,
+    crs: Option<String>,
+) -> Result<GeoImage> {
     let image = decode_image(bytes)?;
     Ok(GeoImage {
         name: name.to_string(),
@@ -154,7 +165,9 @@ fn read_tiff(name: &str, bytes: &[u8], need_geo: bool) -> Result<GeoImage> {
     let mut d = Decoder::new(std::io::Cursor::new(bytes)).map_err(bad)?;
     let (w, h) = d.dimensions().map_err(bad)?;
     if u64::from(w) * u64::from(h) > crate::raster::MAX_PIXELS {
-        return Err(GisError::Limit(format!("the GeoTIFF is {w} by {h} pixels, which is too large")));
+        return Err(GisError::Limit(format!(
+            "the GeoTIFF is {w} by {h} pixels, which is too large"
+        )));
     }
     let scale = d.get_tag_f64_vec(Tag::Unknown(TAG_PIXEL_SCALE)).ok();
     let tie = d.get_tag_f64_vec(Tag::Unknown(TAG_TIEPOINT)).ok();
@@ -184,7 +197,8 @@ fn read_tiff(name: &str, bytes: &[u8], need_geo: bool) -> Result<GeoImage> {
         _ if !need_geo => Affine::north_up(DVec2::ZERO, DVec2::ONE),
         _ => {
             return Err(GisError::Format(
-                "the TIFF has no georeference (no tiepoint and pixel scale). Use a world file".into(),
+                "the TIFF has no georeference (no tiepoint and pixel scale). Use a world file"
+                    .into(),
             ));
         }
     };
@@ -215,7 +229,9 @@ fn read_tiff(name: &str, bytes: &[u8], need_geo: bool) -> Result<GeoImage> {
         }
     };
     if samples.len() < w as usize * h as usize * channels {
-        return Err(GisError::Format("the GeoTIFF has fewer samples than its size says".into()));
+        return Err(GisError::Format(
+            "the GeoTIFF has fewer samples than its size says".into(),
+        ));
     }
     let mut data = Vec::with_capacity(w as usize * h as usize * 4);
     for px in samples.chunks_exact(channels).take(w as usize * h as usize) {
@@ -314,11 +330,7 @@ pub fn place(img: &GeoImage, doc: Option<&Georeference>, max_side: u32) -> Resul
     };
     let doc_has_crs = doc.is_some_and(|g| !g.crs.trim().is_empty());
     let (doc_crs, georef, new_georef) = match (doc, doc_has_crs, &src_crs) {
-        (Some(g), true, _) => (
-            Crs::parse(&g.crs).map_err(GisError::Crs)?,
-            g.clone(),
-            None,
-        ),
+        (Some(g), true, _) => (Crs::parse(&g.crs).map_err(GisError::Crs)?, g.clone(), None),
         (_, _, Some(src)) => {
             // Make a georeference from the picture.
             let b = img.raster.bounds();
@@ -360,16 +372,24 @@ pub fn place(img: &GeoImage, doc: Option<&Georeference>, max_side: u32) -> Resul
     let mut pts = Vec::new();
     for i in 0..=8 {
         for j in 0..=8 {
-            let p = r.affine.apply(w * f64::from(i) / 8.0, h * f64::from(j) / 8.0);
+            let p = r
+                .affine
+                .apply(w * f64::from(i) / 8.0, h * f64::from(j) / 8.0);
             pts.push(frame.crs_to_model(p, from)?);
         }
     }
     let bx = Bbox::from_points(pts).expect("points");
     if !(bx.width() > 0.0 && bx.height() > 0.0 && bx.is_finite()) {
-        return Err(GisError::Format("the picture has no size on the map".into()));
+        return Err(GisError::Format(
+            "the picture has no size on the map".into(),
+        ));
     }
     let max_side = max_side.clamp(1, MAX_SIDE_PX);
-    let size = fit_size(bx.width(), bx.height(), max_side.min(r.image.width.max(r.image.height).max(1)));
+    let size = fit_size(
+        bx.width(),
+        bx.height(),
+        max_side.min(r.image.width.max(r.image.height).max(1)),
+    );
     let out = warp(r, Some(from), &frame, bx.min, bx.max, size)?;
     Ok(Placed {
         underlay: Underlay {
@@ -402,9 +422,19 @@ mod tests {
         // Comma decimals, blank lines and extra lines.
         let b = parse_world_file("\n1,5\n0\n0\n-1,5\n10\n20\nextra\n").unwrap();
         assert_eq!(b.a, 1.5);
-        assert!(parse_world_file("1\n2\n3").unwrap_err().to_string().contains("six lines"));
+        assert!(
+            parse_world_file("1\n2\n3")
+                .unwrap_err()
+                .to_string()
+                .contains("six lines")
+        );
         assert!(parse_world_file("1\n0\n0\nx\n0\n0").is_err());
-        assert!(parse_world_file("0\n0\n0\n0\n0\n0").unwrap_err().to_string().contains("zero pixel"));
+        assert!(
+            parse_world_file("0\n0\n0\n0\n0\n0")
+                .unwrap_err()
+                .to_string()
+                .contains("zero pixel")
+        );
         assert!(parse_world_file("1\n0\n0\n-1\ninf\n0").is_err());
         // A rotated picture.
         let r = parse_world_file("1\n0.5\n-0.5\n-1\n0\n0\n").unwrap();
@@ -420,17 +450,38 @@ mod tests {
         let j = world_file_candidates(Path::new("x.jpeg"));
         assert_eq!(j[0], PathBuf::from("x.jgw"));
         assert!(j.contains(&PathBuf::from("x.jpegw")));
-        assert_eq!(world_file_candidates(Path::new("x.tif"))[0], PathBuf::from("x.tfw"));
-        assert_eq!(world_file_candidates(Path::new("x.gif"))[0], PathBuf::from("x.gfw"));
-        assert_eq!(world_file_candidates(Path::new("x.bmp"))[0], PathBuf::from("x.bpw"));
-        assert_eq!(world_file_candidates(Path::new("x.xyz"))[0], PathBuf::from("x.wld"));
+        assert_eq!(
+            world_file_candidates(Path::new("x.tif"))[0],
+            PathBuf::from("x.tfw")
+        );
+        assert_eq!(
+            world_file_candidates(Path::new("x.gif"))[0],
+            PathBuf::from("x.gfw")
+        );
+        assert_eq!(
+            world_file_candidates(Path::new("x.bmp"))[0],
+            PathBuf::from("x.bpw")
+        );
+        assert_eq!(
+            world_file_candidates(Path::new("x.xyz"))[0],
+            PathBuf::from("x.wld")
+        );
         // No duplicates.
         let w = world_file_candidates(Path::new("x.wld"));
-        assert_eq!(w.iter().filter(|p| p.extension().unwrap() == "wld").count(), 1);
+        assert_eq!(
+            w.iter().filter(|p| p.extension().unwrap() == "wld").count(),
+            1
+        );
     }
 
     fn geo(crs: Option<&str>) -> GeoImage {
-        from_picture("plan", &solid(10, 10, [10, 20, 30, 255]).to_png(), WORLD, crs.map(String::from)).unwrap()
+        from_picture(
+            "plan",
+            &solid(10, 10, [10, 20, 30, 255]).to_png(),
+            WORLD,
+            crs.map(String::from),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -460,7 +511,11 @@ mod tests {
             Some("EPSG:4326".into()),
         )
         .unwrap();
-        let g35 = Georeference { crs: "EPSG:32635".into(), origin: DVec2::new(385_000.0, 6_672_000.0), ..g.clone() };
+        let g35 = Georeference {
+            crs: "EPSG:32635".into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            ..g.clone()
+        };
         let p = place(&wgs, Some(&g35), 512).unwrap();
         assert!(p.underlay.max.x > p.underlay.min.x);
     }
@@ -475,12 +530,28 @@ mod tests {
         let u = &placed.underlay;
         assert!(u.min.x < 0.0 && u.max.x > 0.0);
         // A geographic picture gets a UTM zone.
-        let wgs = from_picture("p", &solid(4, 4, [1, 2, 3, 255]).to_png(), "0.001\n0\n0\n-0.001\n24.9\n60.2\n", Some("EPSG:4326".into())).unwrap();
+        let wgs = from_picture(
+            "p",
+            &solid(4, 4, [1, 2, 3, 255]).to_png(),
+            "0.001\n0\n0\n-0.001\n24.9\n60.2\n",
+            Some("EPSG:4326".into()),
+        )
+        .unwrap();
         let g = place(&wgs, None, 512).unwrap().new_georef.unwrap();
         assert_eq!(g.crs, "EPSG:32635");
         // A document with a georeference but no CRS counts as none.
-        let local = Georeference { crs: String::new(), origin: DVec2::new(5.0, 5.0), rotation: 0.0, user_origin: DVec2::ZERO };
-        assert!(place(&geo(Some("EPSG:3067")), Some(&local), 512).unwrap().new_georef.is_some());
+        let local = Georeference {
+            crs: String::new(),
+            origin: DVec2::new(5.0, 5.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
+        assert!(
+            place(&geo(Some("EPSG:3067")), Some(&local), 512)
+                .unwrap()
+                .new_georef
+                .is_some()
+        );
         // No CRS anywhere.
         let e = place(&geo(None), None, 512).unwrap_err().to_string();
         assert!(e.contains("no CRS"), "{e}");
@@ -490,7 +561,9 @@ mod tests {
     #[test]
     fn geotiff_keys() {
         // Header: version 1, revision 1, minor 0, 3 keys.
-        let keys = [1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 2, 3072, 0, 1, 3067];
+        let keys = [
+            1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 2, 3072, 0, 1, 3067,
+        ];
         assert_eq!(geo_keys(&keys), (Some(3067), true));
         let user_defined = [1u16, 1, 0, 1, 3072, 0, 1, 32767];
         assert_eq!(geo_keys(&user_defined), (None, false));

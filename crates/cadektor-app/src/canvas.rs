@@ -485,7 +485,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let is_under = |o: &&Object| matches!(o.shape, Shape::Underlay(_));
     for o in visible()
         .filter(is_under)
-        .chain(visible().filter(|o| !is_under(&o)))
+        .chain(visible().filter(|o| !is_under(o)))
     {
         let st = object_style(f.doc, o, view.zoom);
         let direct = f.selection.contains(&o.id);

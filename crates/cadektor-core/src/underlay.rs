@@ -200,8 +200,8 @@ impl Rgba {
                     let (sx, sy) = (x * 2 + dx, y * 2 + dy);
                     if sx < w && sy < h {
                         let i = (sy * w + sx) * 4;
-                        for c in 0..4 {
-                            acc[c] += u32::from(self.data[i + c]);
+                        for (c, a) in acc.iter_mut().enumerate() {
+                            *a += u32::from(self.data[i + c]);
                         }
                         n += 1;
                     }
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!((small.width, small.height), (4, 3));
         assert_eq!(small.data.len(), 4 * 3 * 4);
         // The first pixel is the mean of a 2 by 2 block.
-        assert_eq!(small.data[0], ((0 + 30 + 0 + 30) / 4) as u8);
+        assert_eq!(small.data[0], (30 + 30) / 4);
         assert!(sample().decode(10).is_none());
     }
 

@@ -83,7 +83,11 @@ pub fn parse_url(url: &str) -> Result<ParsedUrl> {
         scheme,
         host: host.to_ascii_lowercase(),
         port,
-        path: if path.is_empty() { "/".into() } else { path.into() },
+        path: if path.is_empty() {
+            "/".into()
+        } else {
+            path.into()
+        },
         query,
     })
 }
@@ -171,7 +175,8 @@ fn entry_matches(entry: &str, u: &ParsedUrl) -> bool {
         }
         let prefix = e.path.as_str();
         return u.path == prefix
-            || (u.path.starts_with(prefix) && (prefix.ends_with('/') || u.path[prefix.len()..].starts_with('/')));
+            || (u.path.starts_with(prefix)
+                && (prefix.ends_with('/') || u.path[prefix.len()..].starts_with('/')));
     }
     let host = entry.to_ascii_lowercase();
     match host.strip_prefix("*.") {
@@ -280,7 +285,9 @@ impl Fetch for HttpClient {
                 .with_config()
                 .limit(self.max_body as u64)
                 .read_to_vec()
-                .map_err(|e| GisError::Http(format!("{}: cannot read the answer: {e}", shorten(&url))))?;
+                .map_err(|e| {
+                    GisError::Http(format!("{}: cannot read the answer: {e}", shorten(&url)))
+                })?;
             if !(200..300).contains(&status) {
                 let hint: String = String::from_utf8_lossy(&body[..body.len().min(200)])
                     .chars()
@@ -378,7 +385,11 @@ mod tests {
         assert!(!free.is_restricted());
         assert!(free.entries().is_empty());
         // A bad entry never matches.
-        assert!(UrlPolicy::allow_list(["ftp://x.com/".into()]).check("https://x.com/").is_err());
+        assert!(
+            UrlPolicy::allow_list(["ftp://x.com/".into()])
+                .check("https://x.com/")
+                .is_err()
+        );
     }
 
     #[test]

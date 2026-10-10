@@ -85,7 +85,8 @@ impl CadektorApp {
         app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
         // Agents may fetch only the addresses of --allow-url (default: none). Network calls never block the UI.
         let args: Vec<String> = std::env::args().collect();
-        app.session.gis.urls = cadektor_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
+        app.session.gis.urls =
+            cadektor_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
         app.session.gis.blocking = false;
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, rs.target_format);
@@ -1015,7 +1016,9 @@ impl eframe::App for CadektorApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.gis_ui.show(&ctx, &mut self.session, &mut self.status) {
-            self.session.selection.retain(|id| self.session.editor.doc().object(*id).is_some());
+            self.session
+                .selection
+                .retain(|id| self.session.editor.doc().object(*id).is_some());
             self.needs_fit = self.needs_fit || self.session.editor.doc().objects.len() <= 1;
         }
         let before = self.session.view.view;
@@ -1054,7 +1057,9 @@ impl eframe::App for CadektorApp {
             });
         });
         let mut commit = false;
-        let readout = self.readout.text(self.session.editor.doc().georef.as_ref(), self.live_cursor);
+        let readout = self
+            .readout
+            .text(self.session.editor.doc().georef.as_ref(), self.live_cursor);
         egui::Panel::bottom("databar").show(ui, |ui| {
             commit = panels::data_bar(
                 ui,
@@ -1064,8 +1069,7 @@ impl eframe::App for CadektorApp {
                 self.live_cursor,
                 self.snap_hit,
                 self.snap_cfg,
-                readout.as_deref(),
-                &mut self.readout.lonlat,
+                readout.as_deref().map(|t| (t, &mut self.readout.lonlat)),
             );
         });
         if commit {
@@ -1175,7 +1179,6 @@ mod tests {
                     None,
                     app.snap_cfg,
                     None,
-                    &mut false,
                 );
             });
         });

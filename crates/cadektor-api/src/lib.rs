@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod data_api;
-mod hardscape_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_api;
-mod massing_api;
+mod hardscape_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
+mod massing_api;
 mod plants_api;
 mod sheets_api;
 mod symbols_api;
@@ -30,11 +30,11 @@ mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
-pub use paths::PathPolicy;
-#[cfg(not(target_arch = "wasm32"))]
 pub use cadektor_gis::http::UrlPolicy;
 #[cfg(not(target_arch = "wasm32"))]
 pub use gis_api::{GisState, JobInfo};
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::PathPolicy;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod site;
@@ -100,7 +100,9 @@ impl RpcError {
 fn elide_image(object: &mut Value) {
     if let Some(png) = object.pointer_mut("/shape/png") {
         let n = png.as_str().map_or(0, str::len);
-        *png = json!(format!("<PNG picture, {n} characters of base64, not shown>"));
+        *png = json!(format!(
+            "<PNG picture, {n} characters of base64, not shown>"
+        ));
     }
 }
 

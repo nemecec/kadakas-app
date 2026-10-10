@@ -40,7 +40,11 @@ impl ViewRequest {
     }
 
     pub fn check(&self) -> Result<()> {
-        if !(self.min.is_finite() && self.max.is_finite() && self.max.x > self.min.x && self.max.y > self.min.y) {
+        if !(self.min.is_finite()
+            && self.max.is_finite()
+            && self.max.x > self.min.x
+            && self.max.y > self.min.y)
+        {
             return Err(GisError::Param("the view needs a positive size".into()));
         }
         if self.target_px == 0 || self.target_px > MAX_SIDE_PX {
@@ -53,7 +57,11 @@ impl ViewRequest {
 
     /// The output size in pixels.
     pub fn size(&self) -> (u32, u32) {
-        fit_size(self.max.x - self.min.x, self.max.y - self.min.y, self.target_px)
+        fit_size(
+            self.max.x - self.min.x,
+            self.max.y - self.min.y,
+            self.target_px,
+        )
     }
 }
 
@@ -251,7 +259,10 @@ mod tests {
 
     fn plan(i: i32, url: &str) -> TilePlan {
         TilePlan {
-            bbox: Bbox::new(DVec2::new(f64::from(i) * 10.0, 0.0), DVec2::new(f64::from(i) * 10.0 + 10.0, 10.0)),
+            bbox: Bbox::new(
+                DVec2::new(f64::from(i) * 10.0, 0.0),
+                DVec2::new(f64::from(i) * 10.0 + 10.0, 10.0),
+            ),
             width: 4,
             height: 4,
             url: url.into(),
@@ -262,7 +273,8 @@ mod tests {
     fn tiles_come_back_in_order_and_go_through_the_cache() {
         let mut f = Fake::default();
         for i in 0..8 {
-            f.answers.insert(format!("u{i}"), png(4, 4, [i as u8 * 10, 0, 0, 255]));
+            f.answers
+                .insert(format!("u{i}"), png(4, 4, [i as u8 * 10, 0, 0, 255]));
         }
         let plans: Vec<TilePlan> = (0..8).map(|i| plan(i, &format!("u{i}"))).collect();
         let dir = std::env::temp_dir().join(format!("cadektor-mosaic-{}", std::process::id()));
@@ -270,7 +282,10 @@ mod tests {
         let cache = TileCache::new(&dir, 1 << 20);
         let (imgs, cached, bytes) = fetch_tiles(&f, Some(&cache), &plans).unwrap();
         assert_eq!(imgs.len(), 8);
-        assert_eq!((0..8).map(|i| imgs[i].data[0]).collect::<Vec<_>>(), (0..8).map(|i| i as u8 * 10).collect::<Vec<_>>());
+        assert_eq!(
+            (0..8).map(|i| imgs[i].data[0]).collect::<Vec<_>>(),
+            (0..8).map(|i| i as u8 * 10).collect::<Vec<_>>()
+        );
         assert_eq!(cached, 0);
         assert!(bytes > 0);
         let (_, cached, _) = fetch_tiles(&f, Some(&cache), &plans).unwrap();
@@ -296,13 +311,25 @@ mod tests {
         );
         f.answers.insert(
             "html".into(),
-            Response { status: 200, content_type: "text/html".into(), body: b"<html></html>".to_vec() },
+            Response {
+                status: 200,
+                content_type: "text/html".into(),
+                body: b"<html></html>".to_vec(),
+            },
         );
         f.answers.insert(
             "junk".into(),
-            Response { status: 200, content_type: "image/png".into(), body: b"junk".to_vec() },
+            Response {
+                status: 200,
+                content_type: "image/png".into(),
+                body: b"junk".to_vec(),
+            },
         );
-        let e = |name: &str| fetch_tiles(&f, None, &[plan(0, "ok"), plan(1, name)]).unwrap_err().to_string();
+        let e = |name: &str| {
+            fetch_tiles(&f, None, &[plan(0, "ok"), plan(1, name)])
+                .unwrap_err()
+                .to_string()
+        };
         assert!(e("xml").contains("Bad layer"));
         assert!(e("small").contains("2 by 2"));
         assert!(e("missing").contains("404"));
@@ -312,8 +339,14 @@ mod tests {
 
     #[test]
     fn assembles_tiles_by_position() {
-        let a = (Bbox::new(DVec2::new(0.0, 10.0), DVec2::new(10.0, 20.0)), solid(5, 5, [255, 0, 0, 255]));
-        let b = (Bbox::new(DVec2::new(10.0, 0.0), DVec2::new(20.0, 10.0)), solid(5, 5, [0, 0, 255, 255]));
+        let a = (
+            Bbox::new(DVec2::new(0.0, 10.0), DVec2::new(10.0, 20.0)),
+            solid(5, 5, [255, 0, 0, 255]),
+        );
+        let b = (
+            Bbox::new(DVec2::new(10.0, 0.0), DVec2::new(20.0, 10.0)),
+            solid(5, 5, [0, 0, 255, 255]),
+        );
         let g = assemble(&[a, b]).unwrap();
         assert_eq!((g.image.width, g.image.height), (10, 10));
         assert_eq!(g.image.data[0], 255);
@@ -333,7 +366,14 @@ mod tests {
         assert_eq!(v.size(), (2048, 1024));
         assert!(ViewRequest::new(DVec2::ZERO, DVec2::ZERO).check().is_err());
         assert!(ViewRequest { target_px: 0, ..v }.check().is_err());
-        assert!(ViewRequest { target_px: 100_000, ..v }.check().is_err());
+        assert!(
+            ViewRequest {
+                target_px: 100_000,
+                ..v
+            }
+            .check()
+            .is_err()
+        );
         assert!(ViewRequest::new(DVec2::NAN, DVec2::ONE).check().is_err());
     }
 
@@ -341,9 +381,21 @@ mod tests {
     fn query_helpers() {
         assert_eq!(encode("a b/c"), "a%20b%2Fc");
         assert_eq!(encode("EPSG-1.x_~"), "EPSG-1.x_~");
-        assert_eq!(with_query("http://h/wms", &[("A", "1".into()), ("B", "2".into())]), "http://h/wms?A=1&B=2");
-        assert_eq!(with_query("http://h/wms?", &[("A", "1".into())]), "http://h/wms?A=1");
-        assert_eq!(with_query("http://h/cgi?map=a", &[("A", "1".into())]), "http://h/cgi?map=a&A=1");
-        assert_eq!(with_query("http://h/cgi?map=a&", &[("A", "1".into())]), "http://h/cgi?map=a&A=1");
+        assert_eq!(
+            with_query("http://h/wms", &[("A", "1".into()), ("B", "2".into())]),
+            "http://h/wms?A=1&B=2"
+        );
+        assert_eq!(
+            with_query("http://h/wms?", &[("A", "1".into())]),
+            "http://h/wms?A=1"
+        );
+        assert_eq!(
+            with_query("http://h/cgi?map=a", &[("A", "1".into())]),
+            "http://h/cgi?map=a&A=1"
+        );
+        assert_eq!(
+            with_query("http://h/cgi?map=a&", &[("A", "1".into())]),
+            "http://h/cgi?map=a&A=1"
+        );
     }
 }

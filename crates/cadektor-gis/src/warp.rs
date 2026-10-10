@@ -28,7 +28,8 @@ impl<'a> Frame<'a> {
     pub fn new(crs: &'a Crs, georef: &'a Georeference) -> Result<Frame<'a>> {
         if crs.is_geographic() {
             return Err(GisError::Crs(
-                "the document CRS must be a projected CRS (meters), not longitude and latitude".into(),
+                "the document CRS must be a projected CRS (meters), not longitude and latitude"
+                    .into(),
             ));
         }
         if !georef.is_finite() {
@@ -59,9 +60,7 @@ impl<'a> Frame<'a> {
                 .map_err(GisError::Crs)?;
             (x, y)
         };
-        Ok(self
-            .georef
-            .to_model(DVec2::new(x, y) * self.crs.to_meter()))
+        Ok(self.georef.to_model(DVec2::new(x, y) * self.crs.to_meter()))
     }
 
     /// The box in another CRS that covers a box of the model. Points along the edges and inside are
@@ -106,10 +105,9 @@ pub fn warp(
     if w == 0 || h == 0 || !(out_max.x > out_min.x && out_max.y > out_min.y) {
         return Err(GisError::Param("the target area is empty".into()));
     }
-    let inv = src
-        .affine
-        .inverse()
-        .ok_or_else(|| GisError::Format("the picture has a map transform that cannot be turned around".into()))?;
+    let inv = src.affine.inverse().ok_or_else(|| {
+        GisError::Format("the picture has a map transform that cannot be turned around".into())
+    })?;
     let src_crs = src_crs.unwrap_or(frame.crs);
     let same = same_crs(frame.crs, src_crs);
     // Source pixel of an output pixel position (in pixels, top left origin).
@@ -209,12 +207,28 @@ mod tests {
             affine: Affine::north_up(DVec2::new(385_000.0, 6_672_010.0), DVec2::ONE),
         };
         // The whole picture: model x 0..10000 mm, y 0..10000 mm.
-        let out = warp(&src, Some(&crs), &frame, DVec2::ZERO, DVec2::splat(10_000.0), (10, 10)).unwrap();
+        let out = warp(
+            &src,
+            Some(&crs),
+            &frame,
+            DVec2::ZERO,
+            DVec2::splat(10_000.0),
+            (10, 10),
+        )
+        .unwrap();
         assert_eq!(out.data[..4], [0, 0, 0, 255]);
         let last = (9 * 10 + 9) * 4;
         assert_eq!(&out.data[last..last + 3], &[255, 255, 0]);
         // Outside the picture is clear.
-        let wide = warp(&src, None, &frame, DVec2::splat(-10_000.0), DVec2::splat(10_000.0), (20, 20)).unwrap();
+        let wide = warp(
+            &src,
+            None,
+            &frame,
+            DVec2::splat(-10_000.0),
+            DVec2::splat(10_000.0),
+            (20, 20),
+        )
+        .unwrap();
         assert_eq!(wide.data[3], 0);
         let mid = (9 * 20 + 10) * 4;
         assert_eq!(wide.data[mid + 3], 255);
@@ -245,7 +259,12 @@ mod tests {
         // The middle of the view is the middle of the picture, and the two agree.
         let mid = (16 * 32 + 16) * 4;
         assert_eq!(out.data[mid + 3], 255);
-        assert!((i32::from(out.data[mid]) - 128).abs() < 40 && (i32::from(out.data[mid + 1]) - 128).abs() < 40, "{:?}", &out.data[mid..mid + 4]);
+        assert!(
+            (i32::from(out.data[mid]) - 128).abs() < 40
+                && (i32::from(out.data[mid + 1]) - 128).abs() < 40,
+            "{:?}",
+            &out.data[mid..mid + 4]
+        );
         // A point on the ground, converted by hand, lands on the same pixel.
         let probe = DVec2::new(100_000.0, -80_000.0);
         let m = frame.model_to_crs(probe, &merc).unwrap();
@@ -256,7 +275,11 @@ mod tests {
     #[test]
     fn rotated_georeference_turns_the_picture() {
         let crs = Crs::parse("EPSG:3067").unwrap();
-        let g = georef("EPSG:3067", DVec2::new(385_000.0, 6_672_000.0), std::f64::consts::FRAC_PI_2);
+        let g = georef(
+            "EPSG:3067",
+            DVec2::new(385_000.0, 6_672_000.0),
+            std::f64::consts::FRAC_PI_2,
+        );
         let frame = Frame::new(&crs, &g).unwrap();
         let p = frame.model_to_crs(DVec2::new(1000.0, 0.0), &crs).unwrap();
         assert!((p - DVec2::new(385_000.0, 6_672_001.0)).length() < 1e-6);
@@ -280,12 +303,27 @@ mod tests {
         assert!(warp(&src, None, &frame, DVec2::ZERO, DVec2::ONE, (0, 4)).is_err());
         let flat = GeoRaster {
             image: ramp(2, 2),
-            affine: Affine { a: 1.0, b: 1.0, c: 0.0, d: 1.0, e: 1.0, f: 0.0 },
+            affine: Affine {
+                a: 1.0,
+                b: 1.0,
+                c: 0.0,
+                d: 1.0,
+                e: 1.0,
+                f: 0.0,
+            },
         };
         assert!(warp(&flat, None, &frame, DVec2::ZERO, DVec2::ONE, (4, 4)).is_err());
         // A target far outside the valid area of the source CRS gives a clear picture, not an error.
         let utm = Crs::parse("EPSG:32635").unwrap();
-        let out = warp(&src, Some(&utm), &frame, DVec2::splat(1.0e8), DVec2::splat(1.1e8), (4, 4)).unwrap();
+        let out = warp(
+            &src,
+            Some(&utm),
+            &frame,
+            DVec2::splat(1.0e8),
+            DVec2::splat(1.1e8),
+            (4, 4),
+        )
+        .unwrap();
         assert!(out.data.iter().skip(3).step_by(4).all(|a| *a == 0));
     }
 

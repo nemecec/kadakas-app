@@ -66,7 +66,11 @@ fn jpeg_with_a_jgw_and_missing_world_files() {
     let d = temp("jpg");
     let mut jpg = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 90)
-        .encode_image(&image::RgbImage::from_pixel(10, 10, image::Rgb([20, 200, 20])))
+        .encode_image(&image::RgbImage::from_pixel(
+            10,
+            10,
+            image::Rgb([20, 200, 20]),
+        ))
         .unwrap();
     std::fs::write(d.join("a.jpg"), &jpg).unwrap();
     // No world file: the error names what was looked for.
@@ -86,13 +90,20 @@ fn geotiff(w: u32, h: u32, with_tags: bool, point: bool) -> Vec<u8> {
     let mut enc = TiffEncoder::new(&mut buf).unwrap();
     let mut img = enc.new_image::<colortype::RGB8>(w, h).unwrap();
     if with_tags {
-        img.encoder().write_tag(Tag::Unknown(33550), &[2.0f64, 2.0, 0.0][..]).unwrap();
         img.encoder()
-            .write_tag(Tag::Unknown(33922), &[0.0f64, 0.0, 0.0, 385_000.0, 6_672_010.0, 0.0][..])
+            .write_tag(Tag::Unknown(33550), &[2.0f64, 2.0, 0.0][..])
+            .unwrap();
+        img.encoder()
+            .write_tag(
+                Tag::Unknown(33922),
+                &[0.0f64, 0.0, 0.0, 385_000.0, 6_672_010.0, 0.0][..],
+            )
             .unwrap();
         let mut keys: Vec<u16> = vec![1, 1, 0, 3, 1024, 0, 1, 1, 3072, 0, 1, 3067];
         keys.extend([1025, 0, 1, if point { 2 } else { 1 }]);
-        img.encoder().write_tag(Tag::Unknown(34735), &keys[..]).unwrap();
+        img.encoder()
+            .write_tag(Tag::Unknown(34735), &keys[..])
+            .unwrap();
     }
     let data: Vec<u8> = [10u8, 120, 220].repeat((w * h) as usize);
     img.write_data(&data).unwrap();
@@ -103,15 +114,29 @@ fn geotiff(w: u32, h: u32, with_tags: bool, point: bool) -> Vec<u8> {
 fn geotiff_with_tiepoint_scale_and_keys() {
     let g = read_geotiff("t", &geotiff(10, 10, true, false)).unwrap();
     assert_eq!(g.crs.as_deref(), Some("EPSG:3067"));
-    assert_eq!(g.raster.affine.apply(0.0, 0.0), DVec2::new(385_000.0, 6_672_010.0));
-    assert_eq!(g.raster.affine.apply(10.0, 10.0), DVec2::new(385_020.0, 6_671_990.0));
+    assert_eq!(
+        g.raster.affine.apply(0.0, 0.0),
+        DVec2::new(385_000.0, 6_672_010.0)
+    );
+    assert_eq!(
+        g.raster.affine.apply(10.0, 10.0),
+        DVec2::new(385_020.0, 6_671_990.0)
+    );
     assert_eq!(&g.raster.image.data[..4], &[10, 120, 220, 255]);
     // Pixel is point: the tiepoint is the center of the first pixel.
     let p = read_geotiff("t", &geotiff(10, 10, true, true)).unwrap();
-    assert_eq!(p.raster.affine.apply(0.0, 0.0), DVec2::new(384_999.0, 6_672_011.0));
+    assert_eq!(
+        p.raster.affine.apply(0.0, 0.0),
+        DVec2::new(384_999.0, 6_672_011.0)
+    );
     // A TIFF without georeference is refused with a hint.
-    let e = read_geotiff("t", &geotiff(4, 4, false, false)).unwrap_err().to_string();
-    assert!(e.contains("no georeference") && e.contains("world file"), "{e}");
+    let e = read_geotiff("t", &geotiff(4, 4, false, false))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("no georeference") && e.contains("world file"),
+        "{e}"
+    );
     assert!(read_geotiff("t", b"not a tiff").is_err());
     // Through a file: GeoTIFF alone, and a world file wins over the tags.
     let d = temp("tif");

@@ -49,11 +49,23 @@ fn client_gets_answers_and_reports_errors() {
     });
     let c = client();
     let r = c.get(&format!("{}/ok", m.base)).unwrap();
-    assert_eq!((r.status, r.content_type.as_str(), r.body.as_slice()), (200, "text/plain", &b"hello"[..]));
-    let e = c.get(&format!("{}/missing?key=SECRET", m.base)).unwrap_err().to_string();
+    assert_eq!(
+        (r.status, r.content_type.as_str(), r.body.as_slice()),
+        (200, "text/plain", &b"hello"[..])
+    );
+    let e = c
+        .get(&format!("{}/missing?key=SECRET", m.base))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("HTTP 404") && e.contains("no such thing"), "{e}");
-    assert!(!e.contains("SECRET"), "a key in the query must not show: {e}");
-    let e = c.get(&format!("{}/broken", m.base)).unwrap_err().to_string();
+    assert!(
+        !e.contains("SECRET"),
+        "a key in the query must not show: {e}"
+    );
+    let e = c
+        .get(&format!("{}/broken", m.base))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("HTTP 500") && e.contains("boomline"), "{e}");
     assert_eq!(c.policy(), &UrlPolicy::unrestricted());
 }
@@ -74,14 +86,26 @@ fn redirects_are_followed_and_checked_again() {
     assert_eq!(c.get(&format!("{}/hop", m.base)).unwrap().body, b"done");
     let e = c.get(&format!("{}/loop", m.base)).unwrap_err().to_string();
     assert!(e.contains("too many redirects"), "{e}");
-    let e = c.get(&format!("{}/nowhere", m.base)).unwrap_err().to_string();
+    let e = c
+        .get(&format!("{}/nowhere", m.base))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("without a location"), "{e}");
     // Only the first server is on the list: the redirect to the second one is refused.
-    let strict = HttpClient::new(UrlPolicy::allow_list([m.base.clone()]), Duration::from_secs(10));
-    let e = strict.get(&format!("{}/away", m.base)).unwrap_err().to_string();
+    let strict = HttpClient::new(
+        UrlPolicy::allow_list([m.base.clone()]),
+        Duration::from_secs(10),
+    );
+    let e = strict
+        .get(&format!("{}/away", m.base))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("not on the list"), "{e}");
     assert_eq!(other.hit_count(), 0, "the second server was never asked");
-    assert_eq!(strict.get(&format!("{}/hop", m.base)).unwrap().body, b"done");
+    assert_eq!(
+        strict.get(&format!("{}/hop", m.base)).unwrap().body,
+        b"done"
+    );
 }
 
 #[test]
@@ -90,7 +114,10 @@ fn the_policy_blocks_before_any_request() {
     let c = HttpClient::new(UrlPolicy::deny_all(), Duration::from_secs(2));
     assert!(c.get(&format!("{}/a", m.base)).is_err());
     assert_eq!(m.hit_count(), 0);
-    let c = HttpClient::new(UrlPolicy::allow_list(["127.0.0.1".to_string()]), Duration::from_secs(2));
+    let c = HttpClient::new(
+        UrlPolicy::allow_list(["127.0.0.1".to_string()]),
+        Duration::from_secs(2),
+    );
     assert!(c.get(&format!("{}/a", m.base)).is_ok());
     assert!(c.get("ftp://127.0.0.1/a").is_err());
     assert!(c.get("file:///etc/passwd").is_err());
@@ -108,8 +135,12 @@ fn slow_servers_and_big_answers_are_stopped() {
     assert!(c.get(&format!("{}/slow", m.base)).is_err());
     assert!(c.get(&format!("{}/hang", m.base)).is_err());
     assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
-    let small = HttpClient::new(UrlPolicy::unrestricted(), Duration::from_secs(5)).with_max_body(1000);
-    let e = small.get(&format!("{}/big", m.base)).unwrap_err().to_string();
+    let small =
+        HttpClient::new(UrlPolicy::unrestricted(), Duration::from_secs(5)).with_max_body(1000);
+    let e = small
+        .get(&format!("{}/big", m.base))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("cannot read the answer"), "{e}");
     // A server that is not there.
     let dead = {
@@ -177,7 +208,13 @@ fn wms_map_with_a_disk_cache() {
     assert!(first.stats.tiles >= 1);
     let u = &first.underlay;
     assert_eq!((u.width, u.height), (400, 267));
-    assert!(u.decode(4096).unwrap().data.chunks(4).all(|p| p == [30, 160, 90, 255]));
+    assert!(
+        u.decode(4096)
+            .unwrap()
+            .data
+            .chunks(4)
+            .all(|p| p == [30, 160, 90, 255])
+    );
     let hits_after_first = m.hit_count();
     // The same view again comes from the disk.
     let second = wms::fetch_map(&c, Some(&cache), &src, &caps, &crs, &g, &view).unwrap();
@@ -185,16 +222,27 @@ fn wms_map_with_a_disk_cache() {
     assert_eq!(m.hit_count(), hits_after_first);
     assert_eq!(second.underlay.png, first.underlay.png);
     // A layer that exists only in Web Mercator is requested in that CRS and warped.
-    let web = WmsSource { crs: Some("EPSG:3857".into()), ..WmsSource::new(&format!("{}/wms", m.base), &["ortho"]) };
+    let web = WmsSource {
+        crs: Some("EPSG:3857".into()),
+        ..WmsSource::new(&format!("{}/wms", m.base), &["ortho"])
+    };
     let r = wms::fetch_map(&c, None, &web, &caps, &crs, &g, &view).unwrap();
     assert!(r.stats.reprojected && r.stats.crs == "EPSG:3857");
-    assert!(m.hits.lock().unwrap().iter().any(|h| h.contains("CRS=EPSG%3A3857")));
+    assert!(
+        m.hits
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|h| h.contains("CRS=EPSG%3A3857"))
+    );
     // The server reports an error inside a 200 answer.
     let mut caps2 = caps.clone();
     caps2.layers.push(caps.layers[1].clone());
     caps2.layers.last_mut().unwrap().name = Some("broken".into());
     let bad = WmsSource::new(&format!("{}/wms", m.base), &["broken"]);
-    let e = wms::fetch_map(&c, None, &bad, &caps2, &crs, &g, &view).unwrap_err().to_string();
+    let e = wms::fetch_map(&c, None, &bad, &caps2, &crs, &g, &view)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("Layer is broken"), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -262,7 +310,13 @@ fn wmts_map_from_a_template() {
     assert!(r.stats.reprojected);
     let img = r.underlay.decode(4096).unwrap();
     assert!(img.data.chunks(4).all(|p| p == [200, 50, 50, 255]));
-    assert!(m.hits.lock().unwrap().iter().all(|h| h.starts_with("/tiles/")));
+    assert!(
+        m.hits
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|h| h.starts_with("/tiles/"))
+    );
 }
 
 #[test]
@@ -294,7 +348,13 @@ fn wfs_json_and_gml() {
     assert_eq!(f.format, wfs::FeatureFormat::Gml);
     let d = wfs::parse_features(&f).unwrap();
     assert_eq!(d.features[0].props["h"], serde_json::json!(7.5));
-    assert!(m.hits.lock().unwrap().iter().all(|h| h.contains("TYPENAMES=ns%3Ab") && h.contains("SRSNAME=EPSG%3A3067")));
+    assert!(
+        m.hits
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|h| h.contains("TYPENAMES=ns%3Ab") && h.contains("SRSNAME=EPSG%3A3067"))
+    );
 }
 
 #[test]
@@ -302,7 +362,9 @@ fn jobs_keep_the_caller_free() {
     let m = Mock::start(|_| Reply::Slow(Duration::from_millis(300)));
     let url = format!("{}/slow", m.base);
     let mut job = Job::spawn("fetch", move || {
-        HttpClient::new(UrlPolicy::unrestricted(), Duration::from_secs(5)).get(&url).map(|r| r.body.len())
+        HttpClient::new(UrlPolicy::unrestricted(), Duration::from_secs(5))
+            .get(&url)
+            .map(|r| r.body.len())
     });
     let t = Instant::now();
     let mut polls = 0;

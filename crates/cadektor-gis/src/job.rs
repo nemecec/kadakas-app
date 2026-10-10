@@ -50,7 +50,9 @@ impl<T: Send + 'static> Job<T> {
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.received = true;
-                self.result = Some(Err(GisError::Http("the worker stopped without an answer".into())));
+                self.result = Some(Err(GisError::Http(
+                    "the worker stopped without an answer".into(),
+                )));
             }
         }
     }
@@ -122,9 +124,18 @@ mod tests {
     #[test]
     fn errors_panics_timeouts_and_cancel() {
         let mut j: Job<u8> = Job::spawn("e", || Err(GisError::Param("bad".into())));
-        assert_eq!(j.wait(Duration::from_secs(5)).unwrap().unwrap_err(), GisError::Param("bad".into()));
+        assert_eq!(
+            j.wait(Duration::from_secs(5)).unwrap().unwrap_err(),
+            GisError::Param("bad".into())
+        );
         let mut p: Job<u8> = Job::spawn("p", || panic!("boom"));
-        assert!(p.wait(Duration::from_secs(5)).unwrap().unwrap_err().to_string().contains("stopped"));
+        assert!(
+            p.wait(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("stopped")
+        );
         let (go, wait) = channel::<()>();
         let mut s: Job<u8> = Job::spawn("s", move || {
             let _ = wait.recv();

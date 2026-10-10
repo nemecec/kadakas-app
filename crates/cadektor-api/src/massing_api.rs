@@ -212,7 +212,9 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             attrs: None,
         });
     }
-    s.editor.execute(&Command::Batch { commands }).map_err(app)?;
+    s.editor
+        .execute(&Command::Batch { commands })
+        .map_err(app)?;
     Ok(json!({"changed": ids}))
 }
 
@@ -221,7 +223,9 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
 fn base_elevation(s: &Session, id: ObjectId) -> f64 {
     let doc = s.editor.doc();
     let Some(o) = doc.object(id) else { return 0.0 };
-    let Shape::Massing(m) = &o.shape else { return 0.0 };
+    let Shape::Massing(m) = &o.shape else {
+        return 0.0;
+    };
     let terrain = SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
     terrain.massing_base(o, m) + doc.layer(o.layer).map_or(0.0, |l| l.elevation)
 }
@@ -258,7 +262,8 @@ fn from_shapes(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         opts_json.insert("pitch_deg".into(), p);
     }
     if let Some(r) = opts_json.get("roof").and_then(Value::as_str) {
-        let style = RoofStyle::from_name(r).ok_or_else(|| bad("roof must be flat, gable or hip"))?;
+        let style =
+            RoofStyle::from_name(r).ok_or_else(|| bad("roof must be flat, gable or hip"))?;
         opts_json.insert("roof".into(), json!(style));
     }
     let opts: FromShapesOptions = serde_json::from_value(Value::Object(opts_json)).map_err(bad)?;
@@ -294,7 +299,9 @@ fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let mut rows = Vec::new();
     let (mut count, mut footprint, mut gfa, mut volume) = (0, 0.0, 0.0, 0.0);
     for o in doc.objects.values() {
-        let Shape::Massing(mm) = &o.shape else { continue };
+        let Shape::Massing(mm) = &o.shape else {
+            continue;
+        };
         if want.as_ref().is_some_and(|w| !w.contains(&o.id)) {
             continue;
         }
@@ -314,9 +321,20 @@ fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let totals = json!({"count": count, "footprint_m2": footprint, "gross_floor_area_m2": gfa, "volume_m3": volume});
     if csv {
         let cols = [
-            "id", "name", "layer", "floors", "roof", "footprint_m2", "gross_floor_area_m2",
-            "eave_height_m", "ridge_height_m", "volume_m3", "volume_to_eave_m3", "roof_area_m2",
-            "wall_area_m2", "base_elevation_m",
+            "id",
+            "name",
+            "layer",
+            "floors",
+            "roof",
+            "footprint_m2",
+            "gross_floor_area_m2",
+            "eave_height_m",
+            "ridge_height_m",
+            "volume_m3",
+            "volume_to_eave_m3",
+            "roof_area_m2",
+            "wall_area_m2",
+            "base_elevation_m",
         ];
         let mut table = vec![cols.iter().map(|c| c.to_string()).collect::<Vec<_>>()];
         for r in &rows {
@@ -325,7 +343,9 @@ fn report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                     .map(|c| match &r[*c] {
                         Value::Null => String::new(),
                         Value::String(t) => t.clone(),
-                        Value::Number(n) if n.is_f64() => format!("{:.3}", n.as_f64().unwrap_or(0.0)),
+                        Value::Number(n) if n.is_f64() => {
+                            format!("{:.3}", n.as_f64().unwrap_or(0.0))
+                        }
                         other => other.to_string(),
                     })
                     .collect(),

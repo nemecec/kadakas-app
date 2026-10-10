@@ -211,7 +211,11 @@ pub fn is_gis_method(method: &str) -> bool {
 
 /// Default folder of the tile cache.
 pub fn default_cache_dir() -> PathBuf {
-    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let var = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     if let Some(d) = var("CADEKTOR_GIS_CACHE") {
         return d;
     }
@@ -228,10 +232,7 @@ pub fn default_cache_dir() -> PathBuf {
 impl Session {
     fn tile_cache(&self) -> TileCache {
         TileCache::new(
-            self.gis
-                .cache_dir
-                .clone()
-                .unwrap_or_else(default_cache_dir),
+            self.gis.cache_dir.clone().unwrap_or_else(default_cache_dir),
             self.gis.cache_limit,
         )
     }
@@ -447,9 +448,16 @@ impl Session {
         self.gis_call(method, p, true)
     }
 
-    pub(crate) fn gis_call(&mut self, method: &str, p: Value, trusted: bool) -> Result<Value, RpcError> {
+    pub(crate) fn gis_call(
+        &mut self,
+        method: &str,
+        p: Value,
+        trusted: bool,
+    ) -> Result<Value, RpcError> {
         let p = if p.is_null() { json!({}) } else { p };
-        let m = p.as_object().ok_or_else(|| bad("params must be an object"))?;
+        let m = p
+            .as_object()
+            .ok_or_else(|| bad("params must be an object"))?;
         match method {
             "gis.sources" => {
                 let c = self.tile_cache();
@@ -497,7 +505,11 @@ impl Session {
         if !self.gis.jobs.iter().any(|e| e.id == id) {
             return Err(bad(format!("no job {id} (it may be too old)")));
         }
-        let secs = m.get("wait").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 120.0);
+        let secs = m
+            .get("wait")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            .clamp(0.0, 120.0);
         let end = std::time::Instant::now() + Duration::from_secs_f64(secs);
         loop {
             self.settle(id);
@@ -523,7 +535,11 @@ impl Session {
             #[serde(default)]
             rotation: f64,
         }
-        let P { crs, origin, rotation } = parse(m)?;
+        let P {
+            crs,
+            origin,
+            rotation,
+        } = parse(m)?;
         let c = Crs::parse(&crs).map_err(bad)?;
         if c.is_geographic() {
             return Err(bad("the document CRS must be a projected CRS (meters)"));
@@ -544,7 +560,9 @@ impl Session {
             return Err(bad("origin and rotation must be finite numbers"));
         }
         self.editor
-            .execute(&Command::SetGeoreference { georef: Some(g.clone()) })
+            .execute(&Command::SetGeoreference {
+                georef: Some(g.clone()),
+            })
             .map_err(app)?;
         Ok(json!({"georeference": g}))
     }
@@ -577,11 +595,16 @@ impl Session {
             dry_run: bool,
             origin: Option<[f64; 2]>,
         }
-        let P { crs, dry_run, origin } = parse(m)?;
+        let P {
+            crs,
+            dry_run,
+            origin,
+        } = parse(m)?;
         let opts = cadektor_gis::reproject::ReprojectOptions {
             origin: origin.map(|o| DVec2::new(o[0], o[1])),
         };
-        let plan = cadektor_gis::reproject::plan(self.editor.doc(), &crs, &opts).map_err(gis_err)?;
+        let plan =
+            cadektor_gis::reproject::plan(self.editor.doc(), &crs, &opts).map_err(gis_err)?;
         let mut applied = false;
         if let (false, Some(cmd)) = (dry_run, &plan.command) {
             self.editor.execute(cmd).map_err(app)?;
@@ -593,7 +616,12 @@ impl Session {
 
     // ------------------------------------------------------------ services
 
-    fn capabilities(&mut self, method: &str, m: &Map<String, Value>, trusted: bool) -> Result<Value, RpcError> {
+    fn capabilities(
+        &mut self,
+        method: &str,
+        m: &Map<String, Value>,
+        trusted: bool,
+    ) -> Result<Value, RpcError> {
         #[derive(Deserialize)]
         struct P {
             url: String,
@@ -647,7 +675,11 @@ impl Session {
     }
 
     /// The view for a map: the box that the call names, else the drawing plus 5 percent.
-    fn view_of(&self, bbox: Option<[f64; 4]>, max_px: Option<u32>) -> Result<ViewRequest, RpcError> {
+    fn view_of(
+        &self,
+        bbox: Option<[f64; 4]>,
+        max_px: Option<u32>,
+    ) -> Result<ViewRequest, RpcError> {
         let (lo, hi) = match bbox {
             Some(b) => (DVec2::new(b[0], b[1]), DVec2::new(b[2], b[3])),
             None => {
@@ -655,8 +687,19 @@ impl Session {
                 let mut it = doc
                     .objects
                     .values()
-                    .filter(|o| !matches!(o.shape, Shape::Underlay(_) | Shape::Group { .. } | Shape::Viewport(_) | Shape::TitleBlock(_)))
-                    .filter(|o| doc.layer(o.layer).is_some_and(|l| l.kind == cadektor_core::model::LayerKind::Design))
+                    .filter(|o| {
+                        !matches!(
+                            o.shape,
+                            Shape::Underlay(_)
+                                | Shape::Group { .. }
+                                | Shape::Viewport(_)
+                                | Shape::TitleBlock(_)
+                        )
+                    })
+                    .filter(|o| {
+                        doc.layer(o.layer)
+                            .is_some_and(|l| l.kind == cadektor_core::model::LayerKind::Design)
+                    })
                     .map(|o| doc.object_bounds(o))
                     .filter(|(a, b)| a.is_finite() && b.is_finite());
                 let first = it.next().ok_or_else(|| {
@@ -729,7 +772,16 @@ impl Session {
             wait: Option<bool>,
         }
         let mut s = m.clone();
-        for k in ["bbox", "max_px", "name", "opacity", "layer_name", "design_layer", "class", "wait"] {
+        for k in [
+            "bbox",
+            "max_px",
+            "name",
+            "opacity",
+            "layer_name",
+            "design_layer",
+            "class",
+            "wait",
+        ] {
             s.remove(k);
         }
         let source: WmtsSource = parse(&s)?;
@@ -766,7 +818,12 @@ impl Session {
             max_px: Option<u32>,
             wait: Option<bool>,
         }
-        let P { id, bbox, max_px, wait } = parse(m)?;
+        let P {
+            id,
+            bbox,
+            max_px,
+            wait,
+        } = parse(m)?;
         let o = self
             .editor
             .doc()
@@ -775,31 +832,42 @@ impl Session {
         let Shape::Underlay(u) = &o.shape else {
             return Err(bad(format!("object {id} is not an underlay")));
         };
-        let stored = o
-            .data
-            .get("gis_source")
-            .cloned()
-            .ok_or_else(|| bad("this underlay has no source to fetch again (it came from a file)"))?;
+        let stored = o.data.get("gis_source").cloned().ok_or_else(|| {
+            bad("this underlay has no source to fetch again (it came from a file)")
+        })?;
         let (name, opacity) = (u.name.clone(), u.opacity);
         let g = self.doc_frame()?;
         let old_bbox: Option<[f64; 4]> = stored
             .get("bbox")
             .and_then(|b| serde_json::from_value(b.clone()).ok());
-        let old_px = stored.get("max_px").and_then(Value::as_u64).map(|x| x as u32);
+        let old_px = stored
+            .get("max_px")
+            .and_then(Value::as_u64)
+            .map(|x| x as u32);
         let view = self.view_of(bbox.or(old_bbox), max_px.or(old_px))?;
-        let kind = stored.get("kind").and_then(Value::as_str).unwrap_or("wms").to_string();
+        let kind = stored
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("wms")
+            .to_string();
         let src = stored.get("source").cloned().unwrap_or(Value::Null);
         let src_json = json!({"kind": kind, "source": src, "bbox": [view.min.x, view.min.y, view.max.x, view.max.y], "max_px": view.target_px});
-        let url = src.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+        let url = src
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         self.check_url(&url, trusted)?;
         self.submit("map refresh", trusted, wait, move |http, cache| {
             let doc_crs = Crs::parse(&g.crs).map_err(GisError::Crs)?;
             let out = if kind == "wmts" {
-                let source: WmtsSource = serde_json::from_value(src).map_err(|e| GisError::Param(e.to_string()))?;
+                let source: WmtsSource =
+                    serde_json::from_value(src).map_err(|e| GisError::Param(e.to_string()))?;
                 let caps = wmts::fetch_capabilities(http, &source.url)?;
                 wmts::fetch_map(http, Some(cache), &source, &caps, &doc_crs, &g, &view)?
             } else {
-                let source: WmsSource = serde_json::from_value(src).map_err(|e| GisError::Param(e.to_string()))?;
+                let source: WmsSource =
+                    serde_json::from_value(src).map_err(|e| GisError::Param(e.to_string()))?;
                 let caps = wms::fetch_capabilities(http, &source.url)?;
                 wms::fetch_map(http, Some(cache), &source, &caps, &doc_crs, &g, &view)?
             };
@@ -841,7 +909,12 @@ impl Session {
                     .to_string(),
             );
         }
-        let doc_frame = self.editor.doc().georef.clone().filter(|g| !g.crs.trim().is_empty());
+        let doc_frame = self
+            .editor
+            .doc()
+            .georef
+            .clone()
+            .filter(|g| !g.crs.trim().is_empty());
         let use_caps = ex.caps.unwrap_or(true);
         self.submit("WFS import", trusted, ex.wait, move |http, _| {
             let caps = if use_caps {
@@ -863,7 +936,11 @@ impl Session {
         })
     }
 
-    fn geoimage_import(&mut self, m: &Map<String, Value>, trusted: bool) -> Result<Value, RpcError> {
+    fn geoimage_import(
+        &mut self,
+        m: &Map<String, Value>,
+        trusted: bool,
+    ) -> Result<Value, RpcError> {
         #[derive(Deserialize)]
         struct P {
             path: PathBuf,
@@ -882,7 +959,8 @@ impl Session {
             self.check_path(&p.path, false, &["png", "jpg", "jpeg", "tif", "tiff"])
                 .map_err(app)?
         };
-        let mut img = cadektor_gis::geoimage::load_file(&path, p.crs.as_deref()).map_err(gis_err)?;
+        let mut img =
+            cadektor_gis::geoimage::load_file(&path, p.crs.as_deref()).map_err(gis_err)?;
         if let Some(n) = p.name {
             img.name = n;
         }
@@ -893,16 +971,23 @@ impl Session {
                 cadektor_core::underlay::MAX_SIDE_PX
             )));
         }
-        let placed = cadektor_gis::geoimage::place(&img, self.editor.doc().georef.as_ref(), max_px).map_err(gis_err)?;
+        let placed = cadektor_gis::geoimage::place(&img, self.editor.doc().georef.as_ref(), max_px)
+            .map_err(gis_err)?;
         let design = self.design_layer(p.layer.as_ref(), p.layer_name)?;
         let mut u = placed.underlay;
         u.opacity = check_opacity(p.opacity)?;
-        u.source = format!("{}.{}", img.name, path.extension().map_or("", |e| e.to_str().unwrap_or("")));
+        u.source = format!(
+            "{}.{}",
+            img.name,
+            path.extension().map_or("", |e| e.to_str().unwrap_or(""))
+        );
         let (w, h) = (u.width, u.height);
         let next = ObjectId(self.editor.doc().next_id());
         let mut commands = Vec::new();
         if let Some(g) = &placed.new_georef {
-            commands.push(Command::SetGeoreference { georef: Some(g.clone()) });
+            commands.push(Command::SetGeoreference {
+                georef: Some(g.clone()),
+            });
         }
         commands.push(Command::AddObject {
             shape: Shape::Underlay(Box::new(u)),
@@ -910,7 +995,9 @@ impl Session {
             class: p.class,
             attrs: Attributes::default(),
         });
-        self.editor.execute(&Command::Batch { commands }).map_err(app)?;
+        self.editor
+            .execute(&Command::Batch { commands })
+            .map_err(app)?;
         self.prune_selection();
         Ok(json!({
             "id": next,
@@ -922,11 +1009,18 @@ impl Session {
     }
 
     /// The design layer for a new underlay: by ID or name. `None`: the active layer.
-    fn design_layer(&self, by_id: Option<&Value>, by_name: Option<String>) -> Result<Option<LayerId>, RpcError> {
+    fn design_layer(
+        &self,
+        by_id: Option<&Value>,
+        by_name: Option<String>,
+    ) -> Result<Option<LayerId>, RpcError> {
         let doc: &Document = self.editor.doc();
         if let Some(Value::Number(n)) = by_id {
             let id = LayerId(n.as_u64().ok_or_else(|| bad("layer must be an ID"))?);
-            return doc.layer(id).map(|_| Some(id)).ok_or_else(|| bad(format!("layer {id} does not exist")));
+            return doc
+                .layer(id)
+                .map(|_| Some(id))
+                .ok_or_else(|| bad(format!("layer {id} does not exist")));
         }
         let name = by_name.or_else(|| by_id.and_then(Value::as_str).map(str::to_string));
         match name {
