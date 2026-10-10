@@ -303,7 +303,7 @@ def test_database_rows_with_criteria_records_and_grouping(cad):
 
 
 def test_set_database_and_templates(cad, planted):
-    assert [t["id"] for t in cad.result("worksheet.templates")["templates"]] == ["plant_list", "hardscape_quantities", "area_schedule", "tree_survey"]
+    assert [t["id"] for t in cad.result("worksheet.templates")["templates"]] == ["plant_list", "hardscape_quantities", "area_schedule", "tree_survey", "irrigation_heads", "irrigation_pipes"]
     sid = cad.result("worksheet.create", {"name": "Mine"})["id"]
     db = {"name": "Trees", "anchor": "B2", "criteria": 'Kind = "plant"', "columns": [{"header": "Species", "expr": "Species"}, {"header": "Count", "expr": "Count", "summary": "sum"}],
           "group_by": 0, "group_mode": "summary"}

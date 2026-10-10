@@ -13,6 +13,7 @@ pub mod graphics;
 pub mod group;
 pub mod guid;
 pub mod hardscape;
+pub mod irrigation;
 pub mod landscape;
 pub mod library;
 pub mod mesh;

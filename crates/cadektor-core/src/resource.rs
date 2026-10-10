@@ -37,6 +37,9 @@ pub enum ResourceBody {
     LandscapeAreaStyle(Box<LandscapeAreaStyle>),
     /// A symbol, hatch, tile, line type or texture (see `crate::graphics`).
     Graphic(Box<crate::graphics::GraphicResource>),
+    /// An irrigation catalog (head models, pipe sizes, pipe materials). The core keeps it as JSON.
+    /// `cadektor-irrigation` reads and writes it.
+    IrrigationCatalog(serde_json::Value),
     /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
     Annot(Box<crate::annot::style::AnnotResource>),
     /// A material or a render style (see `crate::present`).
@@ -66,6 +69,7 @@ impl Serialize for ResourceBody {
                 v.serialize(s)
             }
             ResourceBody::Graphic(g) => g.serialize(s),
+            ResourceBody::IrrigationCatalog(v) => v.serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
@@ -107,6 +111,7 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 .map(|m| ResourceBody::DataMap(Box::new(m)))
                 .map_err(serde::de::Error::custom),
             Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
+            Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
@@ -156,6 +161,7 @@ impl ResourceBody {
             ResourceBody::HardscapeStyle(_) => "hardscape_style",
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Graphic(g) => g.type_name(),
+            ResourceBody::IrrigationCatalog(_) => "irrigation_catalog",
             ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Render(r) => r.type_name(),
             ResourceBody::Unknown(_) => "unknown",
@@ -175,6 +181,10 @@ impl ResourceBody {
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
             ResourceBody::Graphic(g) => g.validate(),
+            ResourceBody::IrrigationCatalog(v) if !v.is_object() => {
+                Err("an irrigation catalog is a JSON object".into())
+            }
+            ResourceBody::IrrigationCatalog(_) => Ok(()),
             ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Render(r) => r.validate(),
             ResourceBody::Unknown(_) => Ok(()),
@@ -561,5 +571,20 @@ mod tests {
         let mut ok = Resources::default();
         ok.push(sym(1, 99));
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn irrigation_catalog_resource_round_trips_and_validates() {
+        let body = ResourceBody::IrrigationCatalog(serde_json::json!({
+            "type": "irrigation_catalog",
+            "heads": [{"name": "H", "radius": 1000, "flow": 2, "pressure": 100}]
+        }));
+        assert_eq!(body.type_name(), "irrigation_catalog");
+        assert!(body.validate().is_ok());
+        let text = serde_json::to_string(&body).unwrap();
+        let back: ResourceBody = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, body);
+        let bad = ResourceBody::IrrigationCatalog(serde_json::json!(5));
+        assert!(bad.validate().unwrap_err().contains("JSON object"));
     }
 }

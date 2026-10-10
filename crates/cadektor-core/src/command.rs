@@ -1191,6 +1191,7 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
             bad("arc sweep must not be zero")
         }
         Shape::Plant { spread, .. } if *spread <= 0.0 => bad("spread must be positive"),
+        Shape::Irrigation(i) => i.problem().map_or(Ok(()), |m| bad(&m)),
         Shape::ExistingTree {
             dbh,
             spread,
