@@ -113,7 +113,7 @@ pub fn menu_bar(
     egui::MenuBar::new().ui(ui, |ui| {
         let item =
             |ui: &mut Ui, label: &str, enabled: bool, a: MenuAction, out: &mut Vec<MenuAction>| {
-                let button = egui::Button::new(label)
+                let button = crate::icons::button(ui, crate::icons::menu_icon(a), label)
                     .shortcut_text(menu_key(a).map(|k| keys.hint(k)).unwrap_or_default());
                 if ui.add_enabled(enabled, button).clicked() {
                     out.push(a);
@@ -271,8 +271,7 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             StandardView::Front,
             StandardView::RightIsometric,
         ] {
-            if ui
-                .selectable_label(v.view == s, s.label())
+            if crate::icons::select_button(ui, crate::icons::view_icon(s), s.label(), v.view == s)
                 .on_hover_text(view_hint(keys, s))
                 .clicked()
             {
@@ -285,14 +284,50 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             ui.selectable_value(&mut v.projection, Projection::Perspective, "Perspective")
                 .on_hover_text(keys.hint(Action::ViewProjection));
             ui.separator();
-            ui.selectable_value(&mut v.mode, RenderMode::Wireframe, "Wireframe")
-                .on_hover_text(keys.hint(Action::ViewWireframe));
-            ui.selectable_value(&mut v.mode, RenderMode::Shaded, "Shaded")
-                .on_hover_text(keys.hint(Action::ViewShaded));
-            ui.selectable_value(&mut v.mode, RenderMode::HiddenLine, "Hidden Line")
-                .on_hover_text(keys.hint(Action::ViewHiddenLine));
-            ui.selectable_value(&mut v.mode, RenderMode::DashedHiddenLine, "Dashed")
-                .on_hover_text(keys.hint(Action::ViewDashedHiddenLine));
+            if crate::icons::select_button(
+                ui,
+                crate::icons::render_icon(RenderMode::Wireframe),
+                "Wireframe",
+                v.mode == RenderMode::Wireframe,
+            )
+            .on_hover_text(keys.hint(Action::ViewWireframe))
+            .clicked()
+            {
+                v.mode = RenderMode::Wireframe;
+            }
+            if crate::icons::select_button(
+                ui,
+                crate::icons::render_icon(RenderMode::Shaded),
+                "Shaded",
+                v.mode == RenderMode::Shaded,
+            )
+            .on_hover_text(keys.hint(Action::ViewShaded))
+            .clicked()
+            {
+                v.mode = RenderMode::Shaded;
+            }
+            if crate::icons::select_button(
+                ui,
+                crate::icons::render_icon(RenderMode::HiddenLine),
+                "Hidden Line",
+                v.mode == RenderMode::HiddenLine,
+            )
+            .on_hover_text(keys.hint(Action::ViewHiddenLine))
+            .clicked()
+            {
+                v.mode = RenderMode::HiddenLine;
+            }
+            if crate::icons::select_button(
+                ui,
+                crate::icons::render_icon(RenderMode::DashedHiddenLine),
+                "Dashed",
+                v.mode == RenderMode::DashedHiddenLine,
+            )
+            .on_hover_text(keys.hint(Action::ViewDashedHiddenLine))
+            .clicked()
+            {
+                v.mode = RenderMode::DashedHiddenLine;
+            }
         });
     });
 }
@@ -350,9 +385,9 @@ pub fn tool_label(tool: Tool, keys: &Keymap) -> (String, String) {
 
 fn tool_button(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, tool: Tool) {
     let (label, tip) = tool_label(tool, keys);
-    let r = ui
-        .selectable_label(m.tool() == tool, label)
-        .on_hover_text(tip);
+    let r =
+        crate::icons::select_button(ui, crate::icons::tool_icon(tool), &label, m.tool() == tool)
+            .on_hover_text(tip);
     if r.clicked() {
         m.set_tool(tool);
     }
@@ -462,7 +497,11 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
     ui.label("Selection mode");
     ui.horizontal_wrapped(|ui| {
         for mode in crate::tools::SelectMode::ALL {
-            let r = ui.selectable_label(settings.select_mode == mode, mode.label());
+            let icon = match mode {
+                crate::tools::SelectMode::Rectangle => "rectangle",
+                crate::tools::SelectMode::Lasso => "lasso",
+            };
+            let r = crate::icons::select_button(ui, icon, mode.label(), settings.select_mode == mode);
             let tip = match mode {
                 crate::tools::SelectMode::Rectangle => {
                     "Drag a box. Left to right selects what is inside, right to left what the box touches."
