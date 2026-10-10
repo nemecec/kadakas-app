@@ -9,6 +9,7 @@
 pub mod contour;
 pub mod draw;
 pub mod drape;
+pub mod grading;
 pub mod grid;
 pub mod model;
 pub mod modifier;

@@ -11,6 +11,7 @@ use cadektor_core::model::{Color, Document, Object, Shape};
 use cadektor_core::site::{Display3d, SurfaceDisplay};
 
 use crate::contour::Contour;
+use crate::grading::{self, analysis::AnalysisResult};
 use crate::model::{SiteCache, SiteResult, Surface};
 
 /// Default colors: existing ground is tan, proposed ground is green.
@@ -48,9 +49,20 @@ fn mesh_color(site: &SiteResult, which: Surface) -> [u8; 4] {
 
 /// Adds the 3D geometry of a site model: a terrain mesh, contour lines, or both.
 pub fn draw_3d(site: &SiteResult, sink: &mut SceneSink<'_>) {
+    draw_3d_with(site, None, sink);
+}
+
+/// Like `draw_3d`. With an analysis, the mesh of the analyzed surface has the colors of its bands.
+pub fn draw_3d_with(site: &SiteResult, analysis: Option<&AnalysisResult>, sink: &mut SceneSink<'_>) {
     let display = site.settings.display_3d;
+    let colored = analysis.map(|a| if site.proposed.is_none() { Surface::Existing } else { a.surface.surface() });
     for which in shown_surfaces(site, site.settings.surface_3d) {
-        if matches!(display, Display3d::Mesh | Display3d::Both) {
+        if let (Some(a), true) = (analysis, colored == Some(which)) {
+            let tin = site.surface(which);
+            for band in a.bands.iter().filter(|b| b.triangles > 0) {
+                sink.mesh(&tin.vertices, &grading::analysis::band_indices(tin, a, band.index), band.color);
+            }
+        } else if matches!(display, Display3d::Mesh | Display3d::Both) {
             let tin = site.surface(which);
             let mut idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
             // Vertical pad edges are drawn as walls.
@@ -75,9 +87,12 @@ pub fn draw_3d(site: &SiteResult, sink: &mut SceneSink<'_>) {
 /// Draws the whole 3D part of one object, if it is a site model. For `mesh::build_with`.
 pub fn scene_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, &Object, &mut SceneSink<'_>) + 'a {
     move |doc, obj, sink| {
-        if let Shape::SiteModel { .. } = obj.shape {
+        if cadektor_core::site::carries_extra(obj) {
+            grading::hook::scene(doc, cache, revision, obj, sink);
+        } else if let Shape::SiteModel { .. } = obj.shape {
             if let Ok(site) = cache.get(revision, doc, obj.id) {
-                draw_3d(&site, sink);
+                let analysis = grading::analysis::spec_of(obj).and_then(|s| grading::analysis::for_site(&site, &s));
+                draw_3d_with(&site, analysis.as_deref(), sink);
             }
         } else if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
             // Core sends only the objects that drape. They follow the site models on their layer.
@@ -145,10 +160,17 @@ pub fn format_level(mm: f64) -> String {
 /// Adds the contours of a site model to the SVG of the drawing. For `svg::render_with`.
 pub fn svg_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, &Object, &str, &mut String) + 'a {
     move |doc, obj, _style, out| {
+        if cadektor_core::site::carries_extra(obj) {
+            grading::hook::svg(doc, cache, revision, obj, out);
+            return;
+        }
         if !matches!(obj.shape, Shape::SiteModel { .. }) {
             return;
         }
         let Ok(site) = cache.get(revision, doc, obj.id) else { return };
+        if let Some(a) = grading::analysis::spec_of(obj).and_then(|s| grading::analysis::for_site(&site, &s)) {
+            out.push_str(&grading::analysis::svg(obj.id, site.surface(a.surface.surface()), &a));
+        }
         for which in shown_surfaces(&site, site.settings.display_2d) {
             let color = line_color(&site, which);
             for c in site.contours(which).unwrap_or(&[]) {

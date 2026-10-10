@@ -270,6 +270,7 @@ pub fn data_bar(
                     }
                 }
             }
+            Tool::Grading => crate::grading_ui::options(ui, &mut s.grading),
             _ => {}
         }
         let anchor = m.anchor();

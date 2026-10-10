@@ -60,10 +60,15 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
     doc.objects
         .values()
         .filter(|o| o.layer == obj.layer && doc.is_visible(o))
-        .filter_map(|o| {
-            let m = modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o))?;
+        .flat_map(|o| {
             let (a, b) = o.shape.bounds();
-            (a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y).then_some((o.id, m))
+            let touches = a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y;
+            let mods: Vec<Modifier> = if touches {
+                modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o)).into_iter().chain(crate::grading::wall::pads_of(doc, o)).collect()
+            } else {
+                Vec::new()
+            };
+            mods.into_iter().map(move |m| (o.id, m))
         })
         .collect()
 }
@@ -115,7 +120,12 @@ impl SiteResult {
             settings: settings.clone(),
             existing,
             proposed,
-            modifiers: mods.into_iter().map(|(i, _)| i).collect(),
+            modifiers: {
+                // A wall makes many pads. It counts once.
+                let mut ids: Vec<ObjectId> = mods.into_iter().map(|(i, _)| i).collect();
+                ids.dedup();
+                ids
+            },
             geometry_hash,
             content_hash,
             existing_contours: OnceLock::new(),

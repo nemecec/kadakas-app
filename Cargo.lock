@@ -678,6 +678,8 @@ dependencies = [
  "cadektor-core",
  "glam",
  "proptest",
+ "serde",
+ "serde_json",
  "spade",
  "thiserror 2.0.21",
 ]

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod data_api;
+mod grading_api;
 mod hardscape_api;
 mod plants_api;
 mod sheets_api;
@@ -173,6 +174,25 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::REPORT_HARDSCAPE,
     hardscape_api::REPORT_LANDSCAPE_AREAS,
     hardscape_api::REPORT_PLANT_LIST,
+    // Grading and site analysis (see grading_api.rs).
+    grading_api::WALL_STYLE_CREATE,
+    grading_api::WALL_STYLE_LIST,
+    grading_api::WALL_STYLE_UPDATE,
+    grading_api::WALL_STYLE_DELETE,
+    grading_api::WALL_ADD,
+    grading_api::WALL_SET,
+    grading_api::WALL_REPORT,
+    grading_api::GRADE_ADD,
+    grading_api::GRADE_SET,
+    grading_api::GRADE_GET,
+    grading_api::SITE_ANALYSIS,
+    grading_api::SPOT_ADD,
+    grading_api::SPOT_SET,
+    grading_api::SPOT_GET,
+    grading_api::SECTION_ADD,
+    grading_api::SECTION_SET,
+    grading_api::SECTION_PROFILE,
+    grading_api::SECTION_PLACE,
     ("site.create", "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh). Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}."),
     ("site.update", "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}."),
     ("site.elevation", "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y."),
@@ -295,6 +315,9 @@ impl Session {
     }
 
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if grading_api::knows(method) {
+            return self.handle_grading(method, p);
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
@@ -310,6 +333,7 @@ impl Session {
                 "plants": plants_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
+                "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
                 });
                 #[cfg(not(target_arch = "wasm32"))]

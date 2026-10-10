@@ -109,6 +109,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
         let fill = a.fill.unwrap_or(Color::NONE).to_css();
         let sw = a.line_weight.unwrap_or(0.25) * scale;
         let style = format!(r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id);
+        let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
         let _ = match &o.shape {
             Shape::Line { a, b } => writeln!(s, r#"<line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#, a.x, -a.y, b.x, -b.y),
             Shape::Rect { min, max } => {
@@ -264,6 +265,9 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 res
             }
         };
+        if let (Some(ext), Some(style)) = (ext, extra_style) {
+            ext(doc, o, &style, &mut s);
+        }
     }
     s.push_str("</svg>\n");
     s

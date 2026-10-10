@@ -169,13 +169,14 @@ Non-goals
 | SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
-| SIT-18 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
-| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). | P1 | planned |
-| SIT-13 | Stake / spot elevation object. | P1 | planned |
+| SIT-18 | Grade object with end tags. | P1 | partial: a straight grade between two points, with two elevations, or an elevation and a slope (percent, ratio or angle), or snapped live to the site model. Slope arrow, slope label and end elevations in 2D. API `grade.*`, Grading tool. No curved grades, and it does not act as a site modifier yet. |
+| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). Walls are done (HRD-07). | P1 | partial: hardscape and wall |
+| SIT-13 | Stake / spot elevation object. | P1 | done: a point that reads the existing and proposed height live (label in paper units, prefix, decimals). Stake mode shows northing and easting from the georeference, or local meters without one. API `spot.*`, Grading tool. |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
-| SIT-15 | Slope and aspect analysis display. | P2 | partial: slope and aspect at a point, no legend display |
+| SIT-15 | Slope and aspect analysis display. | P2 | partial: slope analysis and elevation analysis (hypsometric) as color bands per triangle, with user limits and colors, on the existing or proposed surface, in the 2D plan and the 3D view, with a legend object (band labels and areas). Cached by content. API `site.analysis`. No aspect analysis. |
 | SIT-16 | Point cloud as source (LAS/E57). | P2 | planned |
 | SIT-17 | Volume fill and grading impact report. | P2 | planned |
+| SIT-19 | Site section: a section line gives the profile of the existing and proposed ground (a point at every triangle edge, so it equals `site.elevation`), the walls, hardscapes and plants it cuts or passes. The profile is placed as shapes on a design or sheet layer with a vertical exaggeration and a scale, and is replaced when placed again. | P1 | done (API `section.*`, Grading tool makes the line; shapes are plain objects tagged with `site_section_profile`, not a group) |
 
 ### 4.6 Plants
 
@@ -239,7 +240,7 @@ Non-goals
 | HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground, a few mm above it) and in the area report. Beyond the edge of the model the height of the nearest edge counts, and the report says `partially_draped`. | P1 | done |
 | HRD-10 | Site modifier option: the hardscape acts as a pad at its formation level (top minus build-up), sloped as the hardscape. | P2 | done |
 | HRD-11 | Edit modes in Object Info (style, slab or path, width, join, slope, elevation, drape, site modifier) and style, path and width options in the Hardscape tool. | P1 | done |
-| HRD-07 | Landscape walls. | P2 | planned |
+| HRD-07 | Landscape walls: a path (curves allowed, open or closed) with a thickness, a top (fixed, the ground plus an offset, or a slope between two heights), a bottom that follows the existing or proposed ground (with an embed depth), wall styles (resource: components, coping, color), a 3D solid between ground and top, and quantities (length, face area, volume, coping volume). A wall with a fixed or sloped top can act as a site modifier: a vertical break in the proposed surface. API `wall.*`, `wall_style.*`, Grading tool. | P2 | done (no wall-to-wall joins or corners other than miter, no openings; the Object Info panel does not edit walls yet) |
 
 ### 4.9 Existing trees
 

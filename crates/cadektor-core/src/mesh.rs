@@ -793,6 +793,12 @@ pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> S
     for (obj, layer) in visible_objects(doc) {
         let (t0, s0) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
         b.add_object(obj, layer);
+        if let Some(ext) = b.ext {
+            if crate::site::carries_extra(obj) {
+                let mut sink = SceneSink { scene: &mut b.scene, object: obj.id, z0: z_of(layer) };
+                ext(doc, obj, &mut sink);
+            }
+        }
         let (t1, s1) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
         if t1 > t0 || s1 > s0 {
             b.scene.ranges.insert(obj.id, ObjectRange { tris: t0..t1, segs: s0..s1 });
