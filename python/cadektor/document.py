@@ -514,7 +514,8 @@ class Document:
 
 
 def open(path: str | Path | None = None, *, binary: str | Path | None = None,  # noqa: A001
-         allow_dir: Sequence[str | Path] = (), allow_agent_scripts: bool = False) -> Document:
+         allow_dir: Sequence[str | Path] = (), allow_agent_scripts: bool = False,
+         allow_converters: bool = False) -> Document:
     """Start ``cadektor serve`` and return a ``Document`` for its session.
 
     ``path`` is a document file to open at the start. ``allow_dir`` lists the folders that the
@@ -524,6 +525,8 @@ def open(path: str | Path | None = None, *, binary: str | Path | None = None,  #
         args += ["--allow-dir", str(d)]
     if allow_agent_scripts:
         args.append("--allow-agent-scripts")
+    if allow_converters:
+        args.append("--allow-converters")
     if path is not None:
         args.append(str(path))
     return Document(StdioTransport(args, binary))

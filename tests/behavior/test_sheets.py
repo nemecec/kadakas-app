@@ -121,7 +121,7 @@ def test_title_block_fills_fields_from_project_and_sheet(garden):
     cad.result("title_block.update", {"id": tb, "layout": layout})
     assert cad.result("title_block.resolve", {"id": tb})["cells"][0]["text"] == "1 of 1"
     err = cad.error("title_block.create", {"sheet": "Planting plan", "grid_columns": 99})
-    assert err["code"] == 1
+    assert err["code"] == 3
 
 
 def test_saved_views_restore_visibility_and_the_active_layer(garden):
@@ -138,7 +138,7 @@ def test_saved_views_restore_visibility_and_the_active_layer(garden):
     assert all(l["visible"] for l in summary["layers"]) and all(c["visible"] for c in summary["classes"])
     assert [v["name"] for v in cad.result("saved_view.list")["views"]] == ["All"]
     cad.result("saved_view.delete", {"name": "All"})
-    assert cad.error("saved_view.restore", {"name": "All"})["code"] == 1
+    assert cad.error("saved_view.restore", {"name": "All"})["code"] == 3
 
 
 def test_export_pdf_has_the_page_size_vector_lines_and_text(garden, tmp_path):
@@ -193,7 +193,7 @@ def test_export_refuses_bad_paths_and_missing_sheets(garden, tmp_path):
     cad = garden["cad"]
     assert "path" in cad.error("export.file", {"format": "pdf"})["message"]
     assert ".pdf" in cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "x.txt")})["message"]
-    assert cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "no" / "such" / "x.pdf")})["code"] == 1
+    assert cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "no" / "such" / "x.pdf")})["code"] == 4
     assert "not a sheet" in cad.error("export.file", {"format": "pdf", "path": str(tmp_path / "x.pdf"), "options": {"sheets": ["Layer 1"]}})["message"]
     outside = JsonRpc()
     try:

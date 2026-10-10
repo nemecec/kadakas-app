@@ -29,7 +29,7 @@ def test_saved_file_is_the_document_json(make_serve, tmp_path):
     cad.result("file.save", {"path": str(path)})
     on_disk = json.loads(path.read_text())
     assert on_disk == cad.doc()
-    assert on_disk["format_version"] == 1
+    assert on_disk["format_version"] == 2
 
 
 def test_serve_with_a_file_argument_opens_it_at_start(make_serve, tmp_path):
@@ -65,7 +65,7 @@ def test_document_with_newer_format_version_is_refused_and_session_is_kept(make_
     cad.execute(rect_cmd(0, 0, 1, 1))
     before = cad.doc()
     error = cad.error("file.open", {"path": str(future)})
-    assert error["code"] == 1
+    assert error["code"] == 3
     assert "999" in error["message"]
     assert cad.doc() == before, "a refused file must not replace the open document"
 
@@ -80,14 +80,14 @@ def test_document_load_with_newer_format_version_is_refused(cad):
 
 def test_opening_a_missing_file_is_an_application_error(cad, tmp_path):
     error = cad.error("file.open", {"path": str(tmp_path / "missing.json")})
-    assert error["code"] == 1
+    assert error["code"] == 4
 
 
 def test_opening_a_file_that_is_not_a_document_is_an_application_error(cad, tmp_path):
     junk = tmp_path / "junk.json"
     junk.write_text("[1, 2, 3]")
     error = cad.error("file.open", {"path": str(junk)})
-    assert error["code"] == 1
+    assert error["code"] == 3
 
 
 def test_saving_without_a_path_is_invalid_params(cad):
@@ -96,5 +96,5 @@ def test_saving_without_a_path_is_invalid_params(cad):
 
 def test_saving_into_a_missing_directory_is_an_application_error(cad, tmp_path):
     error = cad.error("file.save", {"path": str(tmp_path / "no" / "such" / "dir.json")})
-    assert error["code"] == 1
+    assert error["code"] == 4
     assert not (tmp_path / "no").exists()

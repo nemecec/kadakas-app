@@ -21,6 +21,7 @@ use cadektor_core::resource::ResourceId;
 use cadektor_site::SiteResult;
 use cadektor_site::grading::{self, analysis, grade, section, spot, wall};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const WALL_STYLE_CREATE: (&str, &str) = (
@@ -143,14 +144,6 @@ pub fn knows(method: &str) -> bool {
             | "section.profile"
             | "section.place"
     )
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError::invalid_params(e)
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError::app(e)
 }
 
 fn map_of(p: Value) -> Result<Map<String, Value>, RpcError> {
@@ -305,10 +298,7 @@ impl Session {
             "section.set" => self.section_set(m),
             "section.profile" => self.section_profile(m),
             "section.place" => self.section_place(m),
-            _ => Err(RpcError {
-                code: -32601,
-                message: format!("unknown method: {method}"),
-            }),
+            _ => Err(RpcError::method_not_found(method)),
         }
     }
 
@@ -338,7 +328,7 @@ impl Session {
             .execute(&Command::Batch {
                 commands: vec![add, set],
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         debug_assert_eq!(out.created.first(), Some(&id.0));
         self.prune_selection();
         Ok(id)
@@ -369,7 +359,7 @@ impl Session {
         });
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(())
     }
 
@@ -377,7 +367,7 @@ impl Session {
         self.editor
             .doc()
             .object(id)
-            .ok_or_else(|| app(format!("object {id} does not exist")))
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))
     }
 
     /// The site model that serves an object.
@@ -411,7 +401,7 @@ impl Session {
                 name,
                 body: style.to_body(),
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "id": out.created[0] }))
     }
 
@@ -435,7 +425,7 @@ impl Session {
                 name,
                 body: Some(style.to_body()),
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "id": id }))
     }
 
@@ -475,7 +465,7 @@ impl Session {
         commands.push(Command::DeleteResource { id, reassign: None });
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "deleted": id }))
     }
 
@@ -559,8 +549,8 @@ impl Session {
         let mut commands = Vec::new();
         for id in &ids {
             let obj = self.object(*id)?;
-            let current =
-                wall::data(obj).ok_or_else(|| app(format!("object {id} is not a wall")))?;
+            let current = wall::data(obj)
+                .ok_or_else(|| RpcError::validation(format!("object {id} is not a wall")))?;
             let data: wall::WallData = patched(&current, &m, "wall")?;
             data.validate().map_err(bad)?;
             if let Some(path) = &path {
@@ -589,7 +579,7 @@ impl Session {
         }
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "ids": ids }))
     }
 
@@ -610,7 +600,8 @@ impl Session {
         let mut rows = Vec::new();
         for id in ids {
             self.object(id).and_then(|o| {
-                wall::data(o).ok_or_else(|| app(format!("object {id} is not a wall")))
+                wall::data(o)
+                    .ok_or_else(|| RpcError::validation(format!("object {id} is not a wall")))
             })?;
             rows.extend(self.wall_row(id));
         }
@@ -655,10 +646,12 @@ impl Session {
     fn grade_json(&self, id: ObjectId) -> Result<Value, RpcError> {
         let obj = self.object(id)?;
         let Shape::Line { a, b } = &obj.shape else {
-            return Err(app(format!("object {id} is not a grade object")));
+            return Err(RpcError::validation(format!(
+                "object {id} is not a grade object"
+            )));
         };
-        let d =
-            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
+        let d = grade::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a grade object")))?;
         Ok(Self::grade_value(
             id,
             &self.solve_grade(obj.layer, *a, *b, &d)?,
@@ -688,10 +681,12 @@ impl Session {
         let (a, b) = (take_point(&mut m, "a")?, take_point(&mut m, "b")?);
         let obj = self.object(id)?;
         let Shape::Line { a: old_a, b: old_b } = obj.shape else {
-            return Err(app(format!("object {id} is not a grade object")));
+            return Err(RpcError::validation(format!(
+                "object {id} is not a grade object"
+            )));
         };
-        let current =
-            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
+        let current = grade::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a grade object")))?;
         let data: grade::GradeData = patched(&current, &m, "grade")?;
         data.validate().map_err(bad)?;
         let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
@@ -718,7 +713,9 @@ impl Session {
         let legend = m.remove("legend");
         let obj = self.object(id)?;
         if !matches!(obj.shape, Shape::SiteModel { .. }) {
-            return Err(app(format!("object {id} is not a site model")));
+            return Err(RpcError::validation(format!(
+                "object {id} is not a site model"
+            )));
         }
         let current = analysis::spec_of(obj).unwrap_or_default();
         if let Some(c) = m.get_mut("colors").and_then(Value::as_array_mut) {
@@ -844,10 +841,12 @@ impl Session {
         let at = take_point(&mut m, "at")?;
         let obj = self.object(id)?;
         let Shape::Circle { center, radius } = obj.shape else {
-            return Err(app(format!("object {id} is not a spot elevation")));
+            return Err(RpcError::validation(format!(
+                "object {id} is not a spot elevation"
+            )));
         };
-        let current =
-            spot::data(obj).ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
+        let current = spot::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a spot elevation")))?;
         let d: spot::SpotData = patched(&current, &m, "spot")?;
         d.validate().map_err(bad)?;
         let shape = at.map(|c| Shape::Circle { center: c, radius });
@@ -866,10 +865,13 @@ impl Session {
             let id = take_id(&mut m, "id")?;
             let obj = self.object(id)?;
             let Shape::Circle { center, .. } = obj.shape else {
-                return Err(app(format!("object {id} is not a spot elevation")));
+                return Err(RpcError::validation(format!(
+                    "object {id} is not a spot elevation"
+                )));
             };
-            let d = spot::data(obj)
-                .ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
+            let d = spot::data(obj).ok_or_else(|| {
+                RpcError::validation(format!("object {id} is not a spot elevation"))
+            })?;
             return Ok(self.reading_json(obj, &d, center));
         }
         let at = need_point(&mut m, "at")?;
@@ -888,8 +890,9 @@ impl Session {
             })
             .ok_or_else(|| app("the document has no site model"))?;
         let host_obj = self.object(host)?;
-        self.site_for(host_obj, Some(host))
-            .ok_or_else(|| app(format!("object {host} is not a site model with a surface")))?;
+        self.site_for(host_obj, Some(host)).ok_or_else(|| {
+            RpcError::validation(format!("object {host} is not a site model with a surface"))
+        })?;
         let d = spot::SpotData {
             site: Some(host),
             ..Default::default()
@@ -922,10 +925,12 @@ impl Session {
         let (a, b) = (take_point(&mut m, "a")?, take_point(&mut m, "b")?);
         let obj = self.object(id)?;
         let Shape::Line { a: old_a, b: old_b } = obj.shape else {
-            return Err(app(format!("object {id} is not a section line")));
+            return Err(RpcError::validation(format!(
+                "object {id} is not a section line"
+            )));
         };
-        let current =
-            section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
+        let current = section::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a section line")))?;
         let d: section::SectionData = patched(&current, &m, "section")?;
         d.validate().map_err(bad)?;
         let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
@@ -947,8 +952,8 @@ impl Session {
         id: ObjectId,
     ) -> Result<(section::SectionData, section::Profile), RpcError> {
         let obj = self.object(id)?;
-        let d =
-            section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
+        let d = section::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a section line")))?;
         let site = self
             .site_for(obj, d.site)
             .ok_or_else(|| app("there is no site model for the section on its layer"))?;
@@ -1002,7 +1007,7 @@ impl Session {
         let target = layer_param.unwrap_or(section_layer);
         let layer = doc
             .layer(target)
-            .ok_or_else(|| app(format!("layer {target} does not exist")))?;
+            .ok_or_else(|| RpcError::not_found(format!("layer {target} does not exist")))?;
         let section_scale = doc.layer(section_layer).map_or(100.0, |l| l.scale);
         let sheet = layer.kind == LayerKind::Sheet;
         let scale = scale_param.unwrap_or(if sheet { section_scale } else { 1.0 });
@@ -1058,7 +1063,7 @@ impl Session {
         }
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         self.prune_selection();
         Ok(json!({ "ids": ids, "bounds": [[bounds.0.x, bounds.0.y], [bounds.1.x, bounds.1.y]] }))
     }

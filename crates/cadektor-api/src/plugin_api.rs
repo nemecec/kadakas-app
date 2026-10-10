@@ -20,6 +20,7 @@ use cadektor_script::plugin::{
 use cadektor_script::python::{self, Interpreter};
 use cadektor_script::trust::{Permit, TrustStore};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 /// The key in the data of an instance.
@@ -127,36 +128,21 @@ impl Default for ScriptingState {
     }
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
-}
-
 fn forbidden() -> RpcError {
-    RpcError {
-        code: -32001,
-        message: "this script may not run. A user must review and trust it in the app, or the host must allow agents with --allow-agent-scripts. The shipped plug-in objects (Bench, Stepping stones) run anyway".into(),
-    }
+    RpcError::policy(
+        "this script may not run. A user must review and trust it in the app, or the host must allow agents with --allow-agent-scripts. The shipped plug-in objects (Bench, Stepping stones) run anyway",
+    )
 }
 
 /// The error for a user action on a script that nobody trusted. The app opens the trust dialog.
 pub const UNTRUSTED_CODE: i64 = -32002;
 
 fn untrusted() -> RpcError {
-    RpcError {
-        code: UNTRUSTED_CODE,
-        message: "this plug-in script is not trusted. Review it, then trust it, before it can run"
-            .into(),
-    }
+    RpcError::new(
+        UNTRUSTED_CODE,
+        "untrusted",
+        "this plug-in script is not trusted. Review it, then trust it, before it can run",
+    )
 }
 
 /// Extra text for `describe`.
@@ -200,10 +186,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "script.status" => script_status(s, m),
         "script.stop" => script_stop(s, m),
         "script.list" => Ok(script_list(s)),
-        other => Err(RpcError {
-            code: -32601,
-            message: format!("unknown method: {other}"),
-        }),
+        other => Err(RpcError::method_not_found(other)),
     })
 }
 
@@ -247,7 +230,7 @@ fn find_def(s: &Session, sel: &Value) -> Result<Found, RpcError> {
         Value::String(name) => defs.into_iter().find(|d| d.name.eq_ignore_ascii_case(name)),
         _ => return Err(bad("definition must be an ID or a name")),
     };
-    found.ok_or_else(|| app(format!("there is no plug-in object definition {sel}")))
+    found.ok_or_else(|| RpcError::not_found(format!("there is no plug-in object definition {sel}")))
 }
 
 fn sel<'a>(m: &'a Map<String, Value>, keys: &[&str]) -> Result<&'a Value, RpcError> {
@@ -312,7 +295,7 @@ fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
 
 fn exec(s: &mut Session, cmd: &Command) -> Result<Vec<u64>, RpcError> {
     let cmd = s.in_context(cmd.clone());
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     s.prune_selection();
     Ok(out.created)
 }
@@ -674,9 +657,9 @@ fn prepare_reset(
     let doc = s.editor.doc();
     let obj = doc
         .object(id)
-        .ok_or_else(|| app(format!("object {id} does not exist")))?;
-    let data =
-        instance_data(obj).ok_or_else(|| app(format!("object {id} is not a plug-in object")))?;
+        .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+    let data = instance_data(obj)
+        .ok_or_else(|| RpcError::validation(format!("object {id} is not a plug-in object")))?;
     let mut geometry = Geometry::from_json(f.def.shape_type, &data["geometry"]).map_err(app)?;
     // Someone may have moved the group. Follow the shapes.
     let children = doc.children(id);
@@ -799,9 +782,9 @@ fn instance_def(s: &Session, id: ObjectId) -> Result<Found, RpcError> {
         .editor
         .doc()
         .object(id)
-        .ok_or_else(|| app(format!("object {id} does not exist")))?;
-    let data =
-        instance_data(obj).ok_or_else(|| app(format!("object {id} is not a plug-in object")))?;
+        .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+    let data = instance_data(obj)
+        .ok_or_else(|| RpcError::validation(format!("object {id} is not a plug-in object")))?;
     find_def(s, &data["definition"])
 }
 
@@ -942,7 +925,7 @@ fn script_run(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     let script = match (m.get("path"), m.get("source")) {
         (Some(Value::String(p)), None) => s
             .check_path(std::path::Path::new(p), false, &["py"])
-            .map_err(app)?,
+            .map_err(RpcError::policy)?,
         (None, Some(Value::String(src))) => {
             if src.len() > plug::MAX_SCRIPT {
                 return Err(bad("the source is too long"));
@@ -995,7 +978,7 @@ fn script_status(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError>
         .scripting
         .host
         .poll(run, since)
-        .ok_or_else(|| app(format!("there is no script run {run}")))?;
+        .ok_or_else(|| RpcError::not_found(format!("there is no script run {run}")))?;
     let next = lines.last().map_or(since, |l| l.n + 1);
     let mut v = json!({
         "run": run,
@@ -1059,7 +1042,9 @@ pub fn user_finish(
         .is_some_and(|o| instance_data(o).is_some())
         && doc.children(job.id) == job.children;
     if !same {
-        return Err(app("the object changed while its script ran. Try again"));
+        return Err(RpcError::conflict(
+            "the object changed while its script ran. Try again",
+        ));
     }
     let (cmd, outcome) = finish_reset(&job, result);
     exec(s, &cmd)?;

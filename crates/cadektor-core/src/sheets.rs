@@ -262,6 +262,9 @@ pub struct Drawing {
     /// Materials in use, the sun and the render style (see `crate::present`).
     #[serde(default)]
     pub presentation: crate::present::Presentation,
+    /// Fields that this version does not know. They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Drawing {
@@ -1467,6 +1470,7 @@ mod tests {
     fn doc_with_overrides() -> (Document, Object) {
         let mut doc = Document::default();
         doc.classes.push(Class {
+            extra: Default::default(),
             id: ClassId(9),
             name: "Trees".into(),
             visible: true,
@@ -1628,6 +1632,7 @@ mod tests {
     fn title_fields_and_geometry() {
         let mut doc = Document::default();
         doc.layers.push(crate::model::Layer {
+            extra: Default::default(),
             id: LayerId(5),
             name: "Plan sheet".into(),
             kind: LayerKind::Sheet,

@@ -104,6 +104,10 @@ struct RemoteArgs {
     /// scripts). Default: off. The plug-in objects that ship with the app always run.
     #[arg(long = "allow-agent-scripts")]
     allow_agent_scripts: bool,
+    /// Let requests from agents start external converter programs (DWG import and export).
+    /// Default: off. The converter is a separate program that the user installed.
+    #[arg(long = "allow-converters")]
+    allow_converters: bool,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -126,7 +130,8 @@ impl Backend {
         } else {
             remote.allow_dir
         };
-        session.paths = cadektor_api::PathPolicy::restricted(dirs);
+        session.paths =
+            cadektor_api::PathPolicy::restricted(dirs).with_converters(remote.allow_converters);
         session.gis.urls = cadektor_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
         session.scripting.trust = cadektor_api::TrustStore::load_default();
@@ -142,7 +147,9 @@ impl Backend {
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let line = match self {
             Backend::Local(s) => match method {
-                "file.save" | "file.open" => Some(file_method(s, &req)),
+                "file.save" | "file.open" => {
+                    Some(cadektor_api::files::handle_file_request(s, &req))
+                }
                 _ => s.handle_line(&req.to_string()),
             },
             Backend::Remote(conn) => remote_call(conn, &req),
@@ -199,8 +206,7 @@ fn remote_call(conn: &mut BufReader<TcpStream>, req: &Value) -> Option<String> {
 }
 
 fn load(path: &PathBuf) -> Result<Document, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut doc = Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut doc = cadektor_api::files::read_document(path).map_err(|e| e.message)?;
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
     doc.ensure_project_guid();
     Ok(doc)
@@ -213,51 +219,6 @@ fn doc_dir_of(file: &std::path::Path) -> Option<PathBuf> {
         .filter(|d| !d.as_os_str().is_empty())
         .map_or_else(|| PathBuf::from("."), PathBuf::from);
     std::fs::canonicalize(dir).ok()
-}
-
-/// `file.save {path}` and `file.open {path}` for a headless session. The path policy of the session applies.
-fn file_method(s: &mut Session, req: &Value) -> String {
-    let id = req["id"].clone();
-    let path = req["params"]["path"].as_str().map(PathBuf::from);
-    let result = match (req["method"].as_str(), path) {
-        (_, None) => Err((-32602, "params.path is required".to_string())),
-        (Some("file.save"), Some(p)) => s
-            .check_path(&p, true, &["json"])
-            .map_err(|e| (1, e))
-            .and_then(|p| {
-                let t = serde_json::to_string_pretty(&s.editor.doc())
-                    .map_err(|e| (1, e.to_string()))?;
-                fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))?;
-                s.doc_dir = doc_dir_of(&p);
-                Ok(())
-            }),
-        (_, Some(p)) => s
-            .check_path(&p, false, &["json"])
-            .map_err(|e| (1, e))
-            .and_then(|p| {
-                load(&p).map_err(|e| (1, e)).and_then(|d| {
-                    s.doc_dir = doc_dir_of(&p);
-                    let line =
-                        json!({"id": 0, "method": "document.load", "params": {"document": d}})
-                            .to_string();
-                    let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
-                    match r.get("error") {
-                        Some(e) => Err((
-                            1,
-                            e["message"].as_str().unwrap_or("load failed").to_string(),
-                        )),
-                        None => Ok(()),
-                    }
-                })
-            }),
-    };
-    match result {
-        Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),
-        Err((code, message)) => {
-            json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-        }
-    }
-    .to_string()
 }
 
 fn serve(mut backend: Backend) {
@@ -273,7 +234,7 @@ fn serve(mut backend: Backend) {
                 let _ = writeln!(
                     out,
                     "{}",
-                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}"), "data": {"kind": "parse_error"}}})
                 );
                 continue;
             }
@@ -347,7 +308,7 @@ fn mcp(mut backend: Backend) {
                 let _ = writeln!(
                     out,
                     "{}",
-                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}"), "data": {"kind": "parse_error"}}})
                 );
                 let _ = out.flush();
                 continue;
@@ -482,8 +443,9 @@ fn main() {
             output,
             width,
         } => load(&file).and_then(|doc| {
-            fsio::write_atomic(&output, cadektor_core::svg::render(&doc, width).as_bytes())
-                .map_err(|e| e.to_string())
+            let svg = Session::with_document(doc).render_svg(width);
+            fsio::write_atomic(&output, svg.as_bytes())
+                .map_err(|e| format!("{}: {e}", output.display()))
         }),
     };
     if let Err(e) = result {

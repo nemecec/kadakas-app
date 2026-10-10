@@ -8,23 +8,6 @@ use crate::compute::Computed;
 use crate::formula::CellRef;
 use crate::value::Value;
 
-/// A text cell that starts with one of these could run as a formula in a spreadsheet program.
-fn defuse(s: &str) -> String {
-    if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
-        format!("'{s}")
-    } else {
-        s.to_string()
-    }
-}
-
-fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
 /// The sheet as CSV text (RFC 4180, lines end with `\n`). Numbers use the decimals of their
 /// cell format and no unit. Text that starts with `=`, `+`, `-` or `@` gets a leading `'`,
 /// so that a spreadsheet program does not run it as a formula.
@@ -34,11 +17,11 @@ pub fn csv(c: &Computed) -> String {
         let line: Vec<String> = (1..=c.cols)
             .map(|col| {
                 let text = c.display_plain(r, col);
-                csv_field(&if matches!(c.value(r, col), Value::Text(_)) {
-                    defuse(&text)
+                if matches!(c.value(r, col), Value::Text(_)) {
+                    cadektor_core::csv::text_cell(&text)
                 } else {
-                    text
-                })
+                    cadektor_core::csv::quote(&text)
+                }
             })
             .collect();
         out.push_str(&line.join(","));

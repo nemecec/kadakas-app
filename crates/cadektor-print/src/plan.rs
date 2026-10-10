@@ -515,7 +515,7 @@ fn shape_core(
         }
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
-        Shape::Group { .. } => {}
+        Shape::Group { .. } | Shape::Unknown { .. } => {}
         Shape::Underlay(u) => {
             if let Some(img) = crate::underlay::image_prim(u, xf) {
                 out.push(Prim::Image(img));

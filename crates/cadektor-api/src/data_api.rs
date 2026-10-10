@@ -19,6 +19,7 @@ use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_sheet::def::{CellFormat, DatabaseDef, WorksheetDef};
 use cadektor_sheet::{export, templates};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session, params};
 
 pub const RECORD_FORMAT_LIST: (&str, &str) = (
@@ -177,14 +178,6 @@ pub fn describe() -> Value {
     })
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError::invalid_params(e)
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError::app(e)
-}
-
 /// Methods that this module handles.
 const NAMES: &[&str] = &[
     "record_format.list",
@@ -253,7 +246,7 @@ struct IdParam {
 }
 
 fn exec(s: &mut Session, c: Command) -> Result<cadektor_core::command::Outcome, RpcError> {
-    let out = s.editor.execute(&c).map_err(app)?;
+    let out = s.editor.execute(&c).map_err(RpcError::from)?;
     s.prune_selection();
     Ok(out)
 }
@@ -290,7 +283,9 @@ fn parse_fields(v: &Value) -> Result<RecordFormat, RpcError> {
 
 fn object_ids(doc: &Document, ids: &[ObjectId]) -> Result<(), RpcError> {
     match ids.iter().find(|id| doc.object(**id).is_none()) {
-        Some(bad_id) => Err(app(format!("object {bad_id} does not exist"))),
+        Some(bad_id) => Err(RpcError::not_found(format!(
+            "object {bad_id} does not exist"
+        ))),
         None => Ok(()),
     }
 }
@@ -553,7 +548,7 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             let doc = s.editor.doc();
             let o = doc
                 .object(id)
-                .ok_or_else(|| app(format!("object {id} does not exist")))?;
+                .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
             let records: Map<String, Value> = doc
                 .resources
                 .iter()
@@ -1056,17 +1051,17 @@ fn write_export(
     bytes: &[u8],
 ) -> Result<Value, RpcError> {
     let path = if s.paths.is_restricted() {
-        s.check_path(path, true, &[ext]).map_err(app)?
+        s.check_path(path, true, &[ext]).map_err(RpcError::policy)?
     } else {
         path.to_path_buf()
     };
     if s.paths.is_restricted() && path.exists() && !overwrite {
-        return Err(app(format!(
+        return Err(RpcError::conflict(format!(
             "{} exists: pass \"overwrite\": true to replace it",
             path.display()
         )));
     }
-    std::fs::write(&path, bytes)
+    cadektor_core::fsio::write_atomic(&path, bytes)
         .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }

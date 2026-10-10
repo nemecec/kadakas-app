@@ -34,9 +34,9 @@ def test_numbers_beyond_1e9_mm_are_refused_and_the_document_still_saves_and_open
     (a,) = cad.execute(line_cmd(0, 0, 1e9, 0))
     err = cad.error("execute", {"command": {"op": "move_objects", "ids": [a], "delta": [1, 0]}})
     assert "1e9" in err["message"]
-    assert cad.error("execute", {"command": line_cmd(0, 0, 1e39, 0)})["code"] == 1
+    assert cad.error("execute", {"command": line_cmd(0, 0, 1e39, 0)})["code"] == 3
     slab = {"kind": "hardscape", "boundary": [[0, 0], [1, 0], [0, 1]], "material": "m"}
-    assert cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": 1e39}}})["code"] == 1
+    assert cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": 1e39}}})["code"] == 3
     for bad in (0, -3):
         err = cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": bad}}})
         assert "thickness" in err["message"]

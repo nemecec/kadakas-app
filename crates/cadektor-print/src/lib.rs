@@ -118,8 +118,10 @@ pub fn export_pdf_on(
     Ok(pdf::write_pdf(&refs, title))
 }
 
-/// Writes bytes to a file. The folder must exist. Existing files are replaced.
+/// Writes bytes to a file, atomically (a temporary file, then a rename). The folder must exist.
+/// An existing file is replaced, and the old one stays as `<path>.bak`.
 pub fn write_file(path: &Path, bytes: &[u8]) -> Result<PathBuf, PrintError> {
-    std::fs::write(path, bytes).map_err(|e| PrintError::Io(format!("{}: {e}", path.display())))?;
+    cadektor_core::fsio::write_atomic(path, bytes)
+        .map_err(|e| PrintError::Io(format!("{}: {e}", path.display())))?;
     Ok(path.to_path_buf())
 }

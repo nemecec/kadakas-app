@@ -58,6 +58,15 @@ fn write_replacing(
     result
 }
 
+/// Moves a finished temporary file over `target`, which is the last step of a streamed save.
+/// The old `target` is first copied to `<target>.bak`. The temporary file must be in the same folder.
+pub fn replace_with_backup(tmp: &Path, target: &Path) -> std::io::Result<()> {
+    if target.is_file() {
+        std::fs::copy(target, sibling(target, "", ".bak"))?;
+    }
+    std::fs::rename(tmp, target)
+}
+
 /// Saves a document file atomically and keeps the previous version as `<path>.bak`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_replacing(path, bytes, true, false)

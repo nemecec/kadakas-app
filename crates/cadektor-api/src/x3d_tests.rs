@@ -166,7 +166,7 @@ fn export_follows_the_path_policy() {
             json!({"path": outside.join("a.glb")})
         )
         .code,
-        1
+        4
     );
     assert_eq!(
         fail(
@@ -175,13 +175,13 @@ fn export_follows_the_path_policy() {
             json!({"path": inside.join("a.txt"), "format": "glb"})
         )
         .code,
-        1
+        4
     );
     assert!(!outside.join("a.glb").exists() && !inside.join("a.txt").exists());
     let out = inside.join("a.obj");
     ok(&mut s, "export.file", json!({"path": out}));
     // A second export needs overwrite, and so does the MTL file.
-    assert_eq!(fail(&mut s, "export.file", json!({"path": out})).code, 1);
+    assert_eq!(fail(&mut s, "export.file", json!({"path": out})).code, 5);
     ok(
         &mut s,
         "export.file",
@@ -190,7 +190,7 @@ fn export_follows_the_path_policy() {
     std::fs::remove_file(&out).unwrap();
     assert_eq!(
         fail(&mut s, "export.file", json!({"path": out})).code,
-        1,
+        5,
         "the MTL exists"
     );
     // The trusted call (the file dialog of the app) ignores the policy.
@@ -516,7 +516,7 @@ fn bad_section_requests_are_refused() {
             json!({"id": 9999, "name": "x"})
         )
         .code,
-        1
+        2
     );
     assert_eq!(
         fail(
@@ -533,14 +533,14 @@ fn bad_section_requests_are_refused() {
     );
     assert_eq!(
         fail(&mut s, "section_viewport.get", json!({"id": 9999})).code,
-        1
+        2
     );
     assert_eq!(fail(&mut s, "section_viewport.get", json!({})).code, -32602);
     // A plain object is not a section line.
     let slab_id = s.editor.doc().objects.keys().next().unwrap().0;
     assert_eq!(
         fail(&mut s, "section_viewport.get", json!({"id": slab_id})).code,
-        1
+        3
     );
     assert_eq!(
         fail(
@@ -549,7 +549,7 @@ fn bad_section_requests_are_refused() {
             json!({"id": slab_id, "name": "x"})
         )
         .code,
-        1
+        3
     );
     assert_eq!(
         fail(
@@ -619,7 +619,7 @@ fn bad_section_requests_are_refused() {
     let vid = vid["id"].as_u64().unwrap();
     assert_eq!(
         fail(&mut s, "section_viewport.update", json!({"id": slab_id})).code,
-        1
+        3
     );
     assert_eq!(
         fail(&mut s, "section_viewport.update", json!({"id": line})).code,
@@ -680,11 +680,11 @@ fn bad_section_requests_are_refused() {
         .unwrap();
     assert_eq!(
         fail(&mut s, "section_viewport.get", json!({"id": plain})).code,
-        1
+        3
     );
     assert_eq!(
         fail(&mut s, "section_viewport.update", json!({"id": plain})).code,
-        1
+        3
     );
     // A line deleted under a viewport: the viewport reports it, the sheet still renders.
     ok(
@@ -694,7 +694,7 @@ fn bad_section_requests_are_refused() {
     );
     assert_eq!(
         fail(&mut s, "section_viewport.get", json!({"id": vid})).code,
-        1
+        3
     );
     ok(&mut s, "sheet.render", json!({"sheet": sh}));
     // The methods are in the list, and describe has the examples.

@@ -20,6 +20,7 @@ use cadektor_core::plants::catalog::write_csv;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_site::SiteTerrain;
 
+use crate::errors::bad;
 use crate::{RpcError, Session};
 
 pub const HARDSCAPE_STYLE_LIST: (&str, &str) = (
@@ -115,20 +116,6 @@ pub fn describe() -> Value {
             {"method": "report.plant_list", "params": {"format": "csv"}}
         ],
     })
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
 }
 
 fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcError> {
@@ -380,7 +367,7 @@ fn style_method(
             let out = s
                 .editor
                 .execute(&Command::AddResource { name, body: b })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "update" => {
@@ -400,7 +387,7 @@ fn style_method(
                     name,
                     body: Some(b),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(style_json(s.editor.doc(), id))
         }
         "duplicate" => {
@@ -421,7 +408,7 @@ fn style_method(
                     name,
                     body: r.body.clone(),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "delete" => {
@@ -434,7 +421,7 @@ fn style_method(
                 .transpose()?;
             s.editor
                 .execute(&Command::DeleteResource { id, reassign })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             s.prune_selection();
             Ok(json!({ "ok": true }))
         }
@@ -666,7 +653,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     class,
                     attrs: Attributes::default(),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "hardscape.set" => {
@@ -677,7 +664,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     ids: ids.clone(),
                     patch,
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "ids": ids }))
         }
         "landscape_area.add" => {
@@ -704,7 +691,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     class,
                     attrs: Attributes::default(),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "landscape_area.set" => {
@@ -715,7 +702,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     ids: ids.clone(),
                     patch,
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "ids": ids }))
         }
         "report.hardscape" => {

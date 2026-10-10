@@ -13,6 +13,7 @@ use cadektor_core::model::{Attributes, ClassId, LayerId, ObjectId, Shape};
 use cadektor_core::plants::catalog::write_csv;
 use cadektor_site::SiteTerrain;
 
+use crate::errors::bad;
 use crate::{RpcError, Session};
 
 pub const MASSING_ADD: (&str, &str) = (
@@ -49,20 +50,6 @@ pub fn describe() -> Value {
     })
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
-}
-
 /// Handles a method of this module. `None` means that the method is not one of ours.
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
     if !method.starts_with("massing.") {
@@ -78,10 +65,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "massing.get" => get(s, m),
         "massing.from_shapes" => from_shapes(s, m),
         "massing.report" => report(s, m),
-        other => Err(RpcError {
-            code: -32601,
-            message: format!("unknown method: {other}"),
-        }),
+        other => Err(RpcError::method_not_found(other)),
     })
 }
 
@@ -178,7 +162,7 @@ fn add(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             attrs: Attributes::default(),
         },
     };
-    let out = s.editor.execute(&command).map_err(app)?;
+    let out = s.editor.execute(&command).map_err(RpcError::from)?;
     Ok(json!({"id": out.created[0], "quantities": quantities, "warnings": warnings}))
 }
 
@@ -219,7 +203,7 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     s.editor
         .execute(&Command::Batch { commands })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"changed": ids, "warnings": warnings}))
 }
 
@@ -279,7 +263,7 @@ fn from_shapes(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
     }
     let made = massing_batch::from_shapes(s.editor.doc(), &ids, &opts);
     if let (false, Some(cmd)) = (dry_run, &made.command) {
-        s.editor.execute(cmd).map_err(app)?;
+        s.editor.execute(cmd).map_err(RpcError::from)?;
         s.prune_selection();
         // The new models become the selection.
         s.selection = made.created.iter().map(|c| c.1).collect();

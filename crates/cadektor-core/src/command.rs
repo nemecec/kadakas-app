@@ -911,6 +911,7 @@ impl<'a> Tx<'a> {
                 validate_layer_numbers(Some(*elevation), *scale)?;
                 let id = LayerId(self.alloc()?);
                 self.doc.layers.push(Layer {
+                    extra: Default::default(),
                     id,
                     name: name.clone(),
                     kind: kind.unwrap_or_default(),
@@ -976,6 +977,7 @@ impl<'a> Tx<'a> {
                 self.check_attr_refs(attrs)?;
                 let id = ClassId(self.alloc()?);
                 self.doc.classes.push(Class {
+                    extra: Default::default(),
                     id,
                     name: name.clone(),
                     visible: true,
@@ -1078,6 +1080,25 @@ impl<'a> Tx<'a> {
     /// still have finite numbers, so the document can always be saved and
     /// reopened.
     fn check_result(&self) -> Result<(), CommandError> {
+        // A shape of an unknown kind (from a newer file) cannot be made or changed here. Delete is allowed.
+        if self
+            .added
+            .iter()
+            .filter_map(|id| self.doc.object(*id))
+            .any(|o| matches!(o.shape, Shape::Unknown { .. }))
+        {
+            return Err(CommandError::Invalid(
+                "an object of an unknown kind cannot be created".into(),
+            ));
+        }
+        for (id, before) in &self.before {
+            if matches!(before.shape, Shape::Unknown { .. }) && self.doc.object(*id).is_some() {
+                return Err(CommandError::Invalid(format!(
+                    "object {} is of an unknown kind and cannot be edited. Only delete works",
+                    id.0
+                )));
+            }
+        }
         let mut touched = self
             .added
             .iter()
@@ -1163,6 +1184,9 @@ fn validate_vertex(v: &Vertex) -> Result<(), CommandError> {
 
 fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     let bad = |m: &str| Err(CommandError::Invalid(m.into()));
+    if matches!(shape, Shape::Unknown { .. }) {
+        return bad("an object of an unknown kind cannot be created");
+    }
     if let Some(m) = crate::sheets::shape_problem(shape) {
         return bad(&m);
     }

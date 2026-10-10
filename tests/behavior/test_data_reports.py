@@ -87,10 +87,10 @@ def test_bad_records_are_refused_and_change_nothing(cad):
     b = add_hardscape(cad, "Brick", 1000)
     before = cad.doc()
     for values in ({"Depth": "deep"}, {"Grade": "Z"}, {"Samples": 1.5}, {"Nope": 1}, {"Wet": "maybe"}, {"Depth": 1e15}):
-        assert cad.error("record.attach", {"ids": [a], "record": "Soil", "values": values})["code"] in (1, -32602)
-    assert cad.error("record.attach", {"ids": [999], "record": "Soil"})["code"] == 1
+        assert cad.error("record.attach", {"ids": [a], "record": "Soil", "values": values})["code"] in (1, 3, -32602)
+    assert cad.error("record.attach", {"ids": [999], "record": "Soil"})["code"] == 2
     assert cad.error("record.attach", {"ids": [a], "record": "Missing"})["code"] == -32602
-    assert cad.error("record.set", {"ids": [a], "record": "Soil", "values": {"Wet": True}})["code"] == 1  # not attached
+    assert cad.error("record.set", {"ids": [a], "record": "Soil", "values": {"Wet": True}})["code"] == 3  # not attached
     cad.result("record.attach", {"ids": [a], "record": "Soil"})
     assert "already" in cad.error("record.attach", {"ids": [b, a], "record": "Soil"})["message"]
     assert cad.result("record.get", {"id": b})["records"] == {}
@@ -106,9 +106,9 @@ def test_record_format_rules(cad):
                 {"name": "X", "fields": [{"name": "A", "type": "text"}, {"name": "a", "type": "text"}]},
                 {"name": "X", "fields": [{"name": "A", "type": "integer", "default": 1.5}]},
                 {"name": "X", "fields": [{"name": "A", "type": "colour"}]}):
-        assert cad.error("record_format.create", bad)["code"] in (1, -32602), bad
+        assert cad.error("record_format.create", bad)["code"] in (1, 3, -32602), bad
     fid = cad.result("record_format.create", {"name": "Soil", "fields": soil_fields()})["id"]
-    assert cad.error("record_format.create", {"name": "SOIL", "fields": []})["code"] == 1
+    assert cad.error("record_format.create", {"name": "SOIL", "fields": []})["code"] == 3
     obj = add_hardscape(cad, "Granite", 1000)
     cad.result("record.attach", {"ids": [obj], "record": fid, "values": {"Depth": 120}})
     assert "used by 1" in cad.error("record_format.delete", {"id": fid})["message"]
@@ -131,12 +131,12 @@ def test_plain_data_is_never_taken_for_a_record(cad):
     assert "already have data" in err["message"]
     fid = cad.result("record_format.create", {"name": "Soil", "fields": [{"name": "Depth", "type": "number"}]})["id"]
     assert cad.result("record.get", {"id": a})["records"] == {}
-    assert cad.error("record.detach", {"ids": [a], "record": fid})["code"] == 1
+    assert cad.error("record.detach", {"ids": [a], "record": fid})["code"] == 3
     cad.result("record.attach", {"ids": [a], "record": fid})
     assert cad.result("objects.get", {"id": a})["data"]["Soil"]["_record"] == fid
     assert cad.result("record.get", {"id": a})["records"]["Soil"] == {"Depth": 0.0}, "the tag is not shown as a field"
     assert cad.result("objects.get", {"id": a})["data"]["Notes"] == {"Depth": 5}
-    assert cad.error("record_format.update", {"id": fid, "fields": [{"name": "_record", "type": "text"}]})["code"] == 1
+    assert cad.error("record_format.update", {"id": fid, "fields": [{"name": "_record", "type": "text"}]})["code"] == 3
 
 
 def test_date_time_volume_and_angle_fields_and_unknown_types(cad, tmp_path):
@@ -146,7 +146,7 @@ def test_date_time_volume_and_angle_fields_and_unknown_types(cad, tmp_path):
     cad.result("record.attach", {"ids": [a], "record": fid, "values": {"Planted": "2026-3-7", "Open": "9:05", "Fill": 2.5, "Slope": "15"}})
     assert cad.result("record.get", {"id": a})["records"]["Care"] == {"Planted": "2026-03-07", "Open": "09:05", "Fill": 2.5, "Slope": 15.0}
     for bad in ({"Planted": "2025-02-29"}, {"Open": "25:00"}, {"Fill": "much"}):
-        assert cad.error("record.set", {"ids": [a], "record": fid, "values": bad})["code"] == 1
+        assert cad.error("record.set", {"ids": [a], "record": fid, "values": bad})["code"] == 3
     assert cad.error("record_format.create", {"name": "X", "fields": [{"name": "A", "type": "hologram"}]})["code"] == -32602
     # A document with a field type from a newer app still opens, and the resource is kept.
     doc = cad.result("document.get")
@@ -376,7 +376,7 @@ def test_export_csv_and_xlsx(cad, planted, tmp_path):
     assert csv_path.read_text().startswith("Style,")
     assert "exists" in cad.error("worksheet.export", {"id": sid, "format": "csv", "path": str(csv_path)})["message"]
     cad.result("worksheet.export", {"id": sid, "format": "csv", "path": str(csv_path), "overwrite": True})
-    assert cad.error("worksheet.export", {"id": sid, "format": "xlsx", "path": str(tmp_path / "wrong.csv")})["code"] == 1
+    assert cad.error("worksheet.export", {"id": sid, "format": "xlsx", "path": str(tmp_path / "wrong.csv")})["code"] == 4
     assert cad.error("worksheet.export", {"id": sid, "format": "pdf"})["code"] == -32602
 
 
@@ -440,7 +440,7 @@ def test_data_manager_maps_parameters_to_ifc_and_records(cad, planted):
     # The map follows the document: a rule that points to a missing record is reported.
     cad.result("data_manager.update", {"id": mid, "rules": rules + [{"source": {"type": "property", "name": "Id"}, "target": {"type": "record_field", "record": "Nope", "field": "X"}}]})
     assert any("Nope" in p for p in cad.result("data_manager.check", {"id": mid})["problems"])
-    assert cad.error("data_manager.create", {"name": "Bad", "rules": [{"source": {"type": "property", "name": ""}, "target": {"type": "record_field", "record": "R", "field": "F"}}]})["code"] == 1
+    assert cad.error("data_manager.create", {"name": "Bad", "rules": [{"source": {"type": "property", "name": ""}, "target": {"type": "record_field", "record": "R", "field": "F"}}]})["code"] == 3
     assert cad.error("data_manager.create", {"name": "Bad2", "template": "nope"})["code"] == -32602
     names = cad.result("data_manager.properties")
     assert "Area" in names["builtin"] and "price" in names["plant_fields"] and names["records"][0]["record"] == "Takeoff"
@@ -517,7 +517,7 @@ def test_has_record_ignores_the_reserved_data_keys(cad):
         "criteria": 'HASRECORD("hardscape") OR HASRECORD("plant") OR HASRECORD("landscape_area")', "columns": [{"header": "Id", "expr": "Id"}]}]})
     assert cad.result("worksheet.evaluate", {"id": "H"})["blocks"][0]["matched"] == 0
     for name in ("hardscape", "landscape_area", "plant", "worksheet_table"):
-        assert cad.error("record_format.create", {"name": name, "fields": []})["code"] == 1
+        assert cad.error("record_format.create", {"name": name, "fields": []})["code"] == 3
 
 
 # --- Worksheets in the drawing -------------------------------------------------------------
@@ -570,12 +570,12 @@ def test_a_worksheet_table_on_a_design_layer_and_the_rules_of_sheets(cad):
     assert "x-ray" in cad.result("sheet.render", {"sheet": sheet})["svg"], "a table on a design layer shows in a viewport"
     assert cad.error("worksheet.place", {"id": "nope", "at": [0, 0]})["code"] == -32602
     assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "text_height": -1})["code"] == -32602
-    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": 9999})["code"] == 1
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": 9999})["code"] == 2
     assert "used by 1" in cad.error("worksheet.delete", {"id": sid})["message"]
-    assert cad.error("execute", {"command": {"op": "set_data", "id": on_design, "set": {"worksheet_table": {}}}})["code"] == 1
+    assert cad.error("execute", {"command": {"op": "set_data", "id": on_design, "set": {"worksheet_table": {}}}})["code"] == 3
     assert cad.error("worksheet.fit", {"ids": [999]})["code"] == -32602
     cad.execute({"op": "modify_layer", "id": sheet, "locked": True})
-    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": sheet})["code"] == 1
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": sheet})["code"] == 5
     cad.execute({"op": "modify_layer", "id": sheet, "locked": False})
     n = len(cad.result("objects.list", {}))
     cad.result("worksheet.place", {"id": sid, "at": [0, 0]})

@@ -202,7 +202,7 @@ fn obj_texture_files_follow_the_path_policy() {
     // A texture file that exists blocks the export unless overwrite is set, and nothing is written.
     std::fs::remove_file(&out).unwrap();
     std::fs::remove_file(inside.join("m.mtl")).unwrap();
-    assert_eq!(fail(&mut s, "export.file", json!({"path": out})).code, 1);
+    assert_eq!(fail(&mut s, "export.file", json!({"path": out})).code, 5);
     assert!(!out.exists());
     ok(
         &mut s,

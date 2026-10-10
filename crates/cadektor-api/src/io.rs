@@ -22,6 +22,7 @@ struct FileParams {
 fn rpc(e: IoError) -> RpcError {
     match e {
         IoError::Option(_) => RpcError::invalid_params(e),
+        IoError::Format(_) => RpcError::validation(e),
         e => RpcError::app(e),
     }
 }
@@ -104,7 +105,7 @@ impl Session {
             RpcError::invalid_params("unknown file type: give a format (dxf, shp or geojson)")
         })?;
         self.check_path(&path, write, extensions(format))
-            .map_err(RpcError::app)
+            .map_err(RpcError::policy)
     }
 
     pub(crate) fn import_file(&mut self, p: Value) -> Result<Value, RpcError> {
@@ -149,7 +150,7 @@ impl Session {
             cadektor_io::import_file(&path, format, &opts, self.editor.doc()).map_err(rpc)?;
         self.editor
             .execute(&result.command)
-            .map_err(RpcError::app)?;
+            .map_err(RpcError::from)?;
         self.prune_selection();
         Ok(json!({
             "imported": result.report.total(),
@@ -189,7 +190,7 @@ impl Session {
             path
         };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(RpcError::app(format!(
+            return Err(RpcError::conflict(format!(
                 "{} exists: pass \"overwrite\": true to replace it",
                 path.display()
             )));

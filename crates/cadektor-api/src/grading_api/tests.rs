@@ -237,7 +237,7 @@ fn wall_follows_the_ground_and_changes() {
         -32602
     );
     assert_eq!(fail(&mut s, "wall.set", json!({"ids": []})).0, -32602);
-    assert_eq!(fail(&mut s, "wall.set", json!({"id": 9999})).0, 1);
+    assert_eq!(fail(&mut s, "wall.set", json!({"id": 9999})).0, 2);
     assert_eq!(
         fail(&mut s, "wall.set", json!({"id": id, "path": "x"})).0,
         -32602
@@ -266,7 +266,7 @@ fn wall_follows_the_ground_and_changes() {
         .0,
         -32602
     );
-    assert_eq!(fail(&mut s, "wall.add", json!({"path": [[0, 0]]})).0, 1);
+    assert_eq!(fail(&mut s, "wall.add", json!({"path": [[0, 0]]})).0, 3);
     assert_eq!(
         fail(
             &mut s,
@@ -279,11 +279,11 @@ fn wall_follows_the_ground_and_changes() {
     let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
     assert_eq!(
         fail(&mut s, "wall.set", json!({"id": circle, "thickness": 5})).0,
-        1
+        3
     );
-    assert_eq!(fail(&mut s, "wall.report", json!({"ids": [circle]})).0, 1);
+    assert_eq!(fail(&mut s, "wall.report", json!({"ids": [circle]})).0, 3);
     assert_eq!(fail(&mut s, "wall.report", json!({"ids": "x"})).0, -32602);
-    assert_eq!(fail(&mut s, "wall.report", json!({"ids": [9999]})).0, 1);
+    assert_eq!(fail(&mut s, "wall.report", json!({"ids": [9999]})).0, 2);
 }
 
 #[test]
@@ -487,15 +487,15 @@ fn grade_objects() {
         fail(&mut s, "grade.set", json!({"id": id, "bogus": 1})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "grade.set", json!({"id": 9999})).0, 1);
-    assert_eq!(fail(&mut s, "grade.get", json!({"id": 9999})).0, 1);
+    assert_eq!(fail(&mut s, "grade.set", json!({"id": 9999})).0, 2);
+    assert_eq!(fail(&mut s, "grade.get", json!({"id": 9999})).0, 2);
     assert_eq!(fail(&mut s, "grade.get", json!({})).0, -32602);
     let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "grade.get", json!({"id": line})).0, 1);
-    assert_eq!(fail(&mut s, "grade.set", json!({"id": line})).0, 1);
+    assert_eq!(fail(&mut s, "grade.get", json!({"id": line})).0, 3);
+    assert_eq!(fail(&mut s, "grade.set", json!({"id": line})).0, 3);
     let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "grade.get", json!({"id": circle})).0, 1);
-    assert_eq!(fail(&mut s, "grade.set", json!({"id": circle})).0, 1);
+    assert_eq!(fail(&mut s, "grade.get", json!({"id": circle})).0, 3);
+    assert_eq!(fail(&mut s, "grade.set", json!({"id": circle})).0, 3);
     // A grade without a site model cannot snap.
     let mut empty = Session::default();
     assert_eq!(
@@ -606,10 +606,10 @@ fn analysis_bands_and_legend() {
         fail(&mut s, "site.analysis", json!({"id": site, "legend": 5})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "site.analysis", json!({"id": 9999})).0, 1);
+    assert_eq!(fail(&mut s, "site.analysis", json!({"id": 9999})).0, 2);
     assert_eq!(fail(&mut s, "site.analysis", json!({})).0, -32602);
     let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "site.analysis", json!({"id": circle})).0, 1);
+    assert_eq!(fail(&mut s, "site.analysis", json!({"id": circle})).0, 3);
     // A site model that cannot make a surface cannot be analyzed.
     let few = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "site_model", "points": [[0, 0, 0]]}}}))["created"][0].as_u64().unwrap();
     assert_eq!(
@@ -696,8 +696,8 @@ fn spot_elevations_and_stakes() {
         fail(&mut s, "spot.set", json!({"id": id, "show": "all"})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "spot.set", json!({"id": 9999})).0, 1);
-    assert_eq!(fail(&mut s, "spot.get", json!({"id": 9999})).0, 1);
+    assert_eq!(fail(&mut s, "spot.set", json!({"id": 9999})).0, 2);
+    assert_eq!(fail(&mut s, "spot.get", json!({"id": 9999})).0, 2);
     assert_eq!(fail(&mut s, "spot.get", json!({})).0, -32602);
     assert_eq!(
         fail(&mut s, "spot.get", json!({"at": [0, 0], "site": "x"})).0,
@@ -705,14 +705,14 @@ fn spot_elevations_and_stakes() {
     );
     assert_eq!(
         fail(&mut s, "spot.get", json!({"at": [0, 0], "site": 9999})).0,
-        1
+        2
     );
     let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "spot.get", json!({"id": circle})).0, 1);
-    assert_eq!(fail(&mut s, "spot.set", json!({"id": circle})).0, 1);
+    assert_eq!(fail(&mut s, "spot.get", json!({"id": circle})).0, 3);
+    assert_eq!(fail(&mut s, "spot.set", json!({"id": circle})).0, 3);
     let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "spot.get", json!({"id": line})).0, 1);
-    assert_eq!(fail(&mut s, "spot.set", json!({"id": line})).0, 1);
+    assert_eq!(fail(&mut s, "spot.get", json!({"id": line})).0, 3);
+    assert_eq!(fail(&mut s, "spot.set", json!({"id": line})).0, 3);
     // Without a site model a spot has no height. A point read needs a site model.
     let mut empty = Session::default();
     let sp = ok(&mut empty, "spot.add", json!({"at": [0, 0]}));
@@ -793,7 +793,7 @@ fn sections_profile_and_placement() {
     assert_eq!(again["ids"].as_array().unwrap().len(), ids.len());
     assert_eq!(
         fail(&mut s, "objects.get", json!({"id": ids[0]})).0,
-        1,
+        2,
         "the old shapes are gone"
     );
 }
@@ -849,8 +849,8 @@ fn sections_on_a_design_layer_and_errors() {
         fail(&mut s, "section.set", json!({"id": sec, "step": 1})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "section.set", json!({"id": 9999})).0, 1);
-    assert_eq!(fail(&mut s, "section.profile", json!({"id": 9999})).0, 1);
+    assert_eq!(fail(&mut s, "section.set", json!({"id": 9999})).0, 2);
+    assert_eq!(fail(&mut s, "section.profile", json!({"id": 9999})).0, 2);
     assert_eq!(fail(&mut s, "section.place", json!({"id": sec})).0, -32602);
     assert_eq!(
         fail(
@@ -859,7 +859,7 @@ fn sections_on_a_design_layer_and_errors() {
             json!({"id": sec, "at": [0, 0], "layer": 999})
         )
         .0,
-        1
+        2
     );
     assert_eq!(
         fail(
@@ -880,8 +880,8 @@ fn sections_on_a_design_layer_and_errors() {
         -32602
     );
     let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "section.set", json!({"id": circle})).0, 1);
-    assert_eq!(fail(&mut s, "section.profile", json!({"id": circle})).0, 1);
+    assert_eq!(fail(&mut s, "section.set", json!({"id": circle})).0, 3);
+    assert_eq!(fail(&mut s, "section.profile", json!({"id": circle})).0, 3);
     let mut empty = Session::default();
     let e = ok(
         &mut empty,

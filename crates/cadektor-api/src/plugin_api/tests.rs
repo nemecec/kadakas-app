@@ -840,7 +840,7 @@ fn an_untrusted_definition_never_starts_python() {
         ),
     ] {
         let e = call(&mut s, m, p).unwrap_err();
-        assert_eq!(e.code, -32001, "{m}: {}", e.message);
+        assert_eq!(e.code, 4, "{m}: {}", e.message);
     }
     assert!(!spy.started(), "an untrusted script started Python");
     // Trust is by the exact text. The user trusts it; now Python starts (the spy fails the run).

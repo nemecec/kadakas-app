@@ -136,9 +136,9 @@ def test_bad_options_and_path_policy(cad, tmp_path):
     assert cad.error("export.file", {"path": str(out), "format": "ifc", "options": {"colour": 1}})["code"] == -32602
     assert not out.exists()
     # The extension must match the format, and an existing file needs overwrite.
-    assert cad.error("export.file", {"path": str(tmp_path / "x.txt"), "format": "ifc"})["code"] == 1
+    assert cad.error("export.file", {"path": str(tmp_path / "x.txt"), "format": "ifc"})["code"] == 4
     cad.result("export.file", {"path": str(out)})
-    assert cad.error("export.file", {"path": str(out), "format": "ifc"})["code"] == 1
+    assert cad.error("export.file", {"path": str(out), "format": "ifc"})["code"] == 5
     cad.result("export.file", {"path": str(out), "format": "ifc", "overwrite": True})
 
 

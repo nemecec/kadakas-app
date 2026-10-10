@@ -1566,6 +1566,10 @@ fn files_are_written_and_errors_reported() {
     let path = dir.join("out.bin");
     assert_eq!(write_file(&path, b"abc").unwrap(), path);
     assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+    // A second write is atomic and keeps the old file as .bak.
+    write_file(&path, b"def").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"def");
+    assert_eq!(std::fs::read(dir.join("out.bin.bak")).unwrap(), b"abc");
     let missing = dir.join("no/such/folder/x.pdf");
     assert!(matches!(write_file(&missing, b"x"), Err(PrintError::Io(m)) if m.contains("x.pdf")));
     std::fs::remove_dir_all(&dir).unwrap();

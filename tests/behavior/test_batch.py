@@ -13,7 +13,7 @@ def test_batch_failure_rolls_back_every_step(cad):
         {"op": "move_objects", "ids": [keep], "delta": [100, 0]},
         {"op": "delete_objects", "ids": [999]},
     ]}})
-    assert error["code"] == 1
+    assert error["code"] == 2
     assert "999" in error["message"]
     assert strip_next_id(cad.doc()) == before
 

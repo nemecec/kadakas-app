@@ -15,6 +15,7 @@ use cadektor_core::library;
 use cadektor_core::model::*;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const GROUP_CREATE: (&str, &str) = (
@@ -198,20 +199,6 @@ pub fn describe() -> Value {
     })
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
-}
-
 fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcError> {
     m.get(key).ok_or_else(|| bad(format!("missing '{key}'")))
 }
@@ -389,7 +376,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 }
 
 fn exec(s: &mut Session, c: &Command) -> Result<cadektor_core::command::Outcome, RpcError> {
-    let out = s.editor.execute(c).map_err(app)?;
+    let out = s.editor.execute(c).map_err(RpcError::from)?;
     s.prune_selection();
     Ok(out)
 }
@@ -417,7 +404,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let id: ObjectId = serde_json::from_value(required(m, "id")?.clone()).map_err(bad)?;
             let doc = s.editor.doc();
             if !doc.is_group(id) {
-                return Err(app(format!("object {id} is not a group")));
+                return Err(RpcError::validation(format!("object {id} is not a group")));
             }
             if doc.selection_target(id, s.edit_context()) != Some(id) {
                 return Err(app(format!(
@@ -441,7 +428,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let id: ObjectId = serde_json::from_value(required(m, "id")?.clone()).map_err(bad)?;
             let doc = s.editor.doc();
             if !doc.is_group(id) {
-                return Err(app(format!("object {id} is not a group")));
+                return Err(RpcError::validation(format!("object {id} is not a group")));
             }
             let deep = m.get("deep").and_then(Value::as_bool).unwrap_or(false);
             Ok(json!({ "members": if deep { doc.descendants(id) } else { doc.children(id) } }))
@@ -489,10 +476,10 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let id: ObjectId = serde_json::from_value(required(m, "id")?.clone()).map_err(bad)?;
             let doc = s.editor.doc();
             doc.object(id)
-                .ok_or_else(|| app(format!("object {id} does not exist")))?;
-            let target = doc
-                .selection_target(id, s.edit_context())
-                .ok_or_else(|| app(format!("object {id} is not inside the group you are in")))?;
+                .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+            let target = doc.selection_target(id, s.edit_context()).ok_or_else(|| {
+                RpcError::validation(format!("object {id} is not inside the group you are in"))
+            })?;
             if m.get("add").and_then(Value::as_bool).unwrap_or(false) {
                 match s.selection.iter().position(|x| *x == target) {
                     Some(i) => {
@@ -636,7 +623,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 let doc = s.editor.doc();
                 let o = doc
                     .object(id)
-                    .ok_or_else(|| app(format!("object {id} does not exist")))?;
+                    .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
                 let Shape::Symbol {
                     symbol,
                     at,
@@ -645,7 +632,9 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     scale_y,
                 } = o.shape.clone()
                 else {
-                    return Err(app(format!("object {id} is not a symbol instance")));
+                    return Err(RpcError::validation(format!(
+                        "object {id} is not a symbol instance"
+                    )));
                 };
                 let symbol = match m.get("symbol") {
                     Some(v) => resource_ref(doc, v, Some("symbol"))?,
