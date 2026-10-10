@@ -76,7 +76,7 @@ pub fn describe() -> Value {
         "undo": "collab.undo takes back only your own edits, as new edits. While the session is connected, the normal undo and redo refuse and point to collab.undo.",
         "presence": "Cursor, selection and viewport of each client. Not part of the document and not saved.",
         "remote_changes": "A change of another user reaches the document as one change set with the origin remote (events.change). The selection, the group context and the caches stay. The undo history of the normal undo is cleared.",
-        "limits": "The z-order of objects and the order of layers are not shared. A session with predictable IDs cannot connect.",
+        "limits": "The stacking order of objects and layers is shared (fractional keys). A session with predictable IDs cannot connect. The points of a site model are cut into chunks by position: if one user inserts or removes a point while another moves a point of the same model, the points can end up wrong; edit one site model at a time.",
         "examples": [
             {"method": "collab.connect", "params": {"name": "Ann"}},
             {"method": "collab.sync", "params": {}},

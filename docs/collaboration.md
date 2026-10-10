@@ -66,7 +66,14 @@ The property `id` does not exist. It is the identity. Names have 1 to 256 charac
 The **shape** is one property, except for a site model (above). Moving one point of a site model sends
 one chunk of 256 points, not all points. Two users who move points in different chunks both keep
 their change; in the same chunk, the last writer wins. Inserting or removing a point shifts the
-later chunks, which are sent again. A resource body is one property too.
+later chunks, which are sent again.
+
+**Limit.** The chunks are cut by *position*, because a point has no ID in the document. If one user
+inserts or removes a point while another user moves a point of the same site model, the chunks no
+longer fit together: a moved point can land on a neighbour, or a point can appear twice or be lost.
+The result is the same on every client (it converges), but it is not what either user meant. Points
+that only move, or that are only added at the end, are safe. A later version needs stable point IDs
+in the document to remove this limit. A resource body is one property too.
 
 The picture of an **underlay** is not sent in the operation. The client sends it once as a blob
 (section 4.7) and the shape holds a reference. A move or a new opacity of the underlay sends a small
@@ -140,9 +147,19 @@ What this gives:
 ### 3.3.1 The stacking order
 
 The z-order of objects and the order of layers are shared. Every object and every layer has the
-property `order`: a text key (digits `0-9A-Za-z`, compared as text, never ending with `0`). The
-lists are sorted by the key, and by the ID for equal keys. Between two keys there is always a third
-(*fractional indexing*; the code is our own, in `kadakas_collab::order`).
+property `order`: a text key. The lists are sorted by the key (compared as text), and by the ID for
+equal keys. Between two keys there is always a third (*fractional indexing*, in the form of the
+`fractional-indexing` library of Rocicorp; the code is our own, in `kadakas_collab::order`).
+
+A key is an integer part and a fraction, written with the digits `0-9A-Za-z`. The integer part
+starts with a letter that gives its length (`a` is 2 characters, `b` 3, up to `z` with 27; `Z` is 2,
+`Y` 3, down to `A` with 27), so appending counts up and the key grows with the *logarithm* of the
+number of appends: 1000 appends give a key of 3 characters, and so do 1000 prepends (4 at most). The
+fraction never ends with `0`, and the first key is `a0`. **A key is valid** if it has only the
+digits `0-9A-Za-z`, at most 1024 characters, a head letter with as many digits as it says, no `0` at
+the end of the fraction, and is not the smallest integer part alone. A server must refuse an
+operation that gives a key that is not valid (`validate_entity` does it: `invalid_txn`). A client
+treats an invalid key as no key.
 
 - When the user changes the order locally (`arrange` to front, back, forward or backward,
   `move_layer`, or a new object), the client looks at the list of each touched layer, keeps the
@@ -169,8 +186,17 @@ Two users who regenerate the same object at the same time make the same IDs.
 To make this work, `create` has a flag `merge` (false when it is left out). A create with `merge`
 of a thing that exists and is alive writes the properties like `set` operations (last writer wins)
 instead of being refused. A deleted thing stays deleted. The client sets the flag for objects with a
-derived ID, and for nothing else. A server must accept a `merge` create of a living thing, and must
-refuse every other create of an ID that exists.
+derived ID, and for nothing else. **The server must refuse `merge` on anything else** (`invalid_txn`:
+the flag is only for objects with a derived ID, version 8; `validate_ops` does it). A server must accept
+a `merge` create of a living thing, and also of a thing that is deleted: the merge then drops that
+operation (the thing stays deleted), and the rest of the transaction is ordered as usual. It must
+refuse every other create of an ID that exists or ever existed.
+
+**Generations.** The IDs of a generation that was undone are deleted things, and their IDs stay
+taken. So a client picks as the next generation the first number whose first shape ID is not in the
+shared state, deleted things included. (Place, regenerate, undo, regenerate again then makes
+generation 3, not 2.) If two clients see different deleted things at that moment, they can pick
+different numbers and both sets of shapes stay until the next regeneration.
 
 With different parameters at the same time, the last writer in server order wins: its parameters, its
 generation, and its properties of every shape. A shape that the loser made at an index the winner did
@@ -312,8 +338,9 @@ as canonical JSON text, are equal.
 3. **Sign-in and identity.** If the token is not good, send `error` with `auth_failed` and close.
    The server **binds `user` to the identity of the token**: a `hello` whose `user` is not the user
    of the token is `auth_failed`. The `user` in entries and presence always comes from the sign-in,
-   never from a message. The client ID may be any UUID that this user uses; a server may also
-   limit a client ID to one connection at a time.
+   never from a message. The client ID may be any UUID that this user uses; a server must also
+   limit a client ID to one connection at a time (a second connection with the same client ID
+   replaces the first, or is refused).
 4. **Ordering.** For a good `submit`: give the next sequence number, apply the operations to the
    server replica with the writer (client ID, `op_id`), append the entry to the log, send `ack` to
    the author and `broadcast` to all other connected clients.
@@ -336,8 +363,9 @@ as canonical JSON text, are equal.
    it would be lost.
 8. **Refuse before ordering** (send `error` with the `op_id`; do not use a sequence number):
    - `invalid_txn`: the transaction is malformed or breaks a limit or a value check (below);
-   - `duplicate_uid`: a `create` uses an ID that exists or ever existed in the replica, also twice in
-     one transaction;
+   - `duplicate_uid`: a `create` without `merge` uses an ID that exists or ever existed in the
+     replica, also twice in one transaction. (A `create` with `merge` of an ID that exists or is
+     deleted is not an error: section 3.3.2.)
    - `rate_limited`: the client sends too much (for example more than the server's limit of
      transactions per second or bytes per minute). It is temporary.
 9. **Presence.** Check the numbers (`bad_message` if they are not valid). Send at most one update per
@@ -399,17 +427,25 @@ Every error code has a class. The client acts on the class:
 The picture of an underlay (the base64 text of a PNG, 4 KiB or more) is a *blob*. The client
 replaces it in the operation by `{"$blob": "<sha256 hex>"}` (the SHA-256 of the text), keeps the text,
 and sends `blob_put` first. The server checks that the hash is the SHA-256 of `data` (`bad_message`
-if not) and keeps the blob; one blob is at most 64 MiB. Before it orders a transaction, the server
+if not) and keeps the blob; one blob is at most 32 MiB. Before it orders a transaction, the server
 puts the pictures back to check the objects (section 4.5), so a transaction that refers to a blob the
 server does not have is `invalid_txn`. Messages of one connection keep their order, so the blob
 arrives first.
 
 A client that finds a reference to a blob it does not have (after a snapshot or an entry) sends
 `blob_get` once, and leaves the object out of its document until `blob` arrives. On `blob_missing` it
-does not ask again. After a sign-in the client sends `blob_put` again for every picture that a
+does not ask again on this connection (the list is cleared at the next sign-in). After a sign-in the client sends `blob_put` again for every picture that a
 waiting transaction refers to. The checkpoint and the journal of the client hold the pictures they
-need. The server keeps a blob as long as the log refers to it. The same picture has the same hash, so
-it is sent once.
+need. The same picture has the same hash, so it is sent once.
+
+**Keeping blobs.** The rule for version 1: a server keeps a blob while any property of any thing in
+the replica refers to it, deleted things included (an undo can bring them back). A blob that nothing
+refers to may be dropped. The client does not rely on it: it sends a picture again (`blob_put`) on
+every new connection for every picture a waiting transaction refers to, and for every picture an
+undo or redo step brings back, also on the same connection. A `blob_put` that fails is sent again
+after the next server error. The sizes: a blob is at most 32 MiB, so a `blob_put` fits in a frame
+(64 MiB). The checkpoint of a client keeps the pictures that its confirmed state (deleted things
+too), its waiting transactions and its undo and redo steps refer to, and drops the others.
 
 ### 4.8 The rules of the client
 

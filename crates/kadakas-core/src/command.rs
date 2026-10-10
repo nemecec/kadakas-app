@@ -1840,9 +1840,13 @@ impl Editor {
     }
 
     /// Writes stacking keys into the objects and layers (the field `order` in `extra`) without a
-    /// command, a revision or a change set. The keys are bookkeeping for collaboration (see
-    /// `kadakas-collab`): the document must carry them so that a saved file keeps them, but they
-    /// are not a change that a user made or that anything draws. Returns true if a key changed.
+    /// command, an undo step, a revision or a change set. The keys are bookkeeping for
+    /// collaboration (see `kadakas-collab`): the document must carry them so that a saved file
+    /// keeps them, but they are not a change that a user made or that anything draws, exports or
+    /// caches (the revision exists to find stale caches, and nothing reads the keys but the
+    /// collaboration code). An undo step needs no key either: it restores the objects it saved, and
+    /// the collaboration code writes the keys again at the next sync. Returns true if a key
+    /// changed.
     pub fn stamp_order_keys(
         &mut self,
         objects: &std::collections::HashMap<ObjectId, String>,

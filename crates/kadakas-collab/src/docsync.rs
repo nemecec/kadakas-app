@@ -18,16 +18,19 @@
 //!
 //! - an object or class: `attrs.<field>` for each field of the attributes (`attrs.pen`,
 //!   `attrs.fill`), and `data.<key>` for each key of the record data; other top-level fields
-//!   (`shape`, `layer`, `class`, `parent`) are one property each;
+//!   (`shape`, `layer`, `class`, `parent`, `order`) are one property each;
+//! - the points of a site model: `shape.points.<n>` in chunks of [`POINT_CHUNK`], and
+//!   `shape.lines.<n>` for each line (the rest of the shape stays in `shape`);
 //! - the document settings: `georef`, and `drawing.<field>` for each field of the drawing data,
 //!   cut once more when the field is an object (`drawing.project.name`), and
 //!   `drawing.sheets.<layer id>` for the page settings of each sheet layer;
-//! - a layer or resource: its top-level fields (`name`, `visible`, `body`).
+//! - a layer or resource: its top-level fields (`name`, `visible`, `body`, `order`).
 //!
-//! The **shape** is one property. A big shape value (the points of a site model, the PNG of an
-//! underlay) is copied whole by every edit of it, in the transaction, in the log and in the
-//! snapshot. This costs size, not correctness. A later version can cut such values into parts (a
-//! point list into chunks, a picture into a resource that is made once and never edited).
+//! The **shape** is one property, except for a site model. The chunks of its points are cut by
+//! *position*, so if one user inserts or removes a point while another moves a point of the same
+//! model, the chunks no longer fit together and points can end up wrong. Edits that only move
+//! points, or that only add at the end, are safe. The picture of an underlay is not in the
+//! operation: `blob` replaces it by a reference.
 //!
 //! # Numbers
 //!
@@ -39,8 +42,8 @@
 //! changed, and this is what the other users need. It also means every command works with
 //! collaboration without extra code.
 //!
-//! Limits: the z-order of objects and the order of layers are not shared (see `replica`). The
-//! active layer and the active class are personal settings: they are not shared.
+//! The stacking order of objects and layers is shared with the property `order` (see `order`).
+//! The active layer and the active class are personal settings: they are not shared.
 
 use std::collections::{BTreeMap, BTreeSet};
 
