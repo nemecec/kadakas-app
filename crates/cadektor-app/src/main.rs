@@ -39,6 +39,7 @@ mod tess;
 mod tools;
 mod vertex;
 mod view;
+mod view_history;
 mod view3d;
 
 #[cfg(not(target_arch = "wasm32"))]

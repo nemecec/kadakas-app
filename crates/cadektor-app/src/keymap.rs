@@ -156,6 +156,31 @@ actions! {
     ToolScaleBar => "tool.scale_bar", "Scale Bar tool", ["Alt+Shift+B"], true;
     ToolRevisionCloud => "tool.revision_cloud", "Revision Cloud tool", ["Alt+Shift+V"], true;
     CmdGraphicLegend => "cmd.graphic_legend", "Add a graphic legend", ["Alt+Shift+E"], true;
+    ToolRotate => "tool.rotate", "Rotate tool", ["Alt+="], true;
+    ToolMirror => "tool.mirror", "Mirror tool", ["="], true;
+    ToolScale => "tool.scale", "Scale tool", [], true;
+    ToolOffset => "tool.offset", "Offset tool", ["Shift+-"], true;
+    ToolFillet => "tool.fillet", "Fillet tool", ["7"], true;
+    ToolChamfer => "tool.chamfer", "Chamfer tool", ["Alt+7"], true;
+    ToolTrim => "tool.trim", "Trim tool", ["Alt+Shift+L"], true;
+    ToolExtend => "tool.extend", "Extend tool", [], true;
+    ToolSplit => "tool.split", "Split tool", ["L"], true;
+    CmdDuplicateArray => "cmd.duplicate_array", "Duplicate Array", ["Cmd/Ctrl+Shift+Alt+D"], true;
+    CmdAddSurface => "cmd.add_surface", "Add Surface", ["Cmd/Ctrl+Shift+Alt+A"], true;
+    CmdSubtractSurface => "cmd.subtract_surface", "Subtract Surface", [], true;
+    CmdClipSurface => "cmd.clip_surface", "Clip Surface", ["Cmd/Ctrl+Shift+Alt+C"], true;
+    CmdIntersectSurface => "cmd.intersect_surface", "Intersect Surface", [], true;
+    CmdCompose => "cmd.compose", "Compose", [], true;
+    CmdRotateLeft90 => "cmd.rotate_left_90", "Rotate left 90 degrees", ["Cmd/Ctrl+L"], true;
+    CmdRotateRight90 => "cmd.rotate_right_90", "Rotate right 90 degrees", ["Cmd/Ctrl+Shift+R"], true;
+    CmdFlipHorizontal => "cmd.flip_horizontal", "Flip horizontal", ["Cmd/Ctrl+Shift+H"], true;
+    CmdFlipVertical => "cmd.flip_vertical", "Flip vertical", ["Cmd/Ctrl+Shift+V"], true;
+    QuickSearch => "ui.quick_search", "Quick search for commands", ["F"], true;
+    ViewHistoryPrevious => "view.history_previous", "Previous view in history", ["Cmd/Ctrl+Shift+,"], true;
+    ViewHistoryNext => "view.history_next", "Next view in history", ["Cmd/Ctrl+Shift+."], true;
+    SnapCues => "snap.cues", "Toggle SmartCursor cues", ["Y"], true;
+    SnapRelativeAngles => "snap.relative_angles", "Toggle angles relative to the prior segment", ["/"], true;
+    SnapAcquire => "snap.acquire", "Set a smart point or smart edge at the pointer", ["T"], true;
     ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
     ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
     ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
@@ -240,6 +265,15 @@ impl Action {
             Action::ToolNorthArrow => Tool::NorthArrow,
             Action::ToolScaleBar => Tool::ScaleBar,
             Action::ToolRevisionCloud => Tool::RevisionCloud,
+            Action::ToolRotate => Tool::Rotate,
+            Action::ToolMirror => Tool::Mirror,
+            Action::ToolScale => Tool::Scale,
+            Action::ToolOffset => Tool::Offset,
+            Action::ToolFillet => Tool::Fillet,
+            Action::ToolChamfer => Tool::Chamfer,
+            Action::ToolTrim => Tool::Trim,
+            Action::ToolExtend => Tool::Extend,
+            Action::ToolSplit => Tool::Split,
             _ => return None,
         })
     }
@@ -265,6 +299,15 @@ impl Action {
             Tool::NorthArrow => Action::ToolNorthArrow,
             Tool::ScaleBar => Action::ToolScaleBar,
             Tool::RevisionCloud => Action::ToolRevisionCloud,
+            Tool::Rotate => Action::ToolRotate,
+            Tool::Mirror => Action::ToolMirror,
+            Tool::Scale => Action::ToolScale,
+            Tool::Offset => Action::ToolOffset,
+            Tool::Fillet => Action::ToolFillet,
+            Tool::Chamfer => Action::ToolChamfer,
+            Tool::Trim => Action::ToolTrim,
+            Tool::Extend => Action::ToolExtend,
+            Tool::Split => Action::ToolSplit,
         }
     }
 
@@ -312,7 +355,9 @@ impl Action {
 fn is_digit(k: Key) -> bool {
     matches!(
         k,
-        Key::Num0
+        Key::Minus
+            | Key::Equals
+            | Key::Num0
             | Key::Num1
             | Key::Num2
             | Key::Num3
@@ -665,9 +710,9 @@ mod tests {
 
     #[test]
     fn override_replaces_defaults_of_the_action() {
-        let (km, w) = Keymap::with_overrides(r#"{"tool.line": "L", "edit.redo": []}"#);
+        let (km, w) = Keymap::with_overrides(r#"{"tool.line": "G", "edit.redo": []}"#);
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(km.action_for(chord("L")), Some(Action::ToolLine));
+        assert_eq!(km.action_for(chord("G")), Some(Action::ToolLine));
         assert_eq!(km.action_for(chord("2")), None);
         assert!(km.chords(Action::Redo).is_empty());
         assert_eq!(km.action_for(chord("Cmd/Ctrl+Y")), None);
@@ -687,10 +732,10 @@ mod tests {
 
     #[test]
     fn conflict_between_two_user_entries() {
-        let (km, w) = Keymap::with_overrides(r#"{"tool.line": "F", "tool.rect": "F"}"#);
+        let (km, w) = Keymap::with_overrides(r#"{"tool.line": "Q", "tool.rect": "Q"}"#);
         assert_eq!(w.len(), 1);
         // Later action id wins; the other loses the chord.
-        assert_eq!(km.action_for(chord("F")), Some(Action::ToolRect));
+        assert_eq!(km.action_for(chord("Q")), Some(Action::ToolRect));
         assert!(km.chords(Action::ToolLine).is_empty());
     }
 
@@ -705,10 +750,10 @@ mod tests {
             Some(Action::ToolLine),
             "a bad chord keeps the default"
         );
-        let (km, w) = Keymap::with_overrides(r#"{"tool.line": ["F", 7]}"#);
+        let (km, w) = Keymap::with_overrides(r#"{"tool.line": ["Q", 7]}"#);
         assert_eq!(w.len(), 1);
         assert_eq!(km.action_for(chord("2")), Some(Action::ToolLine));
-        assert_eq!(km.action_for(chord("F")), None);
+        assert_eq!(km.action_for(chord("Q")), None);
         let (km, w) = Keymap::with_overrides("not json");
         assert_eq!(w.len(), 1);
         assert_eq!(km.action_for(chord("2")), Some(Action::ToolLine));

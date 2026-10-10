@@ -21,8 +21,9 @@ mod plant_ops;
 mod present_ops;
 mod record_ops;
 mod table_ops;
+mod transform_ops;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
     // Groups, copies and symbols are at the end of the list.
@@ -42,6 +43,7 @@ pub enum Command {
     /// Move objects. An ID that appears twice is moved once.
     MoveObjects {
         ids: Vec<ObjectId>,
+        #[schemars(with = "[f64; 2]")]
         delta: DVec2,
     },
     /// Change properties of one object. Missing fields stay unchanged.
@@ -65,6 +67,7 @@ pub enum Command {
         #[serde(default)]
         kind: Option<VertexKind>,
         #[serde(default)]
+        #[schemars(with = "Option<[f64; 2]>")]
         p: Option<DVec2>,
     },
     /// Change the record data of one object: `set` merges keys, `remove`
@@ -169,6 +172,7 @@ pub enum Command {
         style: Option<ResourceId>,
         #[serde(default)]
         overrides: serde_json::Map<String, Value>,
+        #[schemars(with = "Vec<[f64; 2]>")]
         positions: Vec<DVec2>,
         #[serde(default)]
         layer: Option<LayerId>,
@@ -305,7 +309,9 @@ pub enum Command {
     /// frame in mm (paper mm on a sheet layer). The table is drawn from the calculated worksheet.
     AddWorksheetTable {
         worksheet: ResourceId,
+        #[schemars(with = "[f64; 2]")]
         at: DVec2,
+        #[schemars(with = "[f64; 2]")]
         size: DVec2,
         #[serde(default)]
         text_height: Option<f64>,
@@ -324,6 +330,7 @@ pub enum Command {
         #[serde(default)]
         text_height: Option<f64>,
         #[serde(default)]
+        #[schemars(with = "Option<[f64; 2]>")]
         size: Option<DVec2>,
     },
     /// Make a group of objects. They must be on one layer and in the same group (or in none).
@@ -358,6 +365,7 @@ pub enum Command {
     /// Hardscapes, landscape areas and site models cannot be turned.
     RotateObjects {
         ids: Vec<ObjectId>,
+        #[schemars(with = "[f64; 2]")]
         center: DVec2,
         angle: f64,
     },
@@ -366,6 +374,7 @@ pub enum Command {
     CopyObjects {
         ids: Vec<ObjectId>,
         #[serde(default)]
+        #[schemars(with = "[f64; 2]")]
         delta: DVec2,
     },
     /// Make a symbol definition from objects (groups count as their members). The insertion point is
@@ -375,6 +384,7 @@ pub enum Command {
         name: String,
         ids: Vec<ObjectId>,
         #[serde(default)]
+        #[schemars(with = "Option<[f64; 2]>")]
         insertion: Option<DVec2>,
         #[serde(default)]
         replace: bool,
@@ -391,6 +401,29 @@ pub enum Command {
     /// End editing in place: the objects of the edit group become the 2D components of the definition.
     ExitSymbolEdit {
         group: ObjectId,
+    },
+    /// Set the visibility mode of layers and classes: visible, grey (drawn in grey, cannot be
+    /// picked or edited) or invisible. See `crate::visibility`.
+    SetVisibility {
+        #[serde(default)]
+        layers: Vec<LayerId>,
+        #[serde(default)]
+        classes: Vec<ClassId>,
+        mode: crate::visibility::VisMode,
+    },
+    /// Scale, mirror, turn or move objects (a group as one unit), in place or as copies. With
+    /// `copy` the originals stay and the copies are returned in `created`. See `edit2d::Transform`.
+    TransformObjects {
+        ids: Vec<ObjectId>,
+        transform: crate::edit2d::Transform,
+        #[serde(default)]
+        copy: bool,
+    },
+    /// Duplicate array: linear, rectangular or circular copies of objects (a group as one unit).
+    /// Returns the IDs of the copies of `ids` in `created`. See `edit2d::ArrayParams`.
+    ArrayObjects {
+        ids: Vec<ObjectId>,
+        array: crate::edit2d::ArrayParams,
     },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
@@ -1063,6 +1096,47 @@ impl<'a> Tx<'a> {
             | Command::SaveView { .. }
             | Command::DeleteView { .. }
             | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
+            Command::TransformObjects { .. } | Command::ArrayObjects { .. } => {
+                self.run_transform(cmd, out)?
+            }
+            Command::SetVisibility {
+                layers,
+                classes,
+                mode,
+            } => {
+                use crate::visibility::VisMode;
+                if layers.is_empty() && classes.is_empty() {
+                    return Err(CommandError::Invalid(
+                        "give at least one layer or class".into(),
+                    ));
+                }
+                for l in layers {
+                    self.doc.layer(*l).ok_or(CommandError::NoLayer(*l))?;
+                }
+                for c in classes {
+                    self.check_class(*c)?;
+                }
+                for l in layers {
+                    if let Some(layer) = self.doc.layers.iter_mut().find(|x| x.id == *l) {
+                        layer.visible = *mode != VisMode::Invisible;
+                    }
+                    if *mode == VisMode::Grey {
+                        self.doc.drawing.grey.layers.insert(*l);
+                    } else {
+                        self.doc.drawing.grey.layers.remove(l);
+                    }
+                }
+                for c in classes {
+                    if let Some(class) = self.doc.classes.iter_mut().find(|x| x.id == *c) {
+                        class.visible = *mode != VisMode::Invisible;
+                    }
+                    if *mode == VisMode::Grey {
+                        self.doc.drawing.grey.classes.insert(*c);
+                    } else {
+                        self.doc.drawing.grey.classes.remove(c);
+                    }
+                }
+            }
             Command::Batch { commands } => {
                 for c in commands {
                     self.run(c, out)?;

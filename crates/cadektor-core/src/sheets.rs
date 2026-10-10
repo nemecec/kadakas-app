@@ -262,6 +262,9 @@ pub struct Drawing {
     /// Materials in use, the sun and the render style (see `crate::present`).
     #[serde(default)]
     pub presentation: crate::present::Presentation,
+    /// Layers and classes that show in grey (see `crate::visibility`).
+    #[serde(default)]
+    pub grey: crate::visibility::GreySet,
 }
 
 impl Drawing {

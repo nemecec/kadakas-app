@@ -234,7 +234,7 @@ impl Tx<'_> {
     }
 
     /// The given objects, with each group replaced by its members at any depth. All must be editable.
-    fn editable_leaves(&self, ids: &[ObjectId]) -> Result<Vec<ObjectId>, CommandError> {
+    pub(super) fn editable_leaves(&self, ids: &[ObjectId]) -> Result<Vec<ObjectId>, CommandError> {
         let ids = unique(ids);
         for &id in &ids {
             self.editable(id)?;
@@ -251,7 +251,7 @@ impl Tx<'_> {
     }
 
     /// Objects of the same kind of layer rules: adds a new object made by this command.
-    fn add_new(&mut self, o: Object) {
+    pub(super) fn add_new(&mut self, o: Object) {
         let id = o.id;
         self.added.push(id);
         self.added_set.insert(id);

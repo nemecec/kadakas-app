@@ -36,7 +36,7 @@ pub const DOMAINS: &[Domain] = &[
     Domain {
         name: "document",
         summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility and the document files.",
-        prefixes: &["execute", "document", "project", "saved_view", "file"],
+        prefixes: &["execute", "document", "project", "saved_view", "file", "visibility"],
         read_only: false,
         open_world: false,
     },
@@ -45,6 +45,13 @@ pub const DOMAINS: &[Domain] = &[
         summary: "Read objects of the drawing.",
         prefixes: &["objects"],
         read_only: true,
+        open_world: false,
+    },
+    Domain {
+        name: "edit_2d",
+        summary: "Edit 2D geometry: rotate, scale, mirror, duplicate array (linear, rectangular, circular), offset, fillet, chamfer, trim, extend, split, and surface operations (add, subtract, clip, intersect, compose). Also snap queries.",
+        prefixes: &["edit", "surface", "snap"],
+        read_only: false,
         open_world: false,
     },
     Domain {

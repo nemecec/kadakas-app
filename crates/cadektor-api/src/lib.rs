@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod data_api;
+mod edit2d_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_api;
 mod grading_api;
@@ -15,6 +16,7 @@ mod irrigation_api;
 mod libfiles;
 mod massing_api;
 mod plants_api;
+mod query_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;
 mod present_api;
@@ -70,6 +72,10 @@ pub struct Session {
     pub context: Vec<ObjectId>,
     /// The chosen 3D view. `view.set` changes it, and the app follows it.
     pub view: ViewSettings,
+    /// The snapping settings (the Snapping set). The app and `snap.*` share them.
+    pub snap: cadektor_core::snapping::Settings,
+    /// The smart points and edges you acquired.
+    pub smart: cadektor_core::snapping::Smart,
     replaced: bool,
     view_changed: bool,
     mesh_cache: MeshCache,
@@ -488,6 +494,30 @@ pub const METHODS: &[(&str, &str)] = &[
         "site.contours",
         "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}.",
     ),
+    // Editing 2D geometry (see edit2d_api.rs).
+    edit2d_api::EDIT_ROTATE,
+    edit2d_api::EDIT_SCALE,
+    edit2d_api::EDIT_MIRROR,
+    edit2d_api::EDIT_ARRAY,
+    edit2d_api::EDIT_OFFSET,
+    edit2d_api::EDIT_FILLET,
+    edit2d_api::EDIT_CHAMFER,
+    edit2d_api::EDIT_TRIM,
+    edit2d_api::EDIT_EXTEND,
+    edit2d_api::EDIT_SPLIT,
+    edit2d_api::SURFACE_ADD,
+    edit2d_api::SURFACE_SUBTRACT,
+    edit2d_api::SURFACE_CLIP,
+    edit2d_api::SURFACE_INTERSECT,
+    edit2d_api::SURFACE_COMPOSE,
+    // Queries, snapping and visibility modes (see query_api.rs).
+    query_api::OBJECTS_QUERY,
+    query_api::SNAP_GET,
+    query_api::SNAP_SET,
+    query_api::SNAP_QUERY,
+    query_api::SNAP_SMART,
+    query_api::VISIBILITY_GET,
+    query_api::VISIBILITY_SET,
     // Drawing documentation (see sheets_api.rs).
     sheets_api::SHEET_LIST,
     sheets_api::SHEET_CREATE,
@@ -571,6 +601,8 @@ impl Session {
             selection: Vec::new(),
             context: Vec::new(),
             view: ViewSettings::default(),
+            snap: Default::default(),
+            smart: Default::default(),
             replaced: false,
             view_changed: false,
             mesh_cache: MeshCache::default(),
@@ -615,6 +647,7 @@ impl Session {
         *self = Session {
             replaced: true,
             view: self.view,
+            snap: self.snap,
             ..Session::with_document(doc)
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -746,6 +779,7 @@ impl Session {
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
+                let want_schema = p.get("schema").and_then(Value::as_bool) == Some(true);
                 #[allow(unused_mut)]
                 let mut d = json!({
                 "methods": METHODS.iter().map(|(m, d)| json!({"name": m, "doc": d})).collect::<Vec<_>>(),
@@ -761,6 +795,8 @@ impl Session {
                 "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
                 "resources": symbols_api::describe(),
+                "editing": edit2d_api::describe(),
+                "queries": query_api::describe(),
                 "annotation": annotation_api::describe(),
                 });
                 #[cfg(not(target_arch = "wasm32"))]
@@ -768,6 +804,12 @@ impl Session {
                     d["io"] = io::describe();
                     d["gis"] = gis_api::describe();
                     d["scripting"] = plugin_api::describe();
+                }
+                d["schemas"] = json!({
+                    "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Shapes, resource bodies and patches are objects with a `kind` or `type`; their fields are in command_examples and in the sections of this answer.",
+                });
+                if want_schema {
+                    d["command_schema"] = cadektor_core::schema::command_schema();
                 }
                 d
             }
@@ -808,6 +850,7 @@ impl Session {
                     "objects_by_kind": kinds,
                     "bounds": bounds,
                     "georeference": doc.georef,
+                    "grey": doc.drawing.grey,
                     "can_undo": self.editor.can_undo(),
                     "can_redo": self.editor.can_redo(),
                 })
@@ -1042,6 +1085,8 @@ impl Session {
                 return plants_api::handle(self, method, p.clone())
                     .or_else(|| sheets_api::handle(self, method, p.clone()))
                     .or_else(|| symbols_api::handle(self, method, p.clone()))
+                    .or_else(|| edit2d_api::handle(self, method, p.clone()))
+                    .or_else(|| query_api::handle(self, method, p.clone()))
                     .or_else(|| annotation_api::handle(self, method, p.clone()))
                     .or_else(|| data_api::handle(self, method, p))
                     .unwrap_or_else(|| {

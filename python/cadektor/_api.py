@@ -1371,6 +1371,138 @@ class Api:
         JSON-RPC method ``site.contours``."""
         return self._call("site.contours", params or None)
 
+    def edit_rotate(self, **params: Any) -> Any:
+        """Turn objects (a group as one unit). params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise), copy? (turn copies, keep the originals)}. Returns {created: [ids of the copies]}. Hardscapes, landscape areas and site models cannot be turned.
+
+        JSON-RPC method ``edit.rotate``."""
+        return self._call("edit.rotate", params or None)
+
+    def edit_scale(self, **params: Any) -> Any:
+        """Scale objects about a point. params: {ids?, center: [x, y], sx, sy? (default sx; a negative factor mirrors), copy?}. Circles, arcs and symbols need sx = sy. Fillet vertices and curves are flattened for a stretch. Returns {created}.
+
+        JSON-RPC method ``edit.scale``."""
+        return self._call("edit.scale", params or None)
+
+    def edit_mirror(self, **params: Any) -> Any:
+        """Mirror objects on the line through a and b. params: {ids?, a: [x, y], b: [x, y], copy? (default false: the objects move to the other side)}. Returns {created}.
+
+        JSON-RPC method ``edit.mirror``."""
+        return self._call("edit.mirror", params or None)
+
+    def edit_array(self, **params: Any) -> Any:
+        """Duplicate array. params: {ids?, shape: linear | rectangular | circular, retain? (keep the original, default true), resize? (each copy this many times larger than the one before), rotate? (radians; each copy turned this much more than the one before)}. linear: {count, offset: [dx, dy] | distance + angle}; rectangular: {columns, rows, column_spacing, row_spacing, angle?}, the place at column 0 and row 0 is the original; circular: {count, center: [x, y], angle? (between copies, radians; default spreads them over a full turn), rotate_objects? (default true)}. Returns {created: [ids of the copies]}.
+
+        JSON-RPC method ``edit.array``."""
+        return self._call("edit.array", params or None)
+
+    def edit_offset(self, **params: Any) -> Any:
+        """Offset: a parallel copy of a line, arc, circle, rectangle or polyline. params: {id, distance + side (left | right | outside | inside; default outside for closed shapes, left otherwise) | through: [x, y] (the copy passes through the point), copy? (default true; false moves the object itself)}. Arcs stay arcs; corners get a miter, or a bevel when the miter is longer than 4 times the distance. Returns {created}.
+
+        JSON-RPC method ``edit.offset``."""
+        return self._call("edit.offset", params or None)
+
+    def edit_fillet(self, **params: Any) -> Any:
+        """Fillet (round a corner). params: {radius, mode? (trim (default) | split | standard)}. Between two objects: {a, b, pick_a: [x, y], pick_b: [x, y]} (the picks are points on the parts to keep). trim cuts both and the fillet arc is a new object; split keeps the cut-off parts as objects; standard leaves the objects alone. Inside one shape: {id, corner? (index of the corner: between segment k and the next) | corners? ([indices]) | all? (every corner)}, the fillet becomes part of the shape (exact arc vertices). Lines that are too short are extended. Returns {created}.
+
+        JSON-RPC method ``edit.fillet``."""
+        return self._call("edit.fillet", params or None)
+
+    def edit_chamfer(self, **params: Any) -> Any:
+        """Chamfer (cut a corner with a line). Same objects and modes as edit.fillet. The size is {distance, distance2? (default distance)} measured from the corner along the first and second object, or {distance, angle} (radians between the first object and the chamfer), or {length} of the chamfer line. Returns {created}.
+
+        JSON-RPC method ``edit.chamfer``."""
+        return self._call("edit.chamfer", params or None)
+
+    def edit_trim(self, **params: Any) -> Any:
+        """Trim: remove the part of an object at a point, between the nearest crossings with other objects of the layer. params: {id, pick: [x, y], cutters? (ids; default: all other objects of the layer)}. A closed shape becomes an open one. Returns {created} (a second piece, if the click was between two crossings).
+
+        JSON-RPC method ``edit.trim``."""
+        return self._call("edit.trim", params or None)
+
+    def edit_extend(self, **params: Any) -> Any:
+        """Extend the end of an open line, arc or polyline (the end nearer to the point) to the nearest boundary. params: {id, pick: [x, y], boundaries? (ids; default: all other objects of the layer)}.
+
+        JSON-RPC method ``edit.extend``."""
+        return self._call("edit.extend", params or None)
+
+    def edit_split(self, **params: Any) -> Any:
+        """Split an object. params: {id, at: [[x, y]] (points on the object; it is cut there) | line: {a: [x, y], b: [x, y]} (cut a closed shape along the infinite line through a and b into closed polylines; the pieces together keep the area)}. Returns {created} (the first piece keeps the ID).
+
+        JSON-RPC method ``edit.split``."""
+        return self._call("edit.split", params or None)
+
+    def surface_add(self, **params: Any) -> Any:
+        """Add surface: one shape from the union of rectangles, circles and polylines on one layer. params: {ids (2 or more), keep? (keep the other shapes, default false)}. The lowest shape keeps its ID and attributes. Curves are flattened to 0.05 mm. Returns {created}.
+
+        JSON-RPC method ``surface.add``."""
+        return self._call("surface.add", params or None)
+
+    def surface_subtract(self, **params: Any) -> Any:
+        """Subtract surface: the base shape without the area of the cutters. params: {base, cutters: [ids], keep_cutters? (default false)}. The result can have holes (a polyline with a bridge of no width). Returns {created}; the base is deleted if nothing is left.
+
+        JSON-RPC method ``surface.subtract``."""
+        return self._call("surface.subtract", params or None)
+
+    def surface_clip(self, **params: Any) -> Any:
+        """Clip surface: the topmost shape cuts out its area of the shapes under it. params: {ids (2 or more), keep_cutter? (default true)}. Returns {created}.
+
+        JSON-RPC method ``surface.clip``."""
+        return self._call("surface.clip", params or None)
+
+    def surface_intersect(self, **params: Any) -> Any:
+        """Intersect surface: the area that all shapes share. params: {ids (2 or more), keep? (default false)}. The lowest shape keeps its ID. Returns {created}.
+
+        JSON-RPC method ``surface.intersect``."""
+        return self._call("surface.intersect", params or None)
+
+    def surface_compose(self, **params: Any) -> Any:
+        """Compose: split overlapping shapes into regions that do not overlap (every overlap and every rest is a new shape, in the attributes of the topmost shape that covers it). params: {ids (2 or more), keep? (keep the originals, default false)}. Returns {created}.
+
+        JSON-RPC method ``surface.compose``."""
+        return self._call("surface.compose", params or None)
+
+    def objects_query(self, **params: Any) -> Any:
+        """Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = "plant" AND Area > 20, Class = "Trees", Layer = "Site", 'Soil'.'Depth' > 300, Style = "6\\" pot"; empty matches all), columns? ([expressions, e.g. "Area", "Style"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.
+
+        JSON-RPC method ``objects.query``."""
+        return self._call("objects.query", params or None)
+
+    def snap_get(self, **params: Any) -> Any:
+        """The snapping settings of the session (the app uses the same ones): {set: {grid, object_points, midpoints, intersections, edges, perpendicular, tangent, angle, distance, smart_points, smart_edges}, angle_step_deg, relative_angles, distance_step, other_layers, grey}, and the acquired smart points and edges.
+
+        JSON-RPC method ``snap.get``."""
+        return self._call("snap.get", params or None)
+
+    def snap_set(self, **params: Any) -> Any:
+        """Change the snapping settings. params: {set? ({category: bool}), angle_step_deg? (above 0, at most 180), relative_angles?, distance_step? (mm; 0 uses the grid step), other_layers? (snap to objects of other layers), grey? (snap to objects of grey layers and classes)}. Returns what snap.get returns.
+
+        JSON-RPC method ``snap.set``."""
+        return self._call("snap.set", params or None)
+
+    def snap_query(self, **params: Any) -> Any:
+        """Where a point snaps to. params: {point: [x, y], tolerance? (mm, default 10), grid_step? (mm, default 100), anchor? ([x, y]: the last clicked point, for angle, distance, perpendicular and tangent), prior_direction? (radians), exclude? ([ids]), set? ({category: bool} for this call only)}. Returns {snapped, point, kind, cue (the label at the cursor), guides ([{a, b, kind}])}.
+
+        JSON-RPC method ``snap.query``."""
+        return self._call("snap.query", params or None)
+
+    def snap_smart(self, **params: Any) -> Any:
+        """Smart points and smart edges (alignment lines). params: {action: acquire_point | acquire_edge | acquire_at | clear, point? ([x, y]), a? and b? ([x, y], the edge), tolerance? (acquire_at takes the object point or, with edges: true, the edge nearest to the point)}. Up to 3 points and 2 edges are kept; the oldest goes. Returns what snap.get returns.
+
+        JSON-RPC method ``snap.smart``."""
+        return self._call("snap.smart", params or None)
+
+    def visibility_get(self, **params: Any) -> Any:
+        """The visibility mode (visible, grey or invisible) of layers and classes. Returns {layers: [{id, name, mode}], classes: [{id, name, mode}]}.
+
+        JSON-RPC method ``visibility.get``."""
+        return self._call("visibility.get", params or None)
+
+    def visibility_set(self, **params: Any) -> Any:
+        """Set the visibility mode of layers and classes in one undo step. params: {mode: visible | grey | invisible, layers? ([ids]), classes? ([ids])}. A grey layer or class is drawn in grey and its objects cannot be picked, edited or (by default) snapped to. Returns what visibility.get returns.
+
+        JSON-RPC method ``visibility.set``."""
+        return self._call("visibility.set", params or None)
+
     def sheet_list(self, **params: Any) -> Any:
         """Sheet layers with page size, number, title, and the IDs of their viewports and title blocks. Returns {sheets: [{layer, name, number, title, paper, orientation, width_mm, height_mm, viewports, title_blocks}]}.
 
@@ -1923,6 +2055,28 @@ METHOD_NAMES: tuple[str, ...] = (
     "site.drape",
     "site.refresh",
     "site.contours",
+    "edit.rotate",
+    "edit.scale",
+    "edit.mirror",
+    "edit.array",
+    "edit.offset",
+    "edit.fillet",
+    "edit.chamfer",
+    "edit.trim",
+    "edit.extend",
+    "edit.split",
+    "surface.add",
+    "surface.subtract",
+    "surface.clip",
+    "surface.intersect",
+    "surface.compose",
+    "objects.query",
+    "snap.get",
+    "snap.set",
+    "snap.query",
+    "snap.smart",
+    "visibility.get",
+    "visibility.set",
     "sheet.list",
     "sheet.create",
     "sheet.set",

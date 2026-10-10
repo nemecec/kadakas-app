@@ -1,0 +1,2269 @@
+{
+  "$defs": {
+    "ArrayParams": {
+      "description": "A duplicate array.",
+      "oneOf": [
+        {
+          "description": "`count` copies along `offset` (x, y) from one copy to the next. Or give `distance` and\n`angle` (radians) for a polar offset.",
+          "properties": {
+            "angle": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "distance": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "offset": {
+              "default": null,
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "shape": {
+              "const": "linear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`columns` x `rows` places, `column_spacing` and `row_spacing` apart. The grid can be turned\nby `angle`. The place at column 0, row 0 is the original.",
+          "properties": {
+            "angle": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            },
+            "column_spacing": {
+              "format": "double",
+              "type": "number"
+            },
+            "columns": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row_spacing": {
+              "format": "double",
+              "type": "number"
+            },
+            "rows": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shape": {
+              "const": "rectangular",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "columns",
+            "rows",
+            "column_spacing",
+            "row_spacing"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`count` copies about `center`, `angle` apart. The default angle spreads the copies\nand the original evenly over a full turn.",
+          "properties": {
+            "angle": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "center": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rotate_objects": {
+              "default": true,
+              "description": "Turn the copies too (default true).",
+              "type": "boolean"
+            },
+            "shape": {
+              "const": "circular",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "count",
+            "center"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "resize": {
+          "default": null,
+          "description": "Each copy is this many times larger than the one before (default 1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "retain": {
+          "default": true,
+          "description": "Keep the original (default true). If not, the original goes and the array fills its place too.",
+          "type": "boolean"
+        },
+        "rotate": {
+          "default": null,
+          "description": "Each copy is turned this much more than the one before, in radians, about its own center.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Attributes": {
+      "additionalProperties": false,
+      "description": "Graphic attributes. A missing field uses the class attribute.",
+      "properties": {
+        "fill": {
+          "$ref": "#/$defs/Color"
+        },
+        "fill_pattern": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "line_type": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "line_weight": {
+          "description": "mm on paper",
+          "type": "number"
+        },
+        "pen": {
+          "$ref": "#/$defs/Color"
+        }
+      },
+      "type": "object"
+    },
+    "ClassId": {
+      "description": "An ID.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Color": {
+      "description": "[red, green, blue, alpha], 0 to 255.",
+      "items": {
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "type": "array"
+    },
+    "Georeference": {
+      "description": "Where the drawing sits on the earth: CRS and origin.",
+      "type": "object"
+    },
+    "HardscapePatch": {
+      "description": "Hardscape settings to change. Missing fields stay.",
+      "type": "object"
+    },
+    "LandscapePatch": {
+      "description": "Landscape area settings to change. Missing fields stay.",
+      "type": "object"
+    },
+    "LayerId": {
+      "description": "An ID.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LayerKind": {
+      "enum": [
+        "design",
+        "sheet"
+      ],
+      "type": "string"
+    },
+    "ObjectId": {
+      "description": "An ID.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Orientation": {
+      "enum": [
+        "landscape",
+        "portrait"
+      ],
+      "type": "string"
+    },
+    "PaperSize": {
+      "enum": [
+        "a0",
+        "a1",
+        "a2",
+        "a3",
+        "a4",
+        "letter",
+        "legal",
+        "tabloid",
+        "arch_c",
+        "arch_d",
+        "arch_e",
+        "custom"
+      ],
+      "type": "string"
+    },
+    "ResourceBody": {
+      "additionalProperties": true,
+      "description": "The content of a resource. `type` names it (plant_style, record_format, worksheet, hatch, tile, line_type, symbol, ... see describe: resources). The other keys depend on the type.",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "ResourceId": {
+      "description": "An ID.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "SavedView": {
+      "description": "A saved view: name, layer visibility, active layer and camera.",
+      "type": "object"
+    },
+    "Shape": {
+      "additionalProperties": true,
+      "description": "A shape. `kind` names the variant; the other keys depend on it (see describe: command_examples and the sections of each feature).",
+      "properties": {
+        "kind": {
+          "enum": [
+            "line",
+            "rect",
+            "circle",
+            "arc",
+            "polyline",
+            "text",
+            "plant",
+            "existing_tree",
+            "plant_tag",
+            "landscape_area",
+            "hardscape",
+            "locus3d",
+            "polyline3d",
+            "site_model",
+            "site_modifier",
+            "viewport",
+            "massing",
+            "underlay",
+            "title_block",
+            "annotation",
+            "group",
+            "symbol",
+            "mesh3d",
+            "irrigation"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SlotTarget": {
+      "additionalProperties": true,
+      "description": "A place that takes a material: a class, an object, or a hatch.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "object",
+            "style",
+            "class"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SunSettings": {
+      "description": "The sun: latitude, longitude, date and time.",
+      "type": "object"
+    },
+    "Transform": {
+      "description": "A transform of objects. Angles are radians, counterclockwise.",
+      "oneOf": [
+        {
+          "description": "Turn about `center`.",
+          "properties": {
+            "angle": {
+              "format": "double",
+              "type": "number"
+            },
+            "center": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": {
+              "const": "rotate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "angle"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Scale about `center`. `sy` defaults to `sx`. A negative factor mirrors along that axis.",
+          "properties": {
+            "center": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "sx": {
+              "format": "double",
+              "type": "number"
+            },
+            "sy": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "scale",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "sx"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Mirror on the line through `a` and `b`.",
+          "properties": {
+            "a": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "b": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": {
+              "const": "mirror",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "a",
+            "b"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Move by `delta`.",
+          "properties": {
+            "delta": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": {
+              "const": "move",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "delta"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Variation": {
+      "description": "Random variation of placed plants: seed and ranges.",
+      "type": "object"
+    },
+    "Vertex": {
+      "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: arc | point_on_arc | bezier | cubic | corner, radius?} is a curved vertex.",
+      "oneOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "corner",
+                "arc",
+                "point_on_arc",
+                "bezier",
+                "cubic"
+              ],
+              "type": "string"
+            },
+            "p": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "radius": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "p"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VertexKind": {
+      "additionalProperties": true,
+      "description": "The kind of a vertex. `arc` has a radius.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "corner",
+            "arc",
+            "point_on_arc",
+            "bezier",
+            "cubic"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "VisMode": {
+      "enum": [
+        "visible",
+        "grey",
+        "invisible"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "description": "Add an object. Missing layer or class means the active one.",
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "add_object",
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/Shape"
+        }
+      },
+      "required": [
+        "op",
+        "shape"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "delete_objects",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Move objects. An ID that appears twice is moved once.",
+      "properties": {
+        "delta": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "move_objects",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "delta"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change properties of one object. Missing fields stay unchanged.",
+      "properties": {
+        "attrs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Attributes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "modify_object",
+          "type": "string"
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change one vertex of a polyline, landscape area or hardscape.\nMissing fields stay unchanged. `kind` is a vertex kind such as\n`{\"kind\": \"arc\", \"radius\": 50}`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VertexKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "set_vertex",
+          "type": "string"
+        },
+        "p": {
+          "default": null,
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "index"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the record data of one object: `set` merges keys, `remove`\ndeletes keys. Keys in `set` are applied first.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "set_data",
+          "type": "string"
+        },
+        "remove": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "set": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "elevation": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "add_layer",
+          "type": "string"
+        },
+        "scale": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "elevation": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "locked": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "modify_layer",
+          "type": "string"
+        },
+        "scale": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "visible": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete an empty layer.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "op": {
+          "const": "delete_layer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "add_class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "attrs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Attributes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ClassId"
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "modify_class",
+          "type": "string"
+        },
+        "visible": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "set_active",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set or clear the georeference of the document.",
+      "properties": {
+        "georef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Georeference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "op": {
+          "const": "set_georeference",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set or clear the sun (heliodon) of the document.",
+      "properties": {
+        "op": {
+          "const": "set_sun",
+          "type": "string"
+        },
+        "sun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SunSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Put a material on a slot (an object or one of its parts, a style part or a class), or clear the slot.",
+      "properties": {
+        "material": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "set_material_slot",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SlotTarget"
+        }
+      },
+      "required": [
+        "op",
+        "target"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Choose the render style of the 3D view, or `null` for the built-in style.",
+      "properties": {
+        "op": {
+          "const": "set_render_style",
+          "type": "string"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a resource, for example a plant style. Returns its ID in `created`.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/ResourceBody"
+        },
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "add_resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name",
+        "body"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the name or content of a resource. Plants that use a plant style follow the change.",
+      "properties": {
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "modify_resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a resource. If objects use it, the command fails unless `reassign` names\nanother resource of the same type that takes over.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "op": {
+          "const": "delete_resource",
+          "type": "string"
+        },
+        "reassign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add one plant per position, as one step. A plant refers to `style` (if given) and\n`overrides` replace style fields. Without a style the plants are by instance, with\nthe default style fields and the overrides.",
+      "properties": {
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "add_plants",
+          "type": "string"
+        },
+        "overrides": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "positions": {
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "variation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Variation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Random size and rotation, from a seed. Plant `i` gets the same values every time."
+        }
+      },
+      "required": [
+        "op",
+        "positions"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Link plants to a style, replace their overrides, or unlink them.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_plant_style",
+          "type": "string"
+        },
+        "overrides": {
+          "additionalProperties": true,
+          "default": null,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unlink": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Attach a record to objects. `values` are checked against the record format. Fields\nwithout a value get the default. Each object can have a record once.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "attach_record",
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "values": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "record"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Remove a record and its values from objects.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "detach_record",
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/ResourceId"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "record"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change field values of a record that is attached. Other fields stay unchanged.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_record_fields",
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "values": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "record",
+        "values"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.\nThe patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).",
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "boundary": {
+          "default": null,
+          "items": {
+            "$ref": "#/$defs/Vertex"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "add_hardscape",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/HardscapePatch",
+          "default": {
+            "align": null,
+            "center": null,
+            "closed": null,
+            "drape": null,
+            "elevation": null,
+            "join": null,
+            "material": null,
+            "mode": null,
+            "offset": null,
+            "site_modifier": null,
+            "slope": null,
+            "style": null,
+            "thickness": null,
+            "unstyle": false,
+            "width": null
+          }
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a landscape area with a boundary, a name and settings (style, holes, drape).",
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "boundary": {
+          "items": {
+            "$ref": "#/$defs/Vertex"
+          },
+          "type": "array"
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "op": {
+          "const": "add_landscape_area",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/LandscapePatch",
+          "default": {
+            "drape": null,
+            "holes": null,
+            "name": null,
+            "show_plants": null,
+            "style": null,
+            "unstyle": false
+          }
+        }
+      },
+      "required": [
+        "op",
+        "boundary"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change hardscape settings of one or more hardscapes. Missing fields stay unchanged.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_hardscape",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/HardscapePatch"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "patch"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the style, holes or options of landscape areas.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_landscape_area",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/LandscapePatch"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "patch"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a sheet layer with its page settings, as one step. Returns the layer ID in `created`.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "add_sheet",
+          "type": "string"
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Orientation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "paper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaperSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the page of a sheet layer. Missing fields stay unchanged.\n`paper` is a size id (`a3`, `letter`, ...) or `{custom: {width_mm, height_mm}}`.",
+      "properties": {
+        "layer": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "number": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "set_sheet",
+          "type": "string"
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Orientation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "paper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaperSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "layer"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the project data that title blocks show. Missing fields stay unchanged.",
+      "properties": {
+        "address": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drawn_by": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "set_project",
+          "type": "string"
+        },
+        "revision": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set the stable project GUID (22 characters of the IFC base64 alphabet). IFC export sets it once.",
+      "properties": {
+        "guid": {
+          "type": "string"
+        },
+        "op": {
+          "const": "set_project_guid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "guid"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Store a saved view. A view with the same name is replaced.",
+      "properties": {
+        "op": {
+          "const": "save_view",
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/SavedView"
+        }
+      },
+      "required": [
+        "op",
+        "view"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "delete_view",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Apply a saved view: layer and class visibility and the active layer and class.\nThe camera part (zoom, pan, 3D view) is for the host to apply.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "restore_view",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Place a worksheet in the drawing as a table. `at` is the top left corner and `size` the\nframe in mm (paper mm on a sheet layer). The table is drawn from the calculated worksheet.",
+      "properties": {
+        "at": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "add_worksheet_table",
+          "type": "string"
+        },
+        "size": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "text_height": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "worksheet": {
+          "$ref": "#/$defs/ResourceId"
+        }
+      },
+      "required": [
+        "op",
+        "worksheet",
+        "at",
+        "size"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change tables: the worksheet, the text height or the size of the frame (the top left corner stays).",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_worksheet_table",
+          "type": "string"
+        },
+        "size": {
+          "default": null,
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "text_height": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "worksheet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Make a group of objects. They must be on one layer and in the same group (or in none).\nA click on a group selects it as a whole. Returns the ID of the group in `created`.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "const": "group",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add an object as a member of a group (on the layer of the group). Use it when you draw inside a group\nyou have entered. Returns the ID of the object in `created`.",
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/Attributes",
+          "default": {}
+        },
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "op": {
+          "const": "add_object_in",
+          "type": "string"
+        },
+        "parent": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "shape": {
+          "$ref": "#/$defs/Shape"
+        }
+      },
+      "required": [
+        "op",
+        "parent",
+        "shape"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Move objects into a group (`parent`) or out of all groups (no parent). The objects must be on the\nlayer of the group. A group that loses its last member goes.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "set_parent",
+          "type": "string"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Dissolve groups by one level: the members stay (in the group above, if any) and the group object goes.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "ungroup",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Turn objects about a point. A group turns as one unit. Angles are radians, counterclockwise.\nHardscapes, landscape areas and site models cannot be turned.",
+      "properties": {
+        "angle": {
+          "format": "double",
+          "type": "number"
+        },
+        "center": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "rotate_objects",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "center",
+        "angle"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Copy objects and move the copies by `delta`. A group is copied with its members. Returns the\nIDs of the copies of `ids` in `created`, then the IDs of copied members.",
+      "properties": {
+        "delta": {
+          "default": [
+            0.0,
+            0.0
+          ],
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "copy_objects",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Make a symbol definition from objects (groups count as their members). The insertion point is\nin the drawing (default: the center of the objects). With `replace` the objects are replaced by one instance.\nReturns the ID of the definition and then, with `replace`, the ID of the instance in `created`.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "insertion": {
+          "default": null,
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "create_symbol",
+          "type": "string"
+        },
+        "replace": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "name",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Replace symbol instances by groups of plain objects.",
+      "properties": {
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "convert_symbol_to_group",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Edit the definition of a symbol in place: its 2D components become a group at the instance\n(the instance is hidden meanwhile). Returns the ID of the group in `created`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "edit_symbol",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "End editing in place: the objects of the edit group become the 2D components of the definition.",
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "op": {
+          "const": "exit_symbol_edit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "group"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set the visibility mode of layers and classes: visible, grey (drawn in grey, cannot be\npicked or edited) or invisible. See `crate::visibility`.",
+      "properties": {
+        "classes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ClassId"
+          },
+          "type": "array"
+        },
+        "layers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LayerId"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/VisMode"
+        },
+        "op": {
+          "const": "set_visibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "mode"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Scale, mirror, turn or move objects (a group as one unit), in place or as copies. With\n`copy` the originals stay and the copies are returned in `created`. See `edit2d::Transform`.",
+      "properties": {
+        "copy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "transform_objects",
+          "type": "string"
+        },
+        "transform": {
+          "$ref": "#/$defs/Transform"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "transform"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Duplicate array: linear, rectangular or circular copies of objects (a group as one unit).\nReturns the IDs of the copies of `ids` in `created`. See `edit2d::ArrayParams`.",
+      "properties": {
+        "array": {
+          "$ref": "#/$defs/ArrayParams"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "array_objects",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "array"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Several commands as one undo step. Stops at the first error.",
+      "properties": {
+        "commands": {
+          "items": {
+            "$ref": "#"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "batch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "commands"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Command"
+}

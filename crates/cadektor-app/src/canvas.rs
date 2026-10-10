@@ -625,6 +625,29 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
                 egui::StrokeKind::Middle,
             );
         }
+        Preview::Lasso { points, crossing } => {
+            let c = if *crossing {
+                Color32::from_rgb(40, 160, 70)
+            } else {
+                SELECT_COLOR
+            };
+            let sp: Vec<Pos2> = points.iter().map(|p| view.to_screen(*p)).collect();
+            if sp.len() >= 3 {
+                painter.add(PathShape {
+                    points: sp.clone(),
+                    closed: true,
+                    fill: c.gamma_multiply(0.1),
+                    stroke: PathStroke::new(1.0, c),
+                });
+            } else {
+                painter.add(PathShape {
+                    points: sp,
+                    closed: false,
+                    fill: Color32::TRANSPARENT,
+                    stroke: PathStroke::new(1.0, c),
+                });
+            }
+        }
         Preview::Move { ids, delta } => {
             let counts = tag_counts(f.doc);
             for o in f.doc.objects.values().filter(|o| ids.contains(&o.id)) {

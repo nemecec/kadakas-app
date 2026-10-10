@@ -262,6 +262,55 @@ fn summary_line(columns: &[ColumnDef], rows: &[&Vec<Value>]) -> Vec<Value> {
         .collect()
 }
 
+/// The objects that match some criteria, and the values of some columns for them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryResult {
+    /// The matching objects in drawing order.
+    pub ids: Vec<cadektor_core::model::ObjectId>,
+    /// One row per matching object: the value of each column expression.
+    pub rows: Vec<Vec<Value>>,
+    /// Objects for which the criteria gave an error (they are left out).
+    pub errors: usize,
+}
+
+/// Finds objects by criteria. The criteria are the same language as the criteria of a database
+/// block: `Kind = "plant" AND Area > 20`, `Class = "Trees" OR 'Soil'.'Depth' > 300`. An empty
+/// criteria text matches all objects. `columns` are expressions over object properties. A bad
+/// criteria or column text gives an error message.
+pub fn query_objects(
+    doc: &Document,
+    criteria: &str,
+    columns: &[String],
+    ground: &dyn TerrainSource,
+) -> Result<QueryResult, String> {
+    let crit: Option<Expr> = if criteria.trim().is_empty() {
+        None
+    } else {
+        Some(formula::parse(criteria).map_err(|e| format!("criteria: {e}"))?)
+    };
+    let cols: Vec<Expr> = columns
+        .iter()
+        .map(|c| formula::parse(c).map_err(|e| format!("column '{c}': {e}")))
+        .collect::<Result<_, _>>()?;
+    let mut out = QueryResult::default();
+    for obj in doc.objects.values() {
+        let env = ObjEnv { doc, obj, ground };
+        if let Some(c) = &crit {
+            match eval(c, &env).to_bool() {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(_) => {
+                    out.errors += 1;
+                    continue;
+                }
+            }
+        }
+        out.ids.push(obj.id);
+        out.rows.push(cols.iter().map(|e| eval(e, &env)).collect());
+    }
+    Ok(out)
+}
+
 /// Runs one database block against the document, with no ground.
 pub fn run(doc: &Document, db: &DatabaseDef, index: usize) -> DbOutput {
     run_on(doc, db, index, &NoTerrain)

@@ -284,6 +284,17 @@ pub fn tool_panel(
     for t in Tool::BASIC {
         tool_button(ui, m, keys, t);
     }
+    if m.tool() == Tool::Select {
+        select_mode_bar(ui, settings);
+    }
+    ui.add_space(8.0);
+    ui.label("Modify");
+    for t in Tool::MODIFY {
+        tool_button(ui, m, keys, t);
+    }
+    if crate::tools::is_modify(m.tool()) {
+        modify_options(ui, m, settings);
+    }
     ui.add_space(8.0);
     ui.label("Landscape");
     for t in Tool::LANDSCAPE {
@@ -321,6 +332,91 @@ pub fn tool_panel(
     if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
         // A new mode starts a new placement.
         m.cancel();
+    }
+}
+
+/// The modes of the Selection tool: how a drag on empty space picks.
+fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
+    ui.add_space(4.0);
+    ui.label("Selection mode");
+    ui.horizontal_wrapped(|ui| {
+        for mode in crate::tools::SelectMode::ALL {
+            let r = ui.selectable_label(settings.select_mode == mode, mode.label());
+            let tip = match mode {
+                crate::tools::SelectMode::Rectangle => {
+                    "Drag a box. Left to right selects what is inside, right to left what the box touches."
+                }
+                crate::tools::SelectMode::Lasso => {
+                    "Drag a free-hand shape. It ends to the right of its start: objects inside. To the left: objects it touches."
+                }
+            };
+            if r.on_hover_text(tip).clicked() {
+                settings.select_mode = mode;
+            }
+        }
+    });
+}
+
+/// The options of the modify tools (the Tool bar fields).
+fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings) {
+    use cadektor_core::edit2d::modify::JoinMode;
+    let s = &mut settings.modify;
+    let tool = m.tool();
+    ui.add_space(4.0);
+    match tool {
+        Tool::Rotate | Tool::Mirror | Tool::Scale => {
+            ui.checkbox(&mut s.copy, "Duplicate")
+                .on_hover_text("Work on copies and keep the originals");
+        }
+        Tool::Offset => {
+            ui.horizontal(|ui| {
+                ui.label("Distance");
+                ui.add(DragValue::new(&mut s.offset_distance).speed(10.0).range(0.0..=1.0e7).suffix(" mm"))
+                    .on_hover_text("0: the copy passes through the second click");
+            });
+            ui.checkbox(&mut s.offset_copy, "Make a copy");
+        }
+        Tool::Fillet | Tool::Chamfer => {
+            if tool == Tool::Fillet {
+                ui.horizontal(|ui| {
+                    ui.label("Radius");
+                    ui.add(DragValue::new(&mut s.radius).speed(10.0).range(0.001..=1.0e7).suffix(" mm"));
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("First");
+                    ui.add(DragValue::new(&mut s.chamfer_a).speed(10.0).range(0.001..=1.0e7).suffix(" mm"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Second");
+                    ui.add(DragValue::new(&mut s.chamfer_b).speed(10.0).range(0.001..=1.0e7).suffix(" mm"));
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (mode, label, tip) in [
+                    (JoinMode::Standard, "Standard", "Only add the new piece. The objects stay."),
+                    (JoinMode::Split, "Split", "Cut the objects at the new piece and keep the cut-off parts."),
+                    (JoinMode::Trim, "Trim", "Cut the objects at the new piece and remove the cut-off parts."),
+                ] {
+                    if ui.selectable_label(s.join_mode == mode, label).on_hover_text(tip).clicked() {
+                        s.join_mode = mode;
+                    }
+                }
+            });
+        }
+        Tool::Trim | Tool::Extend => {
+            ui.horizontal_wrapped(|ui| {
+                for (mode, label) in [
+                    (crate::tools::CutTo::AllObjects, "All objects"),
+                    (crate::tools::CutTo::SelectedObjects, "Selected objects"),
+                ] {
+                    if ui.selectable_label(s.cut_to == mode, label).clicked() {
+                        s.cut_to = mode;
+                    }
+                }
+            });
+        }
+        _ => {}
     }
 }
 
