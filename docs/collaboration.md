@@ -55,18 +55,22 @@ change different parts both keep their change:
 
 | Thing | Properties |
 |---|---|
-| object | `shape`, `layer`, `class`, `parent`, `attrs.<field>` (for example `attrs.pen`, `attrs.fill`), `data.<key>` (record data), and any other top-level field |
+| object | `shape`, `layer`, `class`, `parent`, `order`, `attrs.<field>` (for example `attrs.pen`, `attrs.fill`), `data.<key>` (record data), and any other top-level field. A site model is cut further: `shape` (without the points and lines), `shape.points.<n>` (chunks of 256 points) and `shape.lines.<n>` (one line each). |
 | class | `name`, `visible`, `attrs.<field>` |
-| layer | `name`, `kind`, `visible`, `locked`, `elevation`, `scale` |
+| layer | `name`, `kind`, `visible`, `locked`, `elevation`, `scale`, `order` |
 | resource | `name`, `body` |
 | document | `georef`, `drawing.<field>` for each field of the drawing data, cut once more when the field is an object (`drawing.project.name`), and `drawing.sheets.<layer id>` for the page settings of each sheet layer |
 
 The property `id` does not exist. It is the identity. Names have 1 to 256 characters.
 
-The **shape** is one property. A big shape value (the points of a site model, the PNG of an
-underlay) is copied whole by every edit of it, in the transaction, in the log and in the snapshot.
-This costs size, not correctness. A later version can cut such values into parts. A resource body
-is one property too.
+The **shape** is one property, except for a site model (above). Moving one point of a site model sends
+one chunk of 256 points, not all points. Two users who move points in different chunks both keep
+their change; in the same chunk, the last writer wins. Inserting or removing a point shifts the
+later chunks, which are sent again. A resource body is one property too.
+
+The picture of an **underlay** is not sent in the operation. The client sends it once as a blob
+(section 4.7) and the shape holds a reference. A move or a new opacity of the underlay sends a small
+operation.
 
 ### 3.2 The five operations
 
@@ -127,12 +131,51 @@ What this gives:
 - **Layers, classes and resources** are things like objects. A reference can break when one user
   deletes a layer, class or resource while another uses it. The replica keeps the reference as it
   is. The client repairs it when it builds the document (section 3.4).
-- **Not shared in version 1:** the z-order of objects, the order of layers, the active layer and
-  class, the selection, the view. A document keeps its own order, and new things go to the end,
-  sorted by ID.
-- **Plug-in objects.** If two users run the script of one plug-in object at the same time, each
-  run makes its own child objects with new IDs, and both sets stay. The geometry doubles until
-  someone runs the script again. Version 1 does not prevent this.
+- **Not shared:** the active layer and class, the selection, the view. (The stacking order is
+  shared, section 3.3.1.)
+- **Plug-in objects** converge when two users regenerate them at once (section 3.3.2). Plug-in
+  objects of the older script kind (Python) still make new IDs at each run, and two runs at the same
+  time double the geometry until someone runs it again.
+
+### 3.3.1 The stacking order
+
+The z-order of objects and the order of layers are shared. Every object and every layer has the
+property `order`: a text key (digits `0-9A-Za-z`, compared as text, never ending with `0`). The
+lists are sorted by the key, and by the ID for equal keys. Between two keys there is always a third
+(*fractional indexing*; the code is our own, in `kadakas_collab::order`).
+
+- When the user changes the order locally (`arrange` to front, back, forward or backward,
+  `move_layer`, or a new object), the client looks at the list of each touched layer, keeps the
+  longest run of objects whose keys already increase, and gives new keys between the neighbours to the
+  others. One object that moves needs one new key. The keys are `set` operations like any other.
+- Two users who insert at the same place at the same time may make the same key. Both objects stay,
+  the ID decides which is first, and the client of the next change gives one of them a new key.
+- The key of an object is in the field `order` of the object in the document (in `extra`), so a saved
+  file keeps it. The client writes the keys into its document without a command or a change set
+  (`Editor::stamp_order_keys`).
+- Undo of a creation deletes the object, and its key with it. Undo of an `arrange` puts the old key
+  back (when no other client changed it).
+- A thing that has no key (made by an older client) sorts first, by ID, until a client gives it a
+  key.
+
+### 3.3.2 Things that a program makes again and again
+
+The shapes of a plug-in object are made again each time the object is regenerated. They get IDs that
+follow from the ID of the object, the number of the regeneration (`generation`) and their place in
+the list (`Uid::derive`, UUID version 8). The data of the plug-in object (parameters, generation and
+the list of shapes) is one property of the object, so the last writer wins on all three together.
+Two users who regenerate the same object at the same time make the same IDs.
+
+To make this work, `create` has a flag `merge` (false when it is left out). A create with `merge`
+of a thing that exists and is alive writes the properties like `set` operations (last writer wins)
+instead of being refused. A deleted thing stays deleted. The client sets the flag for objects with a
+derived ID, and for nothing else. A server must accept a `merge` create of a living thing, and must
+refuse every other create of an ID that exists.
+
+With different parameters at the same time, the last writer in server order wins: its parameters, its
+generation, and its properties of every shape. A shape that the loser made at an index the winner did
+not make stays as a leftover with a derived ID of the same generation; the next regeneration of the
+object removes it.
 
 ### 3.4 From the replica to a document
 
@@ -157,8 +200,10 @@ use only the content of the replica and IDs, so every client makes the same docu
 - An empty resource name becomes `Resource <last 8 characters of the ID>`. When two resources of one
   type have the same name (without case), the smaller ID keeps it, and the others get
   ` (<last 8 characters of the ID>)` added.
+- The lists of objects and layers are sorted by their keys (section 3.3.1).
 - **Quarantine:** a thing that does not read as its type, or fails `validate_entity`, is left out
-  and reported. It stays in the replica, so nothing is lost: a later good edit brings it back.
+  and reported. An object whose picture has not arrived yet (section 4.7) is left out too, and
+  appears when the picture comes. It stays in the replica, so nothing is lost: a later good edit brings it back.
 
 The repairs are not edits. They are not sent. The local shadow is the document that was built, so a
 repair never comes back as a change.
@@ -191,6 +236,11 @@ are left out if the client has no state yet.
 
 All fields of `state` are optional. Numbers must be finite. `scale` is above 0. A selection has at
 most 1000 IDs.
+
+**`blob_put`**: `{"type": "blob_put", "hash": "<sha256 hex>", "data": "<text>"}`. A blob (section
+4.7). The client sends it before the transaction that refers to it.
+
+**`blob_get`**: `{"type": "blob_get", "hash": "<sha256 hex>"}`. Asks for a blob.
 
 **`bye`**: the client leaves.
 
@@ -231,6 +281,9 @@ An **Entry** is `{"seq": 18, "author": "<client uuid>", "user": "<user uuid>", "
 empty `state`, so the others learn who is online.
 
 **`presence_leave`**: `{"type": "presence_leave", "client": "<uuid>"}`.
+
+**`blob`**: `{"type": "blob", "hash": "…", "data": "…"}`, the answer to `blob_get`. **`blob_missing`**:
+`{"type": "blob_missing", "hash": "…"}`.
 
 **`error`**: `{"type": "error", "code": "…", "message": "…", "op_id": 5}`. `op_id` is left out if
 the error is not about one transaction.
@@ -341,7 +394,24 @@ Every error code has a class. The client acts on the class:
 | `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s |
 | `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
 
-### 4.7 The rules of the client
+### 4.7 Blobs
+
+The picture of an underlay (the base64 text of a PNG, 4 KiB or more) is a *blob*. The client
+replaces it in the operation by `{"$blob": "<sha256 hex>"}` (the SHA-256 of the text), keeps the text,
+and sends `blob_put` first. The server checks that the hash is the SHA-256 of `data` (`bad_message`
+if not) and keeps the blob; one blob is at most 64 MiB. Before it orders a transaction, the server
+puts the pictures back to check the objects (section 4.5), so a transaction that refers to a blob the
+server does not have is `invalid_txn`. Messages of one connection keep their order, so the blob
+arrives first.
+
+A client that finds a reference to a blob it does not have (after a snapshot or an entry) sends
+`blob_get` once, and leaves the object out of its document until `blob` arrives. On `blob_missing` it
+does not ask again. After a sign-in the client sends `blob_put` again for every picture that a
+waiting transaction refers to. The checkpoint and the journal of the client hold the pictures they
+need. The server keeps a blob as long as the log refers to it. The same picture has the same hash, so
+it is sent once.
+
+### 4.8 The rules of the client
 
 - `hello` first. Then wait for `welcome` and for `entries` or `snapshot`. In that time the client
   edits only locally.
@@ -401,8 +471,10 @@ other users do not. The stacks hold at most 1000 steps.
 
 The check uses what the client has received. A change of another client that has not arrived yet is
 not seen. If the server orders it before the undo, the undo overwrites it, like any later edit.
-The inverse is made when the edit is made, from the view at that time; it is not made again when the
-server confirms the edit.
+The inverse is first made when the edit is made, from the view. When the server confirms the edit, the
+client makes the inverse **again**, from the confirmed state just before the transaction in server
+order. So if a write of another user was ordered under yours without your client having seen it, undo
+restores the value that was really underneath, not the stale one.
 
 ## 7. Offline work
 
@@ -470,9 +542,7 @@ normal `undo` is cleared, because its steps no longer fit. While a session is co
 - Creating the first shared document. The server makes it from an uploaded `.kad` file (the function
   `docsync::replica_of` reads a document into a replica).
 - Permissions, roles and locking of layers.
-- Sharing the z-order of objects and the order of layers.
-- Cutting big shape values into parts.
-- Making the inverse of an undo step again when the server confirms the edit.
+- Cutting other big values (a long polyline, a worksheet) into parts.
 - Comments and chat.
 - Compression of the log and of snapshots.
 

@@ -2062,3 +2062,208 @@ fn undo_restores_the_value_that_was_really_underneath_in_server_order() {
     net.settle();
     assert_eq!(net.value(1, 1, "a"), Some(json!(3)));
 }
+
+#[test]
+fn blobs_travel_by_hash_and_the_object_waits_for_its_picture() {
+    use crate::blob::{externalize, sha256_hex};
+    let text = "A".repeat(crate::blob::MIN_BLOB_BYTES + 1);
+    let shape = json!({"kind": "underlay", "png": text, "opacity": 1.0});
+    let (reference, hash, data) = externalize(&shape).unwrap();
+    let mut s = Sequencer::new(Replica::new());
+    s.check_entities(false);
+    let conn = s.open();
+    s.receive(
+        conn,
+        ClientMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            user: Uid::from_num(1),
+            client: Uid::from_num(1),
+            name: "x".into(),
+            token: String::new(),
+            last_seq: None,
+            log_id: None,
+        },
+        0,
+    );
+    // A blob with a wrong hash is refused; a good one is kept and can be asked for.
+    let bad = s.receive(
+        conn,
+        ClientMsg::BlobPut {
+            hash: "00".into(),
+            data: data.clone(),
+        },
+        0,
+    );
+    assert!(matches!(
+        bad[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::BadMessage,
+            ..
+        }
+    ));
+    assert!(
+        s.receive(
+            conn,
+            ClientMsg::BlobPut {
+                hash: hash.clone(),
+                data: data.clone()
+            },
+            0
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        s.receive(conn, ClientMsg::BlobGet { hash: hash.clone() }, 0)[0].msg,
+        ServerMsg::Blob {
+            hash: hash.clone(),
+            data: data.clone()
+        }
+    );
+    assert!(matches!(
+        s.receive(
+            conn,
+            ClientMsg::BlobGet {
+                hash: "nope".into()
+            },
+            0
+        )[0]
+        .msg,
+        ServerMsg::BlobMissing { .. }
+    ));
+
+    // A client with a reference to a picture it does not have asks for it, and leaves the object
+    // out of the document until the picture comes.
+    let mut r = Replica::new();
+    r.insert_baseline(
+        Target::new(Kind::Object, Uid::from_num(5)),
+        serde_json::from_value(json!({
+            "layer": kadakas_core::model::FIRST_LAYER.0,
+            "class": kadakas_core::model::NONE_CLASS.0,
+            "shape": reference,
+        }))
+        .unwrap(),
+    );
+    let mut c = Client::with_state(cfg(2), r, 0, "log-1");
+    c.connect();
+    c.handle(
+        ServerMsg::Welcome {
+            protocol: PROTOCOL_VERSION,
+            log_id: "log-1".into(),
+            head_seq: 0,
+            your_last_op: 0,
+            peers: vec![],
+        },
+        0,
+    );
+    c.handle(ServerMsg::Entries { entries: vec![] }, 0);
+    c.take_outbox();
+    c.tick(10);
+    let sent = c.take_outbox();
+    assert!(sent.contains(&ClientMsg::BlobGet { hash: hash.clone() }));
+    let m = c.materialize(&Document::default());
+    assert!(m.quarantined[0].reason.contains("has not arrived"));
+    // A blob with a wrong hash is ignored. A good one is kept (the object then fails for its own
+    // reason: this picture is not a PNG).
+    c.handle(
+        ServerMsg::Blob {
+            hash: hash.clone(),
+            data: "other".into(),
+        },
+        11,
+    );
+    assert!(
+        c.materialize(&Document::default()).quarantined[0]
+            .reason
+            .contains("has not arrived")
+    );
+    c.handle(
+        ServerMsg::Blob {
+            hash: hash.clone(),
+            data: data.clone(),
+        },
+        12,
+    );
+    assert_eq!(sha256_hex(data.as_bytes()), hash);
+    assert!(c.take_changed());
+    assert!(
+        !c.materialize(&Document::default()).quarantined[0]
+            .reason
+            .contains("has not arrived")
+    );
+    // A missing blob is not asked for again.
+    let mut r = Replica::new();
+    r.insert_baseline(
+        Target::new(Kind::Object, Uid::from_num(6)),
+        serde_json::from_value(json!({"shape": {"kind": "underlay", "png": {"$blob": "ab"}}}))
+            .unwrap(),
+    );
+    let mut c = Client::with_state(cfg(3), r, 0, "log-1");
+    c.connect();
+    c.handle(
+        ServerMsg::Welcome {
+            protocol: PROTOCOL_VERSION,
+            log_id: "log-1".into(),
+            head_seq: 0,
+            your_last_op: 0,
+            peers: vec![],
+        },
+        0,
+    );
+    c.handle(ServerMsg::Entries { entries: vec![] }, 0);
+    c.take_outbox();
+    c.tick(1);
+    let gets = |out: Vec<ClientMsg>| {
+        out.into_iter()
+            .filter(|m| matches!(m, ClientMsg::BlobGet { .. }))
+            .count()
+    };
+    assert_eq!(gets(c.take_outbox()), 1);
+    c.handle(ServerMsg::BlobMissing { hash: "ab".into() }, 2);
+    c.keep_changed();
+    c.tick(3);
+    assert_eq!(gets(c.take_outbox()), 0);
+}
+
+#[test]
+fn a_waiting_transaction_sends_its_picture_again_after_a_sign_in() {
+    let text = "B".repeat(crate::blob::MIN_BLOB_BYTES + 5);
+    let shape = json!({"kind": "underlay", "png": text});
+    let store = MemStore::new();
+    let mut c = Client::new(cfg(4));
+    c.set_store(Box::new(store.clone()));
+    let op = Op::Create {
+        target: obj(9),
+        props: [("shape".to_string(), shape)].into(),
+        merge: false,
+    };
+    c.edit(vec![op]).unwrap();
+    // The operation holds a reference. The picture is in the journal.
+    let j = c.journal();
+    assert_eq!(j.blobs.len(), 1);
+    assert!(serde_json::to_string(&j.pending).unwrap().len() < 1_000);
+    // After a restart the picture goes to the server before the transaction.
+    let mut c = Client::restore(cfg(4), Box::new(store));
+    c.connect();
+    c.take_outbox();
+    c.handle(
+        ServerMsg::Welcome {
+            protocol: PROTOCOL_VERSION,
+            log_id: "log-1".into(),
+            head_seq: 0,
+            your_last_op: 0,
+            peers: vec![],
+        },
+        0,
+    );
+    c.handle(
+        ServerMsg::Snapshot {
+            log_id: "log-1".into(),
+            seq: 0,
+            state: Replica::new(),
+        },
+        0,
+    );
+    let out = c.take_outbox();
+    assert!(matches!(out[0], ClientMsg::BlobPut { .. }));
+    assert!(matches!(out[1], ClientMsg::Submit { .. }));
+}

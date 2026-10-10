@@ -71,6 +71,7 @@ We implement these from the public descriptions. No code or data is copied unles
 | OGC WMS 1.1.1 and 1.3.0, WMTS 1.0.0, WFS 2.0 (Open Geospatial Consortium) | `kadakas-gis`: map services. https://www.ogc.org |
 | Esri Shapefile technical description, GeoJSON (RFC 7946) | `kadakas-io`: shapefile and GeoJSON import and export |
 | Last-writer-wins register and a central sequencer that orders an operation log (common techniques of replicated data, for example Shapiro et al., "A comprehensive study of Convergent and Commutative Replicated Data Types", 2011). UUID version 7 (RFC 9562) | `kadakas-collab` and `docs/collaboration.md`: merge rules and IDs of the collaboration protocol. No dependency or code is added |
+| Fractional indexing for ordered lists (the technique of the Figma editor and the write-up of Evan Wallace; our own code). SHA-256 (FIPS 180-4, NIST), our own code | `kadakas-collab`: `order.rs` (keys of the stacking order) and `blob.rs` (hash of pictures). No dependency is added |
 | Vectorworks 2026 public help pages and shortcut list (app-help.vectorworks.net) | Workflow, terms and default keys follow them. We use public information only and copy no text, icon or graphic. See `docs/keyboard-shortcuts.md`. |
 
 ## Tools that we use but do not ship

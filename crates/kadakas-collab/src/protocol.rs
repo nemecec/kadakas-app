@@ -143,6 +143,16 @@ pub enum ClientMsg {
     Presence {
         state: PresenceState,
     },
+    /// A blob (see `blob`): the text of a picture. `hash` is its SHA-256 as hex. The server checks it
+    /// and keeps the blob. The client sends it before the transaction that refers to it.
+    BlobPut {
+        hash: String,
+        data: String,
+    },
+    /// Asks for a blob that a reference in the state points to.
+    BlobGet {
+        hash: String,
+    },
     /// The client leaves. The server may close the connection.
     Bye,
 }
@@ -187,6 +197,10 @@ pub enum ServerMsg {
     },
     /// Another client went offline.
     PresenceLeave { client: Uid },
+    /// The answer to `blob_get`.
+    Blob { hash: String, data: String },
+    /// The server does not have this blob.
+    BlobMissing { hash: String },
     Error {
         code: ErrorCode,
         message: String,
@@ -250,6 +264,16 @@ mod tests {
         round(&ClientMsg::Presence {
             state: PresenceState::default(),
         });
+        round(&ClientMsg::BlobPut {
+            hash: "h".into(),
+            data: "d".into(),
+        });
+        round(&ClientMsg::BlobGet { hash: "h".into() });
+        round(&ServerMsg::Blob {
+            hash: "h".into(),
+            data: "d".into(),
+        });
+        round(&ServerMsg::BlobMissing { hash: "h".into() });
         round(&ClientMsg::Bye);
         round(&ServerMsg::Welcome {
             protocol: 1,

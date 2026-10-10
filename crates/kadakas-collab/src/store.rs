@@ -59,6 +59,9 @@ pub struct Journal {
     pub pending: Vec<Txn>,
     pub undo: Vec<UndoEntry>,
     pub redo: Vec<UndoEntry>,
+    /// The blobs (pictures) that the waiting transactions refer to, by hash.
+    #[serde(default)]
+    pub blobs: BTreeMap<String, String>,
 }
 
 /// The confirmed state of a client.
@@ -69,6 +72,9 @@ pub struct Checkpoint {
     pub log_id: String,
     pub seq: u64,
     pub state: Replica,
+    /// The blobs (pictures) that the client has, by hash.
+    #[serde(default)]
+    pub blobs: BTreeMap<String, String>,
 }
 
 /// A store in memory. Clones share the data, so a test can "restart" a client with a clone.
@@ -135,6 +141,7 @@ mod tests {
             log_id: "log".into(),
             seq: 3,
             state: Replica::new(),
+            blobs: BTreeMap::new(),
         };
         let back: Checkpoint = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);

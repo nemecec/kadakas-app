@@ -29,7 +29,7 @@
 //!    refuse and point to `collab.undo`.
 
 use kadakas_collab::client::{Client, ClientConfig, ClientEvent, ConnState};
-use kadakas_collab::materialize::{Materialized, Quarantined, materialize};
+use kadakas_collab::materialize::{Materialized, Quarantined};
 use kadakas_collab::presence::{PresenceState, Viewport};
 use kadakas_collab::transport::{Endpoint, Link};
 use kadakas_core::model::Document;
@@ -401,7 +401,7 @@ fn apply_remote(s: &mut Session) -> bool {
         doc,
         quarantined,
         repairs,
-    } = materialize(link.client.view(), s.editor.doc());
+    } = link.client.materialize(s.editor.doc());
     s.collab.quarantined = quarantined;
     s.collab.repairs = repairs;
     // From now on the shadow is the document that the client built.

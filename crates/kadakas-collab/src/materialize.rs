@@ -126,6 +126,16 @@ fn read<T: serde::de::DeserializeOwned>(
 /// Builds the document that a replica describes. `base` gives what is not shared: the order of
 /// things that exist in both, the generator of IDs and the active layer and class. Never fails.
 pub fn materialize(view: &Replica, base: &Document) -> Materialized {
+    materialize_with(view, base, &|_| None)
+}
+
+/// Like [`materialize`], with a way to find the blobs (pictures) that the state refers to. An
+/// object whose picture is not there yet is left out (quarantine) and appears when it arrives.
+pub fn materialize_with(
+    view: &Replica,
+    base: &Document,
+    blobs: &dyn Fn(&str) -> Option<String>,
+) -> Materialized {
     let mut cx = Ctx {
         quarantined: Vec::new(),
         repairs: Vec::new(),
@@ -167,6 +177,17 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
     // Objects.
     let mut objects: Vec<Object> = Vec::new();
     for (id, props) in ordered(view, Kind::Object, std::iter::empty()) {
+        let props = match crate::blob::inline_props(&props, blobs) {
+            Ok(p) => p,
+            Err(hash) => {
+                cx.quarantine(
+                    Kind::Object,
+                    id,
+                    format!("the image {hash} has not arrived yet"),
+                );
+                continue;
+            }
+        };
         let parsed = validate_entity(Kind::Object, id, &props)
             .and_then(|()| read::<Object>(Kind::Object, id, &props));
         match parsed {

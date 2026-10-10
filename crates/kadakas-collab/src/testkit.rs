@@ -87,6 +87,8 @@ pub struct Sequencer {
     /// Per connection: after a refusal that the client must retry, every later submit gets the
     /// same error, until the refused number comes again.
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
+    /// Blobs by hash.
+    blobs: BTreeMap<String, String>,
 }
 
 fn hash_ops(ops: &[Op]) -> u64 {
@@ -113,6 +115,7 @@ impl Sequencer {
             inject: None,
             check_entities: true,
             blocked: BTreeMap::new(),
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -312,6 +315,26 @@ impl Sequencer {
                     },
                 )
             }
+            (ClientMsg::BlobPut { hash, data }, Some(_)) => {
+                if data.len() > crate::blob::MAX_BLOB_BYTES
+                    || crate::blob::sha256_hex(data.as_bytes()) != hash
+                {
+                    return reply(error(
+                        ErrorCode::BadMessage,
+                        "the hash is not the hash of the data",
+                        None,
+                    ));
+                }
+                self.blobs.insert(hash, data);
+                Vec::new()
+            }
+            (ClientMsg::BlobGet { hash }, Some(_)) => match self.blobs.get(&hash) {
+                Some(data) => reply(ServerMsg::Blob {
+                    data: data.clone(),
+                    hash,
+                }),
+                None => reply(ServerMsg::BlobMissing { hash }),
+            },
             (ClientMsg::Bye, Some(_)) => self.close(conn),
         }
     }
@@ -413,7 +436,10 @@ impl Sequencer {
             }
         }
         for t in order {
-            validate_entity(t.kind, t.id, &props[&t])
+            // Pictures are in blobs: put them back to check the thing.
+            let full = crate::blob::inline_props(&props[&t], &|h| self.blobs.get(h).cloned())
+                .map_err(|h| format!("the blob {h} was not sent before the transaction"))?;
+            validate_entity(t.kind, t.id, &full)
                 .map_err(|e| format!("{:?} {}: {e}", t.kind, t.id))?;
         }
         Ok(())

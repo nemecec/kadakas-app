@@ -20,6 +20,7 @@
 //!
 //! [`Uid`]: kadakas_core::uid::Uid
 
+pub mod blob;
 pub mod client;
 pub mod docsync;
 pub mod materialize;
@@ -40,7 +41,7 @@ mod tests;
 pub mod testkit;
 
 pub use client::{Client, ClientConfig, ClientEvent, ConnState};
-pub use materialize::{Materialized, Quarantined, materialize};
+pub use materialize::{Materialized, Quarantined, materialize, materialize_with};
 pub use op::{Kind, Op, Target, Txn, Writer};
 pub use protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 pub use replica::Replica;

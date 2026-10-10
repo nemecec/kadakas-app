@@ -84,13 +84,16 @@
 //! loses nothing (see `store`). A journal that cannot be read is reported as an event, never
 //! ignored.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use kadakas_core::change::ChangeSet;
 use kadakas_core::model::Document;
 use kadakas_core::uid::Uid;
 use serde::{Deserialize, Serialize};
 
+use serde_json::Value;
+
+use crate::blob;
 use crate::docsync;
 use crate::op::{InvalidTxn, Op, Txn, Writer, validate_ops};
 use crate::presence::{self, Outgoing, Peer, Peers, PresenceError, PresenceState};
@@ -221,6 +224,13 @@ pub struct Client {
     peers: Peers,
     changed: bool,
     retry: Option<Retry>,
+    /// The blobs (pictures) that this client has, by hash.
+    blobs: BTreeMap<String, String>,
+    /// Blobs that were asked for, and blobs that the server does not have.
+    asked: BTreeSet<String>,
+    missing: BTreeSet<String>,
+    /// The view changed: look for references to blobs that are not here.
+    blob_scan: bool,
     /// At the next sign-in, give the waiting transactions new numbers, whatever the server says.
     force_renumber: bool,
     store: Option<Box<dyn OpLogStore>>,
@@ -252,6 +262,10 @@ impl Client {
             peers: Peers::default(),
             changed: false,
             retry: None,
+            blobs: BTreeMap::new(),
+            asked: BTreeSet::new(),
+            missing: BTreeSet::new(),
+            blob_scan: false,
             force_renumber: false,
             store: None,
             saved_journal: String::new(),
@@ -287,6 +301,7 @@ impl Client {
                     c.confirmed_seq = cp.seq;
                     c.head_seq = cp.seq;
                     c.log_id = Some(cp.log_id).filter(|l| !l.is_empty());
+                    c.blobs.extend(cp.blobs);
                     c.has_state = true;
                 }
                 Err(e) => c
@@ -302,6 +317,7 @@ impl Client {
                     c.pending = j.pending.into();
                     c.undo = j.undo;
                     c.redo = j.redo;
+                    c.blobs.extend(j.blobs);
                     c.saved_journal = text;
                 }
                 Ok(_) => c.events.push(ClientEvent::StoreCorrupt(
@@ -542,6 +558,7 @@ impl Client {
     /// the inverse operations (in the order to apply them).
     fn commit(&mut self, ops: Vec<Op>) -> Result<(u64, Vec<Op>), EditError> {
         validate_ops(&ops)?;
+        let ops = self.externalize(ops);
         let op_id = self.last_op + 1;
         let w = Writer {
             client: self.client,
@@ -570,6 +587,41 @@ impl Client {
             ops: applied,
         });
         Ok((op_id, inverse))
+    }
+
+    /// Replaces big pictures in the operations by references (see `blob`), keeps the pictures, and
+    /// queues them for the server before the transaction (when online).
+    fn externalize(&mut self, mut ops: Vec<Op>) -> Vec<Op> {
+        let put = |this: &mut Client, v: &mut Value| {
+            if let Some((r, hash, data)) = blob::externalize(v) {
+                *v = r;
+                if this.state == ConnState::Online {
+                    this.outbox.push(ClientMsg::BlobPut {
+                        hash: hash.clone(),
+                        data: data.clone(),
+                    });
+                }
+                this.blobs.insert(hash, data);
+            }
+        };
+        for op in &mut ops {
+            match op {
+                Op::Create { props, .. } => {
+                    if let Some(v) = props.get_mut("shape") {
+                        put(self, v);
+                    }
+                }
+                Op::Set { prop, value, .. } if prop == "shape" => put(self, value),
+                _ => {}
+            }
+        }
+        ops
+    }
+
+    /// The document that the view describes, with the pictures it refers to (see
+    /// `materialize::materialize_with`).
+    pub fn materialize(&self, base: &Document) -> crate::materialize::Materialized {
+        crate::materialize::materialize_with(&self.view, base, &|h| self.blobs.get(h).cloned())
     }
 
     /// Takes back your last edit (see `undo` for the rules). Other users' work stays.
@@ -653,6 +705,10 @@ impl Client {
             if let Some(state) = self.out_presence.poll(now_ms) {
                 self.outbox.push(ClientMsg::Presence { state });
             }
+            if self.blob_scan {
+                self.blob_scan = false;
+                self.ask_for_blobs();
+            }
             if let Some(r) = self.retry
                 && r.at.is_some_and(|at| now_ms >= at)
             {
@@ -661,6 +717,24 @@ impl Client {
             }
         }
         self.peers.expire(now_ms);
+    }
+
+    /// Asks the server for the blobs that the state refers to and that this client does not have.
+    fn ask_for_blobs(&mut self) {
+        let mut wanted: Vec<String> = Vec::new();
+        for (_, e) in self.view.alive_of(crate::op::Kind::Object) {
+            if let Some(h) = e.get("shape").and_then(blob::blob_ref)
+                && !self.blobs.contains_key(h)
+                && !self.asked.contains(h)
+                && !self.missing.contains(h)
+            {
+                wanted.push(h.to_string());
+            }
+        }
+        for h in wanted {
+            self.asked.insert(h.clone());
+            self.outbox.push(ClientMsg::BlobGet { hash: h });
+        }
     }
 
     fn resend_from(&mut self, from_op: u64) {
@@ -734,6 +808,16 @@ impl Client {
             }
             ServerMsg::PresenceLeave { client } => {
                 self.peers.remove(client);
+            }
+            ServerMsg::Blob { hash, data } => {
+                if blob::sha256_hex(data.as_bytes()) == hash && data.len() <= blob::MAX_BLOB_BYTES {
+                    self.asked.remove(&hash);
+                    self.blobs.insert(hash, data);
+                    self.changed = true;
+                }
+            }
+            ServerMsg::BlobMissing { hash } => {
+                self.missing.insert(hash);
             }
             ServerMsg::Error {
                 code,
@@ -858,6 +942,7 @@ impl Client {
             } else if live && self.pending.is_empty() {
                 self.view.apply_all(w, &e.ops);
                 self.changed = true;
+                self.blob_scan = true;
             } else {
                 rebuild |= live;
             }
@@ -1021,7 +1106,33 @@ impl Client {
         self.pending.retain(|t| !t.ops.is_empty());
         self.view = scratch;
         self.changed = true;
+        self.blob_scan = true;
+        self.asked.clear();
         self.state = ConnState::Online;
+        // The pictures that waiting transactions refer to go first.
+        let mut sent = BTreeSet::new();
+        for t in &self.pending {
+            for op in &t.ops {
+                let hashes: Vec<String> = match op {
+                    Op::Create { props, .. } => blob::refs_in(props),
+                    Op::Set { prop, value, .. } if prop == "shape" => blob::blob_ref(value)
+                        .map(str::to_string)
+                        .into_iter()
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for h in hashes {
+                    if let Some(data) = self.blobs.get(&h)
+                        && sent.insert(h.clone())
+                    {
+                        self.outbox.push(ClientMsg::BlobPut {
+                            hash: h,
+                            data: data.clone(),
+                        });
+                    }
+                }
+            }
+        }
         self.retry = None;
         for t in &self.pending {
             self.outbox.push(ClientMsg::Submit {
@@ -1047,6 +1158,7 @@ impl Client {
         }
         self.view = v;
         self.changed = true;
+        self.blob_scan = true;
     }
 
     // ----- store -----
@@ -1060,7 +1172,30 @@ impl Client {
             pending: self.pending.iter().cloned().collect(),
             undo: self.undo.clone(),
             redo: self.redo.clone(),
+            blobs: self.pending_blobs(),
         }
+    }
+
+    /// The blobs that the waiting transactions refer to.
+    fn pending_blobs(&self) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for t in &self.pending {
+            for op in &t.ops {
+                let h = match op {
+                    Op::Create { props, .. } => blob::refs_in(props).into_iter().next(),
+                    Op::Set { prop, value, .. } if prop == "shape" => {
+                        blob::blob_ref(value).map(str::to_string)
+                    }
+                    _ => None,
+                };
+                if let Some(h) = h
+                    && let Some(d) = self.blobs.get(&h)
+                {
+                    out.insert(h, d.clone());
+                }
+            }
+        }
+        out
     }
 
     /// The checkpoint as it would be saved, if the client has a confirmed state.
@@ -1069,6 +1204,7 @@ impl Client {
             log_id: self.log_id.clone().unwrap_or_default(),
             seq: self.confirmed_seq,
             state: self.confirmed.clone(),
+            blobs: self.blobs.clone(),
         })
     }
 

@@ -777,6 +777,74 @@ fn two_users_who_regenerate_one_plug_in_object_at_once_do_not_double_it() {
     assert_eq!(wall(&mut b), json!(90.0));
 }
 
+/// A PNG of noise, so that it does not shrink: well above the size where a picture becomes a blob.
+fn noisy_png_base64(side: u32) -> String {
+    let mut seed = 0x1234_5678u32;
+    let mut data = Vec::new();
+    for _ in 0..side * side * 4 {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        data.push((seed >> 24) as u8);
+    }
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, side, side);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&data).unwrap();
+    }
+    kadakas_core::underlay::base64_encode(&out)
+}
+
+#[test]
+fn a_picture_is_sent_once_as_a_blob_and_not_with_every_edit() {
+    let (hub, mut a, mut b) = pair();
+    let png = noisy_png_base64(64);
+    assert!(png.len() > kadakas_collab::blob::MIN_BLOB_BYTES);
+    let out = call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {
+            "kind": "underlay", "min": [0, 0], "max": [6400, 6400],
+            "width": 64, "height": 64, "png": png, "opacity": 1.0}}}),
+    );
+    let id = out["created"][0].as_str().unwrap().to_string();
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    // The log holds a reference, not the picture.
+    let entry_size = hub.with(|s| {
+        serde_json::to_string(s.log().last().unwrap())
+            .unwrap()
+            .len()
+    });
+    assert!(entry_size < 3_000, "{entry_size} bytes");
+    assert!(hub.with(|s| serde_json::to_string(s.replica()).unwrap().len()) < 6_000);
+    // B asks for the blob, gets it, and builds the same document.
+    let r = call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    assert_eq!(r["document_changed"], true, "{r}");
+    assert!(has(&b, &id));
+    assert!(same(&a, &b));
+    // A change of the opacity sends a small operation.
+    call(
+        &mut a,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [id], "delta": [100, 0]}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    let entry_size = hub.with(|s| {
+        serde_json::to_string(s.log().last().unwrap())
+            .unwrap()
+            .len()
+    });
+    assert!(entry_size < 3_000, "a move sends {entry_size} bytes");
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(same(&a, &b));
+    assert!(
+        call(&mut b, "collab.status", json!({}))["quarantined"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
 // ----- real commands on two sessions -----
 
 mod real_commands {
