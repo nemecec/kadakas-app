@@ -165,6 +165,18 @@ fn draw_object(
     let _ = match &o.shape {
         Shape::Group { .. } => Ok(()),
         Shape::Underlay(u) => writeln!(s, "{}", u.svg_element()),
+        Shape::Mesh3d(m) => {
+            // Plan view: the box around the mesh.
+            let (lo, hi) = m.bounds3();
+            writeln!(
+                s,
+                r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="mesh3d"/>"#,
+                lo.x,
+                -hi.y,
+                hi.x - lo.x,
+                hi.y - lo.y
+            )
+        }
         Shape::Massing(m) => {
             let res = if curve::all_straight(&m.footprint) {
                 writeln!(

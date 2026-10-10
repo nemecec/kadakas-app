@@ -8,8 +8,9 @@
 //! error for files that are not of the format, and they skip single bad
 //! entities with a reason in the report.
 
-mod builder;
+pub mod builder;
 pub mod crs;
+pub mod dwg;
 pub mod dxf;
 mod encoding;
 pub mod geojson;

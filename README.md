@@ -4,8 +4,8 @@ Cadektor is a 2D CAD program for landscape design, written in Rust. Every change
 serializable, undoable command. The desktop app, scripts and AI agents all send the same commands.
 
 - `crates/cadektor-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
-- `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. The core never parses files.
-- `crates/cadektor-ifc`: IFC4 export (writer only; the STEP entity model and parser are shared for a later reader).
+- `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. Reads and writes DWG through a converter that you install (`docs/dwg.md`). The core never parses files.
+- `crates/cadektor-ifc`: IFC4 export and IFC2x3, IFC4 and IFC4x3 import (a streaming STEP reader, geometry, mapping).
 - `crates/cadektor-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.
 - `python/cadektor`: the Python package for scripts and automation (`import cadektor`).
 - `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
@@ -44,6 +44,8 @@ cadektor import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS
 cadektor import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
 cadektor export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
 cadektor export drawing.cdk.json -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
+cadektor import model.ifc -o drawing.cdk.json                                # IFC2x3, IFC4 or IFC4x3
+cadektor import survey.dwg -o drawing.cdk.json                               # needs a converter, see docs/dwg.md
 ```
 
 An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the
@@ -175,10 +177,32 @@ cargo llvm-cov -p cadektor-io --summary-only
 Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) or MIT license
 ([LICENSE-MIT](LICENSE-MIT)) at your option.
 
+## IFC import
+
+`import.file` with a `.ifc` file (or format `ifc`) reads IFC2x3, IFC4 and IFC4x3 in one undo step. The reader indexes the file
+once, in blocks, and keeps 24 bytes per entity in memory (the file stays on disk). It parses an entity when it needs it. So large files work (caps: 1 GiB, 20 million entities). Elements become objects:
+
+- Slabs, coverings, walls and every other element with a body become a generic 3D mesh (`mesh3d`). The IFC class is in
+  `data.ifc_class`, and the GlobalId, name and type are in `data.ifc`. Nothing becomes a hardscape.
+- Terrain becomes a site model (its vertices are the points, option `terrain: "mesh"` keeps the triangles). Vegetation becomes a
+  landscape area (thin flat extrusion, arcs stay exact) or a plant (size from the geometry), else a mesh.
+- A mapped item that is used twice or more and has only upright extrusions becomes a symbol with instances.
+- Storeys become design layers with their elevation. Presentation layers become classes. Property sets and quantity sets become
+  records (option `property_sets`: `records`, `data` or `none`). Colors, units (SI prefixes, feet) and placements are read.
+- `IfcMapConversion` sets the georeference of an empty document, or moves the file into the georeference of the document when the CRS is the same.
+- Geometry that is not supported is listed in the report. A bounding box stands in for it when the file has one.
+  Openings are not cut. `describe` lists the options (`io.ifc.import`). Test files are in `tests/fixtures/ifc`.
+
+## DWG
+
+`import.file` and `export.file` accept `.dwg` files when a converter is installed (ODA File Converter, or the LibreDWG tools
+`dwg2dxf` and `dxf2dwg`). Cadektor runs it in a temporary folder with a time limit and uses the DXF import and export.
+See [docs/dwg.md](docs/dwg.md) for install hints and licenses.
+
 ## IFC4 export
 
 `export.file` with format `ifc` (or a `.ifc` file name) writes IFC4 ADD2 TC1 as a STEP file, one entity at a time.
-It is a writer only. The file has an `IfcProject` (mm, m2, m3), an `IfcSite` with `IfcMapConversion`, `IfcProjectedCRS` and
+The file has an `IfcProject` (mm, m2, m3), an `IfcSite` with `IfcMapConversion`, `IfcProjectedCRS` and
 latitude and longitude from the document georeference, and no `IfcBuilding` (with the option `layers_as_storeys`, a default
 building holds one storey per design layer). Site models become `IfcGeographicElement` TERRAIN (triangulated face set),
 hardscapes `IfcSlab` BASESLAB like the Vectorworks default (extruded solid, or a mesh when sloped or draped; style

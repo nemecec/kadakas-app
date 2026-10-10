@@ -61,6 +61,16 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let flat = curve::flatten(&m.footprint, true, curve_tolerance(tol));
             edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
+        Shape::Mesh3d(m) => {
+            let (lo, hi) = m.bounds3();
+            let corners = [
+                lo.truncate(),
+                DVec2::new(hi.x, lo.y),
+                hi.truncate(),
+                DVec2::new(lo.x, hi.y),
+            ];
+            edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
+        }
         // A map picks at its frame only, so the objects on it stay pickable.
         Shape::Underlay(u) => {
             let corners = [
