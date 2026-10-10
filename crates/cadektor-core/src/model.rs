@@ -240,6 +240,9 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scale_y: Option<f64>,
     },
+    /// An irrigation object: outlet, line, point of connection, valve or controller
+    /// (see `crate::irrigation`). In JSON it is `{"kind": "irrigation", "type": "outlet", ...}`.
+    Irrigation(Box<crate::irrigation::IrrigationShape>),
 }
 
 fn default_symbol_scale() -> f64 {
@@ -304,6 +307,7 @@ impl Shape {
             Shape::Symbol { .. } => "symbol",
             Shape::Massing(_) => "massing",
             Shape::Underlay(_) => "underlay",
+            Shape::Irrigation(i) => i.kind(),
         }
     }
 
@@ -340,6 +344,7 @@ impl Shape {
             Shape::Group { .. } => true,
             Shape::Massing(m) => m.is_finite(),
             Shape::Underlay(u) => u.is_finite(),
+            Shape::Irrigation(i) => i.is_finite(),
             Shape::Symbol {
                 at,
                 rotation,
@@ -431,6 +436,7 @@ impl Shape {
         match self {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
+            Shape::Irrigation(i) => i.for_each_number(f),
             Shape::Annotation(a) => a.numbers(f),
             Shape::Massing(m) => {
                 m.footprint.iter().for_each(|x| vertex(x, f));
@@ -589,6 +595,7 @@ impl Shape {
                 mv(&mut u.max);
             }
             Shape::Group { .. } => {}
+            Shape::Irrigation(i) => i.translate(d),
             Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
                 p.x += d.x;
@@ -653,6 +660,7 @@ impl Shape {
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
+            Shape::Irrigation(i) => i.bounds(),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())

@@ -10,6 +10,8 @@ use cadektor_core::plants::style::PlantGraphic;
 use cadektor_core::plants::tree::{self, TreeAction};
 use cadektor_core::sheets::{Annotation, AnnotationItem, Viewport};
 use cadektor_core::svg::site_outline;
+use cadektor_site::grading::draw::Drawn;
+use cadektor_site::grading::hook;
 use glam::DVec2;
 
 use crate::display::*;
@@ -209,8 +211,80 @@ fn shape_prims_deep(
         return;
     }
     let start = out.len();
+    // The colors of an analysis go under the outline of the site model. Walls, grades, spot
+    // elevations and the like go over their shape.
+    let is_site = matches!(obj.shape, Shape::SiteModel { .. });
+    if is_site {
+        site_prims(doc, obj, xf, tables, out);
+    }
+    let start = if is_site { out.len() } else { start };
     shape_core(doc, obj, attrs, xf, counts, tables, out, depth);
     decor_prims(doc, obj, attrs, xf, counts, tables, out, start, depth);
+    if cadektor_core::site::carries_extra(obj) {
+        let scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
+        let drawn = hook::extras_at(doc, tables.site(), SITE_REVISION, obj, scale);
+        drawn_prims(&drawn, xf, out);
+    }
+}
+
+/// The revision of the document of a page, for the cache of its site models.
+const SITE_REVISION: u64 = 1;
+
+/// The contours and the analysis colors of a site model.
+fn site_prims(
+    doc: &Document,
+    obj: &Object,
+    xf: &Xf,
+    tables: &crate::table::Tables,
+    out: &mut Vec<Prim>,
+) {
+    let scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
+    let drawn = hook::site_layers(doc, tables.site(), SITE_REVISION, obj, scale, true);
+    drawn_prims(&drawn, xf, out);
+}
+
+/// The shapes and texts of the grading objects as primitives on paper. The same `Drawn` is drawn
+/// by the plan SVG and by the app canvas. Text is not turned: a turned label stays horizontal.
+pub fn drawn_prims(d: &Drawn, xf: &Xf, out: &mut Vec<Prim>) {
+    for poly in &d.polys {
+        let rings: Vec<&Vec<DVec2>> = poly.rings.iter().filter(|r| !r.is_empty()).collect();
+        let width = poly.weight * xf.k;
+        if let Some(fill) = poly.fill {
+            // The rings of a shape with holes run in opposite directions, so the nonzero rule leaves the holes empty.
+            let segs: Vec<PSeg> = rings.iter().flat_map(|r| mapped(r, xf)).collect();
+            let stroke = if rings.len() == 1 { poly.stroke } else { None };
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: poly.closed,
+                stroke,
+                fill: Some(fill),
+                width,
+                dash: None,
+            }));
+            if rings.len() == 1 {
+                continue;
+            }
+        }
+        if let Some(stroke) = poly.stroke {
+            for r in rings {
+                out.push(Prim::Path(PathPrim::stroked(
+                    mapped(r, xf),
+                    poly.closed,
+                    stroke,
+                    width,
+                )));
+            }
+        }
+    }
+    for l in &d.labels {
+        out.push(Prim::Text(TextPrim {
+            at: xf.p(l.at),
+            text: l.text.clone(),
+            height: l.height * xf.k,
+            color: [0, 0, 0, 255],
+            align: if l.center { Align::Center } else { Align::Left },
+        }));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -458,6 +532,7 @@ fn shape_core(
                 out.push(path(mapped(&[p, q], xf), false, &st));
             }
         }
+        Shape::Irrigation(i) => irrigation_prims(i, &st, xf, out),
         Shape::Symbol { .. } => {
             // A symbol in paper units keeps its paper size at the scale of the drawing that shows it.
             let paper_scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
@@ -470,6 +545,66 @@ fn shape_core(
                 };
                 shape_prims_deep(doc, &v, &a, xf, counts, tables, out, depth + 1);
             }
+        }
+    }
+}
+
+/// Irrigation objects: a translucent fan per outlet (in the color of its zone), lines, and small
+/// markers for points of connection, valves and controllers.
+fn irrigation_prims(
+    i: &cadektor_core::irrigation::IrrigationShape,
+    st: &Style,
+    xf: &Xf,
+    out: &mut Vec<Prim>,
+) {
+    use cadektor_core::irrigation::{IrrigationShape as I, sector_points, zone_color};
+    let rgba = |c: [u8; 3], a: u8| Some([c[0], c[1], c[2], a]);
+    match i {
+        I::Outlet {
+            at,
+            arc,
+            direction,
+            radius,
+            zone,
+            ..
+        } => {
+            let c = zone_color(zone.unwrap_or(0));
+            if let Some(r) = radius {
+                let pts = sector_points(*at, *r, *arc, *direction, 48);
+                let s = Style {
+                    stroke: rgba(c, 255),
+                    fill: rgba(c, 64),
+                    width: st.width,
+                };
+                out.push(path(mapped(&pts, xf), true, &s));
+            }
+            let s = Style {
+                stroke: Some([0, 0, 0, 255]),
+                fill: rgba(c, 255),
+                width: st.width,
+            };
+            out.push(path(circle_segs(xf.p(*at), xf.len(300.0)), true, &s));
+        }
+        I::Line { points, .. } => out.push(path(
+            mapped(points, xf),
+            false,
+            &Style {
+                stroke: rgba([30, 80, 170], 255),
+                fill: None,
+                width: st.width,
+            },
+        )),
+        I::Poc { at, .. } | I::Controller { at, .. } | I::Valve { at, .. } => {
+            let c = match i {
+                I::Valve { zone, .. } => zone_color(*zone),
+                _ => [20, 50, 140],
+            };
+            let s = Style {
+                stroke: rgba(c, 255),
+                fill: rgba(c, 96),
+                width: st.width,
+            };
+            out.push(path(circle_segs(xf.p(*at), xf.len(500.0)), true, &s));
         }
     }
 }

@@ -155,6 +155,20 @@ impl Mapper<'_> {
                 }
             }
             Shape::Symbol { at, .. } => *at = self.point(*at)?,
+            Shape::Irrigation(i) => {
+                use cadektor_core::irrigation::IrrigationShape as I;
+                match &mut **i {
+                    I::Outlet { at, .. }
+                    | I::Poc { at, .. }
+                    | I::Valve { at, .. }
+                    | I::Controller { at, .. } => *at = self.point(*at)?,
+                    I::Line { points, .. } => {
+                        for p in points {
+                            *p = self.point(*p)?;
+                        }
+                    }
+                }
+            }
             // Paper space, derived or placed by other code.
             Shape::Viewport(vp) => vp.center = self.point(vp.center)?,
             Shape::TitleBlock(_)

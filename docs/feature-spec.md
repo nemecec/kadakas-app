@@ -171,13 +171,14 @@ Non-goals
 | SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
 | SIT-10 | Pad with retaining edge. | P1 | planned |
-| SIT-18 | Grade object (tangent, arc, cubic, polyline) with end tags. | P1 | planned |
-| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). | P1 | planned |
-| SIT-13 | Stake / spot elevation object. | P1 | planned |
+| SIT-18 | Grade object with end tags. | P1 | partial: a straight grade between two points, with two elevations, or an elevation and a slope (percent, ratio or angle), or snapped live to the site model. Slope arrow, slope label and end elevations in 2D. API `grade.*`, Grading tool. No curved grades, and it does not act as a site modifier yet. |
+| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). Walls are done (HRD-07). | P1 | partial: hardscape and wall |
+| SIT-13 | Stake / spot elevation object. | P1 | done: a point that reads the existing and proposed height live (label in paper units, prefix, decimals). Stake mode shows northing and easting from the georeference, or local meters without one. API `spot.*`, Grading tool. |
 | SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
-| SIT-15 | Slope and aspect analysis display. | P2 | partial: slope and aspect at a point, no legend display |
+| SIT-15 | Slope and aspect analysis display. | P2 | partial: slope analysis and elevation analysis (hypsometric) as color bands per triangle, with user limits and colors, on the existing or proposed surface, in the 2D plan and the 3D view, with a legend object (band labels and areas). The triangles of a band merge into rings (a 50 000 point site draws in well under a second), cached by content. Sheets and PDF show the contours, the colors, the legend, wall tags, grade arrows and labels, spot labels and section ends, from the same drawing primitives as the canvas and the SVG (turned text stays horizontal on a sheet). API `site.analysis`. No aspect analysis. |
 | SIT-16 | Point cloud as source (LAS/E57). | P2 | planned |
 | SIT-17 | Volume fill and grading impact report. | P2 | planned |
+| SIT-19 | Site section: a section line gives the profile of the existing and proposed ground (a point at every triangle edge, so it equals `site.elevation`), the walls, hardscapes and plants it cuts or passes. Objects on all visible design layers show, at the height of their layer; off the model the profile takes the height of the nearest edge. The profile is placed as shapes on a design or sheet layer with a vertical exaggeration and a scale, and is replaced when placed again. | P1 | done (API `section.*`, Grading tool makes the line; shapes are plain objects tagged with `site_section_profile`, not a group) |
 
 ### 4.6 Plants
 
@@ -241,7 +242,7 @@ Non-goals
 | HRD-09 | Drape on site model in 3D (slab, components and walls follow the ground, a few mm above it) and in the area report. Beyond the edge of the model the height of the nearest edge counts, and the report says `partially_draped`. | P1 | done |
 | HRD-10 | Site modifier option: the hardscape acts as a pad at its formation level (top minus build-up), sloped as the hardscape. | P2 | done |
 | HRD-11 | Edit modes in Object Info (style, slab or path, width, join, slope, elevation, drape, site modifier) and style, path and width options in the Hardscape tool. | P1 | done |
-| HRD-07 | Landscape walls. | P2 | planned |
+| HRD-07 | Landscape walls: a path (curves allowed, open or closed) with a thickness, a top (fixed, the ground plus an offset, or a slope between two heights), a bottom that follows the existing or proposed ground (with an embed depth), wall styles (resource: components, coping, color), a 3D solid between ground and top, and quantities (length, face area, volume, coping volume). A wall with a fixed or sloped top can act as a retaining edge: the ground behind it (on the chosen side, back by the backfill width) is set to the top of the wall and the other side keeps its height. The wall adds no earth to the cut and fill, and a pad of the user wins where they overlap. The solid is closed (bottom, coping underside, seam of a closed wall). Off the site model a wall takes the height of the nearest edge and says so. API `wall.*`, `wall_style.*`, Grading tool. | P2 | done (no wall-to-wall joins or corners other than miter, no openings; the Object Info panel does not edit walls yet) |
 
 ### 4.9 Existing trees
 
@@ -278,14 +279,24 @@ Non-goals
 
 ### 4.11 Irrigation
 
+Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. The drawing objects are one `Shape::Irrigation` variant in the core (`irrigation.rs`). Units: mm, degrees, kPa, l/min.
+
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | IRR-01 | Plant irrigation record fields (water need, hydrozone). | P1 | planned |
-| IRR-02 | Sprinkler head object with radius and flow. | P2 | planned |
-| IRR-03 | Pipe and valve objects. | P2 | planned |
-| IRR-04 | Zone assignment and coverage check. | P2 | planned |
-| IRR-05 | Irrigation schedule report. | P2 | planned |
+| IRR-02 | Outlet objects (spray head, rotor, drip emitter, bubbler): a point with model, spray arc, direction and radius. They draw a translucent coverage fan in 2D, in the color of the zone. Undoable through `add_object`, `modify_object`, move and rotate. | P1 | done |
+| IRR-03 | Irrigation lines (mainline, lateral, drip line) with pipe size and material. Points of connection (static pressure, available flow), control valves (zone, flow factor kv, controller and station) and controllers (stations). | P1 | done |
+| IRR-04 | Zone assignment and coverage: an outlet belongs to the zone of the nearest valve upstream. "Calculate" stores the zone in the outlets (one undo step). Colors per zone. | P1 | done |
+| IRR-05 | Reports: zone schedule (heads per model, flow, area, precipitation rate, run time for a target depth), pipe schedule (length per type, material and size), pressure analysis per zone and a materials list, as JSON and CSV. Worksheet templates `irrigation_heads` and `irrigation_pipes`, and worksheet properties (Model, Zone, Arc, LineType, Size, Material, Length, ...). | P1 | done |
 | IRR-06 | Water budget report. | P2 | planned |
+| IRR-07 | Irrigation catalog as document resources (head models with radius, arc range, flow and pressure; pipe sizes with inner diameter; pipe materials with the Hazen-Williams coefficient) over a built-in catalog. CSV import and export with the plant catalog reader. | P1 | done |
+| IRR-08 | Hydraulics: Hazen-Williams pressure loss with C by material, valve loss from kv, velocity check (warning above 1.5 m/s), precipitation rate from the flow and area. Documented formulas and units, unit tests against hand calculations. | P1 | done |
+| IRR-09 | Network from geometry: points within a tolerance (default 50 mm) are one node. Tree solving POC, mainline, valves, laterals, outlets for one zone at a time. Pressure at every outlet, critical outlet and path, warnings (low pressure, velocity, supply flow, unconnected outlets, loops, catalog gaps, spray arc range, controller stations). | P1 | done |
+| IRR-10 | Layout helpers (pure functions with property tests): fill an area with heads in a square or triangular pattern at head-to-head spacing, heads along an edge, parallel drip lines in an area. | P1 | done |
+| IRR-11 | Agent API `irrigation.*` with `describe` examples: `outlet.add`, `line.add`, `poc.add`, `valve.add`, `controller.add`, `set`, `catalog.get|set|import_csv|export_csv`, `calculate`, `layout.fill|edge|drip`, `report.zones|pipes|pressure|materials`. | P1 | done |
+| IRR-12 | Irrigation tool in the app (`Alt+Shift+I`) with modes Outlet, Line, POC, Valve and Controller (`U` cycles the modes), snapping that joins line ends, fields and catalog lists in Object Info, and a Calculate command that shows the result and the warnings in Object Info. | P1 | done |
+| IRR-13 | Elevation and slope in the pressure calculation, flow that changes with pressure, loops (looped mains), master valves with several zones at once. | P2 | planned |
+| IRR-14 | Irrigation objects in IFC and DXF export. | P2 | planned |
 
 ### 4.12 Reports, worksheets, data tags
 

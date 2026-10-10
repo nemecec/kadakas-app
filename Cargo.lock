@@ -568,6 +568,7 @@ dependencies = [
  "cadektor-gis",
  "cadektor-ifc",
  "cadektor-io",
+ "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
  "cadektor-sheet",
@@ -587,6 +588,7 @@ dependencies = [
  "cadektor-api",
  "cadektor-core",
  "cadektor-gis",
+ "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
  "cadektor-sheet",
@@ -671,6 +673,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadektor-irrigation"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cadektor-print"
 version = "0.1.0"
 dependencies = [
@@ -680,6 +692,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-render",
  "cadektor-sheet",
+ "cadektor-site",
  "epaint_default_fonts",
  "glam",
  "lopdf",
@@ -718,6 +731,8 @@ dependencies = [
  "cadektor-core",
  "glam",
  "proptest",
+ "serde",
+ "serde_json",
  "spade",
  "thiserror 2.0.21",
 ]

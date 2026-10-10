@@ -24,7 +24,12 @@ const ERROR: Rgba = [190, 40, 30, 255];
 /// page, with the ground of the site models, so draped hardscapes and landscape areas are measured
 /// as the reports measure them.
 #[derive(Default)]
-pub struct Tables(HashMap<ResourceId, Computed>);
+pub struct Tables {
+    map: HashMap<ResourceId, Computed>,
+    /// The site models of the page, for the contours, the analysis colors and the grading graphics.
+    /// A page is made from one document, so the revision is always the same.
+    site: cadektor_site::SiteCache,
+}
 
 impl Tables {
     /// Calculates the worksheets of all table objects in the document.
@@ -44,11 +49,19 @@ impl Tables {
                 map.insert(d.worksheet, compute_with(&def, doc, ground));
             }
         }
-        Tables(map)
+        Tables {
+            map,
+            site: Default::default(),
+        }
+    }
+
+    /// The cache of the site models of the page.
+    pub fn site(&self) -> &cadektor_site::SiteCache {
+        &self.site
     }
 
     pub fn get(&self, id: ResourceId) -> Option<&Computed> {
-        self.0.get(&id)
+        self.map.get(&id)
     }
 }
 

@@ -8,7 +8,9 @@ mod annotation_api;
 mod data_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_api;
+mod grading_api;
 mod hardscape_api;
+mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
@@ -280,6 +282,44 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::REPORT_HARDSCAPE,
     hardscape_api::REPORT_LANDSCAPE_AREAS,
     hardscape_api::REPORT_PLANT_LIST,
+    // Irrigation (see irrigation_api.rs).
+    irrigation_api::OUTLET_ADD,
+    irrigation_api::LINE_ADD,
+    irrigation_api::POC_ADD,
+    irrigation_api::VALVE_ADD,
+    irrigation_api::CONTROLLER_ADD,
+    irrigation_api::SET,
+    irrigation_api::CATALOG_GET,
+    irrigation_api::CATALOG_SET,
+    irrigation_api::CATALOG_IMPORT_CSV,
+    irrigation_api::CATALOG_EXPORT_CSV,
+    irrigation_api::CALCULATE,
+    irrigation_api::LAYOUT_FILL,
+    irrigation_api::LAYOUT_EDGE,
+    irrigation_api::LAYOUT_DRIP,
+    irrigation_api::REPORT_ZONES,
+    irrigation_api::REPORT_PIPES,
+    irrigation_api::REPORT_PRESSURE,
+    irrigation_api::REPORT_MATERIALS,
+    // Grading and site analysis (see grading_api.rs).
+    grading_api::WALL_STYLE_CREATE,
+    grading_api::WALL_STYLE_LIST,
+    grading_api::WALL_STYLE_UPDATE,
+    grading_api::WALL_STYLE_DELETE,
+    grading_api::WALL_ADD,
+    grading_api::WALL_SET,
+    grading_api::WALL_REPORT,
+    grading_api::GRADE_ADD,
+    grading_api::GRADE_SET,
+    grading_api::GRADE_GET,
+    grading_api::SITE_ANALYSIS,
+    grading_api::SPOT_ADD,
+    grading_api::SPOT_SET,
+    grading_api::SPOT_GET,
+    grading_api::SECTION_ADD,
+    grading_api::SECTION_SET,
+    grading_api::SECTION_PROFILE,
+    grading_api::SECTION_PLACE,
     // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
     symbols_api::GROUP_CREATE,
     symbols_api::GROUP_UNGROUP,
@@ -537,6 +577,9 @@ impl Session {
     }
 
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if grading_api::knows(method) {
+            return self.handle_grading(method, p);
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
@@ -557,6 +600,8 @@ impl Session {
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                 "massing": massing_api::describe(),
+                "irrigation": irrigation_api::describe(),
+                "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
                 "resources": symbols_api::describe(),
                 "annotation": annotation_api::describe(),
@@ -777,6 +822,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = massing_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = irrigation_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 return plants_api::handle(self, method, p.clone())

@@ -281,6 +281,15 @@ pub fn tool_panel(
         tool_button(ui, m, keys, t);
     }
     ui.add_space(8.0);
+    ui.label("Irrigation");
+    for t in Tool::IRRIGATION {
+        tool_button(ui, m, keys, t);
+    }
+    if m.tool() == Tool::Irrigation && crate::irrigation_ui::tool_options(ui, settings, doc) {
+        // A new mode starts a new object.
+        m.cancel();
+    }
+    ui.add_space(8.0);
     ui.label("Annotation");
     for t in Tool::ANNOTATION {
         tool_button(ui, m, keys, t);
@@ -402,6 +411,7 @@ pub fn data_bar(
                     }
                 }
             }
+            Tool::Grading => crate::grading_ui::options(ui, &mut s.grading),
             _ => {}
         }
         let anchor = m.anchor();
@@ -480,12 +490,12 @@ pub struct InfoEdit {
     edited: Option<Shape>,
 }
 
-struct Fields {
-    commit: bool,
+pub(crate) struct Fields {
+    pub(crate) commit: bool,
 }
 
 impl Fields {
-    fn num(&mut self, ui: &mut Ui, v: &mut f64, speed: f64) {
+    pub(crate) fn num(&mut self, ui: &mut Ui, v: &mut f64, speed: f64) {
         let r = ui.add(DragValue::new(v).speed(speed));
         self.commit |= r.drag_stopped() || r.lost_focus();
     }
@@ -493,7 +503,7 @@ impl Fields {
         let r = ui.add(DragValue::new(v).speed(10.0).range(0.0..=1.0e9));
         self.commit |= r.drag_stopped() || r.lost_focus();
     }
-    fn xy(&mut self, ui: &mut Ui, label: &str, p: &mut DVec2) {
+    pub(crate) fn xy(&mut self, ui: &mut Ui, label: &str, p: &mut DVec2) {
         ui.label(label);
         ui.horizontal(|ui| {
             self.num(ui, &mut p.x, 10.0);
@@ -501,12 +511,12 @@ impl Fields {
         });
         ui.end_row();
     }
-    fn scalar(&mut self, ui: &mut Ui, label: &str, v: &mut f64, speed: f64) {
+    pub(crate) fn scalar(&mut self, ui: &mut Ui, label: &str, v: &mut f64, speed: f64) {
         ui.label(label);
         self.num(ui, v, speed);
         ui.end_row();
     }
-    fn text(&mut self, ui: &mut Ui, label: &str, s: &mut String) {
+    pub(crate) fn text(&mut self, ui: &mut Ui, label: &str, s: &mut String) {
         ui.label(label);
         let r = ui.text_edit_singleline(s);
         self.commit |= r.lost_focus();
@@ -520,7 +530,7 @@ impl Fields {
         *rad = deg.to_radians();
         ui.end_row();
     }
-    fn count(&mut self, ui: &mut Ui, n: usize) {
+    pub(crate) fn count(&mut self, ui: &mut Ui, n: usize) {
         ui.label("Vertices");
         ui.label(format!("{n}"));
         ui.end_row();
@@ -630,6 +640,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
             Shape::Annotation(a) => f.commit |= crate::annot_ui::fields(ui, a),
             Shape::Group { name } => f.text(ui, "Name", name),
+            Shape::Irrigation(i) => crate::irrigation_ui::edit(ui, &mut f, i),
             Shape::Symbol {
                 at,
                 rotation,
@@ -921,6 +932,9 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         Shape::Hardscape { .. } | Shape::LandscapeArea { .. }
     ) {
         crate::area_ui::object_info(ui, session, id, status);
+    }
+    if matches!(obj.shape, Shape::Irrigation(_)) {
+        crate::irrigation_ui::object_info(ui, session, id, status);
     }
     crate::data_ui::table_info(ui, session, id, status);
     crate::site_ui::cut_fill_readout(ui, session, id);

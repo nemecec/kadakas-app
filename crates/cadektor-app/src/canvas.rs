@@ -183,6 +183,7 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         Shape::Annotation(_) => {}
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
         Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Symbol { .. } => {}
+        Shape::Irrigation(i) => crate::irrigation_ui::draw(painter, view, i, st, offset),
     }
 }
 
@@ -508,6 +509,12 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
         if let Some(t) = cadektor_core::worksheet_table::data(o) {
             crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
+        }
+        if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
+            crate::grading_ui::draw_analysis(&painter, view, f.doc, o, cache, revision);
+        }
+        if let (true, Some((cache, revision))) = (cadektor_core::site::carries_extra(o), f.site) {
+            crate::grading_ui::draw_extras(&painter, view, f.doc, o, cache, revision);
         }
         if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
             crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);

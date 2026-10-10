@@ -97,7 +97,7 @@ pub const WORKSHEET_LIST: (&str, &str) = (
 );
 pub const WORKSHEET_TEMPLATES: (&str, &str) = (
     "worksheet.templates",
-    "Built-in report templates: plant_list, hardscape_quantities, area_schedule, tree_survey.",
+    "Built-in report templates: plant_list, hardscape_quantities, area_schedule, tree_survey, irrigation_heads, irrigation_pipes.",
 );
 pub const WORKSHEET_CREATE: (&str, &str) = (
     "worksheet.create",

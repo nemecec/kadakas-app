@@ -84,6 +84,8 @@ Tool keys switch the active tool.
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
 | Massing Model tool (Cadektor) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
+| Irrigation tool (Cadektor; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
+| Grading tool (Cadektor; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
 | Data Tag tool (Cadektor) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
 | North Arrow tool (Cadektor) (`tool.north_arrow`) | none | Alt+Shift+N (no VW default) | done |
 | Scale Bar tool (Cadektor) (`tool.scale_bar`) | none | Alt+Shift+B (no VW default) | done |

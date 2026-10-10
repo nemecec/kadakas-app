@@ -12,8 +12,10 @@ use glam::DVec2;
 use crate::hit;
 
 mod annot_tool;
+mod irrigation_tool;
 mod plant_tool;
 pub use annot_tool::{AnnotSettings, DimToolMode};
+pub use irrigation_tool::{IrrMode, IrrSettings};
 pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +33,10 @@ pub enum Tool {
     Massing,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
+    /// Irrigation: one tool with modes (outlet, line, POC, valve, controller).
+    Irrigation,
+    /// Grading: landscape walls, grades, spot elevations, stakes and section lines (modes).
+    Grading,
     /// Dimensions: one tool with modes (see `DimToolMode`).
     Dimension,
     Callout,
@@ -71,7 +77,7 @@ impl Tool {
         Tool::Text,
     ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
-    pub const SITE: [Tool; 2] = [Tool::SiteModifier, Tool::Massing];
+    pub const SITE: [Tool; 3] = [Tool::SiteModifier, Tool::Grading, Tool::Massing];
     pub const ANNOTATION: [Tool; 6] = [
         Tool::Dimension,
         Tool::Callout,
@@ -80,6 +86,7 @@ impl Tool {
         Tool::ScaleBar,
         Tool::RevisionCloud,
     ];
+    pub const IRRIGATION: [Tool; 1] = [Tool::Irrigation];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -94,6 +101,8 @@ impl Tool {
             Tool::Hardscape => "Hardscape",
             Tool::Massing => "Massing Model",
             Tool::SiteModifier => "Site Modifiers",
+            Tool::Irrigation => "Irrigation",
+            Tool::Grading => "Grading",
             Tool::Dimension => "Dimension",
             Tool::Callout => "Callout",
             Tool::DataTag => "Data Tag",
@@ -216,6 +225,10 @@ pub struct ToolSettings {
     pub areas: crate::area_ui::AreaToolSettings,
     /// Height, floors and roof of the Massing Model tool.
     pub massing: crate::gis_ui::MassingToolSettings,
+    /// Mode and options of the Irrigation tool.
+    pub irrigation: IrrSettings,
+    /// Mode and options of the Grading tool.
+    pub grading: crate::grading_ui::GradingSettings,
     /// Style and options of the annotation tools.
     pub annot: AnnotSettings,
 }
@@ -239,6 +252,8 @@ impl Default for ToolSettings {
             pad_direction_deg: 0.0,
             areas: Default::default(),
             massing: Default::default(),
+            irrigation: Default::default(),
+            grading: Default::default(),
             annot: Default::default(),
         }
     }
@@ -491,6 +506,8 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
+            Tool::Irrigation => self.handle_irrigation(input, cx),
+            Tool::Grading => self.handle_grading(input, cx),
             Tool::Dimension
             | Tool::Callout
             | Tool::DataTag
@@ -522,6 +539,33 @@ impl ToolMachine {
                 _ => vec![],
             },
         }
+    }
+
+    /// The Grading tool: the clicks make the object of the chosen mode.
+    fn handle_grading(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
+        let mode = cx.settings.grading.mode;
+        let mut pts = match &self.state {
+            State::Points(p) => p.clone(),
+            _ => vec![],
+        };
+        match input {
+            Input::Press { p, .. } => {
+                if pts.last() != Some(&p) {
+                    pts.push(p);
+                }
+                if mode.clicks() != Some(pts.len()) {
+                    self.state = State::Points(pts);
+                    return vec![];
+                }
+            }
+            Input::DoubleClick | Input::Enter if mode.clicks().is_none() => {}
+            _ => return vec![],
+        }
+        self.state = State::Idle;
+        crate::grading_ui::command(cx.doc, &cx.settings.grading, &pts)
+            .map(Effect::Exec)
+            .into_iter()
+            .collect()
     }
 
     fn place(&self, p: DVec2, cx: &Ctx) -> Vec<Effect> {
@@ -660,6 +704,19 @@ impl ToolMachine {
                     .map_or(Preview::None, Preview::Shape)
             }
             (_, Tool::Plant) => self.plant_preview(cursor, cx),
+            (_, Tool::Irrigation) => self.irrigation_preview(cursor, cx),
+            (State::Points(pts), Tool::Grading) => {
+                let mut v: Vec<DVec2> = pts.clone();
+                v.push(cursor);
+                if cx.settings.grading.mode == crate::grading_ui::GradingMode::Wall {
+                    Preview::Path {
+                        vertices: curve::corners(&v),
+                        closed: false,
+                    }
+                } else {
+                    Preview::Shape(Shape::Line { a: v[0], b: cursor })
+                }
+            }
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
@@ -773,6 +830,9 @@ impl ToolMachine {
             ) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
+            (Tool::Grading, _) => {
+                "Pick a mode in the Data bar: landscape wall, grade, spot elevation, stake or section line. Esc cancels."
+            }
             (
                 Tool::Dimension
                 | Tool::Callout
@@ -785,6 +845,9 @@ impl ToolMachine {
                 "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
             }
             (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Irrigation, _) => {
+                "Pick a mode (Outlet, Line, POC, Valve, Controller) in the Tool bar. Click to place. A line: Enter or double-click finishes. Esc cancels."
+            }
             (Tool::Plant, _) => {
                 "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
             }
@@ -853,6 +916,60 @@ mod tests {
                 .map(|o| o.shape.clone())
                 .collect()
         }
+    }
+
+    #[test]
+    fn grading_tool_makes_the_object_of_its_mode() {
+        use crate::grading_ui::GradingMode;
+        let mut f = Fixture::new(Tool::Grading);
+        // A wall takes any number of clicks; a double click does not repeat the point.
+        f.click(0.0, 0.0);
+        assert!(f.m.is_busy());
+        assert!(matches!(
+            f.m.preview(
+                DVec2::new(10.0, 0.0),
+                &Ctx {
+                    doc: f.session.editor.doc(),
+                    selection: &[],
+                    settings: &f.settings,
+                    tol: 5.0,
+                    context: None
+                }
+            ),
+            Preview::Path { .. }
+        ));
+        f.click(4000.0, 0.0);
+        f.click(4000.0, 3000.0);
+        f.click(4000.0, 3000.0);
+        f.send(Input::DoubleClick);
+        assert_eq!(f.shapes().len(), 1);
+        assert!(matches!(&f.shapes()[0], Shape::Polyline { points, .. } if points.len() == 3));
+        assert!(!f.m.is_busy());
+        // Two clicks make a grade or a section. One click makes a spot.
+        f.settings.grading.mode = GradingMode::Grade;
+        f.click(0.0, 0.0);
+        assert!(matches!(
+            f.m.preview(
+                DVec2::X,
+                &Ctx {
+                    doc: f.session.editor.doc(),
+                    selection: &[],
+                    settings: &f.settings,
+                    tol: 5.0,
+                    context: None
+                }
+            ),
+            Preview::Shape(Shape::Line { .. })
+        ));
+        f.click(1000.0, 0.0);
+        assert_eq!(f.shapes().len(), 2);
+        f.settings.grading.mode = GradingMode::Spot;
+        f.click(500.0, 500.0);
+        assert_eq!(f.shapes().len(), 3);
+        // Enter with a one-click mode, and a release, do nothing.
+        assert!(f.send(Input::Enter).is_empty() && f.send(Input::Release(DVec2::ZERO)).is_empty());
+        assert!(Tool::SITE.contains(&Tool::Grading) && Tool::Grading.name() == "Grading");
+        assert!(f.m.hint().contains("Pick a mode"));
     }
 
     #[test]

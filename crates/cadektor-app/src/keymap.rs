@@ -145,6 +145,8 @@ actions! {
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
     ToolMassing => "tool.massing", "Massing Model tool", ["Alt+Shift+M"], true;
+    ToolIrrigation => "tool.irrigation", "Irrigation tool", ["Alt+Shift+I"], true;
+    ToolGrading => "tool.grading", "Grading tool", [], true;
     ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
     ToolAngularDim => "tool.angular_dimension", "Angular Dimension tool", ["."], true;
     ToolRadialDim => "tool.radial_dimension", "Radial Dimension tool", [","], true;
@@ -225,6 +227,8 @@ impl Action {
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
             Action::ToolMassing => Tool::Massing,
+            Action::ToolIrrigation => Tool::Irrigation,
+            Action::ToolGrading => Tool::Grading,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
                 Tool::Dimension
             }
@@ -250,6 +254,8 @@ impl Action {
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
             Tool::Massing => Action::ToolMassing,
+            Tool::Irrigation => Action::ToolIrrigation,
+            Tool::Grading => Action::ToolGrading,
             Tool::Dimension => Action::ToolDimension,
             Tool::Callout => Action::ToolCallout,
             Tool::DataTag => Action::ToolDataTag,
@@ -803,7 +809,12 @@ mod tests {
                 "status of {id} disagrees with the code"
             );
             let binding = cells[2].split(" (").next().unwrap();
-            let mut want: Vec<Chord> = binding.split(" or ").map(|c| chord(c.trim())).collect();
+            // A tool without a default key says "none".
+            let mut want: Vec<Chord> = if binding == "none" {
+                Vec::new()
+            } else {
+                binding.split(" or ").map(|c| chord(c.trim())).collect()
+            };
             let mut have = km.chords(action).to_vec();
             want.sort();
             have.sort();

@@ -11,9 +11,11 @@ mod file_io;
 mod gis_dialogs;
 mod gis_ui;
 mod gpu3d;
+mod grading_ui;
 mod hit;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;
+mod irrigation_ui;
 mod keymap;
 mod panels;
 mod plant_draw;

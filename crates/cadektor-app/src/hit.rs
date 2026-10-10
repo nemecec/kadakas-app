@@ -97,6 +97,7 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
         }
         // A viewport is picked inside its frame. A title block is picked at its border.
         Shape::Group { .. } => false,
+        Shape::Irrigation(i) => crate::irrigation_ui::hit(i, p, tol),
         // A symbol is picked through its expanded shapes, see `hit_test`.
         Shape::Symbol { .. } => false,
         // Annotations need the document (see `object_hit`).

@@ -109,6 +109,7 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
         ),
         Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Annotation(_) => {}
         Shape::Symbol { at, .. } => out.push((*at, Center)),
+        Shape::Irrigation(i) => crate::irrigation_ui::snap_points(i, out),
     }
 }
 

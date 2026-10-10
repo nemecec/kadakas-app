@@ -7,6 +7,7 @@ edition = "2024"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-api = { version = "0.1.0", path = "../cadektor-api" }
+cadektor-irrigation = { version = "0.1.0", path = "../cadektor-irrigation" }
 cadektor-print = { version = "0.1.0", path = "../cadektor-print" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }

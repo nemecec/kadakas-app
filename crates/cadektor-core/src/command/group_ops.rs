@@ -112,6 +112,11 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
             scale_y: *scale_y,
         },
         Shape::Group { name } => Shape::Group { name: name.clone() },
+        Shape::Irrigation(i) => {
+            let mut i = i.clone();
+            i.rotate(center, angle);
+            Shape::Irrigation(i)
+        }
         Shape::ExistingTree {
             at,
             species,
