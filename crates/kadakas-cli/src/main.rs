@@ -149,6 +149,7 @@ impl Backend {
         session.gis.urls = kadakas_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
         session.scripting.trust = kadakas_api::TrustStore::load_default();
+        session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(f) = file {
             session.editor = kadakas_core::command::Editor::new(load(&f)?);
             session.doc_dir = doc_dir_of(&f);

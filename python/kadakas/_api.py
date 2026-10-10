@@ -1106,6 +1106,66 @@ class Api:
         JSON-RPC method ``script.list``."""
         return self._call("script.list", params or None)
 
+    def plugins_info(self, **params: Any) -> Any:
+        """How WebAssembly plug-ins run here. Returns {engine (wasmtime, or unavailable in the browser build), agent_plugins_allowed, installed, limits: {fuel, memory_bytes, max_module_bytes, max_output_bytes, max_shapes, max_vertices}, abi_version}.
+
+        JSON-RPC method ``plugins.info``."""
+        return self._call("plugins.info", params or None)
+
+    def plugins_list(self, **params: Any) -> Any:
+        """The installed plug-ins. Returns [{id, name, version, abi_version, description, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted, shape_type, params (the schema), instances}]. Only kind object can be placed in this version.
+
+        JSON-RPC method ``plugins.list``."""
+        return self._call("plugins.list", params or None)
+
+    def plugins_install(self, **params: Any) -> Any:
+        """Load a plug-in module (.wasm) from a file. params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. Returns the entry of plugins.list plus {existing}.
+
+        JSON-RPC method ``plugins.install``."""
+        return self._call("plugins.install", params or None)
+
+    def plugins_trust(self, **params: Any) -> Any:
+        """Trust an installed module, so that its objects can be placed and reset. params: {plugin: id | name, hash} where hash is the SHA-256 of the module as plugins.list shows it (you confirm what you reviewed). Needs the flag --allow-agent-scripts. The trust lasts until the session ends and is not saved. Without the flag, only a user can trust a plug-in, in the dialog of the app, and that trust is saved. Returns {id, hash, trusted, scope: session}.
+
+        JSON-RPC method ``plugins.trust``."""
+        return self._call("plugins.trust", params or None)
+
+    def plugins_remove(self, **params: Any) -> Any:
+        """Remove an installed plug-in. params: {plugin: id | name}. Fails while objects of the document use it: delete those objects first. Returns {ok}.
+
+        JSON-RPC method ``plugins.remove``."""
+        return self._call("plugins.remove", params or None)
+
+    def plugins_place(self, **params: Any) -> Any:
+        """Place a plug-in object: run the module and add the shapes as a group, in one undo step with the change origin script. params: {plugin: id | name, params?: {name: value} (missing values use the defaults), layer?, class?, name?} plus the geometry for the shape type of the plug-in: point {at: [x, y], rotation?: radians}; linear {a, b}; rectangle {min, max}; path {points: [[x, y]], closed?: bool}. Nothing is added if the module fails. Returns {id, children: [ids], shapes}.
+
+        JSON-RPC method ``plugins.place``."""
+        return self._call("plugins.place", params or None)
+
+    def plugins_set_params(self, **params: Any) -> Any:
+        """Change parameters of a plug-in object and regenerate its shapes (one undo step, origin script). params: {id, params: {name: value}} (only the given values change). If the module fails, the old shapes stay, the parameters are saved and the object shows an error. Returns {id, ok, error?, children}.
+
+        JSON-RPC method ``plugins.set_params``."""
+        return self._call("plugins.set_params", params or None)
+
+    def plugins_reset(self, **params: Any) -> Any:
+        """Run the module again for plug-in objects, for example after installing a new build. params: {id | ids | plugin}. One undo step. Returns {results: [{id, ok, error?}]}.
+
+        JSON-RPC method ``plugins.reset``."""
+        return self._call("plugins.reset", params or None)
+
+    def plugins_object(self, **params: Any) -> Any:
+        """The state of a plug-in object. params: {id}. Returns {id, plugin, name, version, hash, installed, trusted, params, schema, geometry, error, children}. error is null when the last reset worked. installed is false when the module is not in this session; the shapes still exist.
+
+        JSON-RPC method ``plugins.object``."""
+        return self._call("plugins.object", params or None)
+
+    def plugins_preview(self, **params: Any) -> Any:
+        """Run a module without changing the document. params: {plugin: id | name, params?} plus the geometry, as in plugins.place. Returns {shapes: [...]}.
+
+        JSON-RPC method ``plugins.preview``."""
+        return self._call("plugins.preview", params or None)
+
     def section_viewport_line_add(self, **params: Any) -> Any:
         """Add a section line: a vertical cut plane along the line from a to b. params: {a: [x, y], b: [x, y], name? (default "A"), look? (left | right: the side of the line, going from a to b, that the view looks to; default left), mode? (cut | elevation; an elevation cuts nothing and shows the model seen from the line), depth? (far clip in mm; nothing farther than this beyond the line is drawn; default no limit), beyond? (draw the objects beyond the cut; default true), layer?, class?}. The line is a plain line object on a design layer with its settings in data.section_line. Returns {id}.
 
@@ -2153,6 +2213,16 @@ METHOD_NAMES: tuple[str, ...] = (
     "script.status",
     "script.stop",
     "script.list",
+    "plugins.info",
+    "plugins.list",
+    "plugins.install",
+    "plugins.trust",
+    "plugins.remove",
+    "plugins.place",
+    "plugins.set_params",
+    "plugins.reset",
+    "plugins.object",
+    "plugins.preview",
     "section_viewport.line_add",
     "section_viewport.line_set",
     "section_viewport.create",

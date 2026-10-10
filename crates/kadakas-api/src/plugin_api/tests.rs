@@ -895,7 +895,13 @@ fn changing_a_script_through_the_api_drops_trust() {
 fn nothing_in_the_api_adds_trust() {
     let mut s = open_session();
     let names: Vec<&str> = crate::METHODS.iter().map(|(n, _)| *n).collect();
-    assert!(!names.iter().any(|n| n.contains("trust")));
+    // The one exception is `plugins.trust` for sandboxed WebAssembly modules. It needs the flag for
+    // agents, lasts for the session only and never writes the trust file (see wasm_plugin_api).
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("trust") && *n != "plugins.trust")
+    );
     assert!(s.scripting.trust.is_empty());
     let def = define_circles(&mut s);
     ok(

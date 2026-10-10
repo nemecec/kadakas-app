@@ -50,6 +50,8 @@ pub struct ModuleTrust {
     path: Option<std::path::PathBuf>,
     /// hash -> name of the plug-in when it was trusted
     entries: BTreeMap<String, String>,
+    /// Modules trusted for this session only. They are never written to the file.
+    session: std::collections::BTreeSet<String>,
 }
 
 /// The trust file of the user, in the config folder.
@@ -74,6 +76,7 @@ impl ModuleTrust {
         ModuleTrust {
             path: Some(path),
             entries,
+            session: Default::default(),
         }
     }
 
@@ -83,9 +86,15 @@ impl ModuleTrust {
         default_path().map_or_else(Self::in_memory, Self::load)
     }
 
-    /// True if the user trusted the module with this hash.
+    /// True if the module with this hash is trusted, for good or for this session.
     pub fn is_trusted(&self, module_hash: &str) -> bool {
-        self.entries.contains_key(module_hash)
+        self.entries.contains_key(module_hash) || self.session.contains(module_hash)
+    }
+
+    /// Trusts the module until the session ends. Nothing is saved. The API method
+    /// `plugins.trust` uses this, so an agent cannot make trust that outlives its session.
+    pub fn trust_for_session(&mut self, module_hash: &str) {
+        self.session.insert(module_hash.to_string());
     }
 
     /// The right to run this module, if it is trusted or `allow_all` is set (the host lets agents
@@ -106,6 +115,7 @@ impl ModuleTrust {
     /// Removes the trust of a module. Saves the file when the store has one.
     pub fn forget(&mut self, module_hash: &str) -> std::io::Result<()> {
         self.entries.remove(module_hash);
+        self.session.remove(module_hash);
         self.save()
     }
 
@@ -159,6 +169,12 @@ mod tests {
         assert!(t.permit("aa", false).is_some());
         t.forget("aa").unwrap();
         assert!(!t.is_trusted("aa"));
+        // Trust for the session counts, but it is not a saved entry.
+        t.trust_for_session("bb");
+        assert!(t.is_trusted("bb") && t.permit("bb", false).is_some());
+        assert!(t.is_empty());
+        t.forget("bb").unwrap();
+        assert!(!t.is_trusted("bb"));
         let _ = Permit::for_test("x");
     }
 
@@ -173,11 +189,17 @@ mod tests {
         t.trust(&h, "One").unwrap();
         // One changed byte is another module.
         assert!(!t.is_trusted(&hash(b"module onf")));
-        let again = ModuleTrust::load(path.clone());
+        let mut again = ModuleTrust::load(path.clone());
         assert!(again.is_trusted(&h) && again.len() == 1);
+        // Trust for one session is not written to the file.
+        again.trust_for_session("cc");
+        again.trust(&hash(b"two"), "Two").unwrap();
+        let reread = ModuleTrust::load(path.clone());
+        assert!(!reread.is_trusted("cc") && reread.len() == 2);
         let mut gone = ModuleTrust::load(path.clone());
         gone.forget(&h).unwrap();
-        assert!(ModuleTrust::load(path.clone()).is_empty());
+        let left = ModuleTrust::load(path.clone());
+        assert!(!left.is_trusted(&h) && left.len() == 1);
         // A broken file is an empty store, not a crash.
         std::fs::write(&path, "not json").unwrap();
         assert!(ModuleTrust::load(path).is_empty());

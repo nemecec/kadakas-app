@@ -26,3 +26,15 @@ opt-level = 1
 opt-level = 1
 [profile.dev.package.kadakas-x3d]
 opt-level = 1
+# The Cranelift compiler of the plug-in engine is slow without optimization. Tests of plug-ins
+# compile modules, so a little optimization saves a lot of test time.
+[profile.dev.package.cranelift-codegen]
+opt-level = 2
+[profile.dev.package.regalloc2]
+opt-level = 2
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 2
+[profile.dev.package.cranelift-frontend]
+opt-level = 2
+[profile.dev.package.wasmparser]
+opt-level = 2

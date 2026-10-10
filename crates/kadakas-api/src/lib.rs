@@ -31,6 +31,8 @@ mod rules_api;
 mod sheets_api;
 mod survey_api;
 mod symbols_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod wasm_plugin_api;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -55,6 +57,8 @@ pub use gis_api::{GisState, JobInfo};
 #[cfg(not(target_arch = "wasm32"))]
 pub use kadakas_gis::http::UrlPolicy;
 #[cfg(not(target_arch = "wasm32"))]
+pub use kadakas_plugin::ModuleTrust;
+#[cfg(not(target_arch = "wasm32"))]
 pub use kadakas_script::trust::TrustStore;
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
@@ -62,6 +66,10 @@ pub use paths::PathPolicy;
 pub use plugin_api::{
     DATA_KEY as PLUGIN_DATA_KEY, ResetJob, ScriptingState, UNTRUSTED_CODE, instance_info,
     trust_plugin, user_finish, user_prepare, user_set_params,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use wasm_plugin_api::{
+    DATA_KEY as WASM_PLUGIN_DATA_KEY, WasmPluginState, trust_module as trust_wasm_plugin,
 };
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
@@ -127,6 +135,9 @@ pub struct Session {
     /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
     #[cfg(not(target_arch = "wasm32"))]
     pub scripting: ScriptingState,
+    /// WebAssembly plug-ins: the installed modules and their trust (see `wasm_plugin_api`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub wasm_plugins: WasmPluginState,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -415,6 +426,27 @@ pub const METHODS: &[(&str, &str)] = &[
     plugin_api::SCRIPT_STOP,
     #[cfg(not(target_arch = "wasm32"))]
     plugin_api::SCRIPT_LIST,
+    // WebAssembly plug-ins (see wasm_plugin_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_INFO,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_LIST,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_INSTALL,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_TRUST,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_REMOVE,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_PLACE,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_SET_PARAMS,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_RESET,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_OBJECT,
+    #[cfg(not(target_arch = "wasm32"))]
+    wasm_plugin_api::PLUGINS_PREVIEW,
     // Section and elevation viewports (see x3d_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
     x3d_api::LINE_ADD,
@@ -688,6 +720,8 @@ impl Session {
             applied_view: None,
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            wasm_plugins: WasmPluginState::default(),
         }
     }
 
@@ -723,6 +757,8 @@ impl Session {
         let gis = std::mem::take(&mut self.gis);
         #[cfg(not(target_arch = "wasm32"))]
         let scripting = std::mem::take(&mut self.scripting);
+        #[cfg(not(target_arch = "wasm32"))]
+        let wasm_plugins = std::mem::take(&mut self.wasm_plugins);
         let limits = self.limits.clone();
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
@@ -741,6 +777,7 @@ impl Session {
             self.doc_dir = doc_dir;
             self.gis = gis;
             self.scripting = scripting;
+            self.wasm_plugins = wasm_plugins;
             // Jobs that were started for the old document must not change this one.
             self.gis.epoch += 1;
         }
@@ -920,6 +957,7 @@ impl Session {
                     d["io"] = io::describe();
                     d["gis"] = gis_api::describe();
                     d["scripting"] = plugin_api::describe();
+                    d["plugins"] = wasm_plugin_api::describe();
                 }
                 d["schemas"] = json!({
                     "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
@@ -1194,6 +1232,10 @@ impl Session {
             _ => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(r) = plugin_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(r) = wasm_plugin_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = present_api::handle(self, method, p.clone()) {

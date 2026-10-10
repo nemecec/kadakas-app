@@ -2367,6 +2367,8 @@ dependencies = [
  "kadakas-io",
  "kadakas-irrigation",
  "kadakas-plants",
+ "kadakas-plugin",
+ "kadakas-plugin-abi",
  "kadakas-print",
  "kadakas-render",
  "kadakas-script",
@@ -2378,6 +2380,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wat",
 ]
 
 [[package]]

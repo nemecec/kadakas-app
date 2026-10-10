@@ -28,7 +28,11 @@ kadakas-ifc = { version = "0.1.0", path = "../kadakas-ifc" }
 kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
+kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
 tempfile = "3"
 
 [dev-dependencies]
 png = "0.18"
+# Test modules for the limits are written as text. Not shipped.
+wat = "1"
