@@ -196,8 +196,8 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "scripting",
-        summary: "Python scripts and plug-in objects.",
-        prefixes: &["script", "plugin"],
+        summary: "Python scripts, Python plug-in objects (plugin.*) and sandboxed WebAssembly plug-ins (plugins.*).",
+        prefixes: &["script", "plugin", "plugins"],
         read_only: false,
         open_world: false,
     },

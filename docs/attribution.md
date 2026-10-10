@@ -16,6 +16,14 @@ SketchUp is a trademark of Trimble Inc. The feature spec names a SketchUp-like u
 
 Every Rust crate that we ship is listed in `THIRD_PARTY_NOTICES.txt` with its license and its license text. The file is made by `scripts/notices.sh` (cargo-about). `cargo deny check` allows permissive licenses only (`deny.toml`).
 
+## WebAssembly plug-in runtime
+
+Plug-ins (PLAT-10) run in `wasmtime`, the WebAssembly runtime of the Bytecode Alliance (https://github.com/bytecodealliance/wasmtime). Native builds only. License: Apache-2.0 WITH LLVM-exception. We use it with the features `std`, `runtime` and `cranelift` only (no WASI, no cache, no async). Its dependencies come with it: the Cranelift code generator (`cranelift-*`, `regalloc2`, `target-lexicon`, `pulley-*`, Apache-2.0 WITH LLVM-exception), `wasmparser`, `wasm-encoder` and `wasmprinter` of the `wasm-tools` project (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT), `gimli`, `object`, `addr2line` (MIT OR Apache-2.0), and a few small helpers (`postcard`, `cobs`, `embedded-io`, `memfd`, `mach2`, `anyhow`, `arbitrary`, `fallible-iterator`, `leb128fmt`). All are listed in `THIRD_PARTY_NOTICES.txt`; the LLVM exception text is part of the Apache 2.0 text there.
+
+The test crate `wat` (and `wast`, `wasm-encoder` 0.261, `wasmparser` 0.261 behind it) turns WebAssembly text into modules in the tests of `kadakas-plugin`. It is a development dependency, so it does not ship, but `cargo deny` checks it: the license is the same (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT).
+
+The example plug-in `plugins/raised-planter` and its module `crates/kadakas-plugin/tests/fixtures/raised_planter.wasm` are own work, under the project license (Apache-2.0 OR MIT).
+
 New with the launcher (PLAT-06, `kadakas-update`): `ed25519-dalek` and `curve25519-dalek` (BSD-3-Clause, by the dalek-cryptography authors) check the signature of update manifests. `sha2` (RustCrypto, MIT OR Apache-2.0) makes the SHA-256 of downloads. `tar` and `flate2` (MIT OR Apache-2.0) unpack the update archives. Their helper crates (`ed25519`, `signature`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`, `fiat-crypto`, `digest`, `block-buffer`, `crypto-common`, `generic-array`, `cpufeatures`, `rand_core`, `filetime`) are listed in `THIRD_PARTY_NOTICES.txt` too. `ureq` (HTTP client) was already in use by `kadakas-gis`.
 
 ## Icons

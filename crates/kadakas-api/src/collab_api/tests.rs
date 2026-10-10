@@ -641,6 +641,47 @@ fn waiting_edits_of_one_user_are_not_dropped_for_another() {
     assert_eq!(st["pending"], 0);
 }
 
+#[test]
+fn plug_in_objects_and_their_regeneration_flow_through_collab() {
+    use kadakas_core::change::Origin;
+    let (_hub, mut a, mut b) = pair();
+    a.scripting.allow_agent_scripts = true;
+    let planter = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
+    );
+    call(&mut a, "plugins.install", json!({"path": planter}));
+    let rev_a = a.editor.revision();
+    let placed = call(
+        &mut a,
+        "plugins.place",
+        json!({"plugin": "org.kadakas.raised-planter", "min": [0, 0], "max": [2000, 800]}),
+    );
+    // The plug-in change set has the origin script on the session that ran the module.
+    let sets = a.editor.changes_since(rev_a);
+    assert_eq!(sets.changes[0].origin, Origin::Script);
+    let id = placed["id"].as_str().unwrap().to_string();
+    call(&mut a, "collab.sync", json!({"now_ms": 2_000}));
+    let rev_b = b.editor.revision();
+    call(&mut b, "collab.sync", json!({"now_ms": 2_000}));
+    // The other session gets the group and its children as one remote change set.
+    let sets = b.editor.changes_since(rev_b);
+    assert_eq!(sets.changes.len(), 1);
+    assert_eq!(sets.changes[0].origin, Origin::Remote);
+    assert!(has(&b, &id));
+    assert!(same(&a, &b));
+    // A regeneration (new parameters) is one more change set; it reaches B the same way.
+    call(
+        &mut a,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 150.0}}),
+    );
+    call(&mut a, "collab.sync", json!({"now_ms": 2_100}));
+    call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
+    assert!(same(&a, &b));
+    assert_eq!(a.editor.doc().objects.len(), b.editor.doc().objects.len());
+}
+
 // ----- real commands on two sessions -----
 
 mod real_commands {

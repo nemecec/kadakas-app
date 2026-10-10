@@ -35,7 +35,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo check -p kadakas-core -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-app --target wasm32-unknown-unknown
+      - run: cargo check -p kadakas-core -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
   web:
     runs-on: ubuntu-latest
     steps:

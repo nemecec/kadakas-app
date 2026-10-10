@@ -153,6 +153,8 @@ impl KadakasApp {
             args.iter().any(|a| a == "--allow-agent-scripts");
         // The scripts of plug-in objects that the user trusted before.
         app.session.scripting.trust = kadakas_api::TrustStore::load_default();
+        // The WebAssembly plug-in modules that the user trusted before.
+        app.session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);

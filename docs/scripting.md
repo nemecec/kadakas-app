@@ -8,6 +8,8 @@ You can do three things:
 2. Run `.py` files from the **Scripts** palette in the app. They work on the open drawing, live.
 3. Make a **plug-in object**: an object with parameters. A short Python script draws its shapes again each time you change a parameter.
 
+For plug-in objects and tools that must run the same everywhere, in a sandbox, see [plugins.md](plugins.md) (WebAssembly plug-ins). Python stays the tool for automation.
+
 Python is not part of Kadakas. Kadakas starts the Python that is on your computer.
 
 ## Contents
@@ -358,7 +360,7 @@ To test a script without the app, use `kadakas.plugin.test_reset(script, params,
 - **A script from a drawing never runs until you trust it.** A plug-in object script is a Python program. A drawing that you download may hold one. When you select such an object, Object Info shows a warning and the button **Review script...**. The dialog **Trust this plug-in?** shows the full source and where it comes from. Nothing runs until you press **Trust this script**.
 - Trust is for the **exact text**. The app keeps the SHA-256 hash of each script you trusted in `trusted_plugins.json` in your config folder. If anyone changes the script, even by one character, the hash changes and the script is untrusted again. Putting the old text back makes it trusted again.
 - The two shipped examples are trusted by their hash. Their scripts are part of the program.
-- **Trust comes only from the dialog.** No API call adds trust. `plugin.update` can change a script, but the new text is untrusted. An agent cannot trust its own script.
+- **Trust comes only from the dialog.** No API call adds trust. The same holds for WebAssembly plug-ins (see [plugins.md](plugins.md)). `plugin.update` can change a script, but the new text is untrusted. An agent cannot trust its own script.
 - Opening a drawing, selecting an object and looking at Object Info never run a script. A parameter edit or **Reset** runs it only for a trusted script.
 - The script of a reset runs in a separate thread. The window stays alive and shows a progress mark. A script that starts a background process does not hold the app: the app ends the whole process group when the reset ends or times out (on Windows only the script process is ended).
 - `script.run` also needs the running app (it gives the script the address and token). A headless `kadakas serve` refuses it.

@@ -1,0 +1,25 @@
+[package]
+name = "kadakas-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The host for Kadakas WebAssembly plug-ins: a runtime-neutral interface, trust by module hash, limits and checks of the answer. The wasmtime backend is native only; the browser build has a stub."
+
+[dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.11.0"
+# Reads the structure of a module (function sizes, locals) before it is compiled. Pure.
+wasmparser = { version = "0.243.0", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+# Only what we need: the runtime and the Cranelift compiler. No WASI, no cache, no async, no text format.
+wasmtime = { version = "40.0.4", default-features = false, features = ["std", "runtime", "cranelift"] }
+
+[dev-dependencies]
+# Test modules are written as text (WAT) and compiled in the tests. Not shipped.
+wat = "1"

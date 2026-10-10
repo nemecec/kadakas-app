@@ -238,7 +238,7 @@ fn find_def(s: &Session, sel: &Value) -> Result<Found, RpcError> {
     found.ok_or_else(|| RpcError::not_found(format!("there is no plug-in object definition {sel}")))
 }
 
-fn sel<'a>(m: &'a Map<String, Value>, keys: &[&str]) -> Result<&'a Value, RpcError> {
+pub(crate) fn sel<'a>(m: &'a Map<String, Value>, keys: &[&str]) -> Result<&'a Value, RpcError> {
     keys.iter()
         .find_map(|k| m.get(*k))
         .ok_or_else(|| bad(format!("give {}", keys.join(" or "))))
@@ -285,7 +285,7 @@ fn get(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(def_summary(&f, s, true))
 }
 
-fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
+pub(crate) fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
     let n = m
         .get(key)
         .and_then(Value::as_str)
@@ -298,7 +298,10 @@ fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
     Ok(n.to_string())
 }
 
-fn exec(s: &mut Session, cmd: &Command) -> Result<Vec<kadakas_core::uid::Uid>, RpcError> {
+pub(crate) fn exec(
+    s: &mut Session,
+    cmd: &Command,
+) -> Result<Vec<kadakas_core::uid::Uid>, RpcError> {
     let cmd = s.in_context(cmd.clone());
     // Plug-in objects change because a script ran, so the change events say so.
     let before = s.editor.origin();
@@ -468,7 +471,7 @@ fn instance_data(o: &Object) -> Option<&Value> {
 }
 
 /// The lowest corner of the shapes, to notice that someone moved the object.
-fn origin_of(shapes: impl Iterator<Item = Shape>) -> [f64; 2] {
+pub(crate) fn origin_of(shapes: impl Iterator<Item = Shape>) -> [f64; 2] {
     let mut lo = [f64::INFINITY; 2];
     for sh in shapes {
         let (a, _) = sh.bounds();
@@ -542,7 +545,7 @@ fn geometry_of(def: &PluginDef, m: &Map<String, Value>) -> Result<Geometry, RpcE
     Geometry::from_json(def.shape_type, &Value::Object(m.clone())).map_err(bad)
 }
 
-fn opt_params(m: &Map<String, Value>) -> Result<Map<String, Value>, RpcError> {
+pub(crate) fn opt_params(m: &Map<String, Value>) -> Result<Map<String, Value>, RpcError> {
     match m.get("params") {
         None | Some(Value::Null) => Ok(Map::new()),
         Some(Value::Object(o)) => Ok(o.clone()),
@@ -567,9 +570,11 @@ fn instance_json(
     params: &Map<String, Value>,
     geometry: &Geometry,
     origin: [f64; 2],
+    class: Option<ClassId>,
     error: Option<&str>,
 ) -> Value {
     json!({
+        "class": class,
         "definition": f.id,
         "name": f.name,
         "shape_type": f.def.shape_type,
@@ -608,7 +613,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         id: group,
         set: [(
             DATA_KEY.to_string(),
-            instance_json(&f, &params, &geometry, origin, None),
+            instance_json(&f, &params, &geometry, origin, class, None),
         )]
         .into(),
         remove: vec![],
@@ -634,6 +639,8 @@ pub struct ResetJob {
     /// The lowest corner of the members now (they may have moved).
     now: [f64; 2],
     children: Vec<ObjectId>,
+    /// The class of the members, kept when they are made again.
+    class: Option<ClassId>,
     interpreter: Option<Interpreter>,
     limits: ResetLimits,
     /// The right to run this exact script. It was made when the job was prepared.
@@ -711,6 +718,7 @@ fn prepare_reset(
         geometry,
         now,
         children,
+        class: data["class"].as_uid().map(ClassId),
         interpreter,
         limits,
         permit,
@@ -725,7 +733,14 @@ fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (
         id,
         set: [(
             DATA_KEY.to_string(),
-            instance_json(&job.found, &job.params, &job.geometry, origin, error),
+            instance_json(
+                &job.found,
+                &job.params,
+                &job.geometry,
+                origin,
+                job.class,
+                error,
+            ),
         )]
         .into(),
         remove: vec![],
@@ -738,7 +753,7 @@ fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (
                 .map(|g| Command::AddObjectIn {
                     parent: id,
                     shape: g.shape.clone(),
-                    class: None,
+                    class: job.class,
                     attrs: g.attrs.clone(),
                 })
                 .collect();
@@ -802,7 +817,7 @@ fn instance_def(s: &Session, id: ObjectId) -> Result<Found, RpcError> {
     find_def(s, &data["definition"])
 }
 
-fn object_id(m: &Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
+pub(crate) fn object_id(m: &Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
     m.get(key)
         .and_then(AsUid::as_uid)
         .map(ObjectId)
