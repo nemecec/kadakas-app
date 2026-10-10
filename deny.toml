@@ -19,6 +19,10 @@ confidence-threshold = 0.93
 #   r-efi         "MIT OR Apache-2.0 OR LGPL-2.1-or-later"         -> MIT
 #   adler2        "0BSD OR MIT OR Apache-2.0"                      -> MIT
 #   ryu           "Apache-2.0 OR BSL-1.0"                          -> Apache-2.0
+#   wasm-encoder, wasmparser, wasmprinter, wast, wat (wasm-tools)
+#                 "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT" -> Apache-2.0 WITH LLVM-exception
+#   wasmtime, cranelift-*, regalloc2, target-lexicon, pulley-*
+#                 "Apache-2.0 WITH LLVM-exception"                 -> allowed as it is
 #   memchr, walkdir, same-file, winapi-util, byteorder-lite
 #                 "Unlicense OR MIT"                               -> MIT
 #

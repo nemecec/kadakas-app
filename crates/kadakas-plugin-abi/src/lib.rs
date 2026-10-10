@@ -30,7 +30,9 @@ pub mod param;
 
 pub use manifest::{Kind, Manifest, ObjectSpec, Permission, ShapeType};
 pub use message::{Attrs, Geometry, OutShape, ResetRequest, ResetResponse, ShapeData};
-pub use param::{ParamSchema, ParamType};
+pub use param::{ParamSchema, ParamType, color_rgba};
+/// Plug-ins use this to build parameter defaults (`json!`) without another dependency.
+pub use serde_json;
 
 /// The version of the ABI that this crate describes. A host runs only modules with this number.
 pub const ABI_VERSION: u32 = 1;

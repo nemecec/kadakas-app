@@ -222,6 +222,19 @@ impl ParamSchema {
     }
 }
 
+/// Reads a color value (`#rrggbb` or `#rrggbbaa`) as `[r, g, b, a]`. Plug-ins use it for the
+/// parameters of type `color`.
+pub fn color_rgba(text: &str) -> Option<[u8; 4]> {
+    let h = normalize_color(text)?;
+    let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    Some([
+        byte(1)?,
+        byte(3)?,
+        byte(5)?,
+        if h.len() == 9 { byte(7)? } else { 255 },
+    ])
+}
+
 /// Fills in defaults and checks every value. Unknown names are an error.
 pub fn resolve(
     schema: &[ParamSchema],
@@ -399,6 +412,14 @@ mod tests {
         // A bad default shows up when the value is missing.
         let broken = vec![ParamSchema::new("c", ParamType::Choice)];
         assert!(resolve(&broken, &Map::new()).is_err());
+    }
+
+    #[test]
+    fn colors_read_as_rgba() {
+        assert_eq!(color_rgba("#ff8000"), Some([255, 128, 0, 255]));
+        assert_eq!(color_rgba("#FF800040"), Some([255, 128, 0, 64]));
+        assert_eq!(color_rgba("ff8000"), None);
+        assert_eq!(color_rgba("#12"), None);
     }
 
     #[test]

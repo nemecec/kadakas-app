@@ -1,0 +1,26 @@
+# The example plug-in "Raised planter". It is NOT a member of the Kadakas workspace: it builds for
+# wasm32-unknown-unknown with its own lock file. `scripts/build-plugin-fixtures.sh` builds it and
+# copies the module to crates/kadakas-plugin/tests/fixtures/.
+[package]
+name = "raised-planter"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0 OR MIT"
+publish = false
+description = "Example Kadakas plug-in: a parametric raised planter."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+kadakas-plugin-abi = { path = "../../crates/kadakas-plugin-abi" }
+
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
