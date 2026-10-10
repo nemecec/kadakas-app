@@ -1,0 +1,18 @@
+[package]
+name = "kadakas-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Kadakas launcher: shows the installed versions, checks for signed updates, rolls back, and starts the app with a chosen UI flavor and profile. Native only. It holds public keys only."
+
+[[bin]]
+name = "kadakas-launcher"
+path = "src/main.rs"
+
+[dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
+eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui = "0.35.0"

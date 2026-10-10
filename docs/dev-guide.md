@@ -33,6 +33,8 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-print` | Sheet composition and output: PDF, SVG and PNG pages from sheet layers | core, sys, render, sheet, annot, site, x3d |
 | `kadakas-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs; native only: sys, io, ifc, gis, print, script, x3d. Also: `SessionLimits`, the event hub (`events`) |
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
+| `kadakas-launcher` | The launcher program (PLAT-06): an egui window that shows versions, channel, flavor and profile, and has Launch, Check, Update and Roll back. The window code only draws; the state is in `model.rs`. Left out of the coverage bar like the app (native only) | sys, update |
+| `kadakas-sign-manifest` (in `scripts/sign-manifest`) | The CI tool `sign-manifest`: `keygen`, `public`, `build`, `sign`, `verify` for update manifests. Holds the signing code (feature `sign` of `kadakas-update`); the launcher does not | sys, update (feature `sign`) |
 | `kadakas-app` | egui and wgpu desktop app and web build | core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
 
 The layers, from the bottom (a crate uses only crates above it; `cargo tree` is the truth):
@@ -53,6 +55,8 @@ core            sys
 
 Nothing below `api` depends on `script` any more: `io` runs its converter through `sys`.
 
+- `kadakas-update`, `kadakas-launcher` and `kadakas-sign-manifest` are native only (files, sockets, processes, windows). They are not in the wasm check. Leave them out of the `cargo check ... --target wasm32-unknown-unknown` line, and do not make a wasm crate depend on them.
+- The launcher holds no secret. It has public keys only (`crates/kadakas-launcher/trusted-keys.txt`). Private keys exist in CI secrets only. Signing code lives behind the `sign` feature of `kadakas-update`, and only `sign-manifest` and tests turn it on.
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
 - Core, crs, plants, render, site, annot, x3d, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.

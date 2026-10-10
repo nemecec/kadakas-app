@@ -2447,6 +2447,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-launcher"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "kadakas-sys",
+ "kadakas-update",
+]
+
+[[package]]
 name = "kadakas-plants"
 version = "0.1.0"
 dependencies = [

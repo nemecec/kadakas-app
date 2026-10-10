@@ -1,0 +1,69 @@
+name: Update manifest
+# Signs the update manifest for the launcher (PLAT-06) after a release is published.
+#
+# The manifest lists the update archives of the release (kadakas-update-<platform>.tar.gz, made by
+# release.yml) with their size and SHA-256. It is signed with the ed25519 key in the secret
+# KADAKAS_UPDATE_SIGNING_KEY (32-byte seed as 64 hex characters). The signed file goes to the
+# release "update-manifests", where the launcher looks for it. See docs/release.md.
+#
+# It runs after the release is PUBLISHED, because the manifest points to the public download
+# addresses. A draft release has no public addresses.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of a published release (for example v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # to upload the manifest to the release "update-manifests"
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Download the update archives of the release
+        run: gh release download "$TAG" --pattern 'kadakas-update-*.tar.gz' --dir archives
+      - name: Build the manifest (size and SHA-256 come from the files)
+        run: |
+          version="${TAG#v}"
+          # A version with a dash (1.2.0-beta.1) goes to the beta channel.
+          case "$version" in *-*) channel=beta ;; *) channel=stable ;; esac
+          echo "CHANNEL=$channel" >> "$GITHUB_ENV"
+          args=()
+          for p in macos-aarch64 macos-x86_64 windows-x86_64 linux-x86_64; do
+            file="archives/kadakas-update-$p.tar.gz"
+            url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kadakas-update-$p.tar.gz"
+            args+=(--platform "$p=$file=$url")
+          done
+          cargo run --release -p kadakas-sign-manifest -- build \
+            --version "$version" --channel "$channel" "${args[@]}" --out manifest.json
+      - name: Sign the manifest
+        env:
+          KADAKAS_UPDATE_SIGNING_KEY: ${{ secrets.KADAKAS_UPDATE_SIGNING_KEY }}
+        run: |
+          cargo run --release -p kadakas-sign-manifest -- sign \
+            --manifest manifest.json --key-env KADAKAS_UPDATE_SIGNING_KEY \
+            --out "manifest-$CHANNEL.json"
+      - name: Check the signature against the keys in the launcher
+        run: |
+          keys=()
+          while read -r k; do keys+=(--pubkey "$k"); done < <(sed 's/#.*//' crates/kadakas-launcher/trusted-keys.txt | tr -d ' \r' | grep -E '^[0-9a-fA-F]{64}$')
+          cargo run --release -p kadakas-sign-manifest -- verify --signed "manifest-$CHANNEL.json" "${keys[@]}"
+      - name: Publish the manifest
+        run: |
+          gh release view update-manifests >/dev/null 2>&1 || gh release create update-manifests \
+            --title "Update manifests" --prerelease --latest=false \
+            --notes "Signed manifests for the Kadakas launcher. Made by CI. Do not edit."
+          gh release upload update-manifests "manifest-$CHANNEL.json" --clobber

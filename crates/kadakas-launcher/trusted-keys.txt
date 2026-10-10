@@ -1,0 +1,8 @@
+# Public keys that the launcher trusts for update manifests (ed25519, hex).
+# One or two keys, one per line. Two keys allow a key rotation (see docs/release.md).
+# These are PUBLIC keys. The private keys are in the CI secrets and never in this repository.
+#
+# PLACEHOLDER: the private half of this key was thrown away on purpose. No manifest can be
+# signed for it, so a launcher built from this file refuses every update. Before the first
+# release, make the real key with `sign-manifest keygen` and replace the line below.
+f1517ae94a0eefd20144191f1583a8d648e3f91c059b0e4bba59c975d9871b7c
