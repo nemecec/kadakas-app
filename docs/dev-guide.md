@@ -19,6 +19,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
 | `kadakas-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
 | `kadakas-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
+| `kadakas-collab` | Collaboration client (PLAT-07, PLAT-08): wire protocol, merge rules, client state machine, per-user undo, offline log, presence, transport trait. No network code and no server (the server is the separate `kadakas-server` repository). `testkit` feature: an in-memory reference sequencer for tests | core |
 | `kadakas-render` | Camera, standard views, picking, CPU rasterizer | core |
 | `kadakas-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants |
 | `kadakas-annot` | Data tags, legends and annotation output on top of the worksheet code (pure, wasm-compatible) | core, sheet |
@@ -53,7 +54,7 @@ core            sys
 Nothing below `api` depends on `script` any more: `io` runs its converter through `sys`.
 
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
-- Core, crs, plants, render, site, annot, x3d, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Core, crs, plants, collab, render, site, annot, x3d, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
@@ -86,7 +87,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```

@@ -1,0 +1,22 @@
+[package]
+name = "kadakas-collab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Collaboration for Kadakas: the wire protocol, the merge rules, the client state machine and presence. Pure and wasm-compatible. It has no network code and no server."
+
+[features]
+# The in-memory reference sequencer and hub, for tests of this crate and of crates that use it.
+# It is not a server.
+testkit = []
+
+[dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"
