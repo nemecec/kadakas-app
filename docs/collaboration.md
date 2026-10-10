@@ -460,8 +460,9 @@ server does not have is `invalid_txn`. Messages of one connection keep their ord
 arrives first.
 
 A client that finds a reference to a blob it does not have (after a snapshot or an entry) sends
-`blob_get` once, and leaves the object out of its document until `blob` arrives. On `blob_missing` it
-does not ask again on this connection (the list is cleared at the next sign-in). After a sign-in the client sends `blob_put` again for every picture that a
+`blob_get` once, and leaves the object out of its document until `blob` arrives. Old log entries can refer to blobs that were removed later. A client that gets `blob_missing` while
+it catches up keeps the thing waiting for its picture; the state at the head refers only to kept
+blobs. On `blob_missing` it does not ask again on this connection (the list is cleared at the next sign-in). After a sign-in the client sends `blob_put` again for every picture that a
 waiting transaction refers to. The checkpoint and the journal of the client hold the pictures they
 need. The same picture has the same hash, so it is sent once.
 
