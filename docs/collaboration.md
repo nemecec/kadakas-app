@@ -420,6 +420,7 @@ Every error code has a class. The client acts on the class:
 | `unsupported_protocol`, `auth_failed` | fatal | stops; the host must connect again on purpose |
 | `bad_message`, `invalid_txn`, `duplicate_uid` | reject | drops the transaction and its undo step; its edit leaves the view |
 | `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s |
+| any other code (the client reads it as `unknown`) | retry when the error has an `op_id`; otherwise the client reports it and goes on | as for a retry error, or reports it |
 | `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
 
 ### 4.7 Blobs

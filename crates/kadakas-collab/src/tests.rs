@@ -1648,6 +1648,43 @@ fn a_transient_error_keeps_the_transaction_and_tries_again_later() {
 }
 
 #[test]
+fn an_unknown_error_code_does_not_stop_the_client() {
+    let unknown = |op: Option<u64>| {
+        let text = match op {
+            Some(n) => format!(
+                r#"{{"type":"error","code":"quota_exceeded","message":"new","op_id":{n}}}"#
+            ),
+            None => r#"{"type":"error","code":"quota_exceeded","message":"new"}"#.to_string(),
+        };
+        serde_json::from_str::<ServerMsg>(&text).unwrap()
+    };
+    // With an op_id: a retry. The transaction stays and goes through later.
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    let op = net.clients[0].pending()[0].op_id;
+    net.clients[0].handle(unknown(Some(op)), net.now);
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    assert_eq!(net.clients[0].pending().len(), 1, "kept");
+    net.now += 300;
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    // Without an op_id: reported, and the client goes on.
+    net.clients[0].take_events();
+    net.clients[0].handle(unknown(None), net.now);
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    assert!(matches!(
+        net.clients[0].take_events()[0],
+        ClientEvent::ServerError {
+            code: ErrorCode::Unknown,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn a_refusal_for_good_drops_the_transaction() {
     let mut net = Net::new(1);
     net.connect(0);

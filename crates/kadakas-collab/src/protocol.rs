@@ -77,6 +77,10 @@ pub enum ErrorCode {
     /// The pair (client, `op_id`) was used before with other content, or is below the highest
     /// number that the server has for this client. The client numbers the transaction again.
     OpIdReused,
+    /// A code that this version does not know (a newer server). The client treats it as a retry
+    /// error when it has an `op_id`, and otherwise reports it and goes on.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What a client does when it gets an error.
@@ -107,7 +111,7 @@ impl ErrorCode {
             ErrorCode::BadMessage | ErrorCode::DuplicateUid | ErrorCode::InvalidTxn => {
                 ErrorClass::Reject
             }
-            ErrorCode::RateLimited | ErrorCode::Internal => ErrorClass::Retry,
+            ErrorCode::RateLimited | ErrorCode::Internal | ErrorCode::Unknown => ErrorClass::Retry,
             ErrorCode::OpIdReused => ErrorClass::Renumber,
         }
     }
@@ -329,11 +333,28 @@ mod tests {
             (ErrorCode::RateLimited, Retry),
             (ErrorCode::Internal, Retry),
             (ErrorCode::OpIdReused, Renumber),
+            (ErrorCode::Unknown, Retry),
         ];
         for (code, class) in all {
             assert_eq!(code.class(), class, "{code:?}");
             assert_eq!(code.is_fatal(), class == Fatal);
         }
+    }
+
+    #[test]
+    fn a_code_from_a_newer_server_reads_as_unknown() {
+        let m: ServerMsg =
+            serde_json::from_str(r#"{"type":"error","code":"from_the_future","message":"x"}"#)
+                .unwrap();
+        assert!(matches!(
+            m,
+            ServerMsg::Error {
+                code: ErrorCode::Unknown,
+                op_id: None,
+                ..
+            }
+        ));
+        assert!(!ErrorCode::Unknown.is_fatal());
     }
 
     #[test]
