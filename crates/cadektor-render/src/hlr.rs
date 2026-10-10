@@ -326,6 +326,149 @@ fn mesh_edges(scene: &Scene, camera: Option<&Camera>, known: &[Edge]) -> Vec<Edg
             });
         }
     }
+    // Where objects cut through each other (a wall in the ground, a pond in the terrain).
+    for (seg, object) in intersection_edges(scene) {
+        let key = key(seg[0].as_vec3(), seg[1].as_vec3());
+        if have.insert(key) {
+            out.push(Edge {
+                a: seg[0],
+                b: seg[1],
+                color: DERIVED_EDGE,
+                object: Some(object),
+            });
+        }
+    }
+    out
+}
+
+/// Most pairs of triangles that are tested for an intersection.
+const MAX_INTERSECTION_PAIRS: usize = 30_000_000;
+
+/// The segment where triangle `b` crosses triangle `a`, if the two cut through each other.
+/// Triangles that touch, or lie in one plane, give nothing: their shared edges are in the
+/// line list already.
+pub fn triangle_cut(a: [DVec3; 3], b: [DVec3; 3], tol: f64) -> Option<[DVec3; 2]> {
+    let n = (a[1] - a[0]).cross(a[2] - a[0]);
+    if n.length() < 1e-12 {
+        return None;
+    }
+    let n = n.normalize();
+    let d = b.map(|p| n.dot(p - a[0]));
+    if !(d.iter().any(|x| *x > tol) && d.iter().any(|x| *x < -tol)) {
+        return None;
+    }
+    // Where the edges of b cross the plane of a.
+    let mut pts: Vec<DVec3> = Vec::with_capacity(2);
+    for k in 0..3 {
+        let (j, dk, dj) = ((k + 1) % 3, d[k], d[(k + 1) % 3]);
+        if (dk > tol && dj < -tol) || (dk < -tol && dj > tol) {
+            pts.push(b[k] + (b[j] - b[k]) * (dk / (dk - dj)));
+        } else if dk.abs() <= tol {
+            pts.push(b[k]);
+        }
+    }
+    if pts.len() != 2 {
+        return None;
+    }
+    // Keep the part inside a.
+    let centroid = (a[0] + a[1] + a[2]) / 3.0;
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for k in 0..3 {
+        let (p, q) = (a[k], a[(k + 1) % 3]);
+        let mut inward = n.cross(q - p).normalize_or_zero();
+        if inward.dot(centroid - p) < 0.0 {
+            inward = -inward;
+        }
+        let g0 = inward.dot(pts[0] - p) + tol;
+        let g1 = inward.dot(pts[1] - p) + tol;
+        if !cut(&mut lo, &mut hi, g0, g1) {
+            return None;
+        }
+    }
+    let (s, e) = (
+        pts[0] + (pts[1] - pts[0]) * lo,
+        pts[0] + (pts[1] - pts[0]) * hi,
+    );
+    (s.distance(e) > tol * 4.0).then_some([s, e])
+}
+
+/// Segments where triangles of different objects cut through each other, with the object of
+/// the triangle that is cut. Triangles are found with a grid, so the cost grows with the number of
+/// close pairs, not with all pairs.
+pub fn intersection_edges(scene: &Scene) -> Vec<([DVec3; 2], ObjectId)> {
+    let mesh = &scene.mesh;
+    let n = mesh.triangle_count();
+    let Some((lo, hi)) = scene.bounds else {
+        return Vec::new();
+    };
+    if n < 2 {
+        return Vec::new();
+    }
+    let diag = (hi - lo).length().max(1.0) as f64;
+    let tol = 1e-5 * diag + 1e-3;
+    let boxes: Vec<(DVec3, DVec3)> = (0..n)
+        .map(|t| {
+            let p = mesh.triangle(t).map(|v| v.as_dvec3());
+            (p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]))
+        })
+        .collect();
+    let mean_ext = boxes
+        .iter()
+        .map(|(a, b)| (*b - *a).max_element())
+        .sum::<f64>()
+        / n as f64;
+    let cell = (diag / 64.0).max(mean_ext * 2.0).max(1e-3);
+    let cell_of = |p: DVec3| -> [i64; 3] {
+        let q = ((p - lo.as_dvec3()) / cell).floor();
+        [q.x as i64, q.y as i64, q.z as i64]
+    };
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
+    for (t, (a, b)) in boxes.iter().enumerate() {
+        let (c0, c1) = (cell_of(*a), cell_of(*b));
+        for x in c0[0]..=c1[0].min(c0[0] + 63) {
+            for y in c0[1]..=c1[1].min(c0[1] + 63) {
+                for z in c0[2]..=c1[2].min(c0[2] + 63) {
+                    grid.entry([x, y, z]).or_default().push(t as u32);
+                }
+            }
+        }
+    }
+    // Visit cells in a fixed order, so the output is the same on every run.
+    let mut cells: Vec<&[i64; 3]> = grid.keys().collect();
+    cells.sort();
+    let mut tested = 0usize;
+    let mut out = Vec::new();
+    'cells: for c in cells {
+        let list = &grid[c];
+        for (ia, &ta) in list.iter().enumerate() {
+            for &tb in &list[ia + 1..] {
+                let (ta, tb) = (ta as usize, tb as usize);
+                if mesh.tri_object[ta] == mesh.tri_object[tb] {
+                    continue;
+                }
+                let (ba, bb) = (&boxes[ta], &boxes[tb]);
+                let (omin, omax) = (ba.0.max(bb.0), ba.1.min(bb.1));
+                if omin.x > omax.x + tol || omin.y > omax.y + tol || omin.z > omax.z + tol {
+                    continue;
+                }
+                // Test a pair in one cell only: the first cell of the common box.
+                if cell_of(omin) != *c {
+                    continue;
+                }
+                tested += 1;
+                if tested > MAX_INTERSECTION_PAIRS {
+                    break 'cells;
+                }
+                let pa = mesh.triangle(ta).map(|v| v.as_dvec3());
+                let pb = mesh.triangle(tb).map(|v| v.as_dvec3());
+                if let Some(seg) = triangle_cut(pa, pb, tol) {
+                    out.push((seg, mesh.tri_object[ta]));
+                } else if let Some(seg) = triangle_cut(pb, pa, tol) {
+                    out.push((seg, mesh.tri_object[tb]));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -952,6 +1095,126 @@ mod tests {
         );
         assert!(took < std::time::Duration::from_secs(60), "{took:?}");
         assert!(hl.visible_edge_count() > 2_000);
+    }
+
+    #[test]
+    fn triangles_that_cut_each_other_give_a_segment() {
+        let a = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(0.0, 10.0, 0.0),
+        ];
+        // A vertical triangle that pokes through the middle of a.
+        let b = [
+            DVec3::new(2.0, 2.0, -3.0),
+            DVec3::new(2.0, 2.0, 3.0),
+            DVec3::new(6.0, 2.0, 0.5),
+        ];
+        let [s, e] = triangle_cut(a, b, 1e-6).unwrap();
+        assert!(s.z.abs() < 1e-9 && e.z.abs() < 1e-9);
+        assert!((s.y - 2.0).abs() < 1e-9 && (e.y - 2.0).abs() < 1e-9);
+        assert!((s.x - e.x).abs() > 1.0);
+        // Cut in the other order gives the same line through b, clipped by a.
+        assert!(triangle_cut(b, a, 1e-6).is_some());
+        // Outside a: the plane is crossed, but not inside the triangle.
+        let far = b.map(|p| p + DVec3::new(20.0, 0.0, 0.0));
+        assert!(triangle_cut(a, far, 1e-6).is_none());
+        // Touching the plane, lying in it, or a degenerate triangle: nothing.
+        let touch = [
+            DVec3::new(2.0, 2.0, 0.0),
+            DVec3::new(3.0, 2.0, 2.0),
+            DVec3::new(4.0, 3.0, 1.0),
+        ];
+        assert!(triangle_cut(a, touch, 1e-6).is_none());
+        let flat = a.map(|p| p + DVec3::new(1.0, 1.0, 0.0));
+        assert!(triangle_cut(a, flat, 1e-6).is_none());
+        let line = [DVec3::ZERO, DVec3::X, DVec3::X * 2.0];
+        assert!(triangle_cut(line, b, 1e-6).is_none());
+    }
+
+    #[test]
+    fn a_cube_sunk_into_the_ground_gets_a_line_where_it_meets_it() {
+        let mut ed = Editor::default();
+        add(&mut ed, square(5000.0), Some([120, 160, 120, 255]));
+        // The cube reaches from z = -500 to z = 500.
+        let pts = [
+            DVec2::new(-500.0, -500.0),
+            DVec2::new(500.0, -500.0),
+            DVec2::new(500.0, 500.0),
+            DVec2::new(-500.0, 500.0),
+        ];
+        let id = add(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: cadektor_core::curve::corners(&pts),
+                material: "m".into(),
+                thickness: Some(1000.0),
+                elevation: Some(500.0),
+            },
+            None,
+        );
+        let scene = scene_of(&ed);
+        let cuts = intersection_edges(&scene);
+        assert!(cuts.len() >= 4, "{}", cuts.len());
+        for (seg, object) in &cuts {
+            assert!(seg.iter().all(|p| p.z.abs() < 1e-3), "{seg:?}");
+            // On the outline of the cube.
+            assert!(seg.iter().all(|p| {
+                let m = p.x.abs().max(p.y.abs());
+                (m - 500.0).abs() < 1e-3
+            }));
+            // Either the cube or the ground is the cut one, depending on which triangle is tested.
+            assert!(*object == id || scene.object_bounds(*object).is_some());
+        }
+        // The same every time.
+        assert_eq!(cuts, intersection_edges(&scene));
+        // The camera free edges list has them, and they show in a view from the side.
+        assert!(feature_edges(&scene).len() >= 4);
+        let cam = iso(
+            &scene,
+            Projection::Orthographic,
+            StandardView::RightIsometric,
+            400,
+            400,
+        );
+        let with = hidden_lines(&scene, &cam, 400, 400, &HlOptions::default());
+        let without = hidden_lines(
+            &scene,
+            &cam,
+            400,
+            400,
+            &HlOptions {
+                include_hidden: false,
+                mesh_edges: false,
+            },
+        );
+        let ring = with
+            .visible()
+            .filter(|s| s.color == DERIVED_EDGE && s.length() > 2.0)
+            .count();
+        assert!(
+            ring >= 2,
+            "the ring where the cube meets the ground is visible: {ring}"
+        );
+        assert!(with.visible_edge_count() > without.visible_edge_count());
+    }
+
+    #[test]
+    fn objects_that_do_not_touch_or_share_an_object_give_no_cuts() {
+        let mut ed = Editor::default();
+        cube_scene(&mut ed, 0.0);
+        cube_scene(&mut ed, 5000.0);
+        assert!(intersection_edges(&scene_of(&ed)).is_empty());
+        // One object alone, or an empty scene.
+        let mut one = Editor::default();
+        cube_scene(&mut one, 0.0);
+        assert!(intersection_edges(&scene_of(&one)).is_empty());
+        assert!(intersection_edges(&scene_of(&Editor::default())).is_empty());
+        // Two cubes that overlap cut each other.
+        let mut ed = Editor::default();
+        cube_scene(&mut ed, 0.0);
+        cube_scene(&mut ed, 500.0);
+        assert!(!intersection_edges(&scene_of(&ed)).is_empty());
     }
 
     #[test]

@@ -1069,7 +1069,9 @@ impl<'a> Tx<'a> {
                 }
             }
         }
-        self.annot_after(cmd)
+        self.annot_after(cmd)?;
+        self.present_prune();
+        Ok(())
     }
 
     /// After a successful run: every object that the command touched must

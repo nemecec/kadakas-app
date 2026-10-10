@@ -905,7 +905,8 @@ impl Builder<'_> {
             PlantForm::Columnar => (0.1, 0.3),
             PlantForm::Conical => (0.08, 0.2),
             PlantForm::Spreading => (0.5, 0.6),
-            PlantForm::ShrubMound => (0.0, 0.0),
+            // A short stub inside the mound, so that every form has a trunk and a canopy part.
+            PlantForm::ShrubMound => (0.0, 0.08),
         };
         let canopy_bottom = z + height * bottom_frac;
         let canopy_h = height * (1.0 - bottom_frac);
@@ -919,16 +920,22 @@ impl Builder<'_> {
                 .unwrap_or((spread * 0.04).clamp(15.0, 300.0))
                 .min(r * 0.5);
             let trunk_top = z + height * trunk_frac;
+            // A stub inside a mound needs few sides.
+            let sides = if form == PlantForm::ShrubMound {
+                4
+            } else {
+                TRUNK_SIDES
+            };
             let base = mesh.positions.len() as u32;
-            for s in 0..TRUNK_SIDES {
-                let a = std::f64::consts::TAU * s as f64 / TRUNK_SIDES as f64;
+            for s in 0..sides {
+                let a = std::f64::consts::TAU * s as f64 / sides as f64;
                 let dir = DVec2::from_angle(a);
                 let n = Vec3::new(dir.x as f32, dir.y as f32, 0.0);
                 mesh.vertex(v3(o, at + dir * trunk_r, z), n, TRUNK);
                 mesh.vertex(v3(o, at + dir * trunk_r, trunk_top), n, TRUNK);
             }
-            for s in 0..TRUNK_SIDES {
-                let s2 = (s + 1) % TRUNK_SIDES;
+            for s in 0..sides {
+                let s2 = (s + 1) % sides;
                 let (b0, t0, b1, t1) = (
                     base + 2 * s as u32,
                     base + 2 * s as u32 + 1,

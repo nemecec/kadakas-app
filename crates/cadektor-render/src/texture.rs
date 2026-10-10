@@ -5,6 +5,9 @@
 
 use cadektor_core::present::{MAX_TEXTURE_SIDE, Procedural, Texture};
 
+/// Largest side of an image that can be imported. It is scaled down to the 2048 px of a texture.
+pub const MAX_IMPORT_SIDE: u32 = 8192;
+
 /// Side of a generated texture in pixels.
 pub const PROCEDURAL_SIZE: u32 = 128;
 
@@ -277,11 +280,11 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
     let info = reader.info();
     if info.width == 0
         || info.height == 0
-        || info.width > MAX_TEXTURE_SIDE
-        || info.height > MAX_TEXTURE_SIDE
+        || info.width > MAX_IMPORT_SIDE
+        || info.height > MAX_IMPORT_SIDE
     {
         return Err(format!(
-            "a texture image side must be 1 to {MAX_TEXTURE_SIDE} pixels"
+            "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
         ));
     }
     let mut buf = vec![0; reader.output_buffer_size().ok_or("the PNG is too large")?];
@@ -333,9 +336,9 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
         .map_err(|e| format!("cannot read the JPEG: {e:?}"))?;
     let info = decoder.info().ok_or("cannot read the JPEG header")?;
     let (w, h) = (info.width as u32, info.height as u32);
-    if w == 0 || h == 0 || w > MAX_TEXTURE_SIDE || h > MAX_TEXTURE_SIDE {
+    if w == 0 || h == 0 || w > MAX_IMPORT_SIDE || h > MAX_IMPORT_SIDE {
         return Err(format!(
-            "a texture image side must be 1 to {MAX_TEXTURE_SIDE} pixels"
+            "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
         ));
     }
     let rgb = decoder
@@ -610,11 +613,11 @@ mod tests {
         // An image that is too large is refused before the pixels are read.
         let mut big = Vec::new();
         {
-            let mut e = png::Encoder::new(&mut big, MAX_TEXTURE_SIDE + 1, 1);
+            let mut e = png::Encoder::new(&mut big, MAX_IMPORT_SIDE + 1, 1);
             e.set_color(png::ColorType::Grayscale);
             e.set_depth(png::BitDepth::Eight);
             let mut w = e.write_header().unwrap();
-            w.write_image_data(&vec![0; (MAX_TEXTURE_SIDE + 1) as usize])
+            w.write_image_data(&vec![0; (MAX_IMPORT_SIDE + 1) as usize])
                 .unwrap();
             w.finish().unwrap();
         }
@@ -642,6 +645,24 @@ mod tests {
         );
         assert!(decode_image_bytes(&jpg[..100]).is_err());
         assert!(decode_image_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn big_images_are_scaled_down_not_refused() {
+        let wide = TextureImage {
+            width: 4100,
+            height: 2,
+            rgba: vec![128; 4100 * 2 * 4],
+        };
+        let png = encode_png(wide.width, wide.height, &wide.rgba).unwrap();
+        let img = decode_image_bytes(&png).unwrap();
+        assert_eq!(img.width, 4100);
+        let Texture::Image { width, height, .. } = to_texture(&img, MAX_TEXTURE_SIDE).unwrap()
+        else {
+            panic!("an image texture");
+        };
+        assert!((1366..=MAX_TEXTURE_SIDE).contains(&width), "{width}");
+        assert_eq!(height, 1);
     }
 
     #[test]

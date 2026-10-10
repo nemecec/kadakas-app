@@ -87,7 +87,7 @@ pub const RENDER_STYLE_SET_ACTIVE: (&str, &str) = (
 );
 pub const SUN_SET: (&str, &str) = (
     "sun.set",
-    "Set the sun of the document (like a heliodon). Fields you give replace the old ones. params: {latitude? (degrees north), longitude? (degrees east), from_georef? (take latitude and longitude from the georeference), date? (\"YYYY-MM-DD\"), time? (\"HH:MM\" local clock time), tz_offset? (hours from UTC; default: the nominal zone of the longitude), north_angle? (degrees clockwise from the model +Y axis to true north; from_georef uses the rotation of the georeference), off? (true removes the sun)}. Render styles with sun on use it; with shadows on, objects cast shadows. Returns the settings and the sun position.",
+    "Set the sun of the document (like a heliodon). Fields you give replace the old ones. params: {latitude? (degrees north), longitude? (degrees east), from_georef? (take latitude and longitude from the georeference), date? (\"YYYY-MM-DD\"), time? (\"HH:MM\" local clock time), tz_offset? (standard time, hours from UTC; default: the nominal zone of the longitude), dst? (true when summer time is in force: the clock is one hour ahead of tz_offset), north_angle? (degrees clockwise from the model +Y axis to true north; from_georef uses the rotation of the georeference and the meridian convergence of its coordinate system), off? (true removes the sun)}. Render styles with sun on use it; with shadows on, objects cast shadows. Returns the settings and the sun position.",
 );
 pub const SUN_GET: (&str, &str) = (
     "sun.get",
@@ -908,8 +908,9 @@ pub fn style_param(doc: &Document, v: &Value) -> Result<RenderStyle, RpcError> {
 
 // --- The sun ----------------------------------------------------------------------------
 
-/// Latitude and longitude of the georeference origin, in degrees.
-fn georef_latlon(doc: &Document) -> Result<(f64, f64), RpcError> {
+/// Latitude and longitude of the georeference origin, and the angle clockwise from the model +Y axis
+/// to true north (with the meridian convergence of the CRS), in degrees.
+fn georef_place(doc: &Document) -> Result<(f64, f64, f64), RpcError> {
     let g = doc
         .georef
         .as_ref()
@@ -921,18 +922,16 @@ fn georef_latlon(doc: &Document) -> Result<(f64, f64), RpcError> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use cadektor_io::crs::{Crs, Transformer};
-        let from = Crs::parse(&g.crs).map_err(app)?;
-        let to = Crs::from_epsg(4326).map_err(app)?;
-        let (lon, lat, _) = Transformer::new(&from, &to)
-            .apply(g.origin.x, g.origin.y, 0.0)
-            .map_err(app)?;
-        Ok((lat, lon))
+        let p = cadektor_io::crs::place_of(g).ok_or_else(|| app("cannot use the georeference"))?;
+        let (lat, lon) = p
+            .lat_lon
+            .ok_or_else(|| app("cannot convert the georeference to latitude and longitude"))?;
+        Ok((lat, lon, p.north_angle()))
     }
     #[cfg(target_arch = "wasm32")]
     {
         if g.crs.trim().eq_ignore_ascii_case("EPSG:4326") {
-            Ok((g.origin.y, g.origin.x))
+            Ok((g.origin.y, g.origin.x, g.rotation.to_degrees()))
         } else {
             Err(app(
                 "converting the georeference needs the desktop build. Give latitude and longitude",
@@ -980,6 +979,7 @@ fn sun_json(st: &SunSettings) -> Value {
         "date": format!("{:04}-{:02}-{:02}", st.year, st.month, st.day),
         "time": sun::hhmm(st.hour),
         "tz_offset": st.tz_offset,
+        "dst": st.dst,
         "north_angle": st.north_angle,
         "from_georef": st.from_georef,
     })
@@ -1016,13 +1016,14 @@ fn sun_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             "date",
             "time",
             "tz_offset",
+            "dst",
             "north_angle",
             "off",
         ]
         .contains(&k.as_str())
         {
             return Err(bad(format!(
-                "unknown key '{k}'. Keys: latitude, longitude, from_georef, date, time, tz_offset, north_angle, off"
+                "unknown key '{k}'. Keys: latitude, longitude, from_georef, date, time, tz_offset, dst, north_angle, off"
             )));
         }
     }
@@ -1044,11 +1045,11 @@ fn sun_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         .transpose()?
         .unwrap_or(false)
     {
-        let (lat, lon) = georef_latlon(doc)?;
+        let (lat, lon, north) = georef_place(doc)?;
         st.latitude = lat;
         st.longitude = lon;
         st.from_georef = true;
-        st.north_angle = doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees());
+        st.north_angle = north;
         if !tz_given && !m.contains_key("longitude") {
             st.tz_offset = (lon / 15.0).round();
             tz_given = true;
@@ -1071,6 +1072,9 @@ fn sun_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     if let Some(v) = m.get("time") {
         st.hour = parse_time(v.as_str().ok_or_else(|| bad("'time' must be text"))?)?;
+    }
+    if let Some(v) = m.get("dst") {
+        st.dst = flag(v, "dst")?;
     }
     if let Some(v) = m.get("tz_offset") {
         st.tz_offset = number(v, "tz_offset")?;

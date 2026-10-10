@@ -527,3 +527,54 @@ fn perspective_cameras_inside_the_scene_clip_at_the_near_plane() {
     );
     assert_eq!(img.pixel(60, 3), crate::raster::BACKGROUND);
 }
+
+/// Two rectangles at the same height: the later one must cover the earlier one everywhere.
+pub(crate) fn coplanar_scene() -> Editor {
+    let mut ed = Editor::default();
+    add(&mut ed, square(3000.0), Some([220, 30, 30, 255]));
+    add(&mut ed, square(1500.0), Some([30, 200, 30, 255]));
+    ed
+}
+
+#[test]
+fn coplanar_surfaces_of_different_objects_do_not_flicker() {
+    let ed = coplanar_scene();
+    for projection in [Projection::Perspective, Projection::Orthographic] {
+        let mut cam = Camera::standard(StandardView::RightIsometric, projection);
+        let scene = scene_of(&ed);
+        cam.fit(scene.bounds, 4.0 / 3.0);
+        let img = render_doc(&ed, &cam, &opts(400, 300));
+        let green = |p: [u8; 4]| p[1] as i32 > p[0] as i32 + 60 && p[1] > 120;
+        let red = |p: [u8; 4]| p[0] as i32 > p[1] as i32 + 60 && p[0] > 120;
+        let mut inside = 0;
+        let mut bad = 0;
+        for y in 0..300 {
+            for x in 0..400 {
+                let p = img.pixel(x, y);
+                // A pixel with a green neighbour on both sides is inside the small rectangle.
+                if x > 2 && x < 397 && green(img.pixel(x - 2, y)) && green(img.pixel(x + 2, y)) {
+                    inside += 1;
+                    if red(p) {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+        assert!(inside > 2000, "{projection:?}: {inside}");
+        assert_eq!(
+            bad, 0,
+            "{projection:?}: red pixels show through the green rectangle"
+        );
+    }
+}
+
+#[test]
+fn object_ranks_follow_the_document_order() {
+    let ed = coplanar_scene();
+    let scene = scene_of(&ed);
+    let ranks = crate::look::object_ranks(&scene);
+    let ids: Vec<_> = scene.objects().collect();
+    assert_eq!(ranks[&ids[0]], 0);
+    assert_eq!(ranks[&ids[1]], 1);
+    assert!(crate::look::DEPTH_RANK_STEP * crate::look::DEPTH_RANK_MAX as f32 <= 3e-4);
+}

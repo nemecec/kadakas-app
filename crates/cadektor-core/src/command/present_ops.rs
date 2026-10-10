@@ -66,6 +66,57 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Drops the slots of objects that no longer exist. An undo brings them back with the objects,
+    /// because the slots are part of the document state that undo restores.
+    pub(super) fn present_prune(&mut self) {
+        let p = &self.doc.drawing.presentation;
+        if p.slots.iter().any(|e| {
+            matches!(&e.target, SlotTarget::Object { object, .. } if self.doc.object(*object).is_none())
+        }) {
+            let doc = &*self.doc;
+            let keep: Vec<_> = doc
+                .drawing
+                .presentation
+                .slots
+                .iter()
+                .filter(|e| {
+                    !matches!(&e.target, SlotTarget::Object { object, .. } if doc.object(*object).is_none())
+                })
+                .cloned()
+                .collect();
+            self.doc.drawing.presentation.slots = keep;
+        }
+    }
+
+    /// Gives the copies of objects the material slots of the originals.
+    pub(super) fn present_copy_slots(
+        &mut self,
+        map: &std::collections::HashMap<ObjectId, ObjectId>,
+    ) {
+        let copies: Vec<_> = self
+            .doc
+            .drawing
+            .presentation
+            .slots
+            .iter()
+            .filter_map(|e| match &e.target {
+                SlotTarget::Object { object, slot } => map.get(object).map(|n| {
+                    (
+                        SlotTarget::Object {
+                            object: *n,
+                            slot: slot.clone(),
+                        },
+                        e.material,
+                    )
+                }),
+                _ => None,
+            })
+            .collect();
+        for (target, m) in copies {
+            self.doc.drawing.presentation.set_slot(target, Some(m));
+        }
+    }
+
     /// Deletes a material or a render style and removes it from the slots. Returns false if the
     /// resource is of another kind (the caller handles it).
     pub(super) fn present_delete(&mut self, id: ResourceId) -> Result<bool, CommandError> {

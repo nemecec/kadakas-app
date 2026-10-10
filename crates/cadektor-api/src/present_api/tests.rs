@@ -705,7 +705,9 @@ fn sun_can_take_its_place_from_the_georeference() {
     assert!((24.5..25.5).contains(&lon), "{lon}");
     assert_eq!(r["sun"]["from_georef"], true);
     assert_eq!(r["sun"]["tz_offset"], 2.0, "nominal zone of the longitude");
-    assert!((r["sun"]["north_angle"].as_f64().unwrap() - 0.5f64.to_degrees()).abs() < 1e-9);
+    // The rotation of the model plus the meridian convergence (about 1.8 degrees here).
+    let north = r["sun"]["north_angle"].as_f64().unwrap();
+    assert!((north - (0.5f64.to_degrees() + 1.8)).abs() < 0.1, "{north}");
     // Giving a latitude makes it manual again.
     let r = ok(&mut s, "sun.set", json!({"latitude": 55.0}));
     assert_eq!(r["sun"]["from_georef"], false);
@@ -913,4 +915,32 @@ fn methods_are_documented() {
     for e in d["presentation"]["examples"].as_array().unwrap() {
         assert!(names.contains(&e["method"].as_str().unwrap()), "{e}");
     }
+}
+
+#[test]
+fn summer_time_and_true_north_in_sun_set() {
+    let mut s = Session::default();
+    let winter = ok(
+        &mut s,
+        "sun.set",
+        json!({"latitude": 60.17, "longitude": 24.94, "date": "2026-06-21", "time": "12:22", "tz_offset": 2}),
+    );
+    let summer = ok(&mut s, "sun.set", json!({"dst": true, "time": "13:22"}));
+    assert_eq!(summer["sun"]["dst"], true);
+    assert_eq!(summer["sun"]["tz_offset"], 2.0, "the standard offset stays");
+    let (a, b) = (
+        winter["position"]["azimuth"].as_f64().unwrap(),
+        summer["position"]["azimuth"].as_f64().unwrap(),
+    );
+    assert!((a - b).abs() < 1e-6, "{a} {b}");
+    assert!(fail(&mut s, "sun.set", json!({"dst": "yes"})).contains("true or false"));
+    // From the georeference the north angle includes the convergence of the CRS (about 1.8 degrees).
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_georeference", "georef": {"crs": "EPSG:3067", "origin": [385000.0, 6672000.0]}}}),
+    );
+    let g = ok(&mut s, "sun.set", json!({"from_georef": true}));
+    let north = g["sun"]["north_angle"].as_f64().unwrap();
+    assert!((north - 1.8).abs() < 0.1, "{north}");
 }

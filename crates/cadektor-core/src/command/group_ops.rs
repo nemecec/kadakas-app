@@ -353,6 +353,7 @@ impl Tx<'_> {
                     self.check_sheet_rules(o.layer, &o.shape, None)?;
                     self.add_new(o);
                 }
+                self.present_copy_slots(&map);
                 out.created.extend(ids.iter().map(|id| map[id].0));
                 out.created.extend(
                     all.iter()

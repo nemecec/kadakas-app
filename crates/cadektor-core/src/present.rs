@@ -592,8 +592,10 @@ pub struct SunSettings {
     pub day: u32,
     /// Local clock time in decimal hours.
     pub hour: f64,
-    /// Offset of the local clock from UTC in hours.
+    /// Offset of the local standard time from UTC in hours.
     pub tz_offset: f64,
+    /// Summer time is in force: the clock is one hour ahead of the standard time.
+    pub dst: bool,
     /// Angle in degrees, clockwise from the model +Y axis to true north (a drawing with north to the right has 90).
     pub north_angle: f64,
     /// True when latitude and longitude came from the georeference of the document.
@@ -610,6 +612,7 @@ impl Default for SunSettings {
             day: 21,
             hour: 12.0,
             tz_offset: 0.0,
+            dst: false,
             north_angle: 0.0,
             from_georef: false,
         }
@@ -625,7 +628,7 @@ impl SunSettings {
             month: self.month,
             day: self.day,
             hour: self.hour,
-            tz_offset: self.tz_offset,
+            tz_offset: self.tz_offset + f64::from(u8::from(self.dst)),
         }
     }
 

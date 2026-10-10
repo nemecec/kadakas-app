@@ -326,6 +326,7 @@ impl Target {
         &mut self,
         v: [Vtx; 3],
         blend: bool,
+        bias: f32,
         shade: &mut dyn FnMut(&Frag) -> ([f32; 3], f32),
     ) {
         let s = [
@@ -357,7 +358,9 @@ impl Target {
                 }
                 let z = b0 * s[0].z + b1 * s[1].z + b2 * s[2].z;
                 let i = y as usize * self.w + x as usize;
-                if !(0.0..=1.0).contains(&z) || z > self.depth[i] {
+                // Later objects move a little toward the viewer, so coplanar surfaces do not flicker.
+                let zb = z - bias;
+                if !(0.0..=1.0).contains(&z) || zb > self.depth[i] {
                     continue;
                 }
                 // Perspective-correct weights.
@@ -387,7 +390,7 @@ impl Target {
                     ];
                 } else {
                     self.color[i] = c;
-                    self.depth[i] = z;
+                    self.depth[i] = zb;
                 }
             }
         }
@@ -483,6 +486,10 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
     let ortho = camera.projection == Projection::Orthographic;
 
     let opacity = |t: usize| look.material_of(t).map_or(1.0, |m| m.opacity);
+    let ranks = crate::look::object_ranks(scene);
+    let bias_of = |t: usize| {
+        ranks.get(&mesh.tri_object[t]).copied().unwrap_or(0) as f32 * crate::look::DEPTH_RANK_STEP
+    };
     let shadow_map = match (opts.light, opts.shadows) {
         (Light::Sun(dir), true) => {
             ShadowMap::build(scene, Vec3::from_array(dir), SHADOW_SIZE, &|t| {
@@ -618,10 +625,15 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
             continue;
         }
         for j in 1..poly.len() - 1 {
-            target.triangle([poly[0], poly[j], poly[j + 1]], false, &mut |f| {
-                let (c, _) = shade_frag(t, face_n, f);
-                (c, 1.0)
-            });
+            target.triangle(
+                [poly[0], poly[j], poly[j + 1]],
+                false,
+                bias_of(t),
+                &mut |f| {
+                    let (c, _) = shade_frag(t, face_n, f);
+                    (c, 1.0)
+                },
+            );
         }
     }
 
@@ -657,9 +669,12 @@ pub fn render_scene(scene: &Scene, look: &Look, camera: &Camera, opts: &ShadeOpt
             continue;
         }
         for j in 1..poly.len() - 1 {
-            target.triangle([poly[0], poly[j], poly[j + 1]], true, &mut |f| {
-                shade_frag(t, face_n, f)
-            });
+            target.triangle(
+                [poly[0], poly[j], poly[j + 1]],
+                true,
+                bias_of(t),
+                &mut |f| shade_frag(t, face_n, f),
+            );
         }
     }
     resolve(&target, w, h, k, opts.background[3])

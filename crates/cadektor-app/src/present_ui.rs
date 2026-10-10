@@ -325,6 +325,12 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
             1.0,
             -360.0..=360.0,
         );
+        ui.label("Summer time");
+        let mut dst = s.dst;
+        if ui.checkbox(&mut dst, "").changed() {
+            edits.push(SunEdit::Set(json!({"dst": dst})));
+        }
+        ui.end_row();
         ui.label("Date");
         ui.horizontal(|ui| {
             let (mut y, mut m, mut d) = (s.year, s.month, s.day);

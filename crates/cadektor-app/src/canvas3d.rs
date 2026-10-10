@@ -108,7 +108,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     let doc = session.editor.doc();
     let mut style = resolve_style(doc, None);
     style.mode = session.view.mode;
-    let (look, look_rev) = view3d.look(doc, &scene, rev, style.textures);
+    let look = view3d.look(doc, &scene, rev, style.textures);
+    let geometry = view3d.geometry_key(&scene, rev);
     let light = light_for(doc, &style);
     let gpu_style = GpuStyle {
         mode: style.mode,
@@ -116,7 +117,6 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         shadows: style.shadows && matches!(light, cadektor_render::shade::Light::Sun(_)),
         light,
         look: Some(look),
-        look_rev,
     };
     let bg = style.background.0;
     let ppp = ui.ctx().pixels_per_point();
@@ -124,7 +124,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         rect,
         SceneCallback {
             scene,
-            scene_rev: rev,
+            scene_rev: geometry,
             overlay,
             overlay_rev,
             mvp: cam.view_proj(aspect, bounds).to_cols_array_2d(),

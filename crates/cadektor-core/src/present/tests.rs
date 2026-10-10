@@ -703,3 +703,126 @@ fn sun_settings_give_a_light_direction_only_when_the_sun_is_up() {
     assert!((turned[2] - d[2]).abs() < 1e-9);
     assert!((turned[0] - d[0]).abs() > 0.1);
 }
+
+#[test]
+fn slots_follow_copies_and_deletes_and_undo_restores_them() {
+    let mut ed = Editor::default();
+    let m = add_material(&mut ed, "M", Material::default());
+    let id = add_shape(&mut ed, plant(0.0));
+    for slot in [None, Some("canopy".to_string())] {
+        ed.execute(&Command::SetMaterialSlot {
+            target: SlotTarget::Object { object: id, slot },
+            material: Some(m),
+        })
+        .unwrap();
+    }
+    let out = ed
+        .execute(&Command::CopyObjects {
+            ids: vec![id],
+            delta: DVec2::new(100.0, 0.0),
+        })
+        .unwrap();
+    let copy = ObjectId(out.created[0]);
+    let p = &ed.doc().drawing.presentation;
+    assert_eq!(p.slots.len(), 4);
+    assert_eq!(
+        p.slot(&SlotTarget::Object {
+            object: copy,
+            slot: None
+        }),
+        Some(m)
+    );
+    assert_eq!(
+        p.slot(&SlotTarget::Object {
+            object: copy,
+            slot: Some("canopy".into())
+        }),
+        Some(m)
+    );
+    // Deleting the original removes only its slots.
+    ed.execute(&Command::DeleteObjects { ids: vec![id] })
+        .unwrap();
+    let p = &ed.doc().drawing.presentation;
+    assert_eq!(p.slots.len(), 2);
+    assert!(
+        p.slots
+            .iter()
+            .all(|e| matches!(&e.target, SlotTarget::Object { object, .. } if *object == copy))
+    );
+    // Undo brings the object and its slots back; undoing the copy removes the copy's.
+    assert!(ed.undo());
+    assert_eq!(ed.doc().drawing.presentation.slots.len(), 4);
+    assert!(ed.undo());
+    assert_eq!(ed.doc().drawing.presentation.slots.len(), 2);
+}
+
+#[test]
+fn every_plant_form_has_a_trunk_part_and_a_canopy_part() {
+    use crate::plants::style::PlantForm;
+    for form in [
+        PlantForm::Tree,
+        PlantForm::Columnar,
+        PlantForm::Conical,
+        PlantForm::Spreading,
+        PlantForm::ShrubMound,
+    ] {
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "S".into(),
+                body: ResourceBody::plant_style(PlantStyle {
+                    form,
+                    ..PlantStyle::default()
+                }),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let out = ed
+            .execute(&Command::AddPlants {
+                style: Some(style),
+                overrides: Default::default(),
+                positions: vec![DVec2::ZERO],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
+        let id = ObjectId(out.created[0]);
+        let m = &build(ed.doc()).mesh;
+        let parts: std::collections::BTreeSet<u8> = (0..m.triangle_count())
+            .filter(|t| m.tri_object[*t] == id)
+            .map(|t| m.tri_part[t])
+            .collect();
+        assert_eq!(
+            parts,
+            [PART_TRUNK, PART_CANOPY].into_iter().collect(),
+            "{form:?}"
+        );
+    }
+}
+
+#[test]
+fn summer_time_moves_the_sun_one_hour_on_the_clock() {
+    let winter = SunSettings {
+        latitude: 60.17,
+        longitude: 24.94,
+        tz_offset: 2.0,
+        hour: 12.0,
+        ..Default::default()
+    };
+    let summer = SunSettings {
+        dst: true,
+        hour: 13.0,
+        ..winter
+    };
+    let (a, b) = (winter.position(), summer.position());
+    assert!((a.azimuth - b.azimuth).abs() < 1e-9 && (a.elevation - b.elevation).abs() < 1e-9);
+    // The same clock time is one hour earlier in the sun's day with summer time.
+    let same_clock = SunSettings {
+        dst: true,
+        hour: 12.0,
+        ..winter
+    };
+    assert!(same_clock.position().azimuth < a.azimuth);
+}

@@ -47,11 +47,13 @@ struct Globals {
     light: vec4<f32>,
     // Position of the eye, or the direction to it for a parallel projection.
     eye: vec4<f32>,
-    // x: ambient light of the fixed light, y: depth bias of lines, z: 1 for a parallel projection.
+    // x: ambient light of the fixed light, y: depth bias of lines, z: 1 for a parallel projection,
+    // w: height of the target in pixels.
     params: vec4<f32>,
     // x: hemisphere sky light, y: hemisphere ground light, z: sun strength, w: night light.
     sunlight: vec4<f32>,
-    // x: shadow depth bias per texel, y: texel size in uv, z: 1 when shadows are on.
+    // x: shadow depth bias per texel, y: texel size in uv, z: 1 when shadows are on,
+    // w: width of the target in pixels.
     shadow: vec4<f32>,
     // Background color, used by the flat surfaces of the hidden line modes.
     bg: vec4<f32>,
@@ -77,6 +79,7 @@ struct SurfaceIn {
     @location(2) color: vec4<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) material: u32,
+    @location(5) order: f32,
 };
 struct SurfaceOut {
     @builtin(position) clip: vec4<f32>,
@@ -90,7 +93,10 @@ struct SurfaceOut {
 @vertex
 fn vs_surface(v: SurfaceIn) -> SurfaceOut {
     var o: SurfaceOut;
-    o.clip = g.mvp * vec4<f32>(v.pos, 1.0);
+    var c = g.mvp * vec4<f32>(v.pos, 1.0);
+    // Later objects move a little toward the viewer, so coplanar surfaces do not flicker.
+    c.z = c.z - v.order * 1.0e-6 * c.w;
+    o.clip = c;
     o.normal = v.normal;
     o.color = v.color;
     o.world = v.pos;
@@ -186,10 +192,13 @@ fn fs_flat(i: SurfaceOut) -> @location(0) vec4<f32> {
 struct LineIn {
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) start: vec3<f32>,
 };
 struct LineOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // Where the segment starts on the screen, in pixels.
+    @location(1) @interpolate(flat) start_px: vec2<f32>,
 };
 
 @vertex
@@ -200,6 +209,12 @@ fn vs_line(v: LineIn) -> LineOut {
     c.z = c.z - g.params.y * c.w;
     o.clip = c;
     o.color = v.color;
+    let s = g.mvp * vec4<f32>(v.start, 1.0);
+    // Window pixels: x grows to the right and y down, like the fragment position.
+    o.start_px = vec2<f32>(
+        (s.x / s.w * 0.5 + 0.5) * g.shadow.w,
+        (0.5 - s.y / s.w * 0.5) * g.params.w,
+    );
     return o;
 }
 
@@ -208,10 +223,10 @@ fn fs_line(i: LineOut) -> @location(0) vec4<f32> {
     return vec4<f32>(i.color.rgb, 1.0);
 }
 
-// Covered edges: gray dashes, 6 pixels on and 4 off along the diagonal of the screen.
+// Covered edges: gray dashes, 6 pixels on and 4 off, measured along the line from its start.
 @fragment
 fn fs_line_hidden(i: LineOut) -> @location(0) vec4<f32> {
-    if ((i.clip.x + i.clip.y) % 10.0 > 6.0) {
+    if (length(i.clip.xy - i.start_px) % 10.0 > 6.0) {
         discard;
     }
     return vec4<f32>(0.47, 0.47, 0.47, 1.0);
@@ -301,8 +316,6 @@ pub struct GpuStyle {
     pub shadows: bool,
     /// The materials of the scene. `None`: every surface keeps its vertex color.
     pub look: Option<Arc<Look>>,
-    /// Changes whenever `look` changes.
-    pub look_rev: u64,
 }
 
 impl Default for GpuStyle {
@@ -313,7 +326,6 @@ impl Default for GpuStyle {
             light: Light::Fixed,
             shadows: false,
             look: None,
-            look_rev: 0,
         }
     }
 }
@@ -321,7 +333,7 @@ impl Default for GpuStyle {
 /// What to draw in one frame.
 pub struct FrameInput<'a> {
     pub scene: &'a Scene,
-    /// Changes whenever `scene` changes. The buffers are rebuilt only then.
+    /// A fingerprint of the geometry of `scene`. The buffers are rebuilt only when it changes.
     pub scene_rev: u64,
     pub mvp: [[f32; 4]; 4],
     pub eye: [f32; 3],
@@ -344,7 +356,7 @@ struct BlendTri {
 
 struct Buffers {
     rev: u64,
-    look_rev: u64,
+    layout_key: u64,
     vertices: Option<wgpu::Buffer>,
     opaque: Option<(wgpu::Buffer, u32)>,
     blend: Option<(wgpu::Buffer, u32)>,
@@ -361,7 +373,7 @@ struct Buffers {
 #[derive(PartialEq)]
 struct ShadowKey {
     scene_rev: u64,
-    look_rev: u64,
+    layout_key: u64,
     to_sun: [f32; 3],
 }
 
@@ -408,6 +420,11 @@ pub struct Gpu3d {
     pub uploads: u64,
     /// How often the shadow map was drawn. For tests.
     pub shadow_draws: u64,
+}
+
+/// The key of the vertex data that depends on the look (material indices and texture coordinates).
+fn layout_key_of(style: &GpuStyle) -> u64 {
+    style.look.as_ref().map_or(0, |l| l.layout_key)
 }
 
 fn line_buffer(device: &wgpu::Device, data: &[LineVertex]) -> Option<(wgpu::Buffer, u32)> {
@@ -669,9 +686,9 @@ impl Gpu3d {
             })
         };
         let surface_attrs = wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Uint32
+            0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x2, 4 => Uint32, 5 => Float32
         ];
-        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
+        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4, 2 => Float32x3];
         let surface_stride = std::mem::size_of::<SurfaceVertex>() as u64;
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let opaque_pipeline = make(
@@ -947,7 +964,7 @@ impl Gpu3d {
         if self
             .buffers
             .as_ref()
-            .is_some_and(|b| b.rev == input.scene_rev && b.look_rev == style.look_rev)
+            .is_some_and(|b| b.rev == input.scene_rev && b.layout_key == layout_key_of(style))
         {
             return;
         }
@@ -1007,7 +1024,7 @@ impl Gpu3d {
         let lines = line_buffer(device, &line_vertices(scene));
         self.buffers = Some(Buffers {
             rev: input.scene_rev,
-            look_rev: style.look_rev,
+            layout_key: layout_key_of(style),
             vertices,
             opaque: opaque_buf,
             blend: blend_buf,
@@ -1016,7 +1033,7 @@ impl Gpu3d {
             lines,
             features: None,
         });
-        self.upload_look(device, queue, look, style.look_rev);
+        self.upload_look(device, queue, look, look.map_or(0, |l| l.materials_key));
     }
 
     /// Writes the material table and the texture array.
@@ -1106,7 +1123,7 @@ impl Gpu3d {
     ) {
         let key = ShadowKey {
             scene_rev: input.scene_rev,
-            look_rev: input.style.look_rev,
+            layout_key: layout_key_of(input.style),
             to_sun,
         };
         if self.shadow_key.as_ref() == Some(&key) {
@@ -1197,9 +1214,19 @@ impl Gpu3d {
             } else {
                 [input.eye[0], input.eye[1], input.eye[2], 1.0]
             },
-            params: [AMBIENT, LINE_BIAS, f32::from(input.ortho), 0.0],
+            params: [
+                AMBIENT,
+                LINE_BIAS,
+                f32::from(input.ortho),
+                input.size[1].clamp(1, 8192) as f32,
+            ],
             sunlight: [SKY_AMBIENT, GROUND_AMBIENT, SUN_INTENSITY, NIGHT_AMBIENT],
-            shadow: [bias, texel, f32::from(shadows_on), 0.0],
+            shadow: [
+                bias,
+                texel,
+                f32::from(shadows_on),
+                input.size[0].clamp(1, 8192) as f32,
+            ],
             bg: [
                 input.background[0] as f32,
                 input.background[1] as f32,
@@ -1219,10 +1246,7 @@ impl Gpu3d {
             let features: Vec<LineVertex> = cadektor_render::hlr::feature_edges(input.scene)
                 .into_iter()
                 .flat_map(|(seg, color)| {
-                    seg.map(|p| LineVertex {
-                        pos: p.to_array(),
-                        color,
-                    })
+                    LineVertex::segment(seg[0].to_array(), seg[1].to_array(), color)
                 })
                 .collect();
             b.features = Some(line_buffer(device, &features));

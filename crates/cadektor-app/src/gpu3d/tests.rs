@@ -240,7 +240,6 @@ fn style_for(ed: &Editor, scene_look: bool, f: impl FnOnce(&mut GpuStyle)) -> Gp
     if scene_look {
         let scene = build(ed.doc());
         s.look = Some(Arc::new(Look::build(ed.doc(), &scene, true)));
-        s.look_rev = ed.revision();
     }
     f(&mut s);
     s
@@ -263,16 +262,8 @@ fn shaders_compile_and_draw_what_the_cpu_renderer_draws() {
     let mut ed = Editor::default();
     add_rect(&mut ed, 500.0, [200, 30, 30, 255]);
     let cam = top_cam(1000.0);
-    let overlay = [
-        LineVertex {
-            pos: [-900.0, 810.0, 0.0],
-            color: [0, 0, 255, 255],
-        },
-        LineVertex {
-            pos: [900.0, 810.0, 0.0],
-            color: [0, 0, 255, 255],
-        },
-    ];
+    let overlay: Vec<LineVertex> =
+        LineVertex::segment([-900.0, 810.0, 0.0], [900.0, 810.0, 0.0], [0, 0, 255, 255]).to_vec();
     let style = GpuStyle::default();
     let img = rig.draw(&ed, &cam, &style, &overlay);
     let lit = cadektor_render::raster::lambert(glam::Vec3::Z);
@@ -586,4 +577,178 @@ fn ten_thousand_plants_draw_in_reasonable_time() {
         "{per_frame:?}"
     );
     assert_eq!(rig.gpu.uploads, 1);
+}
+
+#[test]
+fn covered_edges_are_dashed_along_the_line_at_any_angle() {
+    let Some((device, queue)) = device_or_skip("covered_edges_are_dashed") else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [200, 200]);
+    let mut ed = Editor::default();
+    // A line at the ground, and a roof above it on a higher layer.
+    {
+        let (name, z) = ("Roof", 1000.0);
+        let out = ed
+            .execute(&Command::AddLayer {
+                name: name.into(),
+                kind: None,
+                elevation: z,
+                scale: None,
+            })
+            .unwrap();
+        let layer = cadektor_core::model::LayerId(out.created[0]);
+        ed.execute(&Command::AddObject {
+            shape: Shape::Rect {
+                min: DVec2::splat(-3000.0),
+                max: DVec2::splat(3000.0),
+            },
+            layer: Some(layer),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    }
+    let ground = cadektor_core::model::FIRST_LAYER;
+    let mut line = |a: DVec2, b: DVec2| {
+        ed.execute(&Command::AddObject {
+            shape: Shape::Line { a, b },
+            layer: Some(ground),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    };
+    // A 45 degree line and a horizontal one, both under the roof.
+    line(DVec2::new(-2000.0, -2000.0), DVec2::new(2000.0, 2000.0));
+    line(DVec2::new(-2000.0, 1500.0), DVec2::new(2000.0, 1500.0));
+    let style = GpuStyle {
+        mode: RenderMode::DashedHiddenLine,
+        ..GpuStyle::default()
+    };
+    let img = rig.draw(&ed, &top_cam(3500.0), &style, &[]);
+    // Walk along each line and count the pixels that are drawn (not white).
+    let inked = |img: &[u8], x: usize, y: usize| {
+        (y.saturating_sub(1)..=(y + 1).min(199)).any(|yy| {
+            (x.saturating_sub(1)..=(x + 1).min(199)).any(|xx| px(img, 200, xx, yy)[0] < 235)
+        })
+    };
+    // 7000 mm over 200 px: 35 mm per pixel; the diagonal runs from pixel (43, 157) to (157, 43).
+    let diagonal: Vec<bool> = (0..=100).map(|k| inked(&img, 50 + k, 150 - k)).collect();
+    let flat: Vec<bool> = (0..=100).map(|k| inked(&img, 50 + k, 100 - 43)).collect();
+    for (name, run) in [("diagonal", &diagonal), ("horizontal", &flat)] {
+        let on = run.iter().filter(|b| **b).count();
+        let changes = run.windows(2).filter(|w| w[0] != w[1]).count();
+        // 6 of 10 pixels are on (a wider test pixel box makes it a bit more), with about 10 gaps.
+        assert!((45..=90).contains(&on), "{name}: {on} of 101 pixels are on");
+        assert!(changes >= 8, "{name}: {changes} changes along the line");
+    }
+}
+
+#[test]
+fn an_edit_that_keeps_geometry_and_materials_uploads_and_draws_nothing_again() {
+    let Some((device, queue)) = device_or_skip("an_edit_that_keeps_geometry") else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [64, 64]);
+    let mut ed = Editor::default();
+    let ground = add_rect(&mut ed, 3000.0, [200, 200, 200, 255]);
+    add_slab(&mut ed, 0.0, 0.0, 1000.0, 1000.0, [180, 180, 180, 255]);
+    let m = add_material(
+        &mut ed,
+        "Pavers",
+        Material {
+            texture: Some(Texture::Procedural {
+                kind: Procedural::Pavers,
+                seed: 1,
+            }),
+            ..Default::default()
+        },
+    );
+    assign(&mut ed, ground, m);
+    let cam = top_cam(3500.0);
+    let sun = Light::Sun([0.5, 0.2, 0.8]);
+    let scene = build(ed.doc());
+    let key = cadektor_render::look::scene_key(&scene);
+    let mut cache = cadektor_render::look::TextureCache::new();
+    let style = |ed: &Editor, cache: &mut cadektor_render::look::TextureCache| GpuStyle {
+        light: sun,
+        shadows: true,
+        look: Some(Arc::new(Look::build_cached(
+            ed.doc(),
+            &build(ed.doc()),
+            true,
+            cache,
+        ))),
+        ..GpuStyle::default()
+    };
+    let first = style(&ed, &mut cache);
+    let a = rig.draw_scene(&scene, key, &cam, &first, &[]);
+    assert_eq!((rig.gpu.uploads, rig.gpu.shadow_draws), (1, 1));
+    // Something else in the document changes (a sun setting, a name): a new revision, a new look
+    // object, the same geometry and the same materials. Nothing is uploaded or drawn again.
+    ed.execute(&Command::SetSun {
+        sun: Some(SunSettings::default()),
+    })
+    .unwrap();
+    let second = style(&ed, &mut cache);
+    assert!(!Arc::ptr_eq(
+        first.look.as_ref().unwrap(),
+        second.look.as_ref().unwrap()
+    ));
+    let b = rig.draw_scene(&scene, key, &cam, &second, &[]);
+    assert_eq!((rig.gpu.uploads, rig.gpu.shadow_draws), (1, 1));
+    assert_eq!(a, b);
+    // Another material setting uploads the vertex data and the materials, and draws the shadow
+    // map again, because see-through surfaces do not cast shadows.
+    ed.execute(&Command::ModifyResource {
+        id: m,
+        name: None,
+        body: Some(ResourceBody::Render(Box::new(RenderResource::Material(
+            Material {
+                opacity: 0.4,
+                ..Default::default()
+            },
+        )))),
+    })
+    .unwrap();
+    let third = style(&ed, &mut cache);
+    let c = rig.draw_scene(&scene, key, &cam, &third, &[]);
+    assert_eq!(rig.gpu.uploads, 2);
+    assert_ne!(a, c);
+}
+
+#[test]
+fn coplanar_surfaces_of_different_objects_do_not_flicker_on_the_gpu() {
+    let Some((device, queue)) = device_or_skip("coplanar_surfaces_do_not_flicker") else {
+        return;
+    };
+    let mut rig = Rig::new(device, queue, [400, 300]);
+    let mut ed = Editor::default();
+    add_rect(&mut ed, 3000.0, [220, 30, 30, 255]);
+    add_rect(&mut ed, 1500.0, [30, 200, 30, 255]);
+    let scene = build(ed.doc());
+    for projection in [Projection::Perspective, Projection::Orthographic] {
+        let mut cam = Camera::standard(StandardView::RightIsometric, projection);
+        cam.fit(scene.bounds, 400.0 / 300.0);
+        let img = rig.draw_scene(&scene, 1, &cam, &GpuStyle::default(), &[]);
+        let green = |x: usize, y: usize| {
+            let p = px(&img, 400, x, y);
+            p[1] as i32 > p[0] as i32 + 60 && p[1] > 120
+        };
+        let (mut inside, mut bad) = (0, 0);
+        for y in 0..300 {
+            for x in 2..398 {
+                if green(x - 2, y) && green(x + 2, y) {
+                    inside += 1;
+                    let p = px(&img, 400, x, y);
+                    if p[0] as i32 > p[1] as i32 + 60 && p[0] > 120 {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+        assert!(inside > 2000, "{projection:?}: {inside}");
+        assert_eq!(bad, 0, "{projection:?}: red shows through green");
+    }
 }

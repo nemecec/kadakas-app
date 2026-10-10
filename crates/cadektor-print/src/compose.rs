@@ -180,7 +180,7 @@ pub fn viewport_prims(
         if vp.is_plan() {
             plan_view(doc, vp, counts, tables, out);
         } else if let Some(style) = viewport_style(doc, vp).filter(|s| s.mode.is_hidden_line()) {
-            hidden_line_view(doc, vp, &style, out);
+            hidden_line_prims(doc, vp, &style, MAX_HL_SEGMENTS, out);
         } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
@@ -341,13 +341,29 @@ fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImageP
 /// Pixels per mm of paper for the hidden-line computation. Only the unit of the coordinates.
 const HL_PX_PER_MM: f64 = 20.0;
 
+/// Longest side of the hidden-line coordinate grid.
+const HL_MAX_SIDE: f64 = 20_000.0;
+
+/// Most line segments of one hidden-line viewport. More would make huge SVG and PDF files.
+pub const MAX_HL_SEGMENTS: usize = 100_000;
+
 /// The hidden-line drawing of a 3D viewport as vector paths: black lines for visible edges,
 /// and gray dashes for covered edges in the dashed mode.
-fn hidden_line_view(doc: &Document, vp: &Viewport, style: &RenderStyle, out: &mut Vec<Prim>) {
+pub fn hidden_line_prims(
+    doc: &Document,
+    vp: &Viewport,
+    style: &RenderStyle,
+    max_segments: usize,
+    out: &mut Vec<Prim>,
+) {
     let size = vp.max - vp.min;
+    // One scale for both sides, so a large viewport keeps its proportions.
+    let k = HL_PX_PER_MM
+        .min(HL_MAX_SIDE / size.max_element())
+        .max(8.0 / size.min_element());
     let (w, h) = (
-        (size.x * HL_PX_PER_MM).clamp(8.0, 20_000.0) as u32,
-        (size.y * HL_PX_PER_MM).clamp(8.0, 20_000.0) as u32,
+        (size.x * k).round().max(1.0) as u32,
+        (size.y * k).round().max(1.0) as u32,
     );
     let d = viewport_document(doc, vp);
     let scene = mesh::build(&d);
@@ -365,9 +381,29 @@ fn hidden_line_view(doc: &Document, vp: &Viewport, style: &RenderStyle, out: &mu
         )
     };
     let weight = style.line_weight.max(0.05);
+    // Very large drawings are cut at a number of segments, visible ones first, and say so.
+    let total = lines.segments.len();
+    let mut budget = max_segments;
+    if total > max_segments {
+        out.push(Prim::Text(TextPrim {
+            at: vp.min + DVec2::new(1.0, 1.0),
+            text: format!(
+                "Warning: hidden-line drawing cut at {max_segments} of {total} lines. Use a smaller viewport or fewer layers."
+            ),
+            height: 2.5,
+            color: [200, 0, 0, 255],
+            align: Align::Left,
+        }));
+    }
     // Covered edges first, so visible lines are on top.
     for hidden in [true, false] {
+        let share = if hidden { budget / 4 } else { budget };
+        let mut used = 0;
         for s in lines.segments.iter().filter(|s| s.hidden == hidden) {
+            if used >= share {
+                break;
+            }
+            used += 1;
             let (a, b) = (to_paper(s.a), to_paper(s.b));
             if a.distance(b) < 0.02 {
                 continue;
@@ -384,6 +420,7 @@ fn hidden_line_view(doc: &Document, vp: &Viewport, style: &RenderStyle, out: &mu
             }
             out.push(Prim::Path(path));
         }
+        budget = budget.saturating_sub(used);
     }
 }
 

@@ -1239,6 +1239,77 @@ fn hidden_line_viewports_are_vector_lines_and_styles_apply() {
 }
 
 #[test]
+fn hidden_line_keeps_its_proportions_in_a_huge_viewport_and_caps_its_size() {
+    let (mut ed, _sheet, vp) = project();
+    add(
+        &mut ed,
+        Shape::Hardscape {
+            boundary: corners(&[
+                v(0.0, 0.0),
+                v(3000.0, 0.0),
+                v(3000.0, 3000.0),
+                v(0.0, 3000.0),
+            ]),
+            material: "x".into(),
+            thickness: Some(3000.0),
+            elevation: Some(3000.0),
+        },
+        None,
+        Attributes::default(),
+    );
+    let style = cadektor_core::present::RenderStyle {
+        mode: cadektor_core::present::RenderMode::HiddenLine,
+        ..Default::default()
+    };
+    let extent = |ed: &Editor, min: DVec2, max: DVec2, max_segments: usize| {
+        let mut vpt = match &ed.doc().object(vp).unwrap().shape {
+            Shape::Viewport(v) => (**v).clone(),
+            _ => unreachable!(),
+        };
+        vpt.view = "right_isometric".into();
+        vpt.min = min;
+        vpt.max = max;
+        vpt.center = v(1500.0, 1500.0);
+        vpt.scale = 400.0;
+        let mut out = Vec::new();
+        cadektor_print::compose::hidden_line_prims(ed.doc(), &vpt, &style, max_segments, &mut out);
+        let mut lo = DVec2::splat(f64::MAX);
+        let mut hi = DVec2::splat(f64::MIN);
+        let mut paths = 0;
+        let mut texts = 0;
+        for p in &out {
+            match p {
+                Prim::Path(p) => {
+                    paths += 1;
+                    for s in &p.segs {
+                        if let PSeg::Move(q) | PSeg::Line(q) = s {
+                            lo = lo.min(*q);
+                            hi = hi.max(*q);
+                        }
+                    }
+                }
+                Prim::Text(_) => texts += 1,
+                _ => {}
+            }
+        }
+        (hi - lo, paths, texts)
+    };
+    // The same drawing in a small and in an A0 sized frame has the same shape.
+    let (small, ..) = extent(&ed, v(0.0, 0.0), v(100.0, 70.0), 100_000);
+    let (huge, ..) = extent(&ed, v(0.0, 0.0), v(1189.0, 841.0), 100_000);
+    assert!(small.x > 1.0 && huge.x > 1.0);
+    assert!(
+        ((small.x / small.y) / (huge.x / huge.y) - 1.0).abs() < 0.01,
+        "{small:?} {huge:?}"
+    );
+    // A cap cuts the lines and says so with a text.
+    let (_, paths, texts) = extent(&ed, v(0.0, 0.0), v(100.0, 70.0), 100_000);
+    assert!(paths >= 9 && texts == 0);
+    let (_, capped, texts) = extent(&ed, v(0.0, 0.0), v(100.0, 70.0), 5);
+    assert!(capped <= 5 && texts == 1, "{capped} {texts}");
+}
+
+#[test]
 fn raster_viewport_of_an_empty_model_and_big_pages_still_render() {
     let mut ed = Editor::default();
     let sheet = LayerId(
