@@ -163,6 +163,29 @@ impl ModifierKind {
     }
 }
 
+/// The keys in `Object::data` of objects that an extension draws on top of their plain shape:
+/// landscape walls, grade objects, spot elevations, site sections and analysis legends.
+/// They are made in `cadektor-site` (module `grading`).
+pub const EXTRA_KEYS: [&str; 5] = [
+    "landscape_wall",
+    "grade_object",
+    "spot_elevation",
+    "site_section",
+    "analysis_legend",
+];
+
+/// True if an extension should draw more for this object than its shape. Site models, modifiers,
+/// hardscapes and landscape areas have their own hooks.
+pub fn carries_extra(obj: &crate::model::Object) -> bool {
+    !matches!(
+        obj.shape,
+        crate::model::Shape::SiteModel { .. }
+            | crate::model::Shape::SiteModifier { .. }
+            | crate::model::Shape::Hardscape { .. }
+            | crate::model::Shape::LandscapeArea { .. }
+    ) && EXTRA_KEYS.iter().any(|k| obj.data.contains_key(*k))
+}
+
 /// The corners of a modifier boundary with curves flattened.
 pub fn boundary_points(boundary: &[Vertex]) -> Vec<DVec2> {
     curve::flatten(boundary, true, 2.0)
@@ -279,6 +302,39 @@ mod tests {
         assert!((end_elevation(&sq, 10.0, s) - 9.0).abs() < 1e-9);
         assert!(slope_from_end_elevation(&[], 1.0, 0.0, 2.0).is_none());
         assert!(slope_from_end_elevation(&sq, 1.0, 0.0, f64::NAN).is_none());
+    }
+
+    #[test]
+    fn extras_are_found_by_their_data_key() {
+        use crate::model::{Object, ObjectId, Shape};
+        let mut o = Object::new(
+            ObjectId(1),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        assert!(!carries_extra(&o));
+        for key in EXTRA_KEYS {
+            o.data.clear();
+            o.data.insert(key.into(), serde_json::json!({}));
+            assert!(carries_extra(&o), "{key}");
+        }
+        // Objects with their own hooks are left out.
+        o.shape = Shape::Hardscape {
+            boundary: curve::corners(&[DVec2::ZERO]),
+            material: "m".into(),
+            thickness: None,
+            elevation: None,
+        };
+        assert!(!carries_extra(&o));
+        o.shape = Shape::SiteModifier {
+            modifier: ModifierKind::GradeLimit,
+            boundary: vec![],
+        };
+        assert!(!carries_extra(&o));
     }
 
     #[test]

@@ -156,6 +156,7 @@ fn draw_object(
         r#"stroke="{line_stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
         o.id
     );
+    let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
     let _ = match &o.shape {
         Shape::Group { .. } => Ok(()),
         Shape::Symbol { .. } => {
@@ -431,6 +432,9 @@ fn draw_object(
     };
     if let Some(d) = &decor {
         decor_svg(doc, d, &a, o, scale, s, tag_counts, ext, depth);
+    }
+    if let (Some(ext), Some(style)) = (ext, extra_style) {
+        ext(doc, o, &style, s);
     }
 }
 

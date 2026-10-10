@@ -29,6 +29,8 @@ pub enum Tool {
     Hardscape,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
+    /// Grading: landscape walls, grades, spot elevations, stakes and section lines (modes).
+    Grading,
     /// Dimensions: one tool with modes (see `DimToolMode`).
     Dimension,
     Callout,
@@ -69,7 +71,7 @@ impl Tool {
         Tool::Text,
     ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
-    pub const SITE: [Tool; 1] = [Tool::SiteModifier];
+    pub const SITE: [Tool; 2] = [Tool::SiteModifier, Tool::Grading];
     pub const ANNOTATION: [Tool; 6] = [
         Tool::Dimension,
         Tool::Callout,
@@ -91,6 +93,7 @@ impl Tool {
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
             Tool::SiteModifier => "Site Modifiers",
+            Tool::Grading => "Grading",
             Tool::Dimension => "Dimension",
             Tool::Callout => "Callout",
             Tool::DataTag => "Data Tag",
@@ -211,6 +214,8 @@ pub struct ToolSettings {
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area_ui::AreaToolSettings,
+    /// Mode and options of the Grading tool.
+    pub grading: crate::grading_ui::GradingSettings,
     /// Style and options of the annotation tools.
     pub annot: AnnotSettings,
 }
@@ -233,6 +238,7 @@ impl Default for ToolSettings {
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
             areas: Default::default(),
+            grading: Default::default(),
             annot: Default::default(),
         }
     }
@@ -484,6 +490,7 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
+            Tool::Grading => self.handle_grading(input, cx),
             Tool::Dimension
             | Tool::Callout
             | Tool::DataTag
@@ -513,6 +520,33 @@ impl ToolMachine {
                 }
             }
         }
+    }
+
+    /// The Grading tool: the clicks make the object of the chosen mode.
+    fn handle_grading(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
+        let mode = cx.settings.grading.mode;
+        let mut pts = match &self.state {
+            State::Points(p) => p.clone(),
+            _ => vec![],
+        };
+        match input {
+            Input::Press { p, .. } => {
+                if pts.last() != Some(&p) {
+                    pts.push(p);
+                }
+                if mode.clicks() != Some(pts.len()) {
+                    self.state = State::Points(pts);
+                    return vec![];
+                }
+            }
+            Input::DoubleClick | Input::Enter if mode.clicks().is_none() => {}
+            _ => return vec![],
+        }
+        self.state = State::Idle;
+        crate::grading_ui::command(cx.doc, &cx.settings.grading, &pts)
+            .map(Effect::Exec)
+            .into_iter()
+            .collect()
     }
 
     fn place(&self, p: DVec2, cx: &Ctx) -> Vec<Effect> {
@@ -651,6 +685,18 @@ impl ToolMachine {
                     .map_or(Preview::None, Preview::Shape)
             }
             (_, Tool::Plant) => self.plant_preview(cursor, cx),
+            (State::Points(pts), Tool::Grading) => {
+                let mut v: Vec<DVec2> = pts.clone();
+                v.push(cursor);
+                if cx.settings.grading.mode == crate::grading_ui::GradingMode::Wall {
+                    Preview::Path {
+                        vertices: curve::corners(&v),
+                        closed: false,
+                    }
+                } else {
+                    Preview::Shape(Shape::Line { a: v[0], b: cursor })
+                }
+            }
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
@@ -757,6 +803,9 @@ impl ToolMachine {
             (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
+            (Tool::Grading, _) => {
+                "Pick a mode in the Data bar: landscape wall, grade, spot elevation, stake or section line. Esc cancels."
+            }
             (
                 Tool::Dimension
                 | Tool::Callout
@@ -837,6 +886,60 @@ mod tests {
                 .map(|o| o.shape.clone())
                 .collect()
         }
+    }
+
+    #[test]
+    fn grading_tool_makes_the_object_of_its_mode() {
+        use crate::grading_ui::GradingMode;
+        let mut f = Fixture::new(Tool::Grading);
+        // A wall takes any number of clicks; a double click does not repeat the point.
+        f.click(0.0, 0.0);
+        assert!(f.m.is_busy());
+        assert!(matches!(
+            f.m.preview(
+                DVec2::new(10.0, 0.0),
+                &Ctx {
+                    doc: f.session.editor.doc(),
+                    selection: &[],
+                    settings: &f.settings,
+                    tol: 5.0,
+                    context: None
+                }
+            ),
+            Preview::Path { .. }
+        ));
+        f.click(4000.0, 0.0);
+        f.click(4000.0, 3000.0);
+        f.click(4000.0, 3000.0);
+        f.send(Input::DoubleClick);
+        assert_eq!(f.shapes().len(), 1);
+        assert!(matches!(&f.shapes()[0], Shape::Polyline { points, .. } if points.len() == 3));
+        assert!(!f.m.is_busy());
+        // Two clicks make a grade or a section. One click makes a spot.
+        f.settings.grading.mode = GradingMode::Grade;
+        f.click(0.0, 0.0);
+        assert!(matches!(
+            f.m.preview(
+                DVec2::X,
+                &Ctx {
+                    doc: f.session.editor.doc(),
+                    selection: &[],
+                    settings: &f.settings,
+                    tol: 5.0,
+                    context: None
+                }
+            ),
+            Preview::Shape(Shape::Line { .. })
+        ));
+        f.click(1000.0, 0.0);
+        assert_eq!(f.shapes().len(), 2);
+        f.settings.grading.mode = GradingMode::Spot;
+        f.click(500.0, 500.0);
+        assert_eq!(f.shapes().len(), 3);
+        // Enter with a one-click mode, and a release, do nothing.
+        assert!(f.send(Input::Enter).is_empty() && f.send(Input::Release(DVec2::ZERO)).is_empty());
+        assert!(Tool::SITE.contains(&Tool::Grading) && Tool::Grading.name() == "Grading");
+        assert!(f.m.hint().contains("Pick a mode"));
     }
 
     #[test]

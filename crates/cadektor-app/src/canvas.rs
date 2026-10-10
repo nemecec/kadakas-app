@@ -494,6 +494,12 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
             crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
         }
         if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
+            crate::grading_ui::draw_analysis(&painter, view, f.doc, o, cache, revision);
+        }
+        if let (true, Some((cache, revision))) = (cadektor_core::site::carries_extra(o), f.site) {
+            crate::grading_ui::draw_extras(&painter, view, f.doc, o, cache, revision);
+        }
+        if let (Shape::SiteModel { .. }, Some((cache, revision))) = (&o.shape, f.site) {
             crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
         }
         if selected {

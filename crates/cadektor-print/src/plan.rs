@@ -10,6 +10,8 @@ use cadektor_core::plants::style::PlantGraphic;
 use cadektor_core::plants::tree::{self, TreeAction};
 use cadektor_core::sheets::{Annotation, AnnotationItem, Viewport};
 use cadektor_core::svg::site_outline;
+use cadektor_site::grading::draw::Drawn;
+use cadektor_site::grading::hook;
 use glam::DVec2;
 
 use crate::display::*;
@@ -209,8 +211,80 @@ fn shape_prims_deep(
         return;
     }
     let start = out.len();
+    // The colors of an analysis go under the outline of the site model. Walls, grades, spot
+    // elevations and the like go over their shape.
+    let is_site = matches!(obj.shape, Shape::SiteModel { .. });
+    if is_site {
+        site_prims(doc, obj, xf, tables, out);
+    }
+    let start = if is_site { out.len() } else { start };
     shape_core(doc, obj, attrs, xf, counts, tables, out, depth);
     decor_prims(doc, obj, attrs, xf, counts, tables, out, start, depth);
+    if cadektor_core::site::carries_extra(obj) {
+        let scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
+        let drawn = hook::extras_at(doc, tables.site(), SITE_REVISION, obj, scale);
+        drawn_prims(&drawn, xf, out);
+    }
+}
+
+/// The revision of the document of a page, for the cache of its site models.
+const SITE_REVISION: u64 = 1;
+
+/// The contours and the analysis colors of a site model.
+fn site_prims(
+    doc: &Document,
+    obj: &Object,
+    xf: &Xf,
+    tables: &crate::table::Tables,
+    out: &mut Vec<Prim>,
+) {
+    let scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
+    let drawn = hook::site_layers(doc, tables.site(), SITE_REVISION, obj, scale, true);
+    drawn_prims(&drawn, xf, out);
+}
+
+/// The shapes and texts of the grading objects as primitives on paper. The same `Drawn` is drawn
+/// by the plan SVG and by the app canvas. Text is not turned: a turned label stays horizontal.
+pub fn drawn_prims(d: &Drawn, xf: &Xf, out: &mut Vec<Prim>) {
+    for poly in &d.polys {
+        let rings: Vec<&Vec<DVec2>> = poly.rings.iter().filter(|r| !r.is_empty()).collect();
+        let width = poly.weight * xf.k;
+        if let Some(fill) = poly.fill {
+            // The rings of a shape with holes run in opposite directions, so the nonzero rule leaves the holes empty.
+            let segs: Vec<PSeg> = rings.iter().flat_map(|r| mapped(r, xf)).collect();
+            let stroke = if rings.len() == 1 { poly.stroke } else { None };
+            out.push(Prim::Path(PathPrim {
+                segs,
+                closed: poly.closed,
+                stroke,
+                fill: Some(fill),
+                width,
+                dash: None,
+            }));
+            if rings.len() == 1 {
+                continue;
+            }
+        }
+        if let Some(stroke) = poly.stroke {
+            for r in rings {
+                out.push(Prim::Path(PathPrim::stroked(
+                    mapped(r, xf),
+                    poly.closed,
+                    stroke,
+                    width,
+                )));
+            }
+        }
+    }
+    for l in &d.labels {
+        out.push(Prim::Text(TextPrim {
+            at: xf.p(l.at),
+            text: l.text.clone(),
+            height: l.height * xf.k,
+            color: [0, 0, 0, 255],
+            align: if l.center { Align::Center } else { Align::Left },
+        }));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

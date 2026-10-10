@@ -144,6 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
+    ToolGrading => "tool.grading", "Grading tool", [], true;
     ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
     ToolAngularDim => "tool.angular_dimension", "Angular Dimension tool", ["."], true;
     ToolRadialDim => "tool.radial_dimension", "Radial Dimension tool", [","], true;
@@ -223,6 +224,7 @@ impl Action {
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
+            Action::ToolGrading => Tool::Grading,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
                 Tool::Dimension
             }
@@ -247,6 +249,7 @@ impl Action {
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
+            Tool::Grading => Action::ToolGrading,
             Tool::Dimension => Action::ToolDimension,
             Tool::Callout => Action::ToolCallout,
             Tool::DataTag => Action::ToolDataTag,
@@ -800,7 +803,12 @@ mod tests {
                 "status of {id} disagrees with the code"
             );
             let binding = cells[2].split(" (").next().unwrap();
-            let mut want: Vec<Chord> = binding.split(" or ").map(|c| chord(c.trim())).collect();
+            // A tool without a default key says "none".
+            let mut want: Vec<Chord> = if binding == "none" {
+                Vec::new()
+            } else {
+                binding.split(" or ").map(|c| chord(c.trim())).collect()
+            };
             let mut have = km.chords(action).to_vec();
             want.sort();
             have.sort();
