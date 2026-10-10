@@ -12,11 +12,11 @@ Cadektor has its own icon set (feature UI-12). The files are in `assets/icons/`.
 
 ## Style rules
 
-- 24 x 24 `viewBox`, stroke `currentColor`, stroke width 1.75, round caps and joins.
+- 24 x 24 `viewBox`, stroke `currentColor`, stroke width 2 (design for 16 px first), round caps and joins.
 - No fills, except small accents: dots (`fill="currentColor"`) and light areas (`fill-opacity` 0.5 or less, `stroke="none"`).
 - No colors, no raster images, no text elements. A file must be smaller than 4 KB.
-- Keep the drawing inside the 3 to 21 range, so the stroke is not cut off.
-- Tabler files use stroke width 2. The program draws them with 1.75 (it changes the value when it loads the file).
+- Keep the drawing inside the 3 to 21 range. A test checks the bounding box. Fill accents are 0.8 or less. The result area of a surface icon is 0.5 or more.
+- Tabler files also use stroke width 2, so the whole set matches.
 
 ## Names and ideas
 
@@ -37,7 +37,7 @@ Tabler icons that we use (by our idea): file-plus (new), folder-open, device-flo
 
 ## How the program uses icons
 
-`crates/cadektor-app/src/icons.rs` includes all files with `include_bytes!`. It draws each file with resvg. The size comes from the screen (points times the pixel ratio). It replaces `currentColor` with the text color of the theme. It caches the texture for each name, size and color. If an icon is missing, the button shows the text label only.
+`crates/cadektor-app/src/icons.rs` includes all files with `include_bytes!`. It draws each file with resvg. The size comes from the screen (points times the pixel ratio). It draws it in white. The widget tints it with the text color, so hover, selection and theme need no new texture. It caches the texture for each name and size. It frees the textures when the pixel ratio changes. If an icon is missing, the button shows the text label only.
 
 Icons are in the tool palette (with the name and key as tooltip), the view bar (views and render modes), the menus, the selection mode buttons and the Resource Manager (types and rows).
 

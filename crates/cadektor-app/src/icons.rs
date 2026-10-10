@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use egui::{Color32, Context, TextureHandle, Ui, Vec2};
+use egui::{Context, TextureHandle, Ui, Vec2};
 
 use crate::panels::MenuAction;
 use crate::tools::Tool;
@@ -741,10 +741,7 @@ pub fn render_rgba(name: &str, px: u32, color: [u8; 3]) -> Option<Vec<u8>> {
     use resvg::{tiny_skia, usvg};
     let src = svg(name)?;
     let hex = format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2]);
-    // One stroke width for the whole set: the Tabler files use 2, ours 1.75.
-    let src = src
-        .replace("currentColor", &hex)
-        .replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
+    let src = src.replace("currentColor", &hex);
     let tree = usvg::Tree::from_str(&src, &usvg::Options::default()).ok()?;
     let mut pm = tiny_skia::Pixmap::new(px.max(1), px.max(1))?;
     let k = px.max(1) as f32 / 24.0;
@@ -766,22 +763,34 @@ pub fn render_rgba(name: &str, px: u32, color: [u8; 3]) -> Option<Vec<u8>> {
     Some(data)
 }
 
-type Key = (&'static str, u32, [u8; 3]);
+type Key = (&'static str, u32);
 
-/// The textures made so far. It lives in the egui context.
+/// The textures made so far. They are white: the widget tints them with the text color, so the
+/// theme, hover and selection need no new texture. It lives in the egui context and is emptied
+/// when the pixel ratio changes.
 #[derive(Clone, Default)]
-struct Cache(Arc<Mutex<HashMap<Key, Option<TextureHandle>>>>);
+struct Cache(Arc<Mutex<Textures>>);
 
-/// The texture of an icon at `size` points, in `color`. `None` if the icon is missing.
-pub fn texture(ctx: &Context, name: &str, size: f32, color: Color32) -> Option<TextureHandle> {
+/// The pixel ratio of the textures, and the textures.
+type Textures = (f32, HashMap<Key, Option<TextureHandle>>);
+
+/// The white texture of an icon at `size` points. `None` if the icon is missing.
+pub fn texture(ctx: &Context, name: &str, size: f32) -> Option<TextureHandle> {
     let (name, _) = ICONS.iter().find(|(n, _)| *n == name)?;
-    let px = (size * ctx.pixels_per_point()).ceil().max(1.0) as u32;
-    let rgb = [color.r(), color.g(), color.b()];
+    let ppp = ctx.pixels_per_point();
+    let px = (size * ppp).ceil().max(1.0) as u32;
     let cache = ctx.data_mut(|d| d.get_temp_mut_or_default::<Cache>(egui::Id::NULL).clone());
-    let mut map = cache.0.lock().ok()?;
-    map.entry((name, px, rgb))
+    let mut guard = cache.0.lock().ok()?;
+    if guard.0 != ppp {
+        // The scale changed: free the old textures.
+        guard.1.clear();
+        guard.0 = ppp;
+    }
+    guard
+        .1
+        .entry((name, px))
         .or_insert_with(|| {
-            let data = render_rgba(name, px, rgb)?;
+            let data = render_rgba(name, px, [255, 255, 255])?;
             let img = egui::ColorImage::from_rgba_unmultiplied([px as usize; 2], &data);
             Some(ctx.load_texture(
                 format!("icon-{name}-{px}"),
@@ -792,24 +801,23 @@ pub fn texture(ctx: &Context, name: &str, size: f32, color: Color32) -> Option<T
         .clone()
 }
 
-/// The icon as an image widget, in the text color of `ui`. `None` if the icon is missing.
+/// The icon as an image widget, tinted with the text color of `ui`. `None` if the icon is missing.
 pub fn image(ui: &Ui, name: &str, size: f32) -> Option<egui::Image<'static>> {
     let color = if ui.is_enabled() {
         ui.visuals().text_color()
     } else {
         ui.visuals().weak_text_color()
     };
-    let t = texture(ui.ctx(), name, size, color)?;
-    Some(egui::Image::new(egui::load::SizedTexture::new(
-        t.id(),
-        Vec2::splat(size),
-    )))
+    let t = texture(ui.ctx(), name, size)?;
+    Some(egui::Image::new(egui::load::SizedTexture::new(t.id(), Vec2::splat(size))).tint(color))
 }
 
 /// A button with an icon and a label. Without the icon, it shows the label only.
 pub fn button(ui: &Ui, name: &str, label: &str) -> egui::Button<'static> {
     match image(ui, name, 16.0) {
-        Some(img) => egui::Button::image_and_text(img, label.to_string()),
+        Some(img) => {
+            egui::Button::image_and_text(img, label.to_string()).image_tint_follows_text_color(true)
+        }
         None => egui::Button::new(label.to_string()),
     }
 }
@@ -876,12 +884,13 @@ mod tests {
     #[test]
     fn our_icons_follow_the_style() {
         let list = files("cadektor");
+        let mut outside: Vec<String> = Vec::new();
         assert!(list.len() >= 60);
         for (name, s) in list {
             assert!(!name.to_lowercase().contains("vectorworks"), "{name}");
             assert!(s.contains("viewBox=\"0 0 24 24\""), "{name}: viewBox");
             assert!(s.contains("stroke=\"currentColor\""), "{name}: stroke");
-            assert!(s.contains("stroke-width=\"1.75\""), "{name}: stroke width");
+            assert!(s.contains("stroke-width=\"2\""), "{name}: stroke width");
             assert!(s.contains("stroke-linecap=\"round\""), "{name}: caps");
             assert!(s.contains("stroke-linejoin=\"round\""), "{name}: joins");
             assert!(
@@ -891,7 +900,25 @@ mod tests {
             assert!(s.len() < 4096, "{name}: {} bytes", s.len());
             // Colors only through currentColor.
             assert!(!s.contains('#'), "{name}: fixed color");
+            // Light areas are accents. They must be clear at 16 px.
+            for part in s.split("fill-opacity=\"").skip(1) {
+                let v: f32 = part.split('"').next().unwrap().parse().unwrap();
+                assert!(v <= 0.8, "{name}: fill-opacity {v}");
+                if name.starts_with("surface-") {
+                    assert!(
+                        v >= 0.5,
+                        "{name}: the result area needs fill-opacity >= 0.5"
+                    );
+                }
+            }
+            // The drawing stays inside the 3 to 21 range (the stroke needs room at 16 px).
+            let tree = usvg::Tree::from_str(&s, &usvg::Options::default()).unwrap();
+            let b = tree.root().abs_bounding_box();
+            if !(b.left() >= 2.9 && b.top() >= 2.9 && b.right() <= 21.1 && b.bottom() <= 21.1) {
+                outside.push(format!("{name}: outside 3..21: {b:?}"));
+            }
         }
+        assert!(outside.is_empty(), "{}", outside.join("\n"));
     }
 
     #[test]
@@ -1000,40 +1027,54 @@ mod tests {
         assert!(render_rgba("line", 0, [0; 3]).is_some());
     }
 
-    /// Draws all icons on a sheet and checks that the sheet is not blank. The PNG goes to the
-    /// folder in `ICON_SHEET_DIR` or the temp folder. It is not committed.
-    #[test]
-    fn golden_icon_sheet_is_not_blank() {
-        let cell = 64u32;
-        let cols = 10u32;
+    /// Draws all icons at `px` pixels, enlarged `zoom` times (nearest pixel), on a white sheet.
+    fn sheet(px: u32, zoom: u32) -> (u32, u32, Vec<u8>) {
+        let icon = px * zoom;
+        let cell = icon + 16;
+        let cols = 12u32;
         let rows = (ICONS.len() as u32).div_ceil(cols);
         let (w, h) = (cols * cell, rows * cell);
         let mut sheet = vec![255u8; (w * h * 4) as usize];
         for (i, (name, _)) in ICONS.iter().enumerate() {
-            let px = render_rgba(name, 48, [20, 20, 20]).unwrap();
+            let src = render_rgba(name, px, [20, 20, 20]).unwrap();
             assert!(
-                px.chunks_exact(4).any(|p| p[3] > 0),
+                src.chunks_exact(4).any(|p| p[3] > 0),
                 "icon {name} renders blank"
             );
             let (cx, cy) = ((i as u32 % cols) * cell + 8, (i as u32 / cols) * cell + 8);
-            for y in 0..48 {
-                for x in 0..48 {
-                    let s = ((y * 48 + x) * 4) as usize;
+            for y in 0..icon {
+                for x in 0..icon {
+                    let s = (((y / zoom) * px + x / zoom) * 4) as usize;
                     let d = (((cy + y) * w + cx + x) * 4) as usize;
-                    let a = px[s + 3] as u32;
+                    let a = src[s + 3] as u32;
                     for c in 0..3 {
-                        sheet[d + c] = ((px[s + c] as u32 * a + 255 * (255 - a)) / 255) as u8;
+                        sheet[d + c] = ((src[s + c] as u32 * a + 255 * (255 - a)) / 255) as u8;
                     }
                 }
             }
         }
-        let dark = sheet.chunks_exact(4).filter(|p| p[0] < 128).count();
-        assert!(dark > 5000, "the icon sheet is blank ({dark} dark pixels)");
+        (w, h, sheet)
+    }
+
+    /// Draws all icons on sheets (16 px, 24 px and 48 px) and checks that they are not blank. The
+    /// PNG files go to the folder in `ICON_SHEET_DIR` or the temp folder. They are not committed.
+    #[test]
+    fn golden_icon_sheet_is_not_blank() {
         let dir = std::env::var_os("ICON_SHEET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let mut pm = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
-        pm.data_mut().copy_from_slice(&sheet);
-        pm.save_png(dir.join("cadektor-icon-sheet.png")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        for (px, zoom) in [(16, 4), (24, 3), (48, 1)] {
+            let (w, h, data) = sheet(px, zoom);
+            let dark = data.chunks_exact(4).filter(|p| p[0] < 128).count();
+            assert!(
+                dark > 3000,
+                "the {px} px icon sheet is blank ({dark} dark pixels)"
+            );
+            let mut pm = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
+            pm.data_mut().copy_from_slice(&data);
+            pm.save_png(dir.join(format!("cadektor-icon-sheet-{px}.png")))
+                .unwrap();
+        }
     }
 }

@@ -17,8 +17,7 @@ def load(sub):
     for f in sorted(os.listdir(d)):
         if f.endswith(".svg"):
             s = open(os.path.join(d, f), encoding="utf-8").read()
-            # One stroke width for the whole set, as the program does.
-            s = s.replace('stroke-width="2"', 'stroke-width="1.75"')
+            
             s = re.sub(r'\s(width|height|class)="[^"]*"', "", s, count=3)
             out.append((f[:-4], s.strip()))
     return out
