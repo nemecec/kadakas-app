@@ -43,11 +43,11 @@ fn circle(s: &mut Session) -> u64 {
     r["created"][0].as_u64().unwrap()
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn restricted(dir: &Path) -> Session {
-    Session {
-        paths: PathPolicy::restricted([dir.to_path_buf()]),
-        ..Session::default()
-    }
+    let mut s = Session::default();
+    s.paths = PathPolicy::restricted([dir.to_path_buf()]);
+    s
 }
 
 #[test]

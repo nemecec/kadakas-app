@@ -205,7 +205,7 @@ fn remote_call(conn: &mut BufReader<TcpStream>, req: &Value) -> Option<String> {
     }
 }
 
-fn load(path: &PathBuf) -> Result<Document, String> {
+fn load(path: &std::path::Path) -> Result<Document, String> {
     let mut doc = cadektor_api::files::read_document(path).map_err(|e| e.message)?;
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
     doc.ensure_project_guid();
@@ -411,7 +411,7 @@ fn export_command(
     format: Option<String>,
     options: Option<String>,
 ) -> Result<(), String> {
-    let mut session = Session::with_document(load(&file.to_path_buf())?);
+    let mut session = Session::with_document(load(file)?);
     let result = io_call(&mut session, "export.file", output, format, options)?;
     println!(
         "{}",
