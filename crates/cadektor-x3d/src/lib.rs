@@ -21,7 +21,7 @@ use serde::Serialize;
 
 pub use material::{BaseColors, DocumentMaterials, Material, MaterialSource, Texture};
 pub use obj::ObjFiles;
-pub use options::{ExportOptions, Grouping, Units};
+pub use options::{ExportOptions, Grouping, PlantDetail, Units};
 
 /// Why an export failed.
 #[derive(Debug, PartialEq, thiserror::Error)]

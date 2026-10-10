@@ -235,9 +235,13 @@ fn section_viewports_follow_the_model() {
     assert_eq!(got["length_mm"], 6000.0);
     assert_eq!(got["cut_faces"].as_array().unwrap().len(), 1);
     assert!((got["cut_faces"][0]["area_m2"].as_f64().unwrap() - 4.0 * 0.3).abs() < 1e-6);
-    let builds = s.section_cache.builds;
+    let builds = s.section_cache.lock().unwrap().builds;
     ok(&mut s, "section_viewport.get", json!({"id": line}));
-    assert_eq!(s.section_cache.builds, builds, "cached by revision");
+    assert_eq!(
+        s.section_cache.lock().unwrap().builds,
+        builds,
+        "cached by revision"
+    );
 
     let sh = sheet(&mut s);
     let vp = ok(
@@ -738,7 +742,8 @@ fn plants_and_objects_beyond_show_in_a_section() {
         .unwrap();
     let got = ok(&mut s, "section_viewport.get", json!({"id": line}));
     assert_eq!(got["silhouettes"].as_array().unwrap().len(), 1);
-    assert!(got["cut_faces"].as_array().unwrap().is_empty());
+    // The line passes through the first plant: its trunk is a cut face, its canopy a silhouette.
+    assert_eq!(got["cut_faces"].as_array().unwrap().len(), 1);
     assert!(got["edge_count"].as_u64().unwrap() > 0);
     // The slab beyond the line starts at the first end of the line.
     assert_eq!(got["bounds"]["min"][0].as_f64().unwrap().round(), 0.0);

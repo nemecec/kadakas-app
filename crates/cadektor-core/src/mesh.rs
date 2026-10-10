@@ -78,6 +78,15 @@ impl Mesh {
     }
 
     fn tri(&mut self, a: u32, b: u32, c: u32, object: ObjectId) {
+        // A triangle without area (a fan at a pole that collapsed) draws nothing and has no normal.
+        let (pa, pb, pc) = (
+            self.positions[a as usize],
+            self.positions[b as usize],
+            self.positions[c as usize],
+        );
+        if (pb - pa).cross(pc - pa).length_squared() < 1e-12 {
+            return;
+        }
         self.indices.extend_from_slice(&[a, b, c]);
         self.tri_object.push(object);
         self.tri_part.push(self.part);
@@ -213,6 +222,16 @@ impl SceneSink<'_> {
     /// Adds a triangle mesh with one color. Indices are three per triangle. Normals are smooth.
     /// Triangles that are not counterclockwise seen from above are flipped to face up.
     pub fn mesh(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4]) {
+        self.mesh_with(positions, indices, color, true);
+    }
+
+    /// Like `mesh`, but keeps the winding of the triangles: counterclockwise seen from outside.
+    /// Use it for faces that look down, such as the floor of a closed solid.
+    pub fn mesh_oriented(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4]) {
+        self.mesh_with(positions, indices, color, false);
+    }
+
+    fn mesh_with(&mut self, positions: &[DVec3], indices: &[u32], color: [u8; 4], face_up: bool) {
         let pts: Vec<Vec3> = positions.iter().map(|p| self.local(*p)).collect();
         let mut normals = vec![Vec3::ZERO; pts.len()];
         let mut tris = Vec::with_capacity(indices.len() / 3);
@@ -222,7 +241,11 @@ impl SceneSink<'_> {
                 continue;
             }
             let n = (pts[b] - pts[a]).cross(pts[c] - pts[a]);
-            let (b, c, n) = if n.z < 0.0 { (c, b, -n) } else { (b, c, n) };
+            let (b, c, n) = if face_up && n.z < 0.0 {
+                (c, b, -n)
+            } else {
+                (b, c, n)
+            };
             for i in [a, b, c] {
                 normals[i] += n;
             }
@@ -230,7 +253,9 @@ impl SceneSink<'_> {
         }
         let base = self.scene.mesh.positions.len() as u32;
         for (p, n) in pts.iter().zip(&normals) {
-            self.scene.mesh.vertex(*p, n.normalize_or_zero(), color);
+            self.scene
+                .mesh
+                .vertex(*p, n.try_normalize().unwrap_or(Vec3::Z), color);
         }
         for [a, b, c] in tris {
             self.scene.mesh.tri(
@@ -696,7 +721,7 @@ impl Builder<'_> {
                     form: look.form,
                     color,
                     trunk_radius: None,
-                    seed: form3d::seed_for(id.0, species),
+                    seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
                 };
                 self.plant(&build, z, edge, id);
             }
@@ -715,7 +740,7 @@ impl Builder<'_> {
                     form: PlantForm::Tree,
                     color: fill.unwrap_or_else(|| species_color(species)),
                     trunk_radius: Some(dbh / 2.0),
-                    seed: form3d::seed_for(id.0, species),
+                    seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
                 };
                 self.plant(&build, z, edge, id);
             }
@@ -1054,6 +1079,27 @@ impl Builder<'_> {
                 mesh.tri(b0, b1, t1, id);
                 mesh.tri(b0, t1, t0, id);
             }
+            // Caps, so that a cut through the trunk is a closed face.
+            for (zc, up) in [(z, false), (trunk_top, true)] {
+                let center = mesh.vertex(
+                    v3(o, at, zc),
+                    Vec3::new(0.0, 0.0, if up { 1.0 } else { -1.0 }),
+                    TRUNK,
+                );
+                for s in 0..sides {
+                    let s2 = (s + 1) % sides;
+                    let (a, b) = (
+                        base + 2 * s as u32 + u32::from(up),
+                        base + 2 * s2 as u32 + u32::from(up),
+                    );
+                    // Counterclockwise seen from outside.
+                    if up {
+                        mesh.tri(center, a, b, id);
+                    } else {
+                        mesh.tri(center, b, a, id);
+                    }
+                }
+            }
         }
         // Canopy. A normal of an ellipsoid scales with the inverse radii. A cone has slanted sides.
         let radii = Vec3::new(r as f32, r as f32, (canopy_h / 2.0) as f32);
@@ -1075,7 +1121,9 @@ impl Builder<'_> {
                     // The lower half is squashed flat onto the ground.
                     let up = p.z.max(0.0);
                     let n = (Vec3::new(p.x, p.y, up) / Vec3::new(radii.x, radii.y, radii.z * 2.0))
-                        .normalize_or_zero();
+                        .try_normalize()
+                        // The pole of the flat underside faces down.
+                        .unwrap_or(Vec3::NEG_Z);
                     (
                         center
                             + Vec3::new(p.x * radii.x, p.y * radii.y, (up * 2.0 - 1.0) * radii.z),
@@ -1148,7 +1196,7 @@ fn visible_objects(doc: &Document) -> impl Iterator<Item = (&Object, &Layer)> {
 
 /// The scene origin for a document: the middle of the plan, with Z zero.
 /// Objects with non-finite numbers do not count.
-fn scene_origin(doc: &Document) -> DVec3 {
+pub fn scene_origin(doc: &Document) -> DVec3 {
     let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
     for (o, _) in visible_objects(doc) {
         let (a, b) = o.shape.bounds();
@@ -1180,6 +1228,38 @@ pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> S
     build_with_detail(doc, origin, ext, None)
 }
 
+/// The detail that the scene gives plants by their number: coarse above `COARSE_PLANT_COUNT`,
+/// and billboards above `BILLBOARD_PLANT_COUNT`.
+pub fn count_detail(doc: &Document) -> Detail {
+    let count = doc
+        .objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
+        .count();
+    if count > BILLBOARD_PLANT_COUNT {
+        Detail::Billboard
+    } else if count > COARSE_PLANT_COUNT {
+        Detail::Coarse
+    } else {
+        Detail::Fine
+    }
+}
+
+/// The mean spread of the plants of a document, in mm, or `None` without plants.
+pub fn mean_plant_spread(doc: &Document) -> Option<f64> {
+    let (mut sum, mut n) = (0.0, 0usize);
+    for o in doc.objects.values() {
+        if let Shape::Plant { spread, .. } | Shape::ExistingTree { spread, .. } = o.shape
+            && spread.is_finite()
+            && spread > 0.0
+        {
+            sum += spread;
+            n += 1;
+        }
+    }
+    (n > 0).then(|| sum / n as f64)
+}
+
 /// Like `build_with`, with the detail of the plants given. `None` picks it from the number of
 /// plants: coarse above `COARSE_PLANT_COUNT`, and billboards above `BILLBOARD_PLANT_COUNT`.
 pub fn build_with_detail(
@@ -1188,18 +1268,7 @@ pub fn build_with_detail(
     ext: Option<SceneExt<'_>>,
     plants: Option<Detail>,
 ) -> Scene {
-    let count = doc
-        .objects
-        .values()
-        .filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
-        .count();
-    let level = plants.unwrap_or(if count > BILLBOARD_PLANT_COUNT {
-        Detail::Billboard
-    } else if count > COARSE_PLANT_COUNT {
-        Detail::Coarse
-    } else {
-        Detail::Fine
-    });
+    let level = plants.unwrap_or_else(|| count_detail(doc));
     let detail = if level == Detail::Fine {
         SPHERE_DETAIL
     } else {
@@ -2379,6 +2448,107 @@ mod tests {
                     parts.contains(&PART_CANOPY),
                     "{form:?} {detail:?}: no canopy"
                 );
+            }
+        }
+    }
+
+    /// Edges of the triangles of one object that are not shared by exactly two triangles that
+    /// run through it in opposite directions (0.1 mm grid).
+    fn open_edges(scene: &Scene, id: ObjectId) -> usize {
+        use std::collections::HashMap;
+        let q = |p: Vec3| {
+            [
+                (p.x * 10.0).round() as i64,
+                (p.y * 10.0).round() as i64,
+                (p.z * 10.0).round() as i64,
+            ]
+        };
+        let mut dir: HashMap<([i64; 3], [i64; 3]), i32> = HashMap::new();
+        for t in 0..scene.mesh.triangle_count() {
+            if scene.mesh.tri_object[t] != id {
+                continue;
+            }
+            let p = scene.mesh.triangle(t);
+            for k in 0..3 {
+                *dir.entry((q(p[k]), q(p[(k + 1) % 3]))).or_default() += 1;
+            }
+        }
+        dir.iter()
+            .filter(|((a, b), n)| **n != 1 || dir.get(&(*b, *a)) != Some(&1))
+            .count()
+    }
+
+    #[test]
+    fn solids_are_closed() {
+        use crate::massing::{Massing, RoofStyle};
+        let mut ed = Editor::default();
+        let footprints = [
+            rect_pts(8000.0, 6000.0),
+            vec![
+                DVec2::new(0.0, 0.0),
+                DVec2::new(6000.0, 0.0),
+                DVec2::new(8000.0, 3000.0),
+                DVec2::new(3000.0, 7000.0),
+                DVec2::new(-1000.0, 4000.0),
+            ],
+        ];
+        let mut ids = Vec::new();
+        for fp in &footprints {
+            for roof in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
+                let mut m = Massing::new(curve::corners(fp), 6000.0);
+                m.roof = roof;
+                m.pitch_deg = 30.0;
+                ids.push((
+                    format!("massing {roof:?}"),
+                    add(&mut ed, Shape::Massing(Box::new(m))),
+                ));
+            }
+        }
+        ids.push((
+            "slab".into(),
+            add(
+                &mut ed,
+                hardscape(&rect_pts(4000.0, 3000.0), Some(150.0), Some(0.0)),
+            ),
+        ));
+        ids.push((
+            "thick slab".into(),
+            add(
+                &mut ed,
+                hardscape(&footprints[1], Some(300.0), Some(-200.0)),
+            ),
+        ));
+        let scene = build(ed.doc());
+        for (name, id) in ids {
+            assert!(scene.mesh.tri_object.contains(&id), "{name}: no triangles");
+            assert_eq!(open_edges(&scene, id), 0, "{name} is not closed");
+        }
+    }
+
+    #[test]
+    fn every_form_and_level_has_valid_normals_and_no_flat_triangles() {
+        use crate::plants::form3d::Detail;
+        for form in PlantForm::ALL {
+            let (ed, id) = styled_plant(form, 3000.0, 6000.0);
+            for detail in [Detail::Fine, Detail::Coarse, Detail::Billboard] {
+                let scene = build_with_detail(ed.doc(), scene_origin(ed.doc()), None, Some(detail));
+                let m = &scene.mesh;
+                assert!(m.triangle_count() > 0, "{form:?} {detail:?}");
+                for n in &m.normals {
+                    assert!(
+                        n.is_finite() && (n.length() - 1.0).abs() < 1e-3,
+                        "{form:?} {detail:?}: normal {n}"
+                    );
+                }
+                assert!(m.indices.iter().all(|i| (*i as usize) < m.positions.len()));
+                for t in 0..m.triangle_count() {
+                    if m.tri_object[t] != id {
+                        continue;
+                    }
+                    let p = m.triangle(t);
+                    let area = (p[1] - p[0]).cross(p[2] - p[0]).length();
+                    assert!(area > 1e-3, "{form:?} {detail:?}: flat triangle {t}");
+                }
             }
         }
     }

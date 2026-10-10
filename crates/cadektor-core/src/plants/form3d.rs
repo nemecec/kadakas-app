@@ -25,7 +25,7 @@ pub const MAX_COARSE_TRIANGLES: usize = 200;
 pub const MAX_BILLBOARD_TRIANGLES: usize = 48;
 
 /// How much detail a plant mesh has.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Detail {
     #[default]
     Fine,
@@ -50,7 +50,12 @@ pub fn lod_for(spread: f64, pixel_size: f64) -> Detail {
     }
 }
 
-/// The seed of a plant: the same object and species always give the same seed.
+/// How many looks a species has: plants of one style and size share one of this many meshes, so
+/// exports can instance them (a thousand plants make at most this many meshes).
+pub const VARIANTS: u64 = 8;
+
+/// The seed of a plant: the same variant (the object ID modulo `VARIANTS`) and species always
+/// give the same seed.
 pub fn seed_for(id: u64, species: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ id.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     for b in species.bytes() {
@@ -128,6 +133,14 @@ impl FormMesh {
     }
 
     fn tri(&mut self, a: u32, b: u32, c: u32) {
+        let (pa, pb, pc) = (
+            self.positions[a as usize],
+            self.positions[b as usize],
+            self.positions[c as usize],
+        );
+        if (pb - pa).cross(pc - pa).length_squared() < 1e-12 {
+            return;
+        }
         self.indices.extend_from_slice(&[a, b, c]);
         self.tri_part.push(self.part);
     }
@@ -261,6 +274,31 @@ impl FormMesh {
                 // The sign of the winding follows the direction of the axis.
                 self.tri(a, b, c);
                 self.tri(a, c, d);
+            }
+        }
+        // Caps, so that a cut through the tube is a closed face.
+        for (i, outward) in [(0, -1.0f32), (n - 1, 1.0)] {
+            let axis =
+                (pts[(i + 1).min(n - 1)] - pts[i.saturating_sub(1)]).normalize_or_zero() * outward;
+            let center = self.vertex(pts[i], axis, color);
+            let ring: Vec<u32> = (0..sides)
+                .map(|s| {
+                    let p = self.positions[(base as usize) + i * sides + s];
+                    self.vertex(p, axis, color)
+                })
+                .collect();
+            for s in 0..sides {
+                let (a, b) = (ring[s], ring[(s + 1) % sides]);
+                let (pa, pb, pc) = (
+                    self.positions[center as usize],
+                    self.positions[a as usize],
+                    self.positions[b as usize],
+                );
+                if (pb - pa).cross(pc - pa).dot(axis) >= 0.0 {
+                    self.tri(center, a, b);
+                } else {
+                    self.tri(center, b, a);
+                }
             }
         }
     }

@@ -17,7 +17,7 @@ pub mod beyond;
 pub mod cut;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use glam::{DVec2, DVec3, Vec3};
 use serde::{Deserialize, Serialize};
@@ -232,16 +232,12 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             p: [frame.uvw(pos[0]), frame.uvw(pos[1]), frame.uvw(pos[2])],
             key: [bits(pos[0]), bits(pos[1]), bits(pos[2])],
             plant: plant_of(object),
+            trunk: mesh.tri_part.get(t).copied() == Some(cadektor_core::present::PART_TRUNK),
         });
     }
 
     if spec.mode == Mode::Cut {
-        // Massing models have no floor in the scene: they stand on the ground. Their open cut closes at the base.
-        let open_base = |id: ObjectId| {
-            doc.object(id)
-                .is_some_and(|o| matches!(o.shape, Shape::Massing(_)))
-        };
-        cut_faces(&tris, &frame, &mut out, &plant_of, &open_base);
+        cut_faces(&tris, &frame, &mut out, &plant_of);
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
@@ -268,7 +264,7 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
         let covers: Vec<&CutFace> = out.faces.iter().collect();
         // Depths closer than this count as equal: a ten thousandth of the section, at least 1 mm.
         let tol = (frame.len * 1e-4).max(1.0);
-        out.edges = beyond::edges(&tris, &segs, &region, &covers, tol);
+        out.edges = beyond::edges(&tris, &segs, &region, &covers, tol, spec.mode == Mode::Cut);
         out.truncated = out.edges.len() >= beyond::MAX_EDGES;
     }
     out.grow();
@@ -281,9 +277,9 @@ fn cut_faces(
     frame: &Frame,
     out: &mut SectionDrawing,
     plant_of: &dyn Fn(ObjectId) -> bool,
-    open_base: &dyn Fn(ObjectId) -> bool,
 ) {
-    let mut by_object: BTreeMap<u64, Vec<(DVec2, DVec2)>> = BTreeMap::new();
+    // The trunk of a plant is cut on its own: it is a solid, the canopy only gives a silhouette.
+    let mut by_object: BTreeMap<(u64, bool), Vec<(DVec2, DVec2)>> = BTreeMap::new();
     for t in tris {
         let w = [t.p[0].z, t.p[1].z, t.p[2].z];
         let side = [w[0] >= 0.0, w[1] >= 0.0, w[2] >= 0.0];
@@ -302,16 +298,19 @@ fn cut_faces(
             }
         }
         if let [a, b] = pts[..] {
-            by_object.entry(t.object.0).or_default().push((a, b));
+            by_object
+                .entry((t.object.0, t.trunk))
+                .or_default()
+                .push((a, b));
             out.cut_triangles += 1;
         }
     }
-    for (id, segs) in by_object {
+    for ((id, trunk), segs) in by_object {
         let object = ObjectId(id);
         let mut rings: Vec<Vec<DVec2>> = Vec::new();
         for c in cut::chain(&segs) {
             let pts = cut::simplify(&c.points, c.closed, cut::SNAP * 2.0);
-            if c.closed || (open_base(object) && pts.len() >= 3) {
+            if c.closed {
                 let clipped = cut::clip_ring(&pts, frame.len);
                 if clipped.len() >= 3 {
                     rings.push(cut::simplify(&clipped, true, cut::SNAP * 2.0));
@@ -328,7 +327,7 @@ fn cut_faces(
         let rings = cut::orient(rings);
         if !rings.is_empty() {
             let face = CutFace { object, rings };
-            if plant_of(object) {
+            if plant_of(object) && !trunk {
                 out.silhouettes.push(face);
             } else {
                 out.faces.push(face);
@@ -336,6 +335,10 @@ fn cut_faces(
         }
     }
 }
+
+/// A section cache that several callers share: the API, the sheets and the PDF export. The first
+/// one that needs a drawing computes it, the others get the same one.
+pub type SharedSections = Arc<Mutex<SectionCache>>;
 
 /// Keeps the section of each key for one revision of the document. A viewer can ask every frame.
 #[derive(Default)]

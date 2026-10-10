@@ -33,6 +33,8 @@ pub struct Tri {
     pub key: [[u32; 3]; 3],
     /// A plant.
     pub plant: bool,
+    /// The trunk part of a plant: it is cut like a solid, the canopy only gives a silhouette.
+    pub trunk: bool,
 }
 
 /// A line of the scene in section space.
@@ -50,35 +52,55 @@ pub struct Region {
     pub depth: f64,
 }
 
-/// Cuts a triangle by `w >= 0`. The new vertices are computed from the end points in a fixed
-/// order, so that triangles that share an edge get the same point.
-fn clip_near(t: [DVec3; 3]) -> Vec<[DVec3; 3]> {
-    let inside = |p: DVec3| p.z >= 0.0;
-    if t.iter().all(|p| inside(*p)) {
-        return vec![t];
-    }
-    if t.iter().all(|p| !inside(*p)) {
-        return Vec::new();
-    }
-    let cross = |a: DVec3, b: DVec3| -> DVec3 {
-        let (a, b) = if (a.x, a.y, a.z) <= (b.x, b.y, b.z) {
-            (a, b)
-        } else {
-            (b, a)
-        };
-        let f = a.z / (a.z - b.z);
-        let mut p = a.lerp(b, f);
-        p.z = 0.0;
-        p
-    };
-    let mut poly: Vec<DVec3> = Vec::with_capacity(4);
-    for k in 0..3 {
-        let (a, b) = (t[k], t[(k + 1) % 3]);
-        if inside(a) {
-            poly.push(a);
+/// Cuts a triangle to the slab `0 <= w <= depth`. The new vertices are computed from the end
+/// points in a fixed order, so that triangles that share an edge get the same point. The pieces
+/// of the cut on the two planes go to `clips` (in u, v): they are not edges of the model.
+fn clip_slab(t: [DVec3; 3], depth: f64, clips: &mut Vec<[DVec2; 2]>) -> Vec<[DVec3; 3]> {
+    let mut poly: Vec<DVec3> = t.to_vec();
+    for (bound, keep_above) in [(0.0, true), (depth, false)] {
+        if !bound.is_finite() {
+            continue;
         }
-        if inside(a) != inside(b) {
-            poly.push(cross(a, b));
+        let inside = |p: DVec3| {
+            if keep_above {
+                p.z >= bound
+            } else {
+                p.z <= bound
+            }
+        };
+        if poly.iter().all(|p| inside(*p)) {
+            continue;
+        }
+        let cross = |a: DVec3, b: DVec3| -> DVec3 {
+            let (a, b) = if (a.x, a.y, a.z) <= (b.x, b.y, b.z) {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            let f = (a.z - bound) / (a.z - b.z);
+            let mut p = a.lerp(b, f);
+            p.z = bound;
+            p
+        };
+        let mut next: Vec<DVec3> = Vec::with_capacity(poly.len() + 1);
+        let mut on_plane: Vec<DVec3> = Vec::with_capacity(2);
+        for k in 0..poly.len() {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            if inside(a) {
+                next.push(a);
+            }
+            if inside(a) != inside(b) {
+                let c = cross(a, b);
+                next.push(c);
+                on_plane.push(c);
+            }
+        }
+        if let [p, q] = on_plane[..] {
+            clips.push([DVec2::new(p.x, p.y), DVec2::new(q.x, q.y)]);
+        }
+        poly = next;
+        if poly.len() < 3 {
+            return Vec::new();
         }
     }
     (1..poly.len().saturating_sub(1))
@@ -153,6 +175,68 @@ fn inside_ring(p: DVec2, ring: &[DVec2]) -> bool {
     c
 }
 
+/// The clip segments on a grid, to find the ones near a point without testing all of them.
+struct ClipGrid {
+    lo: DVec2,
+    cell: f64,
+    n: usize,
+    cells: Vec<Vec<u32>>,
+    /// Segments that span many cells; every query tests them.
+    long: Vec<u32>,
+}
+
+impl ClipGrid {
+    fn new(clips: &[[DVec2; 2]], reach: f64, bounds: (DVec2, DVec2)) -> ClipGrid {
+        let (lo, hi) = bounds;
+        let size = (hi - lo).max_element().max(1.0);
+        let n = 256usize;
+        let cell = (size / n as f64).max(reach * 2.0);
+        let mut g = ClipGrid {
+            lo,
+            cell,
+            n,
+            cells: vec![Vec::new(); n * n],
+            long: Vec::new(),
+        };
+        for (i, c) in clips.iter().enumerate() {
+            let (a, b) = (
+                g.cell_of(c[0].min(c[1]) - DVec2::splat(reach)),
+                g.cell_of(c[0].max(c[1]) + DVec2::splat(reach)),
+            );
+            if (b.0 - a.0 + 1) * (b.1 - a.1 + 1) > 64 {
+                g.long.push(i as u32);
+                continue;
+            }
+            for y in a.1..=b.1 {
+                for x in a.0..=b.0 {
+                    g.cells[y * n + x].push(i as u32);
+                }
+            }
+        }
+        g
+    }
+
+    fn cell_of(&self, p: DVec2) -> (usize, usize) {
+        let c = ((p - self.lo) / self.cell).floor();
+        (
+            c.x.clamp(0.0, self.n as f64 - 1.0) as usize,
+            c.y.clamp(0.0, self.n as f64 - 1.0) as usize,
+        )
+    }
+
+    /// True if `p` is within `reach` of a clip segment.
+    fn near(&self, p: DVec2, clips: &[[DVec2; 2]], reach: f64) -> bool {
+        let (x, y) = self.cell_of(p);
+        self.cells[y * self.n + x]
+            .iter()
+            .chain(&self.long)
+            .any(|i| {
+                let c = clips[*i as usize];
+                distance_to_segment(p, c[0], c[1]) <= reach
+            })
+    }
+}
+
 /// Distance from `p` to the segment `a`-`b`.
 fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     let ab = b - a;
@@ -167,13 +251,15 @@ fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
 
 /// The visible lines beyond the plane, from the hidden-line pass of the renderer. `covers` are the
 /// cut faces that hide what is behind them. `tol` is the distance in mm below which lines count as
-/// lying on the cut outline.
+/// lying on the cut outline. `cut_is_drawn` is true when the caller draws the cut (a section); the
+/// lines on the plane and on the far clip are then left out. In an elevation nothing else draws them.
 pub fn edges(
     tris: &[Tri],
     segs: &[Seg],
     region: &Region,
     covers: &[&CutFace],
     tol: f64,
+    cut_is_drawn: bool,
 ) -> Vec<Edge> {
     // Triangles at or behind the plane, and not wholly beyond the far clip. Section space is
     // (u, v, w); the scene is (u, w, v), which keeps the winding.
@@ -201,12 +287,23 @@ pub fn edges(
             hi = hi.max(DVec2::new(v.x, v.y));
         }
     };
+    // Where the slab cuts the triangles: not edges of the model, so lines on them are left out.
+    let mut clips: Vec<[DVec2; 2]> = Vec::new();
     for t in tris {
-        let min_w = t.p.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
-        if min_w > region.depth {
+        // Triangles outside the length, or outside the slab, cannot show or hide anything.
+        let (mut lo_u, mut hi_u) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut lo_w, mut hi_w) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in &t.p {
+            lo_u = lo_u.min(p.x);
+            hi_u = hi_u.max(p.x);
+            lo_w = lo_w.min(p.z);
+            hi_w = hi_w.max(p.z);
+        }
+        if hi_u < 0.0 || lo_u > region.len || hi_w < 0.0 || lo_w > region.depth {
             continue;
         }
-        let pieces = clip_near(t.p);
+        let min_w = lo_w;
+        let pieces = clip_slab(t.p, region.depth, &mut clips);
         if pieces.is_empty() {
             continue;
         }
@@ -291,20 +388,11 @@ pub fn edges(
             tv - (f64::from(p[1]) / px - 0.5) * 2.0 * half,
         )
     };
-    // The outline of the cut: lines on it are the outline already.
-    let outline: Vec<(DVec2, DVec2)> = covers
-        .iter()
-        .flat_map(|f| f.rings.iter())
-        .flat_map(|r| (0..r.len()).map(move |i| (r[i], r[(i + 1) % r.len()])))
-        .collect();
     let near = tol.clamp(0.2, 1.0);
-    let on_outline = |a: DVec2, b: DVec2| {
+    let grid = ClipGrid::new(&clips, near, (lo, hi));
+    let on_clip = |a: DVec2, b: DVec2| {
         let m = (a + b) / 2.0;
-        [a, m, b].iter().all(|q| {
-            outline
-                .iter()
-                .any(|(c, d)| distance_to_segment(*q, *c, *d) <= near)
-        })
+        [a, m, b].iter().all(|q| grid.near(*q, &clips, near))
     };
     let mut out = Vec::new();
     for s in lines.visible() {
@@ -331,7 +419,7 @@ pub fn edges(
             continue;
         }
         (a, b) = (a + d * t0, a + d * t1);
-        if a.distance(b) < 1e-3 || on_outline(a, b) {
+        if a.distance(b) < 1e-3 || (cut_is_drawn && on_clip(a, b)) {
             continue;
         }
         let Some(object) = s.object else {

@@ -21,7 +21,9 @@ pub struct ObjFiles {
     pub textures: Vec<(String, Vec<u8>)>,
 }
 
-pub(crate) fn clean(name: &str) -> String {
+/// A name for the OBJ and MTL text: spaces and control characters become underscores. The file
+/// name of the MTL must be cleaned the same way, because the OBJ refers to it by this name.
+pub fn clean(name: &str) -> String {
     let s: String = name
         .chars()
         .map(|c| {
@@ -63,6 +65,16 @@ pub fn write_obj(
 ) -> Result<(ObjFiles, ExportStats), X3dError> {
     let mut obj = String::new();
     let mut stats = ExportStats::default();
+    // Material names that clean to the same text get an index, so that no material replaces another.
+    let mut mat_names: Vec<String> = Vec::with_capacity(model.materials.len());
+    for (i, m) in model.materials.iter().enumerate() {
+        let c = clean(&m.name);
+        mat_names.push(if mat_names.contains(&c) {
+            format!("{c}_{i}")
+        } else {
+            c
+        });
+    }
     let decimals = if opts.units.factor() < 1.0 { 6 } else { 3 };
     let w = |e: std::fmt::Error| X3dError::Write(e.to_string());
     writeln!(obj, "# Cadektor x3d {}", env!("CARGO_PKG_VERSION")).map_err(w)?;
@@ -90,8 +102,7 @@ pub fn write_obj(
     for part in &model.parts {
         writeln!(obj, "o {}", clean(&part.name)).map_err(w)?;
         for prim in &part.prims {
-            let m = &model.materials[prim.material];
-            writeln!(obj, "usemtl {}", clean(&m.name)).map_err(w)?;
+            writeln!(obj, "usemtl {}", mat_names[prim.material]).map_err(w)?;
             for p in &prim.positions {
                 writeln!(
                     obj,
@@ -146,9 +157,9 @@ pub fn write_obj(
     let mut mtl = String::new();
     let mut textures: Vec<(String, Vec<u8>)> = Vec::new();
     writeln!(mtl, "# Cadektor x3d {}", env!("CARGO_PKG_VERSION")).map_err(w)?;
-    for m in &model.materials {
+    for (mi, m) in model.materials.iter().enumerate() {
         let c = m.srgb();
-        writeln!(mtl, "newmtl {}", clean(&m.name)).map_err(w)?;
+        writeln!(mtl, "newmtl {}", mat_names[mi]).map_err(w)?;
         writeln!(mtl, "Ka 0.0 0.0 0.0").map_err(w)?;
         writeln!(mtl, "Kd {:.4} {:.4} {:.4}", c[0], c[1], c[2]).map_err(w)?;
         writeln!(mtl, "Ks 0.04 0.04 0.04").map_err(w)?;

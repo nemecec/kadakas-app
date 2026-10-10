@@ -36,6 +36,8 @@ pub struct SheetCache {
     used: std::collections::VecDeque<LayerId>,
     /// Number of pages built so far. Tests use it to see that the cache works.
     pub builds: u64,
+    /// The section drawings of the pages. Share them with the API so that a section is computed once.
+    pub sections: cadektor_x3d::section::SharedSections,
 }
 
 impl SheetCache {
@@ -68,7 +70,12 @@ impl SheetCache {
             self.used.push_back(layer);
             return Ok(p.clone());
         }
-        let page = Arc::new(compose_page_on(doc, layer, ground)?);
+        let page = Arc::new(compose_page_shared(
+            doc,
+            layer,
+            ground,
+            Some((self.sections.clone(), revision)),
+        )?);
         self.builds += 1;
         // Pages hold images, so the cache keeps a few of them only.
         while self.pages.len() >= MAX_CACHED_PAGES {
@@ -95,6 +102,16 @@ pub fn compose_page_on(
     layer: LayerId,
     ground: &dyn TerrainSource,
 ) -> Result<Page, PrintError> {
+    compose_page_shared(doc, layer, ground, None)
+}
+
+/// Like `compose_page_on`, with a shared cache of section drawings and the revision of the document.
+pub fn compose_page_shared(
+    doc: &Document,
+    layer: LayerId,
+    ground: &dyn TerrainSource,
+    sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
+) -> Result<Page, PrintError> {
     let l = doc.layer(layer).ok_or(PrintError::NoSheet(layer))?;
     if l.kind != LayerKind::Sheet {
         return Err(PrintError::NoSheet(layer));
@@ -102,7 +119,10 @@ pub fn compose_page_on(
     let sheet = doc.sheet(layer).ok_or(PrintError::NoSheet(layer))?;
     let size = sheet.size_mm();
     let counts = schedule::tag_counts(doc);
-    let tables = Tables::build(doc, ground);
+    let mut tables = Tables::build(doc, ground);
+    if let Some((store, revision)) = sections {
+        tables = tables.with_sections(store, revision);
+    }
     let mut prims = Vec::new();
     let mut budget = MAX_RASTER_PIXELS;
     let mut rasters = 0;

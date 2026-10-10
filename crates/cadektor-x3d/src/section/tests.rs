@@ -122,7 +122,12 @@ fn a_flat_surface_gives_a_profile_line() {
 fn plants_are_silhouettes_and_do_not_hide_with_a_hatch() {
     let doc = document(vec![plant(2000.0, 500.0, "Acer")]);
     let d = run(&doc, &spec((0.0, 500.0), (4000.0, 500.0)));
-    assert!(d.faces.is_empty());
+    // The trunk is a solid: it gives a closed cut face, with no loose profile lines. The canopy
+    // only gives a silhouette.
+    assert_eq!(d.faces.len(), 1);
+    let (tlo, thi) = bounds_of(&d.faces[0]);
+    assert!(thi.x - tlo.x < 700.0 && thi.y < 6000.0 * 0.7, "{tlo} {thi}");
+    assert!(d.profiles.is_empty(), "{:?}", d.profiles);
     assert_eq!(d.silhouettes.len(), 1);
     let (lo, hi) = bounds_of(&d.silhouettes[0]);
     // The canopy is 3000 wide at its widest and the plant is 6000 tall.
@@ -275,6 +280,70 @@ fn lines_without_surfaces_show_beyond() {
     let d = run(&doc, &spec((0.0, 0.0), (2000.0, 0.0)));
     assert_eq!(d.edges.len(), 1);
     assert!((d.edges[0].depth - 2000.0).abs() < 1e-6);
+}
+
+/// A hip-roofed block 8000 by 6000 mm, eaves at 3000 mm, whose roof peaks 4000 mm behind the plane.
+fn hip_house() -> Document {
+    use cadektor_core::massing::{Massing, RoofStyle};
+    let ring = [
+        (0.0, 1000.0),
+        (8000.0, 1000.0),
+        (8000.0, 7000.0),
+        (0.0, 7000.0),
+    ];
+    let mut m = Massing::new(
+        ring.iter()
+            .map(|(x, y)| cadektor_core::model::Vertex::corner(DVec2::new(*x, *y)))
+            .collect(),
+        3000.0,
+    );
+    m.roof = RoofStyle::Hip;
+    m.pitch_deg = 30.0;
+    m.base = Some(0.0);
+    document(vec![Shape::Massing(Box::new(m))])
+}
+
+#[test]
+fn the_far_clip_cuts_triangles_at_the_limit() {
+    let doc = hip_house();
+    let top = |d: &SectionDrawing| {
+        d.edges
+            .iter()
+            .map(|e| e.a.y.max(e.b.y))
+            .fold(f64::MIN, f64::max)
+    };
+    let mut s = spec((-1000.0, 0.0), (9000.0, 0.0));
+    s.mode = Mode::Elevation;
+    let all = run(&doc, &s);
+    assert!(top(&all) > 4500.0, "the peak: {}", top(&all));
+    // The block starts 1000 mm behind the line. At 2000 mm only the first 1000 mm of the roof
+    // slope shows: it is lower than the eaves plus the slope, and no line rises above it.
+    s.depth = Some(2000.0);
+    let near = run(&doc, &s);
+    let slope = 3000.0 + 1000.0 * 30f64.to_radians().tan();
+    assert!(!near.edges.is_empty());
+    assert!(top(&near) <= slope + 1.0, "{} > {slope}", top(&near));
+    assert!(near.edges.iter().all(|e| e.depth <= 2000.0 + 1e-6));
+}
+
+#[test]
+fn triangles_outside_the_length_are_not_drawn_and_the_cut_stays_closed() {
+    let doc = document(vec![
+        slab(0.0, 0.0, 9000.0, 1000.0, 300.0, 0.0),
+        slab(20_000.0, 2000.0, 22_000.0, 3000.0, 300.0, 0.0),
+    ]);
+    let ids: Vec<_> = doc.objects.keys().copied().collect();
+    // The line is shorter than the first slab: its ring is clipped, not left open.
+    let d = run(&doc, &spec((1000.0, 500.0), (3000.0, 500.0)));
+    assert_eq!(d.faces.len(), 1);
+    assert!(d.profiles.is_empty());
+    assert!((d.cut_area() - 2000.0 * 300.0).abs() < 1.0);
+    assert!(d.edges.iter().all(|e| e.object != ids[1]));
+    assert!(
+        d.edges
+            .iter()
+            .all(|e| e.a.x >= -1e-6 && e.b.x <= 2000.0 + 1e-6)
+    );
 }
 
 #[test]

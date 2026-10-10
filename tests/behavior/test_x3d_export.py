@@ -221,3 +221,54 @@ def test_massing_is_cut_by_a_section_viewport(cad):
     face = got["cut_faces"][0]
     assert face["object"] == house
     assert face["area_m2"] == approx(8.0 * 6.0)
+
+
+FORMS = ["tree", "columnar", "conical", "spreading", "shrub_mound", "weeping", "palm", "columnar_conifer", "multi_stem", "hedge"]
+
+
+def test_every_plant_form_and_level_passes_the_khronos_validator(cad, tmp_path):
+    """Normals are unit length and no triangle is flat: the validator has no errors or warnings."""
+    if shutil.which("node") is None or shutil.which("npm") is None:
+        pytest.skip("node and npm are not installed")
+    tool = tmp_path / "validator"
+    tool.mkdir()
+    shutil.copy(Path(__file__).with_name("gltf_validate.js"), tool / "validate.js")
+    (tool / "package.json").write_text("{}")
+    install = subprocess.run(["npm", "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, timeout=300)
+    if install.returncode != 0:
+        pytest.skip("gltf-validator could not be installed")
+    for i, form in enumerate(FORMS):
+        style = cad.result("plant_style.create", {"name": f"S {form}", "botanical_name": f"Form {form}", "id_code": f"F{i}",
+                                                   "category": "tree", "spread": 3000, "height": 6000, "form": form})["id"]
+        cad.execute({"op": "add_plants", "style": style, "positions": [[i * 4000, 0], [i * 4000, 4000]]})
+    files = []
+    for detail in ["fine", "coarse", "billboard"]:
+        path = tmp_path / f"{detail}.glb"
+        cad.result("export.file", {"path": str(path), "options": {"plant_detail": detail}})
+        files.append(str(path))
+    run = subprocess.run(["node", "validate.js", *files], cwd=tool, capture_output=True, text=True, timeout=300)
+    assert run.returncode == 0, run.stderr
+    for line in run.stdout.splitlines():
+        r = json.loads(line)
+        assert r["errors"] == 0 and r["warnings"] == 0, r
+    for path in files:
+        facts = read_3d(path)
+        assert facts["trimesh"]["triangles"] > 0
+
+
+def test_a_park_of_one_style_instances_its_meshes(cad, tmp_path):
+    style = cad.result("plant_style.create", {"name": "Clump", "botanical_name": "Amelanchier", "id_code": "AM", "category": "tree",
+                                              "spread": 3000, "height": 6000, "form": "multi_stem"})["id"]
+    cad.execute({"op": "add_plants", "style": style, "positions": [[(i % 20) * 3500, (i // 20) * 3500] for i in range(400)]})
+    out = tmp_path / "park.glb"
+    r = cad.result("export.file", {"path": str(out)})
+    assert r["report"]["meshes"] <= 8
+    assert out.stat().st_size < 2_000_000
+
+
+def test_obj_with_spaces_in_the_name_refers_to_its_mtl(cad, tmp_path):
+    cad.execute({"op": "add_object", "shape": {"kind": "hardscape", "boundary": SQUARE, "material": "Stone", "thickness": 100}})
+    out = tmp_path / "my model.obj"
+    cad.result("export.file", {"path": str(out)})
+    mtllib = [l.split(" ", 1)[1] for l in out.read_text().splitlines() if l.startswith("mtllib ")][0]
+    assert " " not in mtllib and (tmp_path / mtllib).exists()

@@ -10,6 +10,8 @@ use cadektor_core::pattern;
 use cadektor_core::section::{DEFAULT_BEYOND_WEIGHT, DEFAULT_CUT_WEIGHT, SectionView};
 use cadektor_core::sheets::Viewport;
 use cadektor_x3d::section::{self, CutFace, SectionDrawing, SectionSpec};
+use std::sync::Arc;
+
 use glam::{DVec2, DVec3};
 
 use crate::compose::viewport_document;
@@ -118,6 +120,22 @@ fn face_prims(
     }
 }
 
+/// The key of the drawing of a section line seen through a viewport: the line and the layers and
+/// visibility that the viewport shows. Callers that share a `SectionCache` use the same key.
+pub fn drawing_key(vp: &Viewport, line: ObjectId) -> u64 {
+    // FNV-1a over what decides the objects of the drawing. The frame and the scale are left
+    // out: the drawing does not depend on them.
+    let text = format!(
+        "{:?}{:?}{:?}",
+        vp.layers, vp.layer_overrides, vp.class_overrides
+    );
+    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ line.0.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    for b in text.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// The primitives of a section viewport, inside the clip that the caller has set.
 pub fn section_prims(
     doc: &Document,
@@ -126,8 +144,31 @@ pub fn section_prims(
     tables: &Tables,
     out: &mut Vec<Prim>,
 ) {
-    let Some(d) = drawing(doc, vp, sv, tables.site(), SITE_REVISION) else {
-        return;
+    let d = match tables.sections() {
+        Some((store, revision)) => {
+            let key = drawing_key(vp, sv.line);
+            let mut cache = store.lock().unwrap_or_else(|e| e.into_inner());
+            let mut missing = false;
+            let d = cache.get(revision, key, || {
+                match drawing(doc, vp, sv, tables.site(), SITE_REVISION) {
+                    Some(d) => d,
+                    None => {
+                        missing = true;
+                        SectionDrawing::default()
+                    }
+                }
+            });
+            if missing {
+                return;
+            }
+            d
+        }
+        None => {
+            let Some(d) = drawing(doc, vp, sv, tables.site(), SITE_REVISION) else {
+                return;
+            };
+            Arc::new(d)
+        }
     };
     prims_of(doc, vp, sv, &d, out);
 }

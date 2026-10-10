@@ -47,6 +47,22 @@ impl Units {
     }
 }
 
+/// How detailed the plants of an export are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlantDetail {
+    /// Full meshes. Plants of one style share a few meshes in the file (instancing), so a large
+    /// park stays small. This is the default for exports.
+    #[default]
+    Fine,
+    /// Coarser meshes.
+    Coarse,
+    /// Crossed quads with the outline of the plant.
+    Billboard,
+    /// As the 3D view: the detail follows the number of plants (billboards above 20 000).
+    Auto,
+}
+
 /// What an export does. The defaults follow the glTF rules: metres, Y up.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -68,6 +84,9 @@ pub struct ExportOptions {
     pub objects: Option<Vec<ObjectId>>,
     /// Draw 3D lines (polylines, outlines of lines) as line primitives.
     pub lines: bool,
+    /// The detail of plants. Exports use full meshes by default, because the 3D view turns plants
+    /// into billboards when there are very many (`auto`).
+    pub plant_detail: PlantDetail,
 }
 
 impl Default for ExportOptions {
@@ -82,6 +101,7 @@ impl Default for ExportOptions {
             data: true,
             objects: None,
             lines: true,
+            plant_detail: PlantDetail::Fine,
         }
     }
 }

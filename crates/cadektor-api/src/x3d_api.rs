@@ -14,10 +14,11 @@ use serde_json::{Map, Value, json};
 
 use cadektor_core::command::Command;
 use cadektor_core::model::{Attributes, ClassId, LayerId, LayerKind, ObjectId, Shape};
+use cadektor_core::plants::form3d::Detail;
 use cadektor_core::section::{self as settings, SectionLine, SectionView};
 use cadektor_core::sheets::{Viewport, fit_scale};
 use cadektor_x3d::section::{SectionDrawing, SectionSpec};
-use cadektor_x3d::{DocumentMaterials, ExportOptions, X3dError};
+use cadektor_x3d::{DocumentMaterials, ExportOptions, PlantDetail, X3dError};
 
 use crate::sheets_api::{class_ref, layer_list, layer_ref, sheet_ref, viewport_json};
 use crate::{RpcError, Session};
@@ -114,7 +115,8 @@ pub(crate) fn describe() -> Value {
                 "instance_tolerance": "mm, shapes that differ less than this count as equal. Default 1",
                 "data": "true (default): the data of each object goes into extras.data",
                 "objects": "list of object IDs to export. Default all objects that have 3D geometry",
-                "lines": "true (default): 3D lines and polylines become line primitives"
+                "lines": "true (default): 3D lines and polylines become line primitives",
+                "plant_detail": "fine (default) | coarse | billboard | auto. Fine plants of one style share a few meshes in the file. auto follows the 3D view, which draws billboards above 20 000 plants"
             },
             "nodes": "Each node has a name and extras {id, kind, name, layer, layer_id, class, class_id, data}. Materials of the Resource Manager (the slots of parts, objects, styles and classes) are written as PBR metallic roughness with base color textures: embedded images in GLB and GLTF, and PNG files next to the OBJ and MTL (they follow the path policy and need overwrite to be replaced). Triangles without a material keep their color.",
             "examples": [
@@ -329,53 +331,57 @@ impl Session {
         Ok((vp, line, spec))
     }
 
-    /// The drawing of a section for a viewport (or for all design layers without one).
-    fn compute_section(&self, vp: Option<&Viewport>, spec: &SectionSpec) -> SectionDrawing {
+    /// A viewport that shows all design layers, for sections without a viewport.
+    fn all_layers_viewport(&self) -> Viewport {
         let doc = self.editor.doc();
-        let all;
-        let vp = match vp {
-            Some(v) => v,
-            None => {
-                let mut v = Viewport::new(
-                    DVec2::ZERO,
-                    DVec2::ONE,
-                    DVec2::ZERO,
-                    100.0,
-                    doc.layers
-                        .iter()
-                        .filter(|l| l.kind == LayerKind::Design)
-                        .map(|l| l.id)
-                        .collect(),
-                );
-                v.snapshot_visibility(doc);
-                all = v;
-                &all
-            }
-        };
-        let shown = cadektor_print::compose::viewport_document(doc, vp);
-        let mid = (spec.a + spec.b) / 2.0;
-        let ext = cadektor_site::draw::scene_ext(self.site_cache(), self.editor.revision());
-        let scene = cadektor_core::mesh::build_with(
-            &shown,
-            glam::DVec3::new(mid.x, mid.y, 0.0),
-            Some(&ext),
+        let mut v = Viewport::new(
+            DVec2::ZERO,
+            DVec2::ONE,
+            DVec2::ZERO,
+            100.0,
+            doc.layers
+                .iter()
+                .filter(|l| l.kind == LayerKind::Design)
+                .map(|l| l.id)
+                .collect(),
         );
-        cadektor_x3d::section::compute(&shown, &scene, spec)
+        v.snapshot_visibility(doc);
+        v
     }
 
-    /// The drawing of a section object, cached by document revision. The key is the ID of the
-    /// section viewport, or of the section line when no viewport is asked for.
+    /// The drawing of a section for a viewport (or for all design layers without one), cached by
+    /// document revision in the cache that the sheets use too. So a section is computed once for
+    /// `section_viewport.create`, `get`, the sheet and the PDF.
     fn section_drawing(
         &mut self,
-        key: ObjectId,
+        line: ObjectId,
         vp: Option<&Viewport>,
         spec: &SectionSpec,
     ) -> Arc<SectionDrawing> {
         let revision = self.editor.revision();
-        let mut cache = std::mem::take(&mut self.section_cache);
-        let d = cache.get(revision, key.0, || self.compute_section(vp, spec));
-        self.section_cache = cache;
-        d
+        let all;
+        let vp = match vp {
+            Some(v) => v,
+            None => {
+                all = self.all_layers_viewport();
+                &all
+            }
+        };
+        let key = cadektor_print::section::drawing_key(vp, line);
+        let store = self.section_cache.clone();
+        let mut cache = store.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get(revision, key, || {
+            let doc = self.editor.doc();
+            let shown = cadektor_print::compose::viewport_document(doc, vp);
+            let mid = (spec.a + spec.b) / 2.0;
+            let ext = cadektor_site::draw::scene_ext(self.site_cache(), revision);
+            let scene = cadektor_core::mesh::build_with(
+                &shown,
+                glam::DVec3::new(mid.x, mid.y, 0.0),
+                Some(&ext),
+            );
+            cadektor_x3d::section::compute(&shown, &scene, spec)
+        })
     }
 
     fn section_viewport_create(&mut self, mut m: Map<String, Value>) -> Res {
@@ -438,7 +444,7 @@ impl Session {
         if let Some(p) = vp.problem() {
             return Err(bad(p));
         }
-        let d = self.compute_section(Some(&vp), &spec);
+        let d = self.section_drawing(line, Some(&vp), &spec);
         let fixed = match m.get("scale") {
             None | Some(Value::Null) => None,
             Some(Value::String(t)) if t.eq_ignore_ascii_case("fit") => None,
@@ -521,7 +527,7 @@ impl Session {
                 .object(sv.line)
                 .and_then(SectionSpec::from_line)
                 .ok_or_else(|| app("the section line is gone"))?;
-            let d = self.compute_section(Some(&next), &spec);
+            let d = self.section_drawing(sv.line, Some(&next), &spec);
             fit_viewport(&mut next, &d, true);
         }
         vp = next;
@@ -542,7 +548,7 @@ impl Session {
         let geometry = m.get("geometry").and_then(Value::as_bool).unwrap_or(false);
         let (vp, line, spec) = self.section_target(id)?;
         // The cache key is the object that was asked for, so a viewport and its line can differ.
-        let d = self.section_drawing(id, vp.as_ref(), &spec);
+        let d = self.section_drawing(line, vp.as_ref(), &spec);
         let pts = |v: &[DVec2]| -> Value { if geometry { json!(v) } else { json!(v.len()) } };
         let faces: Vec<Value> = d
             .faces
@@ -604,7 +610,16 @@ impl Session {
             v => serde_json::from_value(v.clone()).map_err(|e| bad(format!("options: {e}")))?,
         };
         opts.validate().map_err(|e| bad(format!("options: {e}")))?;
-        let mtl = path.with_extension("mtl");
+        // The OBJ refers to the MTL by its cleaned name, so the file gets that name.
+        let mtl = {
+            let m = path.with_extension("mtl");
+            let name = m
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(cadektor_x3d::obj::clean)
+                .unwrap_or_else(|| "model.mtl".into());
+            m.with_file_name(name)
+        };
         let paths: Vec<(PathBuf, &str)> = if kind == Kind::Obj {
             vec![(path.clone(), "obj"), (mtl.clone(), "mtl")]
         } else {
@@ -625,7 +640,12 @@ impl Session {
             }
             checked_paths.push(p);
         }
-        let scene = self.scene();
+        let scene = match opts.plant_detail {
+            PlantDetail::Auto => self.scene(),
+            PlantDetail::Fine => self.scene_with_detail(Detail::Fine),
+            PlantDetail::Coarse => self.scene_with_detail(Detail::Coarse),
+            PlantDetail::Billboard => self.scene_with_detail(Detail::Billboard),
+        };
         let doc = self.editor.doc();
         let materials = DocumentMaterials::new(doc, &scene);
         let rpc = |e: X3dError| match e {

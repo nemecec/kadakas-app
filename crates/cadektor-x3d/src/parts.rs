@@ -443,6 +443,7 @@ pub fn build(
     if parts.is_empty() {
         return Err(X3dError::Empty);
     }
+    share_equal_shapes(&mut parts, opts.instance_tolerance * opts.units.factor());
     Ok(Model {
         parts,
         materials: b.materials,
@@ -472,7 +473,7 @@ fn finish_part(
     opts: &ExportOptions,
 ) -> Part {
     let signature = if opts.instancing && opts.grouping == Grouping::Object {
-        signature(&prims, opts.instance_tolerance * opts.units.factor())
+        signature(&prims)
     } else {
         0
     };
@@ -486,26 +487,16 @@ fn finish_part(
     }
 }
 
-/// A hash of the shape of a part: positions to the tolerance, normals, indices and colors.
-/// `tolerance` is in file units.
-fn signature(prims: &[(Prim, [u8; 4])], tolerance: f64) -> u64 {
-    let q = 1.0 / tolerance.max(1e-9);
+/// A hash of the structure of a part: colors, materials, indices and texture coordinates. The
+/// positions are compared separately, to the tolerance (`share_equal_shapes`), because a hash of
+/// rounded positions splits equal shapes whose values fall on both sides of a rounding step.
+fn signature(prims: &[(Prim, [u8; 4])]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for (p, color) in prims {
         h = mix(h, p.lines as u64);
         h = mix(h, u32::from_le_bytes(*color) as u64);
         h = mix(h, p.material as u64);
         h = mix(h, p.positions.len() as u64);
-        for v in &p.positions {
-            for c in v {
-                h = mix(h, (*c as f64 * q).round() as i64 as u64);
-            }
-        }
-        for n in &p.normals {
-            for c in n {
-                h = mix(h, (*c * 100.0).round() as i32 as u32 as u64);
-            }
-        }
         for i in &p.indices {
             h = mix(h, *i as u64);
         }
@@ -518,6 +509,47 @@ fn signature(prims: &[(Prim, [u8; 4])], tolerance: f64) -> u64 {
     }
     // Zero means "no instancing", so a real hash never is zero.
     h | 1
+}
+
+/// True if two parts have the same shape: positions within `tolerance` (file units) and normals
+/// within a hundredth.
+fn same_shape(a: &Part, b: &Part, tolerance: f64) -> bool {
+    a.prims.len() == b.prims.len()
+        && a.prims.iter().zip(&b.prims).all(|(p, q)| {
+            p.positions.len() == q.positions.len()
+                && p.positions.iter().zip(&q.positions).all(|(u, v)| {
+                    (0..3).all(|k| (f64::from(u[k]) - f64::from(v[k])).abs() <= tolerance)
+                })
+                && p.normals
+                    .iter()
+                    .zip(&q.normals)
+                    .all(|(u, v)| (0..3).all(|k| (u[k] - v[k]).abs() <= 0.02))
+        })
+}
+
+/// Gives parts with the same shape the same signature, so that the writers share one mesh. Parts
+/// with equal structure but different positions get different signatures.
+fn share_equal_shapes(parts: &mut [Part], tolerance: f64) {
+    let mut reps: HashMap<u64, Vec<usize>> = HashMap::new();
+    for i in 0..parts.len() {
+        let sig = parts[i].signature;
+        if sig == 0 {
+            continue;
+        }
+        let list = reps.entry(sig).or_default();
+        let found = list
+            .iter()
+            .copied()
+            .find(|j| same_shape(&parts[*j], &parts[i], tolerance));
+        match found {
+            Some(j) => parts[i].signature = parts[j].signature,
+            None => {
+                // The first of a structure keeps the hash; the next different shapes are numbered.
+                parts[i].signature = mix(sig, list.len() as u64) | 1;
+                list.push(i);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
