@@ -1,11 +1,13 @@
 //! Side panels, menu and data bar. Every document change goes through
 //! `run_command`, which uses `Session::editor.execute`.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{DragValue, Ui};
 use glam::DVec2;
 use kadakas_api::Session;
 use kadakas_core::command::{Command, Outcome};
 use kadakas_core::model::{Attributes, Color, ObjectId, Shape, Vertex, VertexKind};
+use kadakas_l10n::tr;
 use kadakas_render::{Projection, RenderMode, StandardView, ViewSettings};
 
 use kadakas_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
@@ -95,7 +97,7 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
             Some(out)
         }
         Err(e) => {
-            *status = format!("Error: {e}");
+            *status = tr!("panels-error", e = e);
             None
         }
     }
@@ -124,114 +126,172 @@ pub fn menu_bar(
                     ui.close();
                 }
             };
-        ui.menu_button("File", |ui| {
-            item(ui, "New", true, New, &mut out);
+        ui.menu_button(tr!("panels-file"), |ui| {
+            item(ui, &tr!("panels-new"), true, New, &mut out);
             // In the browser, Open picks a file and Save downloads it.
-            item(ui, "Open...", true, Open, &mut out);
-            item(ui, "Save", true, Save, &mut out);
-            item(ui, "Save As...", true, SaveAs, &mut out);
-            item(ui, "Export SVG...", true, ExportSvg, &mut out);
+            item(ui, &tr!("panels-open"), true, Open, &mut out);
+            item(ui, &tr!("panels-save"), true, Save, &mut out);
+            item(ui, &tr!("panels-save-as"), true, SaveAs, &mut out);
+            item(ui, &tr!("panels-export-svg"), true, ExportSvg, &mut out);
             #[cfg(not(target_arch = "wasm32"))]
             {
-                item(ui, "Export PDF...", true, ExportPdf, &mut out);
+                item(ui, &tr!("panels-export-pdf"), true, ExportPdf, &mut out);
                 ui.separator();
-                item(ui, "Import...", true, Import, &mut out);
-                item(ui, "Export...", true, Export, &mut out);
+                item(ui, &tr!("panels-import"), true, Import, &mut out);
+                item(ui, &tr!("panels-export"), true, Export, &mut out);
                 ui.separator();
-                item(ui, "Map Sources...", true, MapSources, &mut out);
-                item(ui, "Change CRS...", true, ChangeCrs, &mut out);
+                item(ui, &tr!("panels-map-sources"), true, MapSources, &mut out);
+                item(ui, &tr!("panels-change-crs"), true, ChangeCrs, &mut out);
                 ui.separator();
-                item(ui, "Scripts...", true, Scripts, &mut out);
+                item(ui, &tr!("panels-scripts"), true, Scripts, &mut out);
             }
             ui.separator();
-            item(ui, "Preferences...", true, Preferences, &mut out);
+            item(ui, &tr!("panels-preferences"), true, Preferences, &mut out);
         });
-        ui.menu_button("Edit", |ui| {
-            item(ui, "Undo", can_undo, Undo, &mut out);
-            item(ui, "Redo", can_redo, Redo, &mut out);
+        ui.menu_button(tr!("panels-edit"), |ui| {
+            item(ui, &tr!("panels-undo"), can_undo, Undo, &mut out);
+            item(ui, &tr!("panels-redo"), can_redo, Redo, &mut out);
             ui.separator();
-            item(ui, "Delete", true, Delete, &mut out);
-            item(ui, "Select All", true, SelectAll, &mut out);
+            item(ui, &tr!("panels-delete"), true, Delete, &mut out);
+            item(ui, &tr!("panels-select-all"), true, SelectAll, &mut out);
             ui.separator();
-            item(ui, "Quick Search...", true, QuickSearch, &mut out);
+            item(ui, &tr!("panels-quick-search"), true, QuickSearch, &mut out);
         });
         let sel = extras.has_selection;
-        ui.menu_button("Modify", |ui| {
-            item(ui, "Duplicate Array...", sel, DuplicateArray, &mut out);
-            ui.separator();
-            item(ui, "Rotate Left 90\u{b0}", sel, RotateLeft90, &mut out);
-            item(ui, "Rotate Right 90\u{b0}", sel, RotateRight90, &mut out);
-            item(ui, "Flip Horizontal", sel, FlipHorizontal, &mut out);
-            item(ui, "Flip Vertical", sel, FlipVertical, &mut out);
-            ui.separator();
-            item(ui, "Add Surface", sel, AddSurface, &mut out);
-            item(ui, "Subtract Surface", sel, SubtractSurface, &mut out);
-            item(ui, "Clip Surface", sel, ClipSurface, &mut out);
-            item(ui, "Intersect Surface", sel, IntersectSurface, &mut out);
-            item(ui, "Compose", sel, Compose, &mut out);
-        });
-        ui.menu_button("Site", |ui| {
+        ui.menu_button(tr!("panels-modify"), |ui| {
             item(
                 ui,
-                "Create Site Model from Selection",
+                &tr!("panels-duplicate-array"),
+                sel,
+                DuplicateArray,
+                &mut out,
+            );
+            ui.separator();
+            item(
+                ui,
+                &tr!("panels-rotate-left-90"),
+                sel,
+                RotateLeft90,
+                &mut out,
+            );
+            item(
+                ui,
+                &tr!("panels-rotate-right-90"),
+                sel,
+                RotateRight90,
+                &mut out,
+            );
+            item(
+                ui,
+                &tr!("panels-flip-horizontal"),
+                sel,
+                FlipHorizontal,
+                &mut out,
+            );
+            item(
+                ui,
+                &tr!("panels-flip-vertical"),
+                sel,
+                FlipVertical,
+                &mut out,
+            );
+            ui.separator();
+            item(ui, &tr!("panels-add-surface"), sel, AddSurface, &mut out);
+            item(
+                ui,
+                &tr!("panels-subtract-surface"),
+                sel,
+                SubtractSurface,
+                &mut out,
+            );
+            item(ui, &tr!("panels-clip-surface"), sel, ClipSurface, &mut out);
+            item(
+                ui,
+                &tr!("panels-intersect-surface"),
+                sel,
+                IntersectSurface,
+                &mut out,
+            );
+            item(ui, &tr!("panels-compose"), sel, Compose, &mut out);
+        });
+        ui.menu_button(tr!("panels-site"), |ui| {
+            item(
+                ui,
+                &tr!("panels-create-site-model-from-selection"),
                 can_site,
                 CreateSiteModel,
                 &mut out,
             );
             item(
                 ui,
-                "Update Site Model",
+                &tr!("panels-update-site-model"),
                 can_update_site,
                 UpdateSiteModel,
                 &mut out,
             );
         });
-        ui.menu_button("View", |ui| {
-            item(ui, "Zoom to Fit", true, ZoomFit, &mut out);
-            item(ui, "Previous View", extras.can_back, PreviousView, &mut out);
-            item(ui, "Next View", extras.can_forward, NextView, &mut out);
+        ui.menu_button(tr!("panels-view"), |ui| {
+            item(ui, &tr!("panels-zoom-to-fit"), true, ZoomFit, &mut out);
+            item(
+                ui,
+                &tr!("panels-previous-view"),
+                extras.can_back,
+                PreviousView,
+                &mut out,
+            );
+            item(
+                ui,
+                &tr!("panels-next-view"),
+                extras.can_forward,
+                NextView,
+                &mut out,
+            );
             ui.separator();
-            ui.checkbox(show_grid, "Show grid");
-            ui.menu_button("Snapping", |ui| {
+            ui.checkbox(show_grid, tr!("panels-show-grid"));
+            ui.menu_button(tr!("panels-snapping"), |ui| {
                 for (name, label, tip) in crate::snap_ui::CATEGORIES {
                     let mut on = extras.snap.set.get(name).unwrap_or(false);
-                    if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
+                    if ui
+                        .checkbox(&mut on, kadakas_l10n::translate(label, &[]))
+                        .on_hover_text(kadakas_l10n::translate(tip, &[]))
+                        .changed()
+                    {
                         extras.snap.set.set(name, on);
                     }
                 }
                 ui.separator();
-                ui.checkbox(extras.cues, "SmartCursor cues");
+                ui.checkbox(extras.cues, tr!("panels-smartcursor-cues"));
             });
-            ui.menu_button("Theme", |ui| {
+            ui.menu_button(tr!("panels-theme"), |ui| {
                 for t in crate::theme::ThemeChoice::ALL {
                     ui.selectable_value(extras.theme, t, t.label());
                 }
             });
-            ui.menu_button("Icon size", |ui| {
+            ui.menu_button(tr!("panels-icon-size"), |ui| {
                 for z in IconSize::ALL {
                     ui.selectable_value(extras.icon_size, z, z.label());
                 }
             });
         });
-        ui.menu_button("Window", |ui| {
+        ui.menu_button(tr!("panels-window"), |ui| {
             for tab in crate::layout::Tab::ALL {
-                if tab.closeable() && ui.button(format!("Show {}", tab.title())).clicked() {
+                if tab.closeable() && ui.button(tr!("panels-show", name = tab.title())).clicked() {
                     extras.requests.push(MenuRequest::ShowTab(tab));
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button("Save Layout As...").clicked() {
+            if ui.button(tr!("panels-save-layout-as")).clicked() {
                 extras.requests.push(MenuRequest::SaveLayoutAs);
                 ui.close();
             }
-            if ui.button("Reset Layout").clicked() {
+            if ui.button(tr!("panels-reset-layout")).clicked() {
                 extras.requests.push(MenuRequest::ResetLayout);
                 ui.close();
             }
             if !extras.layout_names.is_empty() {
                 ui.separator();
-                ui.label("Saved layouts");
+                ui.label(tr!("panels-saved-layouts"));
                 for name in extras.layout_names.clone() {
                     ui.horizontal(|ui| {
                         if ui.button(&name).clicked() {
@@ -240,7 +300,7 @@ pub fn menu_bar(
                         }
                         if ui
                             .small_button("\u{d7}")
-                            .on_hover_text("Delete this layout")
+                            .on_hover_text(tr!("panels-delete-this-layout"))
                             .clicked()
                         {
                             extras
@@ -251,8 +311,8 @@ pub fn menu_bar(
                 }
             }
         });
-        ui.menu_button("Help", |ui| {
-            if ui.button("About Kadakas...").clicked() {
+        ui.menu_button(tr!("panels-help"), |ui| {
+            if ui.button(tr!("panels-about-kadakas")).clicked() {
                 extras.requests.push(MenuRequest::About);
                 ui.close();
             }
@@ -272,12 +332,12 @@ fn view_hint(keys: &Keymap, view: StandardView) -> String {
 /// mode apply to the 3D views only; Top/Plan is the 2D drawing.
 pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: bool) {
     ui.horizontal(|ui| {
-        ui.label("View");
+        ui.label(tr!("panels-view"));
         egui::ComboBox::from_id_salt("standard_view")
-            .selected_text(v.view.label())
+            .selected_text(crate::enum_names::standard_view(v.view))
             .show_ui(ui, |ui| {
                 for s in StandardView::ALL {
-                    ui.selectable_value(&mut v.view, s, s.label())
+                    ui.selectable_value(&mut v.view, s, crate::enum_names::standard_view(s))
                         .on_hover_text(view_hint(keys, s));
                 }
             });
@@ -301,15 +361,23 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
         }
         ui.separator();
         ui.add_enabled_ui(!v.view.is_plan() && gpu_ready, |ui| {
-            ui.selectable_value(&mut v.projection, Projection::Orthographic, "Parallel");
-            ui.selectable_value(&mut v.projection, Projection::Perspective, "Perspective")
-                .on_hover_text(keys.hint(Action::ViewProjection));
+            ui.selectable_value(
+                &mut v.projection,
+                Projection::Orthographic,
+                tr!("panels-parallel"),
+            );
+            ui.selectable_value(
+                &mut v.projection,
+                Projection::Perspective,
+                tr!("panels-perspective"),
+            )
+            .on_hover_text(keys.hint(Action::ViewProjection));
             ui.separator();
             if crate::icons::select_button_for(
                 ui,
                 IconRole::Bar,
                 crate::icons::render_icon(RenderMode::Wireframe),
-                "Wireframe",
+                &tr!("panels-wireframe"),
                 v.mode == RenderMode::Wireframe,
             )
             .on_hover_text(keys.hint(Action::ViewWireframe))
@@ -321,7 +389,7 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
                 ui,
                 IconRole::Bar,
                 crate::icons::render_icon(RenderMode::Shaded),
-                "Shaded",
+                &tr!("panels-shaded"),
                 v.mode == RenderMode::Shaded,
             )
             .on_hover_text(keys.hint(Action::ViewShaded))
@@ -333,7 +401,7 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
                 ui,
                 IconRole::Bar,
                 crate::icons::render_icon(RenderMode::HiddenLine),
-                "Hidden Line",
+                &tr!("panels-hidden-line"),
                 v.mode == RenderMode::HiddenLine,
             )
             .on_hover_text(keys.hint(Action::ViewHiddenLine))
@@ -345,7 +413,7 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
                 ui,
                 IconRole::Bar,
                 crate::icons::render_icon(RenderMode::DashedHiddenLine),
-                "Dashed",
+                &tr!("panels-dashed"),
                 v.mode == RenderMode::DashedHiddenLine,
             )
             .on_hover_text(keys.hint(Action::ViewDashedHiddenLine))
@@ -402,8 +470,8 @@ pub fn tool_label(tool: Tool, keys: &Keymap) -> (String, String) {
         (tool.name().to_string(), tool.name().to_string())
     } else {
         (
-            format!("{}  [{key}]", tool.name()),
-            format!("{} ({key})", tool.name()),
+            tr!("panels-text", name = tool.name(), key = key),
+            tr!("panels-text-2", name = tool.name(), key = key),
         )
     }
 }
@@ -426,17 +494,17 @@ fn tool_button(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, tool: Tool) {
 /// The vertex mode buttons and the default arc radius, for the tools that draw paths.
 pub fn vertex_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, keys: &Keymap) {
     ui.add_space(8.0);
-    ui.label("Vertex mode");
+    ui.label(tr!("panels-vertex-mode"));
     let key = keys.hint(Action::ToolMode1);
     let tip = if key.is_empty() {
         String::new()
     } else {
-        format!(" ({key} cycles the modes)")
+        tr!("panels-cycles-the-modes", key = key)
     };
     ui.horizontal_wrapped(|ui| {
         for mode in VertexMode::ALL {
             let r = ui.selectable_label(settings.vertex_mode == mode, mode.label());
-            if r.on_hover_text(format!("{} vertex{tip}", mode.label()))
+            if r.on_hover_text(tr!("panels-vertex", mode = mode.label(), tip = tip))
                 .clicked()
             {
                 settings.vertex_mode = mode;
@@ -444,16 +512,14 @@ pub fn vertex_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, keys: &Keymap) 
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Arc radius");
+        ui.label(tr!("panels-arc-radius"));
         let r = ui.add(
             DragValue::new(&mut settings.arc_radius)
                 .speed(10.0)
                 .range(0.0..=1.0e7)
-                .suffix(" mm"),
+                .length(),
         );
-        r.on_hover_text(
-            "Radius of new arc vertices. Type a value in the Data bar (Tab) in Arc mode.",
-        );
+        r.on_hover_text(tr!("panels-radius-of-new-arc-vertices-type-a"));
     });
 }
 
@@ -465,9 +531,9 @@ pub fn tool_panel(
     doc: &kadakas_core::model::Document,
     requests: &mut crate::annot_ui::PanelRequests,
 ) {
-    ui.heading("Tools");
+    ui.heading(tr!("panels-tools"));
     ui.separator();
-    ui.label("Basic");
+    ui.label(tr!("panels-basic"));
     for t in Tool::BASIC {
         tool_button(ui, m, keys, t);
     }
@@ -475,7 +541,7 @@ pub fn tool_panel(
         select_mode_bar(ui, settings);
     }
     ui.add_space(8.0);
-    ui.label("Modify");
+    ui.label(tr!("panels-modify"));
     for t in Tool::MODIFY {
         tool_button(ui, m, keys, t);
     }
@@ -483,17 +549,17 @@ pub fn tool_panel(
         modify_options(ui, m, settings);
     }
     ui.add_space(8.0);
-    ui.label("Landscape");
+    ui.label(tr!("panels-landscape"));
     for t in Tool::LANDSCAPE {
         tool_button(ui, m, keys, t);
     }
     ui.add_space(8.0);
-    ui.label("Site");
+    ui.label(tr!("panels-site"));
     for t in Tool::SITE {
         tool_button(ui, m, keys, t);
     }
     ui.add_space(8.0);
-    ui.label("Irrigation");
+    ui.label(tr!("panels-irrigation"));
     for t in Tool::IRRIGATION {
         tool_button(ui, m, keys, t);
     }
@@ -502,7 +568,7 @@ pub fn tool_panel(
         m.cancel();
     }
     ui.add_space(8.0);
-    ui.label("Annotation");
+    ui.label(tr!("panels-annotation"));
     for t in Tool::ANNOTATION {
         tool_button(ui, m, keys, t);
     }
@@ -525,7 +591,7 @@ pub fn tool_panel(
 /// The modes of the Selection tool: how a drag on empty space picks.
 fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
     ui.add_space(4.0);
-    ui.label("Selection mode");
+    ui.label(tr!("panels-selection-mode"));
     ui.horizontal_wrapped(|ui| {
         for mode in kadakas_ui_core::tools::SelectMode::ALL {
             let icon = match mode {
@@ -541,10 +607,10 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
             );
             let tip = match mode {
                 kadakas_ui_core::tools::SelectMode::Rectangle => {
-                    "Drag a box. Left to right selects what is inside, right to left what the box touches."
+                    tr!("panels-drag-a-box-left-to-right-selects")
                 }
                 kadakas_ui_core::tools::SelectMode::Lasso => {
-                    "Drag a free-hand shape. It ends to the right of its start: objects inside. To the left: objects it touches."
+                    tr!("panels-drag-a-free-hand-shape-it-ends")
                 }
             };
             if r.on_hover_text(tip).clicked() {
@@ -562,50 +628,50 @@ fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings)
     ui.add_space(4.0);
     match tool {
         Tool::Rotate | Tool::Mirror | Tool::Scale => {
-            ui.checkbox(&mut s.copy, "Duplicate")
-                .on_hover_text("Work on copies and keep the originals");
+            ui.checkbox(&mut s.copy, tr!("panels-duplicate"))
+                .on_hover_text(tr!("panels-work-on-copies-and-keep-the-originals"));
         }
         Tool::Offset => {
             ui.horizontal(|ui| {
-                ui.label("Distance");
+                ui.label(tr!("panels-distance"));
                 ui.add(
                     DragValue::new(&mut s.offset_distance)
                         .speed(10.0)
                         .range(0.0..=1.0e7)
-                        .suffix(" mm"),
+                        .length(),
                 )
-                .on_hover_text("0: the copy passes through the second click");
+                .on_hover_text(tr!("panels-0-the-copy-passes-through-the-second"));
             });
-            ui.checkbox(&mut s.offset_copy, "Make a copy");
+            ui.checkbox(&mut s.offset_copy, tr!("panels-make-a-copy"));
         }
         Tool::Fillet | Tool::Chamfer => {
             if tool == Tool::Fillet {
                 ui.horizontal(|ui| {
-                    ui.label("Radius");
+                    ui.label(tr!("panels-radius"));
                     ui.add(
                         DragValue::new(&mut s.radius)
                             .speed(10.0)
                             .range(0.001..=1.0e7)
-                            .suffix(" mm"),
+                            .length(),
                     );
                 });
             } else {
                 ui.horizontal(|ui| {
-                    ui.label("First");
+                    ui.label(tr!("panels-first"));
                     ui.add(
                         DragValue::new(&mut s.chamfer_a)
                             .speed(10.0)
                             .range(0.001..=1.0e7)
-                            .suffix(" mm"),
+                            .length(),
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Second");
+                    ui.label(tr!("panels-second"));
                     ui.add(
                         DragValue::new(&mut s.chamfer_b)
                             .speed(10.0)
                             .range(0.001..=1.0e7)
-                            .suffix(" mm"),
+                            .length(),
                     );
                 });
             }
@@ -613,18 +679,18 @@ fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings)
                 for (mode, label, tip) in [
                     (
                         JoinMode::Standard,
-                        "Standard",
-                        "Only add the new piece. The objects stay.",
+                        tr!("panels-standard"),
+                        tr!("panels-only-add-the-new-piece-the-objects"),
                     ),
                     (
                         JoinMode::Split,
-                        "Split",
-                        "Cut the objects at the new piece and keep the cut-off parts.",
+                        tr!("panels-split"),
+                        tr!("panels-cut-the-objects-at-the-new-piece"),
                     ),
                     (
                         JoinMode::Trim,
-                        "Trim",
-                        "Cut the objects at the new piece and remove the cut-off parts.",
+                        tr!("panels-trim"),
+                        tr!("panels-cut-the-objects-at-the-new-piece-2"),
                     ),
                 ] {
                     if ui
@@ -640,10 +706,13 @@ fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings)
         Tool::Trim | Tool::Extend => {
             ui.horizontal_wrapped(|ui| {
                 for (mode, label) in [
-                    (kadakas_ui_core::tools::CutTo::AllObjects, "All objects"),
+                    (
+                        kadakas_ui_core::tools::CutTo::AllObjects,
+                        tr!("panels-all-objects"),
+                    ),
                     (
                         kadakas_ui_core::tools::CutTo::SelectedObjects,
-                        "Selected objects",
+                        tr!("panels-selected-objects"),
                     ),
                 ] {
                     if ui.selectable_label(s.cut_to == mode, label).clicked() {
@@ -670,29 +739,33 @@ pub fn data_bar(
 ) -> bool {
     let mut commit = false;
     ui.horizontal_wrapped(|ui| {
-        ui.monospace(format!("X {:>10.1}  Y {:>10.1} mm", cursor.x, cursor.y));
+        let u = kadakas_units::current();
+        ui.monospace(tr!(
+            "panels-cursor-position",
+            x = format!("{:>10}", u.length_field(cursor.x, 1)),
+            y = format!("{:>10}", u.length_field(cursor.y, 1)),
+            unit = u.length_field_unit()
+        ));
         if let Some((t, lonlat)) = readout {
             ui.separator();
             let label =
                 egui::Label::new(egui::RichText::new(t).monospace()).sense(egui::Sense::click());
             if ui
                 .add(label)
-                .on_hover_text(
-                    "Map position of the cursor. Click to switch between N/E and lat/lon.",
-                )
+                .on_hover_text(tr!("panels-map-position-of-the-cursor-click-to"))
                 .clicked()
             {
                 *lonlat = !*lonlat;
             }
         }
         ui.separator();
-        ui.label(format!("Tool: {}", m.tool().name()));
+        ui.label(tr!("panels-tool", tool = m.tool().name()));
         ui.separator();
         match m.tool() {
             Tool::Text => {
-                ui.label("Text");
+                ui.label(tr!("panels-text-3"));
                 ui.add(egui::TextEdit::singleline(&mut s.text).desired_width(120.0));
-                ui.label("Height");
+                ui.label(tr!("panels-height"));
                 ui.add(
                     DragValue::new(&mut s.text_height)
                         .speed(5.0)
@@ -700,15 +773,15 @@ pub fn data_bar(
                 );
             }
             Tool::Plant => {
-                ui.label("Species");
+                ui.label(tr!("panels-species"));
                 ui.add(egui::TextEdit::singleline(&mut s.species).desired_width(140.0));
-                ui.label("Spread");
+                ui.label(tr!("panels-spread"));
                 ui.add(
                     DragValue::new(&mut s.spread)
                         .speed(50.0)
                         .range(1.0..=100000.0),
                 );
-                ui.label("Height");
+                ui.label(tr!("panels-height"));
                 ui.add(
                     DragValue::new(&mut s.plant_height)
                         .speed(50.0)
@@ -716,11 +789,11 @@ pub fn data_bar(
                 );
             }
             Tool::LandscapeArea => {
-                ui.label("Name");
+                ui.label(tr!("panels-name"));
                 ui.add(egui::TextEdit::singleline(&mut s.area_name).desired_width(140.0));
             }
             Tool::Hardscape => {
-                ui.label("Material");
+                ui.label(tr!("panels-material"));
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
             }
             Tool::Massing => crate::gis_ui::massing_bar(&mut s.massing, ui),
@@ -729,30 +802,30 @@ pub fn data_bar(
                     ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
                 }
                 if s.modifier_mode == kadakas_ui_core::tools::ModifierMode::Pad {
-                    ui.label("Elevation");
+                    ui.label(tr!("panels-elevation"));
                     ui.add(
                         DragValue::new(&mut s.pad_elevation)
                             .speed(10.0)
                             .range(-1.0e8..=1.0e8)
-                            .suffix(" mm"),
+                            .length(),
                     );
                     let mut sloped = s.pad_end_elevation.is_some();
-                    if ui.checkbox(&mut sloped, "Slope").changed() {
+                    if ui.checkbox(&mut sloped, tr!("panels-slope")).changed() {
                         s.pad_end_elevation = sloped.then_some(s.pad_elevation);
                     }
                     if let Some(end) = &mut s.pad_end_elevation {
-                        ui.label("Elevation at end");
+                        ui.label(tr!("panels-elevation-at-end"));
                         ui.add(
                             DragValue::new(end)
                                 .speed(10.0)
                                 .range(-1.0e8..=1.0e8)
-                                .suffix(" mm"),
+                                .length(),
                         );
-                        ui.label("Falls toward");
+                        ui.label(tr!("panels-falls-toward"));
                         ui.add(
                             DragValue::new(&mut s.pad_direction_deg)
                                 .speed(1.0)
-                                .suffix("\u{b0}"),
+                                .degrees(),
                         );
                     }
                 }
@@ -772,7 +845,7 @@ pub fn data_bar(
                 let Some(text) = entry.text.get_mut(i) else {
                     continue;
                 };
-                let hint = format!("{:.1}", live[i]);
+                let hint = databar::field_text(*f, live[i]);
                 let r = ui.add(
                     egui::TextEdit::singleline(text)
                         .id(databar::field_id(i))
@@ -866,26 +939,26 @@ impl Fields {
     fn angle(&mut self, ui: &mut Ui, label: &str, rad: &mut f64) {
         let mut deg = rad.to_degrees();
         ui.label(label);
-        let r = ui.add(DragValue::new(&mut deg).speed(1.0).suffix("\u{b0}"));
+        let r = ui.add(DragValue::new(&mut deg).speed(1.0).degrees());
         self.commit |= r.drag_stopped() || r.lost_focus();
         *rad = deg.to_radians();
         ui.end_row();
     }
     pub(crate) fn count(&mut self, ui: &mut Ui, n: usize) {
-        ui.label("Vertices");
+        ui.label(tr!("panels-vertices"));
         ui.label(format!("{n}"));
         ui.end_row();
     }
 }
 
 /// Names of the vertex kinds in the vertex table.
-pub fn kind_label(kind: VertexKind) -> &'static str {
+pub fn kind_label(kind: VertexKind) -> String {
     match kind {
-        VertexKind::Corner => "Corner",
-        VertexKind::Arc { .. } => "Arc",
-        VertexKind::PointOnArc => "Point on arc",
-        VertexKind::Bezier => "B\u{e9}zier",
-        VertexKind::Cubic => "Cubic",
+        VertexKind::Corner => tr!("panels-corner"),
+        VertexKind::Arc { .. } => tr!("panels-arc"),
+        VertexKind::PointOnArc => tr!("panels-point-on-arc"),
+        VertexKind::Bezier => tr!("panels-bezier"),
+        VertexKind::Cubic => tr!("panels-cubic"),
     }
 }
 
@@ -913,7 +986,13 @@ fn vertex_table(ui: &mut Ui, id: ObjectId, vertices: &mut [Vertex]) -> bool {
                 .num_columns(5)
                 .striped(true)
                 .show(ui, |ui| {
-                    for h in ["#", "X", "Y", "Kind", "Radius"] {
+                    for h in [
+                        "#".to_string(),
+                        tr!("panels-x"),
+                        tr!("panels-y"),
+                        tr!("panels-kind"),
+                        tr!("panels-radius"),
+                    ] {
                         ui.strong(h);
                     }
                     ui.end_row();
@@ -923,7 +1002,7 @@ fn vertex_table(ui: &mut Ui, id: ObjectId, vertices: &mut [Vertex]) -> bool {
                         f.num(ui, &mut v.p.y, 10.0);
                         let before = kind_label(v.kind);
                         egui::ComboBox::from_id_salt(("vertex_kind", id, i))
-                            .selected_text(before)
+                            .selected_text(&before)
                             .width(90.0)
                             .show_ui(ui, |ui| {
                                 for choice in KIND_CHOICES {
@@ -969,23 +1048,26 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
         .num_columns(2)
         .show(ui, |ui| match shape {
             Shape::Viewport(vp) => {
-                f.text(ui, "Name", &mut vp.name);
-                f.scalar(ui, "Scale 1:", &mut vp.scale, 1.0);
-                f.xy(ui, "Frame min", &mut vp.min);
-                f.xy(ui, "Frame max", &mut vp.max);
-                f.xy(ui, "Model center", &mut vp.center);
-                ui.label("Frame");
-                f.commit |= ui.checkbox(&mut vp.show_frame, "Show").changed();
+                f.text(ui, &tr!("panels-name"), &mut vp.name);
+                f.scalar(ui, &tr!("panels-scale-1"), &mut vp.scale, 1.0);
+                f.xy(ui, &tr!("panels-frame-min"), &mut vp.min);
+                f.xy(ui, &tr!("panels-frame-max"), &mut vp.max);
+                f.xy(ui, &tr!("panels-model-center"), &mut vp.center);
+                ui.label(tr!("panels-frame"));
+                f.commit |= ui
+                    .checkbox(&mut vp.show_frame, tr!("panels-show-2"))
+                    .changed();
                 ui.end_row();
             }
-            Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
+            Shape::TitleBlock(tb) => f.scalar(ui, &tr!("panels-margin"), &mut tb.margin, 1.0),
             Shape::Annotation(a) => f.commit |= crate::annot_ui::fields(ui, a),
             Shape::Unknown { kind, .. } => {
-                ui.label(format!(
-                    "Unknown shape kind '{kind}' (made by a newer Kadakas). It can only be deleted."
+                ui.label(tr!(
+                    "panels-unknown-shape-kind-made-by-a-newer",
+                    kind = kind
                 ));
             }
-            Shape::Group { name } => f.text(ui, "Name", name),
+            Shape::Group { name } => f.text(ui, &tr!("panels-name"), name),
             Shape::Irrigation(i) => crate::irrigation_ui::edit(ui, &mut f, i),
             Shape::Symbol {
                 at,
@@ -994,24 +1076,24 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 scale_y,
                 ..
             } => {
-                f.xy(ui, "Position", at);
-                f.scalar(ui, "Rotation (rad)", rotation, 0.1);
-                f.scalar(ui, "Scale", scale, 0.1);
+                f.xy(ui, &tr!("panels-position"), at);
+                f.scalar(ui, &tr!("panels-rotation-rad"), rotation, 0.1);
+                f.scalar(ui, &tr!("panels-scale"), scale, 0.1);
                 let mut sy = scale_y.unwrap_or(*scale);
-                f.scalar(ui, "Scale Y", &mut sy, 0.1);
+                f.scalar(ui, &tr!("panels-scale-y"), &mut sy, 0.1);
                 *scale_y = (sy != *scale).then_some(sy);
             }
             Shape::Line { a, b } => {
-                f.xy(ui, "Start", a);
-                f.xy(ui, "End", b);
+                f.xy(ui, &tr!("panels-start"), a);
+                f.xy(ui, &tr!("panels-end"), b);
             }
             Shape::Rect { min, max } => {
-                f.xy(ui, "Corner 1", min);
-                f.xy(ui, "Corner 2", max);
+                f.xy(ui, &tr!("panels-corner-1"), min);
+                f.xy(ui, &tr!("panels-corner-2"), max);
             }
             Shape::Circle { center, radius } => {
-                f.xy(ui, "Center", center);
-                f.scalar(ui, "Radius", radius, 10.0);
+                f.xy(ui, &tr!("panels-center"), center);
+                f.scalar(ui, &tr!("panels-radius"), radius, 10.0);
             }
             Shape::Arc {
                 center,
@@ -1019,28 +1101,28 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 start,
                 end,
             } => {
-                f.xy(ui, "Center", center);
-                f.scalar(ui, "Radius", radius, 10.0);
-                f.angle(ui, "Start", start);
-                f.angle(ui, "End", end);
+                f.xy(ui, &tr!("panels-center"), center);
+                f.scalar(ui, &tr!("panels-radius"), radius, 10.0);
+                f.angle(ui, &tr!("panels-start"), start);
+                f.angle(ui, &tr!("panels-end"), end);
             }
             Shape::Polyline { points, closed } => {
-                ui.label("Closed");
+                ui.label(tr!("panels-closed"));
                 f.commit |= ui.checkbox(closed, "").changed();
                 ui.end_row();
                 f.count(ui, points.len());
             }
             Shape::Locus3d { p } => {
-                ui.label("Position");
+                ui.label(tr!("panels-position"));
                 ui.horizontal(|ui| {
                     f.num(ui, &mut p.x, 10.0);
                     f.num(ui, &mut p.y, 10.0);
                 });
                 ui.end_row();
-                f.scalar(ui, "Z", &mut p.z, 10.0);
+                f.scalar(ui, &tr!("panels-z"), &mut p.z, 10.0);
             }
             Shape::Polyline3d { points, closed } => {
-                ui.label("Closed");
+                ui.label(tr!("panels-closed"));
                 f.commit |= ui.checkbox(closed, "").changed();
                 ui.end_row();
                 f.count(ui, points.len());
@@ -1049,18 +1131,22 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                     .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
                         (lo.min(p.z), hi.max(p.z))
                     });
-                ui.label("Z range");
+                ui.label(tr!("panels-z-range"));
                 ui.label(if points.is_empty() {
                     "-".to_string()
                 } else {
-                    format!("{lo:.1} to {hi:.1}")
+                    tr!(
+                        "panels-range-to",
+                        low = kadakas_units::current().length_text_d(lo, 1),
+                        high = kadakas_units::current().length_text_d(hi, 1)
+                    )
                 });
                 ui.end_row();
             }
             Shape::Text { at, text, height } => {
-                f.xy(ui, "Position", at);
-                f.text(ui, "Text", text);
-                f.scalar(ui, "Height", height, 5.0);
+                f.xy(ui, &tr!("panels-position"), at);
+                f.text(ui, &tr!("panels-text-3"), text);
+                f.scalar(ui, &tr!("panels-height"), height, 5.0);
             }
             Shape::Plant {
                 at,
@@ -1068,10 +1154,10 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 spread,
                 height,
             } => {
-                f.xy(ui, "Position", at);
-                f.text(ui, "Species", species);
-                f.scalar(ui, "Spread", spread, 50.0);
-                f.scalar(ui, "Height", height, 50.0);
+                f.xy(ui, &tr!("panels-position"), at);
+                f.text(ui, &tr!("panels-species"), species);
+                f.scalar(ui, &tr!("panels-spread"), spread, 50.0);
+                f.scalar(ui, &tr!("panels-height"), height, 50.0);
             }
             Shape::ExistingTree {
                 at,
@@ -1084,53 +1170,61 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 rpz_factor,
                 rpz_cap,
             } => {
-                f.xy(ui, "Position", at);
-                f.text(ui, "Species", species);
-                f.scalar(ui, "Trunk diameter", dbh, 10.0);
-                f.scalar(ui, "Canopy spread", spread, 50.0);
-                f.scalar(ui, "Height", height, 50.0);
-                ui.label("Condition");
+                f.xy(ui, &tr!("panels-position"), at);
+                f.text(ui, &tr!("panels-species"), species);
+                f.scalar(ui, &tr!("panels-trunk-diameter"), dbh, 10.0);
+                f.scalar(ui, &tr!("panels-canopy-spread"), spread, 50.0);
+                f.scalar(ui, &tr!("panels-height"), height, 50.0);
+                ui.label(tr!("panels-condition"));
                 let before = *condition;
                 egui::ComboBox::from_id_salt("tree_condition")
-                    .selected_text(condition.id())
+                    .selected_text(crate::enum_names::name("condition", condition.id()))
                     .show_ui(ui, |ui| {
                         for c in TreeCondition::ALL {
-                            ui.selectable_value(condition, c, c.id());
+                            ui.selectable_value(
+                                condition,
+                                c,
+                                crate::enum_names::name("condition", c.id()),
+                            );
                         }
                     });
                 f.commit |= *condition != before;
                 ui.end_row();
-                ui.label("Action");
+                ui.label(tr!("panels-action"));
                 let before = *action;
                 egui::ComboBox::from_id_salt("tree_action")
-                    .selected_text(action.id())
+                    .selected_text(crate::enum_names::name("action", action.id()))
                     .show_ui(ui, |ui| {
                         for a in TreeAction::ALL {
-                            ui.selectable_value(action, a, a.id());
+                            ui.selectable_value(
+                                action,
+                                a,
+                                crate::enum_names::name("action", a.id()),
+                            );
                         }
                     });
                 f.commit |= *action != before;
                 ui.end_row();
-                ui.label("Root zone factor");
+                ui.label(tr!("panels-root-zone-factor"));
                 let mut factor = rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR);
                 let r = ui.add(
                     DragValue::new(&mut factor)
                         .speed(0.1)
                         .range(0.0..=100.0)
-                        .suffix(" x DBH"),
+                        .suffix(tr!("panels-x-dbh")),
                 );
                 if r.changed() {
                     *rpz_factor = Some(factor);
                 }
                 f.commit |= r.drag_stopped() || r.lost_focus();
                 ui.end_row();
-                ui.label("Root zone cap");
+                ui.label(tr!("panels-root-zone-cap"));
                 let mut cap = rpz_cap.unwrap_or(DEFAULT_RPZ_CAP);
                 let r = ui.add(
                     DragValue::new(&mut cap)
                         .speed(100.0)
                         .range(0.0..=1.0e6)
-                        .suffix(" mm"),
+                        .length(),
                 );
                 if r.changed() {
                     *rpz_cap = Some(cap);
@@ -1141,18 +1235,18 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             Shape::PlantTag {
                 at, anchor, height, ..
             } => {
-                f.xy(ui, "Label position", at);
-                f.xy(ui, "Leader end", anchor);
-                f.scalar(ui, "Text height", height, 5.0);
+                f.xy(ui, &tr!("panels-label-position"), at);
+                f.xy(ui, &tr!("panels-leader-end"), anchor);
+                f.scalar(ui, &tr!("panels-text-height"), height, 5.0);
             }
             Shape::LandscapeArea { boundary, name } => {
-                f.text(ui, "Name", name);
+                f.text(ui, &tr!("panels-name"), name);
                 f.count(ui, boundary.len());
             }
             Shape::Hardscape {
                 boundary, material, ..
             } => {
-                f.text(ui, "Material", material);
+                f.text(ui, &tr!("panels-material"), material);
                 f.count(ui, boundary.len());
             }
             Shape::Massing(m) => {
@@ -1179,7 +1273,7 @@ fn attr_row(ui: &mut Ui, label: &str, value: &mut Option<Color>, resolved: Optio
         let mut over = value.is_some();
         if ui
             .checkbox(&mut over, label)
-            .on_hover_text("Override the class attribute")
+            .on_hover_text(tr!("panels-override-the-class-attribute"))
             .changed()
         {
             *value = over.then(|| resolved.unwrap_or(Color::BLACK));
@@ -1197,15 +1291,17 @@ fn attr_row(ui: &mut Ui, label: &str, value: &mut Option<Color>, resolved: Optio
 }
 
 pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, status: &mut String) {
-    ui.heading("Object Info");
+    ui.heading(tr!("panels-object-info"));
     ui.separator();
     let sel = session.selection.clone();
     let Some(&id) = sel.first() else {
         let d = &session.editor.doc();
         let layer = d.layer(d.active_layer).map_or("?", |l| l.name.as_str());
         let class = d.class(d.active_class).map_or("?", |c| c.name.as_str());
-        ui.label(format!(
-            "Nothing selected.\nActive layer: {layer}\nActive class: {class}"
+        ui.label(tr!(
+            "panels-nothing-selected-active-layer-active-class",
+            layer = layer,
+            class = class
         ));
         *edit = InfoEdit::default();
         return;
@@ -1215,7 +1311,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         return;
     }
     if sel.len() > 1 {
-        ui.label(format!("{} objects selected", sel.len()));
+        ui.label(tr!("panels-objects-selected", count = sel.len()));
         *edit = InfoEdit::default();
         class_layer_combos(ui, session, &sel, status);
         return;
@@ -1231,7 +1327,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
             edited: Some(obj.shape.clone()),
         };
     }
-    ui.label(format!("{}  (id {})", obj.shape.kind(), id));
+    ui.label(tr!("panels-id", name = obj.shape.kind(), id = id));
     let edited = edit.edited.as_mut().expect("edit buffer");
     let commit = edit_shape(ui, edited);
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
@@ -1269,7 +1365,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
         }
     }
     if let Some(area) = obj.shape.area() {
-        ui.label(format!("Area {:.2} m\u{b2}", area / 1e6));
+        ui.label(tr!(
+            "panels-area-value",
+            area = kadakas_units::current().area_text(area)
+        ));
     }
     if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
         crate::plant_ui::plant_object_info(ui, session, id, status);
@@ -1294,21 +1393,16 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     let doc = &session.editor.doc();
     let res = doc.resolved_attrs(&obj);
     let mut attrs: Attributes = obj.attrs.clone();
-    let mut changed = attr_row(ui, "Pen", &mut attrs.pen, res.pen);
-    changed |= attr_row(ui, "Fill", &mut attrs.fill, res.fill);
+    let mut changed = attr_row(ui, &tr!("panels-pen"), &mut attrs.pen, res.pen);
+    changed |= attr_row(ui, &tr!("panels-fill"), &mut attrs.fill, res.fill);
     ui.horizontal(|ui| {
         let mut over = attrs.line_weight.is_some();
-        if ui.checkbox(&mut over, "Line weight").changed() {
+        if ui.checkbox(&mut over, tr!("panels-line-weight")).changed() {
             attrs.line_weight = over.then(|| res.line_weight.unwrap_or(0.25));
             changed = true;
         }
         if let Some(w) = &mut attrs.line_weight {
-            let r = ui.add(
-                DragValue::new(w)
-                    .speed(0.05)
-                    .range(0.01..=10.0)
-                    .suffix(" mm"),
-            );
+            let r = ui.add(DragValue::new(w).speed(0.05).range(0.01..=10.0).length());
             changed |= r.drag_stopped() || r.lost_focus();
         }
     });
@@ -1340,14 +1434,14 @@ fn class_layer_combos(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], stat
             .map(|x| x.1.clone())
             .unwrap_or_default()
     };
-    egui::ComboBox::from_label("Layer")
+    egui::ComboBox::from_label(tr!("panels-layer"))
         .selected_text(name_of(&layer_names, layer.0))
         .show_ui(ui, |ui| {
             for (id, n) in &layers {
                 ui.selectable_value(&mut layer, *id, n);
             }
         });
-    egui::ComboBox::from_label("Class")
+    egui::ComboBox::from_label(tr!("panels-class"))
         .selected_text(name_of(&class_names, class.0))
         .show_ui(ui, |ui| {
             for (id, n) in &classes {
@@ -1382,16 +1476,16 @@ pub struct NavState {
 }
 
 pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status: &mut String) {
-    ui.heading("Navigation");
+    ui.heading(tr!("panels-navigation"));
     ui.separator();
     let mut cmds: Vec<Command> = Vec::new();
     let doc = &session.editor.doc();
 
     ui.horizontal(|ui| {
-        ui.strong("Design Layers");
+        ui.strong(tr!("panels-design-layers"));
         if ui
             .small_button("+")
-            .on_hover_text("Add Design Layer")
+            .on_hover_text(tr!("panels-add-design-layer"))
             .clicked()
         {
             cmds.push(Command::AddLayer {
@@ -1409,7 +1503,11 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
     {
         ui.horizontal(|ui| {
             let mut vis = l.visible;
-            if ui.checkbox(&mut vis, "").on_hover_text("Visible").changed() {
+            if ui
+                .checkbox(&mut vis, "")
+                .on_hover_text(tr!("panels-visible"))
+                .changed()
+            {
                 cmds.push(Command::ModifyLayer {
                     id: l.id,
                     name: None,
@@ -1421,8 +1519,8 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
             }
             let mut locked = l.locked;
             if ui
-                .toggle_value(&mut locked, "Lock")
-                .on_hover_text("Lock layer")
+                .toggle_value(&mut locked, tr!("panels-lock"))
+                .on_hover_text(tr!("panels-lock-layer"))
                 .changed()
             {
                 cmds.push(Command::ModifyLayer {
@@ -1466,11 +1564,11 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
                     nav.renaming = Some((RenameKind::Layer, l.id.0, l.name.clone()));
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Rename").clicked() {
+                    if ui.button(tr!("panels-rename")).clicked() {
                         nav.renaming = Some((RenameKind::Layer, l.id.0, l.name.clone()));
                         ui.close();
                     }
-                    if ui.button("Delete (if empty)").clicked() {
+                    if ui.button(tr!("panels-delete-if-empty")).clicked() {
                         cmds.push(Command::DeleteLayer { id: l.id });
                         ui.close();
                     }
@@ -1481,8 +1579,12 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
 
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.strong("Classes");
-        if ui.small_button("+").on_hover_text("Add Class").clicked() {
+        ui.strong(tr!("panels-classes"));
+        if ui
+            .small_button("+")
+            .on_hover_text(tr!("panels-add-class"))
+            .clicked()
+        {
             cmds.push(Command::AddClass {
                 name: format!("Class-{}", doc.classes.len()),
                 attrs: Attributes::default(),
@@ -1492,7 +1594,11 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
     for c in &doc.classes {
         ui.horizontal(|ui| {
             let mut vis = c.visible;
-            if ui.checkbox(&mut vis, "").on_hover_text("Visible").changed() {
+            if ui
+                .checkbox(&mut vis, "")
+                .on_hover_text(tr!("panels-visible"))
+                .changed()
+            {
                 cmds.push(Command::ModifyClass {
                     id: c.id,
                     name: None,
@@ -1530,7 +1636,7 @@ pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status
                     nav.renaming = Some((RenameKind::Class, c.id.0, c.name.clone()));
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Rename").clicked() {
+                    if ui.button(tr!("panels-rename")).clicked() {
                         nav.renaming = Some((RenameKind::Class, c.id.0, c.name.clone()));
                         ui.close();
                     }

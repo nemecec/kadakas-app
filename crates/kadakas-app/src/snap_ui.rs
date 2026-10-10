@@ -1,82 +1,100 @@
 //! The Snapping palette (a tab of the dock) and the drawing of snap marks, cue labels and
 //! alignment guides.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Ui, pos2, vec2};
 use kadakas_core::snapping::{Kind, Settings, Smart};
+use kadakas_l10n::{msg, tr, translate};
 
 use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::snap::SnapResult;
 
 /// What each category of the palette is called and what it does.
 pub const CATEGORIES: [(&str, &str, &str); 11] = [
-    ("grid", "Grid", "Snap to the points of the grid."),
+    (
+        "grid",
+        msg!("snap-ui-grid"),
+        msg!("snap-ui-snap-to-the-points-of-the-grid"),
+    ),
     (
         "object_points",
-        "Object points",
-        "Endpoints, corners, centers and circle quadrants.",
+        msg!("snap-ui-object-points"),
+        msg!("snap-ui-endpoints-corners-centers-and-circle-quadrants"),
     ),
     (
         "midpoints",
-        "Midpoints",
-        "The middle of a segment or an arc.",
+        msg!("snap-ui-midpoints"),
+        msg!("snap-ui-the-middle-of-a-segment-or-an"),
     ),
-    ("intersections", "Intersections", "Where two edges cross."),
-    ("edges", "Edge", "The nearest point on an edge."),
+    (
+        "intersections",
+        msg!("snap-ui-intersections"),
+        msg!("snap-ui-where-two-edges-cross"),
+    ),
+    (
+        "edges",
+        msg!("snap-ui-edge"),
+        msg!("snap-ui-the-nearest-point-on-an-edge"),
+    ),
     (
         "perpendicular",
-        "Perpendicular",
-        "The foot of the perpendicular from the last point.",
+        msg!("snap-ui-perpendicular"),
+        msg!("snap-ui-the-foot-of-the-perpendicular-from-the"),
     ),
     (
         "tangent",
-        "Tangent",
-        "The tangent point of a circle seen from the last point.",
+        msg!("snap-ui-tangent"),
+        msg!("snap-ui-the-tangent-point-of-a-circle-seen"),
     ),
     (
         "angle",
-        "Angle",
-        "Directions at steps of the angle step from the last point.",
+        msg!("snap-ui-angle"),
+        msg!("snap-ui-directions-at-steps-of-the-angle-step"),
     ),
     (
         "distance",
-        "Distance",
-        "Lengths at steps of the distance step from the last point.",
+        msg!("snap-ui-distance"),
+        msg!("snap-ui-lengths-at-steps-of-the-distance-step"),
     ),
     (
         "smart_points",
-        "Smart points",
-        "Alignment lines through points you acquired (T).",
+        msg!("snap-ui-smart-points"),
+        msg!("snap-ui-alignment-lines-through-points-you-acquired-t"),
     ),
     (
         "smart_edges",
-        "Smart edges",
-        "Lines along and across edges you acquired (T).",
+        msg!("snap-ui-smart-edges"),
+        msg!("snap-ui-lines-along-and-across-edges-you-acquired"),
     ),
 ];
 
 /// The palette. Returns true if something changed.
 pub fn palette(ui: &mut Ui, settings: &mut Settings, smart: &mut Smart, cues: &mut bool) -> bool {
     let before = (*settings, *cues);
-    ui.heading("Snapping");
-    ui.small("Switch the kinds of snaps. The back-quote key suspends all snaps while held.");
+    ui.heading(tr!("snap-ui-snapping"));
+    ui.small(tr!("snap-ui-switch-the-kinds-of-snaps-the-back"));
     ui.separator();
     for (name, label, tip) in CATEGORIES {
         let mut on = settings.set.get(name).unwrap_or(false);
-        if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
+        if ui
+            .checkbox(&mut on, translate(label, &[]))
+            .on_hover_text(translate(tip, &[]))
+            .changed()
+        {
             settings.set.set(name, on);
         }
         match name {
             "angle" if on => {
                 ui.horizontal(|ui| {
                     ui.add_space(18.0);
-                    ui.label("Step");
+                    ui.label(tr!("snap-ui-step"));
                     let mut deg = settings.angle_step.to_degrees();
                     if ui
                         .add(
                             egui::DragValue::new(&mut deg)
                                 .speed(0.5)
                                 .range(0.1..=180.0)
-                                .suffix("\u{b0}"),
+                                .degrees(),
                         )
                         .changed()
                     {
@@ -87,45 +105,51 @@ pub fn palette(ui: &mut Ui, settings: &mut Settings, smart: &mut Smart, cues: &m
                     ui.add_space(18.0);
                     ui.checkbox(
                         &mut settings.relative_angles,
-                        "Relative to the prior segment",
+                        tr!("snap-ui-relative-to-the-prior-segment"),
                     )
-                    .on_hover_text("The / key switches this.");
+                    .on_hover_text(tr!("snap-ui-the-key-switches-this"));
                 });
             }
             "distance" if on => {
                 ui.horizontal(|ui| {
                     ui.add_space(18.0);
-                    ui.label("Step");
+                    ui.label(tr!("snap-ui-step"));
                     ui.add(
                         egui::DragValue::new(&mut settings.distance_step)
                             .speed(10.0)
                             .range(0.0..=1.0e6)
-                            .suffix(" mm"),
+                            .length(),
                     )
-                    .on_hover_text("0 uses the step of the grid");
+                    .on_hover_text(tr!("snap-ui-0-uses-the-step-of-the-grid"));
                 });
             }
             _ => {}
         }
     }
     ui.separator();
-    ui.checkbox(&mut settings.other_layers, "Snap to other layers")
-        .on_hover_text("Off: only objects of the active layer.");
-    ui.checkbox(&mut settings.grey, "Snap to grey layers and classes")
-        .on_hover_text("Objects of grey layers and classes cannot be picked. This lets the pointer snap to them.");
-    ui.checkbox(cues, "SmartCursor cues")
-        .on_hover_text("Show the name of the snap at the pointer (Y).");
+    ui.checkbox(
+        &mut settings.other_layers,
+        tr!("snap-ui-snap-to-other-layers"),
+    )
+    .on_hover_text(tr!("snap-ui-off-only-objects-of-the-active-layer"));
+    ui.checkbox(
+        &mut settings.grey,
+        tr!("snap-ui-snap-to-grey-layers-and-classes"),
+    )
+    .on_hover_text(tr!("snap-ui-objects-of-grey-layers-and-classes-cannot"));
+    ui.checkbox(cues, tr!("snap-ui-smartcursor-cues"))
+        .on_hover_text(tr!("snap-ui-show-the-name-of-the-snap-at"));
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label(format!(
-            "Smart points {}/{}  edges {}/{}",
-            smart.points.len(),
-            Smart::MAX_POINTS,
-            smart.edges.len(),
-            Smart::MAX_EDGES
+        ui.label(tr!(
+            "snap-ui-smart-points-edges",
+            smart_used = smart.points.len(),
+            smart_total = Smart::MAX_POINTS,
+            edges_used = smart.edges.len(),
+            edges_total = Smart::MAX_EDGES
         ));
         if ui
-            .add_enabled(!smart.is_empty(), egui::Button::new("Clear"))
+            .add_enabled(!smart.is_empty(), egui::Button::new(tr!("snap-ui-clear")))
             .clicked()
         {
             smart.clear();
@@ -294,9 +318,9 @@ pub fn draw_smart(painter: &Painter, view: &View, smart: &Smart, dark: bool) {
 /// The text for the status line after the pointer snapped.
 pub fn status_text(snap: Option<&SnapResult>, on: bool) -> String {
     match (snap, on) {
-        (Some(r), _) => format!("Snap: {}", r.cue),
-        (None, true) => "Snap: none".to_string(),
-        (None, false) => "Snap: off".to_string(),
+        (Some(r), _) => tr!("snap-ui-snap", cue = r.cue),
+        (None, true) => tr!("snap-ui-snap-none"),
+        (None, false) => tr!("snap-ui-snap-off"),
     }
 }
 

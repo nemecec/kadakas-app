@@ -3,6 +3,7 @@
 //! The dialog builds the same JSON as an agent would send to `import.file` and
 //! `export.file`, so the app and the API use one code path.
 
+use kadakas_l10n::tr;
 use std::path::{Path, PathBuf};
 
 use kadakas_api::Session;
@@ -192,11 +193,11 @@ impl IoUi {
     pub fn start_import(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
-                "DXF, DWG, IFC, Shapefile, GeoJSON",
+                tr!("io-dialog-dxf-dwg-ifc-shapefile-geojson"),
                 &["dxf", "dwg", "ifc", "shp", "geojson", "json"],
             )
             .add_filter("DXF", &["dxf"])
-            .add_filter("DWG (needs a converter, see docs/dwg.md)", &["dwg"])
+            .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
             .add_filter("IFC", &["ifc"])
             .add_filter("Shapefile", &["shp"])
             .add_filter("GeoJSON", &["geojson", "json"])
@@ -212,7 +213,7 @@ impl IoUi {
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
             .add_filter("IFC4", &["ifc"])
-            .add_filter("DWG (needs a converter, see docs/dwg.md)", &["dwg"])
+            .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
             .set_file_name("drawing.dxf")
             .save_file();
         if let Some(p) = picked {
@@ -231,7 +232,8 @@ impl IoUi {
         if let Some(form) = self.import.as_mut() {
             let mut run = false;
             let mut close = false;
-            egui::Window::new("Import")
+            egui::Window::new(tr!("io-dialog-import"))
+                .id(egui::Id::new("win-import"))
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
@@ -241,40 +243,58 @@ impl IoUi {
                         Kind::Dxf => {
                             ui.checkbox(
                                 &mut form.layers_as_layers,
-                                "DXF layers become design layers (default: classes)",
+                                tr!("io-dialog-dxf-layers-become-design-layers-default-classes"),
                             );
                             ui.horizontal(|ui| {
-                                ui.label("Unit");
-                                let label = form.unit.map_or("From file", |u| UNITS[u]);
+                                ui.label(tr!("io-dialog-unit"));
+                                let label = form
+                                    .unit
+                                    .map_or(tr!("io-dialog-from-file"), |u| UNITS[u].to_string());
                                 egui::ComboBox::from_id_salt("import_unit")
                                     .selected_text(label)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut form.unit, None, "From file");
+                                        ui.selectable_value(
+                                            &mut form.unit,
+                                            None,
+                                            tr!("io-dialog-from-file"),
+                                        );
                                         for (i, u) in UNITS.iter().enumerate() {
                                             ui.selectable_value(&mut form.unit, Some(i), *u);
                                         }
                                     });
                             });
-                            ui.checkbox(&mut form.explode_blocks, "Explode blocks");
-                            ui.checkbox(&mut form.hatches, "Import hatch boundaries");
-                            ui.checkbox(&mut form.only_points_with_z, "Only points with a Z value");
+                            ui.checkbox(&mut form.explode_blocks, tr!("io-dialog-explode-blocks"));
+                            ui.checkbox(
+                                &mut form.hatches,
+                                tr!("io-dialog-import-hatch-boundaries"),
+                            );
+                            ui.checkbox(
+                                &mut form.only_points_with_z,
+                                tr!("io-dialog-only-points-with-a-z-value"),
+                            );
                         }
                         Kind::Ifc => {
-                            ui.label("IFC2x3, IFC4 or IFC4x3");
+                            ui.label(tr!("io-dialog-ifc2x3-ifc4-or-ifc4x3"));
                             ui.checkbox(
                                 &mut form.ifc_storeys,
-                                "Building storeys become design layers (off: all on the active layer)",
+                                tr!("io-dialog-building-storeys-become-design-layers-off-all"),
                             );
                             ui.checkbox(
                                 &mut form.ifc_terrain_mesh,
-                                "Terrain as a 3D mesh (default: a site model)",
+                                tr!("io-dialog-terrain-as-a-3d-mesh-default-a"),
                             );
                         }
                         Kind::Gis => {
                             for (label, value) in [
-                                ("File CRS (if the file has none)", &mut form.source_crs),
-                                ("Document CRS (default: UTM zone)", &mut form.target_crs),
-                                ("Class from attribute", &mut form.class_field),
+                                (
+                                    tr!("io-dialog-file-crs-if-the-file-has-none"),
+                                    &mut form.source_crs,
+                                ),
+                                (
+                                    tr!("io-dialog-document-crs-default-utm-zone"),
+                                    &mut form.target_crs,
+                                ),
+                                (tr!("io-dialog-class-from-attribute"), &mut form.class_field),
                             ] {
                                 ui.horizontal(|ui| {
                                     ui.label(label);
@@ -286,29 +306,30 @@ impl IoUi {
                     if kind_of(&form.path) != Kind::Ifc {
                         ui.checkbox(
                             &mut form.keep_origin,
-                            "Keep the coordinates of the file (default: center the drawing)",
+                            tr!("io-dialog-keep-the-coordinates-of-the-file-default"),
                         );
                         ui.horizontal(|ui| {
-                            ui.label("Design layer");
+                            ui.label(tr!("io-dialog-design-layer"));
                             ui.text_edit_singleline(&mut form.layer);
                         });
                     }
                     ui.horizontal(|ui| {
-                        run = ui.button("Import").clicked();
-                        close = ui.button("Cancel").clicked();
+                        run = ui.button(tr!("io-dialog-import")).clicked();
+                        close = ui.button(tr!("io-dialog-cancel")).clicked();
                     });
                 });
             if run {
                 let params = form.params();
                 match session.import_file_trusted(params) {
                     Ok(r) => {
-                        *status = format!(
-                            "Imported {} objects, skipped {}",
-                            r["imported"], r["skipped"]
+                        *status = tr!(
+                            "io-dialog-imported-objects-skipped",
+                            imported = r["imported"],
+                            skipped = r["skipped"]
                         );
                         event = IoEvent::Imported;
                     }
-                    Err(e) => *status = format!("Import failed: {}", e.message),
+                    Err(e) => *status = tr!("io-dialog-import-failed", message = e.message),
                 }
             }
             if run || close {
@@ -318,40 +339,61 @@ impl IoUi {
         if let Some(form) = self.export.as_mut() {
             let mut run = false;
             let mut close = false;
-            egui::Window::new("Export").collapsible(false).resizable(false).show(ctx, |ui| {
-                ui.label(form.path.display().to_string());
-                ui.separator();
-                if is_ifc(&form.path) {
-                    ui.label("IFC4 (IFC4 ADD2 TC1)");
-                    ui.checkbox(&mut form.ifc_classes_as_layers, "Classes become IFC presentation layers");
-                    ui.checkbox(&mut form.ifc_storeys, "Design layers become building storeys (default: everything in the site)");
-                    ui.checkbox(&mut form.ifc_include_2d, "Include 2D objects as annotations");
-                } else if kind_of(&form.path) == Kind::Dxf {
-                    ui.checkbox(&mut form.layers_as_layers, "One DXF layer per design layer (default: per class)");
-                    ui.horizontal(|ui| {
-                        ui.label("Unit");
-                        egui::ComboBox::from_id_salt("export_unit").selected_text(UNITS[form.unit]).show_ui(ui, |ui| {
-                            for (i, u) in UNITS.iter().enumerate() {
-                                ui.selectable_value(&mut form.unit, i, *u);
-                            }
+            egui::Window::new(tr!("io-dialog-export"))
+                .id(egui::Id::new("win-export"))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(form.path.display().to_string());
+                    ui.separator();
+                    if is_ifc(&form.path) {
+                        ui.label(tr!("io-dialog-ifc4-ifc4-add2-tc1"));
+                        ui.checkbox(
+                            &mut form.ifc_classes_as_layers,
+                            tr!("io-dialog-classes-become-ifc-presentation-layers"),
+                        );
+                        ui.checkbox(
+                            &mut form.ifc_storeys,
+                            tr!("io-dialog-design-layers-become-building-storeys-default-everyt"),
+                        );
+                        ui.checkbox(
+                            &mut form.ifc_include_2d,
+                            tr!("io-dialog-include-2d-objects-as-annotations"),
+                        );
+                    } else if kind_of(&form.path) == Kind::Dxf {
+                        ui.checkbox(
+                            &mut form.layers_as_layers,
+                            tr!("io-dialog-one-dxf-layer-per-design-layer-default"),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(tr!("io-dialog-unit"));
+                            egui::ComboBox::from_id_salt("export_unit")
+                                .selected_text(UNITS[form.unit])
+                                .show_ui(ui, |ui| {
+                                    for (i, u) in UNITS.iter().enumerate() {
+                                        ui.selectable_value(&mut form.unit, i, *u);
+                                    }
+                                });
                         });
+                    }
+                    ui.checkbox(
+                        &mut form.visible_only,
+                        tr!("io-dialog-only-visible-layers-and-classes"),
+                    );
+                    ui.horizontal(|ui| {
+                        run = ui.button(tr!("io-dialog-export")).clicked();
+                        close = ui.button(tr!("io-dialog-cancel")).clicked();
                     });
-                }
-                ui.checkbox(&mut form.visible_only, "Only visible layers and classes");
-                ui.horizontal(|ui| {
-                    run = ui.button("Export").clicked();
-                    close = ui.button("Cancel").clicked();
                 });
-            });
             if run {
                 let params = form.params();
                 *status = match session.export_file_trusted(params) {
-                    Ok(r) => format!(
-                        "Exported {} objects to {}",
-                        r["exported"],
-                        form.path.display()
+                    Ok(r) => tr!(
+                        "io-dialog-exported-objects-to",
+                        count = r["exported"],
+                        path = form.path.display()
                     ),
-                    Err(e) => format!("Export failed: {}", e.message),
+                    Err(e) => tr!("io-dialog-export-failed", message = e.message),
                 };
             }
             if run || close {

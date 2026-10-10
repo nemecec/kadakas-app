@@ -2,17 +2,16 @@
 //! The fields follow the Duplicate Array command of Vectorworks: linear, rectangular and circular
 //! arrays, resize and rotate duplicates, and keeping or removing the original.
 
+use crate::units_ui::DragValueExt as _;
 use egui::DragValue;
 use glam::DVec2;
 use kadakas_core::command::Command;
 use kadakas_core::edit2d::spec::{ArrayLayout, ArrayParams};
 use kadakas_core::model::ObjectId;
+use kadakas_l10n::tr;
 
 fn len(v: &mut f64) -> DragValue<'_> {
-    DragValue::new(v)
-        .speed(10.0)
-        .range(-1.0e7..=1.0e7)
-        .suffix(" mm")
+    DragValue::new(v).speed(10.0).range(-1.0e7..=1.0e7).length()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,11 +25,11 @@ pub enum Shape {
 impl Shape {
     const ALL: [Shape; 3] = [Shape::Linear, Shape::Rectangular, Shape::Circular];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Shape::Linear => "Linear",
-            Shape::Rectangular => "Rectangular",
-            Shape::Circular => "Circular",
+            Shape::Linear => tr!("array-ui-linear"),
+            Shape::Rectangular => tr!("array-ui-rectangular"),
+            Shape::Circular => tr!("array-ui-circular"),
         }
     }
 }
@@ -155,7 +154,8 @@ impl ArrayDialog {
         }
         let mut run = None;
         let mut open = true;
-        egui::Window::new("Duplicate Array")
+        egui::Window::new(tr!("array-ui-duplicate-array"))
+            .id(egui::Id::new("win-duplicate-array"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -169,89 +169,95 @@ impl ArrayDialog {
                 match self.shape {
                     Shape::Linear => {
                         ui.horizontal(|ui| {
-                            ui.label("Number of duplicates");
+                            ui.label(tr!("array-ui-number-of-duplicates"));
                             ui.add(DragValue::new(&mut self.count).range(1..=1000));
                         });
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.polar, false, "Cartesian offset");
-                            ui.selectable_value(&mut self.polar, true, "Polar offset");
+                            ui.selectable_value(
+                                &mut self.polar,
+                                false,
+                                tr!("array-ui-cartesian-offset"),
+                            );
+                            ui.selectable_value(
+                                &mut self.polar,
+                                true,
+                                tr!("array-ui-polar-offset"),
+                            );
                         });
                         if self.polar {
                             ui.horizontal(|ui| {
-                                ui.label("r");
+                                ui.label(tr!("array-ui-r"));
                                 ui.add(len(&mut self.distance));
-                                ui.label("angle");
-                                ui.add(
-                                    DragValue::new(&mut self.angle_deg)
-                                        .speed(1.0)
-                                        .suffix("\u{b0}"),
-                                );
+                                ui.label(tr!("array-ui-angle"));
+                                ui.add(DragValue::new(&mut self.angle_deg).speed(1.0).degrees());
                             });
                         } else {
                             ui.horizontal(|ui| {
-                                ui.label("X");
+                                ui.label(tr!("array-ui-x"));
                                 ui.add(len(&mut self.dx));
-                                ui.label("Y");
+                                ui.label(tr!("array-ui-y"));
                                 ui.add(len(&mut self.dy));
                             });
                         }
                     }
                     Shape::Rectangular => {
                         ui.horizontal(|ui| {
-                            ui.label("Columns");
+                            ui.label(tr!("array-ui-columns"));
                             ui.add(DragValue::new(&mut self.columns).range(1..=1000));
-                            ui.label("Rows");
+                            ui.label(tr!("array-ui-rows"));
                             ui.add(DragValue::new(&mut self.rows).range(1..=1000));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Distance between columns");
+                            ui.label(tr!("array-ui-distance-between-columns"));
                             ui.add(len(&mut self.column_spacing));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Distance between rows");
+                            ui.label(tr!("array-ui-distance-between-rows"));
                             ui.add(len(&mut self.row_spacing));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Turn the grid");
+                            ui.label(tr!("array-ui-turn-the-grid"));
                             ui.add(
                                 DragValue::new(&mut self.grid_angle_deg)
                                     .speed(1.0)
-                                    .suffix("\u{b0}"),
+                                    .degrees(),
                             );
                         });
                     }
                     Shape::Circular => {
                         ui.horizontal(|ui| {
-                            ui.label("Number of duplicates");
+                            ui.label(tr!("array-ui-number-of-duplicates"));
                             ui.add(DragValue::new(&mut self.count).range(1..=1000));
-                            ui.label("Angle between");
+                            ui.label(tr!("array-ui-angle-between"));
                             ui.add(
                                 DragValue::new(&mut self.step_deg)
                                     .speed(1.0)
                                     .range(-360.0..=360.0)
-                                    .suffix("\u{b0}"),
+                                    .degrees(),
                             );
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Center X");
+                            ui.label(tr!("array-ui-center-x"));
                             ui.add(len(&mut self.center.x));
-                            ui.label("Y");
+                            ui.label(tr!("array-ui-y"));
                             ui.add(len(&mut self.center.y));
                         });
                         if let Some(c) = center_hint
-                            && ui.button("Use the center of the selection").clicked()
+                            && ui
+                                .button(tr!("array-ui-use-the-center-of-the-selection"))
+                                .clicked()
                         {
                             self.center = c;
                         }
                         ui.checkbox(
                             &mut self.rotate_objects,
-                            "Rotate duplicates with the circle",
+                            tr!("array-ui-rotate-duplicates-with-the-circle"),
                         );
                     }
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.resize, "Resize duplicates");
+                    ui.checkbox(&mut self.resize, tr!("array-ui-resize-duplicates"));
                     ui.add_enabled(
                         self.resize,
                         DragValue::new(&mut self.resize_factor)
@@ -261,23 +267,22 @@ impl ArrayDialog {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.rotate, "Rotate duplicates");
+                    ui.checkbox(&mut self.rotate, tr!("array-ui-rotate-duplicates"));
                     ui.add_enabled(
                         self.rotate,
-                        DragValue::new(&mut self.rotate_deg)
-                            .speed(1.0)
-                            .suffix("\u{b0}"),
+                        DragValue::new(&mut self.rotate_deg).speed(1.0).degrees(),
                     );
                 });
-                ui.checkbox(&mut self.retain, "Retain the original object");
+                ui.checkbox(&mut self.retain, tr!("array-ui-retain-the-original-object"));
                 ui.separator();
                 ui.horizontal(|ui| {
-                    let ok = ui.add_enabled(!selection.is_empty(), egui::Button::new("OK"));
+                    let ok = ui
+                        .add_enabled(!selection.is_empty(), egui::Button::new(tr!("array-ui-ok")));
                     if ok.clicked() {
                         run = Some(self.command(selection.to_vec()));
                     }
                     if selection.is_empty() {
-                        ui.weak("Select objects first");
+                        ui.weak(tr!("array-ui-select-objects-first"));
                     }
                 });
             });

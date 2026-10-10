@@ -1,0 +1,111 @@
+## plant-ui: plant_ui.rs
+
+plant-ui-spacing-spread = Samm = võra laius
+plant-ui-plants-are-placed-one-canopy-diameter-apart = Taimed asetatakse üksteisest ühe võra läbimõõdu kaugusele
+plant-ui-placement-mode = Asetamise režiim
+plant-ui-plant-style = Taimestiil
+plant-ui-none-use-the-data-bar = (puudub: kasuta andmeriba)
+plant-ui-existing-survey-tree = Olemasolev (mõõdistatud) puu
+plant-ui-place-an-existing-tree-with-a-root = Aseta olemasolev puu koos juurekaitsevööndiga, mitte taim
+plant-ui-trunk-diameter = Tüve läbimõõt
+plant-ui-spacing = Samm
+plant-ui-count = Arv
+plant-ui-density = Tihedus
+plant-ui-spacing-in-a-row = Samm reas
+plant-ui-rows = Ridu
+plant-ui-row-spacing = Ridade vahe
+plant-ui-stagger-the-rows = Nihuta read
+plant-ui-spacing-x = Samm X
+plant-ui-spacing-y = Samm Y
+plant-ui-staggered = Nihutatud
+plant-ui-grid = Võrk
+plant-ui-edge-margin = Serva varu
+plant-ui-size-variation = Suuruse varieeruvus
+plant-ui-random-rotation = Juhuslik pööre
+plant-ui-add-plant-tag = Lisa taimesilt
+plant-ui-a-tag-with-the-id-code-and = Silt taime tunnuskoodi ja arvuga. Vajab taimestiili.
+plant-ui-off-use-the-class-color = Väljas: kasuta klassi värvi
+plant-ui-style-name = Stiili nimi
+plant-ui-botanical-name = Ladinakeelne nimi
+plant-ui-common-name = Rahvapärane nimi
+plant-ui-id-code = Tunnuskood
+plant-ui-size = Suurus
+plant-ui-container = Pott
+plant-ui-root = Juurestik
+plant-ui-spread-label = Võra laius
+plant-ui-height-label = Kõrgus
+plant-ui-price = Hind
+plant-ui-category = Kategooria
+plant-ui-2d-graphic = 2D-sümbol
+plant-ui-3d-form = 3D-kuju
+plant-ui-quantity = Kogus
+plant-ui-trunk-diameter-label = Tüve läbimõõt
+plant-ui-tree-protection-zone = Puu kaitsevöönd
+plant-ui-trees-only-radius-is-12-x-trunk = Ainult puudele. Raadius on 12 x tüve läbimõõt, kuni 15 m.
+plant-ui-locked-fields = Lukustatud väljad
+plant-ui-fields-that-plants-cannot-override-for-example = Väljad, mida taimed ei saa üle kirjutada, näiteks: price, spread
+plant-ui-irrigation-and-care = Kastmine ja hooldus
+plant-ui-water-need = Veevajadus
+plant-ui-hydrozone = Hüdrotsoon
+plant-ui-z3-matches-irrigation-zone-3 = Z3 vastab kastmistsoonile 3
+plant-ui-irrigated = Kastetav
+plant-ui-maintenance-interval = Hooldusintervall
+plant-ui-pruning = Lõikus
+plant-ui-hours-per-year = Tunde aastas
+plant-ui-fill-color = Täitevärv
+plant-ui-pen-color = Joone värv
+plant-ui-custom-data = Oma andmed
+plant-ui-remove-this-field = Eemalda see väli
+plant-ui-new-field = uus väli
+plant-ui-add = Lisa
+plant-ui-resource-manager = Ressursihaldur
+plant-ui-plant-styles = Taimestiilid
+plant-ui-new = Uus
+plant-ui-create-a-plant-style = Loo taimestiil
+plant-ui-duplicate = Dubleeri
+plant-ui-spreadsheet-view = Tabelivaade...
+plant-ui-all-plant-styles-in-one-table-for = Kõik taimestiilid ühes tabelis, hulgimuutmiseks
+plant-ui-no-plant-styles-yet-create-one-or = Taimestiile pole veel. Loo üks või impordi CSV-loend.
+plant-ui-text = { $name }  ({ $used })
+plant-ui-text-2 = { $name }  [{ $code }]  ({ $used })
+plant-ui-plants-and-tags-that-use-the-style = Stiili kasutavate taimede ja siltide arv on sulgudes
+plant-ui-in-use-by-object-s-choose-a = Kasutusel { $n } objektil. Vali stiil, mis need üle võtab, ja kustuta siis.
+plant-ui-delete-style = Kustuta stiil
+plant-ui-import-csv = Impordi CSV...
+plant-ui-create-plant-styles-from-a-csv-list = Loo taimestiile CSV-loendist. Veerud sobitatakse päise järgi.
+plant-ui-export-csv = Ekspordi CSV...
+plant-ui-cannot-read = Ei saa lugeda: { $path }: { $e }
+plant-ui-imported-plant-style-s-skipped-warning-s =
+    Imporditi { $imported ->
+        [one] { $imported } taimestiil
+       *[other] { $imported } taimestiili
+    }, vahele jäeti { $skipped }, { $warnings ->
+        [one] { $warnings } hoiatus
+       *[other] { $warnings } hoiatust
+    }
+plant-ui-import-failed = Import ebaõnnestus: { $message }
+plant-ui-exported-to = Eksporditud faili { $path }
+plant-ui-cannot-write = Ei saa kirjutada: { $path }: { $e }
+plant-ui-plant-schedule = Taimeloend
+plant-ui-no-plants-in-the-drawing = Joonisel pole taimi.
+plant-ui-id = Tunnus
+plant-ui-name = Nimi
+plant-ui-total = Kokku
+plant-ui-spread = Võra laius
+plant-ui-height = Kõrgus
+plant-ui-place-on-terrain = Aseta maapinnale
+plant-ui-stand-the-plant-on-the-ground-height = Aseta taim maapinnamudeli kõrgusele
+plant-ui-no-site-model-on-the-layer-of = Selle taime kihil pole maapinnamudelit
+plant-ui-error = Viga: { $message }
+plant-ui-release = Vabasta
+plant-ui-back-to-the-elevation-of-the-layer = Tagasi kihi kõrgusele
+plant-ui-tag-format = Sildi vorming
+plant-ui-level-1-id-and-count = Tase 1: tunnus ja arv
+plant-ui-level-2-plus-plant-name = Tase 2: lisaks taime nimi
+plant-ui-level-3-plus-size-and-container = Tase 3: lisaks suurus ja pott
+plant-ui-id-bubble = Tunnuse mull
+plant-ui-none-by-instance = (puudub: eksemplari järgi)
+plant-ui-locked = { $label } (lukustatud)
+plant-ui-checked-this-plant-has-its-own-value = Märgitud: sellel taimel on oma väärtus (eksemplari järgi). Märkimata: väärtuse annab stiil (stiili järgi).
+plant-ui-seed = algarv{ " " }
+plant-ui-root-protection-radius = Juurekaitseala raadius { $radius } ({ $factor } x tüve läbimõõt)

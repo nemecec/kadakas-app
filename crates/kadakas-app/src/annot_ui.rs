@@ -1,5 +1,6 @@
 //! Annotation in the app: painting, picking, the Tool bar options, and the fields in Object Info.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{Align2, Color32, DragValue, FontId, Painter, Pos2, Ui};
 use glam::DVec2;
 use kadakas_core::annot::draw::{Fill, Prim};
@@ -7,6 +8,7 @@ use kadakas_core::annot::{Annot, Legend};
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_l10n::tr;
 
 use crate::canvas::{Style, color32};
 use crate::view::{View, ViewExt as _};
@@ -167,7 +169,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
     ui.add_space(6.0);
     match tool {
         Tool::Dimension => {
-            ui.label("Dimension mode");
+            ui.label(tr!("annot-ui-dimension-mode"));
             ui.horizontal_wrapped(|ui| {
                 for m in DimToolMode::ALL {
                     if ui
@@ -179,7 +181,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
                     }
                 }
             });
-            ui.label("Dimension style");
+            ui.label(tr!("annot-ui-dimension-style"));
             if let Some(c) = combo(
                 ui,
                 "dim_style",
@@ -190,14 +192,19 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
                 s.dim_style = c;
             }
             ui.horizontal(|ui| {
-                ui.label("Line offset");
-                ui.add(DragValue::new(&mut s.offset_mm).speed(0.5).range(-200.0..=200.0).suffix(" mm"));
+                ui.label(tr!("annot-ui-line-offset"));
+                ui.add(
+                    DragValue::new(&mut s.offset_mm)
+                        .speed(0.5)
+                        .range(-200.0..=200.0)
+                        .length(),
+                );
             })
             .response
-            .on_hover_text("Distance of the dimension line for chain, baseline and ordinate dimensions, in paper mm");
+            .on_hover_text(tr!("annot-ui-distance-of-the-dimension-line-for-chain"));
         }
         Tool::Callout => {
-            ui.label("Text style");
+            ui.label(tr!("annot-ui-text-style"));
             if let Some(c) = combo(
                 ui,
                 "callout_text_style",
@@ -207,11 +214,11 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             ) {
                 s.text_style = c;
             }
-            ui.label("Text");
+            ui.label(tr!("annot-ui-text"));
             ui.text_edit_singleline(&mut s.callout_text);
         }
         Tool::DataTag => {
-            ui.label("Tag style");
+            ui.label(tr!("annot-ui-tag-style"));
             if let Some(c) = combo(
                 ui,
                 "tag_style",
@@ -224,32 +231,32 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
         }
         Tool::NorthArrow => {
             ui.horizontal(|ui| {
-                ui.label("Size");
+                ui.label(tr!("annot-ui-size"));
                 ui.add(
                     DragValue::new(&mut s.north_size_mm)
                         .speed(0.5)
                         .range(2.0..=300.0)
-                        .suffix(" mm"),
+                        .length(),
                 );
             });
         }
         Tool::ScaleBar => {
             ui.horizontal(|ui| {
-                ui.label("Segment");
+                ui.label(tr!("annot-ui-segment"));
                 ui.add(
                     DragValue::new(&mut s.bar_segment_m)
                         .speed(0.1)
                         .range(0.001..=100000.0)
-                        .suffix(" m"),
+                        .length_m(),
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Segments");
+                ui.label(tr!("annot-ui-segments"));
                 ui.add(DragValue::new(&mut s.bar_segments).range(1..=20));
             });
         }
         Tool::RevisionCloud => {
-            ui.label("Revision");
+            ui.label(tr!("annot-ui-revision"));
             ui.text_edit_singleline(&mut s.revision);
         }
         _ => {}
@@ -271,17 +278,17 @@ pub struct PanelRequests {
 pub fn panel_buttons(ui: &mut Ui, doc: &Document, requests: &mut PanelRequests) {
     let cmds = &mut requests.commands;
     if ui
-        .button("Graphic Legend")
-        .on_hover_text("Add a legend that lists the objects by style and updates itself")
+        .button(tr!("annot-ui-graphic-legend"))
+        .on_hover_text(tr!("annot-ui-add-a-legend-that-lists-the-objects"))
         .clicked()
     {
         requests.legend = true;
     }
     let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
     if !has("dimension_style") || !has("tag_style") || !has("text_style") {
-        let r = ui.button("Add default styles").on_hover_text(
-            "Adds a text style, a dimension style and a tag style, if the document has none",
-        );
+        let r = ui
+            .button(tr!("annot-ui-add-default-styles"))
+            .on_hover_text(tr!("annot-ui-adds-a-text-style-a-dimension-style"));
         if r.clicked() {
             use kadakas_core::annot::style::{AnnotResource, DimensionStyle, TagStyle, TextStyle};
             let add = |name: &str, r: AnnotResource| Command::AddResource {
@@ -328,98 +335,130 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
             num(
                 ui,
                 &mut commit,
-                "Line offset (paper mm)",
+                &tr!("annot-ui-line-offset-paper-mm"),
                 &mut d.offset,
                 0.5,
             );
-            ui.label("Text");
+            ui.label(tr!("annot-ui-text"));
             let mut t = d.text.clone().unwrap_or_default();
             let r = ui.text_edit_singleline(&mut t);
             d.text = (!t.is_empty()).then_some(t);
             commit |= r.lost_focus();
             ui.end_row();
-            ui.label("Associative");
-            ui.label(format!(
-                "{} of {} points",
-                d.anchors.iter().flatten().count(),
-                d.points.len()
+            ui.label(tr!("annot-ui-associative"));
+            ui.label(tr!(
+                "annot-ui-of-points",
+                used = d.anchors.iter().flatten().count(),
+                total = d.points.len()
             ));
             ui.end_row();
             if d.detached {
-                ui.label("Detached");
-                ui.label("An anchored vertex or edge is gone. The dimension keeps its last place.");
+                ui.label(tr!("annot-ui-detached"));
+                ui.label(tr!("annot-ui-an-anchored-vertex-or-edge-is-gone"));
                 ui.end_row();
             }
         }
         Annot::Text(t) => {
-            ui.label("Text");
+            ui.label(tr!("annot-ui-text"));
             let r = ui.text_edit_multiline(&mut t.text);
             commit |= r.lost_focus();
             ui.end_row();
         }
         Annot::Callout(c) => {
-            ui.label("Text");
+            ui.label(tr!("annot-ui-text"));
             let r = ui.text_edit_multiline(&mut c.text);
             commit |= r.lost_focus();
             ui.end_row();
             num(
                 ui,
                 &mut commit,
-                "Shoulder (paper mm)",
+                &tr!("annot-ui-shoulder-paper-mm"),
                 &mut c.shoulder_mm,
                 0.5,
             );
             if c.detached {
-                ui.label("Detached");
-                ui.label("A leader lost its vertex or edge.");
+                ui.label(tr!("annot-ui-detached"));
+                ui.label(tr!("annot-ui-a-leader-lost-its-vertex-or-edge"));
                 ui.end_row();
             }
         }
         Annot::DataTag(t) => {
             let mut x = t.offset.x;
             let mut y = t.offset.y;
-            num(ui, &mut commit, "Offset X (paper mm)", &mut x, 0.5);
-            num(ui, &mut commit, "Offset Y (paper mm)", &mut y, 0.5);
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-offset-x-paper-mm"),
+                &mut x,
+                0.5,
+            );
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-offset-y-paper-mm"),
+                &mut y,
+                0.5,
+            );
             t.offset = DVec2::new(x, y);
         }
         Annot::Legend(l) => {
-            ui.label("Title");
+            ui.label(tr!("annot-ui-title"));
             commit |= ui.text_edit_singleline(&mut l.title).lost_focus();
             ui.end_row();
-            ui.label("Criteria");
+            ui.label(tr!("annot-ui-criteria"));
             commit |= ui.text_edit_singleline(&mut l.criteria).lost_focus();
             ui.end_row();
-            ui.label("Group by");
+            ui.label(tr!("annot-ui-group-by"));
             commit |= ui.text_edit_singleline(&mut l.group_by).lost_focus();
             ui.end_row();
-            ui.label("Show count");
+            ui.label(tr!("annot-ui-show-count"));
             commit |= ui.checkbox(&mut l.show_count, "").changed();
             ui.end_row();
         }
         Annot::NorthArrow(n) => {
-            num(ui, &mut commit, "Size (paper mm)", &mut n.size_mm, 0.5);
-            num(ui, &mut commit, "Rotation", &mut n.rotation_deg, 1.0);
-            ui.label("True north");
-            commit |= ui.checkbox(&mut n.use_georef, "Use georeference").changed();
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-size-paper-mm"),
+                &mut n.size_mm,
+                0.5,
+            );
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-rotation"),
+                &mut n.rotation_deg,
+                1.0,
+            );
+            ui.label(tr!("annot-ui-true-north"));
+            commit |= ui
+                .checkbox(&mut n.use_georef, tr!("annot-ui-use-georeference"))
+                .changed();
             ui.end_row();
         }
         Annot::ScaleBar(b) => {
-            num(ui, &mut commit, "Segment", &mut b.segment, 0.1);
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-segment"),
+                &mut b.segment,
+                0.1,
+            );
             let mut n = f64::from(b.segments);
-            num(ui, &mut commit, "Segments", &mut n, 0.1);
+            num(ui, &mut commit, &tr!("annot-ui-segments"), &mut n, 0.1);
             b.segments = n.round().clamp(1.0, 20.0) as u32;
         }
         Annot::RevisionCloud(r) => {
-            ui.label("Revision");
+            ui.label(tr!("annot-ui-revision"));
             commit |= ui.text_edit_singleline(&mut r.revision).lost_focus();
             ui.end_row();
-            ui.label("Date");
+            ui.label(tr!("annot-ui-date"));
             commit |= ui.text_edit_singleline(&mut r.date).lost_focus();
             ui.end_row();
-            ui.label("Description");
+            ui.label(tr!("annot-ui-description"));
             commit |= ui.text_edit_singleline(&mut r.description).lost_focus();
             ui.end_row();
-            ui.label("Author");
+            ui.label(tr!("annot-ui-author"));
             commit |= ui.text_edit_singleline(&mut r.author).lost_focus();
             ui.end_row();
         }

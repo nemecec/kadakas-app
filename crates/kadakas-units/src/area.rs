@@ -110,10 +110,23 @@ pub fn format_volume(mm3: f64, unit: VolumeUnit, decimals: usize, nf: &NumberFor
     )
 }
 
-/// Reads an area that a person typed and gives mm². A number without a unit counts in
-/// `default`. Units: `m²`, `m2`, `m^2`, `sqm`, `sq m`; `ha`, `hectare(s)`; `ft²`, `ft2`, `sqft`,
-/// `sq ft`, `sf`; `ac`, `acre(s)`.
-pub fn parse_area(text: &str, default: AreaUnit, nf: &NumberFormat) -> Option<f64> {
+/// Reads a volume that a person typed and gives mm³. A number without a unit counts in `default`.
+/// Units: `m³`, `m3`, `m^3`, `cu m`; `yd³`, `yd3`, `cu yd`, `cuyd`.
+pub fn parse_volume(text: &str, default: VolumeUnit, nf: &NumberFormat) -> Option<f64> {
+    let (value, rest) = split_number(text, nf)?;
+    let unit = match rest.as_str() {
+        "" => default,
+        "m\u{b3}" | "m3" | "m^3" | "cum" | "cubicmeter" | "cubicmeters" => VolumeUnit::M3,
+        "yd\u{b3}" | "yd3" | "yd^3" | "cuyd" | "cubicyard" | "cubicyards" => VolumeUnit::Yd3,
+        _ => return None,
+    };
+    let mm3 = value * unit.mm3_per_unit();
+    mm3.is_finite().then_some(mm3)
+}
+
+/// Splits a typed quantity into its number and its unit text (lowercase, without spaces and
+/// points). `None` when the number does not parse.
+fn split_number(text: &str, nf: &NumberFormat) -> Option<(f64, String)> {
     let t = text.trim();
     let mut end = 0;
     let chars: Vec<(usize, char)> = t.char_indices().collect();
@@ -129,12 +142,20 @@ pub fn parse_area(text: &str, default: AreaUnit, nf: &NumberFormat) -> Option<f6
     }
     let (number, rest) = t.split_at(end);
     let value = nf.parse(number)?;
-    let rest: String = rest
+    let rest = rest
         .trim()
         .to_lowercase()
         .chars()
         .filter(|c| !is_group_space(*c) && *c != '.')
         .collect();
+    Some((value, rest))
+}
+
+/// Reads an area that a person typed and gives mm². A number without a unit counts in
+/// `default`. Units: `m²`, `m2`, `m^2`, `sqm`, `sq m`; `ha`, `hectare(s)`; `ft²`, `ft2`, `sqft`,
+/// `sq ft`, `sf`; `ac`, `acre(s)`.
+pub fn parse_area(text: &str, default: AreaUnit, nf: &NumberFormat) -> Option<f64> {
+    let (value, rest) = split_number(text, nf)?;
     let unit = match rest.as_str() {
         "" => default,
         "m\u{b2}" | "m2" | "m^2" | "sqm" | "sqmeter" | "sqmeters" => AreaUnit::M2,
@@ -191,6 +212,19 @@ mod tests {
             "1.00 yd\u{b3}"
         );
         assert_eq!(VolumeUnit::M3.mm3_per_unit(), 1e9);
+        let p = |s: &str| parse_volume(s, VolumeUnit::M3, &ET);
+        assert_eq!(p("2,5"), Some(2.5e9));
+        assert_eq!(p("2,5 m\u{b3}"), Some(2.5e9));
+        assert_eq!(p("3 m3"), Some(3e9));
+        assert_eq!(p("1 cu yd"), Some(VolumeUnit::Yd3.mm3_per_unit()));
+        assert_eq!(p("1 yd3"), Some(VolumeUnit::Yd3.mm3_per_unit()));
+        assert_eq!(
+            parse_volume("2", VolumeUnit::Yd3, &ET),
+            Some(2.0 * VolumeUnit::Yd3.mm3_per_unit())
+        );
+        for bad in ["", "abc", "5 parsecs", "m3"] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

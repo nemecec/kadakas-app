@@ -122,6 +122,16 @@ proptest! {
     }
 
     #[test]
+    fn volumes_round_trip(m3 in -1e6f64..1e6, d in 0usize..5, nf in number_format(), imperial in any::<bool>()) {
+        let unit = if imperial { VolumeUnit::Yd3 } else { VolumeUnit::M3 };
+        let mm3 = m3 * 1e9;
+        let text = format_volume(mm3, unit, d, &nf);
+        let back = parse_volume(&text, VolumeUnit::M3, &nf).expect("parses");
+        let step = unit.mm3_per_unit() * 10f64.powi(-(d as i32));
+        prop_assert!((back - mm3).abs() <= step / 2.0 + 1.0 + 1e-9 * mm3.abs(), "{text}");
+    }
+
+    #[test]
     fn dates_round_trip(days in -700_000i64..2_000_000, fmt in prop::sample::select(DateFormat::ALL.to_vec())) {
         let d = Date::from_days(days);
         prop_assert_eq!(d.to_days(), days);

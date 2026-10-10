@@ -119,6 +119,35 @@ impl Localizer {
         )
     }
 
+    /// The errors that Fluent finds when it formats a message of this language (not the
+    /// fallback) with these arguments. Empty for a message that is fine or missing.
+    pub fn format_errors(&self, id: &str, args: &[(&str, Arg)]) -> Vec<String> {
+        let mut fa = FluentArgs::new();
+        for (name, value) in args {
+            match value {
+                Arg::Num(n) => fa.set(*name, FluentValue::from(*n)),
+                Arg::Text(t) => fa.set(*name, FluentValue::from(t.clone())),
+            }
+        }
+        let (name, attr) = match id.split_once('.') {
+            Some((n, a)) => (n, Some(a)),
+            None => (id, None),
+        };
+        let Some(msg) = self.main.get_message(name) else {
+            return Vec::new();
+        };
+        let pattern = match attr {
+            Some(a) => msg.get_attribute(a).map(|a| a.value()),
+            None => msg.value(),
+        };
+        let Some(pattern) = pattern else {
+            return Vec::new();
+        };
+        let mut errors = Vec::new();
+        let _ = self.main.format_pattern(pattern, Some(&fa), &mut errors);
+        errors.iter().map(|e| e.to_string()).collect()
+    }
+
     /// True if this language itself (not the fallback) has the message.
     pub fn has(&self, id: &str) -> bool {
         Self::format(&self.main, id, &FluentArgs::new()).is_some()
@@ -208,6 +237,21 @@ mod tests {
         assert_eq!(et.tr("b", &[]), "B");
         // A file with a syntax error keeps its good messages.
         assert_eq!(et.tr("bad", &[]), "bad");
+    }
+
+    #[test]
+    fn format_errors_are_found_and_missing_messages_are_quiet() {
+        let en = Localizer::new("en-US");
+        // A message without its variable has an error; with it, none.
+        assert!(!en.format_errors("common-test-hello", &[]).is_empty());
+        assert!(
+            en.format_errors("common-test-hello", &[("name", "x".into())])
+                .is_empty()
+        );
+        // An attribute is checked too. A missing message, attribute or value is no error.
+        assert!(en.format_errors("common-test-hello.title", &[]).is_empty());
+        assert!(en.format_errors("common-test-hello.nope", &[]).is_empty());
+        assert!(en.format_errors("no-such-message", &[]).is_empty());
     }
 
     #[test]

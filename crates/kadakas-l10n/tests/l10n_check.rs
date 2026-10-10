@@ -10,13 +10,11 @@
 //!
 //! The rules and the way to add a language are in `docs/localization.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
-
 /// The crates with user interface text. A crate with egui calls must be here.
-const UI_CRATES: &[&str] = &["kadakas-ui-core"];
+const UI_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core"];
 
 /// Crates that use messages (all the crates with `tr!`, `msg!` or `translate` calls).
 const CODE_CRATES: &[&str] = &["kadakas-app", "kadakas-ui-core"];
@@ -32,7 +30,26 @@ const UNUSED_OK: &[&str] = &[
 
 /// String literals that may stay in an egui call, as (source file, literal). These are not
 /// words that a translator could change: symbols, units and names of file formats.
-const LITERAL_OK: &[(&str, &str)] = &[("icons.rs", "X")];
+const LITERAL_OK: &[(&str, &str)] = &[
+    // A multiplication sign and a close mark on small buttons.
+    ("panels.rs", "\\u{d7}"),
+    ("data_ui.rs", "x"),
+    ("gis_ui.rs", "x"),
+    ("plant_ui.rs", "x"),
+    ("array_ui.rs", "x "),
+    // The operators of the criteria language and its example.
+    ("data_ui.rs", "AND"),
+    ("data_ui.rs", "OR"),
+    ("data_ui.rs", "Kind = \\"),
+    // A MIME type and an EPSG code are examples that need no translation.
+    ("gis_dialogs.rs", "image/png"),
+    ("gis_dialogs.rs", "EPSG:32635"),
+    // Row numbers and sort arrows are only symbols and numbers.
+    ("panels.rs", "{n}"),
+    ("panels.rs", "{i}"),
+    ("plant_sheet_ui.rs", "{}{arrow}"),
+    ("site_ui.rs", "{vertices}"),
+];
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -58,18 +75,80 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The source of a file without its test code: the text before the first `#[cfg(test)]`.
-/// Files named `tests.rs` or in a `tests` folder are test code as a whole.
+/// The text of a file without the items that are marked `#[cfg(test)]` (a test module, a helper
+/// function for tests). A marked item ends at its closing brace, or at its semicolon.
+fn strip_cfg_test(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("#[cfg(test)]") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + "#[cfg(test)]".len()..];
+        let (brace, semi) = (after.find('{'), after.find(';'));
+        let end = match (brace, semi) {
+            (Some(b), Some(s)) if s < b => s + 1,
+            (None, Some(s)) => s + 1,
+            (Some(b), _) => b + matching_brace(&after[b..]),
+            (None, None) => after.len(),
+        };
+        rest = &after[end.min(after.len())..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The length of a block that starts with `{`, up to and with its closing brace. Strings, characters
+/// and comments are skipped.
+fn matching_brace(text: &str) -> usize {
+    let b = text.as_bytes();
+    let (mut depth, mut i) = (0i32, 0usize);
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\'' => {
+                // A character like 'a' or '\n' or '{' (not a lifetime).
+                if b.get(i + 2) == Some(&b'\'') {
+                    i += 2;
+                } else if b.get(i + 1) == Some(&b'\\') {
+                    while i < b.len() && b[i] != b'\'' || i < 2 {
+                        i += 1;
+                        if b.get(i) == Some(&b'\'') && b[i - 1] != b'\\' {
+                            break;
+                        }
+                    }
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// The source of a file without its test code. Files named `tests.rs` or in a `tests` folder
+/// are test code as a whole.
 fn production_source(path: &Path) -> Option<String> {
     let name = path.file_name().unwrap().to_string_lossy();
     if name == "tests.rs" || path.components().any(|c| c.as_os_str() == "tests") {
         return None;
     }
-    let text = std::fs::read_to_string(path).unwrap();
-    Some(match text.find("#[cfg(test)]") {
-        Some(i) => text[..i].to_string(),
-        None => text,
-    })
+    Some(strip_cfg_test(&std::fs::read_to_string(path).unwrap()))
 }
 
 fn sources(crates: &[&str]) -> Vec<(PathBuf, String)> {
@@ -84,64 +163,6 @@ fn sources(crates: &[&str]) -> Vec<(PathBuf, String)> {
         }
     }
     out
-}
-
-/// The variables (`$name`) that a message uses, per message id (attributes as `id.attr`).
-fn variables(tag: &str) -> BTreeMap<String, BTreeSet<String>> {
-    fn in_pattern(p: &Pattern<&str>, out: &mut BTreeSet<String>) {
-        for el in &p.elements {
-            if let PatternElement::Placeable { expression } = el {
-                in_expression(expression, out);
-            }
-        }
-    }
-    fn in_inline(e: &InlineExpression<&str>, out: &mut BTreeSet<String>) {
-        match e {
-            InlineExpression::VariableReference { id } => {
-                out.insert(id.name.to_string());
-            }
-            InlineExpression::Placeable { expression } => in_expression(expression, out),
-            InlineExpression::FunctionReference { arguments, .. } => {
-                for a in &arguments.positional {
-                    in_inline(a, out);
-                }
-                for n in &arguments.named {
-                    in_inline(&n.value, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    fn in_expression(e: &Expression<&str>, out: &mut BTreeSet<String>) {
-        match e {
-            Expression::Inline(i) => in_inline(i, out),
-            Expression::Select { selector, variants } => {
-                in_inline(selector, out);
-                for v in variants {
-                    in_pattern(&v.value, out);
-                }
-            }
-        }
-    }
-    let mut all = BTreeMap::new();
-    for (_, text) in kadakas_l10n::source_files(tag).unwrap() {
-        let res = fluent_syntax::parser::parse(*text).expect("syntax");
-        for entry in res.body {
-            if let Entry::Message(m) = entry {
-                let mut set = BTreeSet::new();
-                if let Some(v) = &m.value {
-                    in_pattern(v, &mut set);
-                    all.insert(m.id.name.to_string(), set);
-                }
-                for a in &m.attributes {
-                    let mut set = BTreeSet::new();
-                    in_pattern(&a.value, &mut set);
-                    all.insert(format!("{}.{}", m.id.name, a.id.name), set);
-                }
-            }
-        }
-    }
-    all
 }
 
 #[test]
@@ -161,11 +182,20 @@ fn every_language_has_the_same_messages() {
 }
 
 #[test]
-fn a_message_uses_the_same_variables_in_every_language() {
-    let base = variables(kadakas_l10n::FALLBACK);
+fn every_message_formats_without_an_error() {
     let mut problems = Vec::new();
     for lang in kadakas_l10n::languages() {
-        for (id, vars) in variables(lang.tag) {
+        problems.extend(kadakas_l10n::problems(lang.tag));
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn a_message_uses_the_same_variables_in_every_language() {
+    let base = kadakas_l10n::message_variables(kadakas_l10n::FALLBACK).unwrap();
+    let mut problems = Vec::new();
+    for lang in kadakas_l10n::languages() {
+        for (id, vars) in kadakas_l10n::message_variables(lang.tag).unwrap() {
             if let Some(b) = base.get(&id)
                 && *b != vars
             {
@@ -279,16 +309,48 @@ const FIRST_ARG: &[&str] = &[
     "text_edit_singleline_hint(",
 ];
 
-/// Calls with the text as a later argument: the check looks for a literal after a comma.
-const LATER_ARG: &[&str] = &[
-    ".checkbox(",
-    ".selectable_label(",
-    ".selectable_value(",
-    ".radio_value(",
-    ".radio(",
-    ".colored_label(",
-    ".toggle_value(",
+/// Calls with the text as a later argument, with the place of that argument (the first
+/// argument is 0): `ui.checkbox(&mut on, "Text")`, `ui.selectable_value(&mut v, value, "Text")`.
+const LATER_ARG: &[(&str, usize)] = &[
+    (".checkbox(", 1),
+    (".selectable_label(", 1),
+    (".selectable_value(", 2),
+    (".radio_value(", 2),
+    (".radio(", 1),
+    (".colored_label(", 1),
+    (".toggle_value(", 1),
 ];
+
+/// Splits the text of a call at the commas that are not inside brackets or quotes. The text
+/// ends at the bracket that closes the call.
+fn split_args(call: &str) -> Vec<&str> {
+    let (mut depth, mut start, mut quoted) = (0i32, 0usize, false);
+    let mut out = Vec::new();
+    let bytes = call.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if quoted => i += 1,
+            b'"' => quoted = !quoted,
+            b'(' | b'[' | b'{' if !quoted => depth += 1,
+            b')' | b']' | b'}' if !quoted => {
+                depth -= 1;
+                if depth < 0 {
+                    out.push(&call[start..i]);
+                    return out;
+                }
+            }
+            b',' if !quoted && depth == 0 => {
+                out.push(&call[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&call[start..]);
+    out
+}
 
 fn has_letters(s: &str) -> bool {
     s.chars().any(|c| c.is_alphabetic())
@@ -332,16 +394,15 @@ fn no_user_visible_literal_is_left_in_an_egui_call() {
                     }
                 }
             }
-            for needle in LATER_ARG {
+            for (needle, place) in LATER_ARG {
                 let mut from = 0;
                 while let Some(i) = code[from..].find(needle) {
                     let at = from + i + needle.len();
                     from = at;
-                    for part in code[at..].split(',').skip(1) {
-                        if let Some(lit) = leading_literal(part) {
-                            found.push(lit.to_string());
-                            break;
-                        }
+                    if let Some(arg) = split_args(&code[at..]).get(*place)
+                        && let Some(lit) = leading_literal(arg)
+                    {
+                        found.push(lit.to_string());
                     }
                 }
             }
@@ -357,6 +418,15 @@ fn no_user_visible_literal_is_left_in_an_egui_call() {
         }
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn test_code_is_cut_out_of_a_file() {
+    let text = "a\n#[cfg(test)]\nfn helper() { let s = \"}\"; let c = '{'; }\nb\n#[cfg(test)]\nuse x;\nc\n#[cfg(test)]\nmod tests { fn f() { { } } }\nd";
+    assert_eq!(
+        strip_cfg_test(text).split_whitespace().collect::<Vec<_>>(),
+        ["a", "b", "c", "d"]
+    );
 }
 
 #[test]
@@ -380,4 +450,8 @@ fn the_check_finds_what_it_should() {
     let names: Vec<&str> = ids.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(names, vec!["one", "three"]);
     assert!(has_letters("x") && !has_letters("12 %") && !has_letters("\u{b0}"));
+    assert_eq!(
+        split_args("&mut v, f(1, 2), \"a,b\") x"),
+        vec!["&mut v", " f(1, 2)", " \"a,b\""]
+    );
 }

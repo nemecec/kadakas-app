@@ -4,6 +4,8 @@
 //! Scripts run only when the user presses Run. The script gets the address and token of this app
 //! in the environment, so it sees the live document. Output and errors go to the console.
 
+use crate::units_ui::DragValueExt as _;
+use kadakas_l10n::tr;
 use std::path::{Path, PathBuf};
 
 use std::collections::VecDeque;
@@ -111,7 +113,7 @@ impl ScriptUi {
                 self.status = Some(Status::Running);
             }
             Err(e) => {
-                *status = format!("Script: {e}");
+                *status = tr!("script-ui-script", e = e);
                 self.lines.push(Line {
                     n: 0,
                     stream: Stream::Err,
@@ -154,7 +156,8 @@ impl ScriptUi {
             return self.want_run.take();
         }
         let mut open = self.open;
-        egui::Window::new("Scripts")
+        egui::Window::new(tr!("script-ui-scripts"))
+            .id(egui::Id::new("win-scripts"))
             .open(&mut open)
             .default_width(520.0)
             .show(ctx, |ui| self.window_body(ui, session, running));
@@ -164,20 +167,20 @@ impl ScriptUi {
 
     fn window_body(&mut self, ui: &mut Ui, session: &mut Session, running: bool) {
         match python::discover() {
-            Some(py) => ui.small(format!("Python: {}", py.describe())),
+            Some(py) => ui.small(tr!("script-ui-python", version = py.describe())),
             None => ui.colored_label(
                 Color32::from_rgb(200, 40, 40),
-                "No Python found. Install python3 or uv, or set KADAKAS_PYTHON.",
+                tr!("script-ui-no-python-found-install-python3-or-uv"),
             ),
         };
-        ui.small("A script runs only when you press Run. It can change the open document.");
+        ui.small(tr!("script-ui-a-script-runs-only-when-you-press"));
         ui.horizontal(|ui| {
-            ui.label("Folder");
+            ui.label(tr!("script-ui-folder"));
             let r = ui.add(egui::TextEdit::singleline(&mut self.folder).desired_width(300.0));
             if r.lost_focus() {
                 self.files = list_scripts(Path::new(&self.folder));
             }
-            let chosen = if ui.button("Choose...").clicked() {
+            let chosen = if ui.button(tr!("script-ui-choose")).clicked() {
                 rfd::FileDialog::new().pick_folder()
             } else {
                 None
@@ -186,7 +189,7 @@ impl ScriptUi {
                 self.folder = dir.display().to_string();
                 self.files = list_scripts(&dir);
             }
-            if ui.button("Refresh").clicked() {
+            if ui.button(tr!("script-ui-refresh")).clicked() {
                 self.files = list_scripts(Path::new(&self.folder));
             }
         });
@@ -195,7 +198,7 @@ impl ScriptUi {
             .max_height(120.0)
             .show(ui, |ui| {
                 if self.files.is_empty() {
-                    ui.weak("No .py files in this folder.");
+                    ui.weak(tr!("script-ui-no-py-files-in-this-folder"));
                 }
                 for f in &self.files {
                     let name = f
@@ -209,14 +212,19 @@ impl ScriptUi {
             });
         ui.horizontal(|ui| {
             let can_run = self.selected.is_some() && !running;
-            if ui.add_enabled(can_run, egui::Button::new("Run")).clicked() {
+            if ui
+                .add_enabled(can_run, egui::Button::new(tr!("script-ui-run")))
+                .clicked()
+            {
                 self.want_run = self.selected.clone();
             }
-            let stop = ui.add_enabled(running, egui::Button::new("Stop")).clicked();
+            let stop = ui
+                .add_enabled(running, egui::Button::new(tr!("script-ui-stop")))
+                .clicked();
             if let (true, Some(id)) = (stop, self.run) {
                 session.scripting.host.stop(id);
             }
-            if ui.button("Clear console").clicked() {
+            if ui.button(tr!("script-ui-clear-console")).clicked() {
                 self.lines.clear();
             }
             if let Some(st) = &self.status {
@@ -224,7 +232,7 @@ impl ScriptUi {
             }
         });
         ui.separator();
-        ui.strong("Console");
+        ui.strong(tr!("script-ui-console"));
         egui::ScrollArea::vertical()
             .id_salt("script_console")
             .stick_to_bottom(true)
@@ -258,13 +266,16 @@ impl ScriptUi {
                     self.running = None;
                     match kadakas_api::user_finish(session, job, result) {
                         Ok(v) if v["ok"] == json!(false) => {
-                            *status = format!(
-                                "Plug-in object: {}",
-                                v["error"].as_str().unwrap_or("the script failed")
+                            *status = tr!(
+                                "script-ui-plug-in-object-2",
+                                message = v["error"].as_str().map_or_else(
+                                    || tr!("script-ui-the-script-failed"),
+                                    str::to_string
+                                )
                             );
                         }
                         Ok(_) => {}
-                        Err(e) => *status = format!("Plug-in object: {}", e.message),
+                        Err(e) => *status = tr!("script-ui-plug-in-object-2", message = e.message),
                     }
                     session
                         .selection
@@ -273,7 +284,7 @@ impl ScriptUi {
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.running = None;
-                    *status = "Plug-in object: the script thread ended without an answer".into();
+                    *status = tr!("script-ui-plug-in-object-the-script-thread-ended");
                 }
             }
         }
@@ -306,32 +317,41 @@ impl ScriptUi {
             return;
         };
         let mut decision = None;
-        egui::Window::new("Trust this plug-in?")
+        egui::Window::new(tr!("script-ui-trust-this-plug-in"))
+            .id(egui::Id::new("win-trust-this-plug-in"))
             .collapsible(false)
             .default_width(560.0)
             .show(ctx, |ui| {
                 ui.strong(info["name"].as_str().unwrap_or(""));
-                ui.label(format!("Comes from: {}", info["origin"].as_str().unwrap_or("")));
-                ui.small(format!("Script hash (SHA-256): {}", info["script_hash"].as_str().unwrap_or("")));
+                ui.label(tr!(
+                    "script-ui-comes-from",
+                    origin = info["origin"].as_str().unwrap_or("")
+                ));
+                ui.small(tr!(
+                    "script-ui-script-hash-sha-256",
+                    hash = info["script_hash"].as_str().unwrap_or("")
+                ));
                 ui.colored_label(
                     Color32::from_rgb(200, 40, 40),
-                    "This is a Python program. If you trust it, it runs with your rights, on your files and your network, each time the object is regenerated. Read it first.",
+                    tr!("script-ui-this-is-a-python-program-if-you"),
                 );
                 egui::ScrollArea::vertical()
                     .max_height(320.0)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new(info["script"].as_str().unwrap_or("")).monospace());
+                        ui.label(
+                            egui::RichText::new(info["script"].as_str().unwrap_or("")).monospace(),
+                        );
                     });
                 ui.horizontal(|ui| {
-                    if ui.button("Trust this script").clicked() {
+                    if ui.button(tr!("script-ui-trust-this-script")).clicked() {
                         decision = Some(true);
                     }
-                    if ui.button("Do not trust").clicked() {
+                    if ui.button(tr!("script-ui-do-not-trust")).clicked() {
                         decision = Some(false);
                     }
                 });
-                ui.small("Trust is for this exact text. A changed script asks again.");
+                ui.small(tr!("script-ui-trust-is-for-this-exact-text-a"));
             });
         match decision {
             Some(true) => {
@@ -372,29 +392,32 @@ impl ScriptUi {
         let edit = self.edit.as_mut().expect("set above");
         let trusted = info["trusted"] == json!(true);
         ui.separator();
-        ui.strong(format!(
-            "Plug-in object: {}",
-            info["name"].as_str().unwrap_or("")
+        ui.strong(tr!(
+            "script-ui-plug-in-object-3",
+            name = info["name"].as_str().unwrap_or("")
         ));
         if !trusted {
             ui.colored_label(
                 Color32::from_rgb(200, 120, 0),
-                "\u{26a0} The script is not trusted, so it does not run.",
+                tr!("script-ui-the-script-is-not-trusted-so-it"),
             );
-            if ui.button("Review script...").clicked() {
+            if ui.button(tr!("script-ui-review-script")).clicked() {
                 self.review = Some(id);
             }
         }
         if let Some(err) = info["error"].as_str() {
-            ui.colored_label(Color32::from_rgb(200, 40, 40), "\u{26a0} The script failed")
-                .on_hover_text(err);
+            ui.colored_label(
+                Color32::from_rgb(200, 40, 40),
+                tr!("script-ui-the-script-failed-2"),
+            )
+            .on_hover_text(err);
             ui.small(err);
-            ui.small("The shapes are from the last good run.");
+            ui.small(tr!("script-ui-the-shapes-are-from-the-last-good"));
         }
         if let Some(problem) = info["param_problem"].as_str() {
             ui.colored_label(
                 Color32::from_rgb(200, 40, 40),
-                format!("\u{26a0} {problem}"),
+                tr!("script-ui-text", problem = problem),
             );
         }
         let schema = info["schema"].as_array().cloned().unwrap_or_default();
@@ -410,21 +433,22 @@ impl ScriptUi {
         });
         let settled = !ui.input(|i| i.pointer.any_down()) && ui.memory(|m| m.focused().is_none());
         let reset = ui
-            .add_enabled(trusted, egui::Button::new("Reset"))
-            .on_hover_text("Run the script again")
+            .add_enabled(trusted, egui::Button::new(tr!("script-ui-reset")))
+            .on_hover_text(tr!("script-ui-run-the-script-again"))
             .clicked();
         if let Some(r) = &self.running {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(format!(
-                    "Running the script... {:.0} s",
-                    r.started.elapsed().as_secs_f32()
+                ui.label(tr!(
+                    "script-ui-running-the-script-seconds",
+                    seconds = kadakas_units::current()
+                        .number_text(f64::from(r.started.elapsed().as_secs_f32()), 0)
                 ));
             });
         } else if !self.queue.is_empty() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Waiting to run the script...");
+                ui.label(tr!("script-ui-waiting-to-run-the-script"));
             });
         }
         if trusted && ((edit.dirty && settled) || reset) {
@@ -439,7 +463,7 @@ impl ScriptUi {
                 Ok(job) => self.submit(job),
                 Err(e) if e.code == UNTRUSTED_CODE => self.review = Some(id),
                 Err(e) => {
-                    *status = format!("Plug-in object: {}", e.message);
+                    *status = tr!("script-ui-plug-in-object-2", message = e.message);
                     // Go back to the saved values.
                     self.edit = None;
                 }
@@ -489,7 +513,7 @@ fn param_widget(ui: &mut Ui, p: &Value, value: &mut Value, id_salt: &str) -> boo
                     .range(lo..=hi)
                     .speed(if ty == "length" { 10.0 } else { 0.1 });
                 if ty == "length" {
-                    d = d.suffix(" mm");
+                    d = d.length();
                 }
                 if ui.add(d).changed() && x != shown {
                     changed = true;

@@ -28,7 +28,7 @@ mod length;
 mod number;
 
 pub use angle::{AngleFormat, format_angle, parse_angle};
-pub use area::{AreaUnit, VolumeUnit, format_area, format_volume, parse_area};
+pub use area::{AreaUnit, VolumeUnit, format_area, format_volume, parse_area, parse_volume};
 pub use date::{Date, DateFormat, days_in_month, is_leap};
 pub use length::{LengthUnit, format_drawing, format_ftin_drawing, format_length, parse_length};
 pub use number::{Decimal, Grouping, NumberFormat, round_half_away, trim_negative_zero};
@@ -106,6 +106,50 @@ impl Units {
         format_length(mm, self.length, decimals, self.inch_fraction, &self.number)
     }
 
+    /// A length for a widget that a person drags or edits: the number with the unit, without
+    /// trailing zeros (`12.5 mm`, `1.2 m`), and without digit grouping. Feet and inches keep
+    /// their fractions (`5' 6 1/2"`). Parsing the text with `parse_length` gives the length back.
+    pub fn length_compact(&self, mm: f64) -> String {
+        let plain = self.number.plain();
+        let places = match self.length {
+            LengthUnit::Mm => 3,
+            LengthUnit::Cm => 4,
+            LengthUnit::M => 6,
+            LengthUnit::Ft => 5,
+            LengthUnit::In | LengthUnit::FtIn => 4,
+        };
+        match self.length {
+            LengthUnit::Mm | LengthUnit::Cm | LengthUnit::M | LengthUnit::Ft => {
+                if !mm.is_finite() {
+                    return plain.format(mm, 0);
+                }
+                format!(
+                    "{}{}",
+                    plain.format_trim(mm / self.length.mm_per_unit(), places),
+                    self.length.suffix()
+                )
+            }
+            LengthUnit::In | LengthUnit::FtIn if self.inch_fraction == 0 => {
+                format_length(mm, self.length, places, 0, &plain)
+            }
+            _ => format_length(mm, self.length, 2, self.inch_fraction, &plain),
+        }
+    }
+
+    /// An angle for a widget that a person drags or edits (`45.5°`, `45°30'00"`).
+    pub fn angle_compact(&self, deg: f64) -> String {
+        match self.angle {
+            AngleFormat::Decimal => {
+                if deg.is_finite() {
+                    format!("{}\u{b0}", self.number.plain().format_trim(deg, 3))
+                } else {
+                    self.number.plain().format(deg, 0)
+                }
+            }
+            f => format_angle(deg, f, 1, &self.number.plain()),
+        }
+    }
+
     /// The text that goes into an edit field for a length: no digit grouping, and no unit for the
     /// metric units and feet (the field shows the unit next to it, see `length_field_unit`).
     /// Inches and feet with inches include their marks (`5' 6"`), because the marks are the unit.
@@ -157,6 +201,40 @@ impl Units {
     /// A volume in mm³ with its unit.
     pub fn volume_text(&self, mm3: f64) -> String {
         format_volume(mm3, self.volume_unit(), 2, &self.number)
+    }
+
+    /// Reads a volume and gives mm³.
+    pub fn parse_volume(&self, text: &str) -> Option<f64> {
+        parse_volume(text, self.volume_unit(), &self.number)
+    }
+
+    /// An area for a widget that a person drags or edits: no trailing zeros, no grouping.
+    pub fn area_compact(&self, mm2: f64) -> String {
+        if !mm2.is_finite() {
+            return self.number.plain().format(mm2, 0);
+        }
+        format!(
+            "{}{}",
+            self.number
+                .plain()
+                .format_trim(mm2 / self.area.mm2_per_unit(), 6),
+            self.area.suffix()
+        )
+    }
+
+    /// A volume for a widget that a person drags or edits: no trailing zeros, no grouping.
+    pub fn volume_compact(&self, mm3: f64) -> String {
+        let unit = self.volume_unit();
+        if !mm3.is_finite() {
+            return self.number.plain().format(mm3, 0);
+        }
+        format!(
+            "{}{}",
+            self.number
+                .plain()
+                .format_trim(mm3 / unit.mm3_per_unit(), 6),
+            unit.suffix()
+        )
     }
 
     /// An angle in degrees.
@@ -348,6 +426,55 @@ mod tests {
         let d = Date::new(2026, 10, 11).unwrap();
         assert_eq!(u.date_text(d), "11.10.2026");
         assert_eq!(u.parse_date("11.10.2026"), Some(d));
+    }
+
+    #[test]
+    fn compact_text_for_widgets_round_trips() {
+        let mut u = et();
+        assert_eq!(u.length_compact(12.5), "12,5 mm");
+        assert_eq!(u.length_compact(1234.0), "1234 mm");
+        u.length = LengthUnit::M;
+        assert_eq!(u.length_compact(1250.0), "1,25 m");
+        u.length = LengthUnit::Cm;
+        assert_eq!(u.length_compact(12.0), "1,2 cm");
+        u.length = LengthUnit::Ft;
+        assert_eq!(u.length_compact(609.6), "2'");
+        u.length = LengthUnit::FtIn;
+        assert_eq!(u.length_compact(25.4 * 66.5), "5' 6 1/2\"");
+        u.length = LengthUnit::In;
+        assert_eq!(u.length_compact(25.4 * 6.25), "6 1/4\"");
+        u.inch_fraction = 0;
+        assert_eq!(u.length_compact(25.4 * 6.25), "6,25\"");
+        for l in LengthUnit::ALL {
+            u.length = l;
+            u.inch_fraction = 16;
+            let t = u.length_compact(1234.0);
+            assert!(u.parse_length(&t).is_some(), "{t}");
+        }
+        assert_eq!(u.length_compact(f64::NAN), "\u{2013}");
+        let mut a = et();
+        assert_eq!(a.angle_compact(45.5), "45,5\u{b0}");
+        a.angle = AngleFormat::Dms;
+        assert_eq!(a.angle_compact(45.5), "45\u{b0}30'00,0\"");
+        assert_eq!(Units::METRIC.angle_compact(f64::INFINITY), "\u{2013}");
+    }
+
+    #[test]
+    fn compact_areas_and_volumes_round_trip() {
+        let mut u = et();
+        assert_eq!(u.area_compact(12.5e6), "12,5 m\u{b2}");
+        assert_eq!(u.volume_compact(2.5e9), "2,5 m\u{b3}");
+        assert_eq!(u.parse_volume("2,5 m\u{b3}"), Some(2.5e9));
+        assert_eq!(u.area_compact(f64::NAN), "\u{2013}");
+        assert_eq!(u.volume_compact(f64::NAN), "\u{2013}");
+        u.area = AreaUnit::Ac;
+        u.length = LengthUnit::Ft;
+        let t = u.area_compact(4_046_856_422.4);
+        assert!(t.ends_with(" ac"), "{t}");
+        assert!((u.parse_area(&t).unwrap() - 4_046_856_422.4).abs() < 1.0);
+        let v = u.volume_compact(764_554_857_984.0);
+        assert!(v.ends_with(" yd\u{b3}"), "{v}");
+        assert!((u.parse_volume(&v).unwrap() - 764_554_857_984.0).abs() < 1e3);
     }
 
     #[test]

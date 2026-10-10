@@ -16,6 +16,7 @@ mod canvas;
 mod canvas3d;
 mod data_ui;
 mod databar;
+mod enum_names;
 mod file_io;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_dialogs;
@@ -29,6 +30,7 @@ mod io_dialog;
 mod irrigation_ui;
 mod keymap;
 mod layout;
+mod locale;
 mod panels;
 mod plant_draw;
 mod plant_sheet_ui;
@@ -47,6 +49,7 @@ mod site_ui;
 mod snap_ui;
 mod tess;
 mod theme;
+mod units_ui;
 mod vertex;
 mod view;
 mod view3d;
@@ -74,6 +77,7 @@ fn main() -> eframe::Result {
 /// eframe asks for WebGPU first and falls back to WebGL2.
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    use kadakas_l10n::tr;
     use wasm_bindgen::JsCast as _;
 
     wasm_bindgen_futures::spawn_local(async {
@@ -94,9 +98,9 @@ fn main() {
         if let Some(note) = document.get_element_by_id("loading_text") {
             match result {
                 Ok(()) => note.remove(),
-                Err(e) => note.set_inner_html(&format!(
-                    "Kadakas could not start. This browser needs WebGPU or WebGL2. ({e:?})"
-                )),
+                Err(e) => {
+                    note.set_inner_html(&tr!("main-could-not-start", error = format!("{e:?}")))
+                }
             }
         }
     });

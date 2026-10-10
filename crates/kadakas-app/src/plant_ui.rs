@@ -1,6 +1,7 @@
 //! Panels for plants: the Resource Manager (plant styles), the plant schedule, the plant part of
 //! Object Info, and the placement controls of the Plant tool. All changes are commands.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{DragValue, Ui};
 use kadakas_api::Session;
 use kadakas_core::command::Command;
@@ -11,6 +12,7 @@ use kadakas_core::plants::style::{
 };
 use kadakas_core::plants::tree::{self, DEFAULT_RPZ_FACTOR};
 use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_l10n::{msg, tr, translate};
 use kadakas_plants::placement::Pattern;
 use kadakas_plants::schedule;
 use serde_json::{Map, Value, json};
@@ -28,22 +30,19 @@ fn spacing_row(ui: &mut Ui, ps: &mut kadakas_ui_core::tools::PlantSettings, labe
         ui.label(label);
         ui.add_enabled(!ps.spacing_is_spread, mm(&mut ps.spacing));
     });
-    ui.checkbox(&mut ps.spacing_is_spread, "Spacing = spread")
-        .on_hover_text("Plants are placed one canopy diameter apart");
+    ui.checkbox(&mut ps.spacing_is_spread, tr!("plant-ui-spacing-spread"))
+        .on_hover_text(tr!("plant-ui-plants-are-placed-one-canopy-diameter-apart"));
 }
 
 fn mm(v: &mut f64) -> DragValue<'_> {
-    DragValue::new(v)
-        .speed(25.0)
-        .range(10.0..=1.0e6)
-        .suffix(" mm")
+    DragValue::new(v).speed(25.0).range(10.0..=1.0e6).length()
 }
 
 /// Placement controls of the Plant tool. Returns true if the mode changed.
 pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) -> bool {
     let before = settings.plant.mode;
     ui.add_space(8.0);
-    ui.label("Placement mode");
+    ui.label(tr!("plant-ui-placement-mode"));
     ui.horizontal_wrapped(|ui| {
         for m in PlantMode::ALL {
             if ui
@@ -56,32 +55,32 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
         }
     });
     let ps = &mut settings.plant;
-    ui.label("Plant style");
+    ui.label(tr!("plant-ui-plant-style"));
     let name = ps
         .style
         .and_then(|id| doc.resources.get(id))
-        .map_or("(none: use the Data bar)".to_string(), |r| r.name.clone());
+        .map_or(tr!("plant-ui-none-use-the-data-bar"), |r| r.name.clone());
     egui::ComboBox::from_id_salt("plant_tool_style")
         .selected_text(name)
         .width(150.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut ps.style, None, "(none: use the Data bar)");
+            ui.selectable_value(&mut ps.style, None, tr!("plant-ui-none-use-the-data-bar"));
             for (id, name, _) in doc.resources.plant_styles() {
                 ui.selectable_value(&mut ps.style, Some(id), name);
             }
         });
     match ps.mode {
         PlantMode::Single => {
-            ui.checkbox(&mut ps.existing_tree, "Existing (survey) tree")
-                .on_hover_text("Place an existing tree with a root protection zone, not a plant");
+            ui.checkbox(&mut ps.existing_tree, tr!("plant-ui-existing-survey-tree"))
+                .on_hover_text(tr!("plant-ui-place-an-existing-tree-with-a-root"));
             if ps.existing_tree {
                 ui.horizontal(|ui| {
-                    ui.label("Trunk diameter");
+                    ui.label(tr!("plant-ui-trunk-diameter"));
                     ui.add(
                         DragValue::new(&mut ps.tree_dbh)
                             .speed(10.0)
                             .range(10.0..=5000.0)
-                            .suffix(" mm"),
+                            .length(),
                     );
                 });
             }
@@ -100,51 +99,51 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
                     }
                 });
             if matches!(ps.by, By::Spacing | By::SpacingAndCount) {
-                spacing_row(ui, ps, "Spacing");
+                spacing_row(ui, ps, &tr!("plant-ui-spacing"));
             }
             if matches!(ps.by, By::Count | By::SpacingAndCount) {
                 ui.horizontal(|ui| {
-                    ui.label("Count");
+                    ui.label(tr!("plant-ui-count"));
                     ui.add(DragValue::new(&mut ps.count).speed(0.2).range(1..=20000));
                 });
             }
             if ps.by == By::Density {
                 ui.horizontal(|ui| {
-                    ui.label("Density");
+                    ui.label(tr!("plant-ui-density"));
                     ui.add(
                         DragValue::new(&mut ps.density)
                             .speed(0.05)
                             .range(0.01..=400.0)
-                            .suffix(" /m\u{b2}"),
+                            .per_area(),
                     );
                 });
             }
         }
         PlantMode::Hedgerow => {
-            spacing_row(ui, ps, "Spacing in a row");
+            spacing_row(ui, ps, &tr!("plant-ui-spacing-in-a-row"));
             ui.horizontal(|ui| {
-                ui.label("Rows");
+                ui.label(tr!("plant-ui-rows"));
                 ui.add(DragValue::new(&mut ps.rows).speed(0.2).range(1..=20));
             });
             ui.horizontal(|ui| {
-                ui.label("Row spacing");
+                ui.label(tr!("plant-ui-row-spacing"));
                 ui.add(mm(&mut ps.row_spacing));
             });
-            ui.checkbox(&mut ps.stagger, "Stagger the rows");
+            ui.checkbox(&mut ps.stagger, tr!("plant-ui-stagger-the-rows"));
         }
         PlantMode::Grid | PlantMode::Triangular => {
             spacing_row(
                 ui,
                 ps,
-                if ps.mode == PlantMode::Grid {
-                    "Spacing X"
+                &if ps.mode == PlantMode::Grid {
+                    tr!("plant-ui-spacing-x")
                 } else {
-                    "Spacing"
+                    tr!("plant-ui-spacing")
                 },
             );
             if ps.mode == PlantMode::Grid && !ps.spacing_is_spread {
                 ui.horizontal(|ui| {
-                    ui.label("Spacing Y");
+                    ui.label(tr!("plant-ui-spacing-y"));
                     ui.add(mm(&mut ps.spacing_y));
                 });
             }
@@ -152,8 +151,12 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
     }
     if ps.mode == PlantMode::Fill {
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut ps.pattern, Pattern::Triangular, "Staggered");
-            ui.selectable_value(&mut ps.pattern, Pattern::Rectangular, "Grid");
+            ui.selectable_value(
+                &mut ps.pattern,
+                Pattern::Triangular,
+                tr!("plant-ui-staggered"),
+            );
+            ui.selectable_value(&mut ps.pattern, Pattern::Rectangular, tr!("plant-ui-grid"));
         });
     }
     if matches!(
@@ -161,17 +164,17 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
         PlantMode::Grid | PlantMode::Triangular | PlantMode::Fill
     ) {
         ui.horizontal(|ui| {
-            ui.label("Edge margin");
+            ui.label(tr!("plant-ui-edge-margin"));
             ui.add(
                 DragValue::new(&mut ps.margin)
                     .speed(25.0)
                     .range(0.0..=1.0e6)
-                    .suffix(" mm"),
+                    .length(),
             );
         });
     }
     ui.horizontal(|ui| {
-        ui.label("Size variation");
+        ui.label(tr!("plant-ui-size-variation"));
         let mut percent = ps.size_variation * 100.0;
         if ui
             .add(
@@ -186,14 +189,18 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
         }
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut ps.random_rotation, "Random rotation");
-        ui.add(DragValue::new(&mut ps.seed).speed(1.0).prefix("seed "));
+        ui.checkbox(&mut ps.random_rotation, tr!("plant-ui-random-rotation"));
+        ui.add(
+            DragValue::new(&mut ps.seed)
+                .speed(1.0)
+                .prefix(tr!("plant-ui-seed")),
+        );
     });
     ui.add_enabled(
         ps.style.is_some(),
-        egui::Checkbox::new(&mut ps.tag, "Add plant tag"),
+        egui::Checkbox::new(&mut ps.tag, tr!("plant-ui-add-plant-tag")),
     )
-    .on_hover_text("A tag with the ID code and the count. Needs a plant style.");
+    .on_hover_text(tr!("plant-ui-a-tag-with-the-id-code-and"));
     ps.mode != before
 }
 
@@ -243,7 +250,7 @@ fn color_row(ui: &mut Ui, label: &str, value: &mut Option<Color>) -> bool {
         let mut on = value.is_some();
         if ui
             .checkbox(&mut on, label)
-            .on_hover_text("Off: use the class color")
+            .on_hover_text(tr!("plant-ui-off-use-the-class-color"))
             .changed()
         {
             *value = on.then_some(Color([90, 160, 80, 255]));
@@ -271,56 +278,81 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
     egui::Grid::new("plant_style_form")
         .num_columns(2)
         .show(ui, |ui| {
-            text(ui, "Style name", name);
-            text(ui, "Botanical name", &mut st.botanical_name);
-            text(ui, "Common name", &mut st.common_name);
-            text(ui, "ID code", &mut st.id_code);
-            text(ui, "Size", &mut st.size);
-            text(ui, "Container", &mut st.container);
-            text(ui, "Root", &mut st.root);
+            text(ui, &tr!("plant-ui-style-name"), name);
+            text(ui, &tr!("plant-ui-botanical-name"), &mut st.botanical_name);
+            text(ui, &tr!("plant-ui-common-name"), &mut st.common_name);
+            text(ui, &tr!("plant-ui-id-code"), &mut st.id_code);
+            text(ui, &tr!("plant-ui-size"), &mut st.size);
+            text(ui, &tr!("plant-ui-container"), &mut st.container);
+            text(ui, &tr!("plant-ui-root"), &mut st.root);
         });
     egui::Grid::new("plant_style_numbers")
         .num_columns(2)
         .show(ui, |ui| {
-            for (label, v, speed, min) in [
-                ("Spread (mm)", &mut st.spread, 50.0, 1.0),
-                ("Height (mm)", &mut st.height, 50.0, 1.0),
-                ("Price", &mut st.price, 0.5, 0.0),
+            for (label, v, speed, min, is_length) in [
+                (
+                    tr!("plant-ui-spread-label"),
+                    &mut st.spread,
+                    50.0,
+                    1.0,
+                    true,
+                ),
+                (
+                    tr!("plant-ui-height-label"),
+                    &mut st.height,
+                    50.0,
+                    1.0,
+                    true,
+                ),
+                (tr!("plant-ui-price"), &mut st.price, 0.5, 0.0, false),
             ] {
                 ui.label(label);
-                let r = ui.add(DragValue::new(v).speed(speed).range(min..=1.0e9));
+                let drag = DragValue::new(v).speed(speed).range(min..=1.0e9);
+                let r = ui.add(if is_length { drag.length() } else { drag });
                 commit |= r.drag_stopped() || r.lost_focus();
                 ui.end_row();
             }
-            ui.label("Category");
+            ui.label(tr!("plant-ui-category"));
             let before = st.category;
             egui::ComboBox::from_id_salt("plant_category")
-                .selected_text(st.category.id())
+                .selected_text(crate::enum_names::name("category", st.category.id()))
                 .show_ui(ui, |ui| {
                     for c in PlantCategory::ALL {
-                        ui.selectable_value(&mut st.category, c, c.id());
+                        ui.selectable_value(
+                            &mut st.category,
+                            c,
+                            crate::enum_names::name("category", c.id()),
+                        );
                     }
                 });
             commit |= st.category != before;
             ui.end_row();
-            ui.label("2D graphic");
+            ui.label(tr!("plant-ui-2d-graphic"));
             let before = st.graphic;
             egui::ComboBox::from_id_salt("plant_graphic")
-                .selected_text(st.graphic.id())
+                .selected_text(crate::enum_names::name("graphic", st.graphic.id()))
                 .show_ui(ui, |ui| {
                     for g in PlantGraphic::ALL {
-                        ui.selectable_value(&mut st.graphic, g, g.id());
+                        ui.selectable_value(
+                            &mut st.graphic,
+                            g,
+                            crate::enum_names::name("graphic", g.id()),
+                        );
                     }
                 });
             commit |= st.graphic != before;
             ui.end_row();
-            ui.label("3D form");
+            ui.label(tr!("plant-ui-3d-form"));
             let before = st.form;
             egui::ComboBox::from_id_salt("plant_form")
-                .selected_text(st.form.id())
+                .selected_text(crate::enum_names::name("form", st.form.id()))
                 .show_ui(ui, |ui| {
                     for f in PlantForm::ALL {
-                        ui.selectable_value(&mut st.form, f, f.id());
+                        ui.selectable_value(
+                            &mut st.form,
+                            f,
+                            crate::enum_names::name("form", f.id()),
+                        );
                     }
                 });
             commit |= st.form != before;
@@ -329,36 +361,41 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
     egui::Grid::new("plant_style_more")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.label("Quantity");
+            ui.label(tr!("plant-ui-quantity"));
             let before = st.quantity;
             egui::ComboBox::from_id_salt("plant_quantity")
-                .selected_text(st.quantity.id())
+                .selected_text(crate::enum_names::name("quantity", st.quantity.id()))
                 .show_ui(ui, |ui| {
                     for q in [QuantityType::Count, QuantityType::Area] {
-                        ui.selectable_value(&mut st.quantity, q, q.id());
+                        ui.selectable_value(
+                            &mut st.quantity,
+                            q,
+                            crate::enum_names::name("quantity", q.id()),
+                        );
                     }
                 });
             commit |= st.quantity != before;
             ui.end_row();
-            ui.label("Trunk diameter (mm)");
+            ui.label(tr!("plant-ui-trunk-diameter-label"));
             let r = ui.add(
                 DragValue::new(&mut st.trunk_diameter)
                     .speed(10.0)
-                    .range(0.0..=1.0e5),
+                    .range(0.0..=1.0e5)
+                    .length(),
             );
             commit |= r.drag_stopped() || r.lost_focus();
             ui.end_row();
-            ui.label("Tree protection zone");
+            ui.label(tr!("plant-ui-tree-protection-zone"));
             commit |= ui
                 .checkbox(&mut st.protection_zone, "")
-                .on_hover_text("Trees only. Radius is 12 x trunk diameter, at most 15 m.")
+                .on_hover_text(tr!("plant-ui-trees-only-radius-is-12-x-trunk"))
                 .changed();
             ui.end_row();
-            ui.label("Locked fields");
+            ui.label(tr!("plant-ui-locked-fields"));
             let mut text = st.locked.join(", ");
-            let r = ui
-                .text_edit_singleline(&mut text)
-                .on_hover_text("Fields that plants cannot override, for example: price, spread");
+            let r = ui.text_edit_singleline(&mut text).on_hover_text(tr!(
+                "plant-ui-fields-that-plants-cannot-override-for-example"
+            ));
             if r.changed() {
                 st.locked = text
                     .split(',')
@@ -369,41 +406,48 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             commit |= r.lost_focus();
             ui.end_row();
         });
-    ui.label("Irrigation and care");
+    ui.label(tr!("plant-ui-irrigation-and-care"));
     egui::Grid::new("plant_style_care")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.label("Water need");
+            ui.label(tr!("plant-ui-water-need"));
             let before = st.irrigation.water_need;
             egui::ComboBox::from_id_salt("plant_water_need")
-                .selected_text(st.irrigation.water_need.id())
+                .selected_text(crate::enum_names::name(
+                    "water-need",
+                    st.irrigation.water_need.id(),
+                ))
                 .show_ui(ui, |ui| {
                     for w in kadakas_core::plants::care::WaterNeed::ALL {
-                        ui.selectable_value(&mut st.irrigation.water_need, w, w.id());
+                        ui.selectable_value(
+                            &mut st.irrigation.water_need,
+                            w,
+                            crate::enum_names::name("water-need", w.id()),
+                        );
                     }
                 });
             commit |= st.irrigation.water_need != before;
             ui.end_row();
-            ui.label("Hydrozone");
+            ui.label(tr!("plant-ui-hydrozone"));
             commit |= ui
                 .text_edit_singleline(&mut st.irrigation.hydrozone)
-                .on_hover_text("Z3 matches irrigation zone 3")
+                .on_hover_text(tr!("plant-ui-z3-matches-irrigation-zone-3"))
                 .lost_focus();
             ui.end_row();
-            ui.label("Irrigated");
+            ui.label(tr!("plant-ui-irrigated"));
             commit |= ui.checkbox(&mut st.irrigation.irrigated, "").changed();
             ui.end_row();
-            ui.label("Maintenance interval");
+            ui.label(tr!("plant-ui-maintenance-interval"));
             commit |= ui
                 .text_edit_singleline(&mut st.maintenance.interval)
                 .lost_focus();
             ui.end_row();
-            ui.label("Pruning");
+            ui.label(tr!("plant-ui-pruning"));
             commit |= ui
                 .text_edit_singleline(&mut st.maintenance.pruning)
                 .lost_focus();
             ui.end_row();
-            ui.label("Hours per year");
+            ui.label(tr!("plant-ui-hours-per-year"));
             let r = ui.add(
                 DragValue::new(&mut st.maintenance.hours_per_year)
                     .speed(0.1)
@@ -412,9 +456,9 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             commit |= r.drag_stopped() || r.lost_focus();
             ui.end_row();
         });
-    commit |= color_row(ui, "Fill color", &mut st.fill);
-    commit |= color_row(ui, "Pen color", &mut st.pen);
-    ui.label("Custom data");
+    commit |= color_row(ui, &tr!("plant-ui-fill-color"), &mut st.fill);
+    commit |= color_row(ui, &tr!("plant-ui-pen-color"), &mut st.pen);
+    ui.label(tr!("plant-ui-custom-data"));
     let mut remove = None;
     for (k, v) in st.custom.iter_mut() {
         ui.horizontal(|ui| {
@@ -422,7 +466,7 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             commit |= ui.text_edit_singleline(v).lost_focus();
             if ui
                 .small_button("x")
-                .on_hover_text("Remove this field")
+                .on_hover_text(tr!("plant-ui-remove-this-field"))
                 .clicked()
             {
                 remove = Some(k.clone());
@@ -436,10 +480,10 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(new_key)
-                .hint_text("new field")
+                .hint_text(tr!("plant-ui-new-field"))
                 .desired_width(110.0),
         );
-        if ui.small_button("Add").clicked() && !new_key.trim().is_empty() {
+        if ui.small_button(tr!("plant-ui-add")).clicked() && !new_key.trim().is_empty() {
             st.custom.entry(new_key.trim().to_string()).or_default();
             new_key.clear();
             commit = true;
@@ -450,10 +494,10 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
 
 /// The Resource Manager palette: lists the plant styles, and creates, edits, duplicates and deletes them.
 pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, status: &mut String) {
-    ui.heading("Resource Manager");
+    ui.heading(tr!("plant-ui-resource-manager"));
     ui.separator();
     let mut commands: Vec<Command> = Vec::new();
-    egui::CollapsingHeader::new("Plant styles")
+    egui::CollapsingHeader::new(tr!("plant-ui-plant-styles"))
         .default_open(true)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -470,8 +514,8 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
             }
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button("New")
-                    .on_hover_text("Create a plant style")
+                    .button(tr!("plant-ui-new"))
+                    .on_hover_text(tr!("plant-ui-create-a-plant-style"))
                     .clicked()
                 {
                     let name = unique_name(doc, "Plant style");
@@ -484,7 +528,10 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                     });
                 }
                 if ui
-                    .add_enabled(st.selected.is_some(), egui::Button::new("Duplicate"))
+                    .add_enabled(
+                        st.selected.is_some(),
+                        egui::Button::new(tr!("plant-ui-duplicate")),
+                    )
                     .clicked()
                     && let Some(id) = st.selected
                     && let (Some(r), Some(s)) =
@@ -497,24 +544,24 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                 }
             });
             if ui
-                .button("Spreadsheet view...")
-                .on_hover_text("All plant styles in one table, for batch editing")
+                .button(tr!("plant-ui-spreadsheet-view"))
+                .on_hover_text(tr!("plant-ui-all-plant-styles-in-one-table-for"))
                 .clicked()
             {
                 st.sheet.open = true;
             }
             if rows.is_empty() {
-                ui.weak("No plant styles yet. Create one, or import a CSV list.");
+                ui.weak(tr!("plant-ui-no-plant-styles-yet-create-one-or"));
             }
             for (id, name, code, used) in &rows {
                 let label = if code.is_empty() {
-                    format!("{name}  ({used})")
+                    tr!("plant-ui-text", name = name, used = used)
                 } else {
-                    format!("{name}  [{code}]  ({used})")
+                    tr!("plant-ui-text-2", name = name, code = code, used = used)
                 };
                 if ui
                     .selectable_label(st.selected == Some(*id), label)
-                    .on_hover_text("Plants and tags that use the style are in brackets")
+                    .on_hover_text(tr!("plant-ui-plants-and-tags-that-use-the-style"))
                     .clicked()
                 {
                     st.selected = Some(*id);
@@ -557,9 +604,7 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                 ui.separator();
                 let n = used_by(doc, id);
                 if n > 0 {
-                    ui.label(format!(
-                        "In use by {n} object(s). Choose a style to take them over, then delete."
-                    ));
+                    ui.label(tr!("plant-ui-in-use-by-object-s-choose-a", n = n));
                     let others: Vec<(ResourceId, &str)> = doc
                         .resources
                         .plant_styles()
@@ -578,7 +623,7 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                             }
                         });
                 }
-                if ui.button("Delete style").clicked() {
+                if ui.button(tr!("plant-ui-delete-style")).clicked() {
                     commands.push(Command::DeleteResource {
                         id,
                         reassign: st.reassign.filter(|r| *r != id),
@@ -589,15 +634,13 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
             #[cfg(not(target_arch = "wasm32"))]
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button("Import CSV...")
-                    .on_hover_text(
-                        "Create plant styles from a CSV list. Columns are matched by header.",
-                    )
+                    .button(tr!("plant-ui-import-csv"))
+                    .on_hover_text(tr!("plant-ui-create-plant-styles-from-a-csv-list"))
                     .clicked()
                 {
                     *status = import_csv_file(session);
                 }
-                if ui.button("Export CSV...").clicked() {
+                if ui.button(tr!("plant-ui-export-csv")).clicked() {
                     *status = export_csv_file(session);
                 }
             });
@@ -628,18 +671,19 @@ fn import_csv_file(session: &mut Session) -> String {
     };
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(e) => return format!("Cannot read {}: {e}", path.display()),
+        Err(e) => return tr!("plant-ui-cannot-read", path = path.display(), e = e),
     };
     match session.handle("plant_style.import_csv", json!({ "csv": text })) {
         Ok(v) => {
             let warnings = v["warnings"].as_array().map_or(0, Vec::len);
-            format!(
-                "Imported {} plant style(s), {} skipped, {warnings} warning(s)",
-                v["created_count"],
-                v["skipped"].as_array().map_or(0, Vec::len)
+            tr!(
+                "plant-ui-imported-plant-style-s-skipped-warning-s",
+                imported = v["created_count"],
+                skipped = v["skipped"].as_array().map_or(0, Vec::len),
+                warnings = warnings
             )
         }
-        Err(e) => format!("Import failed: {}", e.message),
+        Err(e) => tr!("plant-ui-import-failed", message = e.message),
     }
 }
 
@@ -658,8 +702,8 @@ fn export_csv_file(session: &mut Session) -> String {
         .and_then(|v| v["csv"].as_str().map(String::from))
         .unwrap_or_default();
     match kadakas_sys::fsio::write_atomic(&path, csv.as_bytes()) {
-        Ok(()) => format!("Exported to {}", path.display()),
-        Err(e) => format!("Cannot write {}: {e}", path.display()),
+        Ok(()) => tr!("plant-ui-exported-to", path = path.display()),
+        Err(e) => tr!("plant-ui-cannot-write", path = path.display(), e = e),
     }
 }
 
@@ -668,17 +712,24 @@ fn export_csv_file(session: &mut Session) -> String {
 
 /// The plant schedule palette: a live table with counts and prices.
 pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
-    ui.heading("Plant schedule");
+    ui.heading(tr!("plant-ui-plant-schedule"));
     ui.separator();
     let sch = schedule::schedule(session.editor.doc());
     if sch.rows.is_empty() {
-        ui.weak("No plants in the drawing.");
+        ui.weak(tr!("plant-ui-no-plants-in-the-drawing"));
         return;
     }
     egui::Grid::new("plant_schedule_grid")
         .striped(true)
         .show(ui, |ui| {
-            for h in ["ID", "Name", "Size", "Count", "Price", "Total"] {
+            for h in [
+                tr!("plant-ui-id"),
+                tr!("plant-ui-name"),
+                tr!("plant-ui-size"),
+                tr!("plant-ui-count"),
+                tr!("plant-ui-price"),
+                tr!("plant-ui-total"),
+            ] {
                 ui.strong(h);
             }
             ui.end_row();
@@ -687,20 +738,20 @@ pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
                 ui.label(&r.name);
                 ui.label(&r.size);
                 ui.label(r.count.to_string());
-                ui.label(format!("{:.2}", r.unit_price));
-                ui.label(format!("{:.2}", r.total_price));
+                ui.label(kadakas_units::current().number_text(r.unit_price, 2));
+                ui.label(kadakas_units::current().number_text(r.total_price, 2));
                 ui.end_row();
             }
             ui.strong("");
-            ui.strong("Total");
+            ui.strong(tr!("plant-ui-total"));
             ui.strong("");
             ui.strong(sch.total_count.to_string());
             ui.strong("");
-            ui.strong(format!("{:.2}", sch.total_price));
+            ui.strong(kadakas_units::current().number_text(sch.total_price, 2));
             ui.end_row();
         });
     #[cfg(not(target_arch = "wasm32"))]
-    if ui.button("Export CSV...").clicked() {
+    if ui.button(tr!("plant-ui-export-csv")).clicked() {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("CSV", &["csv"])
             .set_file_name("plant-schedule.csv")
@@ -710,8 +761,8 @@ pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
         };
         *status =
             match kadakas_sys::fsio::write_atomic(&path, schedule::schedule_csv(&sch).as_bytes()) {
-                Ok(()) => format!("Exported to {}", path.display()),
-                Err(e) => format!("Cannot write {}: {e}", path.display()),
+                Ok(()) => tr!("plant-ui-exported-to", arg1 = path.display()),
+                Err(e) => tr!("plant-ui-cannot-write", arg1 = path.display(), e = e),
             };
     }
     #[cfg(target_arch = "wasm32")]
@@ -723,11 +774,11 @@ pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
 
 /// Fields of a plant that an instance can override, with their labels.
 const OVERRIDES: [(&str, &str); 5] = [
-    ("spread", "Spread"),
-    ("height", "Height"),
-    ("price", "Price"),
-    ("botanical_name", "Botanical name"),
-    ("id_code", "ID code"),
+    ("spread", msg!("plant-ui-spread")),
+    ("height", msg!("plant-ui-height")),
+    ("price", msg!("plant-ui-price")),
+    ("botanical_name", msg!("plant-ui-botanical-name")),
+    ("id_code", msg!("plant-ui-id-code")),
 ];
 
 /// The plant style part of Object Info: the style, and which fields the plant overrides.
@@ -740,25 +791,25 @@ pub fn terrain_buttons(ui: &mut Ui, session: &mut Session, id: ObjectId, status:
         .is_some_and(|o| link::ground_z(o).is_some());
     ui.horizontal(|ui| {
         if ui
-            .button("Place on terrain")
-            .on_hover_text("Stand the plant on the ground height of the site model")
+            .button(tr!("plant-ui-place-on-terrain"))
+            .on_hover_text(tr!("plant-ui-stand-the-plant-on-the-ground-height"))
             .clicked()
         {
             match session.handle("plants.drape", json!({"ids": [id]})) {
                 Ok(v) if v["updated"] == 0 => {
-                    *status = "No site model on the layer of this plant".into()
+                    *status = tr!("plant-ui-no-site-model-on-the-layer-of")
                 }
                 Ok(_) => {}
-                Err(e) => *status = format!("Error: {}", e.message),
+                Err(e) => *status = tr!("plant-ui-error", message = e.message),
             }
         }
         if ui
-            .add_enabled(has_ground, egui::Button::new("Release"))
-            .on_hover_text("Back to the elevation of the layer")
+            .add_enabled(has_ground, egui::Button::new(tr!("plant-ui-release")))
+            .on_hover_text(tr!("plant-ui-back-to-the-elevation-of-the-layer"))
             .clicked()
             && let Err(e) = session.handle("plants.drape", json!({"ids": [id], "release": true}))
         {
-            *status = format!("Error: {}", e.message);
+            *status = tr!("plant-ui-error", message = e.message);
         }
     });
 }
@@ -771,19 +822,23 @@ pub fn plant_tag_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: 
     let current = kadakas_core::plants::tag::TagFormat::of(obj);
     let mut f = current;
     ui.separator();
-    ui.strong("Tag format");
+    ui.strong(tr!("plant-ui-tag-format"));
     egui::ComboBox::from_id_salt(("plant_tag_levels", id))
         .selected_text(match f.levels {
-            1 => "Level 1: ID and count",
-            2 => "Level 2: plus plant name",
-            _ => "Level 3: plus size and container",
+            1 => tr!("plant-ui-level-1-id-and-count"),
+            2 => tr!("plant-ui-level-2-plus-plant-name"),
+            _ => tr!("plant-ui-level-3-plus-size-and-container"),
         })
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut f.levels, 1, "Level 1: ID and count");
-            ui.selectable_value(&mut f.levels, 2, "Level 2: plus plant name");
-            ui.selectable_value(&mut f.levels, 3, "Level 3: plus size and container");
+            ui.selectable_value(&mut f.levels, 1, tr!("plant-ui-level-1-id-and-count"));
+            ui.selectable_value(&mut f.levels, 2, tr!("plant-ui-level-2-plus-plant-name"));
+            ui.selectable_value(
+                &mut f.levels,
+                3,
+                tr!("plant-ui-level-3-plus-size-and-container"),
+            );
         });
-    ui.checkbox(&mut f.bubble, "ID bubble");
+    ui.checkbox(&mut f.bubble, tr!("plant-ui-id-bubble"));
     if f != current {
         let cmd = Command::SetData {
             id,
@@ -812,15 +867,15 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
         .map(|(i, n, _)| (i, n.to_string()))
         .collect();
     let mut chosen = eff.style_id;
-    let selected_text = eff.style_id.map_or("(none: by instance)".to_string(), |_| {
-        eff.style_name.clone()
-    });
+    let selected_text = eff
+        .style_id
+        .map_or(tr!("plant-ui-none-by-instance"), |_| eff.style_name.clone());
     ui.separator();
-    ui.strong("Plant style");
+    ui.strong(tr!("plant-ui-plant-style"));
     egui::ComboBox::from_id_salt(("plant_style_of", id))
         .selected_text(selected_text)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut chosen, None, "(none: by instance)");
+            ui.selectable_value(&mut chosen, None, tr!("plant-ui-none-by-instance"));
             for (sid, name) in &styles {
                 ui.selectable_value(&mut chosen, Some(*sid), name);
             }
@@ -846,53 +901,68 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
         let mut overrides: Map<String, Value> = l.overrides.clone();
         let mut changed = false;
         let effective = serde_json::to_value(&eff.style).unwrap_or_default();
-        egui::Grid::new(("plant_overrides", id)).num_columns(2).show(ui, |ui| {
-            for (key, label) in OVERRIDES {
-                if doc.resources.plant_style(l.style).is_some_and(|s| s.is_locked(key)) {
-                    ui.label(format!("{label} (locked)"));
-                    ui.label(match &effective[key] {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    });
-                    ui.end_row();
-                    continue;
-                }
-                let mut over = overrides.contains_key(key);
-                if ui.checkbox(&mut over, label).on_hover_text("Checked: this plant has its own value (by instance). Unchecked: the style gives it (by style).").changed() {
-                    if over {
-                        overrides.insert(key.into(), effective[key].clone());
-                    } else {
-                        overrides.remove(key);
-                    }
-                    changed = true;
-                }
-                match (over, &mut overrides.get_mut(key)) {
-                    (true, Some(v)) if v.is_number() => {
-                        let mut x = v.as_f64().unwrap_or(0.0);
-                        let r = ui.add(DragValue::new(&mut x).speed(25.0).range(if key == "price" { 0.0 } else { 1.0 }..=1.0e9));
-                        if r.drag_stopped() || r.lost_focus() {
-                            **v = json!(x);
-                            changed = true;
-                        }
-                    }
-                    (true, Some(v)) => {
-                        let mut s = v.as_str().unwrap_or("").to_string();
-                        let r = ui.text_edit_singleline(&mut s);
-                        if r.lost_focus() {
-                            **v = json!(s);
-                            changed = true;
-                        }
-                    }
-                    _ => {
+        egui::Grid::new(("plant_overrides", id))
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (key, label) in OVERRIDES {
+                    let label = translate(label, &[]);
+                    let label = label.as_str();
+                    if doc
+                        .resources
+                        .plant_style(l.style)
+                        .is_some_and(|s| s.is_locked(key))
+                    {
+                        ui.label(tr!("plant-ui-locked", label = label));
                         ui.label(match &effective[key] {
                             Value::String(s) => s.clone(),
                             other => other.to_string(),
                         });
+                        ui.end_row();
+                        continue;
                     }
+                    let mut over = overrides.contains_key(key);
+                    if ui
+                        .checkbox(&mut over, label)
+                        .on_hover_text(tr!("plant-ui-checked-this-plant-has-its-own-value"))
+                        .changed()
+                    {
+                        if over {
+                            overrides.insert(key.into(), effective[key].clone());
+                        } else {
+                            overrides.remove(key);
+                        }
+                        changed = true;
+                    }
+                    match (over, &mut overrides.get_mut(key)) {
+                        (true, Some(v)) if v.is_number() => {
+                            let mut x = v.as_f64().unwrap_or(0.0);
+                            let drag = DragValue::new(&mut x)
+                                .speed(25.0)
+                                .range(if key == "price" { 0.0 } else { 1.0 }..=1.0e9);
+                            let r = ui.add(if key == "price" { drag } else { drag.length() });
+                            if r.drag_stopped() || r.lost_focus() {
+                                **v = json!(x);
+                                changed = true;
+                            }
+                        }
+                        (true, Some(v)) => {
+                            let mut s = v.as_str().unwrap_or("").to_string();
+                            let r = ui.text_edit_singleline(&mut s);
+                            if r.lost_focus() {
+                                **v = json!(s);
+                                changed = true;
+                            }
+                        }
+                        _ => {
+                            ui.label(match &effective[key] {
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            });
+                        }
+                    }
+                    ui.end_row();
                 }
-                ui.end_row();
-            }
-        });
+            });
         if changed && overrides != l.overrides {
             commands.push(Command::SetPlantStyle {
                 ids: vec![id],
@@ -917,10 +987,11 @@ fn existing_tree_info(ui: &mut Ui, shape: &Shape) {
     {
         ui.separator();
         let r = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
-        ui.label(format!(
-            "Root protection radius {:.0} mm ({} x trunk diameter)",
-            r,
-            rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR)
+        ui.label(tr!(
+            "plant-ui-root-protection-radius",
+            radius = kadakas_units::current().length_text_d(r, 0),
+            factor = kadakas_units::current()
+                .number_text_trim(rpz_factor.unwrap_or(DEFAULT_RPZ_FACTOR), 2)
         ));
     }
 }

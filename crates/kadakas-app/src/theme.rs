@@ -5,6 +5,7 @@
 //! theme. In the dark theme the pen colors that are nearly black are drawn light (the usual CAD
 //! convention for a dark background), so black lines stay visible. The document does not change.
 
+use kadakas_l10n::tr;
 use serde::{Deserialize, Serialize};
 
 /// What the user chose.
@@ -21,11 +22,11 @@ pub enum ThemeChoice {
 impl ThemeChoice {
     pub const ALL: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ThemeChoice::System => "System",
-            ThemeChoice::Light => "Light",
-            ThemeChoice::Dark => "Dark",
+            ThemeChoice::System => tr!("theme-system"),
+            ThemeChoice::Light => tr!("theme-light"),
+            ThemeChoice::Dark => tr!("theme-dark"),
         }
     }
 

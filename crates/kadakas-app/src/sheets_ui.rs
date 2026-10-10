@@ -2,6 +2,7 @@
 //! Navigation palette, and PDF export. The sheet is drawn from the display list of
 //! `kadakas-print`, so the screen, the PDF, the SVG and the PNG show the same thing.
 
+use kadakas_l10n::tr;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -188,10 +189,10 @@ pub fn navigation_sections(
     let doc = session.editor.doc();
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.strong("Sheet Layers");
+        ui.strong(tr!("sheets-ui-sheet-layers"));
         if ui
             .small_button("+")
-            .on_hover_text("Add Sheet Layer")
+            .on_hover_text(tr!("sheets-ui-add-sheet-layer"))
             .clicked()
         {
             let n = doc.sheet_layers().count() + 1;
@@ -208,7 +209,11 @@ pub fn navigation_sections(
         let sheet = doc.sheet(l.id).expect("sheet layer");
         ui.horizontal(|ui| {
             let mut vis = l.visible;
-            if ui.checkbox(&mut vis, "").on_hover_text("Visible").changed() {
+            if ui
+                .checkbox(&mut vis, "")
+                .on_hover_text(tr!("sheets-ui-visible"))
+                .changed()
+            {
                 cmds.push(Command::ModifyLayer {
                     id: l.id,
                     name: None,
@@ -251,11 +256,11 @@ pub fn navigation_sections(
                     sui.renaming = Some((l.id, l.name.clone()));
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Rename").clicked() {
+                    if ui.button(tr!("sheets-ui-rename")).clicked() {
                         sui.renaming = Some((l.id, l.name.clone()));
                         ui.close();
                     }
-                    if ui.button("Delete (if empty)").clicked() {
+                    if ui.button(tr!("sheets-ui-delete-if-empty")).clicked() {
                         cmds.push(Command::DeleteLayer { id: l.id });
                         ui.close();
                     }
@@ -271,19 +276,19 @@ pub fn navigation_sections(
                 sheet.orientation,
             );
             egui::Grid::new("sheet_page").num_columns(2).show(ui, |ui| {
-                ui.label("Number");
+                ui.label(tr!("sheets-ui-number"));
                 let n = ui.text_edit_singleline(&mut number);
                 ui.end_row();
-                ui.label("Title");
+                ui.label(tr!("sheets-ui-title"));
                 let t = ui.text_edit_singleline(&mut title);
                 ui.end_row();
-                ui.label("Paper");
+                ui.label(tr!("sheets-ui-paper"));
                 egui::ComboBox::from_id_salt("sheet_paper")
                     .selected_text(
                         PAPERS
                             .iter()
                             .find(|(_, p)| *p == paper)
-                            .map_or("Custom", |(n, _)| *n),
+                            .map_or(tr!("sheets-ui-custom"), |(n, _)| (*n).to_string()),
                     )
                     .show_ui(ui, |ui| {
                         for (name, p) in PAPERS {
@@ -291,10 +296,18 @@ pub fn navigation_sections(
                         }
                     });
                 ui.end_row();
-                ui.label("Orientation");
+                ui.label(tr!("sheets-ui-orientation"));
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut orientation, Orientation::Landscape, "Landscape");
-                    ui.selectable_value(&mut orientation, Orientation::Portrait, "Portrait");
+                    ui.selectable_value(
+                        &mut orientation,
+                        Orientation::Landscape,
+                        tr!("sheets-ui-landscape"),
+                    );
+                    ui.selectable_value(
+                        &mut orientation,
+                        Orientation::Portrait,
+                        tr!("sheets-ui-portrait"),
+                    );
                 });
                 ui.end_row();
                 if n.lost_focus() && number != sheet.number {
@@ -329,22 +342,25 @@ pub fn navigation_sections(
     }
 
     ui.add_space(8.0);
-    ui.strong("Saved Views");
+    ui.strong(tr!("sheets-ui-saved-views"));
     for v in &doc.drawing.saved_views {
         let r = ui
             .selectable_label(false, &v.name)
-            .on_hover_text("Click to restore");
+            .on_hover_text(tr!("sheets-ui-click-to-restore"));
         if r.clicked() {
             cmds.push(Command::RestoreView {
                 name: v.name.clone(),
             });
         }
         r.context_menu(|ui| {
-            if ui.button("Update from current view").clicked() {
+            if ui
+                .button(tr!("sheets-ui-update-from-current-view"))
+                .clicked()
+            {
                 sui.save_request = Some(v.name.clone());
                 ui.close();
             }
-            if ui.button("Delete").clicked() {
+            if ui.button(tr!("sheets-ui-delete")).clicked() {
                 cmds.push(Command::DeleteView {
                     name: v.name.clone(),
                 });
@@ -355,10 +371,10 @@ pub fn navigation_sections(
     ui.horizontal(|ui| {
         let r = ui.add(
             egui::TextEdit::singleline(&mut sui.new_view)
-                .hint_text("View name")
+                .hint_text(tr!("sheets-ui-view-name"))
                 .desired_width(120.0),
         );
-        let add = ui.button("Save view").clicked()
+        let add = ui.button(tr!("sheets-ui-save-view")).clicked()
             || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add && !sui.new_view.trim().is_empty() {
             sui.save_request = Some(sui.new_view.trim().to_string());

@@ -25,9 +25,12 @@ mod lang;
 mod localizer;
 mod resources;
 
+#[doc(hidden)]
+pub mod argconv;
+
 pub use lang::{FALLBACK, Lang, languages, negotiate, normalize_tag};
 pub use localizer::{Arg, Localizer};
-pub use resources::{message_ids, source_files};
+pub use resources::{message_ids, message_variables, problems, source_files};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -112,9 +115,14 @@ macro_rules! tr {
     ($id:expr $(,)?) => {
         $crate::translate($id, &[])
     };
-    ($id:expr, $($name:ident = $value:expr),+ $(,)?) => {
-        $crate::translate($id, &[$((stringify!($name), $crate::Arg::from($value))),+])
-    };
+    ($id:expr, $($name:ident = $value:expr),+ $(,)?) => {{
+        #[allow(unused_imports)]
+        use $crate::argconv::{ViaDisplay as _, ViaNum as _};
+        $crate::translate(
+            $id,
+            &[$((stringify!($name), (&$crate::argconv::Wrap(&$value)).to_arg())),+],
+        )
+    }};
 }
 
 /// Marks a message id in a table or a `static`, where a call of `tr!` is not possible. It gives

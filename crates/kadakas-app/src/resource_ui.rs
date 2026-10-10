@@ -1,6 +1,7 @@
 //! The Resource Manager for all resource types: thumbnails, search, filter, duplicate, rename, delete,
 //! delete unused, and import from another file. It calls the same API methods as agents do.
 
+use kadakas_l10n::tr;
 use std::collections::HashMap;
 
 use egui::epaint::PathStroke;
@@ -70,7 +71,7 @@ fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Op
     match s.handle(method, params) {
         Ok(v) => Some(v),
         Err(e) => {
-            *status = format!("Error: {}", e.message);
+            *status = tr!("resource-ui-error", message = e.message);
             None
         }
     }
@@ -78,7 +79,7 @@ fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Op
 
 /// The section of the palette. It lists every resource of the document.
 pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: &mut String) {
-    egui::CollapsingHeader::new("Resources (all types)")
+    egui::CollapsingHeader::new(tr!("resource-ui-resources-all-types"))
         .default_open(false)
         .show(ui, |ui| {
             let revision = session.editor.revision();
@@ -87,20 +88,24 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 st.revision = revision;
             }
             ui.horizontal(|ui| {
-                ui.label("Search");
+                ui.label(tr!("resource-ui-search"));
                 ui.text_edit_singleline(&mut st.search);
             });
-            egui::ComboBox::from_label("Type")
+            egui::ComboBox::from_label(tr!("resource-ui-type"))
                 .selected_text(if st.ty == 0 {
-                    "All types"
+                    tr!("resource-ui-all-types")
                 } else {
-                    TYPES[st.ty]
+                    TYPES[st.ty].to_string()
                 })
                 .show_ui(ui, |ui| {
                     for (i, t) in TYPES.iter().enumerate() {
-                        let label = if i == 0 { "All types" } else { t };
+                        let label = if i == 0 {
+                            tr!("resource-ui-all-types")
+                        } else {
+                            t.to_string()
+                        };
                         let icon = crate::icons::resource_icon(t);
-                        if crate::icons::select_button(ui, icon, label, st.ty == i).clicked() {
+                        if crate::icons::select_button(ui, icon, &label, st.ty == i).clicked() {
                             st.ty = i;
                         }
                     }
@@ -136,19 +141,23 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                             ) {
                                 ui.add(img);
                             }
-                            ui.small(format!("{}, used by {}", r.type_name, r.used_by));
+                            ui.small(tr!(
+                                "resource-ui-used-by",
+                                type_name = r.type_name,
+                                used_by = r.used_by
+                            ));
                         });
                     });
                     ui.menu_button("...", |ui| {
-                        if ui.button("Duplicate").clicked() {
+                        if ui.button(tr!("resource-ui-duplicate")).clicked() {
                             action = Some((r.id, "duplicate"));
                             ui.close();
                         }
-                        if ui.button("Rename").clicked() {
+                        if ui.button(tr!("resource-ui-rename")).clicked() {
                             st.rename = Some((r.id, r.name.clone()));
                             ui.close();
                         }
-                        if ui.button("Delete").clicked() {
+                        if ui.button(tr!("resource-ui-delete")).clicked() {
                             action = Some((r.id, "delete"));
                             ui.close();
                         }
@@ -156,9 +165,9 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 });
             }
             if rows.len() > 200 {
-                ui.small(format!(
-                    "{} more. Search to narrow the list.",
-                    rows.len() - 200
+                ui.small(tr!(
+                    "resource-ui-more-search-to-narrow-the-list",
+                    count = rows.len() - 200
                 ));
             }
             match action {
@@ -167,7 +176,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 }
                 Some((id, "delete")) => {
                     if call(session, "resource.delete", json!({"id": id}), status).is_some() {
-                        *status = "Deleted".into();
+                        *status = tr!("resource-ui-deleted");
                     }
                 }
                 Some((id, "rename")) => {
@@ -182,24 +191,26 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 }
                 _ => {}
             }
-            if ui.button("Delete unused").clicked()
+            if ui.button(tr!("resource-ui-delete-unused")).clicked()
                 && let Some(v) = call(session, "resource.purge_unused", json!({}), status)
             {
-                *status = format!(
-                    "Deleted {} unused resources",
-                    v["removed"].as_array().map_or(0, Vec::len)
+                *status = tr!(
+                    "resource-ui-deleted-unused-resources",
+                    count = v["removed"].as_array().map_or(0, Vec::len)
                 );
             }
             ui.separator();
-            ui.label("Import from a file");
+            ui.label(tr!("resource-ui-import-from-a-file"));
             ui.text_edit_singleline(&mut st.import_path);
-            if ui.button("Import all resources").clicked() && !st.import_path.trim().is_empty() {
+            if ui.button(tr!("resource-ui-import-all-resources")).clicked()
+                && !st.import_path.trim().is_empty()
+            {
                 let params =
                     json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"});
                 if let Some(v) = call(session, "resource.import_from_file", params, status) {
-                    *status = format!(
-                        "Imported {} resources",
-                        v["imported"].as_array().map_or(0, Vec::len)
+                    *status = tr!(
+                        "resource-ui-imported-resources",
+                        count = v["imported"].as_array().map_or(0, Vec::len)
                     );
                 }
             }

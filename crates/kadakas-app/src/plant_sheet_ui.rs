@@ -2,12 +2,14 @@
 //! command (`ModifyResource`), and "Apply to shown rows" changes one field of many styles in one
 //! undo step.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{DragValue, Ui};
 use kadakas_api::Session;
 use kadakas_core::command::Command;
 use kadakas_core::plants::care::WaterNeed;
 use kadakas_core::plants::style::{PlantCategory, PlantStyle};
 use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_l10n::tr;
 
 use crate::panels::run_command;
 
@@ -48,22 +50,22 @@ const COLS: [Col; 14] = [
 ];
 
 impl Col {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Col::Name => "Style name",
-            Col::IdCode => "ID",
-            Col::Botanical => "Botanical name",
-            Col::Common => "Common name",
-            Col::Category => "Category",
-            Col::Spread => "Spread mm",
-            Col::Height => "Height mm",
-            Col::Price => "Price",
-            Col::Size => "Size",
-            Col::Container => "Container",
-            Col::Water => "Water need",
-            Col::Hydrozone => "Hydrozone",
-            Col::Hours => "Hours/yr",
-            Col::Used => "Used",
+            Col::Name => tr!("plant-sheet-ui-style-name"),
+            Col::IdCode => tr!("plant-sheet-ui-id"),
+            Col::Botanical => tr!("plant-sheet-ui-botanical-name"),
+            Col::Common => tr!("plant-sheet-ui-common-name"),
+            Col::Category => tr!("plant-sheet-ui-category"),
+            Col::Spread => tr!("plant-sheet-ui-spread-label"),
+            Col::Height => tr!("plant-sheet-ui-height-label"),
+            Col::Price => tr!("plant-sheet-ui-price"),
+            Col::Size => tr!("plant-sheet-ui-size"),
+            Col::Container => tr!("plant-sheet-ui-container"),
+            Col::Water => tr!("plant-sheet-ui-water-need"),
+            Col::Hydrozone => tr!("plant-sheet-ui-hydrozone"),
+            Col::Hours => tr!("plant-sheet-ui-hours-yr"),
+            Col::Used => tr!("plant-sheet-ui-used"),
         }
     }
 }
@@ -163,9 +165,17 @@ fn text_cell(ui: &mut Ui, key: egui::Id, current: &str, width: f32) -> Option<St
 }
 
 /// A number cell. Returns the new value when the edit is finished and the value changed.
-fn number_cell(ui: &mut Ui, key: egui::Id, current: f64, speed: f64, min: f64) -> Option<f64> {
+fn number_cell(
+    ui: &mut Ui,
+    key: egui::Id,
+    current: f64,
+    speed: f64,
+    min: f64,
+    length: bool,
+) -> Option<f64> {
     let mut v: f64 = ui.data_mut(|d| d.get_temp(key)).unwrap_or(current);
-    let r = ui.add(DragValue::new(&mut v).speed(speed).range(min..=1.0e9));
+    let drag = DragValue::new(&mut v).speed(speed).range(min..=1.0e9);
+    let r = ui.add(if length { drag.length() } else { drag });
     if r.dragged() || r.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
     } else {
@@ -197,23 +207,27 @@ fn edit_row(ui: &mut Ui, r: &Row) -> Option<(String, PlantStyle)> {
     }
     let before = s.category;
     egui::ComboBox::from_id_salt(key(4))
-        .selected_text(s.category.id())
+        .selected_text(crate::enum_names::name("category", s.category.id()))
         .width(90.0)
         .show_ui(ui, |ui| {
             for c in PlantCategory::ALL {
-                ui.selectable_value(&mut s.category, c, c.id());
+                ui.selectable_value(
+                    &mut s.category,
+                    c,
+                    crate::enum_names::name("category", c.id()),
+                );
             }
         });
     changed |= s.category != before;
-    if let Some(v) = number_cell(ui, key(5), r.style.spread, 50.0, 1.0) {
+    if let Some(v) = number_cell(ui, key(5), r.style.spread, 50.0, 1.0, true) {
         s.spread = v;
         changed = true;
     }
-    if let Some(v) = number_cell(ui, key(6), r.style.height, 50.0, 1.0) {
+    if let Some(v) = number_cell(ui, key(6), r.style.height, 50.0, 1.0, true) {
         s.height = v;
         changed = true;
     }
-    if let Some(v) = number_cell(ui, key(7), r.style.price, 0.5, 0.0) {
+    if let Some(v) = number_cell(ui, key(7), r.style.price, 0.5, 0.0, false) {
         s.price = v;
         changed = true;
     }
@@ -227,11 +241,18 @@ fn edit_row(ui: &mut Ui, r: &Row) -> Option<(String, PlantStyle)> {
     }
     let before = s.irrigation.water_need;
     egui::ComboBox::from_id_salt(key(10))
-        .selected_text(s.irrigation.water_need.id())
+        .selected_text(crate::enum_names::name(
+            "water-need",
+            s.irrigation.water_need.id(),
+        ))
         .width(90.0)
         .show_ui(ui, |ui| {
             for w in WaterNeed::ALL {
-                ui.selectable_value(&mut s.irrigation.water_need, w, w.id());
+                ui.selectable_value(
+                    &mut s.irrigation.water_need,
+                    w,
+                    crate::enum_names::name("water-need", w.id()),
+                );
             }
         });
     changed |= s.irrigation.water_need != before;
@@ -239,7 +260,14 @@ fn edit_row(ui: &mut Ui, r: &Row) -> Option<(String, PlantStyle)> {
         s.irrigation.hydrozone = v;
         changed = true;
     }
-    if let Some(v) = number_cell(ui, key(12), r.style.maintenance.hours_per_year, 0.1, 0.0) {
+    if let Some(v) = number_cell(
+        ui,
+        key(12),
+        r.style.maintenance.hours_per_year,
+        0.1,
+        0.0,
+        false,
+    ) {
         s.maintenance.hours_per_year = v;
         changed = true;
     }
@@ -304,51 +332,86 @@ pub fn window(
     }
     let mut open = state.open;
     let mut commands: Vec<Command> = Vec::new();
-    egui::Window::new("Plant style spreadsheet")
+    egui::Window::new(tr!("plant-sheet-ui-plant-style-spreadsheet"))
+        .id(egui::Id::new("win-plant-style-spreadsheet"))
         .open(&mut open)
         .default_size([1150.0, 420.0])
         .show(ctx, |ui| {
             let rows = collect(session, state);
             ui.horizontal_wrapped(|ui| {
-                ui.label("Filter");
+                ui.label(tr!("plant-sheet-ui-filter"));
                 ui.add(
                     egui::TextEdit::singleline(&mut state.filter)
-                        .hint_text("name, code, hydrozone")
+                        .hint_text(tr!("plant-sheet-ui-name-code-hydrozone"))
                         .desired_width(160.0),
                 );
                 ui.separator();
-                ui.label("Set");
+                ui.label(tr!("plant-sheet-ui-set"));
                 egui::ComboBox::from_id_salt("plant_sheet_bulk")
                     .selected_text(match state.bulk {
-                        Bulk::Water => "Water need",
-                        Bulk::Hydrozone => "Hydrozone",
-                        Bulk::Category => "Category",
-                        Bulk::Container => "Container",
-                        Bulk::Size => "Size",
+                        Bulk::Water => tr!("plant-sheet-ui-water-need"),
+                        Bulk::Hydrozone => tr!("plant-sheet-ui-hydrozone"),
+                        Bulk::Category => tr!("plant-sheet-ui-category"),
+                        Bulk::Container => tr!("plant-sheet-ui-container"),
+                        Bulk::Size => tr!("plant-sheet-ui-size"),
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.bulk, Bulk::Water, "Water need");
-                        ui.selectable_value(&mut state.bulk, Bulk::Hydrozone, "Hydrozone");
-                        ui.selectable_value(&mut state.bulk, Bulk::Category, "Category");
-                        ui.selectable_value(&mut state.bulk, Bulk::Container, "Container");
-                        ui.selectable_value(&mut state.bulk, Bulk::Size, "Size");
+                        ui.selectable_value(
+                            &mut state.bulk,
+                            Bulk::Water,
+                            tr!("plant-sheet-ui-water-need"),
+                        );
+                        ui.selectable_value(
+                            &mut state.bulk,
+                            Bulk::Hydrozone,
+                            tr!("plant-sheet-ui-hydrozone"),
+                        );
+                        ui.selectable_value(
+                            &mut state.bulk,
+                            Bulk::Category,
+                            tr!("plant-sheet-ui-category"),
+                        );
+                        ui.selectable_value(
+                            &mut state.bulk,
+                            Bulk::Container,
+                            tr!("plant-sheet-ui-container"),
+                        );
+                        ui.selectable_value(
+                            &mut state.bulk,
+                            Bulk::Size,
+                            tr!("plant-sheet-ui-size"),
+                        );
                     });
                 match state.bulk {
                     Bulk::Water => {
                         egui::ComboBox::from_id_salt("plant_sheet_bulk_need")
-                            .selected_text(state.bulk_need.id())
+                            .selected_text(crate::enum_names::name(
+                                "water-need",
+                                state.bulk_need.id(),
+                            ))
                             .show_ui(ui, |ui| {
                                 for w in WaterNeed::ALL {
-                                    ui.selectable_value(&mut state.bulk_need, w, w.id());
+                                    ui.selectable_value(
+                                        &mut state.bulk_need,
+                                        w,
+                                        crate::enum_names::name("water-need", w.id()),
+                                    );
                                 }
                             });
                     }
                     Bulk::Category => {
                         egui::ComboBox::from_id_salt("plant_sheet_bulk_cat")
-                            .selected_text(state.bulk_category.id())
+                            .selected_text(crate::enum_names::name(
+                                "category",
+                                state.bulk_category.id(),
+                            ))
                             .show_ui(ui, |ui| {
                                 for c in PlantCategory::ALL {
-                                    ui.selectable_value(&mut state.bulk_category, c, c.id());
+                                    ui.selectable_value(
+                                        &mut state.bulk_category,
+                                        c,
+                                        crate::enum_names::name("category", c.id()),
+                                    );
                                 }
                             });
                     }
@@ -360,8 +423,8 @@ pub fn window(
                 }
                 let shown: Vec<&Row> = rows.iter().filter(|r| matches(r, &state.filter)).collect();
                 if ui
-                    .button(format!("Apply to {} shown", shown.len()))
-                    .on_hover_text("Change this field of every shown row. One undo step.")
+                    .button(tr!("plant-sheet-ui-apply-to-shown", count = shown.len()))
+                    .on_hover_text(tr!("plant-sheet-ui-change-this-field-of-every-shown-row"))
                     .clicked()
                 {
                     let cmds = bulk_commands(state, &shown);
@@ -384,7 +447,7 @@ pub fn window(
                             };
                             if ui
                                 .button(format!("{}{arrow}", c.label()))
-                                .on_hover_text("Sort by this column")
+                                .on_hover_text(tr!("plant-sheet-ui-sort-by-this-column"))
                                 .clicked()
                             {
                                 if state.sort == c {
@@ -409,7 +472,7 @@ pub fn window(
                     });
             });
             if rows.is_empty() {
-                ui.weak("No plant styles yet. Create one in the Resource Manager, or import a CSV list.");
+                ui.weak(tr!("plant-sheet-ui-no-plant-styles-yet-create-one-in"));
             }
         });
     state.open = open;

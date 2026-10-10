@@ -4,6 +4,7 @@
 use eframe::egui_wgpu;
 use egui::Sense;
 use kadakas_api::Session;
+use kadakas_l10n::tr;
 use kadakas_render::Projection;
 use kadakas_render::styled::{light_for, resolve_style};
 
@@ -36,9 +37,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
-        let text = format!(
-            "The 3D view needs the wgpu renderer. Press {} for Top/Plan.",
-            keys.hint(Action::ViewPlan)
+        let text = tr!(
+            "canvas3d-the-3d-view-needs-the-wgpu-renderer",
+            key = keys.hint(Action::ViewPlan)
         );
         ui.painter_at(rect).text(
             rect.center(),

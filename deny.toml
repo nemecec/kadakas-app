@@ -25,6 +25,10 @@ confidence-threshold = 0.93
 #                 "Apache-2.0 WITH LLVM-exception"                 -> allowed as it is
 #   memchr, walkdir, same-file, winapi-util, byteorder-lite
 #                 "Unlicense OR MIT"                               -> MIT
+#   fluent-bundle, fluent-syntax, fluent-langneg, intl-memoizer, unic-langid, sys-locale
+#                 "Apache-2.0 OR MIT" or "MIT OR Apache-2.0"       -> MIT
+#   intl_pluralrules  "Apache-2.0/MIT" (the old SPDX form of OR)    -> MIT
+#   tinystr 0.7 (with unic-langid) "Unicode-3.0"                   -> allowed as it is
 #
 # A crate that has only a copyleft license fails the check.
 allow = [
