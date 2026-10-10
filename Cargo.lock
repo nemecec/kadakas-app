@@ -671,10 +671,13 @@ dependencies = [
 name = "cadektor-render"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "cadektor-core",
  "glam",
  "png",
  "proptest",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

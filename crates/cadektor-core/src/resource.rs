@@ -39,6 +39,8 @@ pub enum ResourceBody {
     Graphic(Box<crate::graphics::GraphicResource>),
     /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
     Annot(Box<crate::annot::style::AnnotResource>),
+    /// A material or a render style (see `crate::present`).
+    Render(Box<crate::present::RenderResource>),
     Unknown(serde_json::Value),
 }
 
@@ -65,6 +67,7 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
+            ResourceBody::Render(r) => r.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -118,6 +121,13 @@ impl<'de> Deserialize<'de> for ResourceBody {
                     }),
                 )
             }
+            Some("material" | "render_style") => {
+                // A value this version cannot read: keep the raw JSON and save it again.
+                Ok(match crate::present::RenderResource::from_json(&v) {
+                    Some(Ok(r)) => ResourceBody::Render(Box::new(r)),
+                    _ => ResourceBody::Unknown(v),
+                })
+            }
             _ => match crate::annot::style::AnnotResource::from_json(&v) {
                 // A value from a newer app (a unit this version does not know): keep the raw JSON and save it again.
                 Some(r) => Ok(r.map_or_else(
@@ -147,6 +157,7 @@ impl ResourceBody {
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Graphic(g) => g.type_name(),
             ResourceBody::Annot(a) => a.type_name(),
+            ResourceBody::Render(r) => r.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -165,6 +176,7 @@ impl ResourceBody {
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
             ResourceBody::Graphic(g) => g.validate(),
             ResourceBody::Annot(a) => a.validate(),
+            ResourceBody::Render(r) => r.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }

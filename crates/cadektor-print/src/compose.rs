@@ -7,8 +7,9 @@ use cadektor_core::hardscape::{NoTerrain, TerrainSource};
 use cadektor_core::mesh;
 use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
 use cadektor_core::plants::schedule;
+use cadektor_core::present::RenderStyle;
 use cadektor_core::sheets::{self, Fields, TitleBlock, Viewport, title_block_geometry};
-use cadektor_render::{Camera, FOV_Y, Projection, RenderMode, RenderOptions, StandardView, render};
+use cadektor_render::{Camera, FOV_Y, Projection, RenderMode, StandardView};
 use glam::DVec2;
 
 use crate::PrintError;
@@ -178,6 +179,8 @@ pub fn viewport_prims(
         out.push(Prim::PushClip(clip.clone()));
         if vp.is_plan() {
             plan_view(doc, vp, counts, tables, out);
+        } else if let Some(style) = viewport_style(doc, vp).filter(|s| s.mode.is_hidden_line()) {
+            hidden_line_view(doc, vp, &style, out);
         } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
@@ -234,6 +237,7 @@ pub fn viewport_document(doc: &Document, vp: &Viewport) -> Document {
         .map(|c| Class { visible: true, ..c })
         .collect();
     d.resources = doc.resources.clone();
+    d.drawing.presentation = doc.drawing.presentation.clone();
     d.active_layer = doc.active_layer;
     d.active_class = doc.active_class;
     d.objects = doc
@@ -271,37 +275,52 @@ fn raster_size(vp: &Viewport, budget: &mut u64) -> Option<(u32, u32)> {
     Some((w as u32, h as u32))
 }
 
-/// Renders a 3D viewport to an image, with the viewport scale and center, from its standard view.
-/// Returns `None` for a view name that is not known, or when no pixels are left.
-fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImagePrim> {
+/// The render style of a 3D viewport: its render style resource, else its `mode`. `None` if the
+/// view name is not known.
+fn viewport_style(doc: &Document, vp: &Viewport) -> Option<RenderStyle> {
+    StandardView::from_name(&vp.view)?;
+    let from_resource = vp
+        .render_style
+        .and_then(|id| cadektor_core::present::render_style(doc, id))
+        .cloned();
+    Some(from_resource.unwrap_or_else(|| RenderStyle {
+        mode: RenderMode::from_name(&vp.mode).unwrap_or_default(),
+        ..RenderStyle::default()
+    }))
+}
+
+/// The camera of a 3D viewport: the viewport scale and center, from its standard view.
+fn viewport_camera(vp: &Viewport, scene: &cadektor_core::mesh::Scene) -> Option<Camera> {
     let view = StandardView::from_name(&vp.view)?;
-    let (w, h) = raster_size(vp, budget)?;
-    let d = viewport_document(doc, vp);
-    let scene = mesh::build(&d);
-    let origin = scene.origin;
     let size = vp.max - vp.min;
     let mut cam = Camera::standard(view, Projection::Orthographic);
-    let c = vp.center - origin.truncate();
+    let c = vp.center - scene.origin.truncate();
     let z = scene.bounds.map_or(0.0, |(lo, hi)| (lo.z + hi.z) / 2.0);
     cam.target = glam::Vec3::new(c.x as f32, c.y as f32, z);
     // The frame is `size.y` mm tall on paper, so it shows `size.y * scale` mm of the model.
     let half = size.y * vp.scale / 2.0;
     cam.distance = (half / (FOV_Y as f64 / 2.0).tan()) as f32;
-    let mode = if vp.mode == "wireframe" {
-        RenderMode::Wireframe
-    } else {
-        RenderMode::Shaded
-    };
-    let img = render(
-        &scene,
-        &cam,
-        &RenderOptions {
-            width: w,
-            height: h,
-            mode,
-            background: [255, 255, 255, 255],
+    Some(cam)
+}
+
+/// Renders a 3D viewport to an image, with the viewport scale and center, from its standard view.
+/// Returns `None` for a view name that is not known, or when no pixels are left.
+fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImagePrim> {
+    let style = viewport_style(doc, vp)?;
+    let (w, h) = raster_size(vp, budget)?;
+    let d = viewport_document(doc, vp);
+    let scene = mesh::build(&d);
+    let cam = viewport_camera(vp, &scene)?;
+    // Sheets are white. A style with its own background keeps it.
+    let style = RenderStyle {
+        background: if style.background == RenderStyle::default().background {
+            cadektor_core::model::Color([255, 255, 255, 255])
+        } else {
+            style.background
         },
-    );
+        ..style
+    };
+    let img = cadektor_render::styled::render_styled(&d, &scene, &cam, &style, w, h, 2);
     let rgb: Vec<u8> = img
         .rgba
         .chunks_exact(4)
@@ -314,6 +333,55 @@ fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImageP
         height: h,
         rgb: Arc::new(rgb),
     })
+}
+
+/// Pixels per mm of paper for the hidden-line computation. Only the unit of the coordinates.
+const HL_PX_PER_MM: f64 = 20.0;
+
+/// The hidden-line drawing of a 3D viewport as vector paths: black lines for visible edges,
+/// and gray dashes for covered edges in the dashed mode.
+fn hidden_line_view(doc: &Document, vp: &Viewport, style: &RenderStyle, out: &mut Vec<Prim>) {
+    let size = vp.max - vp.min;
+    let (w, h) = (
+        (size.x * HL_PX_PER_MM).clamp(8.0, 20_000.0) as u32,
+        (size.y * HL_PX_PER_MM).clamp(8.0, 20_000.0) as u32,
+    );
+    let d = viewport_document(doc, vp);
+    let scene = mesh::build(&d);
+    let Some(cam) = viewport_camera(vp, &scene) else {
+        return;
+    };
+    let Some(lines) = cadektor_render::styled::vector_lines(&scene, &cam, style, w, h) else {
+        return;
+    };
+    // Image pixels (y down) to paper mm (y up).
+    let to_paper = |p: [f32; 2]| {
+        DVec2::new(
+            vp.min.x + p[0] as f64 / w as f64 * size.x,
+            vp.max.y - p[1] as f64 / h as f64 * size.y,
+        )
+    };
+    let weight = style.line_weight.max(0.05);
+    // Covered edges first, so visible lines are on top.
+    for hidden in [true, false] {
+        for s in lines.segments.iter().filter(|s| s.hidden == hidden) {
+            let (a, b) = (to_paper(s.a), to_paper(s.b));
+            if a.distance(b) < 0.02 {
+                continue;
+            }
+            let color = if hidden {
+                [120, 120, 120, 255]
+            } else {
+                s.color
+            };
+            let mut path = PathPrim::stroked(PathPrim::polyline(&[a, b]), false, color, weight);
+            if hidden {
+                path.width = weight * 0.7;
+                path.dash = Some([1.5, 1.0]);
+            }
+            out.push(Prim::Path(path));
+        }
+    }
 }
 
 /// Border, grid reference and title block.

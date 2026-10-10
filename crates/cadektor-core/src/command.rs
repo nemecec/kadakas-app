@@ -18,6 +18,7 @@ mod drawing_ops;
 mod graphic_ops;
 mod group_ops;
 mod plant_ops;
+mod present_ops;
 mod record_ops;
 mod table_ops;
 
@@ -124,6 +125,21 @@ pub enum Command {
     /// Set or clear the georeference of the document.
     SetGeoreference {
         georef: Option<crate::georef::Georeference>,
+    },
+    /// Set or clear the sun (heliodon) of the document.
+    SetSun {
+        sun: Option<crate::present::SunSettings>,
+    },
+    /// Put a material on a slot (an object or one of its parts, a style part or a class), or clear the slot.
+    SetMaterialSlot {
+        target: crate::present::SlotTarget,
+        #[serde(default)]
+        material: Option<ResourceId>,
+    },
+    /// Choose the render style of the 3D view, or `null` for the built-in style.
+    SetRenderStyle {
+        #[serde(default)]
+        style: Option<ResourceId>,
     },
     /// Add a resource, for example a plant style. Returns its ID in `created`.
     AddResource {
@@ -1012,6 +1028,9 @@ impl<'a> Tx<'a> {
                 }
                 self.doc.georef = georef.clone();
             }
+            Command::SetSun { .. }
+            | Command::SetMaterialSlot { .. }
+            | Command::SetRenderStyle { .. } => self.run_present(cmd)?,
             Command::AddResource { .. }
             | Command::ModifyResource { .. }
             | Command::DeleteResource { .. }
