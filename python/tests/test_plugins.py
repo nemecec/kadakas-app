@@ -1,4 +1,4 @@
-"""Plug-in objects and scripts, through the Python package and a real ``cadektor serve``.
+"""Plug-in objects and scripts, through the Python package and a real ``kadakas serve``.
 
 These are also the behavior tests for the two shipped examples (Bench, Stepping stones)."""
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-import cadektor
-from cadektor import CadektorError, Param
-from cadektor.plugin import test_reset
+import kadakas
+from kadakas import KadakasError, Param
+from kadakas.plugin import test_reset
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "plugins"
 
@@ -55,11 +55,11 @@ def test_bench_parameters_change_the_shapes_and_undo_works(doc):
     assert bench.params["supplier"]["name"] == "Parks Ltd"
     assert doc.undo()
     assert len(bench.children) == before and bench.params["slats"] == 5
-    with pytest.raises(CadektorError, match="range"):
+    with pytest.raises(KadakasError, match="range"):
         bench.set_params(slats=99)
-    with pytest.raises(CadektorError, match="not one of"):
+    with pytest.raises(KadakasError, match="not one of"):
         bench.set_params(material="Gold")
-    with pytest.raises(CadektorError, match="color"):
+    with pytest.raises(KadakasError, match="color"):
         bench.set_params(color="red")
 
 
@@ -119,7 +119,7 @@ def test_a_script_error_keeps_the_old_shapes_and_shows_an_error(open_doc):
     # A bad script is not placed at all.
     bad = doc.plugins.define("Bad", "point", "def reset(p, g):\n    return 1 / 0\n")
     before = doc.summary()["object_count"]
-    with pytest.raises(CadektorError, match="ZeroDivisionError"):
+    with pytest.raises(KadakasError, match="ZeroDivisionError"):
         doc.plugins.place(bad, at=[0, 0])
     assert doc.summary()["object_count"] == before
 
@@ -128,24 +128,24 @@ def test_limits_stop_a_runaway_script(open_doc):
     doc = open_doc
     slow = doc.plugins.define("Slow", "point", "import time\ndef reset(p, g):\n    time.sleep(30)\n",
                               timeout_ms=300)
-    with pytest.raises(CadektorError, match="300 ms"):
+    with pytest.raises(KadakasError, match="300 ms"):
         doc.plugins.place(slow, at=[0, 0])
     many = doc.plugins.define("Many", "point",
                               "def reset(p, g):\n    return [circle([i, 0], 1) for i in range(3000)]\n")
-    with pytest.raises(CadektorError, match="3000 shapes"):
+    with pytest.raises(KadakasError, match="3000 shapes"):
         doc.plugins.place(many, at=[0, 0])
     nasty = doc.plugins.define("Nasty", "point",
                                "def reset(p, g):\n    return [{'kind': 'plant', 'at': [0, 0]}]\n")
-    with pytest.raises(CadektorError, match="not allowed"):
+    with pytest.raises(KadakasError, match="not allowed"):
         doc.plugins.place(nasty, at=[0, 0])
 
 
 def test_agents_cannot_run_their_own_scripts_by_default(doc):
     d = doc.plugins.define("Mine", "point", "def reset(p, g):\n    return [circle(g.at, 5)]\n")
-    with pytest.raises(CadektorError) as e:
+    with pytest.raises(KadakasError) as e:
         doc.plugins.place(d, at=[0, 0])
     assert e.value.is_forbidden and "--allow-agent-scripts" in str(e.value)
-    with pytest.raises(CadektorError) as e:
+    with pytest.raises(KadakasError) as e:
         doc.scripts.run(source="print(1)")
     assert e.value.is_forbidden
     info = doc.scripts.info()
@@ -155,7 +155,7 @@ def test_agents_cannot_run_their_own_scripts_by_default(doc):
 
 def test_scripts_need_an_app_even_when_allowed(open_doc):
     assert open_doc.scripts.info()["agent_scripts_allowed"] is True
-    with pytest.raises(CadektorError, match="running Cadektor app"):
+    with pytest.raises(KadakasError, match="running Kadakas app"):
         open_doc.scripts.run(source="print(1)")
     assert open_doc.scripts.list() == []
 
@@ -173,9 +173,9 @@ def test_definitions_update_and_regenerate_in_one_step(open_doc):
     assert len(a.children) == 2 and len(b.children) == 2
     doc.undo()
     assert len(a.children) == 1 and len(b.children) == 1
-    with pytest.raises(CadektorError, match="cannot change"):
+    with pytest.raises(KadakasError, match="cannot change"):
         doc.plugins.update(d, shape_type="path")
-    with pytest.raises(CadektorError, match="objects use"):
+    with pytest.raises(KadakasError, match="objects use"):
         doc.plugins.delete("Dot")
     assert a.reset()["ok"] is True
     doc.delete(a.children + b.children)  # the groups go with their last members
@@ -200,13 +200,13 @@ def test_a_document_with_plug_in_objects_saves_and_opens_again(doc, tmp_path: Pa
 
 def test_undo_group_refuses_plugin_place(doc):
     doc.plugins.install_example("Bench")
-    with pytest.raises(CadektorError, match="undo group"):
+    with pytest.raises(KadakasError, match="undo group"):
         with doc.undo_group():
             doc.plugins.place("Bench", at=[0, 0])
 
 
 def test_shipped_scripts_run_in_plain_python_too():
-    """`cadektor.plugin.test_reset` runs a script without the app, for quick development."""
+    """`kadakas.plugin.test_reset` runs a script without the app, for quick development."""
     bench = (EXAMPLES / "bench.py").read_text()
     shapes = test_reset(bench, {"length": 1000, "depth": 400, "slats": 3, "back": False, "color": "#000000"},
                         {"at": [0, 0], "rotation": 0})
@@ -219,7 +219,7 @@ def test_a_shipped_plugin_whose_script_was_changed_is_not_trusted(doc):
     """Changing the script of a definition through the API gives it a new hash: it does not run."""
     doc.plugins.install_example("Bench")
     doc.plugins.update("Bench", script="def reset(p, g):\n    return [circle(g.at, 5)]\n")
-    with pytest.raises(CadektorError) as e:
+    with pytest.raises(KadakasError) as e:
         doc.plugins.place("Bench", at=[0, 0])
     assert e.value.is_forbidden
     assert doc.summary()["object_count"] == 0

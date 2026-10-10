@@ -1,0 +1,19 @@
+[package]
+name = "kadakas-cli"
+default-run = "kadakas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+clap = { version = "4.6.7", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[[bin]]
+name = "kadakas"
+path = "src/main.rs"

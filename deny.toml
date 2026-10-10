@@ -4,7 +4,7 @@
 #   cargo deny check licenses bans sources    # offline
 #   cargo deny check advisories               # needs the network (the RustSec database)
 #
-# Rule: Cadektor ships under "Apache-2.0 OR MIT". Every dependency must be under a permissive
+# Rule: Kadakas ships under "Apache-2.0 OR MIT". Every dependency must be under a permissive
 # license. Copyleft licenses (GPL, LGPL, AGPL) are not allowed, not even as the only option.
 
 [graph]
@@ -57,7 +57,7 @@ yanked = "deny"
 # Known problems of dependencies that we cannot fix and that do not reach us can be listed here
 # with a reason. Keep this list empty if you can.
 ignore = [
-  { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in cadektor-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in kadakas-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
 ]
 
 [sources]

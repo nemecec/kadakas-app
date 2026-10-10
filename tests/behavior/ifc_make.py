@@ -1,5 +1,5 @@
 """Writes IFC test files with IfcOpenShell (the independent reference implementation). The behavior tests run it with
-`uv run --no-project --with ifcopenshell python -I ifc_make.py <folder>` and import the files with Cadektor."""
+`uv run --no-project --with ifcopenshell python -I ifc_make.py <folder>` and import the files with Kadakas."""
 
 import sys
 from pathlib import Path

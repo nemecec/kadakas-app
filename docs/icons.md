@@ -1,6 +1,6 @@
 # Icons
 
-Cadektor has its own icon set (feature UI-12). The files are in `assets/icons/`. The gallery is
+Kadakas has its own icon set (feature UI-12). The files are in `assets/icons/`. The gallery is
 `docs/icons.html` (made by `python3 scripts/icons_gallery.py`).
 
 ## Legal rules
@@ -20,7 +20,7 @@ Cadektor has its own icon set (feature UI-12). The files are in `assets/icons/`.
 
 ## Names and ideas
 
-One file for each icon, in `assets/icons/cadektor/`. Names are lower case with hyphens.
+One file for each icon, in `assets/icons/kadakas/`. Names are lower case with hyphens.
 
 | Group | Icons (visual idea) |
 |---|---|
@@ -37,15 +37,15 @@ Tabler icons that we use (by our idea): file-plus (new), folder-open, device-flo
 
 ## How the program uses icons
 
-`crates/cadektor-app/src/icons.rs` includes all files with `include_bytes!`. It draws each file with resvg. The size comes from the screen (points times the pixel ratio). It draws it in white. The widget tints it with the text color, so hover, selection and theme need no new texture. It caches the texture for each name and size. It frees the textures when the pixel ratio changes. If an icon is missing, the button shows the text label only.
+`crates/kadakas-app/src/icons.rs` includes all files with `include_bytes!`. It draws each file with resvg. The size comes from the screen (points times the pixel ratio). It draws it in white. The widget tints it with the text color, so hover, selection and theme need no new texture. It caches the texture for each name and size. It frees the textures when the pixel ratio changes. If an icon is missing, the button shows the text label only.
 
 Icons are in the tool palette (with the name and key as tooltip), the view bar (views and render modes), the menus, the selection mode buttons and the Resource Manager (types and rows).
 
 ## How to add an icon
 
-1. Draw `assets/icons/cadektor/<name>.svg` by the style rules. Start from a written idea.
-2. Add one line to `ICONS` in `crates/cadektor-app/src/icons.rs`.
+1. Draw `assets/icons/kadakas/<name>.svg` by the style rules. Start from a written idea.
+2. Add one line to `ICONS` in `crates/kadakas-app/src/icons.rs`.
 3. For a tool, add the name to `tool_icon`. For a menu item, add it to `menu_icon`. Both are exhaustive `match` expressions. The compiler tells you when a new tool or menu item has no icon.
-4. Run `cargo test -p cadektor-app icons`. The tests check four things. Every file parses. Every file follows the style. Every file is in the table. Every tool has an icon. The test `golden_icon_sheet_is_not_blank` writes `cadektor-icon-sheet.png` to the folder in `ICON_SHEET_DIR` (default: the temp folder). Look at it. Do not commit it.
+4. Run `cargo test -p kadakas-app icons`. The tests check four things. Every file parses. Every file follows the style. Every file is in the table. Every tool has an icon. The test `golden_icon_sheet_is_not_blank` writes `kadakas-icon-sheet.png` to the folder in `ICON_SHEET_DIR` (default: the temp folder). Look at it. Do not commit it.
 5. Run `python3 scripts/icons_gallery.py` and commit `docs/icons.html`.
 6. For a Tabler icon: copy the file from the `@tabler/icons` npm package (`npm pack @tabler/icons`, folder `icons/outline`) into `assets/icons/tabler/`. The `LICENSE` file stays there.

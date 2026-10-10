@@ -167,7 +167,7 @@ def test_the_resource_manager_lists_filters_renames_and_purges(cad):
 def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, monkeypatch):
     libdir = tmp_path / "library"
     libdir.mkdir()
-    monkeypatch.setenv("CADEKTOR_LIBRARY_DIR", str(libdir))
+    monkeypatch.setenv("KADAKAS_LIBRARY_DIR", str(libdir))
     src = make_serve()
     h = src.result("resource.create", {"type": "hatch", "name": "Diag", "lines": [{"angle": 45, "spacing": 2}]})["id"]
     src.result("symbol.create", {"name": "Dot", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 5}, "attrs": {"fill_pattern": h}}]})
@@ -205,10 +205,10 @@ def test_import_follows_the_path_policy(cad, tmp_path):
     assert err["code"] == 4
     assert "cannot read" in err["message"] or "outside" in err["message"]
     assert cad.error("resource.import_from_file", {"library": "../x", "all": True})["code"] == -32602
-    # A file that is not a Cadektor document is refused with a clear message.
+    # A file that is not a Kadakas document is refused with a clear message.
     bad = tmp_path / "bad.cdk.json"
     bad.write_text("{}")
-    assert "not a Cadektor file" in cad.error("resource.import_from_file", {"path": str(bad), "all": True})["message"]
+    assert "not a Kadakas file" in cad.error("resource.import_from_file", {"path": str(bad), "all": True})["message"]
     # An extension other than json is refused in a restricted session.
     txt = tmp_path / "lib.txt"
     txt.write_text("x")

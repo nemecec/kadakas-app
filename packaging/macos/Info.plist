@@ -13,9 +13,9 @@
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>net.cadektor.drawing</string>
+      <string>net.kadakas.drawing</string>
       <key>UTTypeDescription</key>
-      <string>Cadektor drawing</string>
+      <string>Kadakas drawing</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.json</string>
@@ -27,7 +27,7 @@
           <string>cdk</string>
         </array>
         <key>public.mime-type</key>
-        <string>application/vnd.cadektor.drawing+json</string>
+        <string>application/vnd.kadakas.drawing+json</string>
       </dict>
     </dict>
   </array>
@@ -35,14 +35,14 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>Cadektor drawing</string>
+      <string>Kadakas drawing</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Owner</string>
       <key>LSItemContentTypes</key>
       <array>
-        <string>net.cadektor.drawing</string>
+        <string>net.kadakas.drawing</string>
       </array>
     </dict>
   </array>

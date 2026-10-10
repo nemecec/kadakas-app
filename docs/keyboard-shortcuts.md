@@ -1,12 +1,12 @@
 # Keyboard shortcuts
 
-Cadektor defaults follow the Vectorworks 2026 defaults, so Vectorworks users find the same keys. Source of the
+Kadakas defaults follow the Vectorworks 2026 defaults, so Vectorworks users find the same keys. Source of the
 Vectorworks keys: https://app-help.vectorworks.net/2026/eng/assets/docs/VWKeyboardShortcuts.pdf
 
 Rules
 - `Cmd/Ctrl` means Cmd on macOS and Ctrl on Windows and Linux. `Alt` is Option on macOS.
 - Status `done`: the key works in the app and is in the default keymap. The test `doc_matches_default_keymap`
-  (`crates/cadektor-app/src/keymap.rs`) checks every `done` row that names an action id.
+  (`crates/kadakas-app/src/keymap.rs`) checks every `done` row that names an action id.
 - Status `planned`: the feature is missing. The key is the Vectorworks default and will be used when the feature is built.
 - Single-key shortcuts never fire while a text field has focus. Only Cmd/Ctrl chords do, except Undo, Redo and Select All,
   which stay with the text field.
@@ -14,13 +14,13 @@ Rules
 
 ## Change the keys
 
-Create `keymap.json` in the per-user config folder (or set `CADEKTOR_KEYMAP` to a file path):
+Create `keymap.json` in the per-user config folder (or set `KADAKAS_KEYMAP` to a file path):
 
 | System | File |
 |---|---|
-| macOS | `~/Library/Application Support/cadektor/keymap.json` |
-| Linux | `$XDG_CONFIG_HOME/cadektor/keymap.json`, else `~/.config/cadektor/keymap.json` |
-| Windows | `%APPDATA%\cadektor\keymap.json` |
+| macOS | `~/Library/Application Support/kadakas/keymap.json` |
+| Linux | `$XDG_CONFIG_HOME/kadakas/keymap.json`, else `~/.config/kadakas/keymap.json` |
+| Windows | `%APPDATA%\kadakas\keymap.json` |
 
 ```json
 { "tool.line": "G", "edit.redo": ["Cmd/Ctrl+Y"], "edit.delete": [] }
@@ -44,7 +44,7 @@ is already used by another action, the user file wins, the other action loses th
 - Space plus drag pans. Vectorworks lets you use any tool while Space is held.
 - The 3D standard views use the Vectorworks numbering: 0 Top/Plan, 5 Top, 2 Front, 8 Back, 4 Left, 6 Right, 1 and 3 the front
   isometrics, 7 and 9 the rear isometrics. Vectorworks binds them to the numeric keypad, which cannot be changed there.
-  egui cannot tell keypad digits from the digit row, and the plain digits are tool keys here, so Cadektor uses
+  egui cannot tell keypad digits from the digit row, and the plain digits are tool keys here, so Kadakas uses
   `Alt+Shift` plus the same digit. The digit is read from the physical key, because Shift changes the character on
   many layouts. Bottom has no key in Vectorworks and none here: use the view bar.
   Top/Plan is the 2D drawing. The other views are the 3D view. In 3D, drag orbits (the Flyover behavior), Shift-drag,
@@ -54,7 +54,7 @@ is already used by another action, the user file wins, the other action loses th
 
 Tool keys switch the active tool.
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Selection tool (`tool.select`) | X (both) | X | done |
 | Text tool (`tool.text`) | 1 (both) | 1 | done |
@@ -75,27 +75,27 @@ Tool keys switch the active tool.
 | Chamfer tool (`tool.chamfer`) | Option+7 / Alt+7 | Alt+7 | done |
 | Offset tool (`tool.offset`) | Shift+- (both) | Shift+- | done |
 | Clip tool (the marquee clip with modes Exclusion, Inclusion and Split is not built; the Clip Surface command is) | Option+C / Shift+N | Shift+N | planned |
-| Scale tool (Cadektor; click the fixed point, the reference point and the new place) (`tool.scale`) | none | none (no VW default) | done |
-| Extend tool (Cadektor; extends the end of a line, arc or polyline to the next object) (`tool.extend`) | none | none (no VW default) | done |
-| Constrained Linear Dimension tool (Cadektor: the Dimension tool with modes; `tool.dimension`) | N (both) | N | done |
+| Scale tool (Kadakas; click the fixed point, the reference point and the new place) (`tool.scale`) | none | none (no VW default) | done |
+| Extend tool (Kadakas; extends the end of a line, arc or polyline to the next object) (`tool.extend`) | none | none (no VW default) | done |
+| Constrained Linear Dimension tool (Kadakas: the Dimension tool with modes; `tool.dimension`) | N (both) | N | done |
 | Angular Dimension tool (`tool.angular_dimension`) | . (both) | . | done |
 | Radial Dimension tool (`tool.radial_dimension`) | , (both) | , | done |
 | Callout tool (`tool.callout`) | Alt+1 (Windows) / Option+1 (Mac) | Alt+1 | done |
-| Plant tool (Cadektor landscape tool) (`tool.plant`) | none | Alt+Shift+P (no VW default; Plant needs a free key) | done |
-| Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
-| Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
-| Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
-| Massing Model tool (Cadektor) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
-| Irrigation tool (Cadektor; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
-| Grading tool (Cadektor; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
-| Data Tag tool (Cadektor) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
-| North Arrow tool (Cadektor) (`tool.north_arrow`) | none | Alt+Shift+N (no VW default) | done |
-| Scale Bar tool (Cadektor) (`tool.scale_bar`) | none | Alt+Shift+B (no VW default) | done |
-| Revision Cloud tool (Cadektor) (`tool.revision_cloud`) | none | Alt+Shift+V (no VW default; Alt+Shift+R is the Regular Polygon tool) | done |
+| Plant tool (Kadakas landscape tool) (`tool.plant`) | none | Alt+Shift+P (no VW default; Plant needs a free key) | done |
+| Landscape Area tool (Kadakas) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
+| Hardscape tool (Kadakas) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
+| Site Modifiers tool (Kadakas; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
+| Massing Model tool (Kadakas) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
+| Irrigation tool (Kadakas; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
+| Grading tool (Kadakas; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
+| Data Tag tool (Kadakas) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
+| North Arrow tool (Kadakas) (`tool.north_arrow`) | none | Alt+Shift+N (no VW default) | done |
+| Scale Bar tool (Kadakas) (`tool.scale_bar`) | none | Alt+Shift+B (no VW default) | done |
+| Revision Cloud tool (Kadakas) (`tool.revision_cloud`) | none | Alt+Shift+V (no VW default; Alt+Shift+R is the Regular Polygon tool) | done |
 
 ## Annotation commands
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Add a graphic legend (`cmd.graphic_legend`) | none | Alt+Shift+E (no VW default) | done |
 
@@ -110,7 +110,7 @@ The Polyline, Landscape Area and Hardscape tools have one group of mode buttons:
 around after the last one. The other groups are bound, but these tools have no buttons for them, so the key only
 shows a message in the status line. Other tools have no mode buttons yet.
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Tool mode group 1 (`mode.group1`) | U (both) | U | done |
 | Tool mode group 2 (`mode.group2`) | I (both) | I | done |
@@ -121,7 +121,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 
 ## Snapping
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Suspend snapping (hold) (`snap.suspend`) | ` (both) | Backtick (the back quote key) | done |
 | Toggle SmartCursor cues (`snap.cues`) | Y (both) | Y | done |
@@ -134,7 +134,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 
 ## View, zoom and pan
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Zoom in, factor 2 (`view.zoom_in`) | Cmd+1 / Ctrl+1 | Cmd/Ctrl+1 | done |
 | Zoom out, factor 2 (`view.zoom_out`) | Cmd+2 / Ctrl+2 | Cmd/Ctrl+2 | done |
@@ -174,7 +174,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 
 ## Edit and menus
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | New (`file.new`) | Cmd+N / Ctrl+N | Cmd/Ctrl+N | done |
 | Open (`file.open`) | Cmd+O / Ctrl+O | Cmd/Ctrl+O | done |
@@ -200,7 +200,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Duplicate Array (`cmd.duplicate_array`) | Cmd+Shift+Option+D / Ctrl+Shift+Alt+D | Cmd/Ctrl+Shift+Alt+D | done |
 | Add Surface (`cmd.add_surface`) | Cmd+Shift+Option+A / Ctrl+Shift+Alt+A | Cmd/Ctrl+Shift+Alt+A | done |
 | Clip Surface (`cmd.clip_surface`) | Cmd+Shift+Option+C / Ctrl+Shift+Alt+C | Cmd/Ctrl+Shift+Alt+C | done |
-| Subtract Surface (Cadektor; the base is the lowest selected shape) (`cmd.subtract_surface`) | none | none (no VW default) | done |
+| Subtract Surface (Kadakas; the base is the lowest selected shape) (`cmd.subtract_surface`) | none | none (no VW default) | done |
 | Intersect Surface (`cmd.intersect_surface`) | Cmd+Shift+Option+I / Ctrl+Shift+Alt+I | Cmd/Ctrl+Shift+Alt+I | done |
 | Compose (`cmd.compose`) | Cmd+Shift+Option+P / Ctrl+Shift+Alt+P | Cmd/Ctrl+Shift+Alt+P | done |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
@@ -223,7 +223,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 
 Type exact values while drawing. Line and polyline use L (length) and A (angle). Rectangle uses W and H. Circle uses R. Before the first click all tools use X and Y. Empty fields follow the cursor. Enter creates the object through the normal command path.
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Data bar: focus the first field, then next field (`databar.focus`) | none | Tab (Vectorworks lists no Data bar keys; Tab here follows its Data bar workflow) | done |
 | Data bar: previous field (`databar.prev`) | none | Shift+Tab | done |
@@ -232,7 +232,7 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 
 ## Mouse modifiers
 
-| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+| Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Pan the view | Wheel button drag (both) | Middle button drag | done |
 | Zoom in and out | Wheel roll (both) | Wheel roll, trackpad pinch | done |
@@ -246,7 +246,7 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 
 ## Not applicable
 
-These Vectorworks shortcuts have no function in Cadektor and none is planned.
+These Vectorworks shortcuts have no function in Kadakas and none is planned.
 
 - Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page,
   2D Locus, Symbol Insertion, Double Line, Rounded Rectangle, Oval, Quarter Arc, Freehand, Regular Polygon, Spiral, Eyedropper,

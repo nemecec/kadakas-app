@@ -6,7 +6,7 @@ members = ["crates/*"]
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/cadektor/cadektor"
+repository = "https://github.com/kadakas/kadakas"
 version = "0.1.0"
 
 # Keep build folders small: line tables for our code, no debug info for dependencies.
@@ -18,11 +18,11 @@ debug = false
 
 # A little optimization makes the CPU-heavy crates much faster in tests (rasterizer, geometry,
 # section drawings, page composition) at a small cost for the build.
-[profile.dev.package.cadektor-render]
+[profile.dev.package.kadakas-render]
 opt-level = 1
-[profile.dev.package.cadektor-core]
+[profile.dev.package.kadakas-core]
 opt-level = 1
-[profile.dev.package.cadektor-print]
+[profile.dev.package.kadakas-print]
 opt-level = 1
-[profile.dev.package.cadektor-x3d]
+[profile.dev.package.kadakas-x3d]
 opt-level = 1

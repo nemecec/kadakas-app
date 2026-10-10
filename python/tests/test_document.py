@@ -1,4 +1,4 @@
-"""The high-level document API against a real ``cadektor serve``."""
+"""The high-level document API against a real ``kadakas serve``."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import cadektor
-from cadektor import CadektorError
+import kadakas
+from kadakas import KadakasError
 
 
 def test_add_shapes_and_read_them_back(doc):
@@ -92,7 +92,7 @@ def test_undo_group_is_one_step(doc):
         b = doc.add.circle([100, 0], 10)
         with doc.undo_group():  # nested groups join the outer one
             c = doc.add.line([0, 0], [1, 1])
-        with pytest.raises(cadektor.CadektorError):
+        with pytest.raises(kadakas.KadakasError):
             a.id  # noqa: B018 - not known yet
         assert doc.in_undo_group
     assert doc.summary()["object_count"] == 3
@@ -114,24 +114,24 @@ def test_undo_group_on_error_sends_nothing(doc):
     assert not doc.in_undo_group
     with doc.undo_group():
         pass  # an empty group sends nothing
-    with pytest.raises(CadektorError):
+    with pytest.raises(KadakasError):
         with doc.undo_group():
             doc.plants.place(at=[0, 0])
-    with pytest.raises(CadektorError):
+    with pytest.raises(KadakasError):
         with doc.undo_group():
             doc.add_layer("x")
-    with pytest.raises(CadektorError):
+    with pytest.raises(KadakasError):
         with doc.undo_group():
             doc.add_class("x")
 
 
 def test_errors_carry_code_and_method(doc):
     missing = "00000000-0000-0000-0000-0000000003e7"
-    with pytest.raises(CadektorError) as e:
+    with pytest.raises(KadakasError) as e:
         doc.get(missing)
     assert e.value.code == 2 and missing in str(e.value) and e.value.method == "objects.get"
     assert not e.value.is_forbidden
-    with pytest.raises(CadektorError) as e:
+    with pytest.raises(KadakasError) as e:
         doc.call("nothing.here")
     assert e.value.code == -32601
 
@@ -203,15 +203,15 @@ def test_render(doc, tmp_path: Path):
 
 def test_open_a_document_file_and_describe(tmp_path: Path):
     saved = tmp_path / "start.json"
-    with cadektor.open(allow_dir=[tmp_path]) as d:
+    with kadakas.open(allow_dir=[tmp_path]) as d:
         d.add.circle([0, 0], 7)
         d.save(saved)
-    with cadektor.open(saved, allow_dir=[tmp_path]) as d:
+    with kadakas.open(saved, allow_dir=[tmp_path]) as d:
         assert d.objects()[0].radius == 7
         assert "methods" in d.describe() and "millimeters" in d.describe()["units"]
         assert d.call("document.summary")["object_count"] == 1
 
 
 def test_a_missing_program_is_reported():
-    with pytest.raises(cadektor.ConnectionFailed):
-        cadektor.open(binary="/no/such/cadektor")
+    with pytest.raises(kadakas.ConnectionFailed):
+        kadakas.open(binary="/no/such/kadakas")

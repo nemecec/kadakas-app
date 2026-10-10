@@ -1,6 +1,6 @@
 # Scripting and plug-in objects
 
-This guide shows how to control Cadektor with Python, and how to make your own parametric objects.
+This guide shows how to control Kadakas with Python, and how to make your own parametric objects.
 
 You can do three things:
 
@@ -8,7 +8,7 @@ You can do three things:
 2. Run `.py` files from the **Scripts** palette in the app. They work on the open drawing, live.
 3. Make a **plug-in object**: an object with parameters. A short Python script draws its shapes again each time you change a parameter.
 
-Python is not part of Cadektor. Cadektor starts the Python that is on your computer.
+Python is not part of Kadakas. Kadakas starts the Python that is on your computer.
 
 ## Contents
 
@@ -23,7 +23,7 @@ Python is not part of Cadektor. Cadektor starts the Python that is on your compu
 
 ## Getting started
 
-You need Python 3.10 or newer and the `cadektor` program (build it with `cargo build -p cadektor-cli`).
+You need Python 3.10 or newer and the `kadakas` program (build it with `cargo build -p kadakas-cli`).
 
 Install the package. It has no other dependencies.
 
@@ -34,9 +34,9 @@ uv pip install -e python        # or: pip install -e python
 Write your first program:
 
 ```python
-import cadektor
+import kadakas
 
-with cadektor.open() as doc:                 # starts "cadektor serve" for you
+with kadakas.open() as doc:                 # starts "kadakas serve" for you
     doc.add.line([0, 0], [5000, 0])
     doc.add.circle([2500, 0], 300)
     print(doc.summary()["objects_by_kind"])  # {'circle': 1, 'line': 1}
@@ -45,31 +45,31 @@ with cadektor.open() as doc:                 # starts "cadektor serve" for you
 
 Units are millimeters. The Y axis points up. Angles are in radians.
 
-If the `cadektor` program is not on PATH, set `CADEKTOR_BIN` or pass `binary="..."` to `cadektor.open()`.
+If the `kadakas` program is not on PATH, set `KADAKAS_BIN` or pass `binary="..."` to `kadakas.open()`.
 
 ### Two ways to connect
 
 | Call | What it does |
 |---|---|
-| `cadektor.open(path=None)` | Starts its own `cadektor serve` with its own document. The process ends when you close the document. |
-| `cadektor.connect()` | Joins the running app. It uses a TCP connection and a token. |
+| `kadakas.open(path=None)` | Starts its own `kadakas serve` with its own document. The process ends when you close the document. |
+| `kadakas.connect()` | Joins the running app. It uses a TCP connection and a token. |
 
 `connect()` finds the app in this order:
 
-1. The arguments: `cadektor.connect("127.0.0.1:7878", token)`.
-2. The environment variables `CADEKTOR_ADDR` and `CADEKTOR_TOKEN`. The app sets them for every script it starts.
+1. The arguments: `kadakas.connect("127.0.0.1:7878", token)`.
+2. The environment variables `KADAKAS_ADDR` and `KADAKAS_TOKEN`. The app sets them for every script it starts.
 3. The runtime file of the app (see the README, section "The live app"). Start the app with `--agent-port 0` to have one.
 
 You see the live drawing. When you change something in the app, your script sees it on the next call.
 
 ## The python package
 
-The package is `python/cadektor/`. It is pure Python and has type hints.
+The package is `python/kadakas/`. It is pure Python and has type hints.
 
 ```python
-import cadektor
+import kadakas
 
-doc = cadektor.connect()
+doc = kadakas.connect()
 
 # Layers and classes
 planting = doc.add_layer("Planting", elevation=0)
@@ -125,7 +125,7 @@ New objects inside the block are `Pending`. Their `.id` is known only after the 
 
 Every object, layer, class and resource has an ID. An ID is a UUID text such as `0192f3c4-7b1a-7c2e-9d41-5e6f7a8b9c0d`. IDs are unique in the world, so a client that works offline never makes an ID that another client made. A file from an older format version, with number IDs, does not open: the loader says "unsupported old format".
 
-In Python, an ID is a `str` (`cadektor.Id`). Use `cadektor.is_id(text)` to test one. Wherever a layer, class or resource is expected, you can give its ID or its name.
+In Python, an ID is a `str` (`kadakas.Id`). Use `kadakas.is_id(text)` to test one. Wherever a layer, class or resource is expected, you can give its ID or its name.
 
 For tests that need IDs that you can predict, start the session with the flag `--sequential-ids`. New IDs then count up from `00000000-0000-0000-0000-000000000002`. Do not use this flag for documents that you merge with others.
 
@@ -151,7 +151,7 @@ A change set has these fields: `revision`, `op` (the command name, or `undo`, `r
 | `doc.events.poll(since_revision, kinds=None)` | The change sets after a revision, as `{revision, truncated, changes}`. For clients that cannot receive messages. If `truncated` is true, read the document again. |
 | `doc.events.unsubscribe()` | Stop the events. |
 
-Over a `cadektor serve` process, a message comes before the reply of the call that made the change. A connection to the app also gets the changes that the user makes, at any time. The change log has a limit; `poll` and `events.reset` tell you when changes were lost. MCP does not carry events.
+Over a `kadakas serve` process, a message comes before the reply of the call that made the change. A connection to the app also gets the changes that the user makes, at any time. The change log has a limit; `poll` and `events.reset` tell you when changes were lost. MCP does not carry events.
 
 ### Everything else
 
@@ -164,7 +164,7 @@ doc.call("report.areas")        # the same, by the name of the method
 doc.execute({"op": "add_layer", "name": "Notes"})   # any command
 ```
 
-Errors raise `CadektorError`. It has `code`, `message` and `method`. A broken connection raises `ConnectionFailed`.
+Errors raise `KadakasError`. It has `code`, `message` and `method`. A broken connection raises `ConnectionFailed`.
 
 ## Scripts palette
 
@@ -175,13 +175,13 @@ Choose **File > Scripts...** to open the palette.
 3. The **Console** shows what the script prints. Errors are red.
 4. **Stop** ends the script and everything it started.
 
-The app sets two environment variables for the script: `CADEKTOR_ADDR` and `CADEKTOR_TOKEN`. In the script, call `cadektor.connect()` and you work on the open drawing. Each change is a normal command, so you can undo it.
+The app sets two environment variables for the script: `KADAKAS_ADDR` and `KADAKAS_TOKEN`. In the script, call `kadakas.connect()` and you work on the open drawing. Each change is a normal command, so you can undo it.
 
 ```python
 # scripts/number_circles.py
-import cadektor
+import kadakas
 
-doc = cadektor.connect()
+doc = kadakas.connect()
 with doc.undo_group():
     for i, c in enumerate(doc.objects(kind="circle"), start=1):
         doc.add.text(c["center"], str(i), height=200)
@@ -192,11 +192,11 @@ If the app has no agent server yet, the palette starts one on a free port the fi
 
 ### Which Python is used
 
-1. The program in `CADEKTOR_PYTHON`. Use this to choose your own.
+1. The program in `KADAKAS_PYTHON`. Use this to choose your own.
 2. `python3` on PATH.
 3. `uv run --no-config --no-project python`. This applies only when `uv` is on PATH. The app clears variables such as `UV_PYTHON`, `VIRTUAL_ENV` and `PYTHONHOME` first, and runs plug-in scripts in an empty private folder, so a planted `.python-version` or config file changes nothing.
 
-The app puts the folder with the `cadektor` package on `PYTHONPATH`. It looks for `python/cadektor` next to the program, and in the folder where you started it. Set `CADEKTOR_PYTHON_DIR` to point to it. You need none of this when you installed the package with `pip`.
+The app puts the folder with the `kadakas` package on `PYTHONPATH`. It looks for `python/kadakas` next to the program, and in the folder where you started it. Set `KADAKAS_PYTHON_DIR` to point to it. You need none of this when you installed the package with `pip`.
 
 ## Plug-in objects
 
@@ -320,10 +320,10 @@ Their scripts are in `python/examples/plugins/`. Add them to a drawing with `doc
 ### Make your own
 
 ```python
-import cadektor
-from cadektor import Param
+import kadakas
+from kadakas import Param
 
-doc = cadektor.connect()
+doc = kadakas.connect()
 
 definition = doc.plugins.define(
     "Planter",
@@ -349,19 +349,19 @@ planter.set_params(wall=250)
 print(planter.params, planter.error)
 ```
 
-To test a script without the app, use `cadektor.plugin.test_reset(script, params, geometry)`. It runs the script in your own Python and returns the shapes.
+To test a script without the app, use `kadakas.plugin.test_reset(script, params, geometry)`. It runs the script in your own Python and returns the shapes.
 
 ## Security
 
 - **Scripts run only when a user starts them.** A drawing never runs code when you open it. The shapes of a plug-in object are stored, so they need no script.
-- **Programs and AI agents cannot run untrusted scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `4` (kind `policy`). The host must opt in. Start `cadektor serve`, `cadektor mcp` or the app with `--allow-agent-scripts`.
+- **Programs and AI agents cannot run untrusted scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `4` (kind `policy`). The host must opt in. Start `kadakas serve`, `kadakas mcp` or the app with `--allow-agent-scripts`.
 - **A script from a drawing never runs until you trust it.** A plug-in object script is a Python program. A drawing that you download may hold one. When you select such an object, Object Info shows a warning and the button **Review script...**. The dialog **Trust this plug-in?** shows the full source and where it comes from. Nothing runs until you press **Trust this script**.
 - Trust is for the **exact text**. The app keeps the SHA-256 hash of each script you trusted in `trusted_plugins.json` in your config folder. If anyone changes the script, even by one character, the hash changes and the script is untrusted again. Putting the old text back makes it trusted again.
 - The two shipped examples are trusted by their hash. Their scripts are part of the program.
 - **Trust comes only from the dialog.** No API call adds trust. `plugin.update` can change a script, but the new text is untrusted. An agent cannot trust its own script.
 - Opening a drawing, selecting an object and looking at Object Info never run a script. A parameter edit or **Reset** runs it only for a trusted script.
 - The script of a reset runs in a separate thread. The window stays alive and shows a progress mark. A script that starts a background process does not hold the app: the app ends the whole process group when the reset ends or times out (on Windows only the script process is ended).
-- `script.run` also needs the running app (it gives the script the address and token). A headless `cadektor serve` refuses it.
+- `script.run` also needs the running app (it gives the script the address and token). A headless `kadakas serve` refuses it.
 - A script is **not sandboxed**. It runs as you, with your files and network. Run only scripts that you trust. A plug-in object script runs with `python -I` (no user site folder, no `PYTHONPATH`). It also has the time and size limits above. These guard against mistakes. They do not stop a hostile script.
 - A script file for an agent must be a `.py` file inside an allowed folder (`--allow-dir`).
 
@@ -371,8 +371,8 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 
 | Name | Use |
 |---|---|
-| `cadektor.open(path=None, binary=None, allow_dir=(), allow_agent_scripts=False)` | Start `cadektor serve`. Returns a `Document`. |
-| `cadektor.connect(addr=None, token=None, timeout=120)` | Join the running app. After a `RequestTimeout` the connection still works. |
+| `kadakas.open(path=None, binary=None, allow_dir=(), allow_agent_scripts=False)` | Start `kadakas serve`. Returns a `Document`. |
+| `kadakas.connect(addr=None, token=None, timeout=120)` | Join the running app. After a `RequestTimeout` the connection still works. |
 | `doc.summary()`, `doc.describe()`, `doc.to_json()` | State of the session. |
 | `doc.layers`, `doc.classes`, `doc.layer(x)`, `doc.class_(x)`, `doc.active_layer` | Read layers and classes. |
 | `doc.add_layer(name, elevation)`, `doc.add_class(name, **attrs)` | Make them. |
@@ -392,7 +392,7 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 | `PluginObject.params / error / children / set_params(**kw) / reset()` | One plug-in object. |
 | `doc.scripts.run / list / info`, `Run.status / wait / stop` | Scripts next to the app (needs the flag). |
 | `doc.api.<method>(**params)`, `doc.call("a.b", **params)`, `doc.execute(command)` | Everything else. |
-| `cadektor.plugin` | The shape helpers and `test_reset` for writing scripts. |
+| `kadakas.plugin` | The shape helpers and `test_reset` for writing scripts. |
 
 The text of every API method is the docstring of `doc.api.<method>`. Use `help(doc.api.plants_place)`.
 
@@ -414,12 +414,12 @@ The methods `events.subscribe`, `events.unsubscribe` and `events.poll` give the 
 
 | Flag | Where | Use |
 |---|---|---|
-| `--allow-agent-scripts` | `cadektor serve`, `cadektor mcp`, the app | Let agents run scripts of their own. Default: off. |
-| `--allow-converters` | `cadektor serve`, `cadektor mcp`, the app | Let agents start the DWG converter. Default: off. The file dialogs of the app are not limited. |
-| `CADEKTOR_PYTHON` | environment | The Python program to use. |
-| `CADEKTOR_PYTHON_DIR` | environment | The folder that holds the `cadektor` package. |
-| `CADEKTOR_BIN` | environment | The `cadektor` program, for the Python package. |
-| `CADEKTOR_SCRIPTS_DIR` | environment | The folder that the Scripts palette shows first. |
+| `--allow-agent-scripts` | `kadakas serve`, `kadakas mcp`, the app | Let agents run scripts of their own. Default: off. |
+| `--allow-converters` | `kadakas serve`, `kadakas mcp`, the app | Let agents start the DWG converter. Default: off. The file dialogs of the app are not limited. |
+| `KADAKAS_PYTHON` | environment | The Python program to use. |
+| `KADAKAS_PYTHON_DIR` | environment | The folder that holds the `kadakas` package. |
+| `KADAKAS_BIN` | environment | The `kadakas` program, for the Python package. |
+| `KADAKAS_SCRIPTS_DIR` | environment | The folder that the Scripts palette shows first. |
 
 ## Examples
 
@@ -429,13 +429,13 @@ The methods `events.subscribe`, `events.unsubscribe` and `events.poll` give the 
 
 ## Keep the package in step with the API
 
-`python/cadektor/_api.py` is generated from the `describe` answer. Do not edit it by hand.
+`python/kadakas/_api.py` is generated from the `describe` answer. Do not edit it by hand.
 
 After you add or change an API method, run:
 
 ```sh
-cargo build -p cadektor-cli
-CADEKTOR_BIN=target/debug/cadektor python python/tools/codegen.py
+cargo build -p kadakas-cli
+KADAKAS_BIN=target/debug/kadakas python python/tools/codegen.py
 ```
 
 The test `python/tests/test_drift.py` fails in two cases. One: `_api.py` no longer matches `describe`. Two: a wrapper calls a method that does not exist.
@@ -443,5 +443,5 @@ The test `python/tests/test_drift.py` fails in two cases. One: `_api.py` no long
 Run the Python tests:
 
 ```sh
-CADEKTOR_BIN=target/debug/cadektor uv run --no-project --with pytest pytest python/tests
+KADAKAS_BIN=target/debug/kadakas uv run --no-project --with pytest pytest python/tests
 ```

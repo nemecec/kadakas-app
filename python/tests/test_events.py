@@ -3,7 +3,7 @@ them, a batch is one message, kinds filter, origins say who changed, and a docum
 
 from __future__ import annotations
 
-import cadektor
+import kadakas
 
 
 def test_each_call_gives_its_change_set_in_order(doc):
@@ -30,7 +30,7 @@ def test_an_undo_group_is_one_message_and_a_failed_one_is_none(doc):
     assert len(notes[0]["params"]["added"]["objects"]) == 3
     try:
         doc.call("execute", command={"op": "delete_objects", "ids": ["00000000-0000-0000-0000-0000000000ff"]})
-    except cadektor.CadektorError:
+    except kadakas.KadakasError:
         pass
     assert doc.events.take() == []
 
@@ -67,7 +67,7 @@ def test_tcp_transport_waits_for_a_pushed_message():
     import threading
     import time
 
-    from cadektor import _rpc
+    from kadakas import _rpc
 
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
@@ -124,7 +124,7 @@ def test_waiting_does_not_block_other_threads():
     import threading
     import time
 
-    from cadektor import _rpc
+    from kadakas import _rpc
 
     server = socket.socket()
     server.bind(("127.0.0.1", 0))

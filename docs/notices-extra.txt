@@ -121,7 +121,7 @@ Noto Emoji: Copyright 2013 Google Inc. All Rights Reserved. Licensed under the S
 --------------------------------------------------------------------------------
 EPSG Geodetic Parameter Dataset (derived definitions)
 --------------------------------------------------------------------------------
-Used by: the coordinate system definitions of the crs-definitions crate (cadektor-crs); https://epsg.org
+Used by: the coordinate system definitions of the crs-definitions crate (kadakas-crs); https://epsg.org
 
 Includes coordinate system definitions derived from the EPSG Geodetic Parameter Dataset
 (https://epsg.org), owned by IOGP, through PostGIS spatial_ref_sys and the crs-definitions crate
@@ -131,7 +131,7 @@ subject to the EPSG Terms of Use (https://epsg.org/terms-of-use.html).
 --------------------------------------------------------------------------------
 GeographicLib geodesic routines (MIT/X11 License)
 --------------------------------------------------------------------------------
-Used by: native builds only. C code in the proj4rs-geodesic crate, reached through cadektor-crs and
+Used by: native builds only. C code in the proj4rs-geodesic crate, reached through kadakas-crs and
 proj4rs (the aeqd projection). The web build does not include it. https://geographiclib.sourceforge.io/
 
 Copyright (c) Charles Karney (2012-2022) <charles@karney.com> and licensed under the MIT/X11 License.
@@ -159,9 +159,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --------------------------------------------------------------------------------
-Cadektor icons (Apache-2.0 OR MIT)
+Kadakas icons (Apache-2.0 OR MIT)
 --------------------------------------------------------------------------------
-Used by: the icons in assets/icons/cadektor/
+Used by: the icons in assets/icons/kadakas/
 
 Drawn for this project from written ideas. They are covered by the project license (LICENSE-APACHE and LICENSE-MIT).
 The application icons in packaging/icons/ are our own work, under the same license.
@@ -169,8 +169,8 @@ The application icons in packaging/icons/ are our own work, under the same licen
 --------------------------------------------------------------------------------
 Trademarks
 --------------------------------------------------------------------------------
-Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not
+Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent project and is not
 affiliated with, endorsed by, or sponsored by Vectorworks, Inc.
 AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the
-file formats that Cadektor reads or writes, or to compare workflows. Cadektor is not affiliated with
+file formats that Kadakas reads or writes, or to compare workflows. Kadakas is not affiliated with
 their owners. All other names belong to their owners.

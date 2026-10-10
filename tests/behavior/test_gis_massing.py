@@ -290,13 +290,13 @@ def test_massing_in_ifc_validates_with_ifcopenshell(cad, tmp_path):
     assert facts["counts"]["IfcBuildingElementProxy"] == 2
     products = {p["name"]: p for p in facts["products"]}
     assert products["Block"]["triangles"] > 0 and products["House"]["triangles"] > 0
-    quantities = products["Block"]["psets"]["Cadektor_MassingQuantities"]
+    quantities = products["Block"]["psets"]["Kadakas_MassingQuantities"]
     assert quantities["GrossFloorArea"] == approx(3 * 96.0)
     assert quantities["GrossVolume"] == approx(96 * 8.4)
     house = products["House"]["psets"]
-    assert house["Cadektor_Massing"]["RoofStyle"] == "gable"
+    assert house["Kadakas_Massing"]["RoofStyle"] == "gable"
     # Lengths are in the project unit, millimeters.
-    assert house["Cadektor_MassingQuantities"]["Height"] == approx(1000 * (5.0 + 3.0 * math.tan(math.radians(30))), rel=1e-6)
+    assert house["Kadakas_MassingQuantities"]["Height"] == approx(1000 * (5.0 + 3.0 * math.tan(math.radians(30))), rel=1e-6)
     # As IfcBuilding, in the site.
     out2 = tmp_path / "buildings.ifc"
     cad.result("export.file", {"path": str(out2), "format": "ifc", "options": {"massing_as_building": True}})

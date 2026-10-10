@@ -92,9 +92,9 @@ def test_export_is_valid_ifc4_with_tree_data_and_georeference(cad, tmp_path):
     assert slab["psets"]["Qto_SlabBaseQuantities"]["Depth"] == approx(100)
     assert slab["psets"]["Qto_SlabBaseQuantities"]["GrossArea"] == approx(6.0)
     maple = next(p for p in by_type["IfcGeographicElement"] if p["name"] == "Field maple")
-    assert maple["psets"]["Cadektor_Planting"]["BotanicalName"] == "Acer campestre"
+    assert maple["psets"]["Kadakas_Planting"]["BotanicalName"] == "Acer campestre"
     meadow = next(p for p in by_type["IfcGeographicElement"] if p["name"] == "Meadow")
-    assert meadow["psets"]["Cadektor_AreaQuantities"]["GrossArea"] == approx(6.0)
+    assert meadow["psets"]["Kadakas_AreaQuantities"]["GrossArea"] == approx(6.0)
 
     # The georeference: map conversion, CRS name, and latitude and longitude of the site.
     assert facts["crs"] == "EPSG:3067"

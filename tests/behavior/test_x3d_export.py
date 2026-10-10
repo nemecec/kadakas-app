@@ -69,8 +69,8 @@ def test_glb_is_a_valid_y_up_file_in_metres_with_instanced_plants(cad, tmp_path)
     assert any(n.startswith("plant") for n in g["node_names"])
     ids = sorted(e["id"] for e in g["extras"])
     assert len(ids) == 6 and all(e["kind"] for e in g["extras"])
-    assert "CADEKTOR_georeference" in g["extensions_used"]
-    ext = g["scene_extensions"]["CADEKTOR_georeference"]
+    assert "KADAKAS_georeference" in g["extensions_used"]
+    ext = g["scene_extensions"]["KADAKAS_georeference"]
     assert ext["crs"] == "EPSG:3067"
     assert ext["map_origin"] == [385000, 6672000]
     t = facts["trimesh"]

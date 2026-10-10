@@ -33,7 +33,7 @@ def section(title, items):
 
 page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Cadektor icons</title>
+<title>Kadakas icons</title>
 <style>
 :root {{ color-scheme: light dark; --fg: #1f2328; --bg: #fff; --mute: #656d76; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --fg: #e6edf3; --bg: #0d1117; --mute: #8b949e; }} }}
@@ -43,10 +43,10 @@ figure {{ margin: 0; text-align: center; }}
 figure svg {{ width: 48px; height: 48px; color: var(--fg); }}
 figcaption {{ font-size: 12px; color: var(--mute); overflow-wrap: anywhere; }}
 </style></head><body>
-<h1>Cadektor icons</h1>
+<h1>Kadakas icons</h1>
 <p>Made by <code>scripts/icons_gallery.py</code>. Rules: <code>docs/icons.md</code>.
 Our icons use the same style as Tabler Icons (MIT).</p>
-{section("Cadektor icons (own drawings)", load("cadektor"))}
+{section("Kadakas icons (own drawings)", load("kadakas"))}
 {section("Tabler Icons (MIT, generic actions)", load("tabler"))}
 </body></html>
 """

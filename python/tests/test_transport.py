@@ -1,7 +1,7 @@
 """The TCP transport (with a token) and the address rules.
 
 The test starts a small bridge: it plays the part of the app's agent server. It wants the token
-first, then it passes every line to a real ``cadektor serve``."""
+first, then it passes every line to a real ``kadakas serve``."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ import time
 
 import pytest
 
-import cadektor
-from cadektor import ConnectionFailed
-from cadektor import _rpc
+import kadakas
+from kadakas import ConnectionFailed
+from kadakas import _rpc
 
 TOKEN = "t" * 64
 
@@ -67,15 +67,15 @@ class Bridge:
 
 
 @pytest.fixture
-def bridge(cadektor_bin):
-    b = Bridge(cadektor_bin)
+def bridge(kadakas_bin):
+    b = Bridge(kadakas_bin)
     yield b
     b.close()
 
 
 def test_connect_with_token_and_see_live_updates(bridge):
-    a = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN)
-    b = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN)
+    a = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN)
+    b = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN)
     a.add.circle([0, 0], 5)
     # The second connection sees the change of the first at once: both use one session.
     assert [o.kind for o in b.objects()] == ["circle"]
@@ -87,14 +87,14 @@ def test_connect_with_token_and_see_live_updates(bridge):
 
 def test_wrong_token_is_refused(bridge):
     with pytest.raises(ConnectionFailed, match="refused the token"):
-        cadektor.connect(f"127.0.0.1:{bridge.port}", "wrong")
+        kadakas.connect(f"127.0.0.1:{bridge.port}", "wrong")
     assert bridge.refused == 1
 
 
 def test_connect_reads_the_environment_the_app_sets_for_scripts(bridge, monkeypatch):
-    monkeypatch.setenv("CADEKTOR_ADDR", f"127.0.0.1:{bridge.port}")
-    monkeypatch.setenv("CADEKTOR_TOKEN", TOKEN)
-    with cadektor.connect() as doc:
+    monkeypatch.setenv("KADAKAS_ADDR", f"127.0.0.1:{bridge.port}")
+    monkeypatch.setenv("KADAKAS_TOKEN", TOKEN)
+    with kadakas.connect() as doc:
         assert doc.summary()["object_count"] == 0
 
 
@@ -104,18 +104,18 @@ def test_nothing_listens(monkeypatch):
     port = s.getsockname()[1]
     s.close()
     with pytest.raises(ConnectionFailed, match="cannot connect"):
-        cadektor.connect(f"127.0.0.1:{port}", "x")
+        kadakas.connect(f"127.0.0.1:{port}", "x")
 
 
 def test_endpoint_rules(tmp_path, monkeypatch):
-    for k in ("CADEKTOR_ADDR", "CADEKTOR_TOKEN"):
+    for k in ("KADAKAS_ADDR", "KADAKAS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    (tmp_path / "cadektor").mkdir()
+    (tmp_path / "kadakas").mkdir()
     # No runtime file: say what to do.
     with pytest.raises(ConnectionFailed, match="--agent-port"):
         _rpc.resolve_endpoint(None, None)
-    (tmp_path / "cadektor" / "agent.json").write_text(json.dumps({"port": 7001, "token": "filetoken"}))
+    (tmp_path / "kadakas" / "agent.json").write_text(json.dumps({"port": 7001, "token": "filetoken"}))
     assert _rpc.resolve_endpoint(None, None) == ("127.0.0.1", 7001, "filetoken")
     # The token of the file is only for the app that the file describes.
     assert _rpc.resolve_endpoint("127.0.0.1:7001", None) == ("127.0.0.1", 7001, "filetoken")
@@ -124,24 +124,24 @@ def test_endpoint_rules(tmp_path, monkeypatch):
     assert _rpc.resolve_endpoint("10.0.0.5:7001", "mine") == ("10.0.0.5", 7001, "mine")
     with pytest.raises(ConnectionFailed, match="HOST:PORT"):
         _rpc.resolve_endpoint("nonsense", "t")
-    (tmp_path / "cadektor" / "agent.json").write_text("not json")
+    (tmp_path / "kadakas" / "agent.json").write_text("not json")
     with pytest.raises(ConnectionFailed):
         _rpc.resolve_endpoint(None, None)
-    assert _rpc.agent_info_path() == tmp_path / "cadektor" / "agent.json"
+    assert _rpc.agent_info_path() == tmp_path / "kadakas" / "agent.json"
 
 
 def test_find_binary_rules(monkeypatch):
-    monkeypatch.setenv("CADEKTOR_BIN", "/from/env")
+    monkeypatch.setenv("KADAKAS_BIN", "/from/env")
     assert _rpc.find_binary() == "/from/env"
     assert _rpc.find_binary("/explicit") == "/explicit"
-    monkeypatch.delenv("CADEKTOR_BIN")
+    monkeypatch.delenv("KADAKAS_BIN")
     monkeypatch.setenv("PATH", "")
     with pytest.raises(ConnectionFailed, match="cannot find"):
         _rpc.find_binary()
 
 
-def test_a_dead_process_is_reported(cadektor_bin):
-    t = _rpc.StdioTransport([], cadektor_bin)
+def test_a_dead_process_is_reported(kadakas_bin):
+    t = _rpc.StdioTransport([], kadakas_bin)
     t._proc.kill()
     t._proc.wait()
     with pytest.raises(ConnectionFailed, match="ended"):
@@ -150,10 +150,10 @@ def test_a_dead_process_is_reported(cadektor_bin):
 
 
 def test_a_timeout_does_not_break_the_connection(bridge):
-    doc = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
     doc.add.circle([0, 0], 5)
     bridge.delay = 1.0  # the next answer comes late
-    with pytest.raises(cadektor.RequestTimeout):
+    with pytest.raises(kadakas.RequestTimeout):
         doc.summary()
     # The late answer is thrown away by its ID. The next call gets its own answer.
     time.sleep(1.2)
@@ -163,9 +163,9 @@ def test_a_timeout_does_not_break_the_connection(bridge):
 
 
 def test_a_late_answer_that_arrives_during_the_next_call_is_skipped(bridge):
-    doc = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    doc = kadakas.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
     bridge.delay = 0.7
-    with pytest.raises(cadektor.RequestTimeout):
+    with pytest.raises(kadakas.RequestTimeout):
         doc.summary()
     # No pause: the next call reads the old answer first, skips it, and waits for its own.
     doc._transport._timeout = 3.0

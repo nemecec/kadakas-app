@@ -1,0 +1,30 @@
+[package]
+name = "kadakas-print"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sheet composition and output: PDF, SVG and PNG. Native only."
+
+[dependencies]
+ab_glyph = "0.2.32"
+base64 = "0.22.1"
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
+kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
+kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+epaint_default_fonts = "0.35.0"
+glam = { version = "0.34.1" }
+miniz_oxide = "0.8.9"
+pdf-writer = "0.15.0"
+png = "0.18"
+tiny-skia = "0.12.0"
+
+[dev-dependencies]
+lopdf = "0.45.0"
+proptest = "1.11.0"
+serde_json = "1.0.151"

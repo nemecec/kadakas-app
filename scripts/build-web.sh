@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the browser version of Cadektor into dist-web/.
+# Builds the browser version of Kadakas into dist-web/.
 #   scripts/build-web.sh           release build (small, slow to build)
 #   scripts/build-web.sh --serve   dev build and a local server on http://127.0.0.1:8080
 set -euo pipefail

@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cadektor"
+name = "kadakas"
 version = "0.1.0"
-description = "Python API for Cadektor, the CAD app for landscape architects: scripts, plug-in objects and automation over JSON-RPC."
+description = "Python API for Kadakas, the CAD app for landscape architects: scripts, plug-in objects and automation over JSON-RPC."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0 OR MIT" }
@@ -15,10 +15,10 @@ dependencies = []
 test = ["pytest>=8"]
 
 [tool.setuptools]
-packages = ["cadektor"]
+packages = ["kadakas"]
 
 [tool.setuptools.package-data]
-cadektor = ["py.typed"]
+kadakas = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

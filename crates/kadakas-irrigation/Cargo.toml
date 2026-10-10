@@ -1,0 +1,16 @@
+[package]
+name = "kadakas-irrigation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Irrigation design: catalog, hydraulics (Hazen-Williams), network solving, layout helpers and reports. Pure and wasm-compatible."
+
+[dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+proptest = "1.11.0"

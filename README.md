@@ -1,15 +1,15 @@
-# Cadektor
+# Kadakas
 
-Cadektor is a 2D CAD program for landscape design, written in Rust. Every change to a drawing is a
+Kadakas is a 2D CAD program for landscape design, written in Rust. Every change to a drawing is a
 serializable, undoable command. The desktop app, scripts and AI agents all send the same commands.
 
-- `crates/cadektor-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
-- `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. Reads and writes DWG through a converter that you install (`docs/dwg.md`). The core never parses files.
-- `crates/cadektor-ifc`: IFC4 export and IFC2x3, IFC4 and IFC4x3 import (a streaming STEP reader, geometry, mapping).
-- `crates/cadektor-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.
-- `python/cadektor`: the Python package for scripts and automation (`import cadektor`).
-- `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
-- `crates/cadektor-app`: the desktop app (egui). It can also serve the API over TCP to agents.
+- `crates/kadakas-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
+- `crates/kadakas-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. Reads and writes DWG through a converter that you install (`docs/dwg.md`). The core never parses files.
+- `crates/kadakas-ifc`: IFC4 export and IFC2x3, IFC4 and IFC4x3 import (a streaming STEP reader, geometry, mapping).
+- `crates/kadakas-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.
+- `python/kadakas`: the Python package for scripts and automation (`import kadakas`).
+- `crates/kadakas-cli`: the `kadakas` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
+- `crates/kadakas-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
 Documents are JSON files with the extension `.cdk`. Older files named `*.cdk.json` still open, and File > Save keeps their name (File > Save As offers `.cdk`). Units are millimeters, the Y axis points up, angles are in radians.
 See `docs/feature-spec.md` for the plan.
@@ -26,7 +26,7 @@ cargo test --workspace
 ## Install
 
 Installers for macOS (`.dmg`), Windows (`.exe`, `.msi`) and Linux (`.AppImage`, `.deb`) come with each release.
-They are not signed yet, so your system may warn you at the first start. The installer also puts the `cadektor`
+They are not signed yet, so your system may warn you at the first start. The installer also puts the `kadakas`
 command line tool next to the app. `docs/release.md` has the paths and the build steps.
 
 ## Autosave and recovery
@@ -34,20 +34,20 @@ command line tool next to the app. `docs/release.md` has the paths and the build
 The app saves a recovery copy every 5 minutes (when the drawing changed) or after 50 operations, and keeps the last 5
 versions. They go to a folder of your user account, never over your file (File > Preferences... changes all of this, and has
 an opt-in to save over your own file too). After a crash, the app offers the last copy at the next start: open it, discard it
-or show its folder. A normal exit removes the copies. The folder is `~/Library/Application Support/cadektor/recovery` on macOS,
-`%LOCALAPPDATA%\cadektor\recovery` on Windows and `~/.local/state/cadektor/recovery` on Linux (`CADEKTOR_RECOVERY_DIR` changes it).
+or show its folder. A normal exit removes the copies. The folder is `~/Library/Application Support/kadakas/recovery` on macOS,
+`%LOCALAPPDATA%\kadakas\recovery` on Windows and `~/.local/state/kadakas/recovery` on Linux (`KADAKAS_RECOVERY_DIR` changes it).
 
 ## Run
 
 ```sh
 # Desktop app
-cargo run --release -p cadektor-app
+cargo run --release -p kadakas-app
 
 # Headless: one JSON-RPC 2.0 request per line on stdin, one response per line on stdout
-cargo run --release -p cadektor-cli -- serve [file.cdk.json]
+cargo run --release -p kadakas-cli -- serve [file.cdk.json]
 
 # Render a document to SVG
-cargo run --release -p cadektor-cli -- render drawing.cdk.json -o drawing.svg
+cargo run --release -p kadakas-cli -- render drawing.cdk.json -o drawing.svg
 ```
 
 ## Web
@@ -58,13 +58,13 @@ The app also runs in a browser (WebGPU, or WebGL2 as the fallback) with fewer fe
 Import and export (File > Import... and File > Export... in the app, `import.file` and `export.file` in the API):
 
 ```sh
-cadektor import site.dxf -o drawing.cdk.json                                # DXF layers become classes
-cadektor import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS data sets the georeference
-cadektor import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
-cadektor export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
-cadektor export drawing.cdk.json -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
-cadektor import model.ifc -o drawing.cdk.json                                # IFC2x3, IFC4 or IFC4x3
-cadektor import survey.dwg -o drawing.cdk.json                               # needs a converter, see docs/dwg.md
+kadakas import site.dxf -o drawing.cdk.json                                # DXF layers become classes
+kadakas import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS data sets the georeference
+kadakas import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
+kadakas export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
+kadakas export drawing.cdk.json -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
+kadakas import model.ifc -o drawing.cdk.json                                # IFC2x3, IFC4 or IFC4x3
+kadakas import survey.dwg -o drawing.cdk.json                               # needs a converter, see docs/dwg.md
 ```
 
 An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the
@@ -78,7 +78,7 @@ data (`rotation_deg`). Old files are decoded with their code page (`$DWGCODEPAGE
 The DXF export writes a release 2004 file with all tables, handles and owner handles, and snaps line weights to the values
 that DXF allows. To check it with ezdxf: `uv run --with pytest --with ezdxf pytest tests/behavior -q`.
 
-A server for agents (`cadektor serve`, `cadektor mcp`, the app with `--agent-port`) only reads and writes in the folder of
+A server for agents (`kadakas serve`, `kadakas mcp`, the app with `--agent-port`) only reads and writes in the folder of
 the open document and in the folders given with `--allow-dir DIR` (repeat the flag; default: the folder where it started).
 This covers `import.file`, `export.file`, `file.open` and `file.save`. Paths are resolved first, so `..` and links do not
 leave those folders. The extension must match the format, and `export.file` needs `"overwrite": true` to replace a file
@@ -96,14 +96,14 @@ Send the `describe` method first. It lists all methods and example commands.
 
 ### Headless
 
-`cadektor serve` and `cadektor mcp` work on their own document. Use `file.open` and `file.save` (in MCP, methods of the `document` tool) to load and store it.
+`kadakas serve` and `kadakas mcp` work on their own document. Use `file.open` and `file.save` (in MCP, methods of the `document` tool) to load and store it.
 
 ### The live app
 
 Start the app with an agent port. Port 0 picks a free port.
 
 ```sh
-cargo run --release -p cadektor-app -- --agent-port 0     # or set CADEKTOR_AGENT_PORT=0
+cargo run --release -p kadakas-app -- --agent-port 0     # or set KADAKAS_AGENT_PORT=0
 ```
 
 The app listens on 127.0.0.1 only. At start it creates a random 256-bit token and writes
@@ -111,9 +111,9 @@ The app listens on 127.0.0.1 only. At start it creates a random 256-bit token an
 
 | System | Runtime file |
 |---|---|
-| Linux | `$XDG_RUNTIME_DIR/cadektor/agent.json`, else `~/.local/state/cadektor/agent.json` |
-| macOS | `$XDG_RUNTIME_DIR/cadektor/agent.json`, else `~/Library/Application Support/cadektor/agent.json` |
-| Windows | `%LOCALAPPDATA%\cadektor\agent.json` |
+| Linux | `$XDG_RUNTIME_DIR/kadakas/agent.json`, else `~/.local/state/kadakas/agent.json` |
+| macOS | `$XDG_RUNTIME_DIR/kadakas/agent.json`, else `~/Library/Application Support/kadakas/agent.json` |
+| Windows | `%LOCALAPPDATA%\kadakas\agent.json` |
 
 The first line on every connection must be an `auth` request. Anything else closes the connection:
 
@@ -126,18 +126,18 @@ The first byte must be `{`. Lines are at most 16 MiB, and at most 4 clients can 
 The CLI does this for you:
 
 ```sh
-cadektor serve --connect                          # find the app through the runtime file
-cadektor serve --connect 127.0.0.1:7878 --token T # explicit address; the token may also come from the file
+kadakas serve --connect                          # find the app through the runtime file
+kadakas serve --connect 127.0.0.1:7878 --token T # explicit address; the token may also come from the file
 ```
 
 ### Claude Code (MCP)
 
 ```sh
 # Live app (start the app with --agent-port first)
-claude mcp add cadektor -- /path/to/cadektor mcp --connect
+claude mcp add kadakas -- /path/to/kadakas mcp --connect
 
 # Headless, with its own document
-claude mcp add cadektor -- /path/to/cadektor mcp
+claude mcp add kadakas -- /path/to/kadakas mcp
 ```
 
 The server lists about 20 tools, one per domain: `describe`, `document`, `objects`, `selection_undo`, `reports`,
@@ -161,14 +161,14 @@ about 280 tools. The tool names are the API methods with `.` replaced by `_` (fo
 `file_open` and `file_save`, and the arguments are the parameters of the method.
 
 ```sh
-claude mcp add cadektor -- /path/to/cadektor mcp --mcp-flat
+claude mcp add kadakas -- /path/to/kadakas mcp --mcp-flat
 ```
 
 ## Scripting and plug-in objects
 
-Control Cadektor from Python, run `.py` files from **File > Scripts...** (with a console), and make parametric
+Control Kadakas from Python, run `.py` files from **File > Scripts...** (with a console), and make parametric
 plug-in objects whose shapes a short Python script draws again when a parameter changes. Python is not embedded:
-Cadektor starts `python3` (or `uv run`). Scripts run only when you start them; agents may run scripts only with
+Kadakas starts `python3` (or `uv run`). Scripts run only when you start them; agents may run scripts only with
 `--allow-agent-scripts`.
 
 ```sh
@@ -176,9 +176,9 @@ uv pip install -e python
 ```
 
 ```python
-import cadektor
+import kadakas
 
-with cadektor.open() as doc:                 # or cadektor.connect() for the running app
+with kadakas.open() as doc:                 # or kadakas.connect() for the running app
     doc.plugins.install_example("Bench")
     bench = doc.plugins.place("Bench", at=[2000, 1000], params={"length": 2400})
     with doc.undo_group():                   # one undo step
@@ -196,7 +196,7 @@ suspends snapping. While you draw a line, rectangle, circle or polyline, `Tab` m
 (length and angle, width and height, radius, or X and Y). `Tab` and `Shift+Tab` change field, `Enter` creates the object,
 `Esc` returns to the canvas. Single keys never fire while you type in a text field.
 
-Put a `keymap.json` in your config folder to change keys (on macOS `~/Library/Application Support/cadektor/keymap.json`).
+Put a `keymap.json` in your config folder to change keys (on macOS `~/Library/Application Support/kadakas/keymap.json`).
 The full table, with the status of each key, is in `docs/keyboard-shortcuts.md`.
 
 ## Tests
@@ -204,11 +204,11 @@ The full table, with the status of each key, is in `docs/keyboard-shortcuts.md`.
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build -p cadektor-cli && uv run --with pytest pytest tests/behavior -q
-CADEKTOR_BIN=target/debug/cadektor uv run --no-project --with pytest pytest python/tests   # the Python package
-cargo test -p cadektor-core --release --test perf -- --ignored --nocapture   # speed on 50,000 objects
-cargo llvm-cov -p cadektor-core --summary-only
-cargo llvm-cov -p cadektor-io --summary-only
+cargo build -p kadakas-cli && uv run --with pytest pytest tests/behavior -q
+KADAKAS_BIN=target/debug/kadakas uv run --no-project --with pytest pytest python/tests   # the Python package
+cargo test -p kadakas-core --release --test perf -- --ignored --nocapture   # speed on 50,000 objects
+cargo llvm-cov -p kadakas-core --summary-only
+cargo llvm-cov -p kadakas-io --summary-only
 ```
 
 ## License
@@ -218,7 +218,7 @@ Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) o
 
 Third-party licenses are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). [docs/attribution.md](docs/attribution.md) lists the libraries, icons, fonts, data and sources that we use.
 
-Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc. AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Cadektor reads or writes, or to compare workflows. Cadektor is not affiliated with their owners.
+Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc. AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Kadakas reads or writes, or to compare workflows. Kadakas is not affiliated with their owners.
 
 ## IFC import
 
@@ -239,7 +239,7 @@ once, in blocks, and keeps 24 bytes per entity in memory (the file stays on disk
 ## DWG
 
 `import.file` and `export.file` accept `.dwg` files when a converter is installed (ODA File Converter, or the LibreDWG tools
-`dwg2dxf` and `dxf2dwg`). Cadektor runs it in a temporary folder with a time limit and uses the DXF import and export.
+`dwg2dxf` and `dxf2dwg`). Kadakas runs it in a temporary folder with a time limit and uses the DXF import and export.
 See [docs/dwg.md](docs/dwg.md) for install hints and licenses.
 
 ## IFC4 export

@@ -1,4 +1,4 @@
-"""Scenario: an AI agent connects to `cadektor mcp` and draws through the MCP tools."""
+"""Scenario: an AI agent connects to `kadakas mcp` and draws through the MCP tools."""
 
 import json
 
@@ -11,7 +11,7 @@ from helpers import McpClient, plant_cmd, rect_cmd
 def test_initialize_reports_server_info_and_tools_capability(mcp_raw):
     resp = mcp_raw.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
     result = resp["result"]
-    assert result["serverInfo"]["name"] == "cadektor"
+    assert result["serverInfo"]["name"] == "kadakas"
     assert "tools" in result["capabilities"]
     assert "describe" in result["instructions"]
 

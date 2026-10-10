@@ -1,4 +1,4 @@
-"""Scenario: an agent or a script looks at the drawing as SVG, through `render.svg` and `cadektor render`."""
+"""Scenario: an agent or a script looks at the drawing as SVG, through `render.svg` and `kadakas render`."""
 
 import pytest
 

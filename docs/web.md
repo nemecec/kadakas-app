@@ -1,4 +1,4 @@
-# Cadektor in the browser
+# Kadakas in the browser
 
 The web build runs the app in a browser tab. It is a small version of the desktop app.
 It is for a quick look, a demo and light edits. The desktop app stays the main product.
@@ -12,7 +12,7 @@ scripts/build-web.sh --serve   # dev build, local server on http://127.0.0.1:808
 
 The script installs `trunk` once. Trunk uses `Trunk.toml` and `web/index.html`. You need the
 `wasm32-unknown-unknown` Rust target (the script adds it). CI checks the code with
-`cargo check -p cadektor-app --target wasm32-unknown-unknown` and builds with `trunk build`.
+`cargo check -p kadakas-app --target wasm32-unknown-unknown` and builds with `trunk build`.
 
 Host the `dist-web` folder on any static web server. No server code is needed.
 

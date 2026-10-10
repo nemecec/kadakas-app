@@ -1,4 +1,4 @@
-"""Shared helpers for the Cadektor behavior tests. Standard library only."""
+"""Shared helpers for the Kadakas behavior tests. Standard library only."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-_EXE = "cadektor.exe" if sys.platform == "win32" else "cadektor"
-BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / _EXE))
+_EXE = "kadakas.exe" if sys.platform == "win32" else "kadakas"
+BIN = Path(os.environ.get("KADAKAS_BIN", REPO / "target" / "debug" / _EXE))
 
 
 class StdioClient:
-    """A child `cadektor` process that reads one JSON object per line on stdin.
+    """A child `kadakas` process that reads one JSON object per line on stdin.
 
     A reader thread moves the output lines into a queue, so a read can time out on every system
     (select() works on pipes only on Unix)."""
@@ -86,7 +86,7 @@ class StdioClient:
         if line is None:
             self._lines.put(None)  # keep the end mark for later reads
             self._threads[1].join(timeout=2)
-            raise AssertionError(f"cadektor exited early. stderr: {self._err.decode(errors='replace')}")
+            raise AssertionError(f"kadakas exited early. stderr: {self._err.decode(errors='replace')}")
         return line
 
     def expect_silence(self, wait=0.3) -> None:
@@ -117,7 +117,7 @@ def uid(n: int) -> str:
 
 
 class JsonRpc(StdioClient):
-    """`cadektor serve` client. `rpc` checks that the response id matches the request id.
+    """`kadakas serve` client. `rpc` checks that the response id matches the request id.
 
     A `serve` process runs with `--sequential-ids`: new IDs count 2, 3, 4, so a test can name them."""
 
@@ -167,7 +167,7 @@ class JsonRpc(StdioClient):
 
 
 class McpClient(StdioClient):
-    """`cadektor mcp` client speaking MCP over stdio."""
+    """`kadakas mcp` client speaking MCP over stdio."""
 
     def __init__(self, args=("mcp",), **kw):
         super().__init__(list(args), **kw)

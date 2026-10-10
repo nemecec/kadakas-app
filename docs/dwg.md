@@ -1,13 +1,13 @@
-# DWG in Cadektor
+# DWG in Kadakas
 
-Cadektor reads and writes DWG through a converter program that you install yourself.
+Kadakas reads and writes DWG through a converter program that you install yourself.
 It has no DWG code of its own. It does not link any DWG library.
 
 ## How it works
 
-- Import: Cadektor starts the converter. The converter turns the DWG file into a DXF file in a temporary folder.
-  Cadektor reads that DXF file with its normal DXF importer. The temporary folder is deleted afterwards.
-- Export: Cadektor writes a DXF file with its normal DXF exporter, then starts the converter to turn it into DWG.
+- Import: Kadakas starts the converter. The converter turns the DWG file into a DXF file in a temporary folder.
+  Kadakas reads that DXF file with its normal DXF importer. The temporary folder is deleted afterwards.
+- Export: Kadakas writes a DXF file with its normal DXF exporter, then starts the converter to turn it into DWG.
 - The converter has a time limit (300 seconds by default). A converter that hangs is stopped.
 - All options of the DXF import and export apply (`layer_mode`, `unit`, `origin`, and so on).
   Two options are for DWG only. `converter_timeout_s` sets the time limit. `dwg_version` sets the file version of an export. Only the ODA File Converter uses it, and the default is `ACAD2018`.
@@ -22,8 +22,8 @@ The DXF importer reads 2D geometry, text, blocks and hatches. It skips 3D solids
 | ODA File Converter | yes | yes | Free download from the Open Design Alliance. It has its own license. Read it before you use the program at work. |
 | LibreDWG (`dwg2dxf`, `dxf2dwg`) | yes | yes, with `dxf2dwg` (less complete) | GPL-3.0-or-later |
 
-Cadektor starts these programs as separate processes. It never links them, so their licenses do not apply to Cadektor.
-Cadektor does not include either program. Get them from their own sites or from your package manager.
+Kadakas starts these programs as separate processes. It never links them, so their licenses do not apply to Kadakas.
+Kadakas does not include either program. Get them from their own sites or from your package manager.
 
 ### Install hints
 
@@ -31,24 +31,24 @@ Cadektor does not include either program. Get them from their own sites or from 
   LibreDWG: `brew install libredwg`.
 - Windows: run the ODA File Converter installer. It goes to `C:\Program Files\ODA\...`.
 - Linux: install the `.deb` or `.rpm` of the ODA File Converter (it puts `ODAFileConverter` in `/usr/bin`).
-  The program needs a display. On a server, start Cadektor with `xvfb-run`.
+  The program needs a display. On a server, start Kadakas with `xvfb-run`.
   LibreDWG: `apt install libredwg-tools` (or the package of your system).
 
-## How Cadektor finds the converter
+## How Kadakas finds the converter
 
-1. The program named in the environment variable `CADEKTOR_DWG_CONVERTER` (the path of `ODAFileConverter` or `dwg2dxf`).
+1. The program named in the environment variable `KADAKAS_DWG_CONVERTER` (the path of `ODAFileConverter` or `dwg2dxf`).
    If you name `dwg2dxf`, `dxf2dwg` is taken from the same folder.
 2. `ODAFileConverter` in its standard install folder, or on `PATH`.
 3. `dwg2dxf` and `dxf2dwg` on `PATH`.
 
-A request can never name a program. An agent cannot make Cadektor run something else. Agents may start the converter only when the host runs with `--allow-converters` (`cadektor serve`, `cadektor mcp` and the app). The default is off, and the call fails with error code 4 (kind `policy`). The file dialogs of the app are not limited.
-`describe` (`io.dwg.converter`) shows which converter Cadektor found.
+A request can never name a program. An agent cannot make Kadakas run something else. Agents may start the converter only when the host runs with `--allow-converters` (`kadakas serve`, `kadakas mcp` and the app). The default is off, and the call fails with error code 4 (kind `policy`). The file dialogs of the app are not limited.
+`describe` (`io.dwg.converter`) shows which converter Kadakas found.
 
 ## Use
 
 ```
-cadektor import survey.dwg -o survey.cdk.json
-cadektor export survey.cdk.json -o out.dwg
+kadakas import survey.dwg -o survey.cdk.json
+kadakas export survey.cdk.json -o out.dwg
 ```
 
 ```json
@@ -70,5 +70,5 @@ In the app, File > Import and File > Export accept `.dwg` files.
 
 ## Tests
 
-The tests put stub scripts on `PATH` in place of a real converter (`crates/cadektor-io/src/dwg.rs`, `tests/behavior/test_dwg.py`).
+The tests put stub scripts on `PATH` in place of a real converter (`crates/kadakas-io/src/dwg.rs`, `tests/behavior/test_dwg.py`).
 They do not need a real converter.

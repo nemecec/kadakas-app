@@ -1,0 +1,20 @@
+[package]
+name = "kadakas-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { version = "0.34.1", features = ["serde"] }
+i_overlay = "9.0.1"
+png = "0.18"
+indexmap = { version = "2.14.2", features = ["serde"] }
+schemars = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"

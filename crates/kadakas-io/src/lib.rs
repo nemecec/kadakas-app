@@ -1,0 +1,299 @@
+//! File formats for Kadakas: DXF, Shapefile and GeoJSON.
+//!
+//! The core never parses files. An [`Importer`] turns the bytes of a file into
+//! one `Command::Batch` plus a [`Report`]. The caller runs the batch, so an
+//! import is one undo step. An [`Exporter`] turns a `Document` into bytes.
+//!
+//! All readers are tolerant. They never panic on bad input. They return an
+//! error for files that are not of the format, and they skip single bad
+//! entities with a reason in the report.
+
+pub mod builder;
+pub mod dwg;
+pub mod dxf;
+mod encoding;
+pub use encoding::decode_text;
+pub mod geojson;
+pub mod gis;
+pub mod options;
+pub mod report;
+pub mod shapefile;
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use kadakas_core::command::Command;
+use kadakas_core::model::{ClassId, Document, Layer, LayerId};
+
+pub use options::{
+    ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, MeshEntity, OriginMode,
+    SiteMesh, Unit,
+};
+pub use report::{Report, Skipped};
+
+/// A file format that this crate can read or write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Dxf,
+    Shapefile,
+    GeoJson,
+}
+
+impl Format {
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Dxf => "dxf",
+            Format::Shapefile => "shapefile",
+            Format::GeoJson => "geojson",
+        }
+    }
+
+    /// Finds a format by name (`dxf`, `shp`, `shapefile`, `geojson`, `json`).
+    pub fn from_name(name: &str) -> Option<Format> {
+        match name
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "dxf" => Some(Format::Dxf),
+            "shp" | "shapefile" => Some(Format::Shapefile),
+            "geojson" | "json" => Some(Format::GeoJson),
+            _ => None,
+        }
+    }
+
+    /// Finds a format by file extension.
+    pub fn from_path(path: &Path) -> Option<Format> {
+        Format::from_name(path.extension()?.to_str()?)
+    }
+}
+
+/// Why a file could not be read or written.
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum IoError {
+    /// The bytes are not a file of this format.
+    #[error("{0}")]
+    Format(String),
+    /// A file could not be read or written.
+    #[error("{0}")]
+    File(String),
+    /// An option has a bad value.
+    #[error("{0}")]
+    Option(String),
+}
+
+/// The file to import: its name, its bytes, and files next to it (a shapefile has
+/// `dbf` and `prj` parts). The keys of `extra` are lower-case extensions.
+#[derive(Clone, Debug, Default)]
+pub struct Source {
+    /// File name without extension.
+    pub name: String,
+    pub data: Vec<u8>,
+    pub extra: BTreeMap<String, Vec<u8>>,
+}
+
+impl Source {
+    /// Reads a file, and for a shapefile its `dbf`, `prj` and `cpg` parts.
+    pub fn read(path: &Path) -> Result<Source, IoError> {
+        let data = std::fs::read(path)
+            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut extra = BTreeMap::new();
+        if Format::from_path(path) == Some(Format::Shapefile) {
+            for ext in ["dbf", "prj", "cpg"] {
+                for e in [ext.to_string(), ext.to_ascii_uppercase()] {
+                    if let Ok(bytes) = std::fs::read(path.with_extension(&e)) {
+                        extra.insert(ext.to_string(), bytes);
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(Source { name, data, extra })
+    }
+}
+
+/// What an importer needs to know about the document that receives the import.
+/// It lets the importer plan IDs and reuse layers and classes by name.
+#[derive(Clone, Debug)]
+pub struct Context {
+    pub ids: kadakas_core::uid::IdGen,
+    pub layers: Vec<Layer>,
+    pub classes: Vec<(ClassId, String)>,
+    pub active_layer: LayerId,
+    pub active_class: ClassId,
+    pub georef: Option<kadakas_core::georef::Georeference>,
+}
+
+impl Context {
+    pub fn of(doc: &Document) -> Context {
+        Context {
+            ids: doc.id_plan(),
+            layers: doc.layers.clone(),
+            classes: doc.classes.iter().map(|c| (c.id, c.name.clone())).collect(),
+            active_layer: doc.active_layer,
+            active_class: doc.active_class,
+            georef: doc.georef.clone(),
+        }
+    }
+}
+
+/// The result of an import: one batch to execute, and the report.
+#[derive(Clone, Debug)]
+pub struct ImportResult {
+    /// A `Command::Batch`. Executing it is one undo step.
+    pub command: Command,
+    pub report: Report,
+}
+
+/// Reads one file format.
+pub trait Importer {
+    fn format(&self) -> Format;
+    fn import(
+        &self,
+        src: &Source,
+        ctx: &Context,
+        opts: &ImportOptions,
+    ) -> Result<ImportResult, IoError>;
+}
+
+/// The result of an export.
+#[derive(Clone, Debug)]
+pub struct ExportResult {
+    pub bytes: Vec<u8>,
+    pub report: Report,
+}
+
+/// Writes one file format.
+pub trait Exporter {
+    fn format(&self) -> Format;
+    fn export(&self, doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>;
+}
+
+/// The importer for a format.
+pub fn importer(format: Format) -> Box<dyn Importer> {
+    match format {
+        Format::Dxf => Box::new(dxf::DxfFormat),
+        Format::Shapefile => Box::new(shapefile::ShapefileFormat),
+        Format::GeoJson => Box::new(geojson::GeoJsonFormat),
+    }
+}
+
+/// The model of a document: without sheet layers and their objects. Sheets are paper space (mm on paper),
+/// so exporters must never write them as model geometry.
+pub(crate) fn model_only(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    use kadakas_core::model::LayerKind;
+    if !doc.layers.iter().any(|l| l.kind == LayerKind::Sheet) {
+        return std::borrow::Cow::Borrowed(doc);
+    }
+    let mut d = doc.clone();
+    let sheets: Vec<_> = d
+        .layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::Sheet)
+        .map(|l| l.id)
+        .collect();
+    d.objects.retain(|_, o| !sheets.contains(&o.layer));
+    d.layers.retain(|l| l.kind != LayerKind::Sheet);
+    if d.layer(d.active_layer).is_none() {
+        d.active_layer = d.layers[0].id;
+    }
+    std::borrow::Cow::Owned(d)
+}
+
+/// The exporter for a format, if the format can be written.
+pub fn exporter(format: Format) -> Option<Box<dyn Exporter>> {
+    match format {
+        Format::Dxf => Some(Box::new(dxf::DxfFormat)),
+        Format::GeoJson => Some(Box::new(geojson::GeoJsonFormat)),
+        Format::Shapefile => None,
+    }
+}
+
+/// Reads a file and plans the import into `doc`. `format` defaults to the file extension.
+pub fn import_file(
+    path: &Path,
+    format: Option<Format>,
+    opts: &ImportOptions,
+    doc: &Document,
+) -> Result<ImportResult, IoError> {
+    let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
+        IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
+    })?;
+    let src = Source::read(path)?;
+    importer(format).import(&src, &Context::of(doc), opts)
+}
+
+/// Exports `doc` to a file. `format` defaults to the file extension.
+pub fn export_file(
+    path: &Path,
+    format: Option<Format>,
+    opts: &ExportOptions,
+    doc: &Document,
+) -> Result<Report, IoError> {
+    let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
+        IoError::Format("unknown file type: give a format (dxf or geojson)".into())
+    })?;
+    let ex = exporter(format)
+        .ok_or_else(|| IoError::Format(format!("export to {} is not supported", format.name())))?;
+    let out = ex.export(doc, opts)?;
+    // Atomic: a crash never leaves a half-written file. An old file stays as `<name>.bak`.
+    kadakas_sys::fsio::write_atomic(path, &out.bytes)
+        .map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
+    Ok(out.report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_by_name_and_path() {
+        assert_eq!(Format::from_name(".DXF"), Some(Format::Dxf));
+        assert_eq!(Format::from_name("shp"), Some(Format::Shapefile));
+        assert_eq!(Format::from_name("json"), Some(Format::GeoJson));
+        assert_eq!(Format::from_name("png"), None);
+        assert_eq!(
+            Format::from_path(Path::new("a/b.GeoJSON")),
+            Some(Format::GeoJson)
+        );
+        assert_eq!(Format::from_path(Path::new("noext")), None);
+        for f in [Format::Dxf, Format::Shapefile, Format::GeoJson] {
+            assert_eq!(Format::from_name(f.name()), Some(f));
+            assert_eq!(importer(f).format(), f);
+        }
+        assert!(exporter(Format::Shapefile).is_none());
+        assert_eq!(exporter(Format::Dxf).unwrap().format(), Format::Dxf);
+    }
+
+    #[test]
+    fn file_errors() {
+        let doc = Document::with_sequential_ids();
+        let o = ImportOptions::default();
+        assert!(matches!(
+            import_file(Path::new("/nonexistent/x.dxf"), None, &o, &doc),
+            Err(IoError::File(_))
+        ));
+        assert!(matches!(
+            import_file(Path::new("/nonexistent/x"), None, &o, &doc),
+            Err(IoError::Format(_))
+        ));
+        let e = ExportOptions::default();
+        assert!(matches!(
+            export_file(Path::new("x"), None, &e, &doc),
+            Err(IoError::Format(_))
+        ));
+        assert!(matches!(
+            export_file(Path::new("x.shp"), None, &e, &doc),
+            Err(IoError::Format(_))
+        ));
+        assert!(matches!(
+            export_file(Path::new("/nonexistent/dir/x.dxf"), None, &e, &doc),
+            Err(IoError::File(_))
+        ));
+    }
+}

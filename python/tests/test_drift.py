@@ -1,8 +1,8 @@
 """The Python package must match the API that `describe` reports.
 
 If this test fails, the API changed. Run ``python python/tools/codegen.py`` to renew
-``cadektor/_api.py``, and then check that the wrappers in ``cadektor/document.py`` and
-``cadektor/plugins.py`` still fit."""
+``kadakas/_api.py``, and then check that the wrappers in ``kadakas/document.py`` and
+``kadakas/plugins.py`` still fit."""
 
 from __future__ import annotations
 
@@ -15,21 +15,21 @@ from pathlib import Path
 
 import pytest
 
-from cadektor import _api
+from kadakas import _api
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR / "tools"))
 import codegen  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def describe(cadektor_bin) -> dict:
-    return codegen.describe_from_binary(str(cadektor_bin))
+def describe(kadakas_bin) -> dict:
+    return codegen.describe_from_binary(str(kadakas_bin))
 
 
 def test_generated_api_matches_describe(describe):
     expected = codegen.render(describe)
-    actual = (PYTHON_DIR / "cadektor" / "_api.py").read_text(encoding="utf-8")
-    assert actual == expected, "cadektor/_api.py is out of date. Run python/tools/codegen.py"
+    actual = (PYTHON_DIR / "kadakas" / "_api.py").read_text(encoding="utf-8")
+    assert actual == expected, "kadakas/_api.py is out of date. Run python/tools/codegen.py"
 
 
 def test_every_method_has_a_python_method_with_its_text(describe):
@@ -41,8 +41,8 @@ def test_every_method_has_a_python_method_with_its_text(describe):
     assert _api.UNITS == describe["units"]
 
 
-def test_the_codegen_check_mode_agrees(describe, cadektor_bin):
-    out = subprocess.run([sys.executable, str(PYTHON_DIR / "tools" / "codegen.py"), "--check", "--binary", str(cadektor_bin)],
+def test_the_codegen_check_mode_agrees(describe, kadakas_bin):
+    out = subprocess.run([sys.executable, str(PYTHON_DIR / "tools" / "codegen.py"), "--check", "--binary", str(kadakas_bin)],
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
 
@@ -52,7 +52,7 @@ def used_methods() -> tuple[set[str], set[str]]:
     api_calls: set[str] = set()
     raw_calls: set[str] = set()
     for file in ("document.py", "plugins.py"):
-        tree = ast.parse((PYTHON_DIR / "cadektor" / file).read_text(encoding="utf-8"))
+        tree = ast.parse((PYTHON_DIR / "kadakas" / file).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute) and node.value.attr == "api":
                 api_calls.add(node.attr)
@@ -74,14 +74,14 @@ def test_the_wrappers_only_use_methods_that_exist(describe):
     assert sorted(r for r in raw_calls if r not in names and r not in {"file.open", "file.save"}) == []
 
 
-def test_command_ops_used_by_the_wrappers_are_known(describe, cadektor_bin):
+def test_command_ops_used_by_the_wrappers_are_known(describe, kadakas_bin):
     """The ops in `{"op": "..."}` of the wrappers must be in the Rust command list (checked through a probe)."""
     ops = set()
     for file in ("document.py", "plugins.py"):
-        ops |= set(re.findall(r'"op":\s*"([a-z_]+)"', (PYTHON_DIR / "cadektor" / file).read_text(encoding="utf-8")))
+        ops |= set(re.findall(r'"op":\s*"([a-z_]+)"', (PYTHON_DIR / "kadakas" / file).read_text(encoding="utf-8")))
     assert {"add_object", "move_objects", "delete_objects", "batch", "add_layer", "add_class", "modify_layer",
             "modify_class", "modify_object", "set_data", "set_active"} <= ops
-    proc = subprocess.Popen([str(cadektor_bin), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([str(kadakas_bin), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         for i, op in enumerate(sorted(ops), start=1):
             proc.stdin.write(json.dumps({"id": i, "method": "execute", "params": {"command": {"op": op}}}) + "\n")
@@ -97,7 +97,7 @@ def test_command_ops_used_by_the_wrappers_are_known(describe, cadektor_bin):
 
 def test_the_embedded_runner_is_the_package_file():
     """The Rust crate embeds plugin_runner.py. It must run as a stand-alone program."""
-    runner = PYTHON_DIR / "cadektor" / "plugin_runner.py"
+    runner = PYTHON_DIR / "kadakas" / "plugin_runner.py"
     request = {"script": "def reset(p, g):\n    return [line([0, 0], [1, 1])]\n", "params": {}, "geometry": {}}
     out = subprocess.run([sys.executable, "-I", "-c", runner.read_text(encoding="utf-8")],
                          input=json.dumps(request), capture_output=True, text=True, check=True)

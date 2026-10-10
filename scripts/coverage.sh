@@ -4,7 +4,7 @@
 # (egui and wgpu) is left out: its window code has no headless test.
 #
 #   scripts/coverage.sh             all crates
-#   scripts/coverage.sh print api   only these crates (names without the cadektor- prefix)
+#   scripts/coverage.sh print api   only these crates (names without the kadakas- prefix)
 #
 # Needs: cargo install cargo-llvm-cov, and the rustup component llvm-tools-preview.
 set -euo pipefail
@@ -26,9 +26,9 @@ failed=0
 for c in "${CRATES[@]}"; do
   min=$LIB_MIN
   if [ "$c" = "cli" ]; then min=$CLI_MIN; fi
-  echo "== cadektor-$c (at least ${min}% of lines)"
-  if ! cargo llvm-cov -p "cadektor-$c" --summary-only --fail-under-lines "$min"; then
-    echo "!! cadektor-$c is below ${min}% line coverage"
+  echo "== kadakas-$c (at least ${min}% of lines)"
+  if ! cargo llvm-cov -p "kadakas-$c" --summary-only --fail-under-lines "$min"; then
+    echo "!! kadakas-$c is below ${min}% line coverage"
     failed=1
   fi
 done

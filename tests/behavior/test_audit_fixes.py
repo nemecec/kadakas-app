@@ -40,8 +40,8 @@ def test_a_newer_file_gets_a_clear_message(cad, tmp_path):
     f = tmp_path / "future.cdk"
     f.write_text(json.dumps({"format_version": 99, "layers": "???"}))
     err = cad.error("file.open", {"path": str(f)})
-    assert "file was made by a newer Cadektor (format 99)" in err["message"]
-    assert "not a Cadektor file" not in err["message"]
+    assert "file was made by a newer Kadakas (format 99)" in err["message"]
+    assert "not a Kadakas file" not in err["message"]
     assert err["data"]["kind"] == "newer_format"
 
 

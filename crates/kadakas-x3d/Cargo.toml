@@ -1,0 +1,22 @@
+[package]
+name = "kadakas-x3d"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "3D output: glTF, GLB and OBJ writers, and section and elevation drawings from the 3D model. Pure Rust, no file access."
+
+[dependencies]
+base64 = "0.22.1"
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+spade = "2.15.1"
+glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+gltf = { version = "1", default-features = false, features = ["extras", "names", "utils"] }
+proptest = "1.11.0"

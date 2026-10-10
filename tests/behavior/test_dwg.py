@@ -1,4 +1,4 @@
-"""Scenario: a surveyor sends a DWG file. Cadektor does not read DWG itself: it runs a converter that the user
+"""Scenario: a surveyor sends a DWG file. Kadakas does not read DWG itself: it runs a converter that the user
 installed (ODA File Converter or LibreDWG). The tests put stub scripts on PATH that stand for the converter."""
 
 import os
@@ -51,7 +51,7 @@ def libredwg(tmp_path, monkeypatch):
     script(stubs, "dwg2dxf", f'[ "$1" = "-y" ] && [ "$2" = "-o" ] || exit 2\ngrep -q FAKEDWG "$4" || {{ echo "not a dwg file" >&2; exit 3; }}\ncat > "$3" <<\'STUB_END\'\n{DXF}STUB_END')
     script(stubs, "dxf2dwg", '[ "$1" = "-y" ] && [ "$2" = "-o" ] || exit 2\ngrep -q ENTITIES "$4" || exit 3\necho FAKEDWG > "$3"')
     monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.delenv("CADEKTOR_DWG_CONVERTER", raising=False)
+    monkeypatch.delenv("KADAKAS_DWG_CONVERTER", raising=False)
     return stubs
 
 
@@ -113,7 +113,7 @@ def test_without_a_converter_the_error_says_how_to_fix_it(make_serve, tmp_path, 
     # Keep the system tools but drop folders that hold a converter.
     keep = [p for p in os.environ["PATH"].split(os.pathsep) if not any((Path(p) / n).exists() for n in ("dwg2dxf", "ODAFileConverter"))]
     monkeypatch.setenv("PATH", os.pathsep.join([str(empty)] + keep))
-    monkeypatch.delenv("CADEKTOR_DWG_CONVERTER", raising=False)
+    monkeypatch.delenv("KADAKAS_DWG_CONVERTER", raising=False)
     cad = make_serve("--allow-converters")
     dwg = tmp_path / "none.dwg"
     dwg.write_bytes(b"FAKEDWG")

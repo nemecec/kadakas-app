@@ -1,6 +1,6 @@
 # Release and installers
 
-This page tells how to build the installers of Cadektor and where the files go on each system.
+This page tells how to build the installers of Kadakas and where the files go on each system.
 
 ## Tool: cargo-packager
 
@@ -14,7 +14,7 @@ We use `cargo-packager` (settings in `packager.toml`). We chose it over `cargo-b
 
 ```sh
 cargo install cargo-packager --locked
-cargo build --release -p cadektor-app -p cadektor-cli
+cargo build --release -p kadakas-app -p kadakas-cli
 cargo packager --release --formats app,dmg        # macOS
 cargo packager --release --formats nsis,wix       # Windows
 cargo packager --release --formats appimage,deb   # Linux
@@ -29,7 +29,7 @@ The icon is our own. `python3 packaging/icons/make_icons.py` draws `icon.svg` an
 
 ## License texts in the installers
 
-Every installer ships `THIRD_PARTY_NOTICES.txt` (the licenses of all libraries in Cadektor), `LICENSE-APACHE` and
+Every installer ships `THIRD_PARTY_NOTICES.txt` (the licenses of all libraries in Kadakas), `LICENSE-APACHE` and
 `LICENSE-MIT`. The list `resources` in `packager.toml` puts them in the package. `scripts/notices.sh` makes the notices
 file with `cargo-about` (settings in `about.toml` and `about.hbs`). CI checks that the committed file is up to date, and
 the release workflow makes it again before it packages. CI also runs `cargo deny check` (`deny.toml`): a dependency
@@ -42,25 +42,25 @@ scripts/notices.sh
 
 ## macOS notes
 
-- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.cadektor.drawing` (it conforms to `public.json`) and makes Cadektor the owner of `.cdk` files. Old `.cdk.json` files still open with File > Open, but a double click does not open them in Cadektor.
+- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.kadakas.drawing` (it conforms to `public.json`) and makes Kadakas the owner of `.cdk` files. Old `.cdk.json` files still open with File > Open, but a double click does not open them in Kadakas.
 - The `.app` build was checked on macOS 26 (Apple silicon). The `.dmg` step runs a Finder script for the window layout. It needs a normal desktop session, and it timed out in a headless run. Run it on a Mac with a user logged in.
-- The bundle id is `net.cadektor.Cadektor`. Test the double click on a `.cdk` file on a real Mac before the first release.
+- The bundle id is `net.kadakas.Kadakas`. Test the double click on a `.cdk` file on a real Mac before the first release.
 
-## Where is the `cadektor` command line tool?
+## Where is the `kadakas` command line tool?
 
-The installer puts the `cadektor` tool next to the app. Agents and MCP clients can start `cadektor mcp` from there.
+The installer puts the `kadakas` tool next to the app. Agents and MCP clients can start `kadakas mcp` from there.
 
 | System | Path of the tool |
 |---|---|
-| macOS | `/Applications/Cadektor.app/Contents/MacOS/cadektor` |
-| Windows | `C:\Program Files\Cadektor\cadektor.exe` (per-user install: `%LOCALAPPDATA%\Cadektor\cadektor.exe`) |
-| Linux `.deb` | `/usr/bin/cadektor` |
-| Linux AppImage | inside the image at `usr/bin/cadektor`. Run `./Cadektor.AppImage --appimage-extract`, then use `squashfs-root/usr/bin/cadektor`. |
+| macOS | `/Applications/Kadakas.app/Contents/MacOS/kadakas` |
+| Windows | `C:\Program Files\Kadakas\kadakas.exe` (per-user install: `%LOCALAPPDATA%\Kadakas\kadakas.exe`) |
+| Linux `.deb` | `/usr/bin/kadakas` |
+| Linux AppImage | inside the image at `usr/bin/kadakas`. Run `./Kadakas.AppImage --appimage-extract`, then use `squashfs-root/usr/bin/kadakas`. |
 
 An MCP client config on macOS looks like this.
 
 ```json
-{ "mcpServers": { "cadektor": { "command": "/Applications/Cadektor.app/Contents/MacOS/cadektor", "args": ["mcp"] } } }
+{ "mcpServers": { "kadakas": { "command": "/Applications/Kadakas.app/Contents/MacOS/kadakas", "args": ["mcp"] } } }
 ```
 
 ## Release workflow

@@ -30,5 +30,5 @@ targets = [
 
 ignore-dev-dependencies = true
 ignore-build-dependencies = false
-# The crates of Cadektor itself are not third party.
+# The crates of Kadakas itself are not third party.
 private = { ignore = true }

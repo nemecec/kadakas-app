@@ -26,7 +26,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-      - run: cargo build -p cadektor-cli
+      - run: cargo build -p kadakas-cli
       - run: uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
   wasm:
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-x3d -p cadektor-app --target wasm32-unknown-unknown
+      - run: cargo check -p kadakas-core -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-app --target wasm32-unknown-unknown
   web:
     runs-on: ubuntu-latest
     steps:

@@ -10,7 +10,7 @@ import pytest
 
 from helpers import REPO, JsonRpc
 
-FIXTURES = REPO / "crates" / "cadektor-io" / "tests" / "fixtures"
+FIXTURES = REPO / "crates" / "kadakas-io" / "tests" / "fixtures"
 
 
 def objects(cad, **filt):

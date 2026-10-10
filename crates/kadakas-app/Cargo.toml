@@ -1,0 +1,45 @@
+[package]
+name = "kadakas-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
+kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
+kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
+kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui = "0.35.0"
+egui_dock = { version = "0.20.1", features = ["serde"] }
+glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+rfd = "0.15"
+resvg = { version = "0.48.1", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.4.3"
+kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
+kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+
+# The web build: WebGPU first, WebGL2 as the fallback (eframe picks at start).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wgpu = { version = "29", default-features = false, features = ["webgpu", "webgl"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto"] }
+js-sys = "0.3"
+
+[dev-dependencies]
+pollster = "1.0.1"

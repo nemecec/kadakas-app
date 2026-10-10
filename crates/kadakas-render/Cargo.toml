@@ -1,0 +1,19 @@
+[package]
+name = "kadakas-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+glam = { version = "0.34.1" }
+png = "0.18"
+zune-core = "0.5"
+zune-jpeg = "0.5"
+
+[dev-dependencies]
+proptest = "1.11.0"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

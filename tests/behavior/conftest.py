@@ -1,4 +1,4 @@
-"""Fixtures: each test gets its own `cadektor` subprocess, so tests never share state."""
+"""Fixtures: each test gets its own `kadakas` subprocess, so tests never share state."""
 
 import os
 import subprocess
@@ -16,15 +16,15 @@ ALLOW = ["--allow-dir", str(Path(tempfile.gettempdir()).resolve()), "--allow-dir
 
 @pytest.fixture(scope="session", autouse=True)
 def built_cli():
-    """Builds the CLI once per session. Set CADEKTOR_SKIP_BUILD=1 to use an existing binary."""
-    if not os.environ.get("CADEKTOR_SKIP_BUILD"):
-        subprocess.run(["cargo", "build", "-p", "cadektor-cli"], cwd=REPO, check=True)
-    assert BIN.exists(), f"cadektor binary not found at {BIN}"
+    """Builds the CLI once per session. Set KADAKAS_SKIP_BUILD=1 to use an existing binary."""
+    if not os.environ.get("KADAKAS_SKIP_BUILD"):
+        subprocess.run(["cargo", "build", "-p", "kadakas-cli"], cwd=REPO, check=True)
+    assert BIN.exists(), f"kadakas binary not found at {BIN}"
 
 
 @pytest.fixture
 def make_serve():
-    """Factory for `cadektor serve [file]` processes. All are closed after the test."""
+    """Factory for `kadakas serve [file]` processes. All are closed after the test."""
     started = []
 
     def make(*args) -> JsonRpc:
@@ -39,19 +39,19 @@ def make_serve():
 
 @pytest.fixture
 def cad(make_serve) -> JsonRpc:
-    """A fresh headless session: `cadektor serve` with an empty document."""
+    """A fresh headless session: `kadakas serve` with an empty document."""
     return make_serve()
 
 
 @pytest.fixture
 def rpc(cad):
-    """The rpc(method, params) helper of a fresh `cadektor serve` process."""
+    """The rpc(method, params) helper of a fresh `kadakas serve` process."""
     return cad.rpc
 
 
 @pytest.fixture
 def mcp() -> McpClient:
-    """A fresh `cadektor mcp` process, already initialized."""
+    """A fresh `kadakas mcp` process, already initialized."""
     client = McpClient(["mcp", *ALLOW])
     client.initialize()
     yield client
@@ -60,7 +60,7 @@ def mcp() -> McpClient:
 
 @pytest.fixture
 def mcp_raw():
-    """A `cadektor mcp` process that has not been initialized yet, for handshake tests."""
+    """A `kadakas mcp` process that has not been initialized yet, for handshake tests."""
     client = McpClient(["mcp", *ALLOW])
     yield client
     client.close()
@@ -68,7 +68,7 @@ def mcp_raw():
 
 @pytest.fixture
 def mcp_flat() -> McpClient:
-    """A fresh `cadektor mcp --mcp-flat` process (one tool per API method), already initialized."""
+    """A fresh `kadakas mcp --mcp-flat` process (one tool per API method), already initialized."""
     client = McpClient(["mcp", "--mcp-flat", *ALLOW])
     client.initialize()
     yield client

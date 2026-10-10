@@ -1,0 +1,34 @@
+[package]
+name = "kadakas-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
+kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
+kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
+kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
+kadakas-ifc = { version = "0.1.0", path = "../kadakas-ifc" }
+kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
+kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
+kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+tempfile = "3"
+
+[dev-dependencies]
+png = "0.18"

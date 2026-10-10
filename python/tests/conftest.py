@@ -1,6 +1,6 @@
-"""Fixtures: each test gets its own ``cadektor serve`` process, so tests never share state.
+"""Fixtures: each test gets its own ``kadakas serve`` process, so tests never share state.
 
-Set CADEKTOR_BIN to the program (default: ``target/debug/cadektor`` of the repository)."""
+Set KADAKAS_BIN to the program (default: ``target/debug/kadakas`` of the repository)."""
 
 from __future__ import annotations
 
@@ -16,16 +16,16 @@ PYTHON_DIR = HERE.parent
 REPO = PYTHON_DIR.parent
 sys.path.insert(0, str(PYTHON_DIR))
 
-_EXE = "cadektor.exe" if sys.platform == "win32" else "cadektor"
-BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / _EXE))
-os.environ["CADEKTOR_BIN"] = str(BIN)
+_EXE = "kadakas.exe" if sys.platform == "win32" else "kadakas"
+BIN = Path(os.environ.get("KADAKAS_BIN", REPO / "target" / "debug" / _EXE))
+os.environ["KADAKAS_BIN"] = str(BIN)
 
-import cadektor  # noqa: E402
+import kadakas  # noqa: E402
 
 
 @pytest.fixture(scope="session")
-def cadektor_bin() -> Path:
-    """The `cadektor` program under test."""
+def kadakas_bin() -> Path:
+    """The `kadakas` program under test."""
     return BIN
 
 
@@ -38,7 +38,7 @@ def python_dir() -> Path:
 @pytest.fixture(scope="session", autouse=True)
 def binary() -> Path:
     if not BIN.exists():
-        pytest.exit(f"cadektor program not found at {BIN}. Build it or set CADEKTOR_BIN", returncode=2)
+        pytest.exit(f"kadakas program not found at {BIN}. Build it or set KADAKAS_BIN", returncode=2)
     return BIN
 
 
@@ -46,7 +46,7 @@ def binary() -> Path:
 def doc(tmp_path: Path):
     """A fresh headless session. It may read and write the temp folder."""
     allowed = [Path(tempfile.gettempdir()).resolve(), REPO]
-    d = cadektor.open(allow_dir=allowed)
+    d = kadakas.open(allow_dir=allowed)
     yield d
     d.close()
 
@@ -54,6 +54,6 @@ def doc(tmp_path: Path):
 @pytest.fixture
 def open_doc(tmp_path: Path):
     """A session whose host lets agents run their own scripts."""
-    d = cadektor.open(allow_dir=[Path(tempfile.gettempdir()).resolve()], allow_agent_scripts=True)
+    d = kadakas.open(allow_dir=[Path(tempfile.gettempdir()).resolve()], allow_agent_scripts=True)
     yield d
     d.close()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws the Cadektor icon and writes icon.svg, the PNG sizes, icon.ico and icon.icns.
+"""Draws the Kadakas icon and writes icon.svg, the PNG sizes, icon.ico and icon.icns.
 
 The icon is our own: a plan symbol of a tree (a ring with a trunk dot) on a green tile, with
 the crosshair of a CAD cursor. One list of shapes drives both the SVG and the pixel renderer, so

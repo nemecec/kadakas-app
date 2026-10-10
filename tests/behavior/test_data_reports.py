@@ -409,10 +409,10 @@ def test_data_manager_maps_parameters_to_ifc_and_records(cad, planted):
     rules = [
         {"name": "area to record", "kinds": ["hardscape"], "source": {"type": "property", "name": "Area"}, "target": {"type": "record_field", "record": "Takeoff", "field": "Area"}},
         {"kinds": ["hardscape"], "source": {"type": "property", "name": "Material"}, "target": {"type": "record_field", "record": "Takeoff", "field": "Material"}},
-        {"kinds": ["hardscape"], "source": {"type": "property", "name": "Area"}, "target": {"type": "ifc_property", "pset": "Cadektor_Quantities", "property": "Area", "ifc_type": "area"}},
-        {"kinds": ["plant"], "source": {"type": "plant_field", "field": "price"}, "target": {"type": "ifc_property", "pset": "Cadektor_Planting", "property": "Price", "ifc_type": "real"}},
-        {"source": {"type": "property", "name": "Layer"}, "target": {"type": "ifc_property", "pset": "Cadektor_Source", "property": "Layer", "ifc_type": "label"}},
-        {"kinds": ["hardscape"], "source": {"type": "constant", "value": "paving"}, "target": {"type": "ifc_property", "pset": "Cadektor_Hardscape", "property": "Use", "ifc_type": "text"}},
+        {"kinds": ["hardscape"], "source": {"type": "property", "name": "Area"}, "target": {"type": "ifc_property", "pset": "Kadakas_Quantities", "property": "Area", "ifc_type": "area"}},
+        {"kinds": ["plant"], "source": {"type": "plant_field", "field": "price"}, "target": {"type": "ifc_property", "pset": "Kadakas_Planting", "property": "Price", "ifc_type": "real"}},
+        {"source": {"type": "property", "name": "Layer"}, "target": {"type": "ifc_property", "pset": "Kadakas_Source", "property": "Layer", "ifc_type": "label"}},
+        {"kinds": ["hardscape"], "source": {"type": "constant", "value": "paving"}, "target": {"type": "ifc_property", "pset": "Kadakas_Hardscape", "property": "Use", "ifc_type": "text"}},
     ]
     mid = cad.result("data_manager.create", {"name": "Map", "entities": [{"kind": "hardscape", "ifc_class": "IfcPavement"}, {"kind": "plant", "ifc_class": "IfcGeographicElement", "predefined_type": "VEGETATION"}], "rules": rules})["id"]
     assert cad.result("data_manager.check", {"id": mid})["problems"] == []
@@ -420,16 +420,16 @@ def test_data_manager_maps_parameters_to_ifc_and_records(cad, planted):
     ev = cad.result("data_manager.evaluate", {"id": "Map", "ids": [h]})
     obj = ev["objects"][0]
     assert obj["ifc_class"] == "IfcPavement"
-    assert obj["properties"]["Cadektor_Quantities"]["Area"] == {"ifc_type": "area", "value": approx(4)}
-    assert obj["properties"]["Cadektor_Hardscape"]["Use"]["value"] == "paving"
+    assert obj["properties"]["Kadakas_Quantities"]["Area"] == {"ifc_type": "area", "value": approx(4)}
+    assert obj["properties"]["Kadakas_Hardscape"]["Use"]["value"] == "paving"
     assert obj["record_values"]["Takeoff"] == {"Area": approx(4), "Material": "Granite"}
     assert obj["problems"] == []
 
     plant = cad.result("objects.list", {"kind": "plant"})[0]["id"]
     p = cad.result("data_manager.evaluate", {"id": mid, "ids": [plant]})["objects"][0]
     assert p["ifc_class"] == "IfcGeographicElement" and p["predefined_type"] == "VEGETATION"
-    assert p["properties"]["Cadektor_Planting"]["Price"]["value"] in (100.0, 40.0)
-    assert "Cadektor_Quantities" not in p["properties"]
+    assert p["properties"]["Kadakas_Planting"]["Price"]["value"] in (100.0, 40.0)
+    assert "Kadakas_Quantities" not in p["properties"]
 
     # Apply writes the record targets, once, as one undo step.
     assert cad.result("data_manager.apply", {"id": mid}) == {"changed": 1, "problems": []}

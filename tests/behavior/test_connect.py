@@ -72,7 +72,7 @@ def test_connect_with_address_and_no_token_and_no_runtime_file_is_an_error(tmp_p
 
 def test_connect_without_address_reads_the_runtime_file(tmp_path):
     app = FakeApp(token="from-file")
-    folder = tmp_path / "cadektor"
+    folder = tmp_path / "kadakas"
     folder.mkdir()
     (folder / "agent.json").write_text(json.dumps({"port": app.port, "token": "from-file"}))
     env = {"XDG_RUNTIME_DIR": str(tmp_path), "HOME": str(tmp_path), "LOCALAPPDATA": str(tmp_path)}
@@ -85,7 +85,7 @@ def test_connect_without_address_reads_the_runtime_file(tmp_path):
 def test_connect_without_address_and_no_app_running_explains_what_to_do(tmp_path):
     env = {"XDG_RUNTIME_DIR": str(tmp_path), "HOME": str(tmp_path), "LOCALAPPDATA": str(tmp_path)}
     p = run_serve(["--connect"], [], env)
-    assert p.returncode == 1 and "no running Cadektor app" in p.stderr
+    assert p.returncode == 1 and "no running Kadakas app" in p.stderr
 
 
 def test_mcp_file_tools_are_forwarded_to_the_app():

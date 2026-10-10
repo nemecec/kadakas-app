@@ -4,7 +4,7 @@ import pytest
 
 from helpers import JsonRpc
 
-# Mirrors METHODS in crates/cadektor-core/src/api.rs.
+# Mirrors METHODS in crates/kadakas-core/src/api.rs.
 ADVERTISED_METHODS = [
     "describe", "execute", "undo", "redo", "document.summary", "document.get", "document.load",
     "objects.list", "objects.get", "selection.get", "selection.set", "render.svg",
