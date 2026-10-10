@@ -265,6 +265,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
             site_cache: cadektor_site::SiteCache::default(),
+            annot_cache: cadektor_annot::AnnotCache::default(),
             worksheet_cache: cadektor_sheet::SheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             sheet_cache: cadektor_print::SheetCache::default(),

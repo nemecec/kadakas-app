@@ -128,7 +128,7 @@ fn rebind(doc: &Document, a: &Anchor, last: DVec2) -> Option<(Anchor, DVec2)> {
                 let len2 = d.length_squared();
                 let t = if len2 > 0.0 { ((last - p).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let at = p + d * t;
-                (at.distance(last) <= REBIND_TOLERANCE).then(|| (Anchor { object: a.object, target: AnchorTarget::Edge { index: i, t }, count: Some(n) }, at))
+                (at.distance(last) <= REBIND_TOLERANCE).then_some((Anchor { object: a.object, target: AnchorTarget::Edge { index: i, t }, count: Some(n) }, at))
             })
         }
     }
