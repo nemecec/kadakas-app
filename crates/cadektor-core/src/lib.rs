@@ -16,6 +16,8 @@ pub mod hardscape;
 pub mod irrigation;
 pub mod landscape;
 pub mod library;
+pub mod massing;
+pub mod massing_batch;
 pub mod mesh;
 pub mod model;
 pub mod pattern;
@@ -28,6 +30,7 @@ pub mod site;
 pub mod svg;
 pub mod symbols;
 pub mod thumbnail;
+pub mod underlay;
 pub mod worksheet_table;
 
 pub use glam::{DVec2, DVec3};

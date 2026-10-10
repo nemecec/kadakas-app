@@ -8,6 +8,8 @@ mod canvas3d;
 mod data_ui;
 mod databar;
 mod file_io;
+mod gis_dialogs;
+mod gis_ui;
 mod gpu3d;
 mod grading_ui;
 mod hit;

@@ -214,6 +214,10 @@ pub enum Shape {
     },
     /// Viewport on a sheet layer: design layers at a scale. Coordinates are paper mm (see `sheets`).
     Viewport(Box<crate::sheets::Viewport>),
+    /// Building block: footprint, height or floors, and a simple roof (see `massing`).
+    Massing(Box<crate::massing::Massing>),
+    /// Georeferenced raster, such as a map background (see `underlay`). Drawn below the vector objects.
+    Underlay(Box<crate::underlay::Underlay>),
     /// Border, grid reference and title block on a sheet layer.
     TitleBlock(crate::sheets::TitleBlock),
     /// Dimension, callout, data tag, legend, north arrow, scale bar, revision cloud or styled text.
@@ -301,6 +305,8 @@ impl Shape {
             Shape::Annotation(_) => "annotation",
             Shape::Group { .. } => "group",
             Shape::Symbol { .. } => "symbol",
+            Shape::Massing(_) => "massing",
+            Shape::Underlay(_) => "underlay",
             Shape::Irrigation(i) => i.kind(),
         }
     }
@@ -312,6 +318,7 @@ impl Shape {
             Shape::LandscapeArea { boundary, .. }
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => Some(boundary),
+            Shape::Massing(m) => Some(&m.footprint),
             _ => None,
         }
     }
@@ -322,6 +329,7 @@ impl Shape {
             Shape::LandscapeArea { boundary, .. }
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => Some(boundary),
+            Shape::Massing(m) => Some(&mut m.footprint),
             _ => None,
         }
     }
@@ -334,6 +342,8 @@ impl Shape {
             Shape::TitleBlock(tb) => tb.problem().is_none(),
             Shape::Annotation(a) => a.is_finite(),
             Shape::Group { .. } => true,
+            Shape::Massing(m) => m.is_finite(),
+            Shape::Underlay(u) => u.is_finite(),
             Shape::Irrigation(i) => i.is_finite(),
             Shape::Symbol {
                 at,
@@ -428,6 +438,18 @@ impl Shape {
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
             Shape::Irrigation(i) => i.for_each_number(f),
             Shape::Annotation(a) => a.numbers(f),
+            Shape::Massing(m) => {
+                m.footprint.iter().for_each(|x| vertex(x, f));
+                [m.height, m.floor_height, m.pitch_deg]
+                    .into_iter()
+                    .chain(m.ridge_angle)
+                    .chain(m.base)
+                    .for_each(&mut *f);
+            }
+            Shape::Underlay(u) => {
+                v(&u.min);
+                v(&u.max);
+            }
             Shape::Symbol {
                 at,
                 rotation,
@@ -547,6 +569,15 @@ impl Shape {
         ok
     }
 
+    /// The first problem of a massing model or an underlay (their values are checked as a whole).
+    pub fn problem(&self) -> Option<String> {
+        match self {
+            Shape::Massing(m) => m.problem(),
+            Shape::Underlay(u) => u.problem(),
+            _ => None,
+        }
+    }
+
     /// True unless a hardscape has a thickness of zero or less.
     pub fn has_valid_thickness(&self) -> bool {
         !matches!(self, Shape::Hardscape { thickness: Some(t), .. } if t.is_nan() || *t <= 0.0)
@@ -558,6 +589,11 @@ impl Shape {
             Shape::Viewport(vp) => vp.translate(d),
             Shape::TitleBlock(tb) => tb.translate(d),
             Shape::Annotation(a) => a.translate(d),
+            Shape::Massing(m) => m.footprint.iter_mut().for_each(|x| mv(&mut x.p)),
+            Shape::Underlay(u) => {
+                mv(&mut u.min);
+                mv(&mut u.max);
+            }
             Shape::Group { .. } => {}
             Shape::Irrigation(i) => i.translate(d),
             Shape::Symbol { at, .. } => mv(at),
@@ -619,6 +655,8 @@ impl Shape {
             Shape::Viewport(vp) => (vp.min, vp.max),
             Shape::TitleBlock(tb) => tb.bounds(),
             Shape::Annotation(a) => a.bounds(),
+            Shape::Massing(m) => curve::bounds(&m.footprint, true),
+            Shape::Underlay(u) => (u.min, u.max),
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
@@ -707,6 +745,7 @@ impl Shape {
     pub fn area(&self) -> Option<f64> {
         match self {
             Shape::Rect { min, max } => Some(((max.x - min.x) * (max.y - min.y)).abs()),
+            Shape::Massing(m) => Some(curve::area(&m.footprint)),
             Shape::Circle { radius, .. } => Some(std::f64::consts::PI * radius * radius),
             Shape::Polyline3d {
                 points,
@@ -1011,6 +1050,7 @@ impl Document {
             !o.is_finite()
                 || !o.shape.is_in_range()
                 || !o.shape.has_valid_thickness()
+                || o.shape.problem().is_some()
                 || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
                 || o.shape.vertices().is_some_and(|vs| {
                     vs.iter()

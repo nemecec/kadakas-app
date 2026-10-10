@@ -144,6 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
+    ToolMassing => "tool.massing", "Massing Model tool", ["Alt+Shift+M"], true;
     ToolIrrigation => "tool.irrigation", "Irrigation tool", ["Alt+Shift+I"], true;
     ToolGrading => "tool.grading", "Grading tool", [], true;
     ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
@@ -225,6 +226,7 @@ impl Action {
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
+            Action::ToolMassing => Tool::Massing,
             Action::ToolIrrigation => Tool::Irrigation,
             Action::ToolGrading => Tool::Grading,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
@@ -251,6 +253,7 @@ impl Action {
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
+            Tool::Massing => Action::ToolMassing,
             Tool::Irrigation => Action::ToolIrrigation,
             Tool::Grading => Action::ToolGrading,
             Tool::Dimension => Action::ToolDimension,

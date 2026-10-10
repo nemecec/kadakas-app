@@ -16,6 +16,11 @@
 //! - Landscape area: `IfcGeographicElement` with a thin extruded solid (holes cut out).
 //! - Plants and existing trees: `IfcGeographicElement`: trunk and canopy cylinders, plus an `IfcBoundingBox`.
 //!   IFC4 has no VEGETATION type (IFC4x3 has), so vegetation is `PredefinedType` USERDEFINED with `ObjectType` 'VEGETATION'.
+//! - Massing model: `IfcBuildingElementProxy` (NOTDEFINED), or `IfcBuilding` in the site with the option
+//!   `massing_as_building`. An extruded solid when the roof is flat, a closed `IfcTriangulatedFaceSet` for a gable
+//!   or hip roof. The base sits on the site model, like in the 3D view. Property sets `Pset_BuildingElementProxyCommon`
+//!   (or `Pset_BuildingCommon`) and `Cadektor_Massing`; quantities `Cadektor_MassingQuantities` (or `Qto_BuildingBaseQuantities`).
+//!   Map underlays are skipped.
 //! - 2D objects are skipped and listed in the report. With `include_2d` they become `IfcAnnotation`.
 //! - Classes become `IfcPresentationLayerAssignment`. Fill colors become `IfcStyledItem` and `IfcSurfaceStyle`.
 //! - Data: the Data Manager map gives IFC classes and `IfcPropertySet`s. Records become `ePset_<record>`.
@@ -37,6 +42,8 @@ mod export;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_massing;
 
 use std::io::Write;
 use std::path::Path;
