@@ -778,8 +778,8 @@ fn two_users_who_regenerate_one_plug_in_object_at_once_do_not_double_it() {
 }
 
 /// A PNG of noise, so that it does not shrink: well above the size where a picture becomes a blob.
-fn noisy_png_base64(side: u32) -> String {
-    let mut seed = 0x1234_5678u32;
+fn noisy_png_base64(side: u32, variant: u32) -> String {
+    let mut seed = 0x1234_5678u32 ^ variant;
     let mut data = Vec::new();
     for _ in 0..side * side * 4 {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -798,7 +798,7 @@ fn noisy_png_base64(side: u32) -> String {
 #[test]
 fn a_picture_is_sent_once_as_a_blob_and_not_with_every_edit() {
     let (hub, mut a, mut b) = pair();
-    let png = noisy_png_base64(64);
+    let png = noisy_png_base64(64, 0);
     assert!(png.len() > kadakas_collab::blob::MIN_BLOB_BYTES);
     let out = call(
         &mut a,
@@ -924,6 +924,13 @@ mod real_commands {
         Data { s: bool, i: u8, v: u8 },
         Arrange { s: bool, i: u8, j: u8, how: u8 },
         MoveLayer { s: bool, l: u8, at: u8 },
+        Undo { s: bool },
+        Redo { s: bool },
+        Place { s: bool, x: i32 },
+        SetParams { s: bool, i: u8, w: u16 },
+        Underlay { s: bool, x: i32, v: u8 },
+        AddSite { s: bool, n: u16 },
+        EditSite { s: bool, i: u8, k: u16 },
         Sync { s: bool },
         Offline { s: bool },
         Online { s: bool },
@@ -945,6 +952,13 @@ mod real_commands {
             3 => (any::<bool>(), any::<u8>(), any::<u8>(), 0u8..4)
                 .prop_map(|(s, i, j, how)| Act::Arrange { s, i, j, how }),
             1 => (any::<bool>(), any::<u8>(), 0u8..4).prop_map(|(s, l, at)| Act::MoveLayer { s, l, at }),
+            2 => any::<bool>().prop_map(|s| Act::Undo { s }),
+            1 => any::<bool>().prop_map(|s| Act::Redo { s }),
+            1 => (any::<bool>(), -500i32..500).prop_map(|(s, x)| Act::Place { s, x }),
+            2 => (any::<bool>(), any::<u8>(), 50u16..200).prop_map(|(s, i, w)| Act::SetParams { s, i, w }),
+            1 => (any::<bool>(), -500i32..500, 0u8..2).prop_map(|(s, x, v)| Act::Underlay { s, x, v }),
+            1 => (any::<bool>(), 1u16..300).prop_map(|(s, n)| Act::AddSite { s, n }),
+            1 => (any::<bool>(), any::<u8>(), 0u16..300).prop_map(|(s, i, k)| Act::EditSite { s, i, k }),
             5 => any::<bool>().prop_map(|s| Act::Sync { s }),
             1 => any::<bool>().prop_map(|s| Act::Offline { s }),
             2 => any::<bool>().prop_map(|s| Act::Online { s }),
@@ -1070,6 +1084,78 @@ mod real_commands {
                     exec(ss, json!({"op": "move_layer", "id": layer, "index": at}));
                 }
             }
+            Act::Undo { s } => {
+                let _ = sessions[idx(*s)].handle("collab.undo", json!({"now_ms": *now}));
+            }
+            Act::Redo { s } => {
+                let _ = sessions[idx(*s)].handle("collab.redo", json!({"now_ms": *now}));
+            }
+            Act::Place { s, x } => {
+                let _ = sessions[idx(*s)].handle(
+                    "plugins.place",
+                    json!({"plugin": "org.kadakas.raised-planter", "min": [x, 0], "max": [x + 2000, 800]}),
+                );
+            }
+            Act::SetParams { s, i, w } => {
+                let ss = &mut sessions[idx(*s)];
+                let planters: Vec<String> = ss
+                    .editor
+                    .doc()
+                    .objects
+                    .values()
+                    .filter(|o| o.data.values().any(|v| v.get("plugin").is_some()))
+                    .map(|o| o.id.0.to_string())
+                    .collect();
+                if let Some(id) = pick(&planters, *i) {
+                    let _ = ss.handle(
+                        "plugins.set_params",
+                        json!({"id": id, "params": {"wall": f64::from(*w)}}),
+                    );
+                }
+            }
+            Act::Underlay { s, x, v } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_object", "shape": {"kind": "underlay",
+                    "min": [x, 0], "max": [x + 6400, 6400], "width": 64, "height": 64,
+                    "png": noisy_png_base64(64, u32::from(*v)), "opacity": 1.0}}),
+            ),
+            Act::AddSite { s, n } => {
+                let points: Vec<Value> = (0..*n)
+                    .map(|i| json!([f64::from(i) * 10.0, f64::from(i % 9) * 5.0, 0.0]))
+                    .collect();
+                exec(
+                    &mut sessions[idx(*s)],
+                    json!({"op": "add_object", "shape": {"kind": "site_model", "points": points}}),
+                );
+            }
+            Act::EditSite { s, i, k } => {
+                let ss = &mut sessions[idx(*s)];
+                let sites: Vec<(String, Vec<Value>)> = ss
+                    .editor
+                    .doc()
+                    .objects
+                    .values()
+                    .filter_map(|o| match &o.shape {
+                        kadakas_core::model::Shape::SiteModel { points, .. } => Some((
+                            o.id.0.to_string(),
+                            points.iter().map(|p| json!([p.x, p.y, p.z])).collect(),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                if !sites.is_empty() {
+                    let (id, mut points) = sites[usize::from(*i) % sites.len()].clone();
+                    if !points.is_empty() {
+                        let at = usize::from(*k) % points.len();
+                        points[at] = json!([1.0, 1.0, 77.0]);
+                        exec(
+                            ss,
+                            json!({"op": "modify_object", "id": id,
+                                   "shape": {"kind": "site_model", "points": points}}),
+                        );
+                    }
+                }
+            }
             Act::Sync { s } => {
                 let _ = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
             }
@@ -1083,14 +1169,20 @@ mod real_commands {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(25))]
+        #![proptest_config(ProptestConfig::with_cases(30))]
 
         #[test]
         fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
             let a = Session::default();
             let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
             let mut sessions = [a, Session::default()];
+            let planter = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
+            );
             for s in &mut sessions {
+                s.scripting.allow_agent_scripts = true;
+                let _ = s.handle("plugins.install", json!({"path": planter}));
                 s.set_collab_endpoint(Box::new(hub.endpoint()));
                 let r = s.handle("collab.connect", json!({"now_ms": 1}));
                 prop_assert!(r.is_ok());

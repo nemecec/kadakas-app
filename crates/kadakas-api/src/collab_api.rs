@@ -96,6 +96,9 @@ pub struct CollabState {
     /// What the last build of the document left out or repaired.
     quarantined: Vec<Quarantined>,
     repairs: Vec<String>,
+    /// Local edits were turned into operations, so their stacking keys must be written into the
+    /// document (see `stamp_keys`).
+    stamp_pending: bool,
     /// Events that were read by a call that has no place for them (connect, presence, undo).
     kept_events: Vec<ClientEvent>,
 }
@@ -392,6 +395,7 @@ fn push_local(s: &mut Session) -> (Vec<u64>, Vec<String>) {
     }
     // Always go on, also after a problem: the same change must not stop every later call.
     s.collab.synced_rev = rev;
+    s.collab.stamp_pending |= !ids.is_empty();
     (ids, problems)
 }
 
@@ -493,7 +497,7 @@ struct Cycle {
 fn sync_cycle(s: &mut Session, now: u64) -> Result<Cycle, RpcError> {
     let (pushed, problems) = push_local(s);
     let moved = pump(s, now);
-    if !pushed.is_empty() {
+    if std::mem::take(&mut s.collab.stamp_pending) {
         stamp_keys(s);
     }
     let changed = apply_remote(s);
