@@ -74,6 +74,7 @@ impl ViewHistory {
     }
 
     /// The view after the current one.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Snapshot> {
         (self.pos + 1 < self.entries.len()).then(|| {
             self.pos += 1;
