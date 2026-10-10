@@ -35,7 +35,7 @@ Non-goals
    - MCP server (`cadektor mcp`) for Claude Code.
    - SVG render so agents can see results.
    - A `describe` method for discovery.
-   - Planned: live viewport screenshot, Python scripting.
+   - Python package and scripts: see section 4.18. Planned: live viewport screenshot.
 6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Core line coverage of 85% or more (cargo-llvm-cov). CI on macOS, Linux, Windows.
 7. License: Apache-2.0 OR MIT.
 
@@ -424,10 +424,10 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| SCR-01 | Python bindings to the command API. | P1 | planned |
-| SCR-02 | Script console palette. | P1 | planned |
+| SCR-01 | Python package `cadektor` (`python/cadektor`, pure Python, typed): `Document`, layers, classes, objects, `doc.add.*`, plants, selection, queries, undo groups (one `batch`), reports, worksheets, import, export, PNG and SVG render. It talks JSON-RPC over stdio (`cadektor.open`) or TCP with a token (`cadektor.connect`). `_api.py` is generated from `describe` (`python/tools/codegen.py`), and a test fails when the two drift apart. See `docs/scripting.md`. | P1 | done |
+| SCR-02 | Scripts palette (File > Scripts) that runs `.py` files with the system `python3` (or `uv run`) and shows output and errors in a console. The script gets the live session through `CADEKTOR_ADDR` and `CADEKTOR_TOKEN`. CPython is not embedded. Scripts run only when the user presses Run. `script.run` for agents is off unless the host sets `--allow-agent-scripts`. | P1 | done |
 | SCR-03 | Script files as resources. | P2 | planned |
-| SCR-04 | Parametric plug-in objects defined by script. | P2 | planned |
+| SCR-04 | Plug-in objects defined by script: a resource with a name, a parameter schema (number, length, text, bool, choice, color, record), a shape type (point, linear, rectangle, path) and a Python `reset(params, geometry)` script. The shapes are stored as a group (display, export and IFC need no Python). Parameter changes run the reset with a time limit and size limits. A failed script keeps the last good shapes and shows an error badge. A script from a document runs only after the user trusted its exact text (SHA-256 hash, trust dialog); resets run on a worker thread. Object Info edits the parameters, every change is undoable. Examples: Bench and Stepping stones. API: `plugin.*`. Not yet: curved path vertices, parameters with units conversion, drawing mode that edits the shapes by hand. | P2 | done |
 | SCR-05 | Export a drawing as a script (replay commands). | P2 | planned |
 | SCR-06 | Visual node scripting. | P2 | planned |
 | SCR-07 | Python import path for shared Vectorworks-style function names. | P2 | planned |
@@ -466,7 +466,7 @@ v1 (P1)
 - Grade object, stakes, existing trees.
 - IFC 2x3 and 4x3, DXF 3D, phases, saved views.
 - 3D view, terrain mesh.
-- PNG render, viewport screenshot, Python scripting.
+- Viewport screenshot.
 - First architecture objects: walls, doors, windows, stories.
 
 Later (P2)
@@ -474,7 +474,7 @@ Later (P2)
 - Graphic legends, section viewports, project sharing.
 - DWG, point clouds, STEP.
 - Light objects (spot, point), lighting devices, sketch render mode, true instancing for plants.
-- Workspaces, visual scripting, parametric plug-in objects.
+- Workspaces, visual scripting.
 - If legal review allows, native `.vwx`.
 
 ## 7. Legal notes
