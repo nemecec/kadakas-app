@@ -83,6 +83,98 @@ pub fn update_active(session: &mut Session, field: &str, value: Value) -> Result
     Ok(())
 }
 
+/// The material that all selected objects share through their own slot: `Some(None)` when none of
+/// them has one, `Some(Some(id))` when all have the same, `None` when they differ.
+pub fn shared_material(session: &Session) -> Option<Option<ResourceId>> {
+    use cadektor_core::present::SlotTarget;
+    let doc = session.editor.doc();
+    let mut seen: Option<Option<ResourceId>> = None;
+    for id in &session.selection {
+        let m = doc.drawing.presentation.slot(&SlotTarget::Object {
+            object: *id,
+            slot: None,
+        });
+        match seen {
+            None => seen = Some(m),
+            Some(prev) if prev != m => return None,
+            _ => {}
+        }
+    }
+    seen
+}
+
+/// Puts a material (or none) on every selected object. One undo step.
+pub fn assign_to_selection(
+    session: &mut Session,
+    material: Option<ResourceId>,
+) -> Result<(), String> {
+    if session.selection.is_empty() {
+        return Err("select objects first".into());
+    }
+    let ids: Vec<u64> = session.selection.iter().map(|o| o.0).collect();
+    session
+        .handle(
+            "material.assign",
+            json!({"material": material, "objects": ids}),
+        )
+        .map(|_| ())
+        .map_err(|e| e.message)
+}
+
+/// The material of the selected objects. A list of the materials of the document, and a button
+/// that adds the built-in library.
+fn material_picker(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
+    let mut error = None;
+    let doc = session.editor.doc();
+    let materials: Vec<(ResourceId, String)> = doc
+        .resources
+        .iter()
+        .filter(|r| cadektor_core::present::material(doc, r.id).is_some())
+        .map(|r| (r.id, r.name.clone()))
+        .collect();
+    let shared = shared_material(session);
+    let label = match shared {
+        None if session.selection.is_empty() => "Select objects".to_string(),
+        None => "Mixed".to_string(),
+        Some(None) => "None".to_string(),
+        Some(Some(id)) => materials
+            .iter()
+            .find(|(m, _)| *m == id)
+            .map_or("None".to_string(), |(_, n)| n.clone()),
+    };
+    ui.label("Material");
+    ui.add_enabled_ui(!session.selection.is_empty(), |ui| {
+        egui::ComboBox::from_id_salt("selection_material")
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(shared == Some(None), "None").clicked()
+                    && let Err(e) = assign_to_selection(session, None)
+                {
+                    error = Some(e);
+                }
+                for (id, name) in &materials {
+                    if ui
+                        .selectable_label(shared == Some(Some(*id)), name)
+                        .clicked()
+                        && let Err(e) = assign_to_selection(session, Some(*id))
+                    {
+                        error = Some(e);
+                    }
+                }
+                ui.separator();
+                if ui.button("Add built-in materials").clicked()
+                    && let Err(e) = session
+                        .handle("material.add_defaults", json!({}))
+                        .map(|_| ())
+                        .map_err(|e| e.message)
+                {
+                    error = Some(e);
+                }
+            });
+    });
+    error
+}
+
 /// What the user changed in the sun panel.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SunEdit {
@@ -171,6 +263,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, gpu_ready: bool) -> Option
                 }
             });
         });
+        ui.separator();
+        if let Some(e) = material_picker(ui, session) {
+            error = Some(e);
+        }
     });
     error
 }
@@ -350,6 +446,58 @@ mod tests {
     }
 
     #[test]
+    fn selected_objects_take_a_material_in_one_step() {
+        use cadektor_core::command::Command;
+        use cadektor_core::model::{Attributes, ObjectId, Shape};
+        let mut s = Session::default();
+        let add = |s: &mut Session, x: f64| -> ObjectId {
+            ObjectId(
+                s.editor
+                    .execute(&Command::AddObject {
+                        shape: Shape::Rect {
+                            min: glam::DVec2::new(x, 0.0),
+                            max: glam::DVec2::new(x + 100.0, 100.0),
+                        },
+                        layer: None,
+                        class: None,
+                        attrs: Attributes::default(),
+                    })
+                    .unwrap()
+                    .created[0],
+            )
+        };
+        let (a, b) = (add(&mut s, 0.0), add(&mut s, 500.0));
+        assert!(
+            assign_to_selection(&mut s, None).is_err(),
+            "nothing is selected"
+        );
+        assert_eq!(shared_material(&s), None);
+        s.handle("material.add_defaults", json!({})).unwrap();
+        let brick = s
+            .editor
+            .doc()
+            .resources
+            .iter()
+            .find(|r| r.name == "Brick")
+            .unwrap()
+            .id;
+        s.selection = vec![a, b];
+        assert_eq!(shared_material(&s), Some(None));
+        assign_to_selection(&mut s, Some(brick)).unwrap();
+        assert_eq!(shared_material(&s), Some(Some(brick)));
+        // One undo step undoes both.
+        assert!(s.editor.undo());
+        assert_eq!(shared_material(&s), Some(None));
+        // Different materials show as mixed.
+        s.selection = vec![a];
+        assign_to_selection(&mut s, Some(brick)).unwrap();
+        s.selection = vec![a, b];
+        assert_eq!(shared_material(&s), None);
+        assign_to_selection(&mut s, None).unwrap();
+        assert_eq!(shared_material(&s), Some(None));
+    }
+
+    #[test]
     fn sun_edits_use_the_api() {
         let mut s = Session::default();
         apply_sun(
@@ -395,6 +543,21 @@ mod tests {
             );
         }
         assert!(errors.is_empty(), "{errors:?}");
+        // The material picker draws with and without a selection.
+        s.selection = vec![cadektor_core::model::ObjectId(1)];
+        let mut errors = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| errors.extend(show(ui, &mut s, true)),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        s.selection.clear();
         // With a style that has a sun, the sun panel (a menu) also draws.
         let mut errors = Vec::new();
         let _ = ctx.run_ui(

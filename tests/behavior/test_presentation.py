@@ -243,7 +243,7 @@ def test_render_styles_are_resources_and_the_active_one_applies(cad):
     # Deleting the active style clears it.
     cad.result("render_style.delete", {"id": plan})
     assert cad.result("render_style.list")["active"] is None
-    assert cad.result("render.png", {"view": "right_isometric", "width": 64, "height": 64})["render_style"] is None
+    assert "render_style" not in cad.result("render.png", {"view": "right_isometric", "width": 64, "height": 64})
     assert cad.result("undo")["done"]
     assert cad.result("render_style.list")["active"] == plan
     copy = cad.result("render_style.duplicate", {"id": plan})["id"]

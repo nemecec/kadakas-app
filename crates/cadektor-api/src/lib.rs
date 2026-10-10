@@ -755,15 +755,19 @@ impl Session {
                     (img, mode)
                 };
                 use base64::Engine;
-                json!({
+                let mut out = json!({
                     "png_base64": base64::engine::general_purpose::STANDARD.encode(img.to_png()),
                     "width": width,
                     "height": height,
                     "view": settings.view.id(),
                     "projection": settings.projection.id(),
                     "mode": used_mode.id(),
-                    "render_style": if plain { Value::Null } else { present_api::style_summary(&used_style) },
-                })
+                });
+                // The settings of the style are only given when materials or a style were used.
+                if !plain {
+                    out["render_style"] = present_api::style_summary(&used_style);
+                }
+                out
             }
             "view.list" => json!({
                 "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),

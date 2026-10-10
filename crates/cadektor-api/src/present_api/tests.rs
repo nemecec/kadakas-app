@@ -745,7 +745,7 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
         "render.png",
         json!({"view": "top", "width": 160, "height": 160}),
     );
-    assert_eq!(plain["render_style"], Value::Null);
+    assert!(plain.get("render_style").is_none());
     let (w, _, px) = png_pixels(&plain);
     let flat = lum(&px, w, 20, 100);
     assert!((lum(&px, w, 30, 100) - flat).abs() < 1.0);
