@@ -17,7 +17,7 @@ use kadakas_print::display::{PSeg, Prim};
 
 use crate::panels::run_command;
 use crate::tess;
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 
 /// State of the sheet parts of the app.
 #[derive(Default)]

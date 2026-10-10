@@ -24,8 +24,7 @@ use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
 use crate::screenshot;
 use crate::theme::{self, ThemeChoice};
-use crate::view::{View, grid_step};
-use crate::view_history::{self, ViewHistory};
+use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
@@ -33,6 +32,7 @@ use kadakas_ui_core::snap::{self, SnapResult};
 use kadakas_ui_core::tools::{
     Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
+use kadakas_ui_core::view_history::{self, ViewHistory};
 
 /// Pan step of an arrow key, in px.
 const PAN_STEP_PX: f32 = 60.0;

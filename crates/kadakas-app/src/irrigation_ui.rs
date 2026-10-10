@@ -15,7 +15,7 @@ use kadakas_irrigation::{Catalog, DEFAULT_TOLERANCE, analyze, zone_commands};
 
 use crate::canvas::Style;
 use crate::panels::{Fields, run_command};
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::tools::{IrrMode, ToolSettings};
 
 fn color(c: [u8; 3], alpha: u8) -> Color32 {

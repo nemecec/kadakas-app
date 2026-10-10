@@ -4,7 +4,7 @@
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Ui, pos2, vec2};
 use kadakas_core::snapping::{Kind, Settings, Smart};
 
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::snap::SnapResult;
 
 /// What each category of the palette is called and what it does.

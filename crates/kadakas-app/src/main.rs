@@ -50,7 +50,6 @@ mod theme;
 mod vertex;
 mod view;
 mod view3d;
-mod view_history;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {

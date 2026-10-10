@@ -10,7 +10,7 @@ use glam::DVec2;
 use kadakas_core::massing::{Massing, RoofStyle};
 use kadakas_core::underlay::Underlay;
 
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::massing::MassingToolSettings;
 
 /// Longest side of the texture of an underlay in pixels. Bigger rasters are reduced.

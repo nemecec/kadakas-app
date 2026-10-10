@@ -719,6 +719,7 @@ pub fn draw_table(
     };
     let l = kadakas_sheet::layout(&c, d.text_height);
     let (lo, hi) = (min.min(*max), min.max(*max));
+    use crate::view::ViewExt as _;
     let frame = egui::Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi));
     let painter = painter.with_clip_rect(frame.intersect(painter.clip_rect()));
     let z = view.zoom;

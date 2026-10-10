@@ -17,3 +17,5 @@ pub mod keys;
 pub mod massing;
 pub mod snap;
 pub mod tools;
+pub mod view;
+pub mod view_history;

@@ -18,7 +18,7 @@ use kadakas_script::plugin::{Generated, ResetError};
 use kadakas_script::python;
 use serde_json::{Map, Value, json};
 
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 
 /// Most console lines the window keeps.
 const KEEP_LINES: usize = 5_000;

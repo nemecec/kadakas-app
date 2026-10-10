@@ -9,7 +9,7 @@ use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 
 use crate::canvas::{Style, color32};
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::tools::{DimToolMode, Tool, ToolSettings};
 
 use kadakas_ui_core::annot_pick::object_prims;

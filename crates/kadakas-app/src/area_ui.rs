@@ -20,7 +20,7 @@ use kadakas_site::SiteTerrain;
 
 use crate::canvas::{Style, color32};
 use crate::panels::run_command;
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::tools::{Tool, ToolSettings};
 
 fn style_combo(

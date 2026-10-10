@@ -10,7 +10,7 @@ use kadakas_core::plants::tag::{TagCounts, tag_counts};
 
 use crate::plant_draw;
 use crate::tess;
-use crate::view::{View, grid_step};
+use crate::view::{View, ViewExt as _, grid_step};
 use kadakas_ui_core::snap::SnapResult;
 use kadakas_ui_core::tools::Preview;
 

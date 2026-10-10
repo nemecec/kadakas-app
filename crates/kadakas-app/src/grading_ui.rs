@@ -11,7 +11,7 @@ use kadakas_core::model::{Document, Object};
 use kadakas_site::SiteCache;
 use kadakas_site::grading::{self, analysis};
 
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::grading::{GradingMode, GradingSettings};
 
 /// The mode row and the fields of the Grading tool (Data bar).

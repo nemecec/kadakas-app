@@ -10,7 +10,7 @@ use kadakas_core::plants::style::PlantGraphic;
 use kadakas_core::plants::tree::{self, TreeAction};
 
 use crate::canvas::Style;
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 
 /// The circles of an existing tree in the plan, in model units.
 #[derive(Clone, Copy, Debug, PartialEq)]

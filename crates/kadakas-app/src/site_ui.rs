@@ -14,7 +14,7 @@ use kadakas_site::{SiteCache, Surface};
 use serde_json::json;
 
 use crate::canvas::color32;
-use crate::view::View;
+use crate::view::{View, ViewExt as _};
 
 const EXISTING_LINE: Color32 = Color32::from_rgb(150, 104, 60);
 const PROPOSED_LINE: Color32 = Color32::from_rgb(30, 120, 50);
