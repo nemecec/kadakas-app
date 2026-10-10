@@ -207,6 +207,8 @@ pub struct Client {
     confirmed: Replica,
     confirmed_seq: u64,
     log_id: Option<String>,
+    /// The chain hash (hex) at `confirmed_seq`, if the server sent it (see `chain`).
+    chain: Option<String>,
     /// True once the client has a confirmed state (from a snapshot, a restore or `with_state`).
     has_state: bool,
     /// The server is not the one that the state came from: only a snapshot is acceptable.
@@ -249,6 +251,7 @@ impl Client {
             confirmed: Replica::new(),
             confirmed_seq: 0,
             log_id: None,
+            chain: None,
             has_state: false,
             regress: false,
             head_seq: 0,
@@ -304,6 +307,7 @@ impl Client {
                     c.confirmed_seq = cp.seq;
                     c.head_seq = cp.seq;
                     c.log_id = Some(cp.log_id).filter(|l| !l.is_empty());
+                    c.chain = cp.chain;
                     c.blobs.extend(cp.blobs);
                     c.has_state = true;
                 }
@@ -373,6 +377,12 @@ impl Client {
     /// The name of the log that the state comes from.
     pub fn log_id(&self) -> Option<&str> {
         self.log_id.as_deref()
+    }
+
+    /// The chain hash (hex) of the log at the last sequence number of the confirmed state, if the
+    /// server sent it. The client sends it in `hello` as `last_hash`.
+    pub fn chain(&self) -> Option<&str> {
+        self.chain.as_deref()
     }
 
     /// What the user sees.
@@ -453,6 +463,7 @@ impl Client {
             token: self.cfg.token.clone(),
             last_seq: self.has_state.then_some(self.confirmed_seq),
             log_id: self.log_id.clone(),
+            last_hash: self.chain.clone().filter(|_| self.has_state),
         });
     }
 
@@ -786,9 +797,14 @@ impl Client {
                 your_last_op,
                 peers,
             } => self.on_welcome(protocol, log_id, head_seq, your_last_op, peers, now_ms),
-            ServerMsg::Snapshot { log_id, seq, state } => {
+            ServerMsg::Snapshot {
+                log_id,
+                seq,
+                state,
+                chain,
+            } => {
                 if self.state == ConnState::Syncing {
-                    self.on_snapshot(log_id, seq, state);
+                    self.on_snapshot(log_id, seq, state, chain);
                 }
             }
             ServerMsg::Entries { entries } => {
@@ -804,9 +820,9 @@ impl Client {
                     self.finish_sync();
                 }
             }
-            ServerMsg::Ack { op_id, seq } => {
+            ServerMsg::Ack { op_id, seq, chain } => {
                 if self.state == ConnState::Online {
-                    self.on_ack(op_id, seq);
+                    self.on_ack(op_id, seq, chain);
                 }
             }
             ServerMsg::Broadcast { entry } => {
@@ -908,12 +924,13 @@ impl Client {
         self.state = ConnState::Syncing;
     }
 
-    fn on_snapshot(&mut self, log_id: String, seq: u64, state: Replica) {
+    fn on_snapshot(&mut self, log_id: String, seq: u64, state: Replica, chain: Option<String>) {
         let regress =
             self.has_state && (self.regress || self.log_id.as_ref().is_some_and(|l| *l != log_id));
         let old_view = std::mem::take(&mut self.view);
         self.confirmed = state;
         self.confirmed_seq = seq;
+        self.chain = chain;
         self.log_id = Some(log_id);
         self.has_state = true;
         if regress {
@@ -961,6 +978,7 @@ impl Client {
                 self.confirmed.apply_all(w, &e.ops);
             }
             self.confirmed_seq = e.seq;
+            self.chain = e.chain.clone();
             self.head_seq = self.head_seq.max(e.seq);
             // While syncing, `finish_sync` builds the view. Only live entries touch it here.
             let live = self.state == ConnState::Online;
@@ -982,7 +1000,7 @@ impl Client {
         true
     }
 
-    fn on_ack(&mut self, op_id: u64, seq: u64) {
+    fn on_ack(&mut self, op_id: u64, seq: u64, chain: Option<String>) {
         let Some(i) = self.pending.iter().position(|t| t.op_id == op_id) else {
             return;
         };
@@ -1008,6 +1026,7 @@ impl Client {
         };
         self.confirm_own(w, txn.ops);
         self.confirmed_seq = seq;
+        self.chain = chain;
         self.head_seq = self.head_seq.max(seq);
         if i != 0 {
             // The server ordered our transactions differently than we made them.
@@ -1254,6 +1273,7 @@ impl Client {
             seq: self.confirmed_seq,
             state: self.confirmed.clone(),
             blobs: self.checkpoint_blobs(),
+            chain: self.chain.clone(),
         })
     }
 

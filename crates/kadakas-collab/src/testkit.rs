@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use kadakas_core::uid::Uid;
 
+use crate::chain::{self, CHAIN_START};
 use crate::op::{Op, Writer, ops_digest, validate_ops};
 use crate::presence::{self, Peer, PresenceState, Throttle};
 use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
@@ -87,6 +88,12 @@ pub struct Sequencer {
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
     /// Blobs by hash.
     blobs: BTreeMap<String, String>,
+    /// The chain hash of each entry of `log`, and the chain hash before the first of them.
+    chains: Vec<[u8; 32]>,
+    base_chain: [u8; 32],
+    /// False: act as a server that does not keep the chain (the old protocol).
+    use_chain: bool,
+    epoch: u32,
     /// client ID -> the first user who signed in with it.
     owners: BTreeMap<Uid, Uid>,
     /// The next blob_put calls fail with this error (nothing is kept).
@@ -117,6 +124,10 @@ impl Sequencer {
             check_entities: true,
             blocked: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            chains: Vec::new(),
+            base_chain: CHAIN_START,
+            use_chain: true,
+            epoch: 0,
             owners: BTreeMap::new(),
             inject_blob: None,
             blob_blocked: BTreeMap::new(),
@@ -147,6 +158,38 @@ impl Sequencer {
         self.log_id = id.to_string();
     }
 
+    /// Gives the log a new name, as a server does after a restore (section 4.9). Clients that
+    /// come back with the old name get a snapshot. The sequencer does it by itself when a client
+    /// says (`last_hash`) that its log has other entries at the same sequence number.
+    pub fn new_epoch(&mut self) {
+        self.epoch += 1;
+        self.log_id = format!("log-e{}", self.epoch);
+    }
+
+    /// Switches the hash chain off or on (it is on by default). Off, the sequencer sends no
+    /// `chain` and ignores `last_hash`, like a server of the first version of the protocol.
+    pub fn keep_chain(&mut self, on: bool) {
+        self.use_chain = on;
+    }
+
+    /// The chain hash after the entry `seq`, if the log still holds it (or `seq` is just before
+    /// its first entry).
+    pub fn chain_at(&self, seq: u64) -> Option<[u8; 32]> {
+        if seq < self.log_start || seq > self.seq {
+            None
+        } else if seq == self.log_start {
+            Some(self.base_chain)
+        } else {
+            Some(self.chains[(seq - self.log_start - 1) as usize])
+        }
+    }
+
+    fn chain_text(&self, seq: u64) -> Option<String> {
+        self.chain_at(seq)
+            .filter(|_| self.use_chain)
+            .map(|c| chain::to_hex(&c))
+    }
+
     /// Makes the next `count` submits fail with this error (nothing is ordered).
     pub fn inject_errors(&mut self, code: ErrorCode, count: usize) {
         self.inject = Some((code, count));
@@ -169,6 +212,8 @@ impl Sequencer {
         if self.log.len() > self.log_limit {
             let cut = self.log.len() - self.log_limit;
             self.log.drain(..cut);
+            self.base_chain = self.chains[cut - 1];
+            self.chains.drain(..cut);
             self.log_start += cut as u64;
         }
     }
@@ -290,6 +335,7 @@ impl Sequencer {
                     token,
                     last_seq,
                     log_id,
+                    last_hash,
                 },
                 None,
             ) => {
@@ -314,6 +360,16 @@ impl Sequencer {
                         "this client ID belongs to another user",
                         None,
                     ));
+                }
+                // The client says which history it has. If this log has another one at that
+                // number, the log is not the one the client knew: it gets a new name.
+                if self.use_chain
+                    && log_id.as_deref() == Some(self.log_id.as_str())
+                    && let (Some(n), Some(h)) = (last_seq, last_hash.as_deref())
+                    && let Some(mine) = self.chain_text(n)
+                    && mine != h
+                {
+                    self.new_epoch();
                 }
                 self.join(conn, user, client, &name, last_seq, log_id)
             }
@@ -448,6 +504,7 @@ impl Sequencer {
                     log_id: self.log_id.clone(),
                     seq: self.seq,
                     state: self.replica.clone(),
+                    chain: self.chain_text(self.seq),
                 }
             },
         });
@@ -491,7 +548,11 @@ impl Sequencer {
         let hash = ops_digest(&ops);
         if let Some(w) = self.writers.get(&client) {
             if op_id == w.high && hash == w.hash {
-                return reply(ServerMsg::Ack { op_id, seq: w.seq });
+                return reply(ServerMsg::Ack {
+                    op_id,
+                    seq: w.seq,
+                    chain: self.chain_text(w.seq),
+                });
             }
             if op_id <= w.high {
                 return reply(error(
@@ -519,13 +580,17 @@ impl Sequencer {
         }
         self.seq += 1;
         self.replica.apply_all(Writer { client, op: op_id }, &ops);
+        let prev = self.chain_at(self.seq - 1).expect("the log holds its head");
+        let link = chain::chain_next(&prev, self.seq, client, op_id, &ops);
         let entry = Entry {
             seq: self.seq,
             author: client,
             user,
             op_id,
             ops,
+            chain: self.use_chain.then(|| chain::to_hex(&link)),
         };
+        self.chains.push(link);
         self.log.push(entry.clone());
         self.trim();
         self.writers.insert(
@@ -539,6 +604,7 @@ impl Sequencer {
         let mut out = reply(ServerMsg::Ack {
             op_id,
             seq: self.seq,
+            chain: entry.chain.clone(),
         });
         out.extend(self.to_others(conn, ServerMsg::Broadcast { entry }));
         out

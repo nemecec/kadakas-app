@@ -43,6 +43,10 @@ pub struct Entry {
     /// The number of the transaction for its author (`Txn::op_id`).
     pub op_id: u64,
     pub ops: Vec<Op>,
+    /// The chain hash after this entry (hex, see [`crate::chain`]). A server that keeps the
+    /// chain sends it; old servers leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
 }
 
 impl Entry {
@@ -139,6 +143,11 @@ pub enum ClientMsg {
         /// The `log_id` that the client saw last, with its state.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         log_id: Option<String>,
+        /// The chain hash (hex) at `last_seq`, if the client knows it. A server that keeps the
+        /// chain compares it with its own. If they differ, the log of the server is not the log
+        /// of the client, and the server gives it a new `log_id` (section 4.9).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_hash: Option<String>,
     },
     /// A transaction. The server answers with `ack`, or with `error` that has this `op_id`. The
     /// server must treat a second submit with the same client, `op_id` and content as the first
@@ -187,12 +196,21 @@ pub enum ServerMsg {
         log_id: String,
         seq: u64,
         state: Replica,
+        /// The chain hash at `seq` (hex), if the server keeps the chain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<String>,
     },
     /// The entries after the `last_seq` of the client, in order. Maybe empty. It follows
     /// `welcome` when the client can catch up. A client without state must not get it.
     Entries { entries: Vec<Entry> },
     /// The transaction `op_id` of this client has the sequence number `seq`.
-    Ack { op_id: u64, seq: u64 },
+    Ack {
+        op_id: u64,
+        seq: u64,
+        /// The chain hash at `seq` (hex), if the server keeps the chain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<String>,
+    },
     /// An entry of another client.
     Broadcast { entry: Entry },
     /// The presence of another client.
@@ -247,6 +265,7 @@ mod tests {
             user,
             op_id: 2,
             ops: vec![op.clone()],
+            chain: None,
         };
         assert_eq!(entry.txn().op_id, 2);
         let t = round(&ClientMsg::Hello {
@@ -257,6 +276,7 @@ mod tests {
             token: "t".into(),
             last_seq: Some(3),
             log_id: Some("log".into()),
+            last_hash: None,
         });
         assert!(t.contains(r#""type":"hello""#));
         round(&ClientMsg::Hello {
@@ -267,6 +287,7 @@ mod tests {
             token: String::new(),
             last_seq: None,
             log_id: None,
+            last_hash: None,
         });
         round(&ClientMsg::Submit {
             op_id: 1,
@@ -302,11 +323,32 @@ mod tests {
             log_id: "log".into(),
             seq: 9,
             state: Replica::new(),
+            chain: None,
         });
         round(&ServerMsg::Entries {
             entries: vec![entry.clone()],
         });
-        round(&ServerMsg::Ack { op_id: 1, seq: 2 });
+        round(&ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: None,
+        });
+        let t = round(&ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: Some("ab".repeat(32)),
+        });
+        assert!(t.contains(r#""chain":"abab"#));
+        // Messages of the first version have none of the optional fields.
+        let old: ServerMsg = serde_json::from_str(r#"{"type":"ack","op_id":1,"seq":2}"#).unwrap();
+        assert_eq!(
+            old,
+            ServerMsg::Ack {
+                op_id: 1,
+                seq: 2,
+                chain: None
+            }
+        );
         round(&ServerMsg::Broadcast { entry });
         round(&ServerMsg::Presence {
             client,

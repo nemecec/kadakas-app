@@ -253,7 +253,8 @@ one line). The transport is not part of this protocol. Use TLS in any real deplo
 ```
 
 `last_seq` is the last sequence number that the client has, and `log_id` the log it comes from. Both
-are left out if the client has no state yet.
+are left out if the client has no state yet. The optional `last_hash` is the chain hash of the log at
+`last_seq` (section 4.9); a client that does not know it leaves it out.
 
 **`submit`**: a transaction. `{"type": "submit", "op_id": 5, "ops": [ … ]}`
 
@@ -300,9 +301,11 @@ Directly after `welcome`, the server sends **one** of these:
 A client that has no state must never get `entries`. It treats that as a violation and stops.
 
 An **Entry** is `{"seq": 18, "author": "<client uuid>", "user": "<user uuid>", "op_id": 3,
-"ops": [ … ]}`.
+"ops": [ … ]}`, with an optional `"chain"`: the chain hash of the log after this entry (section 4.9).
+The `snapshot` message has the optional `chain` too: the hash at its `seq`.
 
-**`ack`**: `{"type": "ack", "op_id": 5, "seq": 21}`. Sent to the author of a transaction.
+**`ack`**: `{"type": "ack", "op_id": 5, "seq": 21}`. Sent to the author of a transaction. The
+optional `chain` is the chain hash of the log at `seq` (section 4.9).
 
 **`broadcast`**: `{"type": "broadcast", "entry": Entry}`. Sent to every other connected client.
 
@@ -490,6 +493,52 @@ too), its waiting transactions and its undo and redo steps refer to, and drops t
   `ack`, move the transaction into the confirmed state.
 - A sequence number that is not the next one means a gap. The client goes offline and connects again
   with its `last_seq`.
+
+### 4.9 Log names
+
+The name of the log (`log_id`) is a promise: **a log with this name holds every entry that the server
+acknowledged under this name.** A client that comes back with the same name and a `last_seq` trusts
+this and asks only for `entries` after it. If the promise breaks, the client keeps state that the
+server does not have, and the two never agree again.
+
+The server must change `log_id` whenever its log might not extend everything it acknowledged under
+that name: after a restore, after loss of storage, or after a write conflict that shows the stored
+head went back. A client that sees a new name takes the `snapshot` and sends again the work that the
+snapshot lacks (section 4.8), so a new name costs one snapshot and loses nothing. When in doubt,
+change the name.
+
+The server cannot see a restore from a backup by itself, so it needs a way to tell. The recommended
+way is the one of `kadakas-server`: a **ledger** and a **chain**.
+
+- **The ledger.** For each document the server writes a small record outside the database, on its own
+  volume that a restore of the database does not touch: the log name, the head sequence number, the
+  chain hash of the head entry, and a flag *clean*. The server writes it when the document loads,
+  every few seconds or every N entries, when the name changes, and at a stop (with *clean* set).
+  When the document loads, the server compares the ledger with the database and gives the document a
+  new name if: the names differ; the database head is below the ledger head; the heads are equal but
+  the chain hashes differ; the database head is above the ledger head and the ledger is not clean (the
+  server did not stop on purpose) or the chain at the ledger head differs; or the document has no
+  ledger record (a missing record is a doubt). An operator can also change the name by hand
+  (a command or an admin call), for example after a restore of the ledger volume. A change of name
+  disconnects the clients of the document.
+- **The chain.** Each entry has a chain hash, `chain_n = SHA256(chain_{n-1} || seq || author || op_id
+  || ops_text)`, with `chain_0` = 32 zero bytes. The exact bytes are in the module `kadakas_collab::chain`
+  (`chain_next`): `chain_{n-1}` as 32 bytes; `seq` and `op_id` as 8 bytes, big endian; `author` as its
+  36 characters of lowercase text; `ops_text` as the compact JSON text of the operations that
+  `chain::ops_text` writes. This is the chain of `kadakas-server` (`log_entries.chain`). Two logs with
+  the same hash at a number have the same entries up to there.
+
+**The chain on the wire (optional).** A server that keeps the chain puts it in `ack` and in each
+`Entry` (`chain`, hex), and in `snapshot` (the hash at its `seq`). A client keeps the hash of its last
+confirmed `seq` with its checkpoint, and sends it in `hello` as `last_hash`. The server compares
+`last_hash` with its own hash at `last_seq`. If they differ, the log of the server is not the log
+that the client knows, even though the name and the numbers fit: the server gives the log a **new
+name** (and, as for any change of name, disconnects the other clients of the document), and the client
+gets a `snapshot`. If the server no longer holds the entry at `last_seq`, it cannot compare, and the
+client gets a `snapshot` anyway. All these fields are optional and have no effect when they are left
+out, so old servers and old clients work with new ones (the protocol version stays 1): a client that
+gets no `chain` sends no `last_hash`, and a server that gets no `last_hash` compares nothing. The test
+sequencer (`Sequencer`) keeps the chain and shows the check.
 
 ## 5. Optimistic apply and rebase
 

@@ -413,6 +413,7 @@ mod tests {
             log_id: "log".into(),
             seq: 0,
             state: crate::replica::Replica::new(),
+            chain: None,
         });
         link.pump(2);
         assert_eq!(link.client.state(), ConnState::Online);

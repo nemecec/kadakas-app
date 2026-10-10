@@ -463,6 +463,7 @@ fn resubmit_after_a_lost_ack_gets_the_old_sequence_number() {
             token: String::new(),
             last_seq: Some(1),
             log_id: None,
+            last_hash: None,
         },
         0,
     );
@@ -474,7 +475,14 @@ fn resubmit_after_a_lost_ack_gets_the_old_sequence_number() {
         },
         0,
     );
-    assert_eq!(outs[0].msg, ServerMsg::Ack { op_id: 1, seq: 1 });
+    assert_eq!(
+        outs[0].msg,
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: net.seq.chain_at(1).map(|c| crate::chain::to_hex(&c))
+        }
+    );
 }
 
 #[test]
@@ -634,6 +642,7 @@ fn a_gap_in_the_sequence_sends_the_client_offline() {
         user: Uid::from_num(9),
         op_id: seq,
         ops: vec![create(seq + 100, 0)],
+        chain: None,
     };
     net.clients[0].handle(ServerMsg::Broadcast { entry: e(1) }, 0);
     assert_eq!(net.clients[0].confirmed_seq(), 1);
@@ -664,7 +673,14 @@ fn a_gap_in_the_sequence_sends_the_client_offline() {
     net.clients[0].handle(ServerMsg::Entries { entries: vec![] }, 0);
     assert_eq!(net.clients[0].state(), ConnState::Online);
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
-    net.clients[0].handle(ServerMsg::Ack { op_id: 1, seq: 7 }, 0);
+    net.clients[0].handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 7,
+            chain: None,
+        },
+        0,
+    );
     assert_eq!(net.clients[0].state(), ConnState::Offline);
     // Entries with a gap during sync.
     net.clients[0].connect();
@@ -706,8 +722,22 @@ fn acks_out_of_order_and_unknown_acks() {
     c.edit(vec![set(1, "a", 2)]).unwrap();
     // The server orders them the other way round: the second first. The set is dropped there
     // (the object does not exist yet), and then the create comes.
-    c.handle(ServerMsg::Ack { op_id: 2, seq: 1 }, 0);
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 2 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 2,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
     assert_eq!(
         c.confirmed().alive(obj(1)).unwrap().get("a"),
@@ -715,18 +745,39 @@ fn acks_out_of_order_and_unknown_acks() {
     );
     assert_eq!(c.view().canonical_text(), c.confirmed().canonical_text());
     // An ack for something unknown does nothing.
-    c.handle(ServerMsg::Ack { op_id: 99, seq: 3 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 99,
+            seq: 3,
+            chain: None,
+        },
+        0,
+    );
     assert_eq!(c.confirmed_seq(), 2);
     // An ack whose number is old only clears the queue.
     c.edit(vec![set(1, "a", 3)]).unwrap();
-    c.handle(ServerMsg::Ack { op_id: 3, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 3,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
 }
 
 #[test]
 fn messages_in_the_wrong_state_are_ignored() {
     let mut c = Client::new(cfg(1));
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     c.handle(
         ServerMsg::Broadcast {
             entry: Entry {
@@ -735,6 +786,7 @@ fn messages_in_the_wrong_state_are_ignored() {
                 user: Uid::from_num(2),
                 op_id: 1,
                 ops: vec![create(1, 1)],
+                chain: None,
             },
         },
         0,
@@ -745,6 +797,7 @@ fn messages_in_the_wrong_state_are_ignored() {
             log_id: "log-1".into(),
             seq: 3,
             state: Replica::new(),
+            chain: None,
         },
         0,
     );
@@ -861,6 +914,7 @@ fn the_sequencer_checks_messages() {
         token: String::new(),
         last_seq: Some(50),
         log_id: None,
+        last_hash: None,
     };
     let outs = s.receive(conn, hello(7), 0);
     assert!(matches!(
@@ -1020,6 +1074,7 @@ fn the_server_drops_presence_that_comes_too_fast() {
                 token: String::new(),
                 last_seq: None,
                 log_id: None,
+                last_hash: None,
             },
             0,
         );
@@ -1150,6 +1205,7 @@ fn document_changes_travel_as_operations() {
                 user: a.user(),
                 op_id: txn.op_id,
                 ops: txn.ops,
+                chain: None,
             }],
         },
         0,
@@ -1530,6 +1586,7 @@ fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
         token: String::new(),
         last_seq: None,
         log_id: None,
+        last_hash: None,
     };
     s.receive(conn, hello, 0);
     let submit = |op_id, a| ClientMsg::Submit {
@@ -1544,7 +1601,11 @@ fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
     // refused.
     assert_eq!(
         s.receive(conn, submit(1, 1), 0)[0].msg,
-        ServerMsg::Ack { op_id: 1, seq: 1 }
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: s.chain_at(1).map(|c| crate::chain::to_hex(&c))
+        }
     );
     assert!(matches!(
         s.receive(conn, submit(1, 2), 0)[0].msg,
@@ -1820,12 +1881,20 @@ fn an_ack_for_a_transaction_that_came_as_an_entry_rebuilds_the_view() {
                 user: Uid::from_num(2),
                 op_id: 1,
                 ops: vec![create(5, 5)],
+                chain: None,
             },
         },
         0,
     );
     // The server says that our transaction has the old number 1.
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
     assert_eq!(c.view().canonical_text(), c.confirmed().canonical_text());
 }
@@ -1885,6 +1954,7 @@ fn a_big_import_is_split_into_transactions_and_arrives() {
             token: String::new(),
             last_seq: Some(0),
             log_id: Some("log-1".into()),
+            last_hash: None,
         },
         0,
     ) {
@@ -1937,6 +2007,7 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
                 token: String::new(),
                 last_seq: None,
                 log_id: None,
+                last_hash: None,
             },
             0,
         );
@@ -2031,6 +2102,7 @@ fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
                     token: String::new(),
                     last_seq: None,
                     log_id: None,
+                    last_hash: None,
                 },
                 0,
             );
@@ -2138,6 +2210,7 @@ fn blobs_travel_by_hash_and_the_object_waits_for_its_picture() {
             token: String::new(),
             last_seq: None,
             log_id: None,
+            last_hash: None,
         },
         0,
     );
@@ -2316,6 +2389,7 @@ fn a_waiting_transaction_sends_its_picture_again_after_a_sign_in() {
             log_id: "log-1".into(),
             seq: 0,
             state: Replica::new(),
+            chain: None,
         },
         0,
     );
@@ -2485,6 +2559,7 @@ fn a_hello_without_log_id_gets_a_snapshot_not_entries() {
         token: String::new(),
         last_seq,
         log_id: log_id.map(str::to_string),
+        last_hash: None,
     };
     let conn = s.open();
     let outs = s.receive(conn, hello(Some(0), None), 0);
@@ -2565,6 +2640,7 @@ fn a_blocked_connection_is_free_again_with_a_lower_number() {
         token: String::new(),
         last_seq: None,
         log_id: None,
+        last_hash: None,
     };
     s.receive(conn, hello, 0);
     let submit = |n: u64| ClientMsg::Submit {
@@ -2604,6 +2680,7 @@ fn a_client_id_belongs_to_the_first_user_who_signs_in_with_it() {
         token: String::new(),
         last_seq: None,
         log_id: None,
+        last_hash: None,
     };
     let a = s.open();
     assert!(matches!(
@@ -2631,4 +2708,114 @@ fn a_client_id_belongs_to_the_first_user_who_signs_in_with_it() {
         s.receive(d, hello(1, 50), 0).last().unwrap().msg,
         ServerMsg::Snapshot { .. }
     ));
+}
+
+#[test]
+fn the_chain_follows_the_log_and_a_restored_history_gets_a_new_log_name() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    // The client keeps the chain hash of its last entry, and it is the one of the server.
+    let head = net.seq.seq();
+    assert_eq!(
+        net.clients[0].chain().map(str::to_string),
+        net.seq.chain_at(head).map(|c| crate::chain::to_hex(&c))
+    );
+    assert!(net.clients[0].chain().is_some());
+    assert_eq!(
+        net.clients[0].checkpoint().unwrap().chain.as_deref(),
+        net.clients[0].chain()
+    );
+    // The same log, back again: entries, and no new name.
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    assert_eq!(net.clients[0].log_id(), Some("log-1"));
+
+    // A restore: a log with the same name and the same head, but other entries.
+    let mut restored = Sequencer::new(replica_of(&Document::default()));
+    restored.check_entities(false);
+    let other = restored.open();
+    let hello = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(99),
+        client: Uid::from_num(99),
+        name: "o".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+        last_hash: None,
+    };
+    restored.receive(other, hello, 0);
+    restored.receive(
+        other,
+        ClientMsg::Submit {
+            op_id: 1,
+            ops: vec![create(2, 1)],
+        },
+        0,
+    );
+    assert_eq!(restored.seq(), head);
+    net.seq = restored;
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    // The server saw the other history and gave the log a new name. The client took the
+    // snapshot and sent its own work again.
+    assert_ne!(net.clients[0].log_id(), Some("log-1"));
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_some(), "sent again");
+    assert!(net.seq.replica().alive(obj(2)).is_some());
+}
+
+#[test]
+fn a_server_without_the_chain_and_a_client_without_the_chain_still_work() {
+    // An old server: no chain in entries, acks or snapshots. The client sends no `last_hash`.
+    let mut net = Net::new(2);
+    net.seq.keep_chain(false);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.clients[0].chain(), None);
+    assert_eq!(net.clients[1].chain(), None);
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    assert_eq!(net.clients[0].log_id(), Some("log-1"));
+
+    // An old client: `last_hash` is not in its hello. The server compares nothing.
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let conn = s.open();
+    let old: ClientMsg = serde_json::from_str(&format!(
+        r#"{{"type":"hello","protocol":1,"user":"{}","client":"{}","name":"n","token":"","last_seq":0,"log_id":"log-1"}}"#,
+        Uid::from_num(1),
+        Uid::from_num(1)
+    ))
+    .unwrap();
+    let outs = s.receive(conn, old, 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Entries { .. }));
+    // A new client with a wrong hash at a number the server holds: a new name.
+    s.close(conn);
+    let conn = s.open();
+    let wrong = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: Some(0),
+        log_id: Some("log-1".into()),
+        last_hash: Some("11".repeat(32)),
+    };
+    let outs = s.receive(conn, wrong, 0);
+    let ServerMsg::Welcome { log_id, .. } = &outs[0].msg else {
+        panic!("welcome first");
+    };
+    assert_ne!(log_id, "log-1");
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
 }

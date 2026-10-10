@@ -75,6 +75,9 @@ pub struct Checkpoint {
     /// The blobs (pictures) that the client has, by hash.
     #[serde(default)]
     pub blobs: BTreeMap<String, String>,
+    /// The chain hash (hex) at `seq`, if the server sent it. Old checkpoints have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
 }
 
 /// A store in memory. Clones share the data, so a test can "restart" a client with a clone.
@@ -142,6 +145,7 @@ mod tests {
             seq: 3,
             state: Replica::new(),
             blobs: BTreeMap::new(),
+            chain: None,
         };
         let back: Checkpoint = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);
