@@ -545,3 +545,21 @@ Crate `cadektor-x3d` (pure Rust, no file access, builds for wasm). It writes glT
 | SHIP-04 | GitHub release workflow on tag push. | P1 | partial (not run on GitHub yet) |
 | SHIP-05 | Web build (eframe on WebGPU, WebGL2 fallback). Open and save through the browser, autosave in local storage. No agent server, scripting, GIS or native import and export. See `docs/web.md`. | P2 | partial (compiles; not run in a browser) |
 | SHIP-06 | Signing and notarization, auto update. | P2 | missing |
+
+## 8. Platform wave
+
+The core stays headless and independent of any UI. Several UIs, a collaboration server and a browser editor use the same core. The server source lives in a separate repository, so that its license can be chosen separately.
+
+| ID | Feature | Priority | Status |
+|---|---|---|---|
+| PLAT-01 | Globally unique object, layer, class and resource IDs (UUIDv7 or client-scoped), so that offline clients never create the same ID. Old files migrate. | P0 | planned |
+| PLAT-02 | Change-event stream: every command emits a change-set (revision, added, changed and removed IDs, resource changes). Agents and UIs subscribe through the API instead of polling. | P0 | planned |
+| PLAT-03 | `cadektor-ui-core` crate: tool state machines, snapping, view state and keymaps without egui code, so that other UI programs can reuse them. | P1 | planned |
+| PLAT-04 | Workspace profiles: switchable keymaps, palettes, terms and tool sets in one app (for example Vectorworks-like and AutoCAD-like). | P1 | planned |
+| PLAT-05 | Localization with Project Fluent for all UI text, a CI check for untranslated text, and a units and formats layer (metric, imperial, feet-inches, decimal comma, dates). | P1 | planned |
+| PLAT-06 | Launcher: signed update manifests (ed25519), stable and beta channels, download and verify, choice of UI flavor and profile, rollback to the previous version. | P1 | planned |
+| PLAT-07 | Collaboration protocol: a server-ordered operation log, last-writer-wins per object property, per-user undo, offline log replay on reconnect. | P1 | planned |
+| PLAT-08 | Presence: other users' cursors, selections and viewports (not saved in the document). | P1 | planned |
+| PLAT-09 | Collaboration server and browser viewer and editor, in a separate repository (`cadektor-server`). | P1 | planned |
+| PLAT-10 | Sandboxed plug-ins as WebAssembly modules that run the same way on the desktop, the server and the browser. Plug-in object geometry syncs as data, so that other clients do not need to run the script. | P2 | planned |
+| PLAT-11 | A second UI flavor as a separate program on `cadektor-ui-core` (for example a SketchUp-like 3D-first UI). | P2 | planned |
