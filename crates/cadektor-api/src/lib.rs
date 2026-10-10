@@ -38,6 +38,8 @@ mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
+mod x3d_api;
+#[cfg(not(target_arch = "wasm32"))]
 pub use cadektor_gis::http::UrlPolicy;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cadektor_script::trust::TrustStore;
@@ -53,6 +55,10 @@ pub use plugin_api::{
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod site;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod x3d_material_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod x3d_tests;
 
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
@@ -67,6 +73,8 @@ pub struct Session {
     replaced: bool,
     view_changed: bool,
     mesh_cache: MeshCache,
+    /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
+    lod_scene: Option<(u64, cadektor_core::plants::form3d::Detail, Arc<Scene>)>,
     /// Which files requests may read and write (`import.file`, `export.file`, `file.open`, `file.save`).
     /// A host that serves agents restricts it. Default: any path.
     #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +94,9 @@ pub struct Session {
     /// Display lists of sheets, by document revision (see `sheet.render`).
     #[cfg(not(target_arch = "wasm32"))]
     sheet_cache: cadektor_print::SheetCache,
+    /// Section drawings by document revision (see x3d_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    section_cache: cadektor_x3d::section::SharedSections,
     /// The saved view that `saved_view.restore` applied last, until the host takes it.
     applied_view: Option<SavedView>,
     /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
@@ -392,6 +403,17 @@ pub const METHODS: &[(&str, &str)] = &[
     plugin_api::SCRIPT_STOP,
     #[cfg(not(target_arch = "wasm32"))]
     plugin_api::SCRIPT_LIST,
+    // Section and elevation viewports (see x3d_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::LINE_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::LINE_SET,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::CREATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::GET,
     // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
     symbols_api::GROUP_CREATE,
     symbols_api::GROUP_UNGROUP,
@@ -539,6 +561,11 @@ impl Default for Session {
 impl Session {
     /// All fields at their defaults, with an empty document that has no project GUID.
     fn blank() -> Self {
+        // The sheets and the API share the section drawings.
+        #[cfg(not(target_arch = "wasm32"))]
+        let sheet_cache = cadektor_print::SheetCache::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let sections = sheet_cache.sections.clone();
         Session {
             editor: Editor::default(),
             selection: Vec::new(),
@@ -547,6 +574,7 @@ impl Session {
             replaced: false,
             view_changed: false,
             mesh_cache: MeshCache::default(),
+            lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
             paths: PathPolicy::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -557,7 +585,9 @@ impl Session {
             annot_cache: cadektor_annot::AnnotCache::default(),
             worksheet_cache: cadektor_sheet::SheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            sheet_cache: cadektor_print::SheetCache::default(),
+            sheet_cache,
+            #[cfg(not(target_arch = "wasm32"))]
+            section_cache: sections,
             applied_view: None,
             #[cfg(not(target_arch = "wasm32"))]
             scripting: ScriptingState::default(),
@@ -637,6 +667,49 @@ impl Session {
             .get_with(revision, self.editor.doc(), Some(&ext))
     }
 
+    /// The scene for a view in which one pixel is `pixel_size` mm wide at the target: plants that
+    /// cover only a few pixels get billboards or coarse meshes (`lod_for`), never finer than the
+    /// count rule gives. The scene is kept for the revision and the detail.
+    pub fn scene_for_pixel_size(&mut self, pixel_size: f64) -> Arc<Scene> {
+        use cadektor_core::mesh::{count_detail, mean_plant_spread};
+        use cadektor_core::plants::form3d::lod_for;
+        let doc = self.editor.doc();
+        let Some(spread) = mean_plant_spread(doc) else {
+            return self.scene();
+        };
+        let want = lod_for(spread, pixel_size).max(count_detail(doc));
+        if want == count_detail(doc) {
+            return self.scene();
+        }
+        let revision = self.editor.revision();
+        if let Some((r, d, s)) = &self.lod_scene
+            && *r == revision
+            && *d == want
+        {
+            return s.clone();
+        }
+        let scene = self.scene_with_detail(want);
+        self.lod_scene = Some((revision, want, scene.clone()));
+        scene
+    }
+
+    /// The scene with the plants at a given detail (not cached). Exports use it, so that they do
+    /// not get the billboards that the 3D view uses for very many plants.
+    pub fn scene_with_detail(
+        &mut self,
+        detail: cadektor_core::plants::form3d::Detail,
+    ) -> Arc<Scene> {
+        let revision = self.editor.revision();
+        let ext = cadektor_site::draw::scene_ext(&self.site_cache, revision);
+        let doc = self.editor.doc();
+        Arc::new(cadektor_core::mesh::build_with_detail(
+            doc,
+            cadektor_core::mesh::scene_origin(doc),
+            Some(&ext),
+            Some(detail),
+        ))
+    }
+
     /// The cache of site model results (TIN, contours, volumes), by document revision.
     pub fn site_cache(&self) -> &cadektor_site::SiteCache {
         &self.site_cache
@@ -661,6 +734,10 @@ impl Session {
         }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if x3d_api::knows(method) {
+            return self.handle_x3d(method, p);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if gis_api::is_gis_method(method) {

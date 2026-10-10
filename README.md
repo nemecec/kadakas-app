@@ -180,7 +180,7 @@ Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) o
 ## IFC import
 
 `import.file` with a `.ifc` file (or format `ifc`) reads IFC2x3, IFC4 and IFC4x3 in one undo step. The reader indexes the file
-once and parses entities when it needs them, so large files work (caps: 2 GiB, 40 million entities). Elements become objects:
+once, in blocks, and keeps 24 bytes per entity in memory (the file stays on disk). It parses an entity when it needs it. So large files work (caps: 1 GiB, 20 million entities). Elements become objects:
 
 - Slabs, coverings, walls and every other element with a body become a generic 3D mesh (`mesh3d`). The IFC class is in
   `data.ifc_class`, and the GlobalId, name and type are in `data.ifc`. Nothing becomes a hardscape.

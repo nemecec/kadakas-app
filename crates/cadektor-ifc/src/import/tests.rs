@@ -549,11 +549,33 @@ fn reimport_into_the_same_document_does_not_clash() {
     ed.execute(&result.command).unwrap();
     assert_eq!(ed.doc().objects.len(), 2);
     let names: Vec<_> = ed.doc().resources.iter().map(|r| r.name.clone()).collect();
-    assert!(names.contains(&"Pset_SlabCommon".to_string()));
-    assert!(
-        names.contains(&"Pset_SlabCommon (2)".to_string()),
-        "{names:?}"
-    );
+    // The second import uses the record formats of the first one.
+    assert_eq!(names, vec!["Pset_SlabCommon", "Qto_SlabBaseQuantities"]);
+    for o in ed.doc().objects.values() {
+        assert!(record::values(o, "Pset_SlabCommon").is_some());
+    }
+    assert!(result.report.notes.iter().any(|n| n.contains("already")));
+    // A third import with a new property adds the field to the same format.
+    let text = String::from_utf8(fixture("extruded_rect.ifc"))
+        .unwrap()
+        .replace("(#110,#111,#112,#113)", "(#110,#111,#112,#113,#119)")
+        .replace(
+            "#114=IFCPROPERTYSET",
+            "#119=IFCPROPERTYSINGLEVALUE('Colour',$,IFCLABEL('grey'),$);\n#114=IFCPROPERTYSET",
+        );
+    let third = import_bytes(text.into_bytes(), ed.doc(), &IfcImportOptions::default()).unwrap();
+    ed.execute(&third.command).unwrap();
+    assert_eq!(ed.doc().resources.iter().count(), 2);
+    let fmt = ed
+        .doc()
+        .resources
+        .iter()
+        .find(|r| r.name == "Pset_SlabCommon")
+        .unwrap();
+    let ResourceBody::RecordFormat(f) = &fmt.body else {
+        panic!()
+    };
+    assert!(f.field("Colour").is_some());
 }
 
 #[test]

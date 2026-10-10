@@ -29,6 +29,8 @@ pub struct Tables {
     /// The site models of the page, for the contours, the analysis colors and the grading graphics.
     /// A page is made from one document, so the revision is always the same.
     site: cadektor_site::SiteCache,
+    /// The section drawings, shared with whoever else draws sections, and the revision of the page.
+    sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
 }
 
 impl Tables {
@@ -52,7 +54,23 @@ impl Tables {
         Tables {
             map,
             site: Default::default(),
+            sections: None,
         }
+    }
+
+    /// Draws sections through a shared cache. `revision` is the revision of the document.
+    pub fn with_sections(
+        mut self,
+        store: cadektor_x3d::section::SharedSections,
+        revision: u64,
+    ) -> Tables {
+        self.sections = Some((store, revision));
+        self
+    }
+
+    /// The shared section cache and the revision, if there is one.
+    pub fn sections(&self) -> Option<(&cadektor_x3d::section::SharedSections, u64)> {
+        self.sections.as_ref().map(|(s, r)| (s, *r))
     }
 
     /// The cache of the site models of the page.

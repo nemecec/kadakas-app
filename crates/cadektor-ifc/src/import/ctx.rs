@@ -118,6 +118,8 @@ impl Default for Units {
 pub struct Ctx<'a> {
     pub x: &'a StepIndex,
     pub units: Units,
+    /// Placement chains that loop or are longer than 256 (they stop there).
+    pub bad_placements: std::cell::Cell<usize>,
 }
 
 impl<'a> Ctx<'a> {
@@ -125,6 +127,7 @@ impl<'a> Ctx<'a> {
         let mut c = Ctx {
             x,
             units: Units::default(),
+            bad_placements: std::cell::Cell::new(0),
         };
         c.units = c.read_units();
         c
@@ -284,6 +287,7 @@ impl<'a> Ctx<'a> {
         let mut cur = Some(id);
         while let Some(i) = cur {
             if seen.contains(&i) || seen.len() >= 256 {
+                self.bad_placements.set(self.bad_placements.get() + 1);
                 break;
             }
             seen.push(i);
@@ -325,14 +329,7 @@ impl<'a> Ctx<'a> {
             } else {
                 (scale, scale)
             };
-            let z = a3.and_then(|d| d.try_normalize()).unwrap_or(DVec3::Z);
-            let x = a1.and_then(|d| d.try_normalize());
-            let mut m = frame(z, x);
-            if let (Some(y), None) = (a2.and_then(|d| d.try_normalize()), a1) {
-                // Only the Y axis is given: build the frame from it.
-                let x = y.cross(z).try_normalize().unwrap_or(DVec3::X);
-                m = DMat3::from_cols(x, z.cross(x), z);
-            }
+            let m = oriented_frame(a1, a2, a3);
             (m, DVec3::new(scale, sy, sz))
         } else {
             let sy = if e.name.ends_with("NONUNIFORM") {
@@ -340,14 +337,12 @@ impl<'a> Ctx<'a> {
             } else {
                 scale
             };
-            let x = a1
-                .map(|d| d.truncate())
-                .and_then(|d| d.try_normalize())
-                .unwrap_or(DVec2::X);
-            (
-                DMat3::from_cols(x.extend(0.0), x.perp().extend(0.0), DVec3::Z),
-                DVec3::new(scale, sy, 1.0),
-            )
+            let m = oriented_frame(
+                a1.map(|d| d.truncate().extend(0.0)),
+                a2.map(|d| d.truncate().extend(0.0)),
+                Some(DVec3::Z),
+            );
+            (m, DVec3::new(scale, sy, 1.0))
         };
         let m = DMat3::from_cols(
             m.x_axis * scales.x,
@@ -359,6 +354,27 @@ impl<'a> Ctx<'a> {
             translation: origin,
         })
     }
+}
+
+/// A frame from the axes that an operator names. Missing axes are derived. A given second axis keeps its
+/// side, so the frame can be left-handed (a mirror).
+pub fn oriented_frame(x: Option<DVec3>, y: Option<DVec3>, z: Option<DVec3>) -> DMat3 {
+    let x = x.and_then(|d| d.try_normalize());
+    let y = y.and_then(|d| d.try_normalize());
+    let z = z.and_then(|d| d.try_normalize());
+    let z = z
+        .or_else(|| x.zip(y).and_then(|(a, b)| a.cross(b).try_normalize()))
+        .unwrap_or(DVec3::Z);
+    let x = x
+        .map(|a| a - z * a.dot(z))
+        .and_then(|a| a.try_normalize())
+        .or_else(|| y.and_then(|b| b.cross(z).try_normalize()))
+        .unwrap_or_else(|| frame(z, None).x_axis);
+    let y = y
+        .map(|b| b - z * b.dot(z) - x * b.dot(x))
+        .and_then(|b| b.try_normalize())
+        .unwrap_or_else(|| z.cross(x));
+    DMat3::from_cols(x, y, z)
 }
 
 /// A right-handed frame with Z along `z` and X as close as possible to `x_hint`.

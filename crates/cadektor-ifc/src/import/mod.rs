@@ -186,9 +186,7 @@ pub fn import_file(
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| IfcImportError::Io(format!("cannot read {}: {e}", path.display())))?;
-    let index = StepIndex::from_reader(file, opts.limits.clone())?;
+    let index = StepIndex::from_file(path, opts.limits.clone())?;
     import_index(index, doc, opts)
 }
 
@@ -343,6 +341,12 @@ impl<'a> Importer<'a> {
         for (what, n) in std::mem::take(&mut self.geometry_notes) {
             self.b.report.note(&format!("{n} x {what}"));
         }
+        if self.cx.bad_placements.get() > 0 {
+            self.b.report.note(&format!(
+                "{} placement chains loop or have more than 256 levels: they stop there",
+                self.cx.bad_placements.get()
+            ));
+        }
         if self.z_dropped > 0 {
             self.b.report.note(&format!(
                 "{} landscape areas or plants keep the elevation of their layer: their own height is not stored",
@@ -365,7 +369,7 @@ impl<'a> Importer<'a> {
         let Some(g) = model::file_georef(&self.cx) else {
             if self.schema.to_ascii_uppercase().starts_with("IFC2X3") {
                 self.b.report.note(
-                    "IFC2x3 has no map conversion: the geometry is placed at the model origin",
+                    "the file has no georeference (IFC2x3 has no IfcMapConversion, and the property set ePSet_MapConversion is missing): the geometry keeps its local coordinates",
                 );
             }
             return;
@@ -521,7 +525,6 @@ impl<'a> Importer<'a> {
         let class_id = self.class_of(&rep_ids);
         let predefined = self.predefined(e);
         let object_type = text(attr(e, 4)).unwrap_or("").to_string();
-        let upper_type = format!("{} {}", predefined, object_type).to_ascii_uppercase();
 
         // Annotations are curves and points.
         if e.name == "IFCANNOTATION" {
@@ -529,13 +532,8 @@ impl<'a> Importer<'a> {
             return;
         }
 
-        let terrain = (e.name == "IFCGEOGRAPHICELEMENT" && predefined == "TERRAIN")
-            || (e.name == "IFCSITE" && self.has_face_set(&reps))
-            || (e.name == "IFCGEOGRAPHICELEMENT" && upper_type.contains("TIN"));
-        let vegetation = e.name == "IFCGEOGRAPHICELEMENT"
-            && ["VEGETATION", "PLANT", "TREE", "SHRUB"]
-                .iter()
-                .any(|k| upper_type.contains(k));
+        let (terrain, vegetation) =
+            classify_geographic(e, &predefined, &object_type, || self.has_face_set(&reps));
 
         let mut out = self.eval_product(e, &reps, true);
         if out
@@ -853,16 +851,10 @@ impl<'a> Importer<'a> {
             return None;
         }
         let src = self.cx.ent(src_id)?;
-        let origin = self
-            .cx
-            .get(attr(&src, 0))
-            .and_then(|o| self.cx.axis3(&o))
-            .unwrap_or(DAffine3::IDENTITY);
         let rep = self.cx.get(attr(&src, 1))?;
         let mut ev = Eval::new(&self.cx, 200_000);
-        let inv = origin.inverse();
         for i in items(attr(&rep, 3)) {
-            ev.item(i.as_ref_id()?, &inv, 0);
+            ev.item(i.as_ref_id()?, &DAffine3::IDENTITY, 0);
         }
         if !ev.issues.is_empty() || ev.pieces.is_empty() || ev.pieces.len() > 40 {
             return None;
@@ -1241,11 +1233,24 @@ impl<'a> Importer<'a> {
             return false;
         }
         let at = DVec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
-        let species = if name.is_empty() {
-            "IFC vegetation".to_string()
-        } else {
-            name.to_string()
-        };
+        // The botanical name from the property sets (our own export writes it), else the name of the element.
+        let botanical = psets
+            .iter()
+            .flat_map(|s| &s.props)
+            .find(|p| {
+                ["species", "botanicalname", "botanical name"]
+                    .contains(&p.name.to_ascii_lowercase().as_str())
+            })
+            .and_then(|p| p.value.as_str())
+            .map(|t| clean_text(t.trim(), 200))
+            .filter(|t| !t.is_empty());
+        let species = botanical.unwrap_or_else(|| {
+            if name.is_empty() {
+                "IFC vegetation".to_string()
+            } else {
+                name.to_string()
+            }
+        });
         let shape = Shape::Plant {
             at,
             species,
@@ -1381,4 +1386,56 @@ fn same_crs(a: &str, b: &str) -> bool {
         (Ok(x), Ok(y)) => x.epsg().is_some() && x.epsg() == y.epsg(),
         _ => false,
     }
+}
+
+/// Words in the object type that name vegetation.
+const VEGETATION_WORDS: [&str; 9] = [
+    "VEGETATION",
+    "PLANT",
+    "PLANTS",
+    "TREE",
+    "TREES",
+    "SHRUB",
+    "SHRUBS",
+    "HEDGE",
+    "BUSH",
+];
+
+/// Whole words of a text, in upper case: "Street tree" gives STREET and TREE.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_uppercase)
+        .collect()
+}
+
+/// Terrain and vegetation among geographic elements and sites. The predefined type decides when it says
+/// something (TERRAIN, VEGETATION, SOIL_BORING_POINT). The object type is read as whole words, and only
+/// when the predefined type is USERDEFINED, NOTDEFINED or missing.
+fn classify_geographic(
+    e: &Entity,
+    predefined: &str,
+    object_type: &str,
+    site_has_faces: impl FnOnce() -> bool,
+) -> (bool, bool) {
+    if e.name == "IFCSITE" {
+        return (site_has_faces(), false);
+    }
+    if e.name != "IFCGEOGRAPHICELEMENT" {
+        return (false, false);
+    }
+    let open = matches!(predefined, "" | "USERDEFINED" | "NOTDEFINED");
+    if predefined == "TERRAIN" {
+        return (true, false);
+    }
+    if predefined == "VEGETATION" {
+        return (false, true);
+    }
+    if !open {
+        return (false, false);
+    }
+    let w = words(object_type);
+    let terrain = w.iter().any(|x| x == "TIN" || x == "TERRAIN");
+    let vegetation = !terrain && w.iter().any(|x| VEGETATION_WORDS.contains(&x.as_str()));
+    (terrain, vegetation)
 }

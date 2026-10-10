@@ -2,6 +2,7 @@
 Files from IfcOpenShell (through `uv`) stand for files from other programs. The hand-written files in
 tests/fixtures/ifc cover each entity type. Our own export must come back in."""
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -188,3 +189,13 @@ def test_imported_meshes_export_as_valid_ifc(cad, generated, tmp_path):
     assert facts["counts"]["IfcSlab"] == 1
     assert facts["counts"]["IfcBuildingElementProxy"] == 1
     assert all(p["triangles"] > 0 for p in facts["products"])
+
+
+def test_mapped_items_land_where_ifcopenshell_puts_them(cad, generated):
+    """A map origin that is not at zero: the positions must be the same as the ones of IfcOpenShell."""
+    expected = json.loads((generated / "mapped_origin.json").read_text())
+    cad.result("import.file", {"path": str(generated / "mapped_origin.ifc"), "options": {"instances": False}})
+    shape = objects(cad)[0]["shape"]
+    for axis, (lo, hi) in enumerate(expected):
+        values = [v[axis] for v in shape["vertices"]]
+        assert min(values) == approx(lo, abs=1e-3) and max(values) == approx(hi, abs=1e-3), (axis, expected)

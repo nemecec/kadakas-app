@@ -390,14 +390,18 @@ fn many_sets_and_fields_are_limited() {
         "{:?}",
         r.notes
     );
+    // Sets that only one object has go into the object data once there are 40 record formats.
     assert!(
-        r.notes
-            .iter()
-            .any(|n| n.contains("property sets were not imported")),
+        r.notes.iter().any(|n| n.contains("went into the data")),
         "{:?}",
         r.notes
     );
-    assert_eq!(ed.doc().resources.iter().count(), 300);
+    assert_eq!(ed.doc().resources.iter().count(), 40);
+    let in_data = objs(&ed)
+        .iter()
+        .filter(|o| o.data.contains_key("ifc_psets"))
+        .count();
+    assert_eq!(in_data, 2);
 }
 
 #[test]
@@ -815,4 +819,301 @@ fn orphans_depth_and_budget() {
     let (ed, r) = run(&data, &tiny);
     assert!(objs(&ed).is_empty());
     assert!(r.skipped[0].reason.contains("triangle limit"), "{r:?}");
+}
+
+// ---------------------------------------------------------------- review fixes
+
+/// Nested mapped items (every source holds two uses of the next one) and nested geometric sets. The work is
+/// limited, and the answer comes quickly with a note.
+#[test]
+fn nested_items_stop_at_the_limits_and_do_not_hang() {
+    let mut data = String::from(
+        "#20=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#6,1.,$);\n#21=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,10.,10.);\n#22=IFCEXTRUDEDAREASOLID(#21,#5,#4,10.);\n",
+    );
+    let levels = 22u64;
+    for k in 0..levels {
+        let (r, m, a, b) = (1000 + 10 * k, 1001 + 10 * k, 1002 + 10 * k, 1003 + 10 * k);
+        let items = if k + 1 == levels {
+            "#22".to_string()
+        } else {
+            format!("#{a},#{b}")
+        };
+        data += &format!(
+            "#{r}=IFCSHAPEREPRESENTATION($,'Body','Model',({items}));\n#{m}=IFCREPRESENTATIONMAP(#5,#{r});\n"
+        );
+        if k + 1 < levels {
+            let next = 1001 + 10 * (k + 1);
+            data +=
+                &format!("#{a}=IFCMAPPEDITEM(#{next},#20);\n#{b}=IFCMAPPEDITEM(#{next},#20);\n");
+        }
+    }
+    data += &slab(30, "#1002");
+    // Nested geometric sets: every set holds the next one twice.
+    for k in 0..40u64 {
+        let next = if k == 39 { 6 } else { 5000 + k + 1 };
+        data += &format!("#{}=IFCGEOMETRICSET((#{next},#{next}));\n", 5000 + k);
+    }
+    data += &product(60, "IFCANNOTATION", "#5000", "$,@");
+    assert!(data.len() < 8000, "{}", data.len());
+    let started = std::time::Instant::now();
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    // The slab is cut down, not dropped without a word.
+    assert!(
+        r.notes
+            .iter()
+            .chain(r.skipped.iter().map(|s| &s.reason))
+            .any(|n| n.contains("limit") || n.contains("nest too deep") || n.contains("too many")),
+        "{r:?}"
+    );
+    let _ = ed;
+}
+
+#[test]
+fn a_mapped_source_is_made_once_and_copied() {
+    // Three uses of one source: the geometry is the same and the copies are placed by their own targets.
+    let source = "#20=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);\n#21=IFCEXTRUDEDAREASOLID(#20,#5,#4,50.);\n#22=IFCSHAPEREPRESENTATION($,'Body','Model',(#21));\n#23=IFCREPRESENTATIONMAP(#5,#22);\n";
+    let mut data = source.to_string();
+    for k in 0..3u64 {
+        data += &format!(
+            "#{p}=IFCCARTESIANPOINT(({x}.,0.,0.));\n#{o}=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#{p},1.,$);\n#{m}=IFCMAPPEDITEM(#23,#{o});\n",
+            p = 100 + 3 * k,
+            o = 101 + 3 * k,
+            m = 102 + 3 * k,
+            x = 1000 * (k + 1),
+        );
+    }
+    data += &slab(30, "#102,#105,#108");
+    let opts = IfcImportOptions {
+        instances: false,
+        ..IfcImportOptions::default()
+    };
+    let (ed, _) = run(&data, &opts);
+    let o = objs(&ed)[0];
+    assert!((volume_of(o) - 3.0 * 100.0 * 100.0 * 50.0).abs() < 1.0);
+    let Shape::Mesh3d(m) = &o.shape else { panic!() };
+    let (lo, hi) = m.bounds3();
+    assert!(
+        (lo.x - 950.0).abs() < 1e-6 && (hi.x - 3050.0).abs() < 1e-6,
+        "{lo} {hi}"
+    );
+    // A source that contains itself is reported.
+    let cyc = "#20=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);\n#21=IFCEXTRUDEDAREASOLID(#20,#5,#4,50.);\n#22=IFCSHAPEREPRESENTATION($,'Body','Model',(#21,#24));\n#23=IFCREPRESENTATIONMAP(#5,#22);\n#24=IFCMAPPEDITEM(#23,#25);\n#25=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#6,1.,$);\n";
+    let (_, r) = run(&format!("{cyc}{}", slab(30, "#24")), &opts);
+    assert!(
+        r.notes.iter().any(|n| n.contains("contains itself")),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn the_mapping_origin_moves_instances_like_ifcopenshell() {
+    // The source is a 10 mm box around its own origin. The map origin is at x = 100 and the target at x = 1000:
+    // IfcOpenShell puts the box at 1100 (the target times the origin).
+    let data = "#20=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,10.,10.);\n#21=IFCEXTRUDEDAREASOLID(#20,#5,#4,10.);\n#22=IFCSHAPEREPRESENTATION($,'Body','Model',(#21));\n\
+#23=IFCCARTESIANPOINT((100.,0.,0.));\n#24=IFCAXIS2PLACEMENT3D(#23,$,$);\n#25=IFCREPRESENTATIONMAP(#24,#22);\n#26=IFCCARTESIANPOINT((1000.,0.,0.));\n#27=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#26,1.,$);\n#28=IFCMAPPEDITEM(#25,#27);\n";
+    let opts = IfcImportOptions {
+        instances: false,
+        ..IfcImportOptions::default()
+    };
+    let (ed, _) = run(&format!("{data}{}", slab(30, "#28")), &opts);
+    let Shape::Mesh3d(m) = &objs(&ed)[0].shape else {
+        panic!()
+    };
+    let (lo, hi) = m.bounds3();
+    assert!(((lo.x + hi.x) / 2.0 - 1100.0).abs() < 1e-6, "{lo} {hi}");
+}
+
+fn signed_volume(o: &Object) -> f64 {
+    let Shape::Mesh3d(m) = &o.shape else { panic!() };
+    m.triangles
+        .iter()
+        .map(|t| {
+            let p = |i: u32| m.vertices[i as usize];
+            p(t[0]).dot(p(t[1]).cross(p(t[2])))
+        })
+        .sum::<f64>()
+        / 6.0
+}
+
+#[test]
+fn mirrored_operators_keep_the_mirror_and_the_solid_outward() {
+    let source = "#20=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);\n#21=IFCEXTRUDEDAREASOLID(#20,#5,#4,300.);\n#22=IFCSHAPEREPRESENTATION($,'Body','Model',(#21));\n#23=IFCREPRESENTATIONMAP(#5,#22);\n";
+    // Axis3 points down: the box hangs below the placement.
+    let down = "#24=IFCDIRECTION((1.,0.,0.));\n#25=IFCDIRECTION((0.,1.,0.));\n#26=IFCDIRECTION((0.,0.,-1.));\n#27=IFCCARTESIANTRANSFORMATIONOPERATOR3D(#24,#25,#6,1.,#26);\n#28=IFCMAPPEDITEM(#23,#27);\n";
+    let opts = IfcImportOptions {
+        instances: false,
+        ..IfcImportOptions::default()
+    };
+    let (ed, _) = run(&format!("{source}{down}{}", slab(30, "#28")), &opts);
+    let o = objs(&ed)[0];
+    let Shape::Mesh3d(m) = &o.shape else { panic!() };
+    let (lo, hi) = m.bounds3();
+    assert!(
+        (lo.z + 300.0).abs() < 1e-6 && hi.z.abs() < 1e-6,
+        "{lo} {hi}"
+    );
+    assert!(
+        (signed_volume(o) - 100.0 * 100.0 * 300.0).abs() < 1.0,
+        "{}",
+        signed_volume(o)
+    );
+    // Mirrored in x (Axis1 = -X, Axis2 = +Y, Axis3 = +Z is a mirror): the box is at the other side.
+    let mirror = "#24=IFCDIRECTION((-1.,0.,0.));\n#25=IFCDIRECTION((0.,1.,0.));\n#26=IFCCARTESIANPOINT((500.,0.,0.));\n#27=IFCCARTESIANTRANSFORMATIONOPERATOR3D(#24,#25,#26,1.,$);\n#28=IFCMAPPEDITEM(#23,#27);\n";
+    let (ed, _) = run(&format!("{source}{mirror}{}", slab(30, "#28")), &opts);
+    assert!((signed_volume(objs(&ed)[0]) - 100.0 * 100.0 * 300.0).abs() < 1.0);
+    // Two mirrored uses are meshes, never symbols (a symbol cannot mirror).
+    let two = format!(
+        "{source}{mirror}#29=IFCMAPPEDITEM(#23,#27);\n{}{}",
+        product(30, "IFCFURNISHINGELEMENT", "#28", "$,@,$"),
+        product(40, "IFCFURNISHINGELEMENT", "#29", "$,@,$"),
+    );
+    let (_, r) = run(&two, &IfcImportOptions::default());
+    assert_eq!(
+        (r.objects.get("symbol"), r.objects["mesh3d"]),
+        (None, 2),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn vegetation_is_matched_by_whole_words() {
+    let rect = "#20=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,1000.,1000.);\n#21=IFCEXTRUDEDAREASOLID(#20,#5,#4,1500.);\n";
+    let kind = |object_type: &str, predefined: &str| {
+        let data = format!(
+            "{rect}{}",
+            product(
+                40,
+                "IFCGEOGRAPHICELEMENT",
+                "#21",
+                &format!("{object_type},@,$,{predefined}")
+            )
+        );
+        let (ed, _) = run(&data, &IfcImportOptions::default());
+        objs(&ed)[0].shape.kind()
+    };
+    assert_eq!(kind("'Street tree'", ".USERDEFINED."), "plant");
+    assert_eq!(kind("'TREES'", ".NOTDEFINED."), "plant");
+    assert_eq!(kind("'Hedge-row'", ".USERDEFINED."), "plant");
+    // "Street" contains "tree" and "planter" contains "plant", but they are not those words.
+    assert_eq!(kind("'Street furniture'", ".USERDEFINED."), "mesh3d");
+    assert_eq!(kind("'Planter box'", ".USERDEFINED."), "mesh3d");
+    assert_eq!(kind("'Treeline sign'", ".USERDEFINED."), "mesh3d");
+    // The predefined type decides when it says something.
+    assert_eq!(kind("'Tree'", ".SOIL_BORING_POINT."), "mesh3d");
+    assert_eq!(kind("$", ".VEGETATION."), "plant");
+    assert_eq!(kind("'Tree'", ".TERRAIN."), "site_model");
+}
+
+#[test]
+fn points_that_a_pnindex_leaves_out_do_not_count() {
+    // Four points, but the only triangle uses PnIndex to pick three of them.
+    let data = "#20=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(10.,0.,0.),(0.,10.,0.),(9999.,9999.,9999.)));\n#21=IFCTRIANGULATEDFACESET(#20,$,.F.,((1,2,3)),(1,2,3));\n";
+    let (ed, _) = run(
+        &format!("{data}{}", slab(30, "#21")),
+        &IfcImportOptions::default(),
+    );
+    let Shape::Mesh3d(m) = &objs(&ed)[0].shape else {
+        panic!()
+    };
+    assert_eq!(m.vertices.len(), 3);
+    assert!(m.bounds3().1.x <= 10.0);
+}
+
+#[test]
+fn looping_placements_are_reported() {
+    let data = format!(
+        "#20=IFCLOCALPLACEMENT(#21,#5);\n#21=IFCLOCALPLACEMENT(#20,#5);\n{}{}",
+        extr(40, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0),
+        product(50, "IFCSLAB", "#41", "$,@,$,.FLOOR.").replace("#7,", "#20,")
+    );
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 1);
+    assert!(r.notes.iter().any(|n| n.contains("loop")), "{:?}", r.notes);
+}
+
+#[test]
+fn ifc2x3_reads_the_map_conversion_property_sets() {
+    let data = format!(
+        "#20=IFCPROPERTYSINGLEVALUE('Eastings',$,IFCLENGTHMEASURE(500000.),$);\n#21=IFCPROPERTYSINGLEVALUE('Northings',$,IFCLENGTHMEASURE(6700000.),$);\n#22=IFCPROPERTYSINGLEVALUE('XAxisAbscissa',$,IFCREAL(0.),$);\n#23=IFCPROPERTYSINGLEVALUE('XAxisOrdinate',$,IFCREAL(1.),$);\n#24=IFCPROPERTYSINGLEVALUE('Scale',$,IFCREAL(0.001),$);\n\
+#25=IFCPROPERTYSET('a',$,'ePSet_MapConversion',$,(#20,#21,#22,#23,#24));\n#26=IFCPROPERTYSINGLEVALUE('Name',$,IFCLABEL('EPSG:3067'),$);\n#27=IFCPROPERTYSET('b',$,'ePSet_ProjectedCRS',$,(#26));\n{}{}",
+        extr(40, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0),
+        slab(50, "#41")
+    );
+    let (ed, r) = run_in(
+        Document::default(),
+        "IFC2X3",
+        &data,
+        &IfcImportOptions::default(),
+    );
+    let g = ed.doc().georef.clone().expect("georeference");
+    assert_eq!(g.crs, "EPSG:3067");
+    assert_eq!(g.origin, DVec2::new(500_000.0, 6_700_000.0));
+    assert!((g.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    assert!(!r.notes.iter().any(|n| n.contains("no georeference")));
+}
+
+#[test]
+fn the_species_comes_back_from_our_own_export() {
+    use cadektor_core::command::Command;
+    use cadektor_core::plants::style::PlantStyle;
+    let mut ed = Editor::default();
+    let style = ed
+        .execute(&Command::AddResource {
+            name: "Maple".into(),
+            body: ResourceBody::plant_style(PlantStyle {
+                spread: 5000.0,
+                height: 9000.0,
+                id_code: "AC".into(),
+                ..PlantStyle::default()
+            }),
+        })
+        .unwrap()
+        .created[0];
+    ed.execute(&Command::AddObject {
+        shape: Shape::Plant {
+            at: DVec2::new(1000.0, 2000.0),
+            species: "Acer campestre".into(),
+            spread: 5000.0,
+            height: 9000.0,
+        },
+        layer: None,
+        class: None,
+        attrs: Default::default(),
+    })
+    .unwrap();
+    let _ = style;
+    let (bytes, _) = crate::export_bytes(ed.doc(), &crate::IfcOptions::default()).unwrap();
+    let r = import_bytes(bytes, &Document::default(), &IfcImportOptions::default()).unwrap();
+    let mut back = Editor::new(Document::default());
+    back.execute(&r.command).unwrap();
+    let Shape::Plant { species, .. } = &objs(&back)[0].shape else {
+        panic!("{}", objs(&back)[0].shape.kind())
+    };
+    assert_eq!(species, "Acer campestre");
+}
+
+#[test]
+fn imported_meshes_can_be_turned() {
+    let (mut ed, _) = run(
+        &format!(
+            "{}{}",
+            extr(20, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,200.,100.)", 10.0),
+            slab(30, "#21")
+        ),
+        &IfcImportOptions::default(),
+    );
+    let id = objs(&ed)[0].id;
+    ed.execute(&cadektor_core::command::Command::RotateObjects {
+        ids: vec![id],
+        center: DVec2::ZERO,
+        angle: std::f64::consts::FRAC_PI_2,
+    })
+    .unwrap();
+    let Shape::Mesh3d(m) = &ed.doc().object(id).unwrap().shape else {
+        panic!()
+    };
+    let (lo, hi) = m.bounds3();
+    assert!((hi.x - lo.x - 100.0).abs() < 1e-6 && (hi.y - lo.y - 200.0).abs() < 1e-6);
+    assert!((m.volume() - 200.0 * 100.0 * 10.0).abs() < 1.0);
 }

@@ -63,7 +63,7 @@ fn import_describe() -> Value {
             "georef": "true (default): IfcMapConversion sets the georeference of an empty document, or moves the geometry into the georeference of a document that has the same CRS",
             "max_objects": "Default 500000",
             "max_triangles": "Default 20000000",
-            "max_file_mb": "Default 2048"
+            "max_file_mb": "Default 1024"
         },
         "mapping": {
             "IfcSlab, IfcCovering, IfcWall and every other element with a body": "mesh3d (generic 3D mesh). data.ifc_class holds the IFC class, data.ifc the GlobalId, name, type and tag. Nothing is turned into a hardscape",

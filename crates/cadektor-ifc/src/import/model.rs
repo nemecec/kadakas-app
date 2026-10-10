@@ -450,11 +450,14 @@ pub struct FileGeo {
 
 /// Reads `IfcMapConversion` and `IfcProjectedCRS`.
 pub fn file_georef(cx: &Ctx) -> Option<FileGeo> {
-    let id =
+    let Some(id) =
         cx.x.ids_of("IFCMAPCONVERSION")
             .into_iter()
             .chain(cx.x.ids_of("IFCMAPCONVERSIONSCALED"))
-            .next()?;
+            .next()
+    else {
+        return legacy_georef(cx);
+    };
     let e = cx.ent(id)?;
     let crs_e = cx.get(attr(&e, 1));
     let (name, to_m) = match &crs_e {
@@ -516,4 +519,52 @@ pub fn to_georef(g: &FileGeo) -> Georeference {
         rotation: g.rotation,
         user_origin: DVec2::ZERO,
     }
+}
+
+/// The georeference of an IFC2x3 file: the property sets `ePSet_MapConversion` and `ePSet_ProjectedCRS`
+/// (the buildingSMART recommendation for IFC2x3, which has no `IfcMapConversion`). Map units are meters.
+fn legacy_georef(cx: &Ctx) -> Option<FileGeo> {
+    let mut conv: HashMap<String, Value> = HashMap::new();
+    let mut crs: HashMap<String, Value> = HashMap::new();
+    for id in cx.x.ids_of("IFCPROPERTYSET") {
+        let Some(e) = cx.ent(id) else { continue };
+        let target = match text(attr(&e, 2)).map(str::to_ascii_lowercase).as_deref() {
+            Some("epset_mapconversion") => &mut conv,
+            Some("epset_projectedcrs") => &mut crs,
+            _ => continue,
+        };
+        for p in cx.get_all(attr(&e, 4)) {
+            if p.name == "IFCPROPERTYSINGLEVALUE"
+                && let Some(n) = text(attr(&p, 0))
+            {
+                target.insert(n.to_ascii_lowercase(), attr(&p, 2).clone());
+            }
+        }
+    }
+    let n = |k: &str| conv.get(k).and_then(num);
+    let (east, north) = (n("eastings")?, n("northings")?);
+    let (xa, xo) = (
+        n("xaxisabscissa").unwrap_or(1.0),
+        n("xaxisordinate").unwrap_or(0.0),
+    );
+    let scale = n("scale").filter(|s| *s > 0.0).unwrap_or(1.0);
+    let origin = DVec2::new(east, north);
+    if !(origin.is_finite() && origin.abs().max_element() < 1e8) {
+        return None;
+    }
+    Some(FileGeo {
+        crs: crs
+            .get("name")
+            .and_then(text)
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default(),
+        origin,
+        rotation: if xa == 0.0 && xo == 0.0 {
+            0.0
+        } else {
+            xo.atan2(xa)
+        },
+        meters_per_mm: scale / cx.units.length_mm,
+        height: n("orthogonalheight").unwrap_or(0.0),
+    })
 }

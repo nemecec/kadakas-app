@@ -31,7 +31,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
         None => Ok(None),
         Some(n) => Format::from_name(n).map(Some).ok_or_else(|| {
             RpcError::invalid_params(format!(
-                "unknown format '{n}'. Use dxf, shp, geojson, ifc or dwg"
+                "unknown format '{n}'. Use dxf, shp, geojson, ifc or dwg (export also: gltf, glb, obj)"
             ))
         }),
     }
@@ -41,7 +41,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 pub(crate) fn describe() -> Value {
     json!({
         "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)"],
-        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, see describe.io.ifc)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed)",
@@ -66,6 +66,8 @@ pub(crate) fn describe() -> Value {
         },
         "ifc": crate::ifc_api::describe(),
         "dwg": crate::dwg_api::describe(),
+        "x3d": crate::x3d_api::describe()["export"],
+        "section_viewport": crate::x3d_api::describe()["section_viewport"],
         "examples": [
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
             {"method": "import.file", "params": {"path": "/data/trees.geojson", "options": {"class_field": "species"}}},
@@ -169,6 +171,9 @@ impl Session {
         }
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.export_ifc_file(path, &options, overwrite, checked);
+        }
+        if let Some(kind) = crate::x3d_api::kind_of(format.as_deref(), &path) {
+            return self.export_x3d_file(kind, path, &options, overwrite, checked);
         }
         if let Some(f) = format
             .as_deref()

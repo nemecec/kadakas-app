@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
+use std::rc::Rc;
 
 use cadektor_core::curve::{self, Vertex, VertexKind};
 use glam::{DAffine2, DAffine3, DVec2, DVec3};
@@ -49,6 +50,23 @@ impl MeshData {
             (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
             |(lo, hi), p| (lo.min(*p), hi.max(*p)),
         ))
+    }
+
+    /// Drops vertices that no triangle uses (for example points that a `PnIndex` leaves out).
+    pub fn compact(&mut self) {
+        let mut remap = vec![u32::MAX; self.v.len()];
+        let mut out = Vec::new();
+        for t in &mut self.t {
+            for i in t.iter_mut() {
+                let r = &mut remap[*i as usize];
+                if *r == u32::MAX {
+                    out.push(self.v[*i as usize]);
+                    *r = (out.len() - 1) as u32;
+                }
+                *i = *r;
+            }
+        }
+        self.v = out;
     }
 
     /// Merges vertices that are closer than `tol` (on a grid) and drops triangles that collapse.
@@ -254,6 +272,66 @@ pub enum Piece {
     Point(DVec3),
 }
 
+impl Piece {
+    /// A rough number of triangles, for the budget.
+    pub fn cost(&self) -> usize {
+        match self {
+            Piece::Mesh(m) => m.t.len(),
+            Piece::Extrusion(e) => e.regions.iter().map(|r| r.outer.len() * 4 + 2).sum(),
+            _ => 1,
+        }
+    }
+
+    /// The piece moved by `t`.
+    pub fn transformed(&self, t: &DAffine3) -> Piece {
+        match self {
+            Piece::Mesh(m) => {
+                let mut m = m.clone();
+                m.transform(t);
+                Piece::Mesh(m)
+            }
+            Piece::Extrusion(e) => Piece::Extrusion(Extrusion {
+                xf: *t * e.xf,
+                ..e.clone()
+            }),
+            Piece::Instance { source, xf } => Piece::Instance {
+                source: *source,
+                xf: *t * *xf,
+            },
+            Piece::Point(p) => Piece::Point(t.transform_point3(*p)),
+            Piece::Curve(c) => {
+                let m = t.matrix3;
+                let similar = m.z_axis.normalize_or_zero().distance(DVec3::Z) < 1e-9
+                    && m.x_axis.z.abs() < 1e-9
+                    && m.y_axis.z.abs() < 1e-9
+                    && (m.x_axis.length() - m.y_axis.length()).abs() < 1e-9
+                    && m.x_axis.dot(m.y_axis).abs() < 1e-9;
+                let exact = c.exact.as_ref().filter(|_| similar).map(|(vs, z)| {
+                    let mapped: Vec<Vertex> = vs
+                        .iter()
+                        .map(|v| {
+                            let w = t.transform_point3(v.p.extend(*z));
+                            let kind = match v.kind {
+                                VertexKind::Arc { radius } => VertexKind::Arc {
+                                    radius: radius * m.x_axis.length(),
+                                },
+                                k => k,
+                            };
+                            Vertex::new(w.truncate(), kind)
+                        })
+                        .collect();
+                    (mapped, t.transform_point3(DVec3::new(0.0, 0.0, *z)).z)
+                });
+                Piece::Curve(CurveData {
+                    exact,
+                    pts: c.pts.iter().map(|p| t.transform_point3(*p)).collect(),
+                    closed: c.closed,
+                })
+            }
+        }
+    }
+}
+
 /// Evaluates representation items.
 pub struct Eval<'a> {
     pub cx: &'a Ctx<'a>,
@@ -267,9 +345,15 @@ pub struct Eval<'a> {
     pub instancing: Option<&'a dyn Fn(u64) -> bool>,
     /// Curve tolerance in file units.
     pub tol: f64,
+    /// Items visited and pieces copied so far. A file cannot make the work grow without a limit.
+    visits: usize,
+    /// Pieces of each mapped source, in the frame of the source. `None` while the source is being read.
+    cache: HashMap<u64, Option<Rc<Vec<Piece>>>>,
 }
 
 const MAX_DEPTH: usize = 16;
+/// Most items that one evaluation visits (and pieces it copies from mapped sources).
+const MAX_VISITS: usize = 100_000;
 
 impl<'a> Eval<'a> {
     pub fn new(cx: &'a Ctx<'a>, max_tris: usize) -> Eval<'a> {
@@ -282,6 +366,8 @@ impl<'a> Eval<'a> {
             max_tris,
             instancing: None,
             tol: 2.0 / cx.units.length_mm,
+            visits: 0,
+            cache: HashMap::new(),
         }
     }
 
@@ -308,6 +394,14 @@ impl<'a> Eval<'a> {
     pub fn item(&mut self, id: u64, xf: &DAffine3, depth: usize) {
         if depth > MAX_DEPTH {
             self.issue("representation items nest too deep");
+            return;
+        }
+        if self.tris > self.max_tris {
+            return;
+        }
+        self.visits += 1;
+        if self.visits > MAX_VISITS {
+            self.issue("the file has too many nested items: the rest is dropped");
             return;
         }
         let Some(e) = self.cx.ent(id) else {
@@ -383,26 +477,61 @@ impl<'a> Eval<'a> {
             self.issue("a mapped item has a flat transform");
             return;
         }
-        let item_xf = *xf * target * origin.inverse();
+        // A point of the source goes through the origin of the map, then through the target.
+        let source_to_world = *xf * target * origin;
         if let Some(ok) = self.instancing
             && ok(src_id)
         {
-            // The definition lives in the frame of the map origin.
+            // The definition lives in the frame of the source.
             self.pieces.push(Piece::Instance {
                 source: src_id,
-                xf: *xf * target,
+                xf: source_to_world,
             });
             return;
         }
-        let Some(rep) = self.cx.get(attr(&src, 1)) else {
-            self.issue("a mapped item has no representation");
+        let Some(cached) = self.source_pieces(src_id, &src, depth) else {
             return;
         };
+        for p in cached.iter() {
+            self.visits += 1;
+            self.tris += p.cost();
+            if self.visits > MAX_VISITS || self.tris > self.max_tris {
+                self.issue("the triangle or item limit was reached: geometry was dropped");
+                return;
+            }
+            self.pieces.push(p.transformed(&source_to_world));
+        }
+    }
+
+    /// The pieces of a representation map in the frame of the source. They are made once per source.
+    fn source_pieces(
+        &mut self,
+        src_id: u64,
+        src: &crate::step::Entity,
+        depth: usize,
+    ) -> Option<Rc<Vec<Piece>>> {
+        match self.cache.get(&src_id) {
+            Some(Some(hit)) => return Some(hit.clone()),
+            Some(None) => {
+                self.issue("a mapped item contains itself");
+                return None;
+            }
+            None => {}
+        }
+        let Some(rep) = self.cx.get(attr(src, 1)) else {
+            self.issue("a mapped item has no representation");
+            return None;
+        };
+        self.cache.insert(src_id, None);
+        let saved = std::mem::take(&mut self.pieces);
         for i in items(attr(&rep, 3)) {
             if let Some(id) = i.as_ref_id() {
-                self.item(id, &item_xf, depth + 1);
+                self.item(id, &DAffine3::IDENTITY, depth + 1);
             }
         }
+        let made = Rc::new(std::mem::replace(&mut self.pieces, saved));
+        self.cache.insert(src_id, Some(made.clone()));
+        Some(made)
     }
 
     // ------------------------------------------------------------ boolean clipping
@@ -989,6 +1118,7 @@ impl<'a> Eval<'a> {
         if xf.matrix3.determinant() < 0.0 {
             m.flip();
         }
+        m.compact();
         self.add_mesh(m);
     }
 

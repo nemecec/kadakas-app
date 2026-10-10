@@ -80,12 +80,27 @@ pub struct Search {
 impl Search {
     /// `PATH`, `CADEKTOR_DWG_CONVERTER` and the usual install places of this operating system.
     pub fn system() -> Search {
-        let path = std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect())
+        Search::from_values(
+            std::env::var_os("PATH"),
+            std::env::var_os("CADEKTOR_DWG_CONVERTER"),
+        )
+    }
+
+    /// Like [`Search::system`], with the values of `PATH` and `CADEKTOR_DWG_CONVERTER` given.
+    /// A relative entry of `PATH` (such as `.` or an empty one) is left out: a folder of the drawing
+    /// must not supply the program.
+    pub fn from_values(
+        path: Option<std::ffi::OsString>,
+        forced: Option<std::ffi::OsString>,
+    ) -> Search {
+        let path = path
+            .map(|p| {
+                std::env::split_paths(&p)
+                    .filter(|d| d.is_absolute())
+                    .collect()
+            })
             .unwrap_or_default();
-        let forced = std::env::var_os("CADEKTOR_DWG_CONVERTER")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let forced = forced.filter(|v| !v.is_empty()).map(PathBuf::from);
         let mut oda_places = vec![
             PathBuf::from("/Applications/ODAFileConverter.app/Contents/MacOS"),
             PathBuf::from("/opt/ODAFileConverter"),
@@ -124,6 +139,7 @@ fn is_program(p: &Path) -> bool {
 
 fn find_in(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
     dirs.iter()
+        .filter(|d| d.is_absolute())
         .flat_map(|d| [d.join(name), d.join(format!("{name}.exe"))])
         .find(|p| is_program(p))
 }
@@ -131,6 +147,7 @@ fn find_in(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
 /// Finds a converter: the one the user named, then the ODA File Converter, then LibreDWG.
 pub fn detect(search: &Search) -> Option<Converter> {
     if let Some(p) = &search.forced
+        && p.is_absolute()
         && is_program(p)
     {
         let stem = p
@@ -303,23 +320,24 @@ fn run(
     let open = |p: &Path| {
         fs::File::create(p).map_err(|e| DwgError::Io(format!("cannot write {}: {e}", p.display())))
     };
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(open(&out_path)?))
-        .stderr(Stdio::from(open(&err_path)?))
-        .spawn()
-        .map_err(|e| DwgError::Failed {
-            tool: tool.into(),
-            detail: format!("cannot start {}: {e}", program.display()),
-        })?;
+        .stderr(Stdio::from(open(&err_path)?));
+    // The converter leads its own process group, so a stop reaches the programs that it started too.
+    cadektor_script::exec::own_group(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| DwgError::Failed {
+        tool: tool.into(),
+        detail: format!("cannot start {}: {e}", program.display()),
+    })?;
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
+                cadektor_script::exec::kill_tree(&mut child);
                 let _ = child.wait();
                 return Err(DwgError::Timeout {
                     tool: tool.into(),
@@ -960,5 +978,109 @@ mod tests {
         let long = "x".repeat(1000) + "END";
         let t = tail(&long);
         assert!(t.starts_with("...") && t.ends_with("END") && t.chars().count() < 410);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod group_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let p = dir.join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn alive(pid: i32) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc_kill(pid, 0) == 0 }
+    }
+
+    unsafe extern "C" {
+        #[link_name = "kill"]
+        fn libc_kill(pid: i32, sig: i32) -> i32;
+    }
+
+    #[test]
+    fn a_timeout_stops_the_programs_that_the_converter_started() {
+        let work = TempDir::new().unwrap();
+        let stubs = TempDir::new().unwrap();
+        let pidfile = work.path().join("child.pid");
+        // The converter starts a child that sleeps, writes its ID, and waits for it.
+        script(
+            stubs.path(),
+            "dwg2dxf",
+            &format!("sleep 60 &\necho $! > \"{}\"\nwait", pidfile.display()),
+        );
+        let dwg = work.path().join("a.dwg");
+        fs::write(&dwg, "x").unwrap();
+        let search = Search {
+            path: vec![stubs.path().to_path_buf()],
+            ..Search::default()
+        };
+        let quick = RunOptions {
+            timeout: Duration::from_secs(3),
+            ..RunOptions::default()
+        };
+        let e = import_file(
+            &dwg,
+            &ImportOptions::default(),
+            &quick,
+            &Document::default(),
+            &search,
+        )
+        .unwrap_err();
+        assert!(matches!(e, DwgError::Timeout { .. }), "{e}");
+        let pid: i32 = fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // The child of the converter dies with the group (give the system a moment to remove it).
+        let mut gone = false;
+        for _ in 0..50 {
+            if !alive(pid) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(gone, "the child {pid} of the converter is still running");
+    }
+
+    #[test]
+    fn relative_path_entries_and_relative_programs_are_ignored() {
+        // A stub in a folder below the current folder, found only by a relative path.
+        let name = format!("cadektor-dwg-relative-{}", std::process::id());
+        let rel_dir = PathBuf::from(&name);
+        fs::create_dir(&rel_dir).unwrap();
+        script(&rel_dir, "dwg2dxf", "exit 0");
+        let rel = Search {
+            path: vec![rel_dir.clone(), PathBuf::from("")],
+            forced: Some(rel_dir.join("dwg2dxf")),
+            ..Search::default()
+        };
+        let found = detect(&rel);
+        let abs = Search {
+            path: vec![fs::canonicalize(&rel_dir).unwrap()],
+            ..Search::default()
+        };
+        let abs_found = detect(&abs);
+        fs::remove_dir_all(&rel_dir).unwrap();
+        assert!(found.is_none(), "{found:?}");
+        assert!(abs_found.is_some());
+        // `PATH` entries that are not absolute are dropped.
+        let s = Search::from_values(Some(".:/usr/bin::bin:/opt".into()), Some("".into()));
+        assert_eq!(
+            s.path,
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/opt")]
+        );
+        assert!(s.forced.is_none());
+        assert_eq!(
+            Search::from_values(None, Some("/x/dwg2dxf".into())).forced,
+            Some(PathBuf::from("/x/dwg2dxf"))
+        );
     }
 }

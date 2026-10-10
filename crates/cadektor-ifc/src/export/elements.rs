@@ -521,6 +521,20 @@ impl<W: Write> Exporter<'_, W> {
             },
             &mapped,
         )?;
+        // The botanical name stays in the file, so an import can give the plant its species back.
+        let species = match &obj.shape {
+            Shape::Plant { species, .. } | Shape::ExistingTree { species, .. } => species.trim(),
+            _ => "",
+        };
+        if !species.is_empty() {
+            self.pset(
+                "Cadektor_Plant",
+                vec![(
+                    "Species".into(),
+                    Value::typed("IFCLABEL", Value::s(species)),
+                )],
+            );
+        }
         if let Shape::ExistingTree {
             condition,
             action,

@@ -263,7 +263,7 @@ impl IoUi {
                             ui.label("IFC2x3, IFC4 or IFC4x3");
                             ui.checkbox(
                                 &mut form.ifc_storeys,
-                                "Building storeys become design layers (default: all on the layer Site)",
+                                "Building storeys become design layers (off: all on the active layer)",
                             );
                             ui.checkbox(
                                 &mut form.ifc_terrain_mesh,

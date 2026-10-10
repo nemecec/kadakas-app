@@ -120,6 +120,37 @@ def ifc2x3_wall(out):
     f.write(str(out / "wall_ifc2x3.ifc"))
 
 
+def world_bounds_mm(f, element):
+    """Where IfcOpenShell puts the element: the box around its vertices in world coordinates, in millimeters."""
+    import ifcopenshell.geom
+
+    settings = ifcopenshell.geom.settings()
+    try:
+        settings.set("use-world-coords", True)
+    except Exception:
+        settings.set(settings.USE_WORLD_COORDS, True)
+    shape = ifcopenshell.geom.create_shape(settings, element)
+    v = shape.geometry.verts
+    pts = [(v[i] * 1000.0, v[i + 1] * 1000.0, v[i + 2] * 1000.0) for i in range(0, len(v), 3)]
+    return [[min(p[k] for p in pts), max(p[k] for p in pts)] for k in range(3)]
+
+
+def mapped_with_origin(out):
+    """A box that is mapped with a map origin at x = 100 and a target at x = 1000, and a mirrored second use."""
+    import json
+
+    f, body, storey, sp = new_model()
+    e = f.create_entity
+    rect = e("IfcRectangleProfileDef", ProfileType="AREA", XDim=10.0, YDim=10.0)
+    source = e("IfcShapeRepresentation", ContextOfItems=body, RepresentationIdentifier="Body", RepresentationType="SweptSolid", Items=[extrusion(f, rect, 10)])
+    rmap = e("IfcRepresentationMap", MappingOrigin=axis(f, 100.0, 0.0, 0.0), MappedRepresentation=source)
+    op = e("IfcCartesianTransformationOperator3D", LocalOrigin=pt(f, 1000, 0, 0), Scale=1.0)
+    item = e("IfcMappedItem", MappingSource=rmap, MappingTarget=op)
+    el = product(f, "IfcFurnishingElement", "Bench", body, storey, sp, [item], rep_type="MappedRepresentation")
+    f.write(str(out / "mapped_origin.ifc"))
+    (out / "mapped_origin.json").write_text(json.dumps(world_bounds_mm(f, el)))
+
+
 if __name__ == "__main__":
     folder = Path(sys.argv[1])
     folder.mkdir(parents=True, exist_ok=True)
@@ -128,4 +159,5 @@ if __name__ == "__main__":
     mapped_bollards(folder)
     terrain_and_tree(folder)
     ifc2x3_wall(folder)
+    mapped_with_origin(folder)
     print("ok")
