@@ -233,9 +233,161 @@ pub fn box_select_in(
     out
 }
 
+fn segments_cross(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    let (r, s) = (b - a, d - c);
+    let den = r.perp_dot(s);
+    if den.abs() < 1e-12 {
+        return false;
+    }
+    let t = (c - a).perp_dot(s) / den;
+    let u = (c - a).perp_dot(r) / den;
+    (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)
+}
+
+/// True if the box `lo..hi` is inside the polygon (`crossing` false), or touches it (`crossing` true).
+pub fn box_in_polygon(lo: DVec2, hi: DVec2, poly: &[DVec2], crossing: bool) -> bool {
+    let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
+    if !crossing {
+        return corners.iter().all(|c| point_in_polygon(*c, poly));
+    }
+    if corners.iter().any(|c| point_in_polygon(*c, poly))
+        || poly.iter().any(|v| v.cmpge(lo).all() && v.cmple(hi).all())
+    {
+        return true;
+    }
+    let n = poly.len();
+    (0..n).any(|i| {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        (0..4).any(|k| segments_cross(a, b, corners[k], corners[(k + 1) % 4]))
+    })
+}
+
+/// Objects selected by a lasso, a free-hand polygon. Like the box: `crossing` selects objects that
+/// touch the lasso, otherwise objects must be fully inside. In a group, the members of the group
+/// are selected. A group counts when any member (crossing) or all members (inside) are selected.
+pub fn lasso_select_in(
+    doc: &Document,
+    polygon: &[DVec2],
+    crossing: bool,
+    context: Option<ObjectId>,
+) -> Vec<ObjectId> {
+    if polygon.len() < 3 {
+        return Vec::new();
+    }
+    let bounds = |o: &Object| {
+        if matches!(o.shape, Shape::Annotation(_)) {
+            crate::annot_ui::bounds(doc, o)
+        } else {
+            doc.object_bounds(o)
+        }
+    };
+    let mut out: Vec<ObjectId> = Vec::new();
+    for o in doc
+        .objects
+        .values()
+        .filter(|o| pickable(doc, o) && !matches!(o.shape, Shape::Group { .. }))
+    {
+        let Some(target) = doc.selection_target(o.id, context) else {
+            continue;
+        };
+        let (s0, s1) = bounds(o);
+        if !(s0.is_finite() && s1.is_finite()) {
+            continue;
+        }
+        if box_in_polygon(s0, s1, polygon, crossing) && !out.contains(&target) {
+            out.push(target);
+        }
+    }
+    if !crossing {
+        out.retain(|id| {
+            doc.leaves(&[*id]).iter().all(|l| {
+                doc.object(*l).is_some_and(|o| {
+                    let (s0, s1) = doc.object_bounds(o);
+                    box_in_polygon(s0, s1, polygon, false)
+                })
+            })
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tri() -> Vec<DVec2> {
+        vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(100.0, 0.0),
+            DVec2::new(0.0, 100.0),
+        ]
+    }
+
+    #[test]
+    fn points_and_boxes_against_a_polygon() {
+        let t = tri();
+        assert!(point_in_polygon(DVec2::new(10.0, 10.0), &t));
+        assert!(!point_in_polygon(DVec2::new(90.0, 90.0), &t));
+        // A box inside, a box across the edge, a box far away, a box that holds the polygon.
+        let b = |x0: f64, y0: f64, x1: f64, y1: f64| (DVec2::new(x0, y0), DVec2::new(x1, y1));
+        let (lo, hi) = b(5.0, 5.0, 20.0, 20.0);
+        assert!(box_in_polygon(lo, hi, &t, false) && box_in_polygon(lo, hi, &t, true));
+        let (lo, hi) = b(40.0, 40.0, 80.0, 80.0);
+        assert!(!box_in_polygon(lo, hi, &t, false) && box_in_polygon(lo, hi, &t, true));
+        let (lo, hi) = b(200.0, 200.0, 300.0, 300.0);
+        assert!(!box_in_polygon(lo, hi, &t, true));
+        let (lo, hi) = b(-50.0, -50.0, 500.0, 500.0);
+        assert!(box_in_polygon(lo, hi, &t, true) && !box_in_polygon(lo, hi, &t, false));
+        // A box that the polygon crosses with no corner inside either way: a thin bar.
+        let bar = vec![
+            DVec2::new(-10.0, 5.0),
+            DVec2::new(200.0, 5.0),
+            DVec2::new(200.0, 6.0),
+            DVec2::new(-10.0, 6.0),
+        ];
+        let (lo, hi) = b(50.0, 0.0, 60.0, 100.0);
+        assert!(box_in_polygon(lo, hi, &bar, true));
+    }
+
+    #[test]
+    fn a_lasso_selects_inside_or_crossing() {
+        use cadektor_core::command::{Command, Editor};
+        use cadektor_core::model::Attributes;
+        let mut ed = Editor::default();
+        let mut add = |shape: Shape| {
+            ObjectId(
+                ed.execute(&Command::AddObject {
+                    shape,
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let inside = add(Shape::Circle {
+            center: DVec2::new(20.0, 20.0),
+            radius: 5.0,
+        });
+        let across = add(Shape::Line {
+            a: DVec2::new(50.0, 40.0),
+            b: DVec2::new(200.0, 40.0),
+        });
+        let outside = add(Shape::Circle {
+            center: DVec2::new(400.0, 400.0),
+            radius: 5.0,
+        });
+        let t = tri();
+        let inner = lasso_select_in(ed.doc(), &t, false, None);
+        assert_eq!(inner, vec![inside]);
+        let touched = lasso_select_in(ed.doc(), &t, true, None);
+        assert!(
+            touched.contains(&inside) && touched.contains(&across) && !touched.contains(&outside)
+        );
+        assert!(lasso_select_in(ed.doc(), &t[..2], true, None).is_empty());
+    }
+
     use cadektor_api::Session;
     use cadektor_core::command::Command;
     use cadektor_core::model::Attributes;

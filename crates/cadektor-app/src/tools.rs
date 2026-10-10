@@ -13,9 +13,11 @@ use crate::hit;
 
 mod annot_tool;
 mod irrigation_tool;
+mod modify_tool;
 mod plant_tool;
 pub use annot_tool::{AnnotSettings, DimToolMode};
 pub use irrigation_tool::{IrrMode, IrrSettings};
+pub use modify_tool::{CutTo, ModifySettings, is_modify};
 pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +46,37 @@ pub enum Tool {
     NorthArrow,
     ScaleBar,
     RevisionCloud,
+    /// Modify tools (see `modify_tool`).
+    Rotate,
+    Mirror,
+    Scale,
+    Offset,
+    Fillet,
+    Chamfer,
+    Trim,
+    Extend,
+    Split,
+}
+
+/// How the Selection tool picks with a drag on empty space.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectMode {
+    /// A box. Left to right selects what is inside, right to left what the box touches.
+    #[default]
+    Rectangle,
+    /// A free-hand shape. Same rule: it ends to the right of its start (inside) or to the left (touching).
+    Lasso,
+}
+
+impl SelectMode {
+    pub const ALL: [SelectMode; 2] = [SelectMode::Rectangle, SelectMode::Lasso];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SelectMode::Rectangle => "Rectangle",
+            SelectMode::Lasso => "Lasso",
+        }
+    }
 }
 
 /// What the Site Modifiers tool makes.
@@ -87,6 +120,17 @@ impl Tool {
         Tool::RevisionCloud,
     ];
     pub const IRRIGATION: [Tool; 1] = [Tool::Irrigation];
+    pub const MODIFY: [Tool; 9] = [
+        Tool::Rotate,
+        Tool::Mirror,
+        Tool::Scale,
+        Tool::Offset,
+        Tool::Fillet,
+        Tool::Chamfer,
+        Tool::Trim,
+        Tool::Extend,
+        Tool::Split,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -109,6 +153,15 @@ impl Tool {
             Tool::NorthArrow => "North Arrow",
             Tool::ScaleBar => "Scale Bar",
             Tool::RevisionCloud => "Revision Cloud",
+            Tool::Rotate => "Rotate",
+            Tool::Mirror => "Mirror",
+            Tool::Scale => "Scale",
+            Tool::Offset => "Offset",
+            Tool::Fillet => "Fillet",
+            Tool::Chamfer => "Chamfer",
+            Tool::Trim => "Trim",
+            Tool::Extend => "Extend",
+            Tool::Split => "Split",
         }
     }
 }
@@ -231,6 +284,10 @@ pub struct ToolSettings {
     pub grading: crate::grading_ui::GradingSettings,
     /// Style and options of the annotation tools.
     pub annot: AnnotSettings,
+    /// Options of Rotate, Mirror, Scale, Offset, Fillet, Chamfer, Trim, Extend and Split.
+    pub modify: ModifySettings,
+    /// How a drag on empty space selects.
+    pub select_mode: SelectMode,
 }
 
 impl Default for ToolSettings {
@@ -255,6 +312,8 @@ impl Default for ToolSettings {
             irrigation: Default::default(),
             grading: Default::default(),
             annot: Default::default(),
+            modify: Default::default(),
+            select_mode: SelectMode::Rectangle,
         }
     }
 }
@@ -305,6 +364,11 @@ pub enum Preview {
         ids: Vec<ObjectId>,
         delta: DVec2,
     },
+    /// A free-hand selection shape (the Lasso mode of the Selection tool).
+    Lasso {
+        points: Vec<DVec2>,
+        crossing: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -324,6 +388,13 @@ enum State {
         cur: DVec2,
         add: bool,
     },
+    /// The points of a lasso.
+    Lasso {
+        points: Vec<DVec2>,
+        add: bool,
+    },
+    /// A modify tool (see `modify_tool`).
+    Modify(modify_tool::ModifyState),
 }
 
 pub struct ToolMachine {
@@ -375,8 +446,21 @@ impl ToolMachine {
         match &self.state {
             State::Points(p) => p.last().copied(),
             State::Path(h) => h.last().and_then(|v| v.last()).map(|v| v.p),
+            State::Modify(m) => m.pts.last().copied(),
             _ => None,
         }
+    }
+
+    /// The direction of the last segment you drew (radians), if two points are known.
+    pub fn prior_direction(&self) -> Option<f64> {
+        let pts: Vec<DVec2> = match &self.state {
+            State::Points(p) => p.clone(),
+            State::Path(h) => h.last()?.iter().map(|v| v.p).collect(),
+            State::Modify(m) => m.pts.clone(),
+            _ => return None,
+        };
+        let n = pts.len();
+        (n >= 2 && pts[n - 1] != pts[n - 2]).then(|| (pts[n - 1] - pts[n - 2]).to_angle())
     }
 
     /// Takes back the last clicked point. The operation ends when none is left.
@@ -500,6 +584,15 @@ impl ToolMachine {
     pub fn handle(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
         match self.tool {
             Tool::Select => self.handle_select(input, cx),
+            Tool::Rotate
+            | Tool::Mirror
+            | Tool::Scale
+            | Tool::Offset
+            | Tool::Fillet
+            | Tool::Chamfer
+            | Tool::Trim
+            | Tool::Extend
+            | Tool::Split => self.handle_modify(input, cx),
             Tool::Line | Tool::Rect | Tool::Circle => self.handle_two_click(input),
             Tool::Text => match input {
                 Input::Press { p, .. } => self.place(p, cx),
@@ -647,10 +740,17 @@ impl ToolMachine {
                     }
                 }
                 None => {
-                    self.state = State::Box {
-                        start: p,
-                        cur: p,
-                        add: shift,
+                    self.state = if cx.settings.select_mode == SelectMode::Lasso {
+                        State::Lasso {
+                            points: vec![p],
+                            add: shift,
+                        }
+                    } else {
+                        State::Box {
+                            start: p,
+                            cur: p,
+                            add: shift,
+                        }
                     };
                     if shift {
                         vec![]
@@ -662,6 +762,12 @@ impl ToolMachine {
             Input::Move(p) => {
                 match &mut self.state {
                     State::Drag { cur, .. } | State::Box { cur, .. } => *cur = p,
+                    State::Lasso { points, .. } => {
+                        // Skip points that are too close to the last one.
+                        if points.last().is_none_or(|l| l.distance(p) > cx.tol * 0.5) {
+                            points.push(p);
+                        }
+                    }
                     _ => {}
                 }
                 vec![]
@@ -681,6 +787,22 @@ impl ToolMachine {
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
                     for id in hit::box_select_in(cx.doc, start, p, p.x < start.x, cx.context) {
+                        if !sel.contains(&id) {
+                            sel.push(id);
+                        }
+                    }
+                    vec![Effect::SetSelection(sel)]
+                }
+                State::Lasso { mut points, add } => {
+                    let start = points[0];
+                    if points.last() != Some(&p) {
+                        points.push(p);
+                    }
+                    if points.len() < 3 {
+                        return vec![];
+                    }
+                    let mut sel = if add { cx.selection.to_vec() } else { vec![] };
+                    for id in hit::lasso_select_in(cx.doc, &points, p.x < start.x, cx.context) {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -740,6 +862,11 @@ impl ToolMachine {
                 max: start.max(cursor),
                 crossing: cursor.x < start.x,
             },
+            (State::Lasso { points, .. }, _) => Preview::Lasso {
+                crossing: cursor.x < points[0].x,
+                points: points.clone(),
+            },
+            (State::Modify(_), _) => self.modify_preview(cursor),
             (State::Idle, Tool::Text) if !cx.settings.text.is_empty() => {
                 Preview::Shape(Shape::Text {
                     at: cursor,
@@ -796,6 +923,8 @@ impl ToolMachine {
                 let d = (cursor - *start).abs();
                 format!("Box {:.1} x {:.1} mm", d.x, d.y)
             }
+            (State::Lasso { points, .. }, _) => format!("Lasso {} points", points.len()),
+            (State::Modify(_), _) => self.modify_readout(cursor),
             (State::Idle, _) => String::new(),
         }
     }
@@ -811,6 +940,9 @@ impl ToolMachine {
 
     /// Hint for the status line.
     pub fn hint(&self) -> &'static str {
+        if is_modify(self.tool) {
+            return modify_tool::hint(self.tool, self.modify_step());
+        }
         match (self.tool, self.is_busy()) {
             (Tool::Select, _) => {
                 "Click to select, Shift-click to toggle, drag to move or box select. Delete removes."
@@ -851,6 +983,7 @@ impl ToolMachine {
             (Tool::Plant, _) => {
                 "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
             }
+            _ => "",
         }
     }
 }

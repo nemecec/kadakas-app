@@ -35,7 +35,7 @@ Non-goals
    - MCP server (`cadektor mcp`) for Claude Code.
    - SVG render so agents can see results.
    - A `describe` method for discovery.
-   - Python package and scripts: see section 4.18. Planned: live viewport screenshot.
+   - Python package and scripts: see section 4.18. `view.screenshot` gives a PNG of the live window.
 6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Line coverage of 95% or more for every library crate (cargo-llvm-cov, enforced in CI by `scripts/coverage.sh`; the CLI crate has a bar of 90%). CI on macOS, Linux, Windows.
 7. License: Apache-2.0 OR MIT.
 
@@ -88,8 +88,8 @@ Non-goals
 | DOC-08 | Undo/redo through patches. | P0 | done |
 | DOC-09 | Locked layer rejects edits. | P0 | done |
 | DOC-10 | Native file format (JSON based, versioned with `format_version`; older files migrate when they load). | P0 | done |
-| DOC-11 | Layer elevation, stories, 3D height. | P1 | planned |
-| DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
+| DOC-11 | Layer elevation and 3D height. A design layer has an `elevation` (mm, `add_layer`, `modify_layer`, undoable). It is the zero of the 3D model on the layer: a hardscape top is `elevation` above it and its bottom is `thickness` lower, a massing base and a plant stand on it, and a section or elevation drawing follows. Checked by `crates/cadektor-core/tests/layer_elevation.rs` and `tests/behavior/test_layer_elevation.py`. Stories (named floor levels that group layers) are architecture work and are deferred to "Later" (section 6). | P1 | done |
+| DOC-12 | Class and layer visibility modes: visible, grey, invisible. The command `set_visibility` and the methods `visibility.get|set` set the mode of layers and classes in one undo step. A grey layer or class is drawn faint and without colors in the canvas and in the SVG (a group with `data-visibility="grey"`), cannot be selected or edited (commands refuse its objects, `selection.set` and `objects.query {select}` skip them, and nothing can be added to a grey layer), and does not snap unless "Snap to grey layers and classes" is on. It stays in 3D views, other exports and sheet viewports (a viewport has its own visibility overrides). The active layer cannot be grey. Trim and extend still use grey objects of the same layer as cutters and boundaries (they are only read). The flags are stored in `drawing.grey`, so older files load and older apps ignore them. | P1 | done |
 | DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
 | DOC-14 | Phases (existing, new, demolished). | P1 | planned |
 | DOC-15 | Symbols and symbol definitions: a resource with 2D components and optional 3D components (hybrid), an insertion point, and instances (`Shape::Symbol`) with position, rotation, symmetric or asymmetric scale and a class. Editing the definition changes all instances at once. Convert to group, Edit 2D components in place (`edit_symbol`, `exit_symbol_edit`), nested symbols (loops are refused). Plug-in object symbols (red and blue) are out of scope. | P1 | done |
@@ -105,10 +105,10 @@ Non-goals
 | DRF-02 | Move objects. | P0 | done |
 | DRF-03 | Shape validation (reject bad geometry). | P0 | done |
 | DRF-04 | Bounds and area calculation. | P0 | done |
-| DRF-05 | Selection tool: click, box select (window and crossing), shift-click to toggle. A lasso is not built. | P0 | partial |
+| DRF-05 | Selection tool: click, box select (window and crossing), shift-click to toggle, and a lasso mode (the Selection mode buttons in the Tool bar: Rectangle and Lasso). A lasso that ends to the right of its start selects what is fully inside, one that ends to the left selects what it touches, like the box. Shift adds to the selection. Grey and locked objects are skipped. The lasso is a polygon test of the bounds of each object (`hit::lasso_select_in`); a polygon-click mode is not built. | P0 | done |
 | DRF-06 | Tools for the shapes above with live preview. | P0 | done |
-| DRF-07 | Rotate, scale, mirror, offset, duplicate array. | P0 | planned |
-| DRF-08 | Fillet, chamfer, trim, extend, split. | P1 | planned |
+| DRF-07 | Rotate, scale, mirror, offset and duplicate array, as commands (`rotate_objects`, `transform_objects` with `rotate`, `scale`, `mirror` and `move`, `array_objects`), as API methods (`edit.rotate|scale|mirror|array|offset`) and as tools (Rotate, Mirror, Scale, Offset; the Duplicate Array dialog; Rotate/Flip 90 commands). Transforms work on a selection or a group as one unit, in place or as copies, and are one undo step. Scale needs equal factors for circles, arcs and symbols; fillet vertices are flattened for a stretch. Offset keeps arcs and circles exact and joins polyline corners with a miter, or a bevel past 4 times the distance. An offset that would cross itself is cleaned (an inward offset keeps the points farther than the distance from the outline, so inner corners come out rounded; an outward one is a union), pieces can be several shapes, and a shape that vanishes gives the error "offset collapses the shape". One command creates at most 100 000 objects. Arrays are linear (offset or polar), rectangular and circular, with resize, rotate and retain. The math is in `cadektor_core::edit2d`; property tests check inverse transforms, area after scale, array counts and undo. | P0 | done |
+| DRF-08 | Fillet, chamfer, trim, extend and split, for lines, arcs, circles, rectangles and polylines including curved vertices (`edit.fillet|chamfer|trim|extend|split`, the tools of the same names). A polyline is read as exact lines and arcs (fillet vertices and arcs through three points are exact; Bezier and spline pieces are cut into 0.05 mm lines) and written back with point-on-arc vertices, so arcs stay exact. Fillet and Chamfer have the modes Standard, Split and Trim, the chamfer size as two distances, distance and angle, or length, a double-click that rounds or cuts every corner of a shape, and short objects are extended. Trim cuts to all objects of the layer or to the selection. Split cuts at a point, or cuts a closed shape along a line into pieces whose areas add up to the original. Property tests check area conservation, tangency and that no number is NaN. | P1 | done |
 | DRF-09 | Polyline editing (vertices, smooth, Bezier, spline). | P1 | done |
 | DRF-15 | Curved polylines. A vertex is a corner, a fillet arc with a radius, a point on an arc, a quadratic Bezier control point or a cubic point that the curve passes through (centripetal Catmull-Rom). Landscape area and hardscape boundaries use the same vertices. A plain `[x, y]` in a file is a corner. | P1 | done |
 | DRF-16 | Exact curve math: arc radius is clamped to fit, area is exact (rounded square = s² − (4 − π)r²), bounds and hit tests use a chord tolerance. SVG output uses true `A`, `Q` and `C` path commands. | P1 | done |
@@ -120,24 +120,24 @@ Non-goals
 | DRF-12 | Groups: group and ungroup (one level), nested groups, enter and exit a group (edit context), move, rotate and copy a group as a unit, delete with members, all undoable. A click selects the top group, and inside a group it selects the members. Select-similar is planned. Rotating hardscapes, landscape areas and site models is not built yet. | P1 | done |
 | DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
 | DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
-| DRF-13 | Compose, clip, add/subtract surfaces. | P1 | planned |
-| DRF-14 | Pan, zoom (wheel, zoom in and out keys), zoom to fit. A view history (previous view) is not built. | P0 | partial |
+| DRF-13 | Compose, clip, add and subtract surfaces, and intersect (`surface.add|subtract|clip|intersect|compose`, the Modify menu, `Cmd/Ctrl+Shift+Alt+A` and `Cmd/Ctrl+Shift+Alt+C`). They work on rectangles, circles and polylines (open ones count as closed) of one layer with polygon booleans (`i_overlay`). Curves are flattened to 0.05 mm; a circle becomes a polygon with the exact area of the circle. Straight edges stay exact. A result with a hole is one polyline with a bridge of no width. The lowest shape keeps its ID and attributes; compose gives each region the attributes of the topmost shape that covers it. Property tests check that union plus intersection equals the sum of the areas and that compose covers the union once. The marquee Clip tool with Exclusion, Inclusion and Split modes is not built. | P1 | done |
+| DRF-14 | Pan, zoom (wheel, zoom in and out keys), zoom to fit, and a view history: Previous View and Next View (`Cmd/Ctrl+Shift+,` and `Cmd/Ctrl+Shift+.`, mouse buttons 4 and 5, the View menu). A view counts when it has rested for 0.4 s, so a wheel turn is one entry; going back and forth adds nothing; a new view after going back cuts the views ahead; up to 100 views. The history is for the plan; the 3D camera is not recorded. | P0 | done |
 
 ### 4.3 Snapping and data bar
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| SNP-01 | Snap to object points: end, mid, centre. | P0 | planned |
-| SNP-02 | Grid snap. | P0 | planned |
-| SNP-03 | Snapping set (toggle snap categories). | P0 | planned |
-| SNP-04 | Smart cursor cues (labels at the cursor). | P0 | planned |
+| SNP-01 | Snap to object points: endpoints and corners, midpoints, centers, circle quadrants, intersections of edges, the nearest point on an edge, and from the last point perpendicular and tangent points. The math is the pure module `cadektor_core::snapping` (the app and `snap.query` use the same code). | P0 | done |
+| SNP-02 | Grid snap. The grid step follows the zoom. | P0 | done |
+| SNP-03 | Snapping set: the Snapping palette (a dock tab, also in the View menu and in quick search) switches grid, object points, midpoints, intersections, edge, perpendicular, tangent, angle, distance, smart points and smart edges. The choice is saved per user (`prefs.json`) and shared with agents (`snap.get|set`). | P0 | done |
+| SNP-04 | Smart cursor cues: a mark per snap kind and a label with its name at the pointer ("Endpoint", "Midpoint", "Angle 45°, length 300", ...), and the alignment lines. `Y` toggles the cues. | P0 | done |
 | SNP-05 | Data bar: Tab to enter length, angle, coordinates. | P0 | done |
 | SNP-06 | Tab and Shift+Tab move between fields. Enter commits. | P0 | done |
-| SNP-07 | Angle and distance snap. | P1 | planned |
-| SNP-08 | Smart points and smart edges (alignment lines). | P1 | planned |
+| SNP-07 | Angle and distance snap from the last clicked point: angle steps (default 15°) from the x axis or, with `/`, from the prior segment, and lengths in steps of the distance step (default: the grid step). The pointer snaps when it is within the pick distance of an angle ray or a length. | P1 | done |
+| SNP-08 | Smart points and smart edges: `T` takes the object point (or, with smart edges on, the edge) under the pointer. Up to 3 points and 2 edges are kept. They give horizontal and vertical lines (and the angle steps) through the points, and extension and perpendicular lines of the edges. The pointer snaps to a line or to the crossing of two lines, including the crossing with an angle ray. | P1 | done |
 | SNP-09 | Snap loupe. | P2 | planned |
 | SNP-10 | Back-quote key suspends snapping while held. | P1 | done |
-| SNP-11 | Snap across layers and grey classes (option). | P1 | planned |
+| SNP-11 | Snap across layers and grey classes: the options "Snap to other layers" (default on) and "Snap to grey layers and classes" (default off) in the palette and in `snap.set`. | P1 | done |
 
 ### 4.4 UI palettes
 
@@ -148,11 +148,11 @@ Non-goals
 | UI-03 | Object Info palette with a Shape tab and a Data tab (records). Materials and render styles are set through the Resource Manager, not in a Render tab. | P0 | done |
 | UI-04 | Navigation palette (design layers, classes, sheet layers, saved views). | P0 | done |
 | UI-05 | Resource Manager palette (plant styles; all other resource types in the section "Resources (all types)", see DRF-20). | P1 | done |
-| UI-06 | Quick search for commands. | P1 | planned |
-| UI-07 | Dockable, saveable layouts. | P1 | planned |
+| UI-06 | Quick search for commands: `F` opens a box; type some letters, pick with the arrow keys, run with Enter. A fuzzy match over all commands with a key, the theme, the snap toggles, the palettes and the layouts. | P1 | done |
+| UI-07 | Dockable, saveable layouts: the drawing and the palettes (Tools, Object Info, Navigation, Resources, Plant Schedule, Snapping) are tabs of a dock (`egui_dock`). Drag a tab to split the window or to join another tab, or out to a floating window; close a tab and bring it back with Window > Show. The layout is saved for the user in `layouts.json` when it changes and when the app closes. Window > Save Layout As keeps named layouts; Reset Layout restores the default. A layout without the drawing tab is replaced by the default one. | P1 | done |
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
 | UI-09 | Keyboard shortcuts compatible with common CAD habits (the default keys follow Vectorworks 2026; see `keymap.rs`). | P0 | done |
-| UI-10 | Light and dark themes. | P1 | planned |
+| UI-10 | Light and dark themes: View > Theme (System, Light, Dark), saved per user. The panels use the egui theme. The canvas has a white or a dark paper, and in the dark theme nearly black pens are drawn light. The document does not change. | P1 | done |
 | UI-11 | Tool modes in tool bar. Keys jump between mode groups. Done for the vertex modes of the path tools (group 1, key U). | P1 | done |
 | UI-12 | Undo history list. | P2 | planned |
 
@@ -406,10 +406,10 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |
 | API-12 | `cadektor mcp` server for Claude Code. About 20 domain tools that take `{method, params}` (their descriptions list the methods) with MCP annotations (`readOnlyHint`, `destructiveHint`). `--mcp-flat` lists one tool per method. | P0 | done |
 | API-13 | `render.png`: a CPU render of the 3D model, base64 PNG, also in `cadektor serve`, over `--connect` and in MCP (as an image). | P1 | done |
-| API-14 | Screenshot of the live viewport. | P1 | planned |
+| API-14 | `view.screenshot {region?: drawing | window, max_width?}`: a PNG (base64) of the live window, answered by the app in a later frame; with the theme and the current view in the answer. The headless server answers with an error that names `render.png`. App only. | P1 | done |
 | API-42 | Presentation methods: `material.*` (list, get, create, update, duplicate, delete, add_defaults, import_texture, assign, slots), `render_style.*` (list, get, create, update, duplicate, delete, set_active), `sun.set`, `sun.get`, `render.hidden_line`, and `render.png {render_style, mode, samples}`. Examples in `describe.presentation`. | P1 | done |
-| API-15 | Command schema (JSON Schema) in `describe`. | P1 | planned |
-| API-16 | Query by criteria (class, layer, record field). | P1 | planned |
+| API-15 | Command schema: `describe {schema: true}` returns `command_schema`, the JSON Schema (draft 2020-12) of every command, made by `schemars` from the `Command` type, so it follows the code. The kinds line, rect, circle, arc, polyline, text, plant, locus3d, polyline3d, group, landscape_area and hardscape are described field by field and vertex kinds exactly (a proptest checks that what the schema accepts, serde accepts); IDs have a maximum of 2^53 - 1. Other shape kinds, resource bodies and patches are structural only, and `describe` lists them. The schema is saved in `crates/cadektor-core/tests/command_schema.json`; a test fails when it changes and the file is renewed with `UPDATE_SCHEMA=1`. | P1 | done |
+| API-16 | `objects.query {criteria, columns?, layer?, class?, kind?, limit?, select?}`: finds objects with the criteria language of worksheet database blocks (`Kind = "plant" AND Area > 20`, `Class = "Trees"`, `'Soil'.'Depth' > 300`) from `cadektor-sheet` (`db::query_objects`), and returns the IDs and the values of the columns. | P1 | done |
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (`import.file`, `export.file`) for DXF, Shapefile, GeoJSON, IFC and DWG. Options and mappings are in `describe`. | P1 | done |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
@@ -467,9 +467,10 @@ v1 (P1)
 - IFC 2x3 and 4x3, DXF 3D, phases, saved views.
 - 3D view, terrain mesh.
 - Viewport screenshot.
-- First architecture objects: walls, doors, windows, stories.
+- First architecture objects: walls, doors, windows.
 
 Later (P2)
+- Stories (named floor levels that group layers; part of the architecture objects). Layer elevation covers the landscape need now (DOC-11).
 - Irrigation design, water budget.
 - Graphic legends, section viewports, project sharing.
 - DWG, point clouds, STEP.

@@ -122,15 +122,29 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     // 1 mm of line weight on paper is `scale` mm in the model.
     // Underlays (map backgrounds) go below everything else.
     let visible = || doc.objects.values().filter(|o| doc.is_visible(o));
+    // An object of a grey layer or class is drawn faint and without colors, in a group.
+    let one = |o: &Object, s: &mut String| {
+        let grey = doc.is_grey(o);
+        if grey {
+            s.push_str(GREY_OPEN);
+        }
+        draw_object(doc, o, s, &tag_counts, ext, 0);
+        if grey {
+            s.push_str("</g>\n");
+        }
+    };
     for o in visible().filter(|o| matches!(o.shape, Shape::Underlay(_))) {
-        draw_object(doc, o, &mut s, &tag_counts, ext, 0);
+        one(o, &mut s);
     }
     for o in visible().filter(|o| !matches!(o.shape, Shape::Underlay(_))) {
-        draw_object(doc, o, &mut s, &tag_counts, ext, 0);
+        one(o, &mut s);
     }
     s.push_str("</svg>\n");
     s
 }
+
+/// The start of the group around an object of a grey layer or class (see `crate::visibility`).
+const GREY_OPEN: &str = r#"<g data-visibility="grey" opacity="0.4" style="filter:grayscale(1)">"#;
 
 /// Draws one object (and, for a symbol, the shapes of its definition). Symbols can contain symbols, so
 /// this calls itself, up to a depth that stops a loop.
@@ -1237,5 +1251,55 @@ mod tests {
         let mut doc = ed.doc().clone();
         doc.resources.remove(ResourceId(id.0));
         assert!(render(&doc, 400).contains(">?</text>"));
+    }
+
+    #[test]
+    fn grey_layers_are_drawn_in_a_faint_group() {
+        use crate::command::{Command, Editor};
+        use crate::model::{Attributes, FIRST_LAYER};
+        use crate::visibility::VisMode;
+        let mut ed = Editor::default();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::new(10.0, 10.0),
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let work = ed
+            .execute(&Command::AddLayer {
+                name: "Work".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(crate::model::LayerId(work)),
+            class: None,
+        })
+        .unwrap();
+        let plain = render(ed.doc(), 200);
+        assert!(!plain.contains("data-visibility"));
+        ed.execute(&Command::SetVisibility {
+            layers: vec![FIRST_LAYER],
+            classes: vec![],
+            mode: VisMode::Grey,
+        })
+        .unwrap();
+        let grey = render(ed.doc(), 200);
+        assert!(grey.contains(GREY_OPEN) && grey.contains("</g>"));
+        assert!(grey.contains("<rect"), "the object is still drawn");
+        ed.execute(&Command::SetVisibility {
+            layers: vec![FIRST_LAYER],
+            classes: vec![],
+            mode: VisMode::Invisible,
+        })
+        .unwrap();
+        assert!(!render(ed.doc(), 200).contains("<rect"));
     }
 }

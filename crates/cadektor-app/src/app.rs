@@ -8,21 +8,30 @@ use egui::{Key, Sense};
 use glam::DVec2;
 use serde_json::Value;
 
+use crate::array_ui::ArrayDialog;
 use crate::canvas;
 use crate::canvas3d;
 use crate::databar::{self, DataEntry};
 use crate::file_io;
 use crate::gpu3d::Gpu3d;
 use crate::keymap::{self, Action, Keymap};
-use crate::panels::{self, InfoEdit, MenuAction, NavState};
+use crate::layout::{self, Layouts, Tab};
+use crate::panels::{self, InfoEdit, MenuAction, MenuExtras, MenuRequest, NavState};
 use crate::plant_ui::{self, PlantUi};
+use crate::prefs::{self, Prefs};
+use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
-use crate::snap::{self, SnapConfig, SnapResult};
+use crate::screenshot;
+use crate::snap::{self, SnapResult};
+use crate::theme::{self, ThemeChoice};
 use crate::tools::{
     Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
 use crate::view::{View, grid_step};
+use crate::view_history::{self, ViewHistory};
 use crate::view3d::{self, View3d};
+use cadektor_core::edit2d::Transform;
+use cadektor_core::edit2d::plan::{self, SurfaceOp};
 
 /// Pan step of an arrow key, in px.
 const PAN_STEP_PX: f32 = 60.0;
@@ -40,10 +49,26 @@ pub struct CadektorApp {
     gpu_ready: bool,
     machine: ToolMachine,
     settings: ToolSettings,
-    snap_cfg: SnapConfig,
     show_grid: bool,
     cursor: DVec2,
     snap_hit: Option<SnapResult>,
+    /// The preferences of the window and the copy that was saved last.
+    prefs: Prefs,
+    prefs_saved: Prefs,
+    theme_applied: Option<ThemeChoice>,
+    /// The panels and the canvas use the dark theme.
+    dark: bool,
+    layouts: Layouts,
+    /// A name being typed for Window > Save Layout As.
+    layout_name: Option<String>,
+    /// Time of the last check whether the layout changed (seconds).
+    layout_checked: f64,
+    quick: QuickSearch,
+    array_dlg: ArrayDialog,
+    view_history: ViewHistory,
+    /// Screenshot requests of agents that wait for a picture.
+    shots: Vec<screenshot::Pending>,
+    shot_key: u64,
     status: String,
     path: Option<std::path::PathBuf>,
     /// The window title must be set in the next frame.
@@ -111,6 +136,17 @@ impl CadektorApp {
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
         }
+        let (prefs, prefs_warning) = prefs::load();
+        app.prefs = prefs;
+        app.prefs_saved = prefs;
+        app.session.snap = prefs.snap;
+        theme::apply(&cc.egui_ctx, prefs.theme);
+        app.theme_applied = Some(prefs.theme);
+        let (layouts, layout_warning) = Layouts::load();
+        app.layouts = layouts;
+        for w in prefs_warning.iter().chain(layout_warning.iter()) {
+            eprintln!("cadektor: {w}");
+        }
         let (keys, warnings) = Keymap::load();
         app.keys = keys;
         for w in &warnings {
@@ -169,10 +205,21 @@ impl CadektorApp {
             gpu_ready: false,
             machine: ToolMachine::default(),
             settings: ToolSettings::default(),
-            snap_cfg: SnapConfig::default(),
             show_grid: true,
             cursor: DVec2::ZERO,
             snap_hit: None,
+            prefs: Prefs::default(),
+            prefs_saved: Prefs::default(),
+            theme_applied: None,
+            dark: false,
+            layouts: Layouts::default(),
+            layout_name: None,
+            layout_checked: 0.0,
+            quick: QuickSearch::default(),
+            array_dlg: ArrayDialog::default(),
+            view_history: ViewHistory::default(),
+            shots: Vec::new(),
+            shot_key: 0,
             status: "Ready".into(),
             path: None,
             title_dirty: false,
@@ -209,7 +256,10 @@ impl CadektorApp {
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
+        let snap = self.session.snap;
         self.session = Session::with_document(doc);
+        self.session.snap = snap;
+        self.view_history.clear();
         self.path = path;
         self.title_dirty = true;
         self.machine.cancel();
@@ -398,6 +448,23 @@ impl CadektorApp {
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
             MenuAction::Preferences => self.autosave.open_preferences(),
+            MenuAction::DuplicateArray
+            | MenuAction::AddSurface
+            | MenuAction::SubtractSurface
+            | MenuAction::ClipSurface
+            | MenuAction::IntersectSurface
+            | MenuAction::Compose
+            | MenuAction::RotateLeft90
+            | MenuAction::RotateRight90
+            | MenuAction::FlipHorizontal
+            | MenuAction::FlipVertical
+            | MenuAction::PreviousView
+            | MenuAction::NextView
+            | MenuAction::QuickSearch => {
+                if let Some(a) = panels::menu_key(action) {
+                    self.run_action(ctx, a);
+                }
+            }
             MenuAction::Open => self.open_file(ctx),
             MenuAction::Save => self.save(false, ctx),
             MenuAction::SaveAs => self.save(true, ctx),
@@ -762,6 +829,41 @@ impl CadektorApp {
                     self.status = e;
                 }
             }
+            Action::CmdDuplicateArray => {
+                if self.session.selection.is_empty() {
+                    self.status = "Select the objects to duplicate first".into();
+                } else {
+                    self.array_dlg.open();
+                }
+            }
+            Action::CmdAddSurface => self.surface_op(SurfaceOp::Add),
+            Action::CmdSubtractSurface => self.surface_op(SurfaceOp::Subtract),
+            Action::CmdClipSurface => self.surface_op(SurfaceOp::Clip),
+            Action::CmdIntersectSurface => self.surface_op(SurfaceOp::Intersect),
+            Action::CmdCompose => self.surface_op(SurfaceOp::Compose),
+            Action::CmdRotateLeft90 => self.turn_selection(std::f64::consts::FRAC_PI_2),
+            Action::CmdRotateRight90 => self.turn_selection(-std::f64::consts::FRAC_PI_2),
+            Action::CmdFlipHorizontal => self.flip_selection(true),
+            Action::CmdFlipVertical => self.flip_selection(false),
+            Action::QuickSearch => self.quick.open(),
+            Action::ViewHistoryPrevious => self.step_view_history(true),
+            Action::ViewHistoryNext => self.step_view_history(false),
+            Action::SnapCues => {
+                self.prefs.cues = !self.prefs.cues;
+                self.status = format!(
+                    "SmartCursor cues {}",
+                    if self.prefs.cues { "on" } else { "off" }
+                );
+            }
+            Action::SnapRelativeAngles => {
+                let on = !self.session.snap.relative_angles;
+                self.session.snap.relative_angles = on;
+                self.status = format!(
+                    "Angles relative to the prior segment {}",
+                    if on { "on" } else { "off" }
+                );
+            }
+            Action::SnapAcquire => self.acquire_smart(),
             Action::ZoomIn => self.pending_zoom *= 2.0,
             Action::ZoomOut => self.pending_zoom *= 0.5,
             // Arrow keys move the view like the scroll bars would: the drawing follows the key.
@@ -1018,6 +1120,27 @@ impl CadektorApp {
             }
         }
 
+        // Mouse buttons 4 and 5 (back and forward) go through the view history.
+        let (back, forward) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(egui::PointerButton::Extra1),
+                i.pointer.button_pressed(egui::PointerButton::Extra2),
+            )
+        });
+        if back {
+            self.step_view_history(true);
+        } else if forward {
+            self.step_view_history(false);
+        }
+        // A view that has rested counts as a view in the history.
+        let waiting = self
+            .view_history
+            .observe(ui.input(|i| i.time), self.view_snapshot());
+        if waiting {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(450));
+        }
+
         // Cursor and snapping.
         if let Some(p) = latest.filter(|p| rect.contains(*p) || self.machine.is_busy()) {
             let raw = self.view.to_model(p);
@@ -1025,16 +1148,19 @@ impl CadektorApp {
             self.snap_hit = if suspend {
                 None
             } else {
-                let pts = snap::snap_points(self.session.editor.doc(), &busy_ids);
-                snap::snap(
+                snap::snap_cursor(
+                    self.session.editor.doc(),
                     raw,
                     self.tol(),
                     grid_step(self.view.zoom, 12.0),
-                    self.snap_cfg,
-                    &pts,
+                    &self.session.snap,
+                    &self.session.smart,
+                    self.machine.anchor(),
+                    self.machine.prior_direction(),
+                    &busy_ids,
                 )
             };
-            self.cursor = self.snap_hit.map_or(raw, |s| s.point);
+            self.cursor = self.snap_hit.as_ref().map_or(raw, |s| s.point);
             self.live_cursor = self.cursor;
             // Typed Data bar values override the mouse.
             if self.entry.any_typed()
@@ -1091,12 +1217,542 @@ impl CadektorApp {
             doc: self.session.editor.doc(),
             selection: &self.session.selection,
             preview: &preview,
-            snap: self.snap_hit,
+            snap: self.snap_hit.as_ref(),
+            cues: self.prefs.cues,
+            dark: self.dark,
+            smart: &self.session.smart,
             show_grid: self.show_grid,
             site: Some((self.session.site_cache(), self.session.editor.revision())),
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
+    }
+}
+
+/// The tabs of the dock draw through the app.
+struct DockViewer<'a> {
+    app: &'a mut CadektorApp,
+}
+
+impl egui_dock::TabViewer for DockViewer<'_> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        tab.title().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        self.app.tab_ui(ui, *tab);
+    }
+
+    fn is_closeable(&self, tab: &Tab) -> bool {
+        tab.closeable()
+    }
+
+    fn allowed_in_windows(&self, tab: &mut Tab) -> bool {
+        *tab != Tab::Drawing
+    }
+
+    fn clear_background(&self, tab: &Tab) -> bool {
+        *tab != Tab::Drawing
+    }
+
+    fn scroll_bars(&self, _tab: &Tab) -> [bool; 2] {
+        [false, false]
+    }
+}
+
+impl CadektorApp {
+    /// The pan and zoom of the plan, for the view history.
+    fn view_snapshot(&self) -> view_history::Snapshot {
+        view_history::Snapshot {
+            origin: self.view.origin,
+            zoom: self.view.zoom,
+        }
+    }
+
+    /// Previous View and Next View.
+    fn step_view_history(&mut self, back: bool) {
+        if !self.plan() {
+            self.status = "The view history is for the plan. Switch to Top/Plan".into();
+            return;
+        }
+        let here = self.view_snapshot();
+        self.view_history.flush(here);
+        let snapshot = if back {
+            self.view_history.previous()
+        } else {
+            self.view_history.next()
+        };
+        match snapshot {
+            Some(s) => {
+                self.view.origin = s.origin;
+                self.view.zoom = s.zoom;
+                self.needs_fit = false;
+            }
+            None => {
+                self.status = if back {
+                    "No earlier view".into()
+                } else {
+                    "No later view".into()
+                }
+            }
+        }
+    }
+
+    /// The middle of the box around the selected objects.
+    fn selection_center(&self) -> Option<DVec2> {
+        let doc = self.session.editor.doc();
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for id in &self.session.selection {
+            if let Some(o) = doc.object(*id) {
+                let (a, b) = doc.object_bounds(o);
+                if a.is_finite() && b.is_finite() {
+                    lo = lo.min(a);
+                    hi = hi.max(b);
+                }
+            }
+        }
+        lo.is_finite().then(|| (lo + hi) / 2.0)
+    }
+
+    fn transform_selection(&mut self, transform: Transform, what: &str) {
+        let ids = self.session.selection.clone();
+        if ids.is_empty() {
+            self.status = format!("Select the objects to {what} first");
+            return;
+        }
+        self.exec(&Command::TransformObjects {
+            ids,
+            transform,
+            copy: false,
+        });
+    }
+
+    fn turn_selection(&mut self, angle: f64) {
+        if let Some(center) = self.selection_center() {
+            self.transform_selection(Transform::Rotate { center, angle }, "rotate");
+        } else {
+            self.status = "Select the objects to rotate first".into();
+        }
+    }
+
+    /// Flip about the middle of the selection. Horizontal swaps left and right.
+    fn flip_selection(&mut self, horizontal: bool) {
+        if let Some(c) = self.selection_center() {
+            let (a, b) = if horizontal {
+                (c, c + DVec2::Y)
+            } else {
+                (c, c + DVec2::X)
+            };
+            self.transform_selection(Transform::Mirror { a, b }, "flip");
+        } else {
+            self.status = "Select the objects to flip first".into();
+        }
+    }
+
+    /// Add, subtract, clip, intersect or compose the selected shapes. For Subtract the lowest shape
+    /// of the drawing is the base and the others cut it. For Clip the topmost one cuts the others.
+    fn surface_op(&mut self, op: SurfaceOp) {
+        let doc = self.session.editor.doc();
+        let mut ids = self.session.selection.clone();
+        ids.sort_by_key(|id| doc.objects.get_index_of(id).unwrap_or(usize::MAX));
+        if ids.len() < 2 {
+            self.status = "Select two or more shapes first".into();
+            return;
+        }
+        let result = if op == SurfaceOp::Subtract {
+            let base = ids[0];
+            plan::surface(doc, op, &ids[1..], Some(base), false)
+        } else {
+            plan::surface(doc, op, &ids, None, op == SurfaceOp::Clip)
+        };
+        match result {
+            Ok(cmd) => {
+                if panels::run_command(&mut self.session, &cmd, &mut self.status).is_some() {
+                    self.status = "Done".into();
+                }
+            }
+            Err(e) => self.status = format!("Error: {e}"),
+        }
+    }
+
+    /// The T key: take the point or edge under the pointer as a smart point or smart edge.
+    fn acquire_smart(&mut self) {
+        let tol = self.tol();
+        let geom = snap::geometry(
+            self.session.editor.doc(),
+            &[],
+            &self.session.snap,
+            Some((self.live_cursor, tol * 4.0)),
+        );
+        let edges = self.session.snap.set.smart_edges;
+        self.status = match self
+            .session
+            .smart
+            .acquire_at(self.live_cursor, &geom, tol, edges)
+        {
+            Some(cadektor_core::snapping::Acquired::Point(_)) => "Smart point set".into(),
+            Some(cadektor_core::snapping::Acquired::Edge(..)) => "Smart edge set".into(),
+            None => "No object point under the pointer. Move onto a corner, end or center".into(),
+        };
+    }
+
+    /// The commands that quick search offers.
+    fn quick_items(&self) -> Vec<QuickItem> {
+        let mut out = Vec::new();
+        let skip = |a: Action| {
+            matches!(
+                a,
+                Action::PanHold
+                    | Action::SnapSuspend
+                    | Action::DataBarFocus
+                    | Action::DataBarPrev
+                    | Action::Cancel
+                    | Action::Finish
+                    | Action::Delete
+                    | Action::QuickSearch
+                    | Action::PanLeft
+                    | Action::PanRight
+                    | Action::PanUp
+                    | Action::PanDown
+                    | Action::NudgeLeft
+                    | Action::NudgeRight
+                    | Action::NudgeUp
+                    | Action::NudgeDown
+            ) || a.id().starts_with("mode.")
+                || !a.implemented()
+        };
+        for a in Action::ALL.iter().copied().filter(|a| !skip(*a)) {
+            out.push(QuickItem {
+                label: a.label().to_string(),
+                keys: self.keys.hint(a),
+                command: QuickCommand::Action(a),
+            });
+        }
+        for (label, m) in [
+            ("Preferences", MenuAction::Preferences),
+            ("Export SVG", MenuAction::ExportSvg),
+            ("Select All", MenuAction::SelectAll),
+        ] {
+            out.push(QuickItem {
+                label: label.into(),
+                keys: String::new(),
+                command: QuickCommand::Menu(m),
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for (label, m) in [
+            ("Import", MenuAction::Import),
+            ("Export", MenuAction::Export),
+            ("Map Sources", MenuAction::MapSources),
+            ("Change CRS", MenuAction::ChangeCrs),
+            ("Scripts", MenuAction::Scripts),
+            ("Export PDF", MenuAction::ExportPdf),
+        ] {
+            out.push(QuickItem {
+                label: label.into(),
+                keys: String::new(),
+                command: QuickCommand::Menu(m),
+            });
+        }
+        for t in ThemeChoice::ALL {
+            out.push(QuickItem {
+                label: format!("Theme: {}", t.label()),
+                keys: String::new(),
+                command: QuickCommand::Theme(t),
+            });
+        }
+        for (name, label, _) in crate::snap_ui::CATEGORIES {
+            out.push(QuickItem {
+                label: format!("Snapping: toggle {label}"),
+                keys: String::new(),
+                command: QuickCommand::SnapToggle(name),
+            });
+        }
+        for tab in Tab::ALL.iter().copied().filter(|t| t.closeable()) {
+            out.push(QuickItem {
+                label: format!("Show {}", tab.title()),
+                keys: String::new(),
+                command: QuickCommand::ShowTab(tab),
+            });
+        }
+        for (label, c) in [
+            ("Save Layout As", QuickCommand::SaveLayout),
+            ("Reset Layout", QuickCommand::ResetLayout),
+        ] {
+            out.push(QuickItem {
+                label: label.into(),
+                keys: String::new(),
+                command: c,
+            });
+        }
+        out
+    }
+
+    fn run_quick(&mut self, ctx: &egui::Context, cmd: QuickCommand) {
+        match cmd {
+            QuickCommand::Action(a) => self.run_action(ctx, a),
+            QuickCommand::Menu(m) => self.apply_menu(ctx, m),
+            QuickCommand::Theme(t) => self.prefs.theme = t,
+            QuickCommand::SnapToggle(name) => {
+                let on = self.session.snap.set.get(name).unwrap_or(false);
+                self.session.snap.set.set(name, !on);
+                self.status = format!("Snap {name}: {}", if on { "off" } else { "on" });
+            }
+            QuickCommand::ShowTab(t) => self.layouts.show_tab(t),
+            QuickCommand::SaveLayout => self.layout_name = Some(String::new()),
+            QuickCommand::ResetLayout => self.layouts.reset(),
+        }
+    }
+
+    fn handle_requests(&mut self, requests: Vec<MenuRequest>) {
+        for r in requests {
+            match r {
+                MenuRequest::ShowTab(t) => self.layouts.show_tab(t),
+                MenuRequest::SaveLayoutAs => self.layout_name = Some(String::new()),
+                MenuRequest::LoadLayout(n) => {
+                    if !self.layouts.apply(&n) {
+                        self.status = format!("No layout named {n}");
+                    }
+                }
+                MenuRequest::DeleteLayout(n) => {
+                    self.layouts.delete(&n);
+                    self.save_layouts();
+                }
+                MenuRequest::ResetLayout => self.layouts.reset(),
+            }
+        }
+    }
+
+    /// The small window that asks for the name of a layout.
+    fn layout_prompt(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.layout_name.as_mut() else {
+            return;
+        };
+        let mut done = None;
+        egui::Window::new("Save Layout As")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let r = ui.add(egui::TextEdit::singleline(name).hint_text("Name of the layout"));
+                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    done = Some(true);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        done = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        done = Some(false);
+                    }
+                });
+            });
+        match done {
+            Some(true) => {
+                let name = self.layout_name.take().unwrap_or_default();
+                match self.layouts.save_as(&name) {
+                    Ok(()) => {
+                        self.save_layouts();
+                        self.status = format!("Saved layout {}", name.trim());
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
+            Some(false) => self.layout_name = None,
+            None => {}
+        }
+    }
+
+    fn save_layouts(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = self.layouts.save() {
+            self.status = e;
+        }
+    }
+
+    /// Saves the preferences and the layout when they changed.
+    fn persist(&mut self, now: f64) {
+        let _ = now;
+        self.prefs.snap = self.session.snap;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.prefs != self.prefs_saved {
+                match prefs::save(&self.prefs) {
+                    Ok(()) => self.prefs_saved = self.prefs,
+                    Err(e) => {
+                        self.status = e;
+                        self.prefs_saved = self.prefs;
+                    }
+                }
+            }
+            // The layout is compared and saved at most twice a second, not on every frame.
+            if now - self.layout_checked >= 0.5 {
+                self.layout_checked = now;
+                if self.layouts.changed() {
+                    self.save_layouts();
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.prefs_saved = self.prefs;
+        }
+    }
+
+    /// Answers the agents that wait for a screenshot, when the window has sent the picture.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_screenshots(&mut self, ctx: &egui::Context) {
+        let ready: Vec<(u64, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Screenshot {
+                        user_data, image, ..
+                    } => user_data
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.downcast_ref::<u64>())
+                        .map(|k| (*k, image.clone())),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (key, image) in ready {
+            let Some(i) = self.shots.iter().position(|p| p.key == key) else {
+                continue;
+            };
+            let pending = self.shots.remove(i);
+            let crop = match pending.request.region {
+                screenshot::Region::Drawing => self.canvas_rect,
+                screenshot::Region::Window => None,
+            };
+            let line = match screenshot::prepare(
+                &image,
+                crop,
+                ctx.pixels_per_point(),
+                pending.request.max_width,
+            ) {
+                Ok(img) => screenshot::answer(
+                    &pending.id,
+                    &img,
+                    &pending.request,
+                    self.dark,
+                    self.session.view.view.id(),
+                ),
+                Err(e) => screenshot::failure_line(&pending.id, &e),
+            };
+            let _ = pending.reply.send(Some(line));
+        }
+        let now = ctx.input(|i| i.time);
+        self.shots.retain(|p| {
+            let alive = now - p.since <= screenshot::TIMEOUT;
+            if !alive {
+                let _ = p.reply.send(Some(screenshot::timeout_line(&p.id)));
+            }
+            alive
+        });
+        if !self.shots.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// The dock: the drawing and the palettes as tabs that the user can move.
+    fn show_dock(&mut self, ui: &mut egui::Ui) {
+        let mut state = self
+            .layouts
+            .current
+            .take()
+            .unwrap_or_else(layout::default_state);
+        let style = egui_dock::Style::from_egui(ui.style());
+        egui_dock::DockArea::new(&mut state)
+            .style(style)
+            .show_close_buttons(true)
+            .show_inside(ui, &mut DockViewer { app: self });
+        // A layout needs the drawing: a closed or dragged-out drawing tab brings the default back.
+        if !layout::has_drawing(&state) {
+            state = layout::default_state();
+        }
+        self.layouts.current = Some(state);
+    }
+
+    /// The content of one tab of the dock.
+    fn tab_ui(&mut self, ui: &mut egui::Ui, tab: Tab) {
+        match tab {
+            Tab::Drawing => {
+                if self.plan() {
+                    self.canvas(ui);
+                } else {
+                    canvas3d::show(
+                        ui,
+                        canvas3d::Canvas3d {
+                            session: &mut self.session,
+                            view3d: &mut self.view3d,
+                            keys: &self.keys,
+                            gpu_ready: self.gpu_ready,
+                            pending_zoom: &mut self.pending_zoom,
+                            pending_pan: &mut self.pending_pan,
+                        },
+                    );
+                }
+            }
+            Tab::Tools => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    panels::tool_panel(
+                        ui,
+                        &mut self.machine,
+                        &self.keys,
+                        &mut self.settings,
+                        self.session.editor.doc(),
+                    )
+                });
+            }
+            Tab::ObjectInfo => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.script_ui
+                        .plugin_info(ui, &mut self.session, &mut self.status);
+                });
+            }
+            Tab::Navigation => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
+                });
+            }
+            Tab::Resources => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    plant_ui::resource_manager(
+                        ui,
+                        &mut self.session,
+                        &mut self.plant_ui,
+                        &mut self.status,
+                    );
+                    crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
+                    resource_ui::section(
+                        ui,
+                        &mut self.session,
+                        &mut self.resource_ui,
+                        &mut self.status,
+                    );
+                });
+            }
+            Tab::Schedule => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
+                });
+            }
+            Tab::Snapping => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    crate::snap_ui::palette(
+                        ui,
+                        &mut self.session.snap,
+                        &mut self.session.smart,
+                        &mut self.prefs.cues,
+                    );
+                });
+            }
+        }
     }
 }
 
@@ -1107,10 +1763,17 @@ impl eframe::App for CadektorApp {
         self.agent = None;
         // A clean exit: the recovery copies are not needed any more.
         self.autosave.finish();
+        self.persist(f64::INFINITY);
+        self.save_layouts();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.theme_applied != Some(self.prefs.theme) {
+            theme::apply(&ctx, self.prefs.theme);
+            self.theme_applied = Some(self.prefs.theme);
+        }
+        self.dark = theme::is_dark(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
@@ -1124,16 +1787,45 @@ impl eframe::App for CadektorApp {
                 .scripting
                 .endpoint
                 .get_or_insert_with(|| (agent.addr.to_string(), agent.token.clone()));
-            agent.poll(&mut |line| {
-                file_io::agent_line(&mut self.session, &mut self.path, line, &mut fx)
+            let now = ctx.input(|i| i.time);
+            let (shots, shot_key) = (&mut self.shots, &mut self.shot_key);
+            agent.poll_ext(&mut |line, reply| {
+                // A screenshot is answered in a later frame, when the window has sent the picture.
+                match screenshot::parse(line) {
+                    Some(Ok((id, request))) => {
+                        *shot_key += 1;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                            egui::UserData::new(*shot_key),
+                        ));
+                        shots.push(screenshot::Pending {
+                            id,
+                            reply: reply.clone(),
+                            request,
+                            since: now,
+                            key: *shot_key,
+                        });
+                        return crate::agent::Reply::Later;
+                    }
+                    Some(Err(answer)) => return crate::agent::Reply::Now(Some(answer)),
+                    None => {}
+                }
+                crate::agent::Reply::Now(file_io::agent_line(
+                    &mut self.session,
+                    &mut self.path,
+                    line,
+                    &mut fx,
+                ))
             });
             if fx.replaced {
                 self.machine.cancel();
                 self.needs_fit = true;
+                self.view_history.clear();
                 self.view3d.request_fit();
             }
             self.title_dirty |= fx.path_changed;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.finish_screenshots(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         if std::mem::take(&mut self.title_dirty) {
             self.set_title(&ctx);
@@ -1165,6 +1857,7 @@ impl eframe::App for CadektorApp {
             self.session.editor.can_redo(),
         );
         let mut actions = Vec::new();
+        let mut requests = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
             let can_site =
                 !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection)
@@ -1174,20 +1867,32 @@ impl eframe::App for CadektorApp {
                 &self.session.selection,
             )
             .is_empty();
+            let mut extras = MenuExtras {
+                snap: &mut self.session.snap,
+                cues: &mut self.prefs.cues,
+                theme: &mut self.prefs.theme,
+                layout_names: self.layouts.names(),
+                can_back: self.view_history.can_go_back(),
+                can_forward: self.view_history.can_go_forward(),
+                has_selection: !self.session.selection.is_empty(),
+                requests: Vec::new(),
+            };
             actions = panels::menu_bar(
                 ui,
                 &self.keys,
                 can_undo,
                 can_redo,
-                &mut self.snap_cfg,
+                &mut extras,
                 &mut self.show_grid,
                 can_site,
                 can_update,
             );
+            requests = std::mem::take(&mut extras.requests);
         });
         for a in actions {
             self.apply_menu(&ctx, a);
         }
+        self.handle_requests(requests);
         #[cfg(not(target_arch = "wasm32"))]
         if self.io_ui.show(&ctx, &mut self.session, &mut self.status)
             == crate::io_dialog::IoEvent::Imported
@@ -1259,77 +1964,35 @@ impl eframe::App for CadektorApp {
                 &mut self.settings,
                 &mut self.entry,
                 self.live_cursor,
-                self.snap_hit,
-                self.snap_cfg,
+                self.snap_hit.as_ref(),
+                self.session.snap.set.any(),
                 readout.as_deref().map(|t| (t, &mut self.readout.lonlat)),
             );
         });
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools")
-            .resizable(false)
-            .exact_size(170.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::tool_panel(
-                        ui,
-                        &mut self.machine,
-                        &self.keys,
-                        &mut self.settings,
-                        self.session.editor.doc(),
-                    )
-                });
-            });
-        self.run_annot_requests();
-        egui::Panel::right("palettes")
-            .default_size(280.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    self.script_ui
-                        .plugin_info(ui, &mut self.session, &mut self.status);
-                    ui.add_space(12.0);
-                    panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
-                    ui.add_space(12.0);
-                    plant_ui::resource_manager(
-                        ui,
-                        &mut self.session,
-                        &mut self.plant_ui,
-                        &mut self.status,
-                    );
-                    crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
-                    resource_ui::section(
-                        ui,
-                        &mut self.session,
-                        &mut self.resource_ui,
-                        &mut self.status,
-                    );
-                    ui.add_space(12.0);
-                    plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
-                });
-            });
         crate::data_ui::windows(&ctx, &mut self.session, &mut self.status);
         let rect = self.canvas_rect;
         self.sync_saved_views(rect);
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            if self.plan() {
-                self.canvas(ui);
-            } else {
-                canvas3d::show(
-                    ui,
-                    canvas3d::Canvas3d {
-                        session: &mut self.session,
-                        view3d: &mut self.view3d,
-                        keys: &self.keys,
-                        gpu_ready: self.gpu_ready,
-                        pending_zoom: &mut self.pending_zoom,
-                        pending_pan: &mut self.pending_pan,
-                    },
-                );
-            }
-        });
+        egui::CentralPanel::no_frame().show(ui, |ui| self.show_dock(ui));
+        self.run_annot_requests();
+        // The dialogs and the quick search.
+        let center = self.selection_center();
+        if let Some(cmd) = self.array_dlg.show(&ctx, &self.session.selection, center) {
+            self.exec(&cmd);
+        }
+        let items = if self.quick.is_open() {
+            self.quick_items()
+        } else {
+            Vec::new()
+        };
+        if let Some(cmd) = self.quick.show(&ctx, &items) {
+            self.run_quick(&ctx, cmd);
+        }
+        self.layout_prompt(&ctx);
+        let now = ctx.input(|i| i.time);
+        self.persist(now);
     }
 }
 
@@ -1372,7 +2035,7 @@ mod tests {
                     &mut app.entry,
                     app.live_cursor,
                     None,
-                    app.snap_cfg,
+                    app.session.snap.set.any(),
                     None,
                 );
             });
@@ -1417,6 +2080,219 @@ mod tests {
         // A second Esc, now on the canvas, cancels.
         frame(&mut app, &ctx, key(Key::Escape, none));
         assert!(!app.machine.is_busy());
+    }
+
+    /// Runs one frame of the whole dock (the drawing and every palette).
+    fn dock_frame(app: &mut CadektorApp, ctx: &egui::Context) {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
+        });
+    }
+
+    #[test]
+    fn the_dock_draws_every_tab_and_keeps_the_drawing() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        dock_frame(&mut app, &ctx);
+        assert!(app.canvas_rect.is_some(), "the drawing tab drew the canvas");
+        // Every tab can be shown alone.
+        for tab in Tab::ALL {
+            let _ = ctx.run_ui(Default::default(), |ui| app.tab_ui(ui, tab));
+        }
+        // Closing every other tab and the drawing tab brings the default layout back.
+        app.layouts.current = Some(egui_dock::DockState::new(vec![Tab::Tools]));
+        dock_frame(&mut app, &ctx);
+        assert!(layout::has_drawing(app.layouts.current.as_ref().unwrap()));
+        // Layout requests from the menu.
+        app.handle_requests(vec![MenuRequest::SaveLayoutAs]);
+        assert!(app.layout_name.is_some());
+        app.layout_name = Some("Mine".into());
+        app.layouts.save_as("Mine").unwrap();
+        app.handle_requests(vec![
+            MenuRequest::ResetLayout,
+            MenuRequest::LoadLayout("Mine".into()),
+            MenuRequest::ShowTab(Tab::Snapping),
+        ]);
+        app.handle_requests(vec![MenuRequest::LoadLayout("Nope".into())]);
+        assert!(app.status.contains("No layout named"));
+        let _ = ctx.run_ui(Default::default(), |_| app.layout_prompt(&ctx));
+    }
+
+    #[test]
+    fn view_history_keys_go_back_and_forward() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let cs = egui::Modifiers {
+            command: true,
+            shift: true,
+            ..Default::default()
+        };
+        app.view.zoom = 0.5;
+        app.view_history.flush(app.view_snapshot());
+        app.view.zoom = 2.0;
+        frame(&mut app, &ctx, key(Key::Comma, cs));
+        assert_eq!(app.view.zoom, 0.5);
+        frame(&mut app, &ctx, key(Key::Period, cs));
+        assert_eq!(app.view.zoom, 2.0);
+        frame(&mut app, &ctx, key(Key::Period, cs));
+        assert_eq!(app.status, "No later view");
+        // In 3D the history is for the plan only.
+        app.session.view.view = StandardView::Front;
+        frame(&mut app, &ctx, key(Key::Comma, cs));
+        assert!(app.status.contains("plan"), "{}", app.status);
+    }
+
+    #[test]
+    fn keys_for_quick_search_cues_and_smart_points() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let none = egui::Modifiers::NONE;
+        frame(&mut app, &ctx, key(Key::F, none));
+        assert!(app.quick.is_open());
+        app.quick.close();
+        assert!(app.prefs.cues);
+        frame(&mut app, &ctx, key(Key::Y, none));
+        assert!(!app.prefs.cues);
+        assert!(!app.session.snap.relative_angles);
+        frame(&mut app, &ctx, key(Key::Slash, none));
+        assert!(app.session.snap.relative_angles);
+        // T takes the point under the pointer.
+        app.exec(&Command::AddObject {
+            shape: Shape::Line {
+                a: DVec2::new(0.0, 0.0),
+                b: DVec2::new(1000.0, 0.0),
+            },
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        });
+        app.live_cursor = DVec2::new(3.0, 2.0);
+        frame(&mut app, &ctx, key(Key::T, none));
+        assert_eq!(app.session.smart.points, vec![DVec2::ZERO]);
+        assert_eq!(app.status, "Smart point set");
+        app.live_cursor = DVec2::new(5000.0, 5000.0);
+        frame(&mut app, &ctx, key(Key::T, none));
+        assert!(app.status.contains("No object point"), "{}", app.status);
+    }
+
+    #[test]
+    fn modify_commands_work_on_the_selection() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let add = |app: &mut CadektorApp, shape: Shape| {
+            let out = app
+                .session
+                .editor
+                .execute(&Command::AddObject {
+                    shape,
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            ObjectId(out.created[0])
+        };
+        let a = add(
+            &mut app,
+            Shape::Rect {
+                min: DVec2::new(0.0, 0.0),
+                max: DVec2::new(1000.0, 1000.0),
+            },
+        );
+        let b = add(
+            &mut app,
+            Shape::Rect {
+                min: DVec2::new(500.0, 500.0),
+                max: DVec2::new(1500.0, 1500.0),
+            },
+        );
+        // Nothing selected: a message.
+        app.run_action(&ctx, Action::CmdAddSurface);
+        assert!(app.status.contains("two or more"), "{}", app.status);
+        app.run_action(&ctx, Action::CmdFlipHorizontal);
+        assert!(app.status.contains("Select"), "{}", app.status);
+        app.session.selection = vec![a, b];
+        app.run_action(&ctx, Action::CmdFlipHorizontal);
+        // The group of two rectangles is flipped about its middle (750).
+        let Shape::Rect { min, .. } = app.session.editor.doc().object(a).unwrap().shape else {
+            panic!()
+        };
+        assert_eq!(min.x, 500.0);
+        app.run_action(&ctx, Action::CmdFlipVertical);
+        app.run_action(&ctx, Action::CmdRotateLeft90);
+        app.run_action(&ctx, Action::CmdRotateRight90);
+        app.run_action(&ctx, Action::CmdDuplicateArray);
+        assert!(app.array_dlg.open);
+        app.array_dlg.open = false;
+        // Surfaces.
+        app.run_action(&ctx, Action::CmdSubtractSurface);
+        assert_eq!(app.session.editor.doc().objects.len(), 1, "{}", app.status);
+        app.undo();
+        app.session.selection = vec![a, b];
+        app.run_action(&ctx, Action::CmdAddSurface);
+        assert_eq!(app.session.editor.doc().objects.len(), 1);
+        app.undo();
+        for action in [
+            Action::CmdClipSurface,
+            Action::CmdIntersectSurface,
+            Action::CmdCompose,
+        ] {
+            app.session.selection = vec![a, b];
+            app.run_action(&ctx, action);
+            app.undo();
+        }
+        assert_eq!(app.session.editor.doc().objects.len(), 2);
+    }
+
+    #[test]
+    fn quick_search_lists_commands_and_runs_them() {
+        let ctx = egui::Context::default();
+        let mut app = CadektorApp::blank();
+        let items = app.quick_items();
+        assert!(
+            items
+                .iter()
+                .any(|i| i.label == "Fillet tool" && i.keys == "7")
+        );
+        assert!(items.iter().any(|i| i.label == "Theme: Dark"));
+        assert!(items.iter().all(|i| !i.label.is_empty()));
+        for (label, keys) in [
+            ("Add Surface", "Cmd/Ctrl+Shift+Alt+A"),
+            ("Subtract Surface", ""),
+            ("Clip Surface", "Cmd/Ctrl+Shift+Alt+C"),
+            ("Intersect Surface", "Cmd/Ctrl+Shift+Alt+I"),
+            ("Compose", "Cmd/Ctrl+Shift+Alt+P"),
+            ("Duplicate Array", "Cmd/Ctrl+Shift+Alt+D"),
+            ("Flip horizontal", "Cmd/Ctrl+Shift+H"),
+            ("Flip vertical", "Cmd/Ctrl+Shift+V"),
+            ("Rotate left 90 degrees", "Cmd/Ctrl+L"),
+            ("Rotate right 90 degrees", "Cmd/Ctrl+Shift+R"),
+        ] {
+            let item = items
+                .iter()
+                .find(|i| i.label == label)
+                .unwrap_or_else(|| panic!("{label}"));
+            // The hint shows the key of this system (Ctrl or Cmd).
+            assert_eq!(
+                item.keys.is_empty(),
+                keys.is_empty(),
+                "{label}: {}",
+                item.keys
+            );
+        }
+        app.run_quick(&ctx, QuickCommand::Theme(ThemeChoice::Dark));
+        assert_eq!(app.prefs.theme, ThemeChoice::Dark);
+        app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
+        assert!(app.session.snap.set.angle);
+        app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
+        assert!(!app.session.snap.set.angle);
+        app.run_quick(&ctx, QuickCommand::Action(Action::ToolFillet));
+        assert_eq!(app.machine.tool(), Tool::Fillet);
+        app.run_quick(&ctx, QuickCommand::ShowTab(Tab::Snapping));
+        app.run_quick(&ctx, QuickCommand::SaveLayout);
+        assert!(app.layout_name.is_some());
+        app.run_quick(&ctx, QuickCommand::ResetLayout);
+        app.run_quick(&ctx, QuickCommand::Menu(MenuAction::SelectAll));
     }
 
     #[test]
