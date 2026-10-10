@@ -31,10 +31,8 @@ pub fn between(a: Option<&str>, b: Option<&str>) -> Option<String> {
     // A trailing lowest digit changes nothing: "1" and "10" are the same place.
     let a = a.unwrap_or("").trim_end_matches('0');
     let b = b.map(|b| b.trim_end_matches('0'));
-    if let Some(b) = b {
-        if a >= b || b.is_empty() {
-            return None;
-        }
+    if b.is_some_and(|b| a >= b || b.is_empty()) {
+        return None;
     }
     Some(midpoint(a.as_bytes(), b.map(str::as_bytes)))
 }

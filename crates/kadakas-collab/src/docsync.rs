@@ -410,7 +410,7 @@ fn diff_thing(view: &Replica, target: Target, new: Option<Map<String, Value>>) -
                 }
             }
             for k in e.visible().keys() {
-                if !props.contains_key(k) && !(k == "order" && target.kind != Kind::Class) {
+                if !(props.contains_key(k) || k == "order" && target.kind != Kind::Class) {
                     ops.push(Op::Unset {
                         target,
                         prop: k.clone(),
