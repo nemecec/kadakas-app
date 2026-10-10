@@ -10,7 +10,19 @@ use egui::epaint::PathStroke;
 use egui::{Color32, Pos2, Sense, Ui, Vec2};
 use serde_json::{Value, json};
 
-const TYPES: [&str; 11] = ["", "plant_style", "hardscape_style", "landscape_area_style", "record_format", "data_map", "worksheet", "symbol", "hatch", "tile", "line_type"];
+const TYPES: [&str; 11] = [
+    "",
+    "plant_style",
+    "hardscape_style",
+    "landscape_area_style",
+    "record_format",
+    "data_map",
+    "worksheet",
+    "symbol",
+    "hatch",
+    "tile",
+    "line_type",
+];
 
 #[derive(Default)]
 pub struct ResourceUi {
@@ -28,7 +40,12 @@ pub fn paint_thumbnail(ui: &mut Ui, t: &Thumbnail, side: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.0, Color32::WHITE);
-    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(200)), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0, Color32::from_gray(200)),
+        egui::StrokeKind::Inside,
+    );
     let k = side / SIZE as f32;
     let map = |q: &[f64; 2]| Pos2::new(rect.min.x + q[0] as f32 * k, rect.min.y + q[1] as f32 * k);
     let col = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
@@ -37,8 +54,15 @@ pub fn paint_thumbnail(ui: &mut Ui, t: &Thumbnail, side: f32) {
         if pts.len() < 2 {
             continue;
         }
-        let stroke = path.stroke.map_or(PathStroke::NONE, |c| PathStroke::new(1.0, col(c)));
-        p.add(egui::epaint::PathShape { points: pts, closed: path.closed, fill: path.fill.map_or(Color32::TRANSPARENT, col), stroke });
+        let stroke = path
+            .stroke
+            .map_or(PathStroke::NONE, |c| PathStroke::new(1.0, col(c)));
+        p.add(egui::epaint::PathShape {
+            points: pts,
+            closed: path.closed,
+            fill: path.fill.map_or(Color32::TRANSPARENT, col),
+            stroke,
+        });
     }
 }
 
@@ -54,91 +78,117 @@ fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Op
 
 /// The section of the palette. It lists every resource of the document.
 pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: &mut String) {
-    egui::CollapsingHeader::new("Resources (all types)").default_open(false).show(ui, |ui| {
-        let revision = session.editor.revision();
-        if st.revision != revision {
-            st.thumbs.clear();
-            st.revision = revision;
-        }
-        ui.horizontal(|ui| {
-            ui.label("Search");
-            ui.text_edit_singleline(&mut st.search);
-        });
-        egui::ComboBox::from_label("Type").selected_text(if st.ty == 0 { "All types" } else { TYPES[st.ty] }).show_ui(ui, |ui| {
-            for (i, t) in TYPES.iter().enumerate() {
-                ui.selectable_value(&mut st.ty, i, if i == 0 { "All types" } else { t });
+    egui::CollapsingHeader::new("Resources (all types)")
+        .default_open(false)
+        .show(ui, |ui| {
+            let revision = session.editor.revision();
+            if st.revision != revision {
+                st.thumbs.clear();
+                st.revision = revision;
             }
-        });
-        let ty = (st.ty > 0).then(|| TYPES[st.ty]);
-        let rows = cadektor_core::library::list(session.editor.doc(), ty, Some(&st.search));
-        let mut action: Option<(ResourceId, &str)> = None;
-        for r in rows.iter().take(200) {
             ui.horizontal(|ui| {
-                let doc = session.editor.doc();
-                let t = st.thumbs.entry(r.id).or_insert_with(|| thumbnail(doc, r.id));
-                paint_thumbnail(ui, t, 36.0);
-                ui.vertical(|ui| {
-                    match &mut st.rename {
-                        Some((id, name)) if *id == r.id => {
-                            let resp = ui.text_edit_singleline(name);
-                            if resp.lost_focus() {
-                                action = Some((r.id, "rename"));
+                ui.label("Search");
+                ui.text_edit_singleline(&mut st.search);
+            });
+            egui::ComboBox::from_label("Type")
+                .selected_text(if st.ty == 0 {
+                    "All types"
+                } else {
+                    TYPES[st.ty]
+                })
+                .show_ui(ui, |ui| {
+                    for (i, t) in TYPES.iter().enumerate() {
+                        ui.selectable_value(&mut st.ty, i, if i == 0 { "All types" } else { t });
+                    }
+                });
+            let ty = (st.ty > 0).then(|| TYPES[st.ty]);
+            let rows = cadektor_core::library::list(session.editor.doc(), ty, Some(&st.search));
+            let mut action: Option<(ResourceId, &str)> = None;
+            for r in rows.iter().take(200) {
+                ui.horizontal(|ui| {
+                    let doc = session.editor.doc();
+                    let t = st
+                        .thumbs
+                        .entry(r.id)
+                        .or_insert_with(|| thumbnail(doc, r.id));
+                    paint_thumbnail(ui, t, 36.0);
+                    ui.vertical(|ui| {
+                        match &mut st.rename {
+                            Some((id, name)) if *id == r.id => {
+                                let resp = ui.text_edit_singleline(name);
+                                if resp.lost_focus() {
+                                    action = Some((r.id, "rename"));
+                                }
+                            }
+                            _ => {
+                                ui.label(&r.name);
                             }
                         }
-                        _ => {
-                            ui.label(&r.name);
+                        ui.small(format!("{}, used by {}", r.type_name, r.used_by));
+                    });
+                    ui.menu_button("...", |ui| {
+                        if ui.button("Duplicate").clicked() {
+                            action = Some((r.id, "duplicate"));
+                            ui.close();
                         }
-                    }
-                    ui.small(format!("{}, used by {}", r.type_name, r.used_by));
+                        if ui.button("Rename").clicked() {
+                            st.rename = Some((r.id, r.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Delete").clicked() {
+                            action = Some((r.id, "delete"));
+                            ui.close();
+                        }
+                    });
                 });
-                ui.menu_button("...", |ui| {
-                    if ui.button("Duplicate").clicked() {
-                        action = Some((r.id, "duplicate"));
-                        ui.close();
-                    }
-                    if ui.button("Rename").clicked() {
-                        st.rename = Some((r.id, r.name.clone()));
-                        ui.close();
-                    }
-                    if ui.button("Delete").clicked() {
-                        action = Some((r.id, "delete"));
-                        ui.close();
-                    }
-                });
-            });
-        }
-        if rows.len() > 200 {
-            ui.small(format!("{} more. Search to narrow the list.", rows.len() - 200));
-        }
-        match action {
-            Some((id, "duplicate")) => {
-                call(session, "resource.duplicate", json!({"id": id}), status);
             }
-            Some((id, "delete")) => {
-                if call(session, "resource.delete", json!({"id": id}), status).is_some() {
-                    *status = "Deleted".into();
+            if rows.len() > 200 {
+                ui.small(format!(
+                    "{} more. Search to narrow the list.",
+                    rows.len() - 200
+                ));
+            }
+            match action {
+                Some((id, "duplicate")) => {
+                    call(session, "resource.duplicate", json!({"id": id}), status);
+                }
+                Some((id, "delete")) => {
+                    if call(session, "resource.delete", json!({"id": id}), status).is_some() {
+                        *status = "Deleted".into();
+                    }
+                }
+                Some((id, "rename")) => {
+                    if let Some((_, name)) = st.rename.take() {
+                        call(
+                            session,
+                            "resource.rename",
+                            json!({"id": id, "name": name}),
+                            status,
+                        );
+                    }
+                }
+                _ => {}
+            }
+            if ui.button("Delete unused").clicked()
+                && let Some(v) = call(session, "resource.purge_unused", json!({}), status)
+            {
+                *status = format!(
+                    "Deleted {} unused resources",
+                    v["removed"].as_array().map_or(0, Vec::len)
+                );
+            }
+            ui.separator();
+            ui.label("Import from a file");
+            ui.text_edit_singleline(&mut st.import_path);
+            if ui.button("Import all resources").clicked() && !st.import_path.trim().is_empty() {
+                let params =
+                    json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"});
+                if let Some(v) = call(session, "resource.import_from_file", params, status) {
+                    *status = format!(
+                        "Imported {} resources",
+                        v["imported"].as_array().map_or(0, Vec::len)
+                    );
                 }
             }
-            Some((id, "rename")) => {
-                if let Some((_, name)) = st.rename.take() {
-                    call(session, "resource.rename", json!({"id": id, "name": name}), status);
-                }
-            }
-            _ => {}
-        }
-        if ui.button("Delete unused").clicked()
-            && let Some(v) = call(session, "resource.purge_unused", json!({}), status)
-        {
-            *status = format!("Deleted {} unused resources", v["removed"].as_array().map_or(0, Vec::len));
-        }
-        ui.separator();
-        ui.label("Import from a file");
-        ui.text_edit_singleline(&mut st.import_path);
-        if ui.button("Import all resources").clicked() && !st.import_path.trim().is_empty() {
-            let params = json!({"path": st.import_path.trim(), "all": true, "on_conflict": "rename"});
-            if let Some(v) = call(session, "resource.import_from_file", params, status) {
-                *status = format!("Imported {} resources", v["imported"].as_array().map_or(0, Vec::len));
-            }
-        }
-    });
+        });
 }

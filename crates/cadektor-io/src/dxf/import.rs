@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{PI, TAU};
 
-use cadektor_core::curve::{corners, Vertex, VertexKind};
-use cadektor_core::georef::Georeference;
-use cadektor_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 use cadektor_core::DVec2;
 use cadektor_core::DVec3;
+use cadektor_core::curve::{Vertex, VertexKind, corners};
+use cadektor_core::georef::Georeference;
+use cadektor_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 use super::parse::{self, Dxf, Entity, LayerDef};
 use super::{aci_rgb, true_color};
@@ -30,22 +30,28 @@ const MAX_ARRAY: i64 = 10_000;
 pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
     let dxf = parse::parse(&src.data)?;
     let mut b = Builder::new(ctx, "dxf", opts.max_objects);
-    let unit = match (opts.unit, dxf.header_value("$INSUNITS").and_then(parse::parse_int)) {
+    let unit = match (
+        opts.unit,
+        dxf.header_value("$INSUNITS").and_then(parse::parse_int),
+    ) {
         (Some(u), _) => u,
         (None, Some(code)) => match Unit::from_insunits(code) {
             Some(u) => u,
             None => {
-                b.report.note("the drawing has no unit: assuming millimeters");
+                b.report
+                    .note("the drawing has no unit: assuming millimeters");
                 Unit::Mm
             }
         },
         (None, None) => {
-            b.report.note("the drawing has no unit: assuming millimeters");
+            b.report
+                .note("the drawing has no unit: assuming millimeters");
             Unit::Mm
         }
     };
     if dxf.truncated {
-        b.report.note("the file ends early: imported what could be read");
+        b.report
+            .note("the file ends early: imported what could be read");
     }
     let scale = unit.mm_per_unit();
 
@@ -63,11 +69,17 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
                     b.set_offset(g.origin * 1000.0);
                     b.report.georeferenced = !g.crs.trim().is_empty();
                     b.report.note("the drawing is far from the origin: its coordinates are taken as map coordinates of the document");
-                } else if opts.origin == OriginMode::Center && center.abs().max_element() <= 1.0e12 {
+                } else if opts.origin == OriginMode::Center && center.abs().max_element() <= 1.0e12
+                {
                     // The georeference origin is in meters and must be below 1e9.
                     let shift = (center / 1000.0).round();
                     b.set_offset(shift * 1000.0);
-                    b.set_georef(Georeference { crs: String::new(), origin: shift, rotation: 0.0, user_origin: DVec2::ZERO });
+                    b.set_georef(Georeference {
+                        crs: String::new(),
+                        origin: shift,
+                        rotation: 0.0,
+                        user_origin: DVec2::ZERO,
+                    });
                     b.report.georeferenced = false;
                     b.report.note(&format!("the drawing is far from the origin: it is centered, the shift ({}, {}) m is saved in the document", shift.x, shift.y));
                 }
@@ -98,7 +110,13 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
         exploded: 0,
         overflow: false,
     };
-    let root = Cx { xf: Xf::scale(scale), layer: None, pen: None, weight: None, depth: 0 };
+    let root = Cx {
+        xf: Xf::scale(scale),
+        layer: None,
+        pen: None,
+        weight: None,
+        depth: 0,
+    };
     for e in &dxf.entities {
         w.entity(e, &root);
     }
@@ -109,7 +127,8 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
         )));
     }
     if w.visits >= MAX_VISITS {
-        w.b.report.note("import stopped: too many entities (a block may contain itself)");
+        w.b.report
+            .note("import stopped: too many entities (a block may contain itself)");
     }
     Ok(())
 }
@@ -126,7 +145,12 @@ struct Xf {
 
 impl Xf {
     fn scale(s: f64) -> Xf {
-        Xf { cols: [DVec2::new(s, 0.0), DVec2::new(0.0, s)], t: DVec2::ZERO, zs: s, zt: 0.0 }
+        Xf {
+            cols: [DVec2::new(s, 0.0), DVec2::new(0.0, s)],
+            t: DVec2::ZERO,
+            zs: s,
+            zt: 0.0,
+        }
     }
 
     fn apply(&self, p: DVec2) -> DVec2 {
@@ -140,7 +164,10 @@ impl Xf {
     /// First `inner`, then `self`.
     fn after(&self, inner: &Xf) -> Xf {
         Xf {
-            cols: [self.apply(inner.cols[0]) - self.t, self.apply(inner.cols[1]) - self.t],
+            cols: [
+                self.apply(inner.cols[0]) - self.t,
+                self.apply(inner.cols[1]) - self.t,
+            ],
             t: self.apply(inner.t),
             zs: self.zs * inner.zs,
             zt: self.zs * inner.zt + self.zt,
@@ -184,7 +211,11 @@ struct Item {
 
 impl Item {
     fn new(shape: Shape) -> Item {
-        Item { shape, fill: None, data: BTreeMap::new() }
+        Item {
+            shape,
+            fill: None,
+            data: BTreeMap::new(),
+        }
     }
 }
 
@@ -209,7 +240,10 @@ fn layer_pen(def: &LayerDef) -> Option<Color> {
         return Some(true_color(t));
     }
     let i = def.color.unsigned_abs();
-    u8::try_from(i).ok().and_then(aci_rgb).map(|[r, g, b]| Color([r, g, b, 255]))
+    u8::try_from(i)
+        .ok()
+        .and_then(aci_rgb)
+        .map(|[r, g, b]| Color([r, g, b, 255]))
 }
 
 fn weight_mm(v: i64) -> Option<f64> {
@@ -228,13 +262,27 @@ impl Walker<'_> {
         let weight = def.and_then(|d| weight_mm(d.lineweight));
         let result = match self.opts.layer_mode {
             LayerMode::Classes => {
-                let attrs = Attributes { pen: Some(pen.unwrap_or(Color::BLACK)), fill: Some(Color::NONE), line_weight: Some(weight.unwrap_or(0.25)), ..Default::default() };
+                let attrs = Attributes {
+                    pen: Some(pen.unwrap_or(Color::BLACK)),
+                    fill: Some(Color::NONE),
+                    line_weight: Some(weight.unwrap_or(0.25)),
+                    ..Default::default()
+                };
                 let class = self.b.class(&decode_percent(name), &attrs, visible);
                 (self.target_layer, class, Attributes::default())
             }
             LayerMode::Layers => {
                 let layer = self.b.layer(&decode_percent(name), visible);
-                (layer, self.b.default_class, Attributes { pen, fill: None, line_weight: weight, ..Default::default() })
+                (
+                    layer,
+                    self.b.default_class,
+                    Attributes {
+                        pen,
+                        fill: None,
+                        line_weight: weight,
+                        ..Default::default()
+                    },
+                )
             }
         };
         self.mapped.insert(name.to_string(), result.clone());
@@ -291,9 +339,11 @@ impl Walker<'_> {
         } else {
             match e.int(62) {
                 Some(0) => cx.pen.or(defaults.pen),
-                Some(i) if i != 256 => {
-                    u8::try_from(i.unsigned_abs()).ok().and_then(aci_rgb).map(|[r, g, b]| Color([r, g, b, 255])).or(defaults.pen)
-                }
+                Some(i) if i != 256 => u8::try_from(i.unsigned_abs())
+                    .ok()
+                    .and_then(aci_rgb)
+                    .map(|[r, g, b]| Color([r, g, b, 255]))
+                    .or(defaults.pen),
                 _ => defaults.pen,
             }
         };
@@ -302,12 +352,19 @@ impl Walker<'_> {
             Some(v) if v >= 0 => weight_mm(v),
             _ => defaults.line_weight,
         };
-        Attributes { pen, fill: defaults.fill, line_weight, ..Default::default() }
+        Attributes {
+            pen,
+            fill: defaults.fill,
+            line_weight,
+            ..Default::default()
+        }
     }
 
     fn insert(&mut self, e: &Entity, cx: &Cx) {
         if !self.opts.explode_blocks {
-            self.b.report.skip("INSERT", "blocks are not exploded (option)");
+            self.b
+                .report
+                .skip("INSERT", "blocks are not exploded (option)");
             return;
         }
         let Some(name) = e.get(2) else {
@@ -345,10 +402,17 @@ impl Walker<'_> {
             "0" => cx.layer.clone().or_else(|| Some("0".into())),
             l => Some(l.to_string()),
         };
-        let own_pen = e.int(420).and_then(|v| u32::try_from(v).ok()).map(true_color).or_else(|| match e.int(62) {
-            Some(i) if i > 0 => u8::try_from(i).ok().and_then(aci_rgb).map(|[r, g, b]| Color([r, g, b, 255])),
-            _ => cx.pen,
-        });
+        let own_pen = e
+            .int(420)
+            .and_then(|v| u32::try_from(v).ok())
+            .map(true_color)
+            .or_else(|| match e.int(62) {
+                Some(i) if i > 0 => u8::try_from(i)
+                    .ok()
+                    .and_then(aci_rgb)
+                    .map(|[r, g, b]| Color([r, g, b, 255])),
+                _ => cx.pen,
+            });
         for r in 0..rows_n {
             for c in 0..cols_n {
                 let at = ins + rotm(DVec2::new(c as f64 * dx, r as f64 * dy));
@@ -358,7 +422,13 @@ impl Walker<'_> {
                     zs: sz,
                     zt: e.fd(30, 0.0) - sz * block.base[2],
                 };
-                let inner = Cx { xf: cx.xf.after(&local), layer: layer.clone(), pen: own_pen, weight: cx.weight, depth: cx.depth + 1 };
+                let inner = Cx {
+                    xf: cx.xf.after(&local),
+                    layer: layer.clone(),
+                    pen: own_pen,
+                    weight: cx.weight,
+                    depth: cx.depth + 1,
+                };
                 for sub in &block.entities {
                     self.entity(sub, &inner);
                 }
@@ -371,19 +441,30 @@ impl Walker<'_> {
         let tol = self.opts.tolerance;
         match e.kind.as_str() {
             "LINE" => {
-                let (a, b) = ((e.fd(10, 0.0), e.fd(20, 0.0), e.fd(30, 0.0)), (e.fd(11, 0.0), e.fd(21, 0.0), e.fd(31, 0.0)));
+                let (a, b) = (
+                    (e.fd(10, 0.0), e.fd(20, 0.0), e.fd(30, 0.0)),
+                    (e.fd(11, 0.0), e.fd(21, 0.0), e.fd(31, 0.0)),
+                );
                 if a.2 != 0.0 || b.2 != 0.0 {
                     let p = |t: (f64, f64, f64)| xf.apply(DVec2::new(t.0, t.1)).extend(xf.z(t.2));
-                    out.push(Item::new(Shape::Polyline3d { points: vec![p(a), p(b)], closed: false }));
+                    out.push(Item::new(Shape::Polyline3d {
+                        points: vec![p(a), p(b)],
+                        closed: false,
+                    }));
                 } else {
-                    out.push(Item::new(Shape::Line { a: xf.apply(DVec2::new(a.0, a.1)), b: xf.apply(DVec2::new(b.0, b.1)) }));
+                    out.push(Item::new(Shape::Line {
+                        a: xf.apply(DVec2::new(a.0, a.1)),
+                        b: xf.apply(DVec2::new(b.0, b.1)),
+                    }));
                 }
             }
             "LWPOLYLINE" => {
                 let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
                 let mut pts: Vec<(DVec2, f64)> = Vec::new();
                 for (code, value) in &e.items {
-                    let Some(v) = parse::parse_f64(value) else { continue };
+                    let Some(v) = parse::parse_f64(value) else {
+                        continue;
+                    };
                     match code {
                         10 => pts.push((DVec2::new(v, 0.0), 0.0)),
                         20 => {
@@ -401,7 +482,9 @@ impl Walker<'_> {
                 }
                 let closed = e.int(70).unwrap_or(0) & 1 != 0;
                 let elevation = e.fd(38, 0.0);
-                out.push(Item::new(polyline_from(&pts, closed, flip, elevation, xf, tol)?));
+                out.push(Item::new(polyline_from(
+                    &pts, closed, flip, elevation, xf, tol,
+                )?));
             }
             "POLYLINE" => {
                 let flags = e.int(70).unwrap_or(0);
@@ -409,31 +492,67 @@ impl Walker<'_> {
                     return Err("mesh polylines are not supported");
                 }
                 let closed = flags & 1 != 0;
-                let verts = e.children.iter().filter(|v| !(flags & 4 != 0 && v.int(70).unwrap_or(0) & 16 != 0));
+                let verts = e
+                    .children
+                    .iter()
+                    .filter(|v| !(flags & 4 != 0 && v.int(70).unwrap_or(0) & 16 != 0));
                 if flags & 8 != 0 {
-                    let points: Vec<DVec3> =
-                        verts.map(|v| xf.apply(DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0))).extend(xf.z(v.fd(30, 0.0)))).collect();
+                    let points: Vec<DVec3> = verts
+                        .map(|v| {
+                            xf.apply(DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)))
+                                .extend(xf.z(v.fd(30, 0.0)))
+                        })
+                        .collect();
                     out.push(Item::new(Shape::Polyline3d { points, closed }));
                 } else {
                     let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
-                    let pts: Vec<(DVec2, f64)> = verts.map(|v| (DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)), v.fd(42, 0.0))).collect();
-                    out.push(Item::new(polyline_from(&pts, closed, flip, e.fd(30, 0.0), xf, tol)?));
+                    let pts: Vec<(DVec2, f64)> = verts
+                        .map(|v| (DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)), v.fd(42, 0.0)))
+                        .collect();
+                    out.push(Item::new(polyline_from(
+                        &pts,
+                        closed,
+                        flip,
+                        e.fd(30, 0.0),
+                        xf,
+                        tol,
+                    )?));
                 }
             }
             "CIRCLE" => {
                 let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
-                let (c, r) = (DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)), e.f(40).ok_or("no radius")?);
+                let (c, r) = (
+                    DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)),
+                    e.f(40).ok_or("no radius")?,
+                );
                 if xf.is_similarity() {
-                    out.push(Item::new(Shape::Circle { center: xf.apply(flipx(c, flip)), radius: r * xf.length_scale() }));
+                    out.push(Item::new(Shape::Circle {
+                        center: xf.apply(flipx(c, flip)),
+                        radius: r * xf.length_scale(),
+                    }));
                 } else {
-                    let pts = ellipse_points(c, DVec2::new(r, 0.0), 1.0, 0.0, TAU, tol / xf.length_scale().max(1e-12));
-                    let pts: Vec<DVec2> = pts.into_iter().map(|p| xf.apply(flipx(p, flip))).collect();
-                    out.push(Item::new(Shape::Polyline { points: corners(&drop_closing(pts)), closed: true }));
+                    let pts = ellipse_points(
+                        c,
+                        DVec2::new(r, 0.0),
+                        1.0,
+                        0.0,
+                        TAU,
+                        tol / xf.length_scale().max(1e-12),
+                    );
+                    let pts: Vec<DVec2> =
+                        pts.into_iter().map(|p| xf.apply(flipx(p, flip))).collect();
+                    out.push(Item::new(Shape::Polyline {
+                        points: corners(&drop_closing(pts)),
+                        closed: true,
+                    }));
                 }
             }
             "ARC" => {
                 let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
-                let (c, r) = (DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)), e.f(40).ok_or("no radius")?);
+                let (c, r) = (
+                    DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)),
+                    e.f(40).ok_or("no radius")?,
+                );
                 let (a0, a1) = (e.fd(50, 0.0).to_radians(), e.fd(51, 360.0).to_radians());
                 let mut sweep = (a1 - a0).rem_euclid(TAU);
                 if sweep == 0.0 {
@@ -444,12 +563,31 @@ impl Walker<'_> {
                     let center = xf.apply(flipx(c, flip));
                     let (s, en) = (at(a0) - center, at(a0 + sweep) - center);
                     let mirrored = (xf.det() < 0.0) != flip;
-                    let (start, end) = if mirrored { (en.to_angle(), s.to_angle()) } else { (s.to_angle(), en.to_angle()) };
-                    out.push(Item::new(Shape::Arc { center, radius: r * xf.length_scale(), start, end }));
+                    let (start, end) = if mirrored {
+                        (en.to_angle(), s.to_angle())
+                    } else {
+                        (s.to_angle(), en.to_angle())
+                    };
+                    out.push(Item::new(Shape::Arc {
+                        center,
+                        radius: r * xf.length_scale(),
+                        start,
+                        end,
+                    }));
                 } else {
                     let n = arc_steps(r * xf.cols[0].length().max(xf.cols[1].length()), sweep, tol);
-                    let pts = (0..=n).map(|i| xf.apply(flipx(c + DVec2::from_angle(a0 + sweep * i as f64 / n as f64) * r, flip))).collect::<Vec<_>>();
-                    out.push(Item::new(Shape::Polyline { points: corners(&pts), closed: false }));
+                    let pts = (0..=n)
+                        .map(|i| {
+                            xf.apply(flipx(
+                                c + DVec2::from_angle(a0 + sweep * i as f64 / n as f64) * r,
+                                flip,
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    out.push(Item::new(Shape::Polyline {
+                        points: corners(&pts),
+                        closed: false,
+                    }));
                 }
             }
             "ELLIPSE" => {
@@ -465,29 +603,58 @@ impl Walker<'_> {
                     sweep = TAU;
                 }
                 let nz = if e.fd(230, 1.0) < 0.0 { -1.0 } else { 1.0 };
-                let pts = ellipse_points(c, major, ratio * nz, t0, sweep, tol / xf.length_scale().max(1e-12));
+                let pts = ellipse_points(
+                    c,
+                    major,
+                    ratio * nz,
+                    t0,
+                    sweep,
+                    tol / xf.length_scale().max(1e-12),
+                );
                 let full = sweep >= TAU - 1e-9;
                 let pts: Vec<DVec2> = pts.into_iter().map(|p| xf.apply(p)).collect();
                 let pts = if full { drop_closing(pts) } else { pts };
-                out.push(Item::new(Shape::Polyline { points: corners(&pts), closed: full }));
+                out.push(Item::new(Shape::Polyline {
+                    points: corners(&pts),
+                    closed: full,
+                }));
             }
             "SPLINE" => out.push(Item::new(spline(e, xf)?)),
             "TEXT" | "MTEXT" => {
                 let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
                 let mtext = e.kind == "MTEXT";
                 let raw: String = if mtext {
-                    e.items.iter().filter(|(c, _)| *c == 3).map(|(_, v)| v.as_str()).chain(e.get(1)).collect()
+                    e.items
+                        .iter()
+                        .filter(|(c, _)| *c == 3)
+                        .map(|(_, v)| v.as_str())
+                        .chain(e.get(1))
+                        .collect()
                 } else {
                     e.get(1).unwrap_or("").to_string()
                 };
-                let text = if mtext { clean_mtext(&raw) } else { decode_percent(&raw) };
+                let text = if mtext {
+                    clean_mtext(&raw)
+                } else {
+                    decode_percent(&raw)
+                };
                 if text.trim().is_empty() {
                     return Err("empty text");
                 }
-                let aligned = !mtext && (e.int(72).unwrap_or(0) != 0 || e.int(73).unwrap_or(0) != 0) && e.f(11).is_some();
-                let p = if aligned { DVec2::new(e.fd(11, 0.0), e.fd(21, 0.0)) } else { DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)) };
+                let aligned = !mtext
+                    && (e.int(72).unwrap_or(0) != 0 || e.int(73).unwrap_or(0) != 0)
+                    && e.f(11).is_some();
+                let p = if aligned {
+                    DVec2::new(e.fd(11, 0.0), e.fd(21, 0.0))
+                } else {
+                    DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0))
+                };
                 let p = if mtext { p } else { flipx(p, flip) };
-                let height = e.f(40).filter(|h| *h > 0.0).map(|h| h * xf.length_scale()).unwrap_or(self.opts.default_text_height);
+                let height = e
+                    .f(40)
+                    .filter(|h| *h > 0.0)
+                    .map(|h| h * xf.length_scale())
+                    .unwrap_or(self.opts.default_text_height);
                 // Direction of the baseline: MTEXT has a vector (11, 21) or an angle in radians, TEXT degrees.
                 let dir = if mtext {
                     match (e.f(11), e.f(21)) {
@@ -498,11 +665,18 @@ impl Walker<'_> {
                     DVec2::from_angle(e.fd(50, 0.0).to_radians())
                 };
                 let dir = xf.cols[0] * flipx(dir, flip).x + xf.cols[1] * flipx(dir, flip).y;
-                let mut item = Item::new(Shape::Text { at: xf.apply(p), text, height });
+                let mut item = Item::new(Shape::Text {
+                    at: xf.apply(p),
+                    text,
+                    height,
+                });
                 let deg = dir.y.atan2(dir.x).to_degrees();
                 if deg.is_finite() && deg.abs() > 1e-9 {
                     let deg = (deg * 1e6).round() / 1e6;
-                    item.data.insert("rotation_deg".into(), serde_json::Value::from(deg.rem_euclid(360.0)));
+                    item.data.insert(
+                        "rotation_deg".into(),
+                        serde_json::Value::from(deg.rem_euclid(360.0)),
+                    );
                 }
                 out.push(item);
             }
@@ -511,7 +685,11 @@ impl Walker<'_> {
                 if self.opts.points == PointMode::WithZ && z == 0.0 {
                     return Err("point without Z value (option)");
                 }
-                out.push(Item::new(Shape::Locus3d { p: xf.apply(DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0))).extend(xf.z(z)) }));
+                out.push(Item::new(Shape::Locus3d {
+                    p: xf
+                        .apply(DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)))
+                        .extend(xf.z(z)),
+                }));
             }
             "3DFACE" => {
                 let mut pts: Vec<DVec3> = Vec::new();
@@ -525,7 +703,10 @@ impl Walker<'_> {
                 if pts.len() < 3 {
                     return Err("degenerate face");
                 }
-                out.push(Item::new(Shape::Polyline3d { points: pts, closed: true }));
+                out.push(Item::new(Shape::Polyline3d {
+                    points: pts,
+                    closed: true,
+                }));
             }
             "HATCH" => {
                 if !self.opts.hatches {
@@ -537,15 +718,32 @@ impl Walker<'_> {
                     return Err("hatch without usable boundary");
                 }
                 let solid = e.int(70) == Some(1);
-                let fill = solid.then(|| e.int(420).and_then(|v| u32::try_from(v).ok()).map(true_color).or_else(|| {
-                    e.int(62).and_then(|i| u8::try_from(i).ok()).and_then(aci_rgb).map(|[r, g, b]| Color([r, g, b, 255]))
-                })).flatten();
+                let fill = solid
+                    .then(|| {
+                        e.int(420)
+                            .and_then(|v| u32::try_from(v).ok())
+                            .map(true_color)
+                            .or_else(|| {
+                                e.int(62)
+                                    .and_then(|i| u8::try_from(i).ok())
+                                    .and_then(aci_rgb)
+                                    .map(|[r, g, b]| Color([r, g, b, 255]))
+                            })
+                    })
+                    .flatten();
                 for l in loops {
                     let pts: Vec<Vertex> = l
                         .into_iter()
                         .map(|v| Vertex::new(xf.apply(flipx(v.p, flip)), v.kind))
                         .collect();
-                    out.push(Item { shape: Shape::Polyline { points: pts, closed: true }, fill, data: BTreeMap::new() });
+                    out.push(Item {
+                        shape: Shape::Polyline {
+                            points: pts,
+                            closed: true,
+                        },
+                        fill,
+                        data: BTreeMap::new(),
+                    });
                 }
             }
             "ATTRIB" | "ATTDEF" | "VIEWPORT" => return Err("not drawing geometry"),
@@ -579,7 +777,11 @@ fn drop_closing(mut pts: Vec<DVec2>) -> Vec<DVec2> {
 /// Number of chords for an arc of this radius and sweep within `tol`.
 fn arc_steps(radius: f64, sweep: f64, tol: f64) -> usize {
     let r = radius.abs().max(1e-12);
-    let step = if tol >= r { PI / 2.0 } else { 2.0 * (1.0 - tol / r).acos() };
+    let step = if tol >= r {
+        PI / 2.0
+    } else {
+        2.0 * (1.0 - tol / r).acos()
+    };
     ((sweep.abs() / step.max(1e-6)).ceil() as usize).clamp(4, 4096)
 }
 
@@ -614,18 +816,36 @@ fn bulge_points(a: DVec2, b: DVec2, bulge: f64, tol: f64) -> Vec<DVec2> {
     let n = arc_steps(r, sweep, tol);
     let a0 = (a - center).to_angle();
     (0..=n)
-        .map(|i| if i == 0 { a } else if i == n { b } else { center + DVec2::from_angle(a0 + sweep * i as f64 / n as f64) * r })
+        .map(|i| {
+            if i == 0 {
+                a
+            } else if i == n {
+                b
+            } else {
+                center + DVec2::from_angle(a0 + sweep * i as f64 / n as f64) * r
+            }
+        })
         .collect()
 }
 
 /// A polyline from OCS points with bulges. Straight polylines with an elevation become 3D.
-fn polyline_from(pts: &[(DVec2, f64)], closed: bool, flip: bool, elevation: f64, xf: &Xf, tol: f64) -> Result<Shape, Skip> {
+fn polyline_from(
+    pts: &[(DVec2, f64)],
+    closed: bool,
+    flip: bool,
+    elevation: f64,
+    xf: &Xf,
+    tol: f64,
+) -> Result<Shape, Skip> {
     if pts.len() < 2 {
         return Err("fewer than 2 vertices");
     }
     let has_bulge = pts.iter().any(|p| p.1.abs() > 1e-9);
     if !has_bulge && elevation != 0.0 {
-        let points = pts.iter().map(|p| xf.apply(flipx(p.0, flip)).extend(xf.z(elevation))).collect();
+        let points = pts
+            .iter()
+            .map(|p| xf.apply(flipx(p.0, flip)).extend(xf.z(elevation)))
+            .collect();
         return Ok(Shape::Polyline3d { points, closed });
     }
     let n = pts.len();
@@ -644,21 +864,39 @@ fn polyline_from(pts: &[(DVec2, f64)], closed: bool, flip: bool, elevation: f64,
             continue;
         }
         if similar {
-            out.push(Vertex::new(tp(bulge_mid(a, b, bulge)), VertexKind::PointOnArc));
+            out.push(Vertex::new(
+                tp(bulge_mid(a, b, bulge)),
+                VertexKind::PointOnArc,
+            ));
         } else {
-            let seg = bulge_points(a, b, bulge, tol / xf.cols[0].length().max(xf.cols[1].length()).max(1e-12));
+            let seg = bulge_points(
+                a,
+                b,
+                bulge,
+                tol / xf.cols[0].length().max(xf.cols[1].length()).max(1e-12),
+            );
             out.extend(seg[1..seg.len() - 1].iter().map(|p| Vertex::corner(tp(*p))));
         }
     }
-    Ok(Shape::Polyline { points: out, closed })
+    Ok(Shape::Polyline {
+        points: out,
+        closed,
+    })
 }
 
 /// Boundary loops of a HATCH as vertices in OCS: polyline paths and line/arc edge paths.
 fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
     let mut loops = Vec::new();
     let items = &e.items;
-    let mut i = items.iter().position(|(c, _)| *c == 91).unwrap_or(items.len());
-    let num = items.get(i).and_then(|(_, v)| parse::parse_int(v)).unwrap_or(0).clamp(0, 10_000);
+    let mut i = items
+        .iter()
+        .position(|(c, _)| *c == 91)
+        .unwrap_or(items.len());
+    let num = items
+        .get(i)
+        .and_then(|(_, v)| parse::parse_int(v))
+        .unwrap_or(0)
+        .clamp(0, 10_000);
     i += 1;
     let next = |i: &mut usize, code: i32| -> Option<f64> {
         while *i < items.len() {
@@ -682,11 +920,19 @@ fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
             let count = next(&mut i, 93).unwrap_or(0.0).clamp(0.0, 1.0e6) as usize;
             let mut pts = Vec::new();
             for _ in 0..count {
-                let (Some(x), Some(y)) = (next(&mut i, 10), next(&mut i, 20)) else { break };
-                let bulge = if has_bulge { peek_bulge(items, &mut i) } else { 0.0 };
+                let (Some(x), Some(y)) = (next(&mut i, 10), next(&mut i, 20)) else {
+                    break;
+                };
+                let bulge = if has_bulge {
+                    peek_bulge(items, &mut i)
+                } else {
+                    0.0
+                };
                 pts.push((DVec2::new(x, y), bulge));
             }
-            if let Ok(Shape::Polyline { points, .. }) = polyline_from(&pts, true, false, 0.0, &Xf::scale(1.0), tol) {
+            if let Ok(Shape::Polyline { points, .. }) =
+                polyline_from(&pts, true, false, 0.0, &Xf::scale(1.0), tol)
+            {
                 loops.push(points);
             }
         } else {
@@ -696,7 +942,12 @@ fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
             for _ in 0..edges {
                 match next(&mut i, 72).map(|v| v as i64) {
                     Some(1) => {
-                        let (Some(x0), Some(y0), Some(x1), Some(y1)) = (next(&mut i, 10), next(&mut i, 20), next(&mut i, 11), next(&mut i, 21)) else {
+                        let (Some(x0), Some(y0), Some(x1), Some(y1)) = (
+                            next(&mut i, 10),
+                            next(&mut i, 20),
+                            next(&mut i, 11),
+                            next(&mut i, 21),
+                        ) else {
                             ok = false;
                             break;
                         };
@@ -704,20 +955,31 @@ fn hatch_loops(e: &Entity, tol: f64) -> Vec<Vec<Vertex>> {
                         pts.push(DVec2::new(x1, y1));
                     }
                     Some(2) => {
-                        let (Some(cx), Some(cy), Some(r), Some(a0), Some(a1)) =
-                            (next(&mut i, 10), next(&mut i, 20), next(&mut i, 40), next(&mut i, 50), next(&mut i, 51))
-                        else {
+                        let (Some(cx), Some(cy), Some(r), Some(a0), Some(a1)) = (
+                            next(&mut i, 10),
+                            next(&mut i, 20),
+                            next(&mut i, 40),
+                            next(&mut i, 50),
+                            next(&mut i, 51),
+                        ) else {
                             ok = false;
                             break;
                         };
                         let ccw = next(&mut i, 73).unwrap_or(1.0) != 0.0;
                         let (a0, a1) = (a0.to_radians(), a1.to_radians());
-                        let mut sweep = if ccw { (a1 - a0).rem_euclid(TAU) } else { -(a0 - a1).rem_euclid(TAU) };
+                        let mut sweep = if ccw {
+                            (a1 - a0).rem_euclid(TAU)
+                        } else {
+                            -(a0 - a1).rem_euclid(TAU)
+                        };
                         if sweep == 0.0 {
                             sweep = if ccw { TAU } else { -TAU };
                         }
                         let n = arc_steps(r, sweep, tol);
-                        pts.extend((0..=n).map(|k| DVec2::new(cx, cy) + DVec2::from_angle(a0 + sweep * k as f64 / n as f64) * r));
+                        pts.extend((0..=n).map(|k| {
+                            DVec2::new(cx, cy)
+                                + DVec2::from_angle(a0 + sweep * k as f64 / n as f64) * r
+                        }));
                     }
                     _ => {
                         ok = false;
@@ -779,7 +1041,9 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
     let point_list = |cx: i32| -> Vec<DVec3> {
         let mut pts: Vec<DVec3> = Vec::new();
         for (code, value) in &e.items {
-            let Some(v) = parse::parse_f64(value) else { continue };
+            let Some(v) = parse::parse_f64(value) else {
+                continue;
+            };
             if *code == cx {
                 pts.push(DVec3::new(v, 0.0, 0.0));
             } else if *code == cx + 10 {
@@ -802,10 +1066,16 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
     let to_world = |p: DVec3| xf.apply(p.truncate()).extend(xf.z(p.z));
     let make = |pts: Vec<DVec3>, closed: bool| -> Shape {
         if pts.iter().any(|p| p.z != 0.0) {
-            Shape::Polyline3d { points: pts.into_iter().map(to_world).collect(), closed }
+            Shape::Polyline3d {
+                points: pts.into_iter().map(to_world).collect(),
+                closed,
+            }
         } else {
             let pts: Vec<DVec2> = pts.into_iter().map(|p| to_world(p).truncate()).collect();
-            Shape::Polyline { points: corners(&pts), closed }
+            Shape::Polyline {
+                points: corners(&pts),
+                closed,
+            }
         }
     };
     let n = ctrl.len();
@@ -838,7 +1108,11 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
             }
         }
         if pts.len() >= 2 {
-            let end_closed = closed && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.distance(*b) < 1e-9);
+            let end_closed = closed
+                && pts
+                    .first()
+                    .zip(pts.last())
+                    .is_some_and(|(a, b)| a.distance(*b) < 1e-9);
             if end_closed {
                 pts.pop();
             }
@@ -851,7 +1125,11 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let kind = if closed || (i != 0 && i != last) { VertexKind::Cubic } else { VertexKind::Corner };
+                let kind = if closed || (i != 0 && i != last) {
+                    VertexKind::Cubic
+                } else {
+                    VertexKind::Corner
+                };
                 Vertex::new(to_world(*p).truncate(), kind)
             })
             .collect();
@@ -883,7 +1161,10 @@ pub fn decode_percent(s: &str) -> String {
                 None => out.push_str("%%"),
             }
             i += 3.min(chars.len() - i);
-        } else if chars[i] == '\\' && matches!(chars.get(i + 1), Some('U') | Some('u')) && chars.get(i + 2) == Some(&'+') {
+        } else if chars[i] == '\\'
+            && matches!(chars.get(i + 1), Some('U') | Some('u'))
+            && chars.get(i + 2) == Some(&'+')
+        {
             let hex: String = chars[i + 3..].iter().take(4).collect();
             match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                 Some(c) if hex.len() == 4 => {
@@ -951,12 +1232,18 @@ mod tests {
 
     /// Builds a DXF text from entity bodies.
     pub(crate) fn dxf_text(header: &str, tables: &str, blocks: &str, entities: &str) -> String {
-        format!("0\nSECTION\n2\nHEADER\n{header}0\nENDSEC\n0\nSECTION\n2\nTABLES\n{tables}0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n{blocks}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{entities}0\nENDSEC\n0\nEOF\n")
+        format!(
+            "0\nSECTION\n2\nHEADER\n{header}0\nENDSEC\n0\nSECTION\n2\nTABLES\n{tables}0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n{blocks}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{entities}0\nENDSEC\n0\nEOF\n"
+        )
     }
 
     fn run(text: &str, opts: &ImportOptions) -> (Document, crate::Report) {
         let doc = Document::default();
-        let src = Source { name: "t".into(), data: text.as_bytes().to_vec(), extra: Default::default() };
+        let src = Source {
+            name: "t".into(),
+            data: text.as_bytes().to_vec(),
+            extra: Default::default(),
+        };
         let r = import(&src, &Context::of(&doc), opts).unwrap();
         let mut ed = Editor::new(doc);
         ed.execute(&r.command).unwrap();
@@ -976,7 +1263,10 @@ mod tests {
 0\nPOINT\n10\n1\n20\n2\n30\n3\n\
 0\nPOINT\n10\n1\n20\n2\n\
 0\nDIMENSION\n8\nWalls\n";
-        let (doc, report) = run(&dxf_text("9\n$INSUNITS\n70\n4\n", "", "", ents), &ImportOptions::default());
+        let (doc, report) = run(
+            &dxf_text("9\n$INSUNITS\n70\n4\n", "", "", ents),
+            &ImportOptions::default(),
+        );
         assert_eq!(report.skipped_total(), 1);
         assert_eq!(report.skipped[0].entity, "DIMENSION");
         let s = shapes(&doc);
@@ -984,7 +1274,9 @@ mod tests {
         assert!(matches!(s[0], Shape::Line { b, .. } if *b == DVec2::new(1000.0, 0.0)));
         assert!(matches!(s[1], Shape::Polyline3d { points, .. } if points[1].z == 9.0));
         assert!(matches!(s[2], Shape::Circle { radius, .. } if *radius == 50.0));
-        assert!(matches!(s[3], Shape::Arc { start, end, .. } if (*start - PI / 2.0).abs() < 1e-12 && (*end - PI).abs() < 1e-12));
+        assert!(
+            matches!(s[3], Shape::Arc { start, end, .. } if (*start - PI / 2.0).abs() < 1e-12 && (*end - PI).abs() < 1e-12)
+        );
         assert!(matches!(s[4], Shape::Locus3d { p } if p.z == 3.0));
         assert!(matches!(s[5], Shape::Locus3d { p } if p.z == 0.0));
         // Layers become classes on the active layer.
@@ -1002,12 +1294,28 @@ mod tests {
 0\nPOINT\n8\nGreen\n10\n1\n20\n2\n30\n4\n\
 0\nLINE\n8\nOff\n10\n0\n20\n0\n11\n1\n21\n1\n\
 0\nLINE\n8\nFrozen\n62\n1\n370\n70\n10\n0\n20\n0\n11\n1\n21\n1\n";
-        let opts = ImportOptions { points: PointMode::WithZ, layer_mode: LayerMode::Layers, ..Default::default() };
+        let opts = ImportOptions {
+            points: PointMode::WithZ,
+            layer_mode: LayerMode::Layers,
+            ..Default::default()
+        };
         let (doc, report) = run(&dxf_text("", tables, "", ents), &opts);
         assert_eq!(doc.objects.len(), 3);
         assert_eq!(report.skipped_total(), 1);
-        let names: Vec<_> = doc.layers.iter().map(|l| (l.name.as_str(), l.visible)).collect();
-        assert_eq!(names, [("Layer 1", true), ("Green", true), ("Off", false), ("Frozen", false)]);
+        let names: Vec<_> = doc
+            .layers
+            .iter()
+            .map(|l| (l.name.as_str(), l.visible))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Layer 1", true),
+                ("Green", true),
+                ("Off", false),
+                ("Frozen", false)
+            ]
+        );
         let p = doc.objects.values().next().unwrap();
         assert_eq!(p.attrs.pen, Some(Color([0, 255, 0, 255])));
         assert_eq!(p.attrs.line_weight, Some(0.35));
@@ -1021,12 +1329,21 @@ mod tests {
     fn classes_get_layer_colors_and_visibility() {
         let tables = "0\nTABLE\n2\nLAYER\n0\nLAYER\n2\nGreen\n62\n3\n420\n16711935\n370\n50\n0\nLAYER\n2\nOff\n62\n-1\n0\nENDTAB\n";
         let ents = "0\nLINE\n8\nGreen\n10\n0\n20\n0\n11\n1\n21\n1\n0\nLINE\n8\nOff\n10\n0\n20\n0\n11\n1\n21\n1\n";
-        let opts = ImportOptions { layer: Some("Imported".into()), ..Default::default() };
+        let opts = ImportOptions {
+            layer: Some("Imported".into()),
+            ..Default::default()
+        };
         let (doc, _) = run(&dxf_text("", tables, "", ents), &opts);
         let green = doc.classes.iter().find(|c| c.name == "Green").unwrap();
         assert_eq!(green.attrs.pen, Some(Color([255, 0, 255, 255])));
         assert_eq!(green.attrs.line_weight, Some(0.5));
-        assert!(!doc.classes.iter().find(|c| c.name == "Off").unwrap().visible);
+        assert!(
+            !doc.classes
+                .iter()
+                .find(|c| c.name == "Off")
+                .unwrap()
+                .visible
+        );
         assert_eq!(doc.layers.len(), 2);
         assert_eq!(doc.layers[1].name, "Imported");
         assert!(doc.objects.values().all(|o| o.layer == doc.layers[1].id));
@@ -1037,7 +1354,9 @@ mod tests {
         // Half circle from (0,0) to (2000,0), bulge 1, then a straight closing edge.
         let ents = "0\nLWPOLYLINE\n90\n2\n70\n1\n10\n0\n20\n0\n42\n1\n10\n2000\n20\n0\n";
         let (doc, _) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
-        let Shape::Polyline { points, closed } = shapes(&doc)[0] else { panic!() };
+        let Shape::Polyline { points, closed } = shapes(&doc)[0] else {
+            panic!()
+        };
         assert!(closed);
         assert_eq!(points.len(), 3);
         assert_eq!(points[1].kind, VertexKind::PointOnArc);
@@ -1050,7 +1369,9 @@ mod tests {
         // A negative bulge goes the other way.
         let ents = "0\nLWPOLYLINE\n90\n2\n70\n0\n10\n0\n20\n0\n42\n-1\n10\n2000\n20\n0\n";
         let (doc, _) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
-        let Shape::Polyline { points, .. } = shapes(&doc)[0] else { panic!() };
+        let Shape::Polyline { points, .. } = shapes(&doc)[0] else {
+            panic!()
+        };
         assert!(points[1].p.distance(DVec2::new(1000.0, 1000.0)) < 1e-9);
         assert_eq!(points.len(), 3);
     }
@@ -1066,7 +1387,9 @@ mod tests {
         let s = shapes(&doc);
         assert_eq!(s.len(), 2);
         assert!(matches!(s[0], Shape::Polyline3d { points, .. } if points[0].z == 12.0));
-        let Shape::Polyline { points, .. } = s[1] else { panic!() };
+        let Shape::Polyline { points, .. } = s[1] else {
+            panic!()
+        };
         assert_eq!(points[0].p, DVec2::new(-1.0, 0.0));
         assert_eq!(report.skipped_total(), 3);
     }
@@ -1099,7 +1422,9 @@ mod tests {
         let (doc, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
         let s = shapes(&doc);
         assert_eq!(report.skipped_total(), 2, "{:?}", report.skipped);
-        let Shape::Polyline { points, closed } = s[0] else { panic!() };
+        let Shape::Polyline { points, closed } = s[0] else {
+            panic!()
+        };
         assert!(closed);
         let flat = cadektor_core::curve::positions(points);
         for p in &flat {
@@ -1108,10 +1433,18 @@ mod tests {
         }
         assert!(matches!(s[1], Shape::Polyline { closed: false, .. }));
         // Quadratic B-spline through three control points: the midpoint is (500, 500).
-        let Shape::Polyline { points, .. } = s[2] else { panic!() };
-        let mid = points.iter().map(|v| v.p).min_by(|a, b| (a.x - 500.0).abs().total_cmp(&(b.x - 500.0).abs())).unwrap();
+        let Shape::Polyline { points, .. } = s[2] else {
+            panic!()
+        };
+        let mid = points
+            .iter()
+            .map(|v| v.p)
+            .min_by(|a, b| (a.x - 500.0).abs().total_cmp(&(b.x - 500.0).abs()))
+            .unwrap();
         assert!((mid.y - 500.0).abs() < 5.0, "{mid:?}");
-        let Shape::Polyline { points, .. } = s[3] else { panic!() };
+        let Shape::Polyline { points, .. } = s[3] else {
+            panic!()
+        };
         assert_eq!(points[1].kind, VertexKind::Cubic);
         assert_eq!(points[0].kind, VertexKind::Corner);
         assert!(matches!(s[4], Shape::Polyline3d { .. }));
@@ -1127,13 +1460,23 @@ mod tests {
         let (doc, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
         let s = shapes(&doc);
         assert_eq!(report.skipped_total(), 1);
-        assert!(matches!(s[0], Shape::Text { text, height, at } if text == "\u{d8}10 \u{b1}2 \u{b0} \u{e4}" && *height == 250.0 && *at == DVec2::new(100.0, 200.0)));
+        assert!(
+            matches!(s[0], Shape::Text { text, height, at } if text == "\u{d8}10 \u{b1}2 \u{b0} \u{e4}" && *height == 250.0 && *at == DVec2::new(100.0, 200.0))
+        );
         assert!(matches!(s[1], Shape::Text { at, .. } if *at == DVec2::new(50.0, 60.0)));
-        assert!(matches!(s[2], Shape::Text { text, height, .. } if text == "Hello\nsecond 1/2 line x\\" && *height == 180.0));
+        assert!(
+            matches!(s[2], Shape::Text { text, height, .. } if text == "Hello\nsecond 1/2 line x\\" && *height == 180.0)
+        );
         assert!(matches!(s[3], Shape::Text { height, .. } if *height == 250.0));
         let first = doc.objects.values().next().unwrap();
         assert_eq!(first.data["rotation_deg"], 30.0);
-        assert_eq!(doc.objects.values().filter(|o| o.data.contains_key("rotation_deg")).count(), 1);
+        assert_eq!(
+            doc.objects
+                .values()
+                .filter(|o| o.data.contains_key("rotation_deg"))
+                .count(),
+            1
+        );
         assert!(report.notes.iter().all(|n| !n.contains("rotation")));
     }
 
@@ -1165,10 +1508,17 @@ mod tests {
         assert_eq!(report.skipped_total(), 2);
         let first = &shapes(&doc)[0];
         // Line (10,0)-(20,0) about base (10,0), scale 2, rotate 90 deg, at (100,100).
-        assert!(matches!(first, Shape::Line { a, b } if a.distance(DVec2::new(100.0, 100.0)) < 1e-9 && b.distance(DVec2::new(100.0, 120.0)) < 1e-9), "{first:?}");
-        let Shape::Circle { radius, .. } = shapes(&doc)[1] else { panic!() };
+        assert!(
+            matches!(first, Shape::Line { a, b } if a.distance(DVec2::new(100.0, 100.0)) < 1e-9 && b.distance(DVec2::new(100.0, 120.0)) < 1e-9),
+            "{first:?}"
+        );
+        let Shape::Circle { radius, .. } = shapes(&doc)[1] else {
+            panic!()
+        };
         assert_eq!(*radius, 4.0);
-        let Shape::Arc { start, end, .. } = shapes(&doc)[2] else { panic!() };
+        let Shape::Arc { start, end, .. } = shapes(&doc)[2] else {
+            panic!()
+        };
         assert!((start - PI / 2.0).abs() < 1e-9 && (end - PI).abs() < 1e-9);
         // Layer "0" inside a block takes the layer of the insert, other layers stay.
         let site = doc.classes.iter().find(|c| c.name == "Site").unwrap().id;
@@ -1176,9 +1526,20 @@ mod tests {
         assert_eq!(doc.objects.values().filter(|o| o.class == fixed).count(), 6);
         assert!(doc.objects.values().filter(|o| o.class == site).count() >= 6);
         // The flipped insert mirrors X: the line starts at (5,0) and goes to (-5,0)+...
-        let last_line = doc.objects.values().rfind(|o| matches!(o.shape, Shape::Line { .. })).unwrap();
-        assert!(matches!(&last_line.shape, Shape::Line { a, b } if a.distance(DVec2::new(-5.0, 0.0)) < 1e-9 && b.distance(DVec2::new(-15.0, 0.0)) < 1e-9), "{:?}", last_line.shape);
-        let opts = ImportOptions { explode_blocks: false, ..Default::default() };
+        let last_line = doc
+            .objects
+            .values()
+            .rfind(|o| matches!(o.shape, Shape::Line { .. }))
+            .unwrap();
+        assert!(
+            matches!(&last_line.shape, Shape::Line { a, b } if a.distance(DVec2::new(-5.0, 0.0)) < 1e-9 && b.distance(DVec2::new(-15.0, 0.0)) < 1e-9),
+            "{:?}",
+            last_line.shape
+        );
+        let opts = ImportOptions {
+            explode_blocks: false,
+            ..Default::default()
+        };
         let (doc, report) = run(&dxf_text("", "", blocks, ents), &opts);
         assert_eq!(doc.objects.len(), 0);
         assert_eq!(report.skipped_total(), 5);
@@ -1192,15 +1553,24 @@ mod tests {
         let ents = "0\nINSERT\n2\nA\n41\n-1\n0\nINSERT\n2\nA\n41\n3\n";
         let (doc, _) = run(&dxf_text("", "", blocks, ents), &ImportOptions::default());
         let s = shapes(&doc);
-        let Shape::Arc { start, end, .. } = s[0] else { panic!() };
-        assert!((start - PI / 2.0).abs() < 1e-9 && (end - PI).abs() < 1e-9, "{start} {end}");
+        let Shape::Arc { start, end, .. } = s[0] else {
+            panic!()
+        };
+        assert!(
+            (start - PI / 2.0).abs() < 1e-9 && (end - PI).abs() < 1e-9,
+            "{start} {end}"
+        );
         // The mirrored bulge polyline still passes the same midpoint mirrored.
-        let Shape::Polyline { points, .. } = s[2] else { panic!() };
+        let Shape::Polyline { points, .. } = s[2] else {
+            panic!()
+        };
         assert!(points[1].p.distance(DVec2::new(-5.0, -5.0)) < 1e-9);
         // Non-uniform scale: circle and arc become polylines.
         assert!(matches!(s[3], Shape::Polyline { closed: false, .. }));
         assert!(matches!(s[4], Shape::Polyline { closed: true, .. }));
-        let Shape::Polyline { points, .. } = s[5] else { panic!() };
+        let Shape::Polyline { points, .. } = s[5] else {
+            panic!()
+        };
         assert!(points.len() > 3);
         assert!(points.iter().all(|v| v.kind == VertexKind::Corner));
     }
@@ -1222,14 +1592,18 @@ mod tests {
         assert!(matches!(s[0], Shape::Polyline { closed: true, .. }));
         let third = doc.objects.values().nth(2).unwrap();
         assert_eq!(third.attrs.fill, None);
-        let opts = ImportOptions { hatches: false, ..Default::default() };
+        let opts = ImportOptions {
+            hatches: false,
+            ..Default::default()
+        };
         let (doc, _) = run(&dxf_text("", "", "", ents), &opts);
         assert!(doc.objects.is_empty());
     }
 
     #[test]
     fn colors_and_weights_on_entities() {
-        let blocks = "0\nBLOCK\n2\nB\n0\nLINE\n62\n0\n370\n-2\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n";
+        let blocks =
+            "0\nBLOCK\n2\nB\n0\nLINE\n62\n0\n370\n-2\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n";
         let ents = "0\nLINE\n62\n1\n370\n25\n10\n0\n20\n0\n11\n1\n21\n1\n\
 0\nLINE\n420\n65793\n10\n0\n20\n0\n11\n1\n21\n1\n\
 0\nLINE\n62\n256\n10\n0\n20\n0\n11\n1\n21\n1\n\
@@ -1251,14 +1625,23 @@ mod tests {
     #[test]
     fn units_and_notes() {
         let ents = "0\nLINE\n10\n0\n20\n0\n11\n1\n21\n0\n";
-        let (doc, report) = run(&dxf_text("9\n$INSUNITS\n70\n6\n", "", "", ents), &ImportOptions::default());
+        let (doc, report) = run(
+            &dxf_text("9\n$INSUNITS\n70\n6\n", "", "", ents),
+            &ImportOptions::default(),
+        );
         assert!(matches!(shapes(&doc)[0], Shape::Line { b, .. } if b.x == 1000.0));
         assert!(report.notes.is_empty());
         let (_, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
         assert_eq!(report.notes.len(), 1);
-        let (_, report) = run(&dxf_text("9\n$INSUNITS\n70\n0\n", "", "", ents), &ImportOptions::default());
+        let (_, report) = run(
+            &dxf_text("9\n$INSUNITS\n70\n0\n", "", "", ents),
+            &ImportOptions::default(),
+        );
         assert_eq!(report.notes.len(), 1);
-        let opts = ImportOptions { unit: Some(Unit::Foot), ..Default::default() };
+        let opts = ImportOptions {
+            unit: Some(Unit::Foot),
+            ..Default::default()
+        };
         let (doc, _) = run(&dxf_text("9\n$INSUNITS\n70\n6\n", "", "", ents), &opts);
         assert!(matches!(shapes(&doc)[0], Shape::Line { b, .. } if (b.x - 304.8).abs() < 1e-9));
         let cut = dxf_text("", "", "", ents);
@@ -1270,7 +1653,10 @@ mod tests {
     #[test]
     fn self_referencing_block_stops() {
         let blocks = "0\nBLOCK\n2\nLOOP\n0\nINSERT\n2\nLOOP\n0\nINSERT\n2\nLOOP\n0\nLINE\n10\n0\n20\n0\n11\n1\n21\n0\n0\nENDBLK\n";
-        let (doc, report) = run(&dxf_text("", "", blocks, "0\nINSERT\n2\nLOOP\n"), &ImportOptions::default());
+        let (doc, report) = run(
+            &dxf_text("", "", blocks, "0\nINSERT\n2\nLOOP\n"),
+            &ImportOptions::default(),
+        );
         assert!(doc.objects.len() < 10_000_000);
         assert!(report.skipped_total() > 0);
     }
@@ -1278,7 +1664,10 @@ mod tests {
     #[test]
     fn object_limit() {
         let ents = "0\nLINE\n10\n0\n20\n0\n11\n1\n21\n0\n".repeat(5);
-        let opts = ImportOptions { max_objects: 3, ..Default::default() };
+        let opts = ImportOptions {
+            max_objects: 3,
+            ..Default::default()
+        };
         let (doc, report) = run(&dxf_text("", "", "", &ents), &opts);
         assert_eq!(doc.objects.len(), 3);
         assert!(report.notes.iter().any(|n| n.contains("limit")));
@@ -1298,8 +1687,14 @@ mod tests {
                 let (p, q, r) = (a, mid, c);
                 let d = 2.0 * (p.x * (q.y - r.y) + q.x * (r.y - p.y) + r.x * (p.y - q.y));
                 DVec2::new(
-                    (p.length_squared() * (q.y - r.y) + q.length_squared() * (r.y - p.y) + r.length_squared() * (p.y - q.y)) / d,
-                    (p.length_squared() * (r.x - q.x) + q.length_squared() * (p.x - r.x) + r.length_squared() * (q.x - p.x)) / d,
+                    (p.length_squared() * (q.y - r.y)
+                        + q.length_squared() * (r.y - p.y)
+                        + r.length_squared() * (p.y - q.y))
+                        / d,
+                    (p.length_squared() * (r.x - q.x)
+                        + q.length_squared() * (p.x - r.x)
+                        + r.length_squared() * (q.x - p.x))
+                        / d,
                 )
             };
             let radius = center.distance(a);
@@ -1318,25 +1713,44 @@ mod tests {
         let (doc, report) = run(&text, &ImportOptions::default());
         assert_eq!(doc.objects.len(), 2, "{:?}", report.skipped);
         let g = doc.georef.clone().unwrap();
-        assert_eq!((g.crs.as_str(), g.origin), ("", DVec2::new(6_589_050.0, 540_025.0)));
-        let Shape::Circle { center, radius } = shapes(&doc)[1] else { panic!() };
+        assert_eq!(
+            (g.crs.as_str(), g.origin),
+            ("", DVec2::new(6_589_050.0, 540_025.0))
+        );
+        let Shape::Circle { center, radius } = shapes(&doc)[1] else {
+            panic!()
+        };
         assert_eq!((*center, *radius), (DVec2::ZERO, 2000.0));
         assert!(report.notes.iter().any(|n| n.contains("centered")));
         // Keep the file origin: objects are out of range and skipped.
-        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let keep = ImportOptions {
+            origin: OriginMode::File,
+            ..ImportOptions::default()
+        };
         let (doc, report) = run(&text, &keep);
         assert_eq!(doc.objects.len(), 0);
         assert_eq!(report.skipped_total(), 2);
         assert!(doc.georef.is_none());
         // A document with a georeference keeps its own origin.
         let mut base = Document::default();
-        base.georef = Some(Georeference { crs: "EPSG:3301".into(), origin: DVec2::new(6_589_000.0, 540_000.0), rotation: 0.0, user_origin: DVec2::ZERO });
-        let src = Source { name: "t".into(), data: text.into_bytes(), extra: Default::default() };
+        base.georef = Some(Georeference {
+            crs: "EPSG:3301".into(),
+            origin: DVec2::new(6_589_000.0, 540_000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        });
+        let src = Source {
+            name: "t".into(),
+            data: text.into_bytes(),
+            extra: Default::default(),
+        };
         let r = import(&src, &Context::of(&base), &ImportOptions::default()).unwrap();
         let mut ed = Editor::new(base.clone());
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().georef, base.georef);
-        let Shape::Circle { center, .. } = shapes(ed.doc())[1] else { panic!() };
+        let Shape::Circle { center, .. } = shapes(ed.doc())[1] else {
+            panic!()
+        };
         assert_eq!(*center, DVec2::new(50_000.0, 25_000.0));
         assert!(r.report.georeferenced);
         // A drawing near the origin is not touched.
@@ -1354,15 +1768,31 @@ mod tests {
         let text = dxf_text("", "", blocks, ents);
         assert!(text.len() < 500);
         let doc = Document::default();
-        let src = Source { name: "t".into(), data: text.into_bytes(), extra: Default::default() };
+        let src = Source {
+            name: "t".into(),
+            data: text.into_bytes(),
+            extra: Default::default(),
+        };
         let err = import(&src, &Context::of(&doc), &ImportOptions::default()).unwrap_err();
         assert!(err.to_string().contains("max_exploded"), "{err}");
         // A smaller drawing within the limit still works, and so does a higher limit.
-        let small = dxf_text("", "", "0\nBLOCK\n2\nB\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n", "0\nINSERT\n2\nB\n70\n10\n71\n10\n44\n5\n45\n5\n");
+        let small = dxf_text(
+            "",
+            "",
+            "0\nBLOCK\n2\nB\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n",
+            "0\nINSERT\n2\nB\n70\n10\n71\n10\n44\n5\n45\n5\n",
+        );
         let (doc, _) = run(&small, &ImportOptions::default());
         assert_eq!(doc.objects.len(), 100);
-        let opts = ImportOptions { max_exploded: 50, ..ImportOptions::default() };
-        let src = Source { name: "t".into(), data: small.into_bytes(), extra: Default::default() };
+        let opts = ImportOptions {
+            max_exploded: 50,
+            ..ImportOptions::default()
+        };
+        let src = Source {
+            name: "t".into(),
+            data: small.into_bytes(),
+            extra: Default::default(),
+        };
         assert!(import(&src, &Context::of(&Document::default()), &opts).is_err());
     }
 }

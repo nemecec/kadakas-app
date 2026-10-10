@@ -78,14 +78,20 @@ impl Solid3d {
     pub fn outline_points(&self) -> Vec<DVec2> {
         match self {
             Solid3d::Extrusion { outline, .. } => outline.clone(),
-            Solid3d::Cylinder { center, radius, .. } => (0..24).map(|k| *center + DVec2::from_angle(std::f64::consts::TAU * k as f64 / 24.0) * *radius).collect(),
+            Solid3d::Cylinder { center, radius, .. } => (0..24)
+                .map(|k| {
+                    *center + DVec2::from_angle(std::f64::consts::TAU * k as f64 / 24.0) * *radius
+                })
+                .collect(),
         }
     }
 
     /// Bottom and height.
     pub fn span(&self) -> (f64, f64) {
         match self {
-            Solid3d::Extrusion { base, height, .. } | Solid3d::Cylinder { base, height, .. } => (*base, *height),
+            Solid3d::Extrusion { base, height, .. } | Solid3d::Cylinder { base, height, .. } => {
+                (*base, *height)
+            }
         }
     }
 
@@ -97,13 +103,31 @@ impl Solid3d {
 
     fn problem(&self) -> Option<String> {
         let (base, height) = self.span();
-        if !base.is_finite() || !height.is_finite() || height <= 0.0 || base.abs() > MAX_COORD || height > MAX_COORD {
+        if !base.is_finite()
+            || !height.is_finite()
+            || height <= 0.0
+            || base.abs() > MAX_COORD
+            || height > MAX_COORD
+        {
             return Some("a 3D component needs a positive height and finite numbers".into());
         }
         match self {
-            Solid3d::Extrusion { outline, .. } if outline.len() < 3 => Some("an extrusion needs 3 or more outline points".into()),
-            Solid3d::Extrusion { outline, .. } if outline.iter().any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD) => Some("the outline has an invalid point".into()),
-            Solid3d::Cylinder { center, radius, .. } if !center.is_finite() || !radius.is_finite() || *radius <= 0.0 || *radius > MAX_COORD => {
+            Solid3d::Extrusion { outline, .. } if outline.len() < 3 => {
+                Some("an extrusion needs 3 or more outline points".into())
+            }
+            Solid3d::Extrusion { outline, .. }
+                if outline
+                    .iter()
+                    .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD) =>
+            {
+                Some("the outline has an invalid point".into())
+            }
+            Solid3d::Cylinder { center, radius, .. }
+                if !center.is_finite()
+                    || !radius.is_finite()
+                    || *radius <= 0.0
+                    || *radius > MAX_COORD =>
+            {
                 Some("a cylinder needs a positive radius and a finite center".into())
             }
             _ => None,
@@ -112,7 +136,7 @@ impl Solid3d {
 }
 
 /// A symbol definition: 2D components and optional 3D components (a hybrid symbol has both).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SymbolDef {
     /// The insertion point, in definition coordinates. An instance puts this point at its position.
     #[serde(default)]
@@ -122,6 +146,37 @@ pub struct SymbolDef {
     /// 3D components. A symbol with none shows its 2D components flat in 3D views.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solids: Vec<Solid3d>,
+    /// `paper`: the components are in paper mm, so the instance keeps its size on the sheet at any
+    /// drawing scale (north arrows, tags). `world` (default): the components are in model mm.
+    #[serde(default = "world", skip_serializing_if = "is_world")]
+    pub units: PatternUnits,
+    /// The class that a new instance gets when the caller gives none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insert_class: Option<ClassId>,
+    /// A new instance is turned toward a second point that the caller gives (`rotate_to`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rotate_on_insert: bool,
+}
+
+fn world() -> PatternUnits {
+    PatternUnits::World
+}
+
+fn is_world(u: &PatternUnits) -> bool {
+    *u == PatternUnits::World
+}
+
+impl Default for SymbolDef {
+    fn default() -> Self {
+        SymbolDef {
+            insertion: DVec2::ZERO,
+            items: Vec::new(),
+            solids: Vec::new(),
+            units: PatternUnits::World,
+            insert_class: None,
+            rotate_on_insert: false,
+        }
+    }
 }
 
 impl SymbolDef {
@@ -147,7 +202,13 @@ impl SymbolDef {
 pub fn allowed_in_symbol(shape: &Shape) -> bool {
     matches!(
         shape,
-        Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::Text { .. } | Shape::Symbol { .. }
+        Shape::Line { .. }
+            | Shape::Rect { .. }
+            | Shape::Circle { .. }
+            | Shape::Arc { .. }
+            | Shape::Polyline { .. }
+            | Shape::Text { .. }
+            | Shape::Symbol { .. }
     )
 }
 
@@ -178,7 +239,15 @@ pub struct HatchLine {
 
 impl HatchLine {
     pub fn solid(angle: f64, spacing: f64) -> Self {
-        HatchLine { angle, spacing, offset: 0.0, origin: DVec2::ZERO, dash: Vec::new(), color: None, weight: None }
+        HatchLine {
+            angle,
+            spacing,
+            offset: 0.0,
+            origin: DVec2::ZERO,
+            dash: Vec::new(),
+            color: None,
+            weight: None,
+        }
     }
 }
 
@@ -219,8 +288,12 @@ fn one() -> f64 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LineElement {
-    Dash { length: f64 },
-    Gap { length: f64 },
+    Dash {
+        length: f64,
+    },
+    Gap {
+        length: f64,
+    },
     /// A symbol placed on the line, with no length of its own. It makes a complex line type.
     Mark {
         symbol: ResourceId,
@@ -337,7 +410,10 @@ impl GraphicResource {
                 }
                 for (i, it) in s.items.iter().enumerate() {
                     if !allowed_in_symbol(&it.shape) {
-                        return Err(format!("component {i} is a {}. A symbol holds line, rect, circle, arc, polyline, text and symbol shapes", it.shape.kind()));
+                        return Err(format!(
+                            "component {i} is a {}. A symbol holds line, rect, circle, arc, polyline, text and symbol shapes",
+                            it.shape.kind()
+                        ));
                     }
                     if !it.shape.is_finite() || !it.shape.is_in_range() || !it.attrs.is_finite() {
                         return Err(format!("component {i} has a number that is not valid"));
@@ -356,11 +432,24 @@ impl GraphicResource {
                     return Err("a hatch needs 1 to 1000 lines".into());
                 }
                 for l in &h.lines {
-                    if !fin(l.angle) || !l.origin.is_finite() || !fin(l.offset) || !l.spacing.is_finite() || l.spacing <= 0.0 || l.spacing > MAX_COORD {
-                        return Err("a hatch line needs a positive spacing and finite numbers".into());
+                    if !fin(l.angle)
+                        || !l.origin.is_finite()
+                        || !fin(l.offset)
+                        || !l.spacing.is_finite()
+                        || l.spacing <= 0.0
+                        || l.spacing > MAX_COORD
+                    {
+                        return Err(
+                            "a hatch line needs a positive spacing and finite numbers".into()
+                        );
                     }
-                    if l.dash.len() > 64 || l.dash.iter().any(|d| !d.is_finite() || *d < 0.0) || (!l.dash.is_empty() && l.dash.iter().sum::<f64>() <= 0.0) {
-                        return Err("a dash pattern needs lengths of zero or more, and not all zero".into());
+                    if l.dash.len() > 64
+                        || l.dash.iter().any(|d| !d.is_finite() || *d < 0.0)
+                        || (!l.dash.is_empty() && l.dash.iter().sum::<f64>() <= 0.0)
+                    {
+                        return Err(
+                            "a dash pattern needs lengths of zero or more, and not all zero".into(),
+                        );
                     }
                     if l.weight.is_some_and(|w| !w.is_finite() || w < 0.0) {
                         return Err("the line weight of a hatch line must be zero or more".into());
@@ -369,10 +458,21 @@ impl GraphicResource {
                 Ok(())
             }
             GraphicResource::Tile(t) => {
-                if !t.width.is_finite() || !t.height.is_finite() || t.width <= 0.0 || t.height <= 0.0 || t.width > MAX_COORD || t.height > MAX_COORD {
+                if !t.width.is_finite()
+                    || !t.height.is_finite()
+                    || t.width <= 0.0
+                    || t.height <= 0.0
+                    || t.width > MAX_COORD
+                    || t.height > MAX_COORD
+                {
                     return Err("a tile needs a positive width and height".into());
                 }
-                if !fin(t.row_shift) || !fin(t.angle) || !t.scale.is_finite() || t.scale <= 0.0 || t.scale > MAX_COORD {
+                if !fin(t.row_shift)
+                    || !fin(t.angle)
+                    || !t.scale.is_finite()
+                    || t.scale <= 0.0
+                    || t.scale > MAX_COORD
+                {
                     return Err("a tile needs a positive scale and finite numbers".into());
                 }
                 Ok(())
@@ -383,10 +483,14 @@ impl GraphicResource {
                 }
                 for e in &l.elements {
                     match e {
-                        LineElement::Dash { length } | LineElement::Gap { length } if !length.is_finite() || *length < 0.0 || *length > MAX_COORD => {
+                        LineElement::Dash { length } | LineElement::Gap { length }
+                            if !length.is_finite() || *length < 0.0 || *length > MAX_COORD =>
+                        {
                             return Err("dash and gap lengths must be zero or more".into());
                         }
-                        LineElement::Mark { scale, .. } if !scale.is_finite() || *scale <= 0.0 || *scale > MAX_COORD => {
+                        LineElement::Mark { scale, .. }
+                            if !scale.is_finite() || *scale <= 0.0 || *scale > MAX_COORD =>
+                        {
                             return Err("the scale of a mark must be positive".into());
                         }
                         _ => {}
@@ -398,10 +502,14 @@ impl GraphicResource {
                 Ok(())
             }
             GraphicResource::Texture(t) => {
-                if !t.size.is_finite() || t.size.min_element() <= 0.0 || t.size.max_element() > MAX_COORD {
+                if !t.size.is_finite()
+                    || t.size.min_element() <= 0.0
+                    || t.size.max_element() > MAX_COORD
+                {
                     return Err("a texture needs a positive size".into());
                 }
-                if !(0.0..=1.0).contains(&t.reflectivity) || !(0.0..=1.0).contains(&t.transparency) {
+                if !(0.0..=1.0).contains(&t.reflectivity) || !(0.0..=1.0).contains(&t.transparency)
+                {
                     return Err("reflectivity and transparency are between 0 and 1".into());
                 }
                 Ok(())
@@ -487,11 +595,23 @@ impl GraphicResource {
 /// Rules for the geometry of one component (sizes that must be positive and so on).
 fn item_problem(shape: &Shape) -> Option<String> {
     match shape {
-        Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => Some("a radius must be positive".into()),
-        Shape::Arc { start, end, .. } if crate::model::arc_sweep(*start, *end) == 0.0 => Some("an arc sweep must not be zero".into()),
-        Shape::Polyline { points, .. } if points.len() < 2 => Some("a polyline needs 2 or more points".into()),
-        Shape::Text { height, .. } if *height <= 0.0 => Some("a text height must be positive".into()),
-        Shape::Symbol { scale, scale_y, .. } if *scale == 0.0 || scale_y.is_some_and(|y| y == 0.0) => Some("a nested symbol cannot have a scale of zero".into()),
+        Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => {
+            Some("a radius must be positive".into())
+        }
+        Shape::Arc { start, end, .. } if crate::model::arc_sweep(*start, *end) == 0.0 => {
+            Some("an arc sweep must not be zero".into())
+        }
+        Shape::Polyline { points, .. } if points.len() < 2 => {
+            Some("a polyline needs 2 or more points".into())
+        }
+        Shape::Text { height, .. } if *height <= 0.0 => {
+            Some("a text height must be positive".into())
+        }
+        Shape::Symbol { scale, scale_y, .. }
+            if *scale == 0.0 || scale_y.is_some_and(|y| y == 0.0) =>
+        {
+            Some("a nested symbol cannot have a scale of zero".into())
+        }
         _ => None,
     }
 }
@@ -535,7 +655,9 @@ impl crate::resource::Resources {
 
     /// The ID of the graphic resource of this type (`symbol`, `hatch`, ...) with this name (compared without case).
     pub fn find_graphic(&self, type_name: &str, name: &str) -> Option<ResourceId> {
-        self.iter().find(|r| r.body.type_name() == type_name && r.name.eq_ignore_ascii_case(name.trim())).map(|r| r.id)
+        self.iter()
+            .find(|r| r.body.type_name() == type_name && r.name.eq_ignore_ascii_case(name.trim()))
+            .map(|r| r.id)
     }
 
     /// True if the resource exists and is of this kind.
@@ -546,6 +668,20 @@ impl crate::resource::Resources {
             RefKind::LineType => self.line_type(id).is_some(),
             RefKind::PlantStyle => self.plant_style(id).is_some(),
         }
+    }
+
+    /// The first graphic resource that uses itself, directly or through others.
+    pub fn find_cycle(&self) -> Option<ResourceId> {
+        self.iter()
+            .filter(|r| matches!(r.body, crate::resource::ResourceBody::Graphic(_)))
+            .find(|r| {
+                self.graphic(r.id).is_some_and(|g| {
+                    g.refs()
+                        .into_iter()
+                        .any(|(x, _)| self.symbol_reaches(x, r.id))
+                })
+            })
+            .map(|r| r.id)
     }
 
     /// True if the resource `target` is `from` or is used by it, directly or through other resources.
@@ -573,11 +709,18 @@ mod tests {
     use crate::model::Shape;
 
     fn item(shape: Shape) -> SymbolItem {
-        SymbolItem { shape, attrs: Attributes::default(), class: None }
+        SymbolItem {
+            shape,
+            attrs: Attributes::default(),
+            class: None,
+        }
     }
 
     fn circle(r: f64) -> Shape {
-        Shape::Circle { center: DVec2::ZERO, radius: r }
+        Shape::Circle {
+            center: DVec2::ZERO,
+            radius: r,
+        }
     }
 
     #[test]
@@ -590,24 +733,84 @@ mod tests {
 
     #[test]
     fn symbol_rules() {
-        let ok = GraphicResource::Symbol(SymbolDef { items: vec![item(circle(5.0))], ..Default::default() });
+        let ok = GraphicResource::Symbol(SymbolDef {
+            items: vec![item(circle(5.0))],
+            ..Default::default()
+        });
         assert!(ok.validate().is_ok());
         assert_eq!(ok.type_name(), "symbol");
-        let bad = |shape| GraphicResource::Symbol(SymbolDef { items: vec![item(shape)], ..Default::default() }).validate().unwrap_err();
-        assert!(bad(Shape::Group { name: String::new() }).contains("group"));
+        let bad = |shape| {
+            GraphicResource::Symbol(SymbolDef {
+                items: vec![item(shape)],
+                ..Default::default()
+            })
+            .validate()
+            .unwrap_err()
+        };
+        assert!(
+            bad(Shape::Group {
+                name: String::new()
+            })
+            .contains("group")
+        );
         assert!(bad(circle(-1.0)).contains("radius"));
         assert!(bad(circle(f64::NAN)).contains("not valid"));
-        assert!(bad(Shape::Arc { center: DVec2::ZERO, radius: 1.0, start: 1.0, end: 1.0 }).contains("sweep"));
-        assert!(bad(Shape::Polyline { points: vec![crate::model::Vertex::corner(DVec2::ZERO)], closed: false }).contains("2 or more"));
-        assert!(bad(Shape::Text { at: DVec2::ZERO, text: "x".into(), height: 0.0 }).contains("height"));
-        assert!(bad(Shape::Symbol { symbol: ResourceId(1), at: DVec2::ZERO, rotation: 0.0, scale: 0.0, scale_y: None }).contains("zero"));
-        let far = GraphicResource::Symbol(SymbolDef { insertion: DVec2::new(f64::INFINITY, 0.0), ..Default::default() });
+        assert!(
+            bad(Shape::Arc {
+                center: DVec2::ZERO,
+                radius: 1.0,
+                start: 1.0,
+                end: 1.0
+            })
+            .contains("sweep")
+        );
+        assert!(
+            bad(Shape::Polyline {
+                points: vec![crate::model::Vertex::corner(DVec2::ZERO)],
+                closed: false
+            })
+            .contains("2 or more")
+        );
+        assert!(
+            bad(Shape::Text {
+                at: DVec2::ZERO,
+                text: "x".into(),
+                height: 0.0
+            })
+            .contains("height")
+        );
+        assert!(
+            bad(Shape::Symbol {
+                symbol: ResourceId(1),
+                at: DVec2::ZERO,
+                rotation: 0.0,
+                scale: 0.0,
+                scale_y: None
+            })
+            .contains("zero")
+        );
+        let far = GraphicResource::Symbol(SymbolDef {
+            insertion: DVec2::new(f64::INFINITY, 0.0),
+            ..Default::default()
+        });
         assert!(far.validate().is_err());
-        let many = GraphicResource::Symbol(SymbolDef { items: vec![item(circle(1.0)); MAX_ITEMS + 1], ..Default::default() });
+        let many = GraphicResource::Symbol(SymbolDef {
+            items: vec![item(circle(1.0)); MAX_ITEMS + 1],
+            ..Default::default()
+        });
         assert!(many.validate().unwrap_err().contains("too many"));
-        let mut s = SymbolDef { items: vec![item(circle(1.0))], ..Default::default() };
+        let mut s = SymbolDef {
+            items: vec![item(circle(1.0))],
+            ..Default::default()
+        };
         assert_eq!(s.kind(), "2d");
-        s.solids.push(Solid3d::Cylinder { center: DVec2::ZERO, radius: 1.0, base: 0.0, height: 2.0, color: None });
+        s.solids.push(Solid3d::Cylinder {
+            center: DVec2::ZERO,
+            radius: 1.0,
+            base: 0.0,
+            height: 2.0,
+            color: None,
+        });
         assert_eq!(s.kind(), "hybrid");
         assert!(s.has_3d() && s.has_2d());
         s.items.clear();
@@ -617,64 +820,236 @@ mod tests {
 
     #[test]
     fn solids() {
-        let cyl = Solid3d::Cylinder { center: DVec2::new(1.0, 1.0), radius: 2.0, base: 5.0, height: 3.0, color: Some(Color::BLACK) };
+        let cyl = Solid3d::Cylinder {
+            center: DVec2::new(1.0, 1.0),
+            radius: 2.0,
+            base: 5.0,
+            height: 3.0,
+            color: Some(Color::BLACK),
+        };
         assert_eq!(cyl.outline_points().len(), 24);
         assert_eq!(cyl.span(), (5.0, 3.0));
         assert_eq!(cyl.color(), Some(Color::BLACK));
-        let ext = Solid3d::Extrusion { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], base: 0.0, height: 1.0, color: None };
+        let ext = Solid3d::Extrusion {
+            outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y],
+            base: 0.0,
+            height: 1.0,
+            color: None,
+        };
         assert_eq!(ext.outline_points().len(), 3);
         assert_eq!(ext.color(), None);
         assert!(ext.problem().is_none() && cyl.problem().is_none());
-        let flat = Solid3d::Extrusion { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], base: 0.0, height: 0.0, color: None };
+        let flat = Solid3d::Extrusion {
+            outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y],
+            base: 0.0,
+            height: 0.0,
+            color: None,
+        };
         assert!(flat.problem().is_some());
-        let two = Solid3d::Extrusion { outline: vec![DVec2::ZERO, DVec2::X], base: 0.0, height: 1.0, color: None };
+        let two = Solid3d::Extrusion {
+            outline: vec![DVec2::ZERO, DVec2::X],
+            base: 0.0,
+            height: 1.0,
+            color: None,
+        };
         assert!(two.problem().unwrap().contains("3 or more"));
-        let nan = Solid3d::Extrusion { outline: vec![DVec2::ZERO, DVec2::X, DVec2::new(f64::NAN, 1.0)], base: 0.0, height: 1.0, color: None };
+        let nan = Solid3d::Extrusion {
+            outline: vec![DVec2::ZERO, DVec2::X, DVec2::new(f64::NAN, 1.0)],
+            base: 0.0,
+            height: 1.0,
+            color: None,
+        };
         assert!(nan.problem().unwrap().contains("invalid"));
-        let thin = Solid3d::Cylinder { center: DVec2::ZERO, radius: 0.0, base: 0.0, height: 1.0, color: None };
+        let thin = Solid3d::Cylinder {
+            center: DVec2::ZERO,
+            radius: 0.0,
+            base: 0.0,
+            height: 1.0,
+            color: None,
+        };
         assert!(thin.problem().unwrap().contains("radius"));
-        let sym = |s| GraphicResource::Symbol(SymbolDef { solids: vec![s], ..Default::default() }).validate();
+        let sym = |s| {
+            GraphicResource::Symbol(SymbolDef {
+                solids: vec![s],
+                ..Default::default()
+            })
+            .validate()
+        };
         assert!(sym(flat).is_err() && sym(cyl).is_ok());
     }
 
     #[test]
     fn hatch_rules() {
-        let h = |l: HatchLine| GraphicResource::Hatch(HatchDef { units: PatternUnits::Paper, lines: vec![l] }).validate();
+        let h = |l: HatchLine| {
+            GraphicResource::Hatch(HatchDef {
+                units: PatternUnits::Paper,
+                lines: vec![l],
+            })
+            .validate()
+        };
         assert!(h(HatchLine::solid(45.0, 2.0)).is_ok());
         assert!(h(HatchLine::solid(45.0, 0.0)).is_err());
         assert!(h(HatchLine::solid(f64::NAN, 1.0)).is_err());
-        assert!(h(HatchLine { dash: vec![1.0, -1.0], ..HatchLine::solid(0.0, 1.0) }).is_err());
-        assert!(h(HatchLine { dash: vec![0.0, 0.0], ..HatchLine::solid(0.0, 1.0) }).is_err());
-        assert!(h(HatchLine { dash: vec![2.0, 1.0], ..HatchLine::solid(0.0, 1.0) }).is_ok());
-        assert!(h(HatchLine { weight: Some(-1.0), ..HatchLine::solid(0.0, 1.0) }).is_err());
-        assert!(GraphicResource::Hatch(HatchDef::default()).validate().is_err());
+        assert!(
+            h(HatchLine {
+                dash: vec![1.0, -1.0],
+                ..HatchLine::solid(0.0, 1.0)
+            })
+            .is_err()
+        );
+        assert!(
+            h(HatchLine {
+                dash: vec![0.0, 0.0],
+                ..HatchLine::solid(0.0, 1.0)
+            })
+            .is_err()
+        );
+        assert!(
+            h(HatchLine {
+                dash: vec![2.0, 1.0],
+                ..HatchLine::solid(0.0, 1.0)
+            })
+            .is_ok()
+        );
+        assert!(
+            h(HatchLine {
+                weight: Some(-1.0),
+                ..HatchLine::solid(0.0, 1.0)
+            })
+            .is_err()
+        );
+        assert!(
+            GraphicResource::Hatch(HatchDef::default())
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]
     fn tile_line_type_and_texture_rules() {
-        let tile = TileDef { symbol: ResourceId(1), width: 10.0, height: 5.0, row_shift: 5.0, angle: 0.0, scale: 1.0, units: PatternUnits::World };
+        let tile = TileDef {
+            symbol: ResourceId(1),
+            width: 10.0,
+            height: 5.0,
+            row_shift: 5.0,
+            angle: 0.0,
+            scale: 1.0,
+            units: PatternUnits::World,
+        };
         assert!(GraphicResource::Tile(tile.clone()).validate().is_ok());
-        assert!(GraphicResource::Tile(TileDef { width: 0.0, ..tile.clone() }).validate().is_err());
-        assert!(GraphicResource::Tile(TileDef { scale: 0.0, ..tile.clone() }).validate().is_err());
-        assert!(GraphicResource::Tile(TileDef { angle: f64::NAN, ..tile }).validate().is_err());
+        assert!(
+            GraphicResource::Tile(TileDef {
+                width: 0.0,
+                ..tile.clone()
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GraphicResource::Tile(TileDef {
+                scale: 0.0,
+                ..tile.clone()
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GraphicResource::Tile(TileDef {
+                angle: f64::NAN,
+                ..tile
+            })
+            .validate()
+            .is_err()
+        );
 
-        let lt = |elements| GraphicResource::LineType(LineTypeDef { units: PatternUnits::Paper, elements }).validate();
-        assert!(lt(vec![LineElement::Dash { length: 3.0 }, LineElement::Gap { length: 1.0 }]).is_ok());
+        let lt = |elements| {
+            GraphicResource::LineType(LineTypeDef {
+                units: PatternUnits::Paper,
+                elements,
+            })
+            .validate()
+        };
+        assert!(
+            lt(vec![
+                LineElement::Dash { length: 3.0 },
+                LineElement::Gap { length: 1.0 }
+            ])
+            .is_ok()
+        );
         assert!(lt(vec![]).is_err());
         assert!(lt(vec![LineElement::Dash { length: -1.0 }]).is_err());
-        assert!(lt(vec![LineElement::Dash { length: 0.0 }]).unwrap_err().contains("longer than zero"));
-        assert!(lt(vec![LineElement::Gap { length: 1.0 }, LineElement::Mark { symbol: ResourceId(2), scale: 0.0, rotate: true }]).is_err());
-        let lt2 = LineTypeDef { units: PatternUnits::Paper, elements: vec![LineElement::Dash { length: 3.0 }, LineElement::Mark { symbol: ResourceId(2), scale: 1.0, rotate: true }, LineElement::Gap { length: 1.0 }] };
+        assert!(
+            lt(vec![LineElement::Dash { length: 0.0 }])
+                .unwrap_err()
+                .contains("longer than zero")
+        );
+        assert!(
+            lt(vec![
+                LineElement::Gap { length: 1.0 },
+                LineElement::Mark {
+                    symbol: ResourceId(2),
+                    scale: 0.0,
+                    rotate: true
+                }
+            ])
+            .is_err()
+        );
+        let lt2 = LineTypeDef {
+            units: PatternUnits::Paper,
+            elements: vec![
+                LineElement::Dash { length: 3.0 },
+                LineElement::Mark {
+                    symbol: ResourceId(2),
+                    scale: 1.0,
+                    rotate: true,
+                },
+                LineElement::Gap { length: 1.0 },
+            ],
+        };
         assert_eq!(lt2.period(), 4.0);
 
-        let tex = TextureDef { color: Color::BLACK, size: DVec2::splat(500.0), reflectivity: 0.2, transparency: 0.0, image: Some("oak.png".into()) };
+        let tex = TextureDef {
+            color: Color::BLACK,
+            size: DVec2::splat(500.0),
+            reflectivity: 0.2,
+            transparency: 0.0,
+            image: Some("oak.png".into()),
+        };
         assert!(GraphicResource::Texture(tex.clone()).validate().is_ok());
-        assert!(GraphicResource::Texture(TextureDef { size: DVec2::new(0.0, 5.0), ..tex.clone() }).validate().is_err());
-        assert!(GraphicResource::Texture(TextureDef { reflectivity: 2.0, ..tex.clone() }).validate().is_err());
-        let names: Vec<&str> = [GraphicResource::Texture(tex), GraphicResource::Hatch(HatchDef::default()), GraphicResource::Tile(TileDef { symbol: ResourceId(1), width: 1.0, height: 1.0, row_shift: 0.0, angle: 0.0, scale: 1.0, units: PatternUnits::Paper }), GraphicResource::LineType(LineTypeDef::default()), GraphicResource::Symbol(SymbolDef::default())]
-            .iter()
-            .map(GraphicResource::type_name)
-            .collect();
+        assert!(
+            GraphicResource::Texture(TextureDef {
+                size: DVec2::new(0.0, 5.0),
+                ..tex.clone()
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GraphicResource::Texture(TextureDef {
+                reflectivity: 2.0,
+                ..tex.clone()
+            })
+            .validate()
+            .is_err()
+        );
+        let names: Vec<&str> = [
+            GraphicResource::Texture(tex),
+            GraphicResource::Hatch(HatchDef::default()),
+            GraphicResource::Tile(TileDef {
+                symbol: ResourceId(1),
+                width: 1.0,
+                height: 1.0,
+                row_shift: 0.0,
+                angle: 0.0,
+                scale: 1.0,
+                units: PatternUnits::Paper,
+            }),
+            GraphicResource::LineType(LineTypeDef::default()),
+            GraphicResource::Symbol(SymbolDef::default()),
+        ]
+        .iter()
+        .map(GraphicResource::type_name)
+        .collect();
         for n in names {
             assert!(TYPE_NAMES.contains(&n));
         }
@@ -682,20 +1057,71 @@ mod tests {
 
     #[test]
     fn refs_and_remap() {
-        let attrs = Attributes { fill_pattern: Some(ResourceId(3)), line_type: Some(ResourceId(4)), ..Default::default() };
-        let nested = Shape::Symbol { symbol: ResourceId(5), at: DVec2::ZERO, rotation: 0.0, scale: 1.0, scale_y: None };
-        let mut sym = GraphicResource::Symbol(SymbolDef { items: vec![SymbolItem { shape: circle(1.0), attrs, class: None }, item(nested)], ..Default::default() });
+        let attrs = Attributes {
+            fill_pattern: Some(ResourceId(3)),
+            line_type: Some(ResourceId(4)),
+            ..Default::default()
+        };
+        let nested = Shape::Symbol {
+            symbol: ResourceId(5),
+            at: DVec2::ZERO,
+            rotation: 0.0,
+            scale: 1.0,
+            scale_y: None,
+        };
+        let mut sym = GraphicResource::Symbol(SymbolDef {
+            items: vec![
+                SymbolItem {
+                    shape: circle(1.0),
+                    attrs,
+                    class: None,
+                },
+                item(nested),
+            ],
+            ..Default::default()
+        });
         let refs = sym.refs();
-        assert_eq!(refs, vec![(ResourceId(3), RefKind::Pattern), (ResourceId(4), RefKind::LineType), (ResourceId(5), RefKind::Symbol)]);
+        assert_eq!(
+            refs,
+            vec![
+                (ResourceId(3), RefKind::Pattern),
+                (ResourceId(4), RefKind::LineType),
+                (ResourceId(5), RefKind::Symbol)
+            ]
+        );
         sym.remap(&|r| ResourceId(r.0 + 10));
-        assert_eq!(sym.refs().iter().map(|(r, _)| r.0).collect::<Vec<_>>(), vec![13, 14, 15]);
-        let mut tile = GraphicResource::Tile(TileDef { symbol: ResourceId(1), width: 1.0, height: 1.0, row_shift: 0.0, angle: 0.0, scale: 1.0, units: PatternUnits::Paper });
+        assert_eq!(
+            sym.refs().iter().map(|(r, _)| r.0).collect::<Vec<_>>(),
+            vec![13, 14, 15]
+        );
+        let mut tile = GraphicResource::Tile(TileDef {
+            symbol: ResourceId(1),
+            width: 1.0,
+            height: 1.0,
+            row_shift: 0.0,
+            angle: 0.0,
+            scale: 1.0,
+            units: PatternUnits::Paper,
+        });
         tile.remap(&|r| ResourceId(r.0 + 1));
         assert_eq!(tile.refs(), vec![(ResourceId(2), RefKind::Symbol)]);
-        let mut lt = GraphicResource::LineType(LineTypeDef { units: PatternUnits::Paper, elements: vec![LineElement::Dash { length: 1.0 }, LineElement::Mark { symbol: ResourceId(7), scale: 1.0, rotate: false }] });
+        let mut lt = GraphicResource::LineType(LineTypeDef {
+            units: PatternUnits::Paper,
+            elements: vec![
+                LineElement::Dash { length: 1.0 },
+                LineElement::Mark {
+                    symbol: ResourceId(7),
+                    scale: 1.0,
+                    rotate: false,
+                },
+            ],
+        });
         lt.remap(&|_| ResourceId(8));
         assert_eq!(lt.refs(), vec![(ResourceId(8), RefKind::Symbol)]);
-        let mut h = GraphicResource::Hatch(HatchDef { units: PatternUnits::Paper, lines: vec![HatchLine::solid(0.0, 1.0)] });
+        let mut h = GraphicResource::Hatch(HatchDef {
+            units: PatternUnits::Paper,
+            lines: vec![HatchLine::solid(0.0, 1.0)],
+        });
         h.remap(&|_| ResourceId(1));
         assert!(h.refs().is_empty());
         assert_eq!(RefKind::Pattern.label(), "hatch or tile");
@@ -706,14 +1132,31 @@ mod tests {
 
     #[test]
     fn json_round_trip() {
-        let h = GraphicResource::Hatch(HatchDef { units: PatternUnits::World, lines: vec![HatchLine { dash: vec![5.0, 2.0], color: Some(Color([1, 2, 3, 255])), weight: Some(0.1), ..HatchLine::solid(30.0, 4.0) }] });
+        let h = GraphicResource::Hatch(HatchDef {
+            units: PatternUnits::World,
+            lines: vec![HatchLine {
+                dash: vec![5.0, 2.0],
+                color: Some(Color([1, 2, 3, 255])),
+                weight: Some(0.1),
+                ..HatchLine::solid(30.0, 4.0)
+            }],
+        });
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["type"], "hatch");
         assert_eq!(serde_json::from_value::<GraphicResource>(v).unwrap(), h);
         let v = serde_json::json!({"type": "line_type", "elements": [{"kind": "dash", "length": 3}, {"kind": "mark", "symbol": 4}]});
         let lt: GraphicResource = serde_json::from_value(v).unwrap();
-        let GraphicResource::LineType(l) = &lt else { panic!() };
+        let GraphicResource::LineType(l) = &lt else {
+            panic!()
+        };
         assert_eq!(l.units, PatternUnits::Paper);
-        assert_eq!(l.elements[1], LineElement::Mark { symbol: ResourceId(4), scale: 1.0, rotate: true });
+        assert_eq!(
+            l.elements[1],
+            LineElement::Mark {
+                symbol: ResourceId(4),
+                scale: 1.0,
+                rotate: true
+            }
+        );
     }
 }

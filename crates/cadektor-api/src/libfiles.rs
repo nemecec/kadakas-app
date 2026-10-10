@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::library::{self, Conflict};
@@ -14,11 +14,17 @@ use cadektor_core::resource::ResourceId;
 use crate::{RpcError, Session};
 
 fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: -32602, message: e.to_string() }
+    RpcError {
+        code: -32602,
+        message: e.to_string(),
+    }
 }
 
 fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: 1, message: e.to_string() }
+    RpcError {
+        code: 1,
+        message: e.to_string(),
+    }
 }
 
 /// The per-user library folder: `CADEKTOR_LIBRARY_DIR`, else `~/.config/cadektor/library`.
@@ -27,7 +33,12 @@ pub fn library_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(d));
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".config").join("cadektor").join("library"))
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("cadektor")
+            .join("library"),
+    )
 }
 
 /// A file in the library folder by name. The name has no folders. `.cdk.json` is added when it has no extension.
@@ -35,14 +46,22 @@ fn library_file(name: &str) -> Result<PathBuf, RpcError> {
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         return Err(bad("a library name is a file name without folders"));
     }
-    let dir = library_dir().ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?;
-    let file = if name.ends_with(".json") { name.to_string() } else { format!("{name}.cdk.json") };
+    let dir =
+        library_dir().ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?;
+    let file = if name.ends_with(".json") {
+        name.to_string()
+    } else {
+        format!("{name}.cdk.json")
+    };
     Ok(dir.join(file))
 }
 
 /// The path of a request (`path` or `library`), checked by the path policy of the session.
 fn request_path(s: &Session, m: &Map<String, Value>, write: bool) -> Result<PathBuf, RpcError> {
-    let path = match (m.get("path").and_then(Value::as_str), m.get("library").and_then(Value::as_str)) {
+    let path = match (
+        m.get("path").and_then(Value::as_str),
+        m.get("library").and_then(Value::as_str),
+    ) {
         (Some(p), _) => PathBuf::from(p),
         (None, Some(l)) => library_file(l)?,
         _ => return Err(bad("give 'path' or 'library'")),
@@ -51,7 +70,8 @@ fn request_path(s: &Session, m: &Map<String, Value>, write: bool) -> Result<Path
 }
 
 fn load(path: &Path) -> Result<Document, RpcError> {
-    let text = std::fs::read_to_string(path).map_err(|e| app(format!("cannot read {}: {e}", path.display())))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| app(format!("cannot read {}: {e}", path.display())))?;
     Document::from_json(&text).map_err(|e| app(format!("{}: {e}", path.display())))
 }
 
@@ -60,20 +80,46 @@ fn pick(src: &Document, m: &Map<String, Value>) -> Result<Vec<ResourceId>, RpcEr
     if m.get("all").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(src.resources.iter().map(|r| r.id).collect());
     }
-    let Some(items) = m.get("items") else { return Ok(Vec::new()) };
-    let items = items.as_array().ok_or_else(|| bad("'items' must be a list"))?;
+    let Some(items) = m.get("items") else {
+        return Ok(Vec::new());
+    };
+    let items = items
+        .as_array()
+        .ok_or_else(|| bad("'items' must be a list"))?;
     let mut out = Vec::new();
     for it in items {
         let (ty, name) = match it {
             Value::String(n) => (None, n.as_str()),
-            Value::Object(o) => (o.get("type").and_then(Value::as_str), o.get("name").and_then(Value::as_str).ok_or_else(|| bad("each item needs a 'name'"))?),
+            Value::Object(o) => (
+                o.get("type").and_then(Value::as_str),
+                o.get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| bad("each item needs a 'name'"))?,
+            ),
             _ => return Err(bad("an item is a name or {type, name}")),
         };
-        let hits: Vec<ResourceId> = src.resources.iter().filter(|r| r.name.eq_ignore_ascii_case(name.trim()) && ty.is_none_or(|t| r.body.type_name() == t)).map(|r| r.id).collect();
+        let hits: Vec<ResourceId> = src
+            .resources
+            .iter()
+            .filter(|r| {
+                r.name.eq_ignore_ascii_case(name.trim())
+                    && ty.is_none_or(|t| r.body.type_name() == t)
+            })
+            .map(|r| r.id)
+            .collect();
         match hits.as_slice() {
             [one] => out.push(*one),
-            [] => return Err(app(format!("the file has no {} named '{name}'", ty.unwrap_or("resource")))),
-            _ => return Err(bad(format!("several resources are named '{name}'. Add the type"))),
+            [] => {
+                return Err(app(format!(
+                    "the file has no {} named '{name}'",
+                    ty.unwrap_or("resource")
+                )));
+            }
+            _ => {
+                return Err(bad(format!(
+                    "several resources are named '{name}'. Add the type"
+                )));
+            }
         }
     }
     Ok(out)
@@ -82,12 +128,15 @@ fn pick(src: &Document, m: &Map<String, Value>) -> Result<Vec<ResourceId>, RpcEr
 fn names(m: &Map<String, Value>, key: &str) -> Result<Vec<String>, RpcError> {
     match m.get(key) {
         None => Ok(Vec::new()),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad(format!("'{key}' must be a list of names"))),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|_| bad(format!("'{key}' must be a list of names"))),
     }
 }
 
 fn favorites_path() -> Result<PathBuf, RpcError> {
-    Ok(library_dir().ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?.join("favorites.json"))
+    Ok(library_dir()
+        .ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?
+        .join("favorites.json"))
 }
 
 fn read_favorites() -> Result<Vec<Value>, RpcError> {
@@ -103,10 +152,18 @@ fn write_favorites(list: &[Value]) -> Result<(), RpcError> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(app)?;
     }
-    cadektor_core::fsio::write_atomic(&p, serde_json::to_string_pretty(list).map_err(app)?.as_bytes()).map_err(app)
+    cadektor_core::fsio::write_atomic(
+        &p,
+        serde_json::to_string_pretty(list).map_err(app)?.as_bytes(),
+    )
+    .map_err(app)
 }
 
-pub(crate) fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, RpcError> {
+pub(crate) fn run(
+    s: &mut Session,
+    method: &str,
+    m: &Map<String, Value>,
+) -> Result<Value, RpcError> {
     match method {
         "resource.list_file" => {
             let path = request_path(s, m, false)?;
@@ -123,7 +180,8 @@ pub(crate) fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Resu
             let src = load(&path)?;
             let conflict = match m.get("on_conflict").and_then(Value::as_str) {
                 None => Conflict::Rename,
-                Some(c) => Conflict::from_name(c).ok_or_else(|| bad("'on_conflict' is rename, reuse or replace"))?,
+                Some(c) => Conflict::from_name(c)
+                    .ok_or_else(|| bad("'on_conflict' is rename, reuse or replace"))?,
             };
             let picks = pick(&src, m)?;
             let classes = names(m, "classes")?;
@@ -135,8 +193,10 @@ pub(crate) fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Resu
             // so the IDs it plans are right, and everything runs as one undo step.
             let mut scratch = Editor::new(s.editor.doc().clone());
             let mut commands = Vec::new();
-            let (cc, classes_added) = library::import_classes_plan(scratch.doc(), &src, &classes).map_err(app)?;
-            let (lc, layers_added) = library::import_layers_plan(scratch.doc(), &src, &layers).map_err(app)?;
+            let (cc, classes_added) =
+                library::import_classes_plan(scratch.doc(), &src, &classes).map_err(app)?;
+            let (lc, layers_added) =
+                library::import_layers_plan(scratch.doc(), &src, &layers).map_err(app)?;
             for c in [cc, lc].into_iter().flatten() {
                 scratch.execute(&c).map_err(app)?;
                 commands.push(c);
@@ -144,18 +204,28 @@ pub(crate) fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Resu
             let plan = library::import_plan(scratch.doc(), &src, &picks, conflict).map_err(app)?;
             commands.extend(plan.command.clone());
             if !commands.is_empty() {
-                s.editor.execute(&Command::Batch { commands }).map_err(app)?;
+                s.editor
+                    .execute(&Command::Batch { commands })
+                    .map_err(app)?;
                 s.prune_selection();
             }
             let imported: Vec<Value> = plan.items.iter().map(|i| json!({"name": i.name, "type": i.type_name, "id": i.dst, "status": i.status.id(), "dependency": i.dependency})).collect();
             let mut classes_added = classes_added;
             classes_added.extend(plan.classes_added);
-            Ok(json!({ "imported": imported, "classes_added": classes_added, "layers_added": layers_added }))
+            Ok(
+                json!({ "imported": imported, "classes_added": classes_added, "layers_added": layers_added }),
+            )
         }
         "resource.export_to_file" => {
             let path = request_path(s, m, true)?;
-            if path.exists() && !m.get("overwrite").and_then(Value::as_bool).unwrap_or(false) && s.paths.is_restricted() {
-                return Err(app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+            if path.exists()
+                && !m.get("overwrite").and_then(Value::as_bool).unwrap_or(false)
+                && s.paths.is_restricted()
+            {
+                return Err(app(format!(
+                    "{} exists: pass \"overwrite\": true to replace it",
+                    path.display()
+                )));
             }
             let doc = s.editor.doc();
             let ids: Vec<ResourceId> = match m.get("ids") {
@@ -171,17 +241,21 @@ pub(crate) fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Resu
                 std::fs::create_dir_all(dir).map_err(app)?;
             }
             let text = serde_json::to_string_pretty(out.doc()).map_err(app)?;
-            cadektor_core::fsio::write_atomic(&path, text.as_bytes()).map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
+            cadektor_core::fsio::write_atomic(&path, text.as_bytes())
+                .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
             Ok(json!({ "path": path, "count": plan.items.len() }))
         }
         "library.list" => {
-            let dir = library_dir().ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?;
+            let dir = library_dir()
+                .ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?;
             let mut files = Vec::new();
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {
                     let name = e.file_name().to_string_lossy().to_string();
                     if name.ends_with(".cdk.json")
-                        && let Ok(doc) = std::fs::read_to_string(e.path()).map_err(|e| e.to_string()).and_then(|t| Document::from_json(&t).map_err(|e| e.to_string()))
+                        && let Ok(doc) = std::fs::read_to_string(e.path())
+                            .map_err(|e| e.to_string())
+                            .and_then(|t| Document::from_json(&t).map_err(|e| e.to_string()))
                     {
                         files.push(json!({"file": name, "resources": doc.resources.len()}));
                     }

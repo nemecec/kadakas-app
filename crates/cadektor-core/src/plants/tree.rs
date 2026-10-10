@@ -26,7 +26,12 @@ pub enum TreeCondition {
 }
 
 impl TreeCondition {
-    pub const ALL: [TreeCondition; 4] = [TreeCondition::Good, TreeCondition::Fair, TreeCondition::Poor, TreeCondition::Dead];
+    pub const ALL: [TreeCondition; 4] = [
+        TreeCondition::Good,
+        TreeCondition::Fair,
+        TreeCondition::Poor,
+        TreeCondition::Dead,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -66,14 +71,20 @@ pub const DEFAULT_RPZ_CAP: f64 = 15_000.0;
 /// Radius of the root protection zone, in mm: `dbh` times the factor, at most the cap.
 /// A missing or invalid factor or cap means the default.
 pub fn rpz_radius(dbh: f64, factor: Option<f64>, cap: Option<f64>) -> f64 {
-    let f = factor.filter(|f| f.is_finite() && *f >= 0.0).unwrap_or(DEFAULT_RPZ_FACTOR);
-    let cap = cap.filter(|c| c.is_finite() && *c >= 0.0).unwrap_or(DEFAULT_RPZ_CAP);
+    let f = factor
+        .filter(|f| f.is_finite() && *f >= 0.0)
+        .unwrap_or(DEFAULT_RPZ_FACTOR);
+    let cap = cap
+        .filter(|c| c.is_finite() && *c >= 0.0)
+        .unwrap_or(DEFAULT_RPZ_CAP);
     (dbh.max(0.0) * f).min(cap)
 }
 
 /// A circle as a closed point list, for drawing.
 pub fn circle(center: DVec2, radius: f64, segments: usize) -> Vec<DVec2> {
-    (0..segments).map(|k| center + DVec2::from_angle(TAU * k as f64 / segments as f64) * radius).collect()
+    (0..segments)
+        .map(|k| center + DVec2::from_angle(TAU * k as f64 / segments as f64) * radius)
+        .collect()
 }
 
 #[cfg(test)]

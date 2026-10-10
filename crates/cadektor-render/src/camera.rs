@@ -75,7 +75,13 @@ impl Default for Camera {
 impl Camera {
     pub fn standard(view: StandardView, projection: Projection) -> Camera {
         let (yaw, pitch) = view.yaw_pitch();
-        Camera { target: Vec3::ZERO, yaw, pitch, distance: 10_000.0, projection }
+        Camera {
+            target: Vec3::ZERO,
+            yaw,
+            pitch,
+            distance: 10_000.0,
+            projection,
+        }
     }
 
     /// Looks from a standard view, keeping target and distance.
@@ -85,7 +91,11 @@ impl Camera {
 
     /// Unit vector from the target to the eye.
     pub fn eye_dir(&self) -> Vec3 {
-        Vec3::new(self.pitch.cos() * self.yaw.cos(), self.pitch.cos() * self.yaw.sin(), self.pitch.sin())
+        Vec3::new(
+            self.pitch.cos() * self.yaw.cos(),
+            self.pitch.cos() * self.yaw.sin(),
+            self.pitch.sin(),
+        )
     }
 
     pub fn eye(&self) -> Vec3 {
@@ -153,7 +163,11 @@ impl Camera {
     /// A box with a number that is not finite counts as no box, and so does a bad `aspect`
     /// (a viewport of zero width), so the camera always stays valid.
     pub fn fit(&mut self, bounds: Option<Bounds3>, aspect: f32) {
-        let aspect = if aspect.is_finite() && aspect > 1e-3 { aspect } else { 1.0 };
+        let aspect = if aspect.is_finite() && aspect > 1e-3 {
+            aspect
+        } else {
+            1.0
+        };
         let (lo, hi) = finite_bounds(bounds).unwrap_or((Vec3::splat(-1000.0), Vec3::splat(1000.0)));
         let center = (lo + hi) / 2.0;
         self.target = center;
@@ -175,7 +189,11 @@ impl Camera {
                 Projection::Orthographic => need.max(x / tx).max(y / ty),
             };
         }
-        self.distance = if need.is_finite() { (need * 1.08).clamp(MIN_DISTANCE, MAX_DISTANCE) } else { 10_000.0 };
+        self.distance = if need.is_finite() {
+            (need * 1.08).clamp(MIN_DISTANCE, MAX_DISTANCE)
+        } else {
+            10_000.0
+        };
     }
 
     /// Turns the camera around the target. Angles in radians. The pitch stops at the poles.
@@ -184,7 +202,8 @@ impl Camera {
             return;
         }
         self.yaw = (self.yaw + d_yaw).rem_euclid(std::f32::consts::TAU);
-        self.pitch = (self.pitch + d_pitch).clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        self.pitch =
+            (self.pitch + d_pitch).clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
     }
 
     /// Drags the scene by `(dx, dy)` px (screen Y down) in a viewport `height_px` tall.
@@ -217,9 +236,15 @@ impl Camera {
         let hh = self.half_height();
         let (right, up, fwd) = (self.right(), self.up(), self.forward());
         match self.projection {
-            Projection::Orthographic => (self.eye() + right * ndc.x * hh * aspect + up * ndc.y * hh, fwd),
+            Projection::Orthographic => (
+                self.eye() + right * ndc.x * hh * aspect + up * ndc.y * hh,
+                fwd,
+            ),
             Projection::Perspective => {
-                let dir = (fwd + right * ndc.x * (FOV_Y / 2.0).tan() * aspect + up * ndc.y * (FOV_Y / 2.0).tan()).normalize();
+                let dir = (fwd
+                    + right * ndc.x * (FOV_Y / 2.0).tan() * aspect
+                    + up * ndc.y * (FOV_Y / 2.0).tan())
+                .normalize();
                 (self.eye(), dir)
             }
         }
@@ -258,17 +283,26 @@ mod tests {
         let c = Camera::standard(StandardView::RightIsometric, Projection::Orthographic);
         let d = c.eye_dir();
         assert!(d.x > 0.0 && d.y < 0.0 && d.z > 0.0);
-        assert!((d.x + d.y).abs() < 1e-5 && (d.x - d.z * 2f32.sqrt() / 2.0 * 2f32.sqrt()).abs() < 1e-4 || (d.x.abs() - d.z).abs() < 1e-4);
-        let rear = Camera::standard(StandardView::LeftRearIsometric, Projection::Orthographic).eye_dir();
+        assert!(
+            (d.x + d.y).abs() < 1e-5 && (d.x - d.z * 2f32.sqrt() / 2.0 * 2f32.sqrt()).abs() < 1e-4
+                || (d.x.abs() - d.z).abs() < 1e-4
+        );
+        let rear =
+            Camera::standard(StandardView::LeftRearIsometric, Projection::Orthographic).eye_dir();
         assert!(rear.x < 0.0 && rear.y > 0.0 && rear.z > 0.0);
-        let left = Camera::standard(StandardView::LeftIsometric, Projection::Orthographic).eye_dir();
+        let left =
+            Camera::standard(StandardView::LeftIsometric, Projection::Orthographic).eye_dir();
         assert!(left.x < 0.0 && left.y < 0.0);
-        let rr = Camera::standard(StandardView::RightRearIsometric, Projection::Orthographic).eye_dir();
+        let rr =
+            Camera::standard(StandardView::RightRearIsometric, Projection::Orthographic).eye_dir();
         assert!(rr.x > 0.0 && rr.y > 0.0);
         // The camera basis is orthonormal for every view.
         for v in StandardView::ALL {
             let c = Camera::standard(v, Projection::Perspective);
-            assert!(c.right().dot(c.up()).abs() < 1e-5 && (c.up().length() - 1.0).abs() < 1e-5, "{v:?}");
+            assert!(
+                c.right().dot(c.up()).abs() < 1e-5 && (c.up().length() - 1.0).abs() < 1e-5,
+                "{v:?}"
+            );
             assert!(c.forward().dot(c.up()).abs() < 1e-5);
         }
     }
@@ -281,9 +315,13 @@ mod tests {
             let p = c.project(c.target, 1.5, None).unwrap();
             assert!(p.x.abs() < 1e-5 && p.y.abs() < 1e-5, "{proj:?} {p:?}");
             // A point one half-height above the target is at the top of the view.
-            let up = c.project(c.target + c.up() * c.half_height(), 1.5, None).unwrap();
+            let up = c
+                .project(c.target + c.up() * c.half_height(), 1.5, None)
+                .unwrap();
             assert!((up.y - 1.0).abs() < 1e-4 && up.x.abs() < 1e-5);
-            let right = c.project(c.target + c.right() * c.half_height() * 1.5, 1.5, None).unwrap();
+            let right = c
+                .project(c.target + c.right() * c.half_height() * 1.5, 1.5, None)
+                .unwrap();
             assert!((right.x - 1.0).abs() < 1e-4);
         }
         // Behind the camera.
@@ -302,7 +340,11 @@ mod tests {
             let (o, d) = c.ray(Vec2::new(ndc.x, ndc.y), 1.7);
             assert!((d.length() - 1.0).abs() < 1e-5);
             let t = (p - o).dot(d);
-            assert!((o + d * t - p).length() < 0.5, "{proj:?}: miss by {}", (o + d * t - p).length());
+            assert!(
+                (o + d * t - p).length() < 0.5,
+                "{proj:?}: miss by {}",
+                (o + d * t - p).length()
+            );
         }
     }
 
@@ -310,7 +352,10 @@ mod tests {
     fn navigation_math() {
         let mut c = Camera::standard(StandardView::RightIsometric, Projection::Orthographic);
         c.orbit(1.0, 10.0);
-        assert!((c.pitch - std::f32::consts::FRAC_PI_2).abs() < 1e-6, "pitch stops at the pole");
+        assert!(
+            (c.pitch - std::f32::consts::FRAC_PI_2).abs() < 1e-6,
+            "pitch stops at the pole"
+        );
         c.orbit(0.0, -10.0);
         assert!((c.pitch + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
         c.orbit(20.0, 0.0);
@@ -322,8 +367,14 @@ mod tests {
         let before = c.project(Vec3::new(100.0, 100.0, 0.0), 1.0, None).unwrap();
         c.pan(30.0, -20.0, 400.0); // 400 px tall: 10 mm per px
         let after = c.project(Vec3::new(100.0, 100.0, 0.0), 1.0, None).unwrap();
-        assert!((after.x - before.x - 30.0 / 200.0).abs() < 1e-4, "moves right by 30 px");
-        assert!((after.y - before.y - 20.0 / 200.0).abs() < 1e-4, "moves down by 20 px");
+        assert!(
+            (after.x - before.x - 30.0 / 200.0).abs() < 1e-4,
+            "moves right by 30 px"
+        );
+        assert!(
+            (after.y - before.y - 20.0 / 200.0).abs() < 1e-4,
+            "moves down by 20 px"
+        );
 
         // Zoom to cursor keeps the point under the cursor.
         for proj in [Projection::Orthographic, Projection::Perspective] {
@@ -336,7 +387,10 @@ mod tests {
             c.zoom_at(2.0, ndc, 1.3);
             assert!((c.distance - 5000.0).abs() < 1e-2);
             let q = c.project(p, 1.3, None).unwrap();
-            assert!((q.x - ndc.x).abs() < 1e-3 && (q.y - ndc.y).abs() < 1e-3, "{proj:?} {q:?}");
+            assert!(
+                (q.x - ndc.x).abs() < 1e-3 && (q.y - ndc.y).abs() < 1e-3,
+                "{proj:?} {q:?}"
+            );
         }
         let mut c = Camera::default();
         let d = c.distance;
@@ -351,7 +405,10 @@ mod tests {
 
     #[test]
     fn fit_shows_the_whole_box() {
-        let bounds = (Vec3::new(-3000.0, -1000.0, 0.0), Vec3::new(5000.0, 2000.0, 1500.0));
+        let bounds = (
+            Vec3::new(-3000.0, -1000.0, 0.0),
+            Vec3::new(5000.0, 2000.0, 1500.0),
+        );
         for proj in [Projection::Orthographic, Projection::Perspective] {
             for view in StandardView::ALL {
                 for aspect in [0.6, 1.0, 2.0] {
@@ -364,7 +421,10 @@ mod tests {
                             if i & 4 == 0 { bounds.0.z } else { bounds.1.z },
                         );
                         let p = c.project(corner, aspect, Some(bounds)).unwrap();
-                        assert!(p.x.abs() <= 1.0 + 1e-3 && p.y.abs() <= 1.0 + 1e-3, "{view:?} {proj:?} {aspect}: {p:?}");
+                        assert!(
+                            p.x.abs() <= 1.0 + 1e-3 && p.y.abs() <= 1.0 + 1e-3,
+                            "{view:?} {proj:?} {aspect}: {p:?}"
+                        );
                         assert!((0.0..=1.0).contains(&p.z), "depth {p:?}");
                     }
                 }

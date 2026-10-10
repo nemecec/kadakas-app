@@ -28,7 +28,10 @@ pub struct Report {
 
 impl Report {
     pub fn new(format: &str) -> Report {
-        Report { format: format.into(), ..Report::default() }
+        Report {
+            format: format.into(),
+            ..Report::default()
+        }
     }
 
     /// Counts an object of this shape kind.
@@ -41,9 +44,17 @@ impl Report {
     }
 
     pub fn skip(&mut self, entity: &str, reason: &str) {
-        match self.skipped.iter_mut().find(|s| s.entity == entity && s.reason == reason) {
+        match self
+            .skipped
+            .iter_mut()
+            .find(|s| s.entity == entity && s.reason == reason)
+        {
             Some(s) => s.count += 1,
-            None => self.skipped.push(Skipped { entity: entity.into(), reason: reason.into(), count: 1 }),
+            None => self.skipped.push(Skipped {
+                entity: entity.into(),
+                reason: reason.into(),
+                count: 1,
+            }),
         }
     }
 

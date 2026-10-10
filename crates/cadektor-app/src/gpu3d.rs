@@ -16,7 +16,7 @@ use cadektor_render::{AMBIENT, LIGHT_DIR};
 use eframe::egui_wgpu::{self, wgpu};
 use wgpu::util::DeviceExt;
 
-use crate::vertex::{line_vertices, surface_vertices, LineVertex, SurfaceVertex};
+use crate::vertex::{LineVertex, SurfaceVertex, line_vertices, surface_vertices};
 
 const SHADER: &str = r#"
 struct Globals {
@@ -196,14 +196,15 @@ pub struct Gpu3d {
 }
 
 fn line_buffer(device: &wgpu::Device, data: &[LineVertex]) -> Option<(wgpu::Buffer, u32)> {
-    (!data.is_empty() && (std::mem::size_of_val(data) as u64) < device.limits().max_buffer_size).then(|| {
-        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cadektor_lines"),
-            contents: bytemuck::cast_slice(data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        (buf, data.len() as u32)
-    })
+    (!data.is_empty() && (std::mem::size_of_val(data) as u64) < device.limits().max_buffer_size)
+        .then(|| {
+            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("cadektor_lines"),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            (buf, data.len() as u32)
+        })
 }
 
 impl Gpu3d {
@@ -218,7 +219,11 @@ impl Gpu3d {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 count: None,
             }],
         });
@@ -231,7 +236,10 @@ impl Gpu3d {
         let globals_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cadektor_globals_group"),
             layout: &globals_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("cadektor_3d_layout"),
@@ -247,7 +255,13 @@ impl Gpu3d {
                 bias: wgpu::DepthBiasState::default(),
             })
         };
-        let make = |label: &str, vs: &str, fs: &str, stride: u64, attrs: &[wgpu::VertexAttribute], topology, depth_stencil| {
+        let make = |label: &str,
+                    vs: &str,
+                    fs: &str,
+                    stride: u64,
+                    attrs: &[wgpu::VertexAttribute],
+                    topology,
+                    depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -255,16 +269,27 @@ impl Gpu3d {
                     module: &module,
                     entry_point: Some(vs),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[wgpu::VertexBufferLayout { array_stride: stride, step_mode: wgpu::VertexStepMode::Vertex, attributes: attrs }],
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: stride,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: attrs,
+                    }],
                 },
-                primitive: wgpu::PrimitiveState { topology, ..Default::default() },
+                primitive: wgpu::PrimitiveState {
+                    topology,
+                    ..Default::default()
+                },
                 depth_stencil,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(fs),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format: OFFSCREEN_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OFFSCREEN_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -341,9 +366,17 @@ impl Gpu3d {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
-                entry_point: Some(if format.is_srgb() { "fs_blit_to_srgb" } else { "fs_blit" }),
+                entry_point: Some(if format.is_srgb() {
+                    "fs_blit_to_srgb"
+                } else {
+                    "fs_blit"
+                }),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -375,7 +408,11 @@ impl Gpu3d {
         if self.target.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
-        let extent = wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
+        let extent = wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        };
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("cadektor_scene_color"),
             size: extent,
@@ -383,7 +420,9 @@ impl Gpu3d {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: OFFSCREEN_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let depth = device.create_texture(&wgpu::TextureDescriptor {
@@ -401,11 +440,23 @@ impl Gpu3d {
             label: Some("cadektor_blit_group"),
             layout: &self.blit_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&color_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
-        self.target = Some(Target { size, color, color_view, depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()), blit_group });
+        self.target = Some(Target {
+            size,
+            color,
+            color_view,
+            depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()),
+            blit_group,
+        });
     }
 
     fn upload_scene(&mut self, device: &wgpu::Device, scene: &Scene, rev: u64) {
@@ -432,15 +483,30 @@ impl Gpu3d {
                 (vb, ib, scene.mesh.indices.len() as u32)
             });
         let lines = line_buffer(device, &line_vertices(scene));
-        self.buffers = Some(Buffers { rev, surface, lines });
+        self.buffers = Some(Buffers {
+            rev,
+            surface,
+            lines,
+        });
     }
 
     /// Draws the scene into the offscreen texture. Call before `paint`, with the egui encoder.
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, input: &FrameInput) {
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &FrameInput,
+    ) {
         self.ensure_target(device, input.size);
         self.upload_scene(device, input.scene, input.scene_rev);
-        if self.overlay.as_ref().is_none_or(|(rev, _, _)| *rev != input.overlay_rev) {
-            self.overlay = line_buffer(device, input.overlay).map(|(b, n)| (input.overlay_rev, b, n));
+        if self
+            .overlay
+            .as_ref()
+            .is_none_or(|(rev, _, _)| *rev != input.overlay_rev)
+        {
+            self.overlay =
+                line_buffer(device, input.overlay).map(|(b, n)| (input.overlay_rev, b, n));
         }
         let globals = Globals {
             mvp: input.mvp,
@@ -448,7 +514,11 @@ impl Gpu3d {
                 let l = LIGHT_DIR.normalize();
                 [l.x, l.y, l.z, 0.0]
             },
-            eye: if input.ortho { [input.eye_dir[0], input.eye_dir[1], input.eye_dir[2], 0.0] } else { [input.eye[0], input.eye[1], input.eye[2], 1.0] },
+            eye: if input.ortho {
+                [input.eye_dir[0], input.eye_dir[1], input.eye_dir[2], 0.0]
+            } else {
+                [input.eye[0], input.eye[1], input.eye[2], 1.0]
+            },
             params: [AMBIENT, LINE_BIAS, f32::from(input.ortho), 0.0],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -461,13 +531,21 @@ impl Gpu3d {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: input.background[0], g: input.background[1], b: input.background[2], a: 1.0 }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: input.background[0],
+                        g: input.background[1],
+                        b: input.background[2],
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &target.depth_view,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,
@@ -560,7 +638,12 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         Vec::new()
     }
 
-    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        pass: &mut wgpu::RenderPass<'static>,
+        resources: &egui_wgpu::CallbackResources,
+    ) {
         if let Some(gpu) = resources.get::<Gpu3d>() {
             gpu.paint(pass);
         }
@@ -579,12 +662,20 @@ mod tests {
     /// A device without a window, or `None` on a machine without a usable GPU.
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
     }
 
     /// Reads the RGBA8 pixels of the offscreen texture.
-    fn read(device: &wgpu::Device, queue: &wgpu::Queue, gpu: &Gpu3d, size: [u32; 2], encoder: wgpu::CommandEncoder) -> Vec<u8> {
+    fn read(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        gpu: &Gpu3d,
+        size: [u32; 2],
+        encoder: wgpu::CommandEncoder,
+    ) -> Vec<u8> {
         let mut encoder = encoder;
         let row = (size[0] * 4).next_multiple_of(256);
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -594,12 +685,25 @@ mod tests {
             mapped_at_creation: false,
         });
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: gpu.color_texture().unwrap(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: gpu.color_texture().unwrap(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(size[1]) },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(size[1]),
+                },
             },
-            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit([encoder.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
@@ -618,8 +722,13 @@ mod tests {
     fn shaders_compile_and_draw_what_the_cpu_renderer_draws() {
         let Some((device, queue)) = device() else {
             // Rust tests cannot be marked skipped at run time, so say it loudly. CI that must have a GPU sets the variable.
-            assert!(std::env::var_os("CADEKTOR_REQUIRE_GPU").is_none(), "CADEKTOR_REQUIRE_GPU is set but there is no GPU adapter");
-            eprintln!("SKIPPED shaders_compile_and_draw_what_the_cpu_renderer_draws: no GPU adapter on this machine");
+            assert!(
+                std::env::var_os("CADEKTOR_REQUIRE_GPU").is_none(),
+                "CADEKTOR_REQUIRE_GPU is set but there is no GPU adapter"
+            );
+            eprintln!(
+                "SKIPPED shaders_compile_and_draw_what_the_cpu_renderer_draws: no GPU adapter on this machine"
+            );
             return;
         };
         assert_eq!(std::mem::size_of::<Globals>(), 112);
@@ -629,10 +738,16 @@ mod tests {
         let mut gpu = Gpu3d::new(&device, format);
         let mut ed = Editor::default();
         ed.execute(&Command::AddObject {
-            shape: Shape::Rect { min: DVec2::splat(-500.0), max: DVec2::splat(500.0) },
+            shape: Shape::Rect {
+                min: DVec2::splat(-500.0),
+                max: DVec2::splat(500.0),
+            },
             layer: None,
             class: None,
-            attrs: Attributes { fill: Some(Color([200, 30, 30, 255])), ..Default::default() },
+            attrs: Attributes {
+                fill: Some(Color([200, 30, 30, 255])),
+                ..Default::default()
+            },
         })
         .unwrap();
         let scene = build(ed.doc());
@@ -641,11 +756,18 @@ mod tests {
         cam.distance = 1000.0 / (cadektor_render::FOV_Y / 2.0).tan();
         let mvp = cam.view_proj(1.0, scene.bounds).to_cols_array_2d();
         let overlay = [
-            LineVertex { pos: [-900.0, 810.0, 0.0], color: [0, 0, 255, 255] },
-            LineVertex { pos: [900.0, 810.0, 0.0], color: [0, 0, 255, 255] },
+            LineVertex {
+                pos: [-900.0, 810.0, 0.0],
+                color: [0, 0, 255, 255],
+            },
+            LineVertex {
+                pos: [900.0, 810.0, 0.0],
+                color: [0, 0, 255, 255],
+            },
         ];
         let draw = |gpu: &mut Gpu3d, wireframe: bool| {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             gpu.prepare(
                 &device,
                 &queue,
@@ -666,12 +788,21 @@ mod tests {
             );
             read(&device, &queue, gpu, size, encoder)
         };
-        let px = |img: &[u8], x: usize, y: usize| [img[(y * 100 + x) * 4], img[(y * 100 + x) * 4 + 1], img[(y * 100 + x) * 4 + 2]];
+        let px = |img: &[u8], x: usize, y: usize| {
+            [
+                img[(y * 100 + x) * 4],
+                img[(y * 100 + x) * 4 + 1],
+                img[(y * 100 + x) * 4 + 2],
+            ]
+        };
 
         let img = draw(&mut gpu, false);
         let lit = cadektor_render::raster::lambert(glam::Vec3::Z);
         let c = px(&img, 50, 50);
-        assert!((c[0] as f32 - 200.0 * lit).abs() <= 2.0 && c[1] < 100, "face color {c:?}");
+        assert!(
+            (c[0] as f32 - 200.0 * lit).abs() <= 2.0 && c[1] < 100,
+            "face color {c:?}"
+        );
         assert_eq!(px(&img, 10, 50), [255, 255, 255], "background");
         assert_eq!(px(&img, 50, 9), [0, 0, 255], "overlay line");
         assert_eq!(gpu.uploads, 1);
@@ -684,7 +815,10 @@ mod tests {
         // Wireframe: no fill, but the outline.
         let img = draw(&mut gpu, true);
         assert_eq!(px(&img, 50, 50), [255, 255, 255]);
-        assert!(px(&img, 24, 50) != [255, 255, 255] || px(&img, 25, 50) != [255, 255, 255], "outline");
+        assert!(
+            px(&img, 24, 50) != [255, 255, 255] || px(&img, 25, 50) != [255, 255, 255],
+            "outline"
+        );
 
         // A new revision uploads again.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

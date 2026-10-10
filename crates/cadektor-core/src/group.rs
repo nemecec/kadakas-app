@@ -19,12 +19,17 @@ pub const MAX_DEPTH: usize = 64;
 impl Document {
     /// True if the object exists and is a group.
     pub fn is_group(&self, id: ObjectId) -> bool {
-        self.object(id).is_some_and(|o| matches!(o.shape, Shape::Group { .. }))
+        self.object(id)
+            .is_some_and(|o| matches!(o.shape, Shape::Group { .. }))
     }
 
     /// The direct members of a group, in z-order.
     pub fn children(&self, group: ObjectId) -> Vec<ObjectId> {
-        self.objects.values().filter(|o| o.parent == Some(group)).map(|o| o.id).collect()
+        self.objects
+            .values()
+            .filter(|o| o.parent == Some(group))
+            .map(|o| o.id)
+            .collect()
     }
 
     /// All members of a group at any depth (the groups too), in z-order.
@@ -97,7 +102,11 @@ impl Document {
                 want.insert(id);
             }
         }
-        self.objects.values().filter(|o| want.contains(&o.id) && !matches!(o.shape, Shape::Group { .. })).map(|o| o.id).collect()
+        self.objects
+            .values()
+            .filter(|o| want.contains(&o.id) && !matches!(o.shape, Shape::Group { .. }))
+            .map(|o| o.id)
+            .collect()
     }
 
     /// The given objects with all members of the groups among them (and the groups), each once, in z-order.
@@ -109,7 +118,11 @@ impl Document {
                 want.extend(self.descendants(id));
             }
         }
-        self.objects.values().filter(|o| want.contains(&o.id)).map(|o| o.id).collect()
+        self.objects
+            .values()
+            .filter(|o| want.contains(&o.id))
+            .map(|o| o.id)
+            .collect()
     }
 
     /// True if `ancestor` is a group that holds `id`, directly or through other groups.
@@ -123,12 +136,20 @@ impl Document {
 pub fn check_tree(doc: &Document) -> Result<(), String> {
     for o in doc.objects.values() {
         if let Some(p) = o.parent {
-            let parent = doc.object(p).ok_or_else(|| format!("object {} has a group {p} that does not exist", o.id))?;
+            let parent = doc
+                .object(p)
+                .ok_or_else(|| format!("object {} has a group {p} that does not exist", o.id))?;
             if !matches!(parent.shape, Shape::Group { .. }) {
-                return Err(format!("object {} has a parent {p} that is not a group", o.id));
+                return Err(format!(
+                    "object {} has a parent {p} that is not a group",
+                    o.id
+                ));
             }
             if parent.layer != o.layer {
-                return Err(format!("object {} is not on the layer of its group {p}", o.id));
+                return Err(format!(
+                    "object {} is not on the layer of its group {p}",
+                    o.id
+                ));
             }
             if doc.ancestors(o.id).contains(&o.id) || doc.ancestors(o.id).len() >= MAX_DEPTH {
                 return Err(format!("object {} is its own ancestor", o.id));
@@ -151,18 +172,42 @@ mod tests {
     use glam::DVec2;
 
     fn add(ed: &mut Editor, x: f64) -> ObjectId {
-        let shape = Shape::Circle { center: DVec2::new(x, 0.0), radius: 1.0 };
-        ObjectId(ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0])
+        let shape = Shape::Circle {
+            center: DVec2::new(x, 0.0),
+            radius: 1.0,
+        };
+        ObjectId(
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        )
     }
 
     fn group(ed: &mut Editor, ids: &[ObjectId]) -> ObjectId {
-        ObjectId(ed.execute(&Command::Group { ids: ids.to_vec(), name: None }).unwrap().created[0])
+        ObjectId(
+            ed.execute(&Command::Group {
+                ids: ids.to_vec(),
+                name: None,
+            })
+            .unwrap()
+            .created[0],
+        )
     }
 
     #[test]
     fn tree_queries() {
         let mut ed = Editor::default();
-        let (a, b, c, d) = (add(&mut ed, 0.0), add(&mut ed, 1.0), add(&mut ed, 2.0), add(&mut ed, 3.0));
+        let (a, b, c, d) = (
+            add(&mut ed, 0.0),
+            add(&mut ed, 1.0),
+            add(&mut ed, 2.0),
+            add(&mut ed, 3.0),
+        );
         let inner = group(&mut ed, &[a, b]);
         let outer = group(&mut ed, &[inner, c]);
         let doc = ed.doc();
@@ -186,7 +231,9 @@ mod tests {
         want.sort();
         assert_eq!(with, want);
         assert!(check_tree(doc).is_ok());
-        assert!(is_group_object(doc.object(outer).unwrap()) && !is_group_object(doc.object(a).unwrap()));
+        assert!(
+            is_group_object(doc.object(outer).unwrap()) && !is_group_object(doc.object(a).unwrap())
+        );
     }
 
     #[test]
@@ -224,7 +271,15 @@ mod tests {
         assert!(check_tree(&doc).unwrap_err().contains("not a group"));
         doc.object_mut(a).unwrap().parent = Some(g);
         let layer = doc.layers[0].id;
-        doc.layers.push(crate::model::Layer { id: crate::model::LayerId(900), name: "x".into(), kind: Default::default(), visible: true, locked: false, elevation: 0.0, scale: 100.0 });
+        doc.layers.push(crate::model::Layer {
+            id: crate::model::LayerId(900),
+            name: "x".into(),
+            kind: Default::default(),
+            visible: true,
+            locked: false,
+            elevation: 0.0,
+            scale: 100.0,
+        });
         doc.object_mut(a).unwrap().layer = crate::model::LayerId(900);
         assert!(check_tree(&doc).unwrap_err().contains("layer"));
         doc.object_mut(a).unwrap().layer = layer;

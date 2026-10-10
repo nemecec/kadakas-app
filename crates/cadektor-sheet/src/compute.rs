@@ -67,7 +67,9 @@ impl Computed {
 
     /// All cells as text, row by row, up to the last used row and column.
     pub fn grid(&self) -> Vec<Vec<String>> {
-        (1..=self.rows).map(|r| (1..=self.cols).map(|c| self.display(r, c)).collect()).collect()
+        (1..=self.rows)
+            .map(|r| (1..=self.cols).map(|c| self.display(r, c)).collect())
+            .collect()
     }
 
     /// All non-empty values with their positions, row by row.
@@ -88,7 +90,11 @@ fn display_value(v: &Value, f: &CellFormat, with_unit: bool) -> String {
                 Some(d) => {
                     let s = format!("{n:.prec$}", prec = usize::from(d));
                     // A tiny negative number rounds to "-0.00". Show it without the sign.
-                    if s.starts_with('-') && !s.bytes().any(|b| (b'1'..=b'9').contains(&b)) { s[1..].to_string() } else { s }
+                    if s.starts_with('-') && !s.bytes().any(|b| (b'1'..=b'9').contains(&b)) {
+                        s[1..].to_string()
+                    } else {
+                        s
+                    }
                 }
                 None => format_number(*n),
             };
@@ -113,11 +119,18 @@ struct CellEnv<'a> {
 
 impl Env for CellEnv<'_> {
     fn cell(&self, at: CellRef) -> Value {
-        self.values.get(&(at.row, at.col)).cloned().unwrap_or_default()
+        self.values
+            .get(&(at.row, at.col))
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn range(&self, from: CellRef, to: CellRef) -> Vec<Value> {
-        self.values.range((from.row, from.col)..=(to.row, to.col)).filter(|((_, c), _)| (from.col..=to.col).contains(c)).map(|(_, v)| v.clone()).collect()
+        self.values
+            .range((from.row, from.col)..=(to.row, to.col))
+            .filter(|((_, c), _)| (from.col..=to.col).contains(c))
+            .map(|(_, v)| v.clone())
+            .collect()
     }
 
     fn name(&self, _: &str) -> Value {
@@ -137,9 +150,18 @@ impl Env for CellEnv<'_> {
 fn dependencies(expr: &Expr, cells: &BTreeMap<Pos, Cell>) -> Vec<Pos> {
     let (mut refs, mut ranges) = (Vec::new(), Vec::new());
     expr.references(&mut refs, &mut ranges);
-    let mut out: Vec<Pos> = refs.iter().map(|c| (c.row, c.col)).filter(|p| cells.contains_key(p)).collect();
+    let mut out: Vec<Pos> = refs
+        .iter()
+        .map(|c| (c.row, c.col))
+        .filter(|p| cells.contains_key(p))
+        .collect();
     for (a, b) in ranges {
-        out.extend(cells.range((a.row, a.col)..=(b.row, b.col)).map(|(p, _)| *p).filter(|(_, c)| (a.col..=b.col).contains(c)));
+        out.extend(
+            cells
+                .range((a.row, a.col)..=(b.row, b.col))
+                .map(|(p, _)| *p)
+                .filter(|(_, c)| (a.col..=b.col).contains(c)),
+        );
     }
     out.sort_unstable();
     out.dedup();
@@ -153,13 +175,19 @@ pub fn compute(def: &WorksheetDef, doc: &Document) -> Computed {
 
 /// Calculates a worksheet against a document and the ground of its site models, so draped
 /// hardscapes and landscape areas are measured as the reports measure them.
-pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_core::hardscape::TerrainSource) -> Computed {
+pub fn compute_with(
+    def: &WorksheetDef,
+    doc: &Document,
+    ground: &dyn cadektor_core::hardscape::TerrainSource,
+) -> Computed {
     let mut result = Computed::default();
     let mut cells: BTreeMap<Pos, Cell> = BTreeMap::new();
 
     for (key, cell) in &def.cells {
         let Some(at) = CellRef::parse(key) else {
-            result.problems.push(format!("'{key}' is not a cell address"));
+            result
+                .problems
+                .push(format!("'{key}' is not a cell address"));
             continue;
         };
         let pos = (at.row, at.col);
@@ -186,7 +214,11 @@ pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_co
     // Database blocks write constants over the cells at their addresses.
     for (i, d) in def.databases.iter().enumerate() {
         let Some(anchor) = CellRef::parse(&d.anchor) else {
-            result.problems.push(format!("database {}: '{}' is not a cell address", i + 1, d.anchor));
+            result.problems.push(format!(
+                "database {}: '{}' is not a cell address",
+                i + 1,
+                d.anchor
+            ));
             continue;
         };
         let out = db::run_on(doc, d, i, ground);
@@ -200,13 +232,24 @@ pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_co
                 cells.insert((row, col), Cell::Const(v.clone()));
                 let c = &d.columns[ci];
                 if line.kind != LineKind::Header && (c.decimals.is_some() || !c.unit.is_empty()) {
-                    result.formats.insert((row, col), CellFormat { decimals: c.decimals, unit: c.unit.clone() });
+                    result.formats.insert(
+                        (row, col),
+                        CellFormat {
+                            decimals: c.decimals,
+                            unit: c.unit.clone(),
+                        },
+                    );
                 } else {
                     result.formats.remove(&(row, col));
                 }
             }
         }
-        result.blocks.push(Block { name: d.name.clone(), first_row: anchor.row, rows: out.lines.len() as u32, matched: out.matched });
+        result.blocks.push(Block {
+            name: d.name.clone(),
+            first_row: anchor.row,
+            rows: out.lines.len() as u32,
+            matched: out.matched,
+        });
     }
 
     // Order the formulas so that every cell comes after the cells it reads.
@@ -218,7 +261,11 @@ pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_co
     }
     let mut state: HashMap<Pos, u8> = HashMap::new(); // 1: being visited, 2: done
     let mut cyclic: HashSet<Pos> = HashSet::new();
-    let formulas: Vec<Pos> = cells.iter().filter(|(_, c)| matches!(c, Cell::Formula(_))).map(|(p, _)| *p).collect();
+    let formulas: Vec<Pos> = cells
+        .iter()
+        .filter(|(_, c)| matches!(c, Cell::Formula(_)))
+        .map(|(p, _)| *p)
+        .collect();
     for root in formulas {
         if state.contains_key(&root) {
             continue;
@@ -253,21 +300,45 @@ pub fn compute_with(def: &WorksheetDef, doc: &Document, ground: &dyn cadektor_co
                 let (p, _, _) = stack.pop().expect("a frame");
                 state.insert(p, 2);
                 if let Some(Cell::Formula(e)) = cells.get(&p) {
-                    let v = if cyclic.contains(&p) { Value::Error(ErrorKind::Cycle) } else { eval(e, &CellEnv { values: &values }) };
+                    let v = if cyclic.contains(&p) {
+                        Value::Error(ErrorKind::Cycle)
+                    } else {
+                        eval(e, &CellEnv { values: &values })
+                    };
                     values.insert(p, v);
                 }
             }
         }
     }
     if !cyclic.is_empty() {
-        let mut at: Vec<CellRef> = cyclic.iter().map(|&(row, col)| CellRef { row, col }).collect();
+        let mut at: Vec<CellRef> = cyclic
+            .iter()
+            .map(|&(row, col)| CellRef { row, col })
+            .collect();
         at.sort();
-        result.problems.push(format!("circular reference in {}", at.iter().take(5).map(ToString::to_string).collect::<Vec<_>>().join(", ")));
+        result.problems.push(format!(
+            "circular reference in {}",
+            at.iter()
+                .take(5)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     values.retain(|_, v| !v.is_empty());
-    result.rows = values.keys().chain(result.formats.keys()).map(|p| p.0).max().unwrap_or(0);
-    result.cols = values.keys().chain(result.formats.keys()).map(|p| p.1).max().unwrap_or(0);
+    result.rows = values
+        .keys()
+        .chain(result.formats.keys())
+        .map(|p| p.0)
+        .max()
+        .unwrap_or(0);
+    result.cols = values
+        .keys()
+        .chain(result.formats.keys())
+        .map(|p| p.1)
+        .max()
+        .unwrap_or(0);
     result.values = values;
     result
 }
@@ -304,7 +375,17 @@ mod tests {
 
     #[test]
     fn constants_and_formulas() {
-        let c = run(&[("A1", "1"), ("A2", "2"), ("A3", "=A1+A2"), ("B1", "text"), ("B2", "=B1 & \"!\""), ("B3", "true"), ("C1", "=SUM(A1:A3)*2"), ("C2", "=AVERAGE(A1:A3)"), ("C3", "=IF(A3>2, \"big\", \"small\")")]);
+        let c = run(&[
+            ("A1", "1"),
+            ("A2", "2"),
+            ("A3", "=A1+A2"),
+            ("B1", "text"),
+            ("B2", "=B1 & \"!\""),
+            ("B3", "true"),
+            ("C1", "=SUM(A1:A3)*2"),
+            ("C2", "=AVERAGE(A1:A3)"),
+            ("C3", "=IF(A3>2, \"big\", \"small\")"),
+        ]);
         assert_eq!(v(&c, "A3"), n(3.0));
         assert_eq!(v(&c, "B2"), Value::Text("text!".into()));
         assert_eq!(v(&c, "B3"), Value::Bool(true));
@@ -320,9 +401,19 @@ mod tests {
 
     #[test]
     fn order_does_not_matter() {
-        let c = run(&[("A1", "=B1+1"), ("B1", "=C1+1"), ("C1", "=D1+1"), ("D1", "10")]);
+        let c = run(&[
+            ("A1", "=B1+1"),
+            ("B1", "=C1+1"),
+            ("C1", "=D1+1"),
+            ("D1", "10"),
+        ]);
         assert_eq!(v(&c, "A1"), n(13.0));
-        let c = run(&[("A1", "=SUM(B1:B3)"), ("B1", "=B2"), ("B2", "=B3"), ("B3", "4")]);
+        let c = run(&[
+            ("A1", "=SUM(B1:B3)"),
+            ("B1", "=B2"),
+            ("B2", "=B3"),
+            ("B3", "4"),
+        ]);
         assert_eq!(v(&c, "A1"), n(12.0));
     }
 
@@ -331,7 +422,11 @@ mod tests {
         let c = run(&[("A1", "=B1"), ("B1", "=A1"), ("C1", "=A1+1"), ("D1", "5")]);
         assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Cycle));
         assert_eq!(v(&c, "B1"), Value::Error(ErrorKind::Cycle));
-        assert_eq!(v(&c, "C1"), Value::Error(ErrorKind::Cycle), "readers of a cycle show the error");
+        assert_eq!(
+            v(&c, "C1"),
+            Value::Error(ErrorKind::Cycle),
+            "readers of a cycle show the error"
+        );
         assert_eq!(v(&c, "D1"), n(5.0));
         assert!(c.problems[0].contains("circular") && c.problems[0].contains("A1"));
         let c = run(&[("A1", "=A1+1")]);
@@ -340,7 +435,13 @@ mod tests {
         let c = run(&[("A1", "=SUM(A1:A3)"), ("A2", "1")]);
         assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Cycle));
         // A three-cell cycle with a branch that is not on it.
-        let c = run(&[("A1", "=B1+C1"), ("B1", "=C1"), ("C1", "=A1"), ("D1", "=E1"), ("E1", "2")]);
+        let c = run(&[
+            ("A1", "=B1+C1"),
+            ("B1", "=C1"),
+            ("C1", "=A1"),
+            ("D1", "=E1"),
+            ("E1", "2"),
+        ]);
         assert_eq!(v(&c, "B1"), Value::Error(ErrorKind::Cycle));
         assert_eq!(v(&c, "D1"), n(2.0));
         // IFERROR can hide the error from a reader.
@@ -353,7 +454,8 @@ mod tests {
         let mut w = WorksheetDef::default();
         w.set_cell("A1", "1", None).unwrap();
         for r in 2..=5000 {
-            w.set_cell(&format!("A{r}"), &format!("=A{}+1", r - 1), None).unwrap();
+            w.set_cell(&format!("A{r}"), &format!("=A{}+1", r - 1), None)
+                .unwrap();
         }
         let c = compute(&w, &Document::default());
         assert_eq!(v(&c, "A5000"), n(5000.0));
@@ -370,7 +472,12 @@ mod tests {
         assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Parse));
         assert_eq!(v(&c, "A2"), Value::Error(ErrorKind::Parse));
         assert!(c.problems[0].starts_with("cell A1"));
-        let c = run(&[("A1", "=Area"), ("A2", "=Nope(1)"), ("A3", "=1/0"), ("A4", "=A1:A2")]);
+        let c = run(&[
+            ("A1", "=Area"),
+            ("A2", "=Nope(1)"),
+            ("A3", "=1/0"),
+            ("A4", "=A1:A2"),
+        ]);
         assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Name));
         assert_eq!(v(&c, "A2"), Value::Error(ErrorKind::Name));
         assert_eq!(v(&c, "A3"), Value::Error(ErrorKind::Div0));
@@ -383,7 +490,14 @@ mod tests {
     #[test]
     fn a_huge_formula_is_an_error_cell_not_a_crash() {
         let long = format!("={}1", "1+".repeat(1900));
-        let c = run(&[("A1", &long), ("A2", "=A1+1"), ("B1", "=ROUND(1.005, 2)"), ("B2", "=50%"), ("B3", "=$B$2*2"), ("B4", "=SUM(C1:C2)=0")]);
+        let c = run(&[
+            ("A1", &long),
+            ("A2", "=A1+1"),
+            ("B1", "=ROUND(1.005, 2)"),
+            ("B2", "=50%"),
+            ("B3", "=$B$2*2"),
+            ("B4", "=SUM(C1:C2)=0"),
+        ]);
         assert_eq!(v(&c, "A1"), Value::Error(ErrorKind::Parse));
         assert_eq!(v(&c, "A2"), Value::Error(ErrorKind::Parse));
         assert!(c.problems[0].contains("levels"), "{:?}", c.problems);
@@ -395,12 +509,58 @@ mod tests {
 
     #[test]
     fn formats_and_display() {
-        let mut w = sheet(&[("A1", "3.14159"), ("A2", "-0.001"), ("A3", "12"), ("A4", "x"), ("A5", "=1/0")]);
-        w.set_cell("A1", "3.14159", Some(CellFormat { decimals: Some(2), unit: "m".into() })).unwrap();
-        w.set_cell("A2", "-0.001", Some(CellFormat { decimals: Some(1), unit: String::new() })).unwrap();
-        w.set_cell("A3", "12", Some(CellFormat { decimals: None, unit: "kg".into() })).unwrap();
-        w.set_cell("A4", "x", Some(CellFormat { decimals: Some(2), unit: "m".into() })).unwrap();
-        w.set_cell("B7", "", Some(CellFormat { decimals: Some(2), unit: String::new() })).unwrap();
+        let mut w = sheet(&[
+            ("A1", "3.14159"),
+            ("A2", "-0.001"),
+            ("A3", "12"),
+            ("A4", "x"),
+            ("A5", "=1/0"),
+        ]);
+        w.set_cell(
+            "A1",
+            "3.14159",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: "m".into(),
+            }),
+        )
+        .unwrap();
+        w.set_cell(
+            "A2",
+            "-0.001",
+            Some(CellFormat {
+                decimals: Some(1),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
+        w.set_cell(
+            "A3",
+            "12",
+            Some(CellFormat {
+                decimals: None,
+                unit: "kg".into(),
+            }),
+        )
+        .unwrap();
+        w.set_cell(
+            "A4",
+            "x",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: "m".into(),
+            }),
+        )
+        .unwrap();
+        w.set_cell(
+            "B7",
+            "",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
         let c = compute(&w, &Document::default());
         assert_eq!(c.display(1, 1), "3.14 m");
         assert_eq!(c.display_plain(1, 1), "3.14");
@@ -409,7 +569,11 @@ mod tests {
         assert_eq!(c.display(4, 1), "x");
         assert_eq!(c.display(5, 1), "#DIV/0!");
         assert_eq!(c.display(9, 9), "");
-        assert_eq!((c.rows, c.cols), (7, 2), "a formatted empty cell counts for the size");
+        assert_eq!(
+            (c.rows, c.cols),
+            (7, 2),
+            "a formatted empty cell counts for the size"
+        );
         assert_eq!(c.format(1, 1).decimals, Some(2));
         assert_eq!(c.cells().count(), 5);
     }
@@ -417,8 +581,24 @@ mod tests {
     fn scene() -> cadektor_core::command::Editor {
         let mut ed = Editor::default();
         for (m, side) in [("Granite", 2000.0), ("Brick", 1000.0), ("Granite", 3000.0)] {
-            let b = corners(&[DVec2::ZERO, DVec2::new(side, 0.0), DVec2::new(side, side), DVec2::new(0.0, side)]);
-            ed.execute(&Command::AddObject { shape: Shape::Hardscape { boundary: b, material: m.into(), thickness: None, elevation: None }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+            let b = corners(&[
+                DVec2::ZERO,
+                DVec2::new(side, 0.0),
+                DVec2::new(side, side),
+                DVec2::new(0.0, side),
+            ]);
+            ed.execute(&Command::AddObject {
+                shape: Shape::Hardscape {
+                    boundary: b,
+                    material: m.into(),
+                    thickness: None,
+                    elevation: None,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         }
         ed
     }
@@ -429,8 +609,18 @@ mod tests {
             anchor: "B2".into(),
             criteria: "Kind = \"hardscape\"".into(),
             columns: vec![
-                ColumnDef { header: "Material".into(), expr: "Material".into(), ..Default::default() },
-                ColumnDef { header: "Area".into(), expr: "Area".into(), summary: Some(Summary::Sum), decimals: Some(1), unit: "m2".into() },
+                ColumnDef {
+                    header: "Material".into(),
+                    expr: "Material".into(),
+                    ..Default::default()
+                },
+                ColumnDef {
+                    header: "Area".into(),
+                    expr: "Area".into(),
+                    summary: Some(Summary::Sum),
+                    decimals: Some(1),
+                    unit: "m2".into(),
+                },
             ],
             group_by: Some(0),
             group_mode: GroupMode::Summary,
@@ -441,7 +631,12 @@ mod tests {
     #[test]
     fn database_blocks_sit_at_their_anchor_and_cells_can_read_them() {
         let ed = scene();
-        let mut w = sheet(&[("A1", "Paving quantities"), ("F2", "=C5*2"), ("F3", "=SUM(C3:C4)"), ("F4", "=COUNTA(B3:B5)")]);
+        let mut w = sheet(&[
+            ("A1", "Paving quantities"),
+            ("F2", "=C5*2"),
+            ("F3", "=SUM(C3:C4)"),
+            ("F4", "=COUNTA(B3:B5)"),
+        ]);
         w.databases.push(quantities());
         let c = compute(&w, ed.doc());
         // Header row 2, groups in rows 3 and 4, total in row 5.
@@ -454,7 +649,15 @@ mod tests {
         assert_eq!(v(&c, "F2"), n(28.0));
         assert_eq!(v(&c, "F3"), n(14.0));
         assert_eq!(v(&c, "F4"), n(3.0));
-        assert_eq!(c.blocks, vec![Block { name: "Paving".into(), first_row: 2, rows: 4, matched: 3 }]);
+        assert_eq!(
+            c.blocks,
+            vec![Block {
+                name: "Paving".into(),
+                first_row: 2,
+                rows: 4,
+                matched: 3
+            }]
+        );
         assert_eq!(c.display(1, 1), "Paving quantities");
         // The header has no number format.
         assert_eq!(c.format(2, 3), CellFormat::default());
@@ -475,7 +678,11 @@ mod tests {
         let c = compute(&w, ed.doc());
         assert_eq!(c.display(2, 2), "Material");
         assert_eq!(c.display(3, 2), "Brick");
-        assert_eq!(c.display(4, 2), "Brick", "the second block covers the first");
+        assert_eq!(
+            c.display(4, 2),
+            "Brick",
+            "the second block covers the first"
+        );
         assert_eq!(c.blocks.len(), 2);
     }
 
@@ -486,14 +693,29 @@ mod tests {
         bad.anchor = "??".into();
         let mut off = quantities();
         off.anchor = "A99999".into();
-        off.columns.push(ColumnDef { header: "x".into(), expr: "Id".into(), ..Default::default() });
+        off.columns.push(ColumnDef {
+            header: "x".into(),
+            expr: "Id".into(),
+            ..Default::default()
+        });
         let mut col_off = quantities();
         col_off.anchor = "ZZ1".into();
-        let mut w = WorksheetDef { databases: vec![bad, off, col_off], ..Default::default() };
+        let mut w = WorksheetDef {
+            databases: vec![bad, off, col_off],
+            ..Default::default()
+        };
         w.cells.insert("not an address".into(), Default::default());
         let c = compute(&w, ed.doc());
-        assert!(c.problems.iter().any(|p| p.contains("database 1") && p.contains("not a cell address")));
-        assert!(c.problems.iter().any(|p| p.contains("'not an address' is not a cell address")));
+        assert!(
+            c.problems
+                .iter()
+                .any(|p| p.contains("database 1") && p.contains("not a cell address"))
+        );
+        assert!(
+            c.problems
+                .iter()
+                .any(|p| p.contains("'not an address' is not a cell address"))
+        );
         assert!(c.rows > 0);
     }
 
@@ -503,8 +725,24 @@ mod tests {
         let mut w = sheet(&[("A1", "=COUNTA(B3:B10)")]);
         w.databases.push(quantities());
         assert_eq!(v(&compute(&w, ed.doc()), "A1"), n(3.0));
-        let b = corners(&[DVec2::ZERO, DVec2::new(500.0, 0.0), DVec2::new(500.0, 500.0), DVec2::new(0.0, 500.0)]);
-        ed.execute(&Command::AddObject { shape: Shape::Hardscape { boundary: b, material: "Slate".into(), thickness: None, elevation: None }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let b = corners(&[
+            DVec2::ZERO,
+            DVec2::new(500.0, 0.0),
+            DVec2::new(500.0, 500.0),
+            DVec2::new(0.0, 500.0),
+        ]);
+        ed.execute(&Command::AddObject {
+            shape: Shape::Hardscape {
+                boundary: b,
+                material: "Slate".into(),
+                thickness: None,
+                elevation: None,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
         assert_eq!(v(&compute(&w, ed.doc()), "A1"), n(4.0));
     }
 

@@ -8,7 +8,7 @@ pub mod views;
 
 pub use camera::{Camera, FOV_Y};
 pub use pick::{pick, pick_ray};
-pub use raster::{render, Image, RenderOptions, AMBIENT, BACKGROUND, LIGHT_DIR};
+pub use raster::{AMBIENT, BACKGROUND, Image, LIGHT_DIR, RenderOptions, render};
 pub use views::{Projection, RenderMode, StandardView, ViewSettings};
 
 #[cfg(test)]

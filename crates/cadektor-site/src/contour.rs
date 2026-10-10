@@ -61,7 +61,10 @@ pub fn contours(tin: &Tin, spec: &ContourSpec) -> Result<Vec<Contour>, SiteError
     }
     let (zlo, zhi) = tin.z_range();
     // Count in f64 first: a tiny interval would overflow the integers.
-    let (f_lo, f_hi) = ((zlo - spec.datum) / spec.minor_interval, (zhi - spec.datum) / spec.minor_interval);
+    let (f_lo, f_hi) = (
+        (zlo - spec.datum) / spec.minor_interval,
+        (zhi - spec.datum) / spec.minor_interval,
+    );
     if !(f_hi.ceil() - f_lo.floor()).is_finite() || f_hi.ceil() - f_lo.floor() > MAX_LEVELS as f64 {
         return Err(SiteError::TooManyContours);
     }
@@ -91,7 +94,10 @@ pub fn contours(tin: &Tin, spec: &ContourSpec) -> Result<Vec<Contour>, SiteError
                 }
             }
             if let [(ea, pa), (eb, pb)] = cut[..] {
-                per_level[(k - k_lo) as usize].push(Seg { ends: [ea, eb], pts: [pa, pb] });
+                per_level[(k - k_lo) as usize].push(Seg {
+                    ends: [ea, eb],
+                    pts: [pa, pb],
+                });
             }
         }
     }
@@ -103,8 +109,17 @@ pub fn contours(tin: &Tin, spec: &ContourSpec) -> Result<Vec<Contour>, SiteError
             r < 1e-9 || 1.0 - r < 1e-9
         };
         for (points, closed) in chain(segs) {
-            let (points, closed) = if spec.smooth { (smooth(&points, closed), closed) } else { (points, closed) };
-            out.push(Contour { level: l, major, closed, points });
+            let (points, closed) = if spec.smooth {
+                (smooth(&points, closed), closed)
+            } else {
+                (points, closed)
+            };
+            out.push(Contour {
+                level: l,
+                major,
+                closed,
+                points,
+            });
         }
     }
     Ok(out)
@@ -200,7 +215,12 @@ mod tests {
     use glam::DVec3;
 
     fn spec(minor: f64, major: f64) -> ContourSpec {
-        ContourSpec { minor_interval: minor, major_interval: major, datum: 0.0, smooth: false }
+        ContourSpec {
+            minor_interval: minor,
+            major_interval: major,
+            datum: 0.0,
+            smooth: false,
+        }
     }
 
     fn grid(n: usize, step: f64, f: impl Fn(f64, f64) -> f64) -> Tin {
@@ -211,7 +231,11 @@ mod tests {
                 pts.push(DVec3::new(x, y, f(x, y)));
             }
         }
-        Tin::build(&SourceData { points: pts, lines: vec![] }).unwrap()
+        Tin::build(&SourceData {
+            points: pts,
+            lines: vec![],
+        })
+        .unwrap()
     }
 
     #[test]
@@ -225,8 +249,15 @@ mod tests {
         assert_eq!(levels, (1..=10).map(f64::from).collect::<Vec<_>>());
         for c in &cs {
             assert!(!c.closed);
-            assert!(c.points.iter().all(|p| (p.x - c.level * 10.0).abs() < 1e-9), "level {}", c.level);
-            let (lo, hi) = c.points.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+            assert!(
+                c.points.iter().all(|p| (p.x - c.level * 10.0).abs() < 1e-9),
+                "level {}",
+                c.level
+            );
+            let (lo, hi) = c
+                .points
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
             assert!((lo, hi) == (0.0, 100.0), "spans the model: {lo} {hi}");
         }
         let majors: Vec<f64> = cs.iter().filter(|c| c.major).map(|c| c.level).collect();
@@ -236,14 +267,27 @@ mod tests {
     #[test]
     fn cone_gives_closed_circles() {
         // A pyramid-like hill: z = 10 - distance from the middle (L-infinity), steps of 1.
-        let tin = grid(21, 5.0, |x, y| 10.0 - (x - 50.0).abs().max((y - 50.0).abs()) / 5.0);
+        let tin = grid(21, 5.0, |x, y| {
+            10.0 - (x - 50.0).abs().max((y - 50.0).abs()) / 5.0
+        });
         let cs = contours(&tin, &spec(2.0, 4.0)).unwrap();
         assert!(!cs.is_empty());
         assert!(cs.iter().all(|c| c.closed && c.points.len() >= 4));
         let levels: Vec<f64> = cs.iter().map(|c| c.level).collect();
-        assert_eq!(levels, vec![2.0, 4.0, 6.0, 8.0, 10.0].into_iter().filter(|l| *l <= 10.0).collect::<Vec<f64>>());
+        assert_eq!(
+            levels,
+            vec![2.0, 4.0, 6.0, 8.0, 10.0]
+                .into_iter()
+                .filter(|l| *l <= 10.0)
+                .collect::<Vec<f64>>()
+        );
         // Higher levels are smaller loops.
-        let extent = |c: &Contour| c.points.iter().map(|p| (p.x - 50.0).abs()).fold(0.0, f64::max);
+        let extent = |c: &Contour| {
+            c.points
+                .iter()
+                .map(|p| (p.x - 50.0).abs())
+                .fold(0.0, f64::max)
+        };
         assert!(cs.windows(2).all(|w| extent(&w[0]) > extent(&w[1])));
     }
 
@@ -260,18 +304,61 @@ mod tests {
     #[test]
     fn datum_and_intervals_are_checked() {
         let tin = grid(3, 10.0, |x, _| x);
-        let c = contours(&tin, &ContourSpec { datum: 0.5, ..spec(5.0, 10.0) }).unwrap();
-        assert_eq!(c.iter().map(|c| c.level).collect::<Vec<_>>(), vec![0.5, 5.5, 10.5, 15.5]);
-        assert_eq!(contours(&tin, &spec(0.0, 5.0)).unwrap_err(), SiteError::BadInterval);
-        assert_eq!(contours(&tin, &spec(f64::NAN, 5.0)).unwrap_err(), SiteError::BadInterval);
-        assert_eq!(contours(&tin, &spec(1.0, f64::NAN)).unwrap_err(), SiteError::BadInterval);
-        assert_eq!(contours(&tin, &ContourSpec { datum: f64::INFINITY, ..spec(1.0, 5.0) }).unwrap_err(), SiteError::BadInterval);
+        let c = contours(
+            &tin,
+            &ContourSpec {
+                datum: 0.5,
+                ..spec(5.0, 10.0)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            c.iter().map(|c| c.level).collect::<Vec<_>>(),
+            vec![0.5, 5.5, 10.5, 15.5]
+        );
+        assert_eq!(
+            contours(&tin, &spec(0.0, 5.0)).unwrap_err(),
+            SiteError::BadInterval
+        );
+        assert_eq!(
+            contours(&tin, &spec(f64::NAN, 5.0)).unwrap_err(),
+            SiteError::BadInterval
+        );
+        assert_eq!(
+            contours(&tin, &spec(1.0, f64::NAN)).unwrap_err(),
+            SiteError::BadInterval
+        );
+        assert_eq!(
+            contours(
+                &tin,
+                &ContourSpec {
+                    datum: f64::INFINITY,
+                    ..spec(1.0, 5.0)
+                }
+            )
+            .unwrap_err(),
+            SiteError::BadInterval
+        );
         let steep = grid(3, 10.0, |x, _| x * 1e6);
-        assert_eq!(contours(&steep, &spec(1.0, 5.0)).unwrap_err(), SiteError::TooManyContours);
-        assert_eq!(contours(&steep, &spec(1e-300, 5.0)).unwrap_err(), SiteError::TooManyContours);
-        assert_eq!(contours(&steep, &spec(f64::MIN_POSITIVE, 5.0)).unwrap_err(), SiteError::TooManyContours);
+        assert_eq!(
+            contours(&steep, &spec(1.0, 5.0)).unwrap_err(),
+            SiteError::TooManyContours
+        );
+        assert_eq!(
+            contours(&steep, &spec(1e-300, 5.0)).unwrap_err(),
+            SiteError::TooManyContours
+        );
+        assert_eq!(
+            contours(&steep, &spec(f64::MIN_POSITIVE, 5.0)).unwrap_err(),
+            SiteError::TooManyContours
+        );
         // A major interval of zero means no major lines.
-        assert!(contours(&tin, &spec(5.0, 0.0)).unwrap().iter().all(|c| !c.major));
+        assert!(
+            contours(&tin, &spec(5.0, 0.0))
+                .unwrap()
+                .iter()
+                .all(|c| !c.major)
+        );
     }
 
     #[test]
@@ -280,10 +367,17 @@ mod tests {
         let s = smooth(&line, false);
         assert_eq!((s[0], *s.last().unwrap()), (line[0], line[2]));
         assert!(s.len() > line.len());
-        let ring = vec![DVec2::ZERO, DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0), DVec2::new(0.0, 10.0)];
+        let ring = vec![
+            DVec2::ZERO,
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ];
         assert_eq!(smooth(&ring, true).len(), 4 * 4);
         assert_eq!(smooth(&line[..2], false), line[..2].to_vec());
-        let tin = grid(11, 10.0, |x, y| 10.0 - ((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt() / 5.0);
+        let tin = grid(11, 10.0, |x, y| {
+            10.0 - ((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt() / 5.0
+        });
         let mut sp = spec(2.0, 4.0);
         let plain = contours(&tin, &sp).unwrap();
         sp.smooth = true;

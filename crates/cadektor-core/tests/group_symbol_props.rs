@@ -1,14 +1,16 @@
 //! Property tests: groups under random commands and undo, symbol instance transforms, and the area
 //! that a hatch covers.
 
+use cadektor_core::DVec2;
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::geom::{point_in_polygon, polygon_area};
-use cadektor_core::graphics::{GraphicResource, HatchDef, HatchLine, PatternUnits, SymbolDef, SymbolItem};
+use cadektor_core::graphics::{
+    GraphicResource, HatchDef, HatchLine, PatternUnits, SymbolDef, SymbolItem,
+};
 use cadektor_core::model::{Attributes, Document, ObjectId, Shape};
 use cadektor_core::pattern::hatch_segments;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::symbols;
-use cadektor_core::DVec2;
 use proptest::prelude::*;
 
 #[derive(Clone, Debug)]
@@ -127,7 +129,7 @@ proptest! {
         let def = SymbolDef {
             insertion: DVec2::new(px.0, px.1),
             items: vec![SymbolItem { shape: Shape::Rect { min: DVec2::new(-20.0, -10.0), max: DVec2::new(30.0, 25.0) }, attrs: Attributes::default(), class: None }],
-            solids: vec![],
+            ..Default::default()
         };
         let sym = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def.clone()))) }).unwrap().created[0]);
         let shape = Shape::Symbol { symbol: sym, at: DVec2::new(at.0, at.1), rotation, scale: sx, scale_y: Some(sy) };

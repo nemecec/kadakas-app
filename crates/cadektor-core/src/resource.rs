@@ -9,7 +9,9 @@ use crate::landscape::style::LandscapeAreaStyle;
 use crate::plants::style::PlantStyle;
 
 /// Identifier of a resource. Resources share one ID space with objects, layers and classes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct ResourceId(pub u64);
 
@@ -65,7 +67,11 @@ impl Serialize for ResourceBody {
     }
 }
 
-fn tagged<T: Serialize, S: serde::Serializer>(body: &T, name: &str, s: S) -> Result<S::Ok, S::Error> {
+fn tagged<T: Serialize, S: serde::Serializer>(
+    body: &T,
+    name: &str,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     let mut v = serde_json::to_value(body).map_err(serde::ser::Error::custom)?;
     v["type"] = name.into();
     v.serialize(s)
@@ -75,15 +81,25 @@ impl<'de> Deserialize<'de> for ResourceBody {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
         match v.get("type").and_then(serde_json::Value::as_str) {
-            Some("plant_style") => {
-                serde_json::from_value::<PlantStyle>(v).map(|s| ResourceBody::PlantStyle(Box::new(s))).map_err(serde::de::Error::custom)
-            }
+            Some("plant_style") => serde_json::from_value::<PlantStyle>(v)
+                .map(|s| ResourceBody::PlantStyle(Box::new(s)))
+                .map_err(serde::de::Error::custom),
             Some("record_format") => {
-                let f: crate::record::RecordFormat = serde_json::from_value(v.clone()).map_err(serde::de::Error::custom)?;
+                let f: crate::record::RecordFormat =
+                    serde_json::from_value(v.clone()).map_err(serde::de::Error::custom)?;
                 // A field type from a newer app: keep the whole resource as it is.
-                if f.fields.iter().any(|x| x.ty == crate::record::FieldType::Unknown) { Ok(ResourceBody::Unknown(v)) } else { Ok(ResourceBody::RecordFormat(Box::new(f))) }
+                if f.fields
+                    .iter()
+                    .any(|x| x.ty == crate::record::FieldType::Unknown)
+                {
+                    Ok(ResourceBody::Unknown(v))
+                } else {
+                    Ok(ResourceBody::RecordFormat(Box::new(f)))
+                }
             }
-            Some("data_map") => serde_json::from_value(v).map(|m| ResourceBody::DataMap(Box::new(m))).map_err(serde::de::Error::custom),
+            Some("data_map") => serde_json::from_value(v)
+                .map(|m| ResourceBody::DataMap(Box::new(m)))
+                .map_err(serde::de::Error::custom),
             Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
@@ -93,7 +109,11 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 .map_err(serde::de::Error::custom),
             Some(t) if crate::graphics::TYPE_NAMES.contains(&t) => {
                 // A hatch, symbol or the like in a shape that this version does not know (from an older or newer app) is kept as it is.
-                Ok(serde_json::from_value(v.clone()).map_or(ResourceBody::Unknown(v), |g| ResourceBody::Graphic(Box::new(g))))
+                Ok(
+                    serde_json::from_value(v.clone()).map_or(ResourceBody::Unknown(v), |g| {
+                        ResourceBody::Graphic(Box::new(g))
+                    }),
+                )
             }
             _ => Ok(ResourceBody::Unknown(v)),
         }
@@ -126,7 +146,9 @@ impl ResourceBody {
             ResourceBody::PlantStyle(s) => s.validate(),
             ResourceBody::RecordFormat(f) => f.validate(),
             ResourceBody::DataMap(m) => m.validate(),
-            ResourceBody::Worksheet(v) if !v.is_object() => Err("a worksheet is a JSON object".into()),
+            ResourceBody::Worksheet(v) if !v.is_object() => {
+                Err("a worksheet is a JSON object".into())
+            }
             ResourceBody::Worksheet(_) => Ok(()),
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
@@ -228,7 +250,9 @@ impl Resources {
     }
 
     /// All landscape area styles with their IDs and names.
-    pub fn landscape_area_styles(&self) -> impl Iterator<Item = (ResourceId, &str, &LandscapeAreaStyle)> {
+    pub fn landscape_area_styles(
+        &self,
+    ) -> impl Iterator<Item = (ResourceId, &str, &LandscapeAreaStyle)> {
         self.0.iter().filter_map(|r| match &r.body {
             ResourceBody::LandscapeAreaStyle(s) => Some((r.id, r.name.as_str(), s.as_ref())),
             _ => None,
@@ -237,34 +261,59 @@ impl Resources {
 
     /// The ID of the hardscape style with this name (compared without case).
     pub fn find_hardscape_style(&self, name: &str) -> Option<ResourceId> {
-        self.hardscape_styles().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| id)
+        self.hardscape_styles()
+            .find(|(_, n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(id, _, _)| id)
     }
 
     /// The ID of the landscape area style with this name (compared without case).
     pub fn find_landscape_area_style(&self, name: &str) -> Option<ResourceId> {
-        self.landscape_area_styles().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| id)
+        self.landscape_area_styles()
+            .find(|(_, n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(id, _, _)| id)
     }
 
     /// The landscape area styles whose mix uses this plant style.
     pub fn mixes_using(&self, plant: ResourceId) -> Vec<ResourceId> {
-        self.landscape_area_styles().filter(|(_, _, s)| s.mix.iter().any(|e| e.plant == plant)).map(|(id, _, _)| id).collect()
+        self.landscape_area_styles()
+            .filter(|(_, _, s)| s.mix.iter().any(|e| e.plant == plant))
+            .map(|(id, _, _)| id)
+            .collect()
     }
 
     /// The ID of the plant style with this name (compared without case).
     pub fn find_plant_style(&self, name: &str) -> Option<ResourceId> {
-        self.plant_styles().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| id)
+        self.plant_styles()
+            .find(|(_, n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(id, _, _)| id)
     }
 
     /// Checks every resource: valid content, a non-empty name, and a name that no other
     /// resource of the same type has.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(id) = self.find_cycle() {
+            let name = self.get(id).map_or_else(String::new, |r| r.name.clone());
+            return Err(format!(
+                "resource {id} ('{name}') uses itself, directly or through other symbols, tiles or line types"
+            ));
+        }
         for (i, r) in self.0.iter().enumerate() {
             if r.name.trim().is_empty() {
                 return Err(format!("resource {} has no name", r.id));
             }
-            r.body.validate().map_err(|e| format!("resource {}: {e}", r.id))?;
-            if !matches!(r.body, ResourceBody::Unknown(_)) && self.0[..i].iter().any(|o| o.body.type_name() == r.body.type_name() && o.name.eq_ignore_ascii_case(&r.name)) {
-                return Err(format!("two {} resources are named '{}'", r.body.type_name(), r.name));
+            r.body
+                .validate()
+                .map_err(|e| format!("resource {}: {e}", r.id))?;
+            if !matches!(r.body, ResourceBody::Unknown(_))
+                && self.0[..i].iter().any(|o| {
+                    o.body.type_name() == r.body.type_name() && o.name.eq_ignore_ascii_case(&r.name)
+                })
+            {
+                return Err(format!(
+                    "two {} resources are named '{}'",
+                    r.body.type_name(),
+                    r.name
+                ));
             }
         }
         Ok(())
@@ -276,7 +325,11 @@ mod tests {
     use super::*;
 
     fn res(id: u64, name: &str) -> Resource {
-        Resource { id: ResourceId(id), name: name.into(), body: ResourceBody::plant_style(PlantStyle::default()) }
+        Resource {
+            id: ResourceId(id),
+            name: name.into(),
+            body: ResourceBody::plant_style(PlantStyle::default()),
+        }
     }
 
     #[test]
@@ -312,7 +365,9 @@ mod tests {
         assert!(r.validate().unwrap_err().contains("no name"));
         r.remove(ResourceId(3));
         let mut bad = res(4, "Bad");
-        let ResourceBody::PlantStyle(s) = &mut bad.body else { panic!() };
+        let ResourceBody::PlantStyle(s) = &mut bad.body else {
+            panic!()
+        };
         s.spread = f64::NAN;
         r.push(bad);
         assert!(r.validate().unwrap_err().contains("resource 4"));
@@ -328,12 +383,20 @@ mod tests {
         assert_eq!(serde_json::to_value(&r).unwrap(), j);
         let mut store = Resources::default();
         store.push(r.clone());
-        store.push(Resource { id: ResourceId(10), name: "Hatch 1".into(), body: r.body.clone() });
-        assert!(store.validate().is_ok(), "unknown resources may share a name");
+        store.push(Resource {
+            id: ResourceId(10),
+            name: "Hatch 1".into(),
+            body: r.body.clone(),
+        });
+        assert!(
+            store.validate().is_ok(),
+            "unknown resources may share a name"
+        );
         assert!(store.plant_style(ResourceId(9)).is_none());
         assert_eq!(store.plant_styles().count(), 0);
         // A body without a type is also kept.
-        let r: Resource = serde_json::from_value(serde_json::json!({"id": 1, "name": "x", "body": 5})).unwrap();
+        let r: Resource =
+            serde_json::from_value(serde_json::json!({"id": 1, "name": "x", "body": 5})).unwrap();
         assert_eq!(r.body, ResourceBody::Unknown(serde_json::json!(5)));
         // A plant style with a bad field is an error.
         let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "plant_style", "spread": "wide"}});
@@ -343,13 +406,23 @@ mod tests {
     #[test]
     fn data_resources_round_trip() {
         use crate::record::{FieldDef, FieldType, RecordFormat};
-        let fmt = RecordFormat { fields: vec![FieldDef::new("Depth", FieldType::Dimension)] };
-        let r = Resource { id: ResourceId(1), name: "Soil".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) };
+        let fmt = RecordFormat {
+            fields: vec![FieldDef::new("Depth", FieldType::Dimension)],
+        };
+        let r = Resource {
+            id: ResourceId(1),
+            name: "Soil".into(),
+            body: ResourceBody::RecordFormat(Box::new(fmt)),
+        };
         let j = serde_json::to_value(&r).unwrap();
         assert_eq!(j["body"]["type"], "record_format");
         assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), r);
         assert_eq!(r.body.type_name(), "record_format");
-        let m = Resource { id: ResourceId(2), name: "Map".into(), body: ResourceBody::DataMap(Box::new(crate::datamap::DataMap::landscape_template())) };
+        let m = Resource {
+            id: ResourceId(2),
+            name: "Map".into(),
+            body: ResourceBody::DataMap(Box::new(crate::datamap::DataMap::landscape_template())),
+        };
         let j = serde_json::to_value(&m).unwrap();
         assert_eq!(j["body"]["type"], "data_map");
         assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), m);
@@ -358,12 +431,20 @@ mod tests {
         store.push(m);
         assert!(store.data_map(ResourceId(2)).is_some());
         assert!(store.data_map(ResourceId(1)).is_none());
-        let w = Resource { id: ResourceId(3), name: "Sheet".into(), body: ResourceBody::Worksheet(serde_json::json!({"type": "worksheet", "cells": {}})) };
+        let w = Resource {
+            id: ResourceId(3),
+            name: "Sheet".into(),
+            body: ResourceBody::Worksheet(serde_json::json!({"type": "worksheet", "cells": {}})),
+        };
         let j = serde_json::to_value(&w).unwrap();
         assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), w);
         assert_eq!(w.body.type_name(), "worksheet");
         assert!(w.body.validate().is_ok());
-        assert!(ResourceBody::Worksheet(serde_json::json!(5)).validate().is_err());
+        assert!(
+            ResourceBody::Worksheet(serde_json::json!(5))
+                .validate()
+                .is_err()
+        );
         // A field type from the future keeps the resource, unchanged.
         let future = serde_json::json!({"id": 4, "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}});
         let r: Resource = serde_json::from_value(future.clone()).unwrap();
@@ -371,9 +452,12 @@ mod tests {
         assert_eq!(serde_json::to_value(&r).unwrap(), future);
         let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "record_format", "fields": 5}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
-        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "data_map", "rules": 5}});
+        let bad =
+            serde_json::json!({"id": 1, "name": "x", "body": {"type": "data_map", "rules": 5}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
-        let bad_fmt = ResourceBody::RecordFormat(Box::new(RecordFormat { fields: vec![FieldDef::new("", FieldType::Text)] }));
+        let bad_fmt = ResourceBody::RecordFormat(Box::new(RecordFormat {
+            fields: vec![FieldDef::new("", FieldType::Text)],
+        }));
         assert!(bad_fmt.validate().is_err());
     }
 
@@ -404,5 +488,54 @@ mod tests {
         let back: Resource = serde_json::from_value(j).unwrap();
         assert_eq!(back, res(1, "Oak"));
         assert_eq!(back.body.type_name(), "plant_style");
+    }
+
+    #[test]
+    fn a_file_with_a_resource_that_uses_itself_is_refused() {
+        use crate::graphics::{
+            GraphicResource, LineElement, LineTypeDef, PatternUnits, SymbolDef, SymbolItem,
+        };
+        let sym = |id: u64, line_type: u64| Resource {
+            id: ResourceId(id),
+            name: format!("S{id}"),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                items: vec![SymbolItem {
+                    shape: crate::model::Shape::Circle {
+                        center: glam::DVec2::ZERO,
+                        radius: 1.0,
+                    },
+                    attrs: crate::model::Attributes {
+                        line_type: Some(ResourceId(line_type)),
+                        ..Default::default()
+                    },
+                    class: None,
+                }],
+                ..Default::default()
+            }))),
+        };
+        // A symbol whose circle has a line type with a mark of the same symbol.
+        let lt = Resource {
+            id: ResourceId(2),
+            name: "Fence".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::LineType(LineTypeDef {
+                units: PatternUnits::Paper,
+                elements: vec![
+                    LineElement::Dash { length: 1.0 },
+                    LineElement::Mark {
+                        symbol: ResourceId(1),
+                        scale: 1.0,
+                        rotate: true,
+                    },
+                ],
+            }))),
+        };
+        let mut store = Resources::default();
+        store.push(sym(1, 2));
+        store.push(lt);
+        let e = store.validate().unwrap_err();
+        assert!(e.contains("uses itself"), "{e}");
+        let mut ok = Resources::default();
+        ok.push(sym(1, 99));
+        assert!(ok.validate().is_ok());
     }
 }

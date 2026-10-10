@@ -57,10 +57,19 @@ impl Chord {
         let key = match key {
             "Backtick" | "Backquote" => Some(Key::Backtick),
             "Plus" => Some(Key::Plus),
-            k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphabetic() => Key::from_name(&k.to_ascii_uppercase()),
+            k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphabetic() => {
+                Key::from_name(&k.to_ascii_uppercase())
+            }
             k => Key::from_name(k),
         };
-        key.map(|key| Chord { key, command, ctrl, shift, alt }).ok_or_else(|| format!("unknown key in '{text}'"))
+        key.map(|key| Chord {
+            key,
+            command,
+            ctrl,
+            shift,
+            alt,
+        })
+        .ok_or_else(|| format!("unknown key in '{text}'"))
     }
 
     /// The chord of a key event.
@@ -70,7 +79,13 @@ impl Chord {
 
     pub fn from_event_for(key: Key, m: Modifiers, mac: bool) -> Chord {
         // Off macOS, `command` is the Ctrl key.
-        Chord { key, command: m.command, ctrl: mac && m.ctrl, shift: m.shift, alt: m.alt }
+        Chord {
+            key,
+            command: m.command,
+            ctrl: mac && m.ctrl,
+            shift: m.shift,
+            alt: m.alt,
+        }
     }
 
     /// Text for tooltips and menus.
@@ -237,7 +252,10 @@ impl Action {
 
     /// The action that shows `view`. Bottom has no action: Vectorworks gives it no key.
     pub fn for_view(view: StandardView) -> Option<Action> {
-        Action::ALL.iter().copied().find(|a| a.standard_view() == Some(view))
+        Action::ALL
+            .iter()
+            .copied()
+            .find(|a| a.standard_view() == Some(view))
     }
 
     /// Keys that repeat while held.
@@ -257,7 +275,19 @@ impl Action {
 }
 
 fn is_digit(k: Key) -> bool {
-    matches!(k, Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9)
+    matches!(
+        k,
+        Key::Num0
+            | Key::Num1
+            | Key::Num2
+            | Key::Num3
+            | Key::Num4
+            | Key::Num5
+            | Key::Num6
+            | Key::Num7
+            | Key::Num8
+            | Key::Num9
+    )
 }
 
 /// While a text field has focus, only chords with Cmd/Ctrl may fire, and not the ones
@@ -275,7 +305,15 @@ pub struct Keymap {
 fn parse_defaults() -> BTreeMap<Action, Vec<Chord>> {
     Action::ALL
         .iter()
-        .map(|a| (*a, a.defaults().iter().map(|c| Chord::parse(c).expect("valid default chord")).collect()))
+        .map(|a| {
+            (
+                *a,
+                a.defaults()
+                    .iter()
+                    .map(|c| Chord::parse(c).expect("valid default chord"))
+                    .collect(),
+            )
+        })
         .collect()
 }
 
@@ -301,10 +339,18 @@ impl Keymap {
         let mut warnings = Vec::new();
         let parsed: serde_json::Value = match serde_json::from_str(json) {
             Ok(v) => v,
-            Err(e) => return (Keymap::defaults(), vec![format!("keymap file ignored: {e}")]),
+            Err(e) => {
+                return (
+                    Keymap::defaults(),
+                    vec![format!("keymap file ignored: {e}")],
+                );
+            }
         };
         let Some(obj) = parsed.as_object() else {
-            return (Keymap::defaults(), vec!["keymap file ignored: expected a JSON object".into()]);
+            return (
+                Keymap::defaults(),
+                vec!["keymap file ignored: expected a JSON object".into()],
+            );
         };
         let mut user: BTreeMap<&str, Vec<Chord>> = BTreeMap::new();
         for (id, val) in obj {
@@ -322,7 +368,9 @@ impl Keymap {
                         bad = true;
                     }
                     None => {
-                        warnings.push(format!("keymap: '{id}' needs a chord string or a list of them (default kept)"));
+                        warnings.push(format!(
+                            "keymap: '{id}' needs a chord string or a list of them (default kept)"
+                        ));
                         bad = true;
                     }
                 }
@@ -341,7 +389,12 @@ impl Keymap {
                 for (other, list) in bindings.iter_mut() {
                     if *other != action && list.contains(c) {
                         list.retain(|x| x != c);
-                        warnings.push(format!("keymap conflict: {} moved from {} to {}", c.display(cfg!(target_os = "macos")), other.id(), id));
+                        warnings.push(format!(
+                            "keymap conflict: {} moved from {} to {}",
+                            c.display(cfg!(target_os = "macos")),
+                            other.id(),
+                            id
+                        ));
                     }
                 }
             }
@@ -352,18 +405,28 @@ impl Keymap {
 
     /// Loads the user file if it exists.
     pub fn load() -> (Keymap, Vec<String>) {
-        let Some(path) = user_file() else { return (Keymap::defaults(), vec![]) };
+        let Some(path) = user_file() else {
+            return (Keymap::defaults(), vec![]);
+        };
         match std::fs::read_to_string(&path) {
             Ok(text) => Keymap::with_overrides(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Keymap::defaults(), vec![]),
-            Err(e) => (Keymap::defaults(), vec![format!("keymap file {} ignored: {e}", path.display())]),
+            Err(e) => (
+                Keymap::defaults(),
+                vec![format!("keymap file {} ignored: {e}", path.display())],
+            ),
         }
     }
 
     /// The action of a key event and the chord that matched. Digit chords such as `Alt+Shift+1`
     /// are also matched by the physical key: with Shift held, many layouts report another logical key
     /// (`!` on a US layout), and with Alt held, macOS reports a symbol.
-    pub fn action_for_event(&self, key: Key, physical: Option<Key>, m: Modifiers) -> Option<(Action, Chord)> {
+    pub fn action_for_event(
+        &self,
+        key: Key,
+        physical: Option<Key>,
+        m: Modifiers,
+    ) -> Option<(Action, Chord)> {
         let chord = Chord::from_event(key, m);
         if let Some(a) = self.action_for(chord) {
             return Some((a, chord));
@@ -383,32 +446,44 @@ impl Keymap {
 
     /// First bound chord as text, for tooltips and menus. Empty when unbound.
     pub fn hint(&self, action: Action) -> String {
-        self.chords(action).first().map(|c| c.display(cfg!(target_os = "macos"))).unwrap_or_default()
+        self.chords(action)
+            .first()
+            .map(|c| c.display(cfg!(target_os = "macos")))
+            .unwrap_or_default()
     }
 
     /// True while the (first matching) chord of `action` is held down.
     pub fn held(&self, action: Action, input: &egui::InputState) -> bool {
         self.chords(action).iter().any(|c| {
-            input.key_down(c.key) && input.modifiers.command == c.command
+            input.key_down(c.key)
+                && input.modifiers.command == c.command
                 && (input.modifiers.ctrl && cfg!(target_os = "macos")) == c.ctrl
-                && input.modifiers.shift == c.shift && input.modifiers.alt == c.alt
+                && input.modifiers.shift == c.shift
+                && input.modifiers.alt == c.alt
         })
     }
 }
 
 /// `keymap.json` in the per-user config directory. `CADEKTOR_KEYMAP` overrides the path.
 pub fn user_file() -> Option<std::path::PathBuf> {
-    user_file_for(std::env::consts::OS, |k| std::env::var_os(k).filter(|v| !v.is_empty()))
+    user_file_for(std::env::consts::OS, |k| {
+        std::env::var_os(k).filter(|v| !v.is_empty())
+    })
 }
 
-fn user_file_for(os: &str, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+fn user_file_for(
+    os: &str,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     if let Some(p) = env("CADEKTOR_KEYMAP") {
         return Some(PathBuf::from(p));
     }
     let dir = match os {
         "windows" => PathBuf::from(env("APPDATA")?),
-        "macos" => PathBuf::from(env("HOME")?).join("Library").join("Application Support"),
+        "macos" => PathBuf::from(env("HOME")?)
+            .join("Library")
+            .join("Application Support"),
         _ => match env("XDG_CONFIG_HOME") {
             Some(x) => PathBuf::from(x),
             None => PathBuf::from(env("HOME")?).join(".config"),
@@ -445,32 +520,76 @@ mod tests {
         assert_eq!(m("9"), Some(Action::ViewRightRearIso));
         assert_eq!(km.action_for(chord("Cmd/Ctrl+5")), Some(Action::ViewPlan));
         assert_eq!(km.action_for(chord("Shift+C")), Some(Action::ViewFlyover));
-        assert_eq!(km.action_for(chord("Cmd/Ctrl+Shift+W")), Some(Action::ViewWireframe));
-        assert_eq!(km.action_for(chord("Cmd/Ctrl+Shift+G")), Some(Action::ViewShaded));
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+W")),
+            Some(Action::ViewWireframe)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+G")),
+            Some(Action::ViewShaded)
+        );
         assert_eq!(Action::ViewFlyover.standard_view(), None);
     }
 
     #[test]
     fn digit_chords_match_the_physical_key_when_the_character_differs() {
         let km = Keymap::defaults();
-        let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
+        let alt_shift = Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
         // US layout, Shift+1 types "!": logical key Exclamationmark, physical key Digit1.
-        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::Num1), alt_shift).map(|x| x.0), Some(Action::ViewLeftIso));
+        assert_eq!(
+            km.action_for_event(Key::Exclamationmark, Some(Key::Num1), alt_shift)
+                .map(|x| x.0),
+            Some(Action::ViewLeftIso)
+        );
         // The logical key matches when it is the digit already.
-        assert_eq!(km.action_for_event(Key::Num3, Some(Key::Num3), alt_shift).map(|x| x.0), Some(Action::ViewRightIso));
-        assert_eq!(km.action_for_event(Key::Num3, None, alt_shift).map(|x| x.0), Some(Action::ViewRightIso));
+        assert_eq!(
+            km.action_for_event(Key::Num3, Some(Key::Num3), alt_shift)
+                .map(|x| x.0),
+            Some(Action::ViewRightIso)
+        );
+        assert_eq!(
+            km.action_for_event(Key::Num3, None, alt_shift).map(|x| x.0),
+            Some(Action::ViewRightIso)
+        );
         // Other keys are not remapped: a logical key that is bound wins, and a physical letter never counts.
-        assert_eq!(km.action_for_event(Key::J, Some(Key::Semicolon), alt_shift).map(|x| x.0), Some(Action::ViewProjection));
-        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::A), alt_shift), None);
+        assert_eq!(
+            km.action_for_event(Key::J, Some(Key::Semicolon), alt_shift)
+                .map(|x| x.0),
+            Some(Action::ViewProjection)
+        );
+        assert_eq!(
+            km.action_for_event(Key::Exclamationmark, Some(Key::A), alt_shift),
+            None
+        );
         // Shift+1 alone is not bound.
-        assert_eq!(km.action_for_event(Key::Exclamationmark, Some(Key::Num1), Modifiers::SHIFT), None);
+        assert_eq!(
+            km.action_for_event(Key::Exclamationmark, Some(Key::Num1), Modifiers::SHIFT),
+            None
+        );
         // A plain digit is still a tool key.
-        assert_eq!(km.action_for_event(Key::Num2, Some(Key::Num2), Modifiers::NONE).map(|x| x.0), Some(Action::ToolLine));
+        assert_eq!(
+            km.action_for_event(Key::Num2, Some(Key::Num2), Modifiers::NONE)
+                .map(|x| x.0),
+            Some(Action::ToolLine)
+        );
     }
 
     #[test]
     fn parses_chords() {
-        assert_eq!(chord("Cmd/Ctrl+Shift+Z"), Chord { key: Key::Z, command: true, ctrl: false, shift: true, alt: false });
+        assert_eq!(
+            chord("Cmd/Ctrl+Shift+Z"),
+            Chord {
+                key: Key::Z,
+                command: true,
+                ctrl: false,
+                shift: true,
+                alt: false
+            }
+        );
         assert_eq!(chord("Option+2").key, Key::Num2);
         assert!(chord("Option+2").alt);
         assert_eq!(chord("Backtick").key, Key::Backtick);
@@ -513,7 +632,10 @@ mod tests {
         assert_eq!(km.action_for(chord("2")), Some(Action::ToolCircle));
         assert!(km.chords(Action::ToolLine).is_empty());
         assert_eq!(w.len(), 1);
-        assert!(w[0].contains("tool.line") && w[0].contains("tool.circle"), "{w:?}");
+        assert!(
+            w[0].contains("tool.line") && w[0].contains("tool.circle"),
+            "{w:?}"
+        );
     }
 
     #[test]
@@ -527,10 +649,15 @@ mod tests {
 
     #[test]
     fn bad_input_warns_and_keeps_defaults() {
-        let (km, w) = Keymap::with_overrides(r#"{"nope": "A", "tool.line": "Hyper+Q", "tool.rect": 5}"#);
+        let (km, w) =
+            Keymap::with_overrides(r#"{"nope": "A", "tool.line": "Hyper+Q", "tool.rect": 5}"#);
         assert_eq!(w.len(), 3, "{w:?}");
         assert_eq!(km.action_for(chord("4")), Some(Action::ToolRect));
-        assert_eq!(km.action_for(chord("2")), Some(Action::ToolLine), "a bad chord keeps the default");
+        assert_eq!(
+            km.action_for(chord("2")),
+            Some(Action::ToolLine),
+            "a bad chord keeps the default"
+        );
         let (km, w) = Keymap::with_overrides(r#"{"tool.line": ["F", 7]}"#);
         assert_eq!(w.len(), 1);
         assert_eq!(km.action_for(chord("2")), Some(Action::ToolLine));
@@ -542,16 +669,28 @@ mod tests {
 
     #[test]
     fn event_chords_ignore_mac_ctrl() {
-        let cmd = Modifiers { command: true, ..Default::default() };
-        assert_eq!(Chord::from_event_for(Key::Z, cmd, true), chord("Cmd/Ctrl+Z"));
+        let cmd = Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            Chord::from_event_for(Key::Z, cmd, true),
+            chord("Cmd/Ctrl+Z")
+        );
         // On macOS the Control key is its own modifier and does not trigger Cmd bindings.
-        let mac_ctrl = Modifiers { ctrl: true, ..Default::default() };
+        let mac_ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
         let c = Chord::from_event_for(Key::Z, mac_ctrl, true);
         assert!(c.ctrl && !c.command);
         assert_ne!(c, chord("Cmd/Ctrl+Z"));
         assert_eq!(Chord::parse_for("Ctrl+Z", true).unwrap(), c);
         // Elsewhere "Ctrl" is the command key.
-        assert_eq!(Chord::parse_for("Ctrl+Z", false).unwrap(), Chord::parse_for("Cmd/Ctrl+Z", false).unwrap());
+        assert_eq!(
+            Chord::parse_for("Ctrl+Z", false).unwrap(),
+            Chord::parse_for("Cmd/Ctrl+Z", false).unwrap()
+        );
         assert_eq!(c.display(true), "Ctrl+Z");
     }
 
@@ -562,28 +701,54 @@ mod tests {
         for a in Action::ALL {
             for c in km.chords(*a) {
                 if !c.command {
-                    assert!(!allowed_in_text_field(*a, *c), "{} must not fire while typing", a.id());
+                    assert!(
+                        !allowed_in_text_field(*a, *c),
+                        "{} must not fire while typing",
+                        a.id()
+                    );
                 }
             }
         }
         assert!(!allowed_in_text_field(Action::Undo, chord("Cmd/Ctrl+Z")));
-        assert!(!allowed_in_text_field(Action::SelectAll, chord("Cmd/Ctrl+A")));
+        assert!(!allowed_in_text_field(
+            Action::SelectAll,
+            chord("Cmd/Ctrl+A")
+        ));
         assert!(allowed_in_text_field(Action::FileSave, chord("Cmd/Ctrl+S")));
     }
 
     #[test]
     fn user_file_location() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| std::ffi::OsString::from(v))
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }
         };
-        let tail = |p: Option<std::path::PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
+        let tail =
+            |p: Option<std::path::PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
         assert_eq!(
             tail(user_file_for("macos", env(&[("HOME", "/Users/me")]))).as_deref(),
             Some("/Users/me/Library/Application Support/cadektor/keymap.json")
         );
-        assert_eq!(tail(user_file_for("linux", env(&[("HOME", "/h")]))).as_deref(), Some("/h/.config/cadektor/keymap.json"));
-        assert_eq!(tail(user_file_for("windows", env(&[("APPDATA", "C:/A")]))).as_deref(), Some("C:/A/cadektor/keymap.json"));
-        assert_eq!(tail(user_file_for("linux", env(&[("CADEKTOR_KEYMAP", "/x.json")]))).as_deref(), Some("/x.json"));
+        assert_eq!(
+            tail(user_file_for("linux", env(&[("HOME", "/h")]))).as_deref(),
+            Some("/h/.config/cadektor/keymap.json")
+        );
+        assert_eq!(
+            tail(user_file_for("windows", env(&[("APPDATA", "C:/A")]))).as_deref(),
+            Some("C:/A/cadektor/keymap.json")
+        );
+        assert_eq!(
+            tail(user_file_for(
+                "linux",
+                env(&[("CADEKTOR_KEYMAP", "/x.json")])
+            ))
+            .as_deref(),
+            Some("/x.json")
+        );
     }
 
     /// The doc table and the default keymap must not drift apart.
@@ -599,11 +764,18 @@ mod tests {
                 continue;
             }
             // Every backticked action id in the row counts as documented.
-            let Some(id) = cells[0].split('`').nth(1) else { continue };
+            let Some(id) = cells[0].split('`').nth(1) else {
+                continue;
+            };
             documented.insert(id.to_string());
-            let action = Action::from_id(id).unwrap_or_else(|| panic!("unknown action id '{id}' in the doc"));
+            let action = Action::from_id(id)
+                .unwrap_or_else(|| panic!("unknown action id '{id}' in the doc"));
             let status = cells[3];
-            assert_eq!(status == "done", action.implemented(), "status of {id} disagrees with the code");
+            assert_eq!(
+                status == "done",
+                action.implemented(),
+                "status of {id} disagrees with the code"
+            );
             let binding = cells[2].split(" (").next().unwrap();
             let mut want: Vec<Chord> = binding.split(" or ").map(|c| chord(c.trim())).collect();
             let mut have = km.chords(action).to_vec();
@@ -613,9 +785,16 @@ mod tests {
             checked += 1;
             done_rows += usize::from(status == "done");
         }
-        assert!(done_rows >= 25 && checked >= 40, "table not parsed: {done_rows} done rows, {checked} checked");
+        assert!(
+            done_rows >= 25 && checked >= 40,
+            "table not parsed: {done_rows} done rows, {checked} checked"
+        );
         for a in Action::ALL {
-            assert!(documented.contains(a.id()), "{} is missing in docs/keyboard-shortcuts.md", a.id());
+            assert!(
+                documented.contains(a.id()),
+                "{} is missing in docs/keyboard-shortcuts.md",
+                a.id()
+            );
         }
     }
 }

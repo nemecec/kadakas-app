@@ -10,11 +10,19 @@ use crate::value::Value;
 
 /// A text cell that starts with one of these could run as a formula in a spreadsheet program.
 fn defuse(s: &str) -> String {
-    if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_string() }
+    if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    }
 }
 
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// The sheet as CSV text (RFC 4180, lines end with `\n`). Numbers use the decimals of their
@@ -26,7 +34,11 @@ pub fn csv(c: &Computed) -> String {
         let line: Vec<String> = (1..=c.cols)
             .map(|col| {
                 let text = c.display_plain(r, col);
-                csv_field(&if matches!(c.value(r, col), Value::Text(_)) { defuse(&text) } else { text })
+                csv_field(&if matches!(c.value(r, col), Value::Text(_)) {
+                    defuse(&text)
+                } else {
+                    text
+                })
             })
             .collect();
         out.push_str(&line.join(","));
@@ -42,11 +54,17 @@ fn crc32(data: &[u8]) -> u32 {
     for (i, slot) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 == 1 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 == 1 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *slot = c;
     }
-    !data.iter().fold(!0u32, |c, &b| table[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8))
+    !data.iter().fold(!0u32, |c, &b| {
+        table[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8)
+    })
 }
 
 /// A ZIP file with stored (uncompressed) entries.
@@ -116,7 +134,8 @@ fn xml_escape(s: &str) -> String {
             '"' => out.push_str("&quot;"),
             // Characters that XML 1.0 does not allow: controls other than tab, LF and CR, and the
             // two non-characters U+FFFE and U+FFFF.
-            c if ((c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{fffe}' | '\u{ffff}') => {}
+            c if ((c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r'))
+                || matches!(c, '\u{fffe}' | '\u{ffff}') => {}
             c => out.push(c),
         }
     }
@@ -125,7 +144,11 @@ fn xml_escape(s: &str) -> String {
 
 /// The sheet name for the workbook: no `[]:*?/\`, at most 31 characters, not empty.
 pub fn sheet_name(name: &str) -> String {
-    let n: String = name.chars().filter(|c| !matches!(c, '[' | ']' | ':' | '*' | '?' | '/' | '\\') && !c.is_control()).take(31).collect();
+    let n: String = name
+        .chars()
+        .filter(|c| !matches!(c, '[' | ']' | ':' | '*' | '?' | '/' | '\\') && !c.is_control())
+        .take(31)
+        .collect();
     let n = n.trim().trim_matches('\'').to_string();
     if n.is_empty() { "Sheet1".into() } else { n }
 }
@@ -135,10 +158,18 @@ const STYLE_DECIMALS: u8 = 6;
 
 fn styles_xml() -> String {
     let mut fmts = String::new();
-    let mut xfs = String::from("<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>");
+    let mut xfs =
+        String::from("<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>");
     for d in 0..=STYLE_DECIMALS {
-        let code = if d == 0 { "0".to_string() } else { format!("0.{}", "0".repeat(usize::from(d))) };
-        fmts.push_str(&format!("<numFmt numFmtId=\"{}\" formatCode=\"{code}\"/>", 164 + u16::from(d)));
+        let code = if d == 0 {
+            "0".to_string()
+        } else {
+            format!("0.{}", "0".repeat(usize::from(d)))
+        };
+        fmts.push_str(&format!(
+            "<numFmt numFmtId=\"{}\" formatCode=\"{code}\"/>",
+            164 + u16::from(d)
+        ));
         xfs.push_str(&format!("<xf numFmtId=\"{}\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\"/>", 164 + u16::from(d)));
     }
     format!(
@@ -158,13 +189,27 @@ fn sheet_xml(c: &Computed) -> String {
             let body = match &v {
                 Value::Empty => continue,
                 Value::Number(n) => {
-                    let style = c.format(r, col).decimals.filter(|d| *d <= STYLE_DECIMALS).map_or(0, |d| 1 + usize::from(d));
-                    let s = if style > 0 { format!(" s=\"{style}\"") } else { String::new() };
+                    let style = c
+                        .format(r, col)
+                        .decimals
+                        .filter(|d| *d <= STYLE_DECIMALS)
+                        .map_or(0, |d| 1 + usize::from(d));
+                    let s = if style > 0 {
+                        format!(" s=\"{style}\"")
+                    } else {
+                        String::new()
+                    };
                     format!("<c r=\"{at}\"{s}><v>{n}</v></c>")
                 }
                 Value::Bool(b) => format!("<c r=\"{at}\" t=\"b\"><v>{}</v></c>", u8::from(*b)),
-                Value::Text(t) => format!("<c r=\"{at}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>", xml_escape(t)),
-                Value::Error(e) => format!("<c r=\"{at}\" t=\"inlineStr\"><is><t>{}</t></is></c>", e.code()),
+                Value::Text(t) => format!(
+                    "<c r=\"{at}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{}</t></is></c>",
+                    xml_escape(t)
+                ),
+                Value::Error(e) => format!(
+                    "<c r=\"{at}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+                    e.code()
+                ),
             };
             cells.push_str(&body);
         }
@@ -172,7 +217,9 @@ fn sheet_xml(c: &Computed) -> String {
             rows.push_str(&format!("<row r=\"{r}\">{cells}</row>"));
         }
     }
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>{rows}</sheetData></worksheet>")
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>{rows}</sheetData></worksheet>"
+    )
 }
 
 /// The sheet as an XLSX file (bytes). `name` is the sheet name in the workbook.
@@ -206,7 +253,15 @@ mod tests {
         w.set_cell("A1", "Name", None).unwrap();
         w.set_cell("B1", "Value, with comma", None).unwrap();
         w.set_cell("A2", "He said \"hi\"", None).unwrap();
-        w.set_cell("B2", "=1/3", Some(CellFormat { decimals: Some(2), unit: "m".into() })).unwrap();
+        w.set_cell(
+            "B2",
+            "=1/3",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: "m".into(),
+            }),
+        )
+        .unwrap();
         w.set_cell("A3", "'=cmd|' /C calc'!A0", None).unwrap();
         w.set_cell("B3", "true", None).unwrap();
         w.set_cell("C3", "-5", None).unwrap();
@@ -221,10 +276,16 @@ mod tests {
         let lines: Vec<&str> = text.split('\n').collect();
         assert_eq!(lines[0], "Name,\"Value, with comma\",");
         assert_eq!(lines[1], "\"He said \"\"hi\"\"\",0.33,");
-        assert_eq!(lines[2], "'=cmd|' /C calc'!A0,TRUE,-5", "text that starts with = is defused. A number stays a number");
+        assert_eq!(
+            lines[2], "'=cmd|' /C calc'!A0,TRUE,-5",
+            "text that starts with = is defused. A number stays a number"
+        );
         assert_eq!(lines[3], "\"line");
         assert_eq!(lines[4], "break <&>\",#DIV/0!,");
-        assert_eq!(csv(&compute(&WorksheetDef::default(), &Document::default())), "");
+        assert_eq!(
+            csv(&compute(&WorksheetDef::default(), &Document::default())),
+            ""
+        );
     }
 
     #[test]
@@ -264,19 +325,44 @@ mod tests {
         let bytes = xlsx(&computed(), "Plant list: [1]");
         let parts = entries(&bytes);
         let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/worksheets/sheet1.xml"]);
-        let text = |n: &str| String::from_utf8(parts.iter().find(|(m, _)| m == n).unwrap().1.clone()).unwrap();
+        assert_eq!(
+            names,
+            [
+                "[Content_Types].xml",
+                "_rels/.rels",
+                "xl/workbook.xml",
+                "xl/_rels/workbook.xml.rels",
+                "xl/styles.xml",
+                "xl/worksheets/sheet1.xml"
+            ]
+        );
+        let text = |n: &str| {
+            String::from_utf8(parts.iter().find(|(m, _)| m == n).unwrap().1.clone()).unwrap()
+        };
         assert!(text("xl/workbook.xml").contains("name=\"Plant list 1\""));
         let sheet = text("xl/worksheets/sheet1.xml");
-        assert!(sheet.contains("<c r=\"A1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">Name</t></is></c>"));
-        assert!(sheet.contains("<c r=\"B2\" s=\"3\"><v>0.3333333333333333</v></c>"), "{sheet}");
+        assert!(sheet.contains(
+            "<c r=\"A1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">Name</t></is></c>"
+        ));
+        assert!(
+            sheet.contains("<c r=\"B2\" s=\"3\"><v>0.3333333333333333</v></c>"),
+            "{sheet}"
+        );
         assert!(sheet.contains("<c r=\"B3\" t=\"b\"><v>1</v></c>"));
         assert!(sheet.contains("<c r=\"C3\"><v>-5</v></c>"));
         assert!(sheet.contains("line\nbreak &lt;&amp;&gt;"));
         assert!(sheet.contains("<t>#DIV/0!</t>"));
-        assert!(sheet.contains("<t xml:space=\"preserve\">=cmd|"), "text is not changed in XLSX, a text cell is not a formula");
+        assert!(
+            sheet.contains("<t xml:space=\"preserve\">=cmd|"),
+            "text is not changed in XLSX, a text cell is not a formula"
+        );
         assert!(!sheet.contains("<c r=\"C1\""), "empty cells are left out");
-        for part in ["xl/styles.xml", "[Content_Types].xml", "_rels/.rels", "xl/_rels/workbook.xml.rels"] {
+        for part in [
+            "xl/styles.xml",
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "xl/_rels/workbook.xml.rels",
+        ] {
             assert!(text(part).starts_with("<?xml"), "{part}");
         }
         assert!(text("xl/styles.xml").contains("formatCode=\"0.00\""));
@@ -292,8 +378,15 @@ mod tests {
         assert_eq!(sheet_name("  'a'  "), "a");
         assert_eq!(sheet_name("a\u{7}b"), "ab");
         assert_eq!(xml_escape("a\u{1}\"b\t"), "a&quot;b\t");
-        assert_eq!(xml_escape("a\u{fffe}b\u{ffff}c\u{b}d\u{c}e\nf\rg"), "abcde\nf\rg");
-        assert_eq!(xml_escape("\u{fffd}\u{10ffff}"), "\u{fffd}\u{10ffff}", "other characters stay");
+        assert_eq!(
+            xml_escape("a\u{fffe}b\u{ffff}c\u{b}d\u{c}e\nf\rg"),
+            "abcde\nf\rg"
+        );
+        assert_eq!(
+            xml_escape("\u{fffd}\u{10ffff}"),
+            "\u{fffd}\u{10ffff}",
+            "other characters stay"
+        );
     }
 
     #[test]
@@ -304,7 +397,12 @@ mod tests {
         w.set_cell("A3", "'@home", None).unwrap();
         let c = compute(&w, &Document::default());
         let sheet = sheet_xml(&c);
-        assert!(sheet.contains(">-5 cm</t>") && sheet.contains(">+x</t>") && sheet.contains(">@home</t>"), "{sheet}");
+        assert!(
+            sheet.contains(">-5 cm</t>")
+                && sheet.contains(">+x</t>")
+                && sheet.contains(">@home</t>"),
+            "{sheet}"
+        );
         assert!(!sheet.contains("'-5"));
         // CSV still guards against formulas.
         assert!(csv(&c).starts_with("'-5 cm\n"));
@@ -313,8 +411,24 @@ mod tests {
     #[test]
     fn many_decimals_use_the_plain_style() {
         let mut w = WorksheetDef::default();
-        w.set_cell("A1", "1.5", Some(CellFormat { decimals: Some(9), unit: String::new() })).unwrap();
-        w.set_cell("A2", "2.5", Some(CellFormat { decimals: Some(0), unit: String::new() })).unwrap();
+        w.set_cell(
+            "A1",
+            "1.5",
+            Some(CellFormat {
+                decimals: Some(9),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
+        w.set_cell(
+            "A2",
+            "2.5",
+            Some(CellFormat {
+                decimals: Some(0),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
         let sheet = sheet_xml(&compute(&w, &Document::default()));
         assert!(sheet.contains("<c r=\"A1\"><v>1.5</v></c>"));
         assert!(sheet.contains("<c r=\"A2\" s=\"1\"><v>2.5</v></c>"));

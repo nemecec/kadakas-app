@@ -65,7 +65,11 @@ fn merge_grid_edges(edges: BTreeSet<(bool, i64, i64)>) -> Vec<((i64, i64), (i64,
     let mut horizontals: Vec<(i64, i64)> = Vec::new();
     let mut verticals: Vec<(i64, i64)> = Vec::new();
     for (vertical, x, y) in edges {
-        if vertical { verticals.push((x, y)) } else { horizontals.push((y, x)) }
+        if vertical {
+            verticals.push((x, y))
+        } else {
+            horizontals.push((y, x))
+        }
     }
     horizontals.sort_unstable();
     verticals.sort_unstable();
@@ -80,7 +84,11 @@ fn merge_grid_edges(edges: BTreeSet<(bool, i64, i64)>) -> Vec<((i64, i64), (i64,
                 end += 1;
                 i += 1;
             }
-            lines.push(if vertical { ((fixed, start), (fixed, end)) } else { ((start, fixed), (end, fixed)) });
+            lines.push(if vertical {
+                ((fixed, start), (fixed, end))
+            } else {
+                ((start, fixed), (end, fixed))
+            });
         }
     }
     lines
@@ -139,11 +147,17 @@ fn pattern_lines(p: &JointPattern, lo: DVec2, hi: DVec2) -> Option<Vec<Segment>>
         JointKind::Herringbone => {
             let cell = wp;
             let k = ((p.unit_length / p.unit_width).round() as i64).max(2);
-            let (nx, ny) = ((span.x / cell).ceil() as i64 + 2 * k + 2, (span.y / cell).ceil() as i64 + 2 * k + 2);
+            let (nx, ny) = (
+                (span.x / cell).ceil() as i64 + 2 * k + 2,
+                (span.y / cell).ceil() as i64 + 2 * k + 2,
+            );
             if nx as f64 * ny as f64 > MAX_CELLS {
                 return None;
             }
-            let (a0, b0) = ((lo.x / cell).floor() as i64 - k, (lo.y / cell).floor() as i64 - k);
+            let (a0, b0) = (
+                (lo.x / cell).floor() as i64 - k,
+                (lo.y / cell).floor() as i64 - k,
+            );
             let mut set = BTreeSet::new();
             for a in a0..a0 + nx {
                 for b in b0..b0 + ny {
@@ -155,7 +169,10 @@ fn pattern_lines(p: &JointPattern, lo: DVec2, hi: DVec2) -> Option<Vec<Segment>>
                 }
             }
             for ((x0, y0), (x1, y1)) in merge_grid_edges(set) {
-                out.push((DVec2::new(x0 as f64, y0 as f64) * cell, DVec2::new(x1 as f64, y1 as f64) * cell));
+                out.push((
+                    DVec2::new(x0 as f64, y0 as f64) * cell,
+                    DVec2::new(x1 as f64, y1 as f64) * cell,
+                ));
             }
         }
         JointKind::BasketWeave => {
@@ -178,9 +195,15 @@ fn pattern_lines(p: &JointPattern, lo: DVec2, hi: DVec2) -> Option<Vec<Segment>>
                     let (i, j) = (i0 + ii, j0 + jj);
                     let (x, y) = (i as f64 * block, j as f64 * block);
                     if (i + j).rem_euclid(2) == 0 {
-                        out.push((DVec2::new(x, y + block / 2.0), DVec2::new(x + block, y + block / 2.0)));
+                        out.push((
+                            DVec2::new(x, y + block / 2.0),
+                            DVec2::new(x + block, y + block / 2.0),
+                        ));
                     } else {
-                        out.push((DVec2::new(x + block / 2.0, y), DVec2::new(x + block / 2.0, y + block)));
+                        out.push((
+                            DVec2::new(x + block / 2.0, y),
+                            DVec2::new(x + block / 2.0, y + block),
+                        ));
                     }
                 }
             }
@@ -208,12 +231,21 @@ impl<'a> EdgeIndex<'a> {
         let bins = (poly.len() / 2).clamp(16, 2048);
         let size = (hi - lo).max(DVec2::splat(1e-9));
         let inv = DVec2::splat(bins as f64) / size;
-        let mut ix = EdgeIndex { poly, lo, inv, bins, strips: [vec![Vec::new(); bins], vec![Vec::new(); bins]] };
+        let mut ix = EdgeIndex {
+            poly,
+            lo,
+            inv,
+            bins,
+            strips: [vec![Vec::new(); bins], vec![Vec::new(); bins]],
+        };
         let n = poly.len();
         for i in 0..n {
             let (p, q) = (poly[i], poly[(i + 1) % n]);
             for axis in 0..2 {
-                let (a, b) = (ix.bin(axis, p[axis].min(q[axis])), ix.bin(axis, p[axis].max(q[axis])));
+                let (a, b) = (
+                    ix.bin(axis, p[axis].min(q[axis])),
+                    ix.bin(axis, p[axis].max(q[axis])),
+                );
                 for strip in a..=b {
                     ix.strips[axis][strip].push(i as u32);
                 }
@@ -229,7 +261,14 @@ impl<'a> EdgeIndex<'a> {
     /// The parts of the axis-parallel line inside the polygon. `fixed_axis` is the axis of the
     /// fixed coordinate (1 for a horizontal line at height `fixed`). `from` and `to` are the ends
     /// along the other axis. `work` counts the edges that were tested.
-    fn clip(&self, fixed_axis: usize, fixed: f64, from: f64, to: f64, work: &mut u64) -> Vec<(f64, f64)> {
+    fn clip(
+        &self,
+        fixed_axis: usize,
+        fixed: f64,
+        from: f64,
+        to: f64,
+        work: &mut u64,
+    ) -> Vec<(f64, f64)> {
         let along = 1 - fixed_axis;
         let strip = &self.strips[fixed_axis][self.bin(fixed_axis, fixed)];
         *work += strip.len() as u64;
@@ -238,11 +277,19 @@ impl<'a> EdgeIndex<'a> {
         for &i in strip {
             let (p, q) = (self.poly[i as usize], self.poly[(i as usize + 1) % n]);
             if (p[fixed_axis] > fixed) != (q[fixed_axis] > fixed) {
-                hits.push(p[along] + (fixed - p[fixed_axis]) * (q[along] - p[along]) / (q[fixed_axis] - p[fixed_axis]));
+                hits.push(
+                    p[along]
+                        + (fixed - p[fixed_axis]) * (q[along] - p[along])
+                            / (q[fixed_axis] - p[fixed_axis]),
+                );
             }
         }
         hits.sort_by(f64::total_cmp);
-        hits.chunks_exact(2).filter(|w| w[1] > from && w[0] < to).map(|w| (w[0].max(from), w[1].min(to))).filter(|(a, b)| b > a).collect()
+        hits.chunks_exact(2)
+            .filter(|w| w[1] > from && w[0] < to)
+            .map(|w| (w[0].max(from), w[1].min(to)))
+            .filter(|(a, b)| b > a)
+            .collect()
     }
 }
 
@@ -271,8 +318,14 @@ pub fn joint_lines(poly: &[DVec2], pattern: &JointPattern) -> Joints {
     let index = EdgeIndex::new(&local, llo, lhi);
     // First the pattern as asked, then with units four times larger.
     for coarse in [1.0, 4.0] {
-        let p = JointPattern { unit_length: pattern.unit_length * coarse, unit_width: pattern.unit_width * coarse, ..*pattern };
-        let Some(lines) = pattern_lines(&p, llo, lhi) else { continue };
+        let p = JointPattern {
+            unit_length: pattern.unit_length * coarse,
+            unit_width: pattern.unit_width * coarse,
+            ..*pattern
+        };
+        let Some(lines) = pattern_lines(&p, llo, lhi) else {
+            continue;
+        };
         let mut work = 0u64;
         let mut segments = Vec::new();
         let mut within_budget = true;
@@ -287,15 +340,25 @@ pub fn joint_lines(poly: &[DVec2], pattern: &JointPattern) -> Joints {
                 (0, a.x, a.y.min(b.y), a.y.max(b.y))
             };
             for (s, e) in index.clip(axis, fixed, from, to, &mut work) {
-                let (c, d) = if axis == 1 { (DVec2::new(s, fixed), DVec2::new(e, fixed)) } else { (DVec2::new(fixed, s), DVec2::new(fixed, e)) };
+                let (c, d) = if axis == 1 {
+                    (DVec2::new(s, fixed), DVec2::new(e, fixed))
+                } else {
+                    (DVec2::new(fixed, s), DVec2::new(fixed, e))
+                };
                 segments.push((center + turn.rotate(c), center + turn.rotate(d)));
             }
         }
         if within_budget && segments.len() <= MAX_SEGMENTS {
-            return Joints { segments, truncated: false };
+            return Joints {
+                segments,
+                truncated: false,
+            };
         }
     }
-    Joints { segments: Vec::new(), truncated: true }
+    Joints {
+        segments: Vec::new(),
+        truncated: true,
+    }
 }
 
 #[cfg(test)]
@@ -303,11 +366,23 @@ mod tests {
     use super::*;
 
     fn rect(w: f64, h: f64) -> Vec<DVec2> {
-        vec![DVec2::new(0.0, 0.0), DVec2::new(w, 0.0), DVec2::new(w, h), DVec2::new(0.0, h)]
+        vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(w, 0.0),
+            DVec2::new(w, h),
+            DVec2::new(0.0, h),
+        ]
     }
 
     fn pat(kind: JointKind) -> JointPattern {
-        JointPattern { kind, unit_length: 200.0, unit_width: 100.0, spacing: 0.0, angle: 0.0, color: None }
+        JointPattern {
+            kind,
+            unit_length: 200.0,
+            unit_width: 100.0,
+            spacing: 0.0,
+            angle: 0.0,
+            color: None,
+        }
     }
 
     fn total_length(j: &Joints) -> f64 {
@@ -318,7 +393,8 @@ mod tests {
         let n = poly.len();
         j.segments.iter().all(|(a, b)| {
             let m = (*a + *b) / 2.0;
-            let on_edge = (0..n).any(|i| crate::geom::dist_to_segment(m, poly[i], poly[(i + 1) % n]) < 1e-6);
+            let on_edge =
+                (0..n).any(|i| crate::geom::dist_to_segment(m, poly[i], poly[(i + 1) % n]) < 1e-6);
             on_edge || crate::geom::point_in_polygon(m, poly)
         })
     }
@@ -338,16 +414,28 @@ mod tests {
     fn running_bond_shifts_alternate_rows() {
         let poly = rect(1000.0, 400.0);
         let j = joint_lines(&poly, &pat(JointKind::RunningBond));
-        let verticals: Vec<&Segment> = j.segments.iter().filter(|(a, b)| (a.x - b.x).abs() < 1e-9).collect();
+        let verticals: Vec<&Segment> = j
+            .segments
+            .iter()
+            .filter(|(a, b)| (a.x - b.x).abs() < 1e-9)
+            .collect();
         assert!(!verticals.is_empty());
         let mut rows: std::collections::BTreeMap<i64, Vec<f64>> = Default::default();
         for (a, b) in &verticals {
-            rows.entry(((a.y + b.y) / 2.0 / 100.0).floor() as i64).or_default().push(a.x);
+            rows.entry(((a.y + b.y) / 2.0 / 100.0).floor() as i64)
+                .or_default()
+                .push(a.x);
         }
         let mut keys = rows.keys();
         let (r0, r1) = (&rows[keys.next().unwrap()], &rows[keys.next().unwrap()]);
         let frac = |x: f64| (x / 200.0).rem_euclid(1.0);
-        assert!((frac(r0[0]) - frac(r1[0])).abs().min(1.0 - (frac(r0[0]) - frac(r1[0])).abs()) > 0.4, "rows are shifted by half a unit");
+        assert!(
+            (frac(r0[0]) - frac(r1[0]))
+                .abs()
+                .min(1.0 - (frac(r0[0]) - frac(r1[0])).abs())
+                > 0.4,
+            "rows are shifted by half a unit"
+        );
         assert!(inside_all(&j, &poly));
     }
 
@@ -363,14 +451,21 @@ mod tests {
         ];
         for kind in JointKind::ALL {
             for angle in [0.0, 30.0, 90.0, -45.0] {
-                let p = JointPattern { angle, spacing: 5.0, ..pat(kind) };
+                let p = JointPattern {
+                    angle,
+                    spacing: 5.0,
+                    ..pat(kind)
+                };
                 let j = joint_lines(&l, &p);
                 assert!(!j.truncated && !j.segments.is_empty(), "{kind:?} {angle}");
                 assert!(inside_all(&j, &l), "{kind:?} {angle}");
             }
         }
         // A turn of 90 degrees maps a stack pattern of a square unit onto itself.
-        let sq = JointPattern { unit_length: 100.0, ..pat(JointKind::Stack) };
+        let sq = JointPattern {
+            unit_length: 100.0,
+            ..pat(JointKind::Stack)
+        };
         let a = joint_lines(&rect(1000.0, 1000.0), &sq);
         let b = joint_lines(&rect(1000.0, 1000.0), &JointPattern { angle: 90.0, ..sq });
         assert!((total_length(&a) - total_length(&b)).abs() < 1e-6);
@@ -398,7 +493,12 @@ mod tests {
 
     #[test]
     fn too_many_lines_are_left_out() {
-        let tiny = JointPattern { unit_length: 10.0, unit_width: 10.0, spacing: 0.0, ..pat(JointKind::RunningBond) };
+        let tiny = JointPattern {
+            unit_length: 10.0,
+            unit_width: 10.0,
+            spacing: 0.0,
+            ..pat(JointKind::RunningBond)
+        };
         for kind in JointKind::ALL {
             let j = joint_lines(&rect(1.0e7, 1.0e7), &JointPattern { kind, ..tiny });
             assert!(j.truncated && j.segments.is_empty(), "{kind:?}");
@@ -408,7 +508,10 @@ mod tests {
     #[test]
     fn degenerate_input_gives_nothing() {
         assert_eq!(joint_lines(&[], &pat(JointKind::Stack)), Joints::default());
-        let zero = JointPattern { unit_length: 0.0, ..pat(JointKind::Stack) };
+        let zero = JointPattern {
+            unit_length: 0.0,
+            ..pat(JointKind::Stack)
+        };
         assert_eq!(joint_lines(&rect(10.0, 10.0), &zero), Joints::default());
     }
 
@@ -430,6 +533,9 @@ mod tests {
             DVec2::new(90.0, 100.0),
             DVec2::new(0.0, 100.0),
         ];
-        assert_eq!(clip_segment(DVec2::new(-10.0, 30.0), DVec2::new(100.0, 30.0), &u).len(), 2);
+        assert_eq!(
+            clip_segment(DVec2::new(-10.0, 30.0), DVec2::new(100.0, 30.0), &u).len(),
+            2
+        );
     }
 }

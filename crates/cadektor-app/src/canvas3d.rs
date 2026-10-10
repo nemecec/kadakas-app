@@ -2,9 +2,9 @@
 //! pointer and click to select. What it shows is chosen in `Session::view`.
 
 use cadektor_api::Session;
+use cadektor_render::{Projection, RenderMode};
 use eframe::egui_wgpu;
 use egui::Sense;
-use cadektor_render::{Projection, RenderMode};
 
 use crate::gpu3d::SceneCallback;
 use crate::keymap::{Action, Keymap};
@@ -25,11 +25,27 @@ pub struct Canvas3d<'a> {
 
 /// Draws the canvas and handles its input for one frame.
 pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
-    let Canvas3d { session, view3d, keys, gpu_ready, pending_zoom, pending_pan } = c;
+    let Canvas3d {
+        session,
+        view3d,
+        keys,
+        gpu_ready,
+        pending_zoom,
+        pending_pan,
+    } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
-        let text = format!("The 3D view needs the wgpu renderer. Press {} for Top/Plan.", keys.hint(Action::ViewPlan));
-        ui.painter_at(rect).text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), ui.visuals().text_color());
+        let text = format!(
+            "The 3D view needs the wgpu renderer. Press {} for Top/Plan.",
+            keys.hint(Action::ViewPlan)
+        );
+        ui.painter_at(rect).text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(16.0),
+            ui.visuals().text_color(),
+        );
         return;
     }
     let size = glam::Vec2::new(rect.width().max(1.0), rect.height().max(1.0));
@@ -40,8 +56,15 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         view3d.fit(scene.bounds, aspect);
     }
 
-    let (hover, mods, space, scroll, pinch) =
-        ui.input(|i| (i.pointer.hover_pos(), i.modifiers, keys.held(Action::PanHold, i), i.smooth_scroll_delta.y, i.zoom_delta()));
+    let (hover, mods, space, scroll, pinch) = ui.input(|i| {
+        (
+            i.pointer.hover_pos(),
+            i.modifiers,
+            keys.held(Action::PanHold, i),
+            i.smooth_scroll_delta.y,
+            i.zoom_delta(),
+        )
+    });
     let local = |p: egui::Pos2| glam::Vec2::new(p.x - rect.min.x, p.y - rect.min.y);
 
     // Keys: zoom and pan.
@@ -56,7 +79,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
 
     // Mouse: drag orbits, Shift-drag, Space-drag and middle-drag pan, the wheel zooms to the pointer.
     let delta = glam::Vec2::new(resp.drag_delta().x, resp.drag_delta().y);
-    if resp.dragged_by(egui::PointerButton::Middle) || (resp.dragged_by(egui::PointerButton::Primary) && (mods.shift || space)) {
+    if resp.dragged_by(egui::PointerButton::Middle)
+        || (resp.dragged_by(egui::PointerButton::Primary) && (mods.shift || space))
+    {
         view3d.pan(delta, size.y);
     } else if resp.dragged_by(egui::PointerButton::Primary) {
         view3d.orbit(delta);
@@ -90,7 +115,10 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             eye_dir: cam.eye_dir().to_array(),
             ortho: cam.projection == Projection::Orthographic,
             wireframe: session.view.mode == RenderMode::Wireframe,
-            size: [(rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32],
+            size: [
+                (rect.width() * ppp).round().max(1.0) as u32,
+                (rect.height() * ppp).round().max(1.0) as u32,
+            ],
             background: [0.96, 0.965, 0.975],
         },
     ));
@@ -134,7 +162,12 @@ mod tests {
                 .editor
                 .execute(&Command::AddObject {
                     shape: Shape::Hardscape {
-                        boundary: cadektor_core::curve::corners(&[DVec2::splat(-1000.0), DVec2::new(1000.0, -1000.0), DVec2::splat(1000.0), DVec2::new(-1000.0, 1000.0)]),
+                        boundary: cadektor_core::curve::corners(&[
+                            DVec2::splat(-1000.0),
+                            DVec2::new(1000.0, -1000.0),
+                            DVec2::splat(1000.0),
+                            DVec2::new(-1000.0, 1000.0),
+                        ]),
                         material: "m".into(),
                         thickness: None,
                         elevation: None,
@@ -156,7 +189,10 @@ mod tests {
             let input = egui::RawInput {
                 events,
                 modifiers,
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
                 ..Default::default()
             };
             let ctx = self.ctx.clone();
@@ -181,18 +217,31 @@ mod tests {
 
         /// A drag with the left button over several frames, from `from` by `by`.
         fn drag(&mut self, from: egui::Pos2, by: egui::Vec2, mods: egui::Modifiers) {
-            let button = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: mods };
+            let button = |pressed, pos| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: mods,
+            };
             self.frame_with(vec![egui::Event::PointerMoved(from)], mods);
             self.frame_with(vec![button(true, from)], mods);
             for k in 1..=4 {
-                self.frame_with(vec![egui::Event::PointerMoved(from + by * (k as f32 / 4.0))], mods);
+                self.frame_with(
+                    vec![egui::Event::PointerMoved(from + by * (k as f32 / 4.0))],
+                    mods,
+                );
             }
             self.frame_with(vec![button(false, from + by)], mods);
         }
 
         /// A click in three frames: move, press, release.
         fn click(&mut self, at: egui::Pos2, mods: egui::Modifiers) {
-            let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: mods };
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: mods,
+            };
             self.frame_with(vec![egui::Event::PointerMoved(at)], mods);
             self.frame_with(vec![button(true)], mods);
             self.frame_with(vec![button(false)], mods);
@@ -205,7 +254,10 @@ mod tests {
         h.gpu_ready = false;
         h.session.view.view = StandardView::Front;
         h.frame(vec![]);
-        assert!(h.view3d.fit_pending(), "nothing else happens without a renderer");
+        assert!(
+            h.view3d.fit_pending(),
+            "nothing else happens without a renderer"
+        );
     }
 
     #[test]
@@ -244,13 +296,24 @@ mod tests {
         assert_ne!(h.view3d.camera.yaw, before.yaw);
         assert_ne!(h.view3d.camera.pitch, before.pitch);
         // Shift-drag pans: the angles stay, the target moves.
-        let (angles, target) = ((h.view3d.camera.yaw, h.view3d.camera.pitch), h.view3d.camera.target);
+        let (angles, target) = (
+            (h.view3d.camera.yaw, h.view3d.camera.pitch),
+            h.view3d.camera.target,
+        );
         h.drag(center, egui::vec2(80.0, 40.0), egui::Modifiers::SHIFT);
         assert_eq!((h.view3d.camera.yaw, h.view3d.camera.pitch), angles);
         assert!((h.view3d.camera.target - target).length() > 1.0);
         // The wheel zooms in toward the pointer.
         let d = h.view3d.camera.distance;
-        h.frame(vec![egui::Event::PointerMoved(center), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 120.0), phase: egui::TouchPhase::Move, modifiers: none }]);
+        h.frame(vec![
+            egui::Event::PointerMoved(center),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 120.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: none,
+            },
+        ]);
         h.frame(vec![]);
         assert!(h.view3d.camera.distance < d, "wheel up zooms in");
         // Keys: zoom and pan reach the camera too.
@@ -258,7 +321,10 @@ mod tests {
         h.pending_pan = egui::vec2(60.0, 0.0);
         let (t, d) = (h.view3d.camera.target, h.view3d.camera.distance);
         h.frame(vec![]);
-        assert!(h.view3d.camera.distance <= d / 2.0 + 1e-2, "the key halves the distance");
+        assert!(
+            h.view3d.camera.distance <= d / 2.0 + 1e-2,
+            "the key halves the distance"
+        );
         assert!((h.view3d.camera.target - t).length() > 1.0);
         assert_eq!((h.pending_zoom, h.pending_pan), (1.0, egui::Vec2::ZERO));
     }
@@ -274,7 +340,10 @@ mod tests {
         let rev = h.session.editor.revision();
         let a = h.session.scene();
         h.frame(vec![]);
-        assert!(std::sync::Arc::ptr_eq(&a, &h.session.scene()), "unchanged document: same mesh");
+        assert!(
+            std::sync::Arc::ptr_eq(&a, &h.session.scene()),
+            "unchanged document: same mesh"
+        );
         assert_eq!(h.session.editor.revision(), rev);
         h.add_slab();
         assert!(!std::sync::Arc::ptr_eq(&a, &h.session.scene()));
@@ -285,7 +354,13 @@ mod tests {
         let mut h = Harness::new();
         h.add_slab();
         h.session.view.view = StandardView::Front;
-        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(0.0, 300.0))), ..Default::default() };
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(0.0, 300.0),
+            )),
+            ..Default::default()
+        };
         let ctx = h.ctx.clone();
         let _ = ctx.run_ui(input, |ui| {
             show(
@@ -301,6 +376,9 @@ mod tests {
             );
         });
         let c = h.view3d.camera;
-        assert!(c.target.is_finite() && c.distance.is_finite() && c.distance > 0.0, "{c:?}");
+        assert!(
+            c.target.is_finite() && c.distance.is_finite() && c.distance > 0.0,
+            "{c:?}"
+        );
     }
 }

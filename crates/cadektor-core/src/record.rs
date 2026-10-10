@@ -80,12 +80,21 @@ impl FieldType {
     }
 
     pub fn from_name(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|t| t.id().eq_ignore_ascii_case(s.trim()))
+        Self::ALL
+            .into_iter()
+            .find(|t| t.id().eq_ignore_ascii_case(s.trim()))
     }
 
     /// True for the types that hold a real number.
     pub fn is_real(self) -> bool {
-        matches!(self, FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle)
+        matches!(
+            self,
+            FieldType::Number
+                | FieldType::Dimension
+                | FieldType::Area
+                | FieldType::Volume
+                | FieldType::Angle
+        )
     }
 }
 
@@ -109,7 +118,13 @@ pub struct FieldDef {
 
 impl FieldDef {
     pub fn new(name: &str, ty: FieldType) -> Self {
-        FieldDef { name: name.into(), ty, default: None, unit: String::new(), choices: Vec::new() }
+        FieldDef {
+            name: name.into(),
+            ty,
+            default: None,
+            unit: String::new(),
+            choices: Vec::new(),
+        }
     }
 
     /// Checks one value against the type. Returns the value in its stored form: an integer field
@@ -129,7 +144,11 @@ impl FieldDef {
                 Some(n) if n.fract() == 0.0 => Ok(Value::from(n as i64)),
                 _ => fail("a whole number"),
             },
-            FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => match as_number(v) {
+            FieldType::Number
+            | FieldType::Dimension
+            | FieldType::Area
+            | FieldType::Volume
+            | FieldType::Angle => match as_number(v) {
                 Some(n) => Ok(Value::from(n)),
                 None => fail("a finite number"),
             },
@@ -147,9 +166,17 @@ impl FieldDef {
                 Some(t) => Ok(Value::String(t)),
                 None => fail("a time like 14:30 or 14:30:15 (or empty)"),
             },
-            FieldType::Choice => match v.as_str().and_then(|s| self.choices.iter().find(|c| c.eq_ignore_ascii_case(s.trim()))) {
+            FieldType::Choice => match v.as_str().and_then(|s| {
+                self.choices
+                    .iter()
+                    .find(|c| c.eq_ignore_ascii_case(s.trim()))
+            }) {
                 Some(c) => Ok(Value::String(c.clone())),
-                None => Err(format!("field '{}' must be one of: {}", self.name, self.choices.join(", "))),
+                None => Err(format!(
+                    "field '{}' must be one of: {}",
+                    self.name,
+                    self.choices.join(", ")
+                )),
             },
         }
     }
@@ -162,9 +189,15 @@ impl FieldDef {
             return v;
         }
         match self.ty {
-            FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => Value::String(String::new()),
+            FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => {
+                Value::String(String::new())
+            }
             FieldType::Integer => Value::from(0),
-            FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => Value::from(0.0),
+            FieldType::Number
+            | FieldType::Dimension
+            | FieldType::Area
+            | FieldType::Volume
+            | FieldType::Angle => Value::from(0.0),
             FieldType::Boolean => Value::Bool(false),
             FieldType::Choice => Value::String(self.choices.first().cloned().unwrap_or_default()),
         }
@@ -179,7 +212,11 @@ fn normalize_date(s: &str) -> Option<String> {
     }
     let mut it = s.split('-');
     let (y, m, d) = (it.next()?, it.next()?, it.next()?);
-    if it.next().is_some() || y.len() != 4 || !(1..=2).contains(&m.len()) || !(1..=2).contains(&d.len()) {
+    if it.next().is_some()
+        || y.len() != 4
+        || !(1..=2).contains(&m.len())
+        || !(1..=2).contains(&d.len())
+    {
         return None;
     }
     let (y, m, d): (u32, u32, u32) = (y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
@@ -191,7 +228,9 @@ fn normalize_date(s: &str) -> Option<String> {
         2 => 28,
         _ => return None,
     };
-    (1..=days).contains(&d).then(|| format!("{y:04}-{m:02}-{d:02}"))
+    (1..=days)
+        .contains(&d)
+        .then(|| format!("{y:04}-{m:02}-{d:02}"))
 }
 
 /// A time as `HH:MM` or `HH:MM:SS`. Empty stays empty.
@@ -201,14 +240,26 @@ fn normalize_time(s: &str) -> Option<String> {
         return Some(String::new());
     }
     let parts: Vec<&str> = s.split(':').collect();
-    if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| !(1..=2).contains(&p.len()) || !p.bytes().all(|b| b.is_ascii_digit())) {
+    if !(2..=3).contains(&parts.len())
+        || parts
+            .iter()
+            .any(|p| !(1..=2).contains(&p.len()) || !p.bytes().all(|b| b.is_ascii_digit()))
+    {
         return None;
     }
-    let n: Vec<u32> = parts.iter().map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let n: Vec<u32> = parts
+        .iter()
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
     if n[0] > 23 || n[1] > 59 || n.get(2).is_some_and(|s| *s > 59) {
         return None;
     }
-    Some(n.iter().map(|x| format!("{x:02}")).collect::<Vec<_>>().join(":"))
+    Some(
+        n.iter()
+            .map(|x| format!("{x:02}"))
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 /// A finite number within range, from a JSON number or a numeric string.
@@ -235,7 +286,9 @@ pub fn check_name(kind: &str, name: &str) -> Result<(), String> {
         return Err(format!("a {kind} needs a name"));
     }
     if n.chars().count() > MAX_NAME || n.chars().any(char::is_control) {
-        return Err(format!("the {kind} name '{n}' is too long or has control characters"));
+        return Err(format!(
+            "the {kind} name '{n}' is too long or has control characters"
+        ));
     }
     Ok(())
 }
@@ -243,12 +296,19 @@ pub fn check_name(kind: &str, name: &str) -> Result<(), String> {
 /// Names that an object's `data` already uses for other purposes.
 pub fn is_reserved_record_name(name: &str) -> bool {
     let n = name.trim();
-    crate::plants::link::RESERVED_DATA_KEYS.iter().any(|k| k.eq_ignore_ascii_case(n)) || n.eq_ignore_ascii_case(crate::plants::link::ROTATION_KEY) || n.eq_ignore_ascii_case(crate::worksheet_table::KEY)
+    crate::plants::link::RESERVED_DATA_KEYS
+        .iter()
+        .chain(crate::symbols::RESERVED_KEYS.iter())
+        .any(|k| k.eq_ignore_ascii_case(n))
+        || n.eq_ignore_ascii_case(crate::plants::link::ROTATION_KEY)
+        || n.eq_ignore_ascii_case(crate::worksheet_table::KEY)
 }
 
 impl RecordFormat {
     pub fn field(&self, name: &str) -> Option<&FieldDef> {
-        self.fields.iter().find(|f| f.name.eq_ignore_ascii_case(name.trim()))
+        self.fields
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(name.trim()))
     }
 
     /// Checks names, choices and defaults.
@@ -256,22 +316,36 @@ impl RecordFormat {
         for (i, f) in self.fields.iter().enumerate() {
             check_name("field", &f.name)?;
             if f.ty == FieldType::Unknown {
-                return Err(format!("field '{}' has a type that this version does not know", f.name));
+                return Err(format!(
+                    "field '{}' has a type that this version does not know",
+                    f.name
+                ));
             }
             if f.name.trim().eq_ignore_ascii_case(MARKER) {
                 return Err(format!("'{MARKER}' is reserved and cannot be a field name"));
             }
-            if self.fields[..i].iter().any(|o| o.name.trim().eq_ignore_ascii_case(f.name.trim())) {
+            if self.fields[..i]
+                .iter()
+                .any(|o| o.name.trim().eq_ignore_ascii_case(f.name.trim()))
+            {
                 return Err(format!("two fields are named '{}'", f.name.trim()));
             }
             if f.ty == FieldType::Choice {
                 if f.choices.is_empty() {
-                    return Err(format!("choice field '{}' needs at least one choice", f.name));
+                    return Err(format!(
+                        "choice field '{}' needs at least one choice",
+                        f.name
+                    ));
                 }
                 if f.choices.iter().any(|c| c.trim().is_empty()) {
                     return Err(format!("choice field '{}' has an empty choice", f.name));
                 }
-                if let Some((_, c)) = f.choices.iter().enumerate().find(|(i, c)| f.choices[..*i].iter().any(|o| o.eq_ignore_ascii_case(c))) {
+                if let Some((_, c)) = f
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .find(|(i, c)| f.choices[..*i].iter().any(|o| o.eq_ignore_ascii_case(c)))
+                {
                     return Err(format!("choice field '{}' lists '{}' twice", f.name, c));
                 }
             } else if !f.choices.is_empty() {
@@ -292,14 +366,30 @@ impl RecordFormat {
 
     /// The record of default values.
     pub fn defaults(&self) -> Map<String, Value> {
-        self.fields.iter().map(|f| (f.name.clone(), f.default_value())).collect()
+        self.fields
+            .iter()
+            .map(|f| (f.name.clone(), f.default_value()))
+            .collect()
     }
 
     /// `existing` with the given values changed. Field names are matched without case.
-    pub fn merge(&self, existing: &Map<String, Value>, given: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+    pub fn merge(
+        &self,
+        existing: &Map<String, Value>,
+        given: &Map<String, Value>,
+    ) -> Result<Map<String, Value>, String> {
         let mut out = existing.clone();
         for (k, v) in given {
-            let f = self.field(k).ok_or_else(|| format!("no field '{k}'. Fields: {}", self.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")))?;
+            let f = self.field(k).ok_or_else(|| {
+                format!(
+                    "no field '{k}'. Fields: {}",
+                    self.fields
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
             out.insert(f.name.clone(), f.coerce(v)?);
         }
         Ok(out)
@@ -309,19 +399,37 @@ impl RecordFormat {
     /// longer exist are dropped, new fields get their defaults, and values of the wrong type are
     /// replaced by the default.
     pub fn conform(&self, stored: &Map<String, Value>) -> Map<String, Value> {
-        self.fields.iter().map(|f| (f.name.clone(), stored.get(&f.name).and_then(|v| f.coerce(v).ok()).unwrap_or_else(|| f.default_value()))).collect()
+        self.fields
+            .iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    stored
+                        .get(&f.name)
+                        .and_then(|v| f.coerce(v).ok())
+                        .unwrap_or_else(|| f.default_value()),
+                )
+            })
+            .collect()
     }
 }
 
 /// The stored record of this name on an object, with its marker. `None` if the object has no data
 /// under this name, or if the data is not a record (it has no marker).
 pub fn values<'a>(obj: &'a Object, record: &str) -> Option<&'a Map<String, Value>> {
-    obj.data.get(record)?.as_object().filter(|m| m.contains_key(MARKER))
+    obj.data
+        .get(record)?
+        .as_object()
+        .filter(|m| m.contains_key(MARKER))
 }
 
 /// The same record without the marker, for output.
 pub fn fields_only(stored: &Map<String, Value>) -> Map<String, Value> {
-    stored.iter().filter(|(k, _)| k.as_str() != MARKER).map(|(k, v)| (k.clone(), v.clone())).collect()
+    stored
+        .iter()
+        .filter(|(k, _)| k.as_str() != MARKER)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// A record ready to store: the field values and the marker with the ID of the format.
@@ -416,7 +524,9 @@ mod tests {
         assert_eq!(r["Note"], json!("hi"));
         assert_eq!(r["Depth"], json!(300.0));
         assert_eq!(r.len(), 7);
-        let r2 = f.merge(&r, json!({"Wet": true}).as_object().unwrap()).unwrap();
+        let r2 = f
+            .merge(&r, json!({"Wet": true}).as_object().unwrap())
+            .unwrap();
         assert_eq!(r2["Wet"], json!(true));
         assert_eq!(r2["Qty"], json!(7));
         let e = f.build(json!({"zzz": 1}).as_object().unwrap()).unwrap_err();
@@ -436,45 +546,102 @@ mod tests {
         let mut f = format();
         f.fields.push(FieldDef::new("note", FieldType::Text));
         assert!(f.validate().unwrap_err().contains("two fields"));
-        let f = RecordFormat { fields: vec![FieldDef::new(" ", FieldType::Text)] };
+        let f = RecordFormat {
+            fields: vec![FieldDef::new(" ", FieldType::Text)],
+        };
         assert!(f.validate().is_err());
-        let f = RecordFormat { fields: vec![FieldDef::new("C", FieldType::Choice)] };
+        let f = RecordFormat {
+            fields: vec![FieldDef::new("C", FieldType::Choice)],
+        };
         assert!(f.validate().unwrap_err().contains("at least one"));
         let mut c = FieldDef::new("C", FieldType::Choice);
         c.choices = vec!["a".into(), " ".into()];
-        assert!(RecordFormat { fields: vec![c.clone()] }.validate().unwrap_err().contains("empty choice"));
+        assert!(
+            RecordFormat {
+                fields: vec![c.clone()]
+            }
+            .validate()
+            .unwrap_err()
+            .contains("empty choice")
+        );
         c.choices = vec!["a".into(), "A".into()];
-        assert!(RecordFormat { fields: vec![c.clone()] }.validate().unwrap_err().contains("twice"));
+        assert!(
+            RecordFormat {
+                fields: vec![c.clone()]
+            }
+            .validate()
+            .unwrap_err()
+            .contains("twice")
+        );
         let mut t = FieldDef::new("T", FieldType::Text);
         t.choices = vec!["a".into()];
-        assert!(RecordFormat { fields: vec![t] }.validate().unwrap_err().contains("only choice"));
+        assert!(
+            RecordFormat { fields: vec![t] }
+                .validate()
+                .unwrap_err()
+                .contains("only choice")
+        );
         let mut n = FieldDef::new("N", FieldType::Integer);
         n.default = Some(json!(1.5));
-        assert!(RecordFormat { fields: vec![n] }.validate().unwrap_err().contains("default"));
+        assert!(
+            RecordFormat { fields: vec![n] }
+                .validate()
+                .unwrap_err()
+                .contains("default")
+        );
     }
 
     #[test]
     fn date_time_volume_and_angle_fields() {
         let c = |t: FieldType, v: Value| FieldDef::new("F", t).coerce(&v);
-        assert_eq!(c(FieldType::Date, json!("2026-3-7")).unwrap(), json!("2026-03-07"));
-        assert_eq!(c(FieldType::Date, json!("2024-02-29")).unwrap(), json!("2024-02-29"));
+        assert_eq!(
+            c(FieldType::Date, json!("2026-3-7")).unwrap(),
+            json!("2026-03-07")
+        );
+        assert_eq!(
+            c(FieldType::Date, json!("2024-02-29")).unwrap(),
+            json!("2024-02-29")
+        );
         assert_eq!(c(FieldType::Date, json!("")).unwrap(), json!(""));
-        for bad in ["2025-02-29", "2026-13-01", "2026-00-10", "26-01-01", "2026-01", "2026-01-01-01", "x", "2026-01-32", "2026-04-31"] {
+        for bad in [
+            "2025-02-29",
+            "2026-13-01",
+            "2026-00-10",
+            "26-01-01",
+            "2026-01",
+            "2026-01-01-01",
+            "x",
+            "2026-01-32",
+            "2026-04-31",
+        ] {
             assert!(c(FieldType::Date, json!(bad)).is_err(), "{bad}");
         }
         assert!(c(FieldType::Date, json!(5)).is_err());
         assert_eq!(c(FieldType::Time, json!("9:05")).unwrap(), json!("09:05"));
-        assert_eq!(c(FieldType::Time, json!("23:59:59")).unwrap(), json!("23:59:59"));
+        assert_eq!(
+            c(FieldType::Time, json!("23:59:59")).unwrap(),
+            json!("23:59:59")
+        );
         assert_eq!(c(FieldType::Time, json!("")).unwrap(), json!(""));
-        for bad in ["24:00", "12:60", "12:00:60", "12", "1:2:3:4", "ab:cd", "123:00"] {
+        for bad in [
+            "24:00", "12:60", "12:00:60", "12", "1:2:3:4", "ab:cd", "123:00",
+        ] {
             assert!(c(FieldType::Time, json!(bad)).is_err(), "{bad}");
         }
         assert_eq!(c(FieldType::Volume, json!("2.5")).unwrap(), json!(2.5));
         assert_eq!(c(FieldType::Angle, json!(90)).unwrap(), json!(90.0));
         assert!(c(FieldType::Angle, json!("x")).is_err());
-        assert!(FieldType::Volume.is_real() && FieldType::Angle.is_real() && !FieldType::Date.is_real());
-        assert_eq!(FieldDef::new("D", FieldType::Date).default_value(), json!(""));
-        assert_eq!(FieldDef::new("V", FieldType::Volume).default_value(), json!(0.0));
+        assert!(
+            FieldType::Volume.is_real() && FieldType::Angle.is_real() && !FieldType::Date.is_real()
+        );
+        assert_eq!(
+            FieldDef::new("D", FieldType::Date).default_value(),
+            json!("")
+        );
+        assert_eq!(
+            FieldDef::new("V", FieldType::Volume).default_value(),
+            json!(0.0)
+        );
         for t in FieldType::ALL {
             assert_eq!(FieldType::from_name(t.id()), Some(t));
         }
@@ -482,11 +649,20 @@ mod tests {
 
     #[test]
     fn unknown_field_types_load_but_do_not_validate() {
-        let f: RecordFormat = serde_json::from_value(json!({"fields": [{"name": "X", "type": "hologram"}]})).unwrap();
+        let f: RecordFormat =
+            serde_json::from_value(json!({"fields": [{"name": "X", "type": "hologram"}]})).unwrap();
         assert_eq!(f.fields[0].ty, FieldType::Unknown);
         assert!(f.validate().unwrap_err().contains("does not know"));
-        assert_eq!(FieldDef::new("X", FieldType::Unknown).coerce(&json!("a")).unwrap(), json!("a"));
-        assert_eq!(FieldDef::new("X", FieldType::Unknown).default_value(), json!(""));
+        assert_eq!(
+            FieldDef::new("X", FieldType::Unknown)
+                .coerce(&json!("a"))
+                .unwrap(),
+            json!("a")
+        );
+        assert_eq!(
+            FieldDef::new("X", FieldType::Unknown).default_value(),
+            json!("")
+        );
         assert_eq!(FieldType::Unknown.id(), "unknown");
         assert_eq!(FieldType::from_name("unknown"), None);
     }
@@ -496,7 +672,15 @@ mod tests {
         let m = tagged(json!({"a": 1}).as_object().unwrap().clone(), 7);
         assert_eq!(m[MARKER], json!(7));
         assert_eq!(fields_only(&m), *json!({"a": 1}).as_object().unwrap());
-        let mut o = Object::new(crate::model::ObjectId(1), crate::model::FIRST_LAYER, crate::model::NONE_CLASS, crate::model::Shape::Circle { center: glam::DVec2::ZERO, radius: 1.0 });
+        let mut o = Object::new(
+            crate::model::ObjectId(1),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            crate::model::Shape::Circle {
+                center: glam::DVec2::ZERO,
+                radius: 1.0,
+            },
+        );
         o.data.insert("Plain".into(), json!({"a": 1}));
         o.data.insert("Tagged".into(), Value::Object(m));
         assert!(values(&o, "Plain").is_none());
@@ -526,7 +710,10 @@ mod tests {
             crate::model::ObjectId(1),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
-            crate::model::Shape::Circle { center: glam::DVec2::ZERO, radius: 1.0 },
+            crate::model::Shape::Circle {
+                center: glam::DVec2::ZERO,
+                radius: 1.0,
+            },
         );
         assert!(values(&o, "Soil").is_none());
         o.data.insert("Soil".into(), json!({"a": 1, "_record": 3}));

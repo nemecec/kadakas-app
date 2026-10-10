@@ -24,7 +24,10 @@ fn polar(center: DVec2, f: impl Fn(f64) -> f64) -> GraphicPath {
             center + DVec2::from_angle(a) * f(a)
         })
         .collect();
-    GraphicPath { points, closed: true }
+    GraphicPath {
+        points,
+        closed: true,
+    }
 }
 
 /// The strokes of a plant symbol with this outline, centered at `center`, within `radius`.
@@ -34,7 +37,12 @@ pub fn paths(graphic: PlantGraphic, center: DVec2, radius: f64) -> Vec<GraphicPa
 }
 
 /// Like `paths`, turned counterclockwise by `rotation` radians around the center.
-pub fn paths_rotated(graphic: PlantGraphic, center: DVec2, radius: f64, rotation: f64) -> Vec<GraphicPath> {
+pub fn paths_rotated(
+    graphic: PlantGraphic,
+    center: DVec2,
+    radius: f64,
+    rotation: f64,
+) -> Vec<GraphicPath> {
     let mut out = outline(graphic, center, radius);
     if rotation != 0.0 {
         let turn = DVec2::from_angle(rotation);
@@ -62,13 +70,19 @@ fn outline(graphic: PlantGraphic, center: DVec2, radius: f64) -> Vec<GraphicPath
                     center + DVec2::from_angle(a) * if k % 2 == 0 { r } else { r * 0.45 }
                 })
                 .collect();
-            vec![GraphicPath { points, closed: true }]
+            vec![GraphicPath {
+                points,
+                closed: true,
+            }]
         }
         PlantGraphic::Spokes => {
             let mut out = vec![polar(center, |_| r)];
             for k in 0..8 {
                 let d = DVec2::from_angle(TAU * k as f64 / 8.0);
-                out.push(GraphicPath { points: vec![center, center + d * r], closed: false });
+                out.push(GraphicPath {
+                    points: vec![center, center + d * r],
+                    closed: false,
+                });
             }
             out
         }

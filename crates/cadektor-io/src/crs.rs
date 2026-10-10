@@ -60,7 +60,12 @@ impl Crs {
     fn wrap(spec: String, proj: Proj) -> Crs {
         let geographic = proj.is_latlong();
         let to_meter = if geographic { 1.0 } else { proj.to_meter() };
-        Crs { spec, proj, geographic, to_meter }
+        Crs {
+            spec,
+            proj,
+            geographic,
+            to_meter,
+        }
     }
 
     /// True for longitude and latitude in degrees.
@@ -81,14 +86,26 @@ impl Crs {
 
 /// The UTM zone (WGS 84) for a longitude and latitude in degrees, as an EPSG code.
 pub fn utm_epsg(lon: f64, lat: f64) -> u32 {
-    let lon = if lon.is_finite() && lon.abs() > 180.0 { (lon + 180.0).rem_euclid(360.0) - 180.0 } else { lon };
+    let lon = if lon.is_finite() && lon.abs() > 180.0 {
+        (lon + 180.0).rem_euclid(360.0) - 180.0
+    } else {
+        lon
+    };
     let zone = ((lon + 180.0) / 6.0).floor().clamp(0.0, 59.0) as u32 + 1;
-    if lat >= 0.0 { 32600 + zone } else { 32700 + zone }
+    if lat >= 0.0 {
+        32600 + zone
+    } else {
+        32700 + zone
+    }
 }
 
 fn epsg_code(t: &str) -> Option<u32> {
     let lower = t.to_ascii_lowercase();
-    if lower == "crs84" || lower == "ogc:crs84" || lower.ends_with("/crs84") || lower.ends_with(":crs84") {
+    if lower == "crs84"
+        || lower == "ogc:crs84"
+        || lower.ends_with("/crs84")
+        || lower.ends_with(":crs84")
+    {
         return Some(4326);
     }
     let digits = if let Some(rest) = lower.strip_prefix("epsg:") {
@@ -227,7 +244,10 @@ fn parse_node(b: &[u8], i: &mut usize, depth: usize) -> Result<Node, String> {
                         *i += 1;
                     }
                     let text = String::from_utf8_lossy(&b[s..*i]).into_owned();
-                    args.push(Arg::Num(text.parse().map_err(|_| format!("bad number {text} in WKT"))?));
+                    args.push(Arg::Num(
+                        text.parse()
+                            .map_err(|_| format!("bad number {text} in WKT"))?,
+                    ));
                 }
                 Some(_) => args.push(Arg::Node(parse_node(b, i, depth + 1)?)),
             }
@@ -239,16 +259,40 @@ fn parse_node(b: &[u8], i: &mut usize, depth: usize) -> Result<Node, String> {
 /// Datum and ellipsoid part of a PROJ string, from a GEOGCS node.
 fn geog_to_proj(g: &Node) -> Result<String, String> {
     let datum = g.child("DATUM");
-    let sph = datum.and_then(|d| d.child("SPHEROID")).ok_or("WKT has no SPHEROID")?;
+    let sph = datum
+        .and_then(|d| d.child("SPHEROID"))
+        .ok_or("WKT has no SPHEROID")?;
     let (a, rf) = (sph.num(1).ok_or("bad SPHEROID")?, sph.num(2).unwrap_or(0.0));
-    let mut out = if rf > 0.0 { format!("+a={a} +rf={rf}") } else { format!("+a={a} +b={a}") };
-    let dname = datum.and_then(|d| d.string(0)).unwrap_or("").to_ascii_lowercase();
+    let mut out = if rf > 0.0 {
+        format!("+a={a} +rf={rf}")
+    } else {
+        format!("+a={a} +b={a}")
+    };
+    let dname = datum
+        .and_then(|d| d.string(0))
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if let Some(t) = datum.and_then(|d| d.child("TOWGS84")) {
-        let v: Vec<String> = t.args.iter().filter_map(|a| if let Arg::Num(n) = a { Some(n.to_string()) } else { None }).collect();
+        let v: Vec<String> = t
+            .args
+            .iter()
+            .filter_map(|a| {
+                if let Arg::Num(n) = a {
+                    Some(n.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
         if v.len() == 3 || v.len() == 7 {
             out += &format!(" +towgs84={}", v.join(","));
         }
-    } else if dname.contains("wgs_1984") || dname.contains("wgs 84") || dname.contains("etrs") || dname.contains("etrf") || dname.contains("nad83") {
+    } else if dname.contains("wgs_1984")
+        || dname.contains("wgs 84")
+        || dname.contains("etrs")
+        || dname.contains("etrf")
+        || dname.contains("nad83")
+    {
         // These datums agree with WGS 84 to about a meter.
         out += " +towgs84=0,0,0";
     }
@@ -262,11 +306,21 @@ fn wkt_to_proj(wkt: &str) -> Result<String, String> {
         "GEOGCS" => Ok(format!("+proj=longlat {} +no_defs", geog_to_proj(&root)?)),
         "PROJCS" => {
             let geog = root.child("GEOGCS").ok_or("PROJCS has no GEOGCS")?;
-            let projection = root.child("PROJECTION").and_then(|p| p.string(0)).ok_or("PROJCS has no PROJECTION")?.to_ascii_lowercase();
+            let projection = root
+                .child("PROJECTION")
+                .and_then(|p| p.string(0))
+                .ok_or("PROJCS has no PROJECTION")?
+                .to_ascii_lowercase();
             let code = match projection.as_str() {
-                "transverse_mercator" | "gauss_kruger" | "transverse_mercator_south_orientated" => "tmerc",
-                "mercator_1sp" | "mercator_2sp" | "mercator" | "mercator_auxiliary_sphere" => "merc",
-                "lambert_conformal_conic_2sp" | "lambert_conformal_conic_1sp" | "lambert_conformal_conic" => "lcc",
+                "transverse_mercator" | "gauss_kruger" | "transverse_mercator_south_orientated" => {
+                    "tmerc"
+                }
+                "mercator_1sp" | "mercator_2sp" | "mercator" | "mercator_auxiliary_sphere" => {
+                    "merc"
+                }
+                "lambert_conformal_conic_2sp"
+                | "lambert_conformal_conic_1sp"
+                | "lambert_conformal_conic" => "lcc",
                 "albers" | "albers_conic_equal_area" => "aea",
                 "stereographic" | "polar_stereographic" => "stere",
                 "oblique_stereographic" | "double_stereographic" => "sterea",
@@ -274,8 +328,23 @@ fn wkt_to_proj(wkt: &str) -> Result<String, String> {
                 _ => return Err(format!("unsupported projection: {projection}")),
             };
             let p = |names: &[&str], default: f64| root.param(names).unwrap_or(default);
-            let lat0 = p(&["latitude_of_origin", "latitude_of_center", "latitude_of_natural_origin"], 0.0);
-            let lon0 = p(&["central_meridian", "longitude_of_center", "longitude_of_natural_origin", "longitude_of_origin"], 0.0);
+            let lat0 = p(
+                &[
+                    "latitude_of_origin",
+                    "latitude_of_center",
+                    "latitude_of_natural_origin",
+                ],
+                0.0,
+            );
+            let lon0 = p(
+                &[
+                    "central_meridian",
+                    "longitude_of_center",
+                    "longitude_of_natural_origin",
+                    "longitude_of_origin",
+                ],
+                0.0,
+            );
             let mut out = format!("+proj={code} +lat_0={lat0} +lon_0={lon0}");
             if code == "lcc" || code == "aea" {
                 let l1 = p(&["standard_parallel_1"], lat0);
@@ -334,11 +403,24 @@ impl<'a> Transformer<'a> {
         if f.geographic && (x.abs() > 180.0 || y.abs() > 90.0) {
             return Err("longitude or latitude is out of range".into());
         }
-        let (sx, sy) = if f.geographic { (x.to_radians(), y.to_radians()) } else { (x, y) };
+        let (sx, sy) = if f.geographic {
+            (x.to_radians(), y.to_radians())
+        } else {
+            (x, y)
+        };
         let mut p = (sx, sy, z);
-        proj4rs::transform::transform(&f.proj, &self.to.proj, &mut p).map_err(|e| format!("cannot project coordinate: {e}"))?;
-        let (ox, oy) = if self.to.geographic { (p.0.to_degrees(), p.1.to_degrees()) } else { (p.0, p.1) };
-        if ox.is_finite() && oy.is_finite() && p.2.is_finite() { Ok((ox, oy, p.2)) } else { Err("cannot project coordinate".into()) }
+        proj4rs::transform::transform(&f.proj, &self.to.proj, &mut p)
+            .map_err(|e| format!("cannot project coordinate: {e}"))?;
+        let (ox, oy) = if self.to.geographic {
+            (p.0.to_degrees(), p.1.to_degrees())
+        } else {
+            (p.0, p.1)
+        };
+        if ox.is_finite() && oy.is_finite() && p.2.is_finite() {
+            Ok((ox, oy, p.2))
+        } else {
+            Err("cannot project coordinate".into())
+        }
     }
 }
 
@@ -353,11 +435,27 @@ mod tests {
         assert_eq!(Crs::parse("EPSG:3067").unwrap().epsg(), Some(3067));
         assert_eq!(Crs::parse("epsg:4326").unwrap().epsg(), Some(4326));
         assert_eq!(Crs::parse("32635").unwrap().epsg(), Some(32635));
-        assert_eq!(Crs::parse("urn:ogc:def:crs:EPSG::25832").unwrap().epsg(), Some(25832));
-        assert_eq!(Crs::parse("http://www.opengis.net/def/crs/EPSG/0/3857").unwrap().epsg(), Some(3857));
-        assert_eq!(Crs::parse("urn:ogc:def:crs:OGC:1.3:CRS84").unwrap().epsg(), Some(4326));
+        assert_eq!(
+            Crs::parse("urn:ogc:def:crs:EPSG::25832").unwrap().epsg(),
+            Some(25832)
+        );
+        assert_eq!(
+            Crs::parse("http://www.opengis.net/def/crs/EPSG/0/3857")
+                .unwrap()
+                .epsg(),
+            Some(3857)
+        );
+        assert_eq!(
+            Crs::parse("urn:ogc:def:crs:OGC:1.3:CRS84").unwrap().epsg(),
+            Some(4326)
+        );
         assert_eq!(Crs::parse("WGS84").unwrap().epsg(), Some(4326));
-        assert!(Crs::parse("+proj=utm +zone=35 +datum=WGS84").unwrap().epsg().is_none());
+        assert!(
+            Crs::parse("+proj=utm +zone=35 +datum=WGS84")
+                .unwrap()
+                .epsg()
+                .is_none()
+        );
         assert!(Crs::parse("").is_err());
         assert!(Crs::parse("banana").is_err());
         assert!(Crs::parse("EPSG:99999999").is_err());
@@ -365,7 +463,10 @@ mod tests {
         assert!(Crs::parse("+proj=nonsense").is_err());
         assert!(Crs::parse("EPSG:4326").unwrap().is_geographic());
         assert!(!Crs::parse("EPSG:3067").unwrap().is_geographic());
-        assert_eq!(format!("{:?}", Crs::parse("EPSG:3067").unwrap()), "Crs(EPSG:3067)");
+        assert_eq!(
+            format!("{:?}", Crs::parse("EPSG:3067").unwrap()),
+            "Crs(EPSG:3067)"
+        );
     }
 
     #[test]
@@ -383,12 +484,21 @@ mod tests {
     fn helsinki_to_tm35fin() {
         let wgs = Crs::parse("EPSG:4326").unwrap();
         let tm = Crs::parse("EPSG:3067").unwrap();
-        let (x, y, z) = Transformer::new(&wgs, &tm).apply(24.9384, 60.1699, 12.0).unwrap();
-        assert!((x - 385_700.0).abs() < 1500.0 && (y - 6_672_000.0).abs() < 1500.0, "{x} {y}");
+        let (x, y, z) = Transformer::new(&wgs, &tm)
+            .apply(24.9384, 60.1699, 12.0)
+            .unwrap();
+        assert!(
+            (x - 385_700.0).abs() < 1500.0 && (y - 6_672_000.0).abs() < 1500.0,
+            "{x} {y}"
+        );
         assert_eq!(z, 12.0);
         let (lon, lat, _) = Transformer::new(&tm, &wgs).apply(x, y, 0.0).unwrap();
         assert!((lon - 24.9384).abs() < 1e-7 && (lat - 60.1699).abs() < 1e-7);
-        assert!(Transformer::new(&wgs, &tm).apply(f64::NAN, 0.0, 0.0).is_err());
+        assert!(
+            Transformer::new(&wgs, &tm)
+                .apply(f64::NAN, 0.0, 0.0)
+                .is_err()
+        );
         assert!(Transformer::new(&wgs, &tm).apply(200.0, 0.0, 0.0).is_err());
         assert_eq!(utm_epsg(f64::NAN, 1e300), 32601);
     }
@@ -398,10 +508,20 @@ mod tests {
         let from_wkt = Crs::parse(TM35FIN_PRJ).unwrap();
         let from_epsg = Crs::parse("EPSG:3067").unwrap();
         let wgs = Crs::parse("EPSG:4326").unwrap();
-        let a = Transformer::new(&wgs, &from_wkt).apply(24.9384, 60.1699, 0.0).unwrap();
-        let b = Transformer::new(&wgs, &from_epsg).apply(24.9384, 60.1699, 0.0).unwrap();
-        assert!((a.0 - b.0).abs() < 2.0 && (a.1 - b.1).abs() < 2.0, "{a:?} {b:?}");
-        let with_auth = TM35FIN_PRJ.replace("UNIT[\"Meter\",1.0]]", "UNIT[\"Meter\",1.0],AUTHORITY[\"EPSG\",\"3067\"]]");
+        let a = Transformer::new(&wgs, &from_wkt)
+            .apply(24.9384, 60.1699, 0.0)
+            .unwrap();
+        let b = Transformer::new(&wgs, &from_epsg)
+            .apply(24.9384, 60.1699, 0.0)
+            .unwrap();
+        assert!(
+            (a.0 - b.0).abs() < 2.0 && (a.1 - b.1).abs() < 2.0,
+            "{a:?} {b:?}"
+        );
+        let with_auth = TM35FIN_PRJ.replace(
+            "UNIT[\"Meter\",1.0]]",
+            "UNIT[\"Meter\",1.0],AUTHORITY[\"EPSG\",\"3067\"]]",
+        );
         assert_eq!(Crs::parse(&with_auth).unwrap().epsg(), Some(3067));
         let wkt2 = "PROJCRS[\"x\",BASEGEOGCRS[\"y\",ID[\"EPSG\",4258]],ID[\"EPSG\",25832]]";
         assert_eq!(Crs::parse(wkt2).unwrap().epsg(), Some(25832));
@@ -417,10 +537,20 @@ mod tests {
         let (x, _, _) = Transformer::new(&wgs, &c).apply(3.0, 46.5, 0.0).unwrap();
         // The coordinates of a feet CRS are in feet: the false easting is 700000.
         assert!((x - 700_000.0).abs() < 1.0, "{x}");
-        let (lon, lat, _) = Transformer::new(&c, &wgs).apply(x, 6_600_000.0, 0.0).unwrap();
+        let (lon, lat, _) = Transformer::new(&c, &wgs)
+            .apply(x, 6_600_000.0, 0.0)
+            .unwrap();
         assert!((lon - 3.0).abs() < 1e-6 && (lat - 46.5).abs() < 1e-6);
-        for proj in ["Mercator_1SP", "Albers", "Stereographic", "Oblique_Stereographic", "Lambert_Azimuthal_Equal_Area"] {
-            let w = format!("PROJCS[\"p\",GEOGCS[\"g\",DATUM[\"d\",SPHEROID[\"s\",6378137,0]]],PROJECTION[\"{proj}\"],PARAMETER[\"standard_parallel_1\",30],UNIT[\"m\",1]]");
+        for proj in [
+            "Mercator_1SP",
+            "Albers",
+            "Stereographic",
+            "Oblique_Stereographic",
+            "Lambert_Azimuthal_Equal_Area",
+        ] {
+            let w = format!(
+                "PROJCS[\"p\",GEOGCS[\"g\",DATUM[\"d\",SPHEROID[\"s\",6378137,0]]],PROJECTION[\"{proj}\"],PARAMETER[\"standard_parallel_1\",30],UNIT[\"m\",1]]"
+            );
             assert!(Crs::parse(&w).is_ok(), "{proj}");
         }
         assert!(Crs::parse("PROJCS[\"p\",GEOGCS[\"g\",DATUM[\"d\",SPHEROID[\"s\",6378137,298]]],PROJECTION[\"Nonsense\"]]").is_err());
@@ -440,11 +570,19 @@ mod tests {
         let ny = Crs::parse("EPSG:2263").unwrap();
         let wgs = Crs::parse("EPSG:4326").unwrap();
         assert!((ny.to_meter() - 0.3048006).abs() < 1e-6);
-        let (x, y, _) = Transformer::new(&wgs, &ny).apply(-74.0, 40.743, 0.0).unwrap();
+        let (x, y, _) = Transformer::new(&wgs, &ny)
+            .apply(-74.0, 40.743, 0.0)
+            .unwrap();
         // Feet, not meters: pyproj gives about (986000, 212000).
-        assert!((x - 985_900.0).abs() < 3000.0 && (y - 212_800.0).abs() < 3000.0, "{x} {y}");
+        assert!(
+            (x - 985_900.0).abs() < 3000.0 && (y - 212_800.0).abs() < 3000.0,
+            "{x} {y}"
+        );
         let (lon, lat, _) = Transformer::new(&ny, &wgs).apply(x, y, 0.0).unwrap();
-        assert!((lon + 74.0).abs() < 1e-6 && (lat - 40.743).abs() < 1e-6, "{lon} {lat}");
+        assert!(
+            (lon + 74.0).abs() < 1e-6 && (lat - 40.743).abs() < 1e-6,
+            "{lon} {lat}"
+        );
     }
 
     #[test]
@@ -457,10 +595,22 @@ mod tests {
         let wgs = Crs::parse("EPSG:4326").unwrap();
         let (x, _, _) = Transformer::new(&wgs, &c).apply(25.0, 60.0, 0.0).unwrap();
         assert!((x - 500_000.0).abs() < 1.0, "{x}");
-        assert_eq!(wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]]"), Some(4326));
-        assert_eq!(wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]"), None);
-        assert_eq!(wkt_authority("PROJCS[\"p\",AUTHORITY[\"EPSG\",\"3067\"]]"), Some(3067));
+        assert_eq!(
+            wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]]"),
+            Some(4326)
+        );
+        assert_eq!(
+            wkt_authority("GEOGCS[\"g\",AUTHORITY[\"EPSG\",\"4326\"]"),
+            None
+        );
+        assert_eq!(
+            wkt_authority("PROJCS[\"p\",AUTHORITY[\"EPSG\",\"3067\"]]"),
+            Some(3067)
+        );
         assert_eq!(wkt_authority("PROJCS[\"p\",ID[\"EPSG\",3067]]"), Some(3067));
-        assert_eq!(wkt_authority("PROJCS[\"p\",AUTHORITY[\"ESRI\",\"1\"]]"), None);
+        assert_eq!(
+            wkt_authority("PROJCS[\"p\",AUTHORITY[\"ESRI\",\"1\"]]"),
+            None
+        );
     }
 }

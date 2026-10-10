@@ -24,7 +24,7 @@ use std::path::Path;
 use cadektor_core::command::Command;
 use cadektor_core::model::{ClassId, Document, Layer, LayerId};
 
-pub use options::{ExportOptions, ImportOptions, LayerMode, OriginMode, Unit, ExportOrigin};
+pub use options::{ExportOptions, ExportOrigin, ImportOptions, LayerMode, OriginMode, Unit};
 pub use report::{Report, Skipped};
 
 /// A file format that this crate can read or write.
@@ -46,7 +46,12 @@ impl Format {
 
     /// Finds a format by name (`dxf`, `shp`, `shapefile`, `geojson`, `json`).
     pub fn from_name(name: &str) -> Option<Format> {
-        match name.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+        match name
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "dxf" => Some(Format::Dxf),
             "shp" | "shapefile" => Some(Format::Shapefile),
             "geojson" | "json" => Some(Format::GeoJson),
@@ -87,8 +92,12 @@ pub struct Source {
 impl Source {
     /// Reads a file, and for a shapefile its `dbf`, `prj` and `cpg` parts.
     pub fn read(path: &Path) -> Result<Source, IoError> {
-        let data = std::fs::read(path).map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
-        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let data = std::fs::read(path)
+            .map_err(|e| IoError::File(format!("cannot read {}: {e}", path.display())))?;
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut extra = BTreeMap::new();
         if Format::from_path(path) == Some(Format::Shapefile) {
             for ext in ["dbf", "prj", "cpg"] {
@@ -140,7 +149,12 @@ pub struct ImportResult {
 /// Reads one file format.
 pub trait Importer {
     fn format(&self) -> Format;
-    fn import(&self, src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError>;
+    fn import(
+        &self,
+        src: &Source,
+        ctx: &Context,
+        opts: &ImportOptions,
+    ) -> Result<ImportResult, IoError>;
 }
 
 /// The result of an export.
@@ -173,7 +187,12 @@ pub(crate) fn model_only(doc: &Document) -> std::borrow::Cow<'_, Document> {
         return std::borrow::Cow::Borrowed(doc);
     }
     let mut d = doc.clone();
-    let sheets: Vec<_> = d.layers.iter().filter(|l| l.kind == LayerKind::Sheet).map(|l| l.id).collect();
+    let sheets: Vec<_> = d
+        .layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::Sheet)
+        .map(|l| l.id)
+        .collect();
     d.objects.retain(|_, o| !sheets.contains(&o.layer));
     d.layers.retain(|l| l.kind != LayerKind::Sheet);
     if d.layer(d.active_layer).is_none() {
@@ -192,23 +211,35 @@ pub fn exporter(format: Format) -> Option<Box<dyn Exporter>> {
 }
 
 /// Reads a file and plans the import into `doc`. `format` defaults to the file extension.
-pub fn import_file(path: &Path, format: Option<Format>, opts: &ImportOptions, doc: &Document) -> Result<ImportResult, IoError> {
-    let format = format
-        .or_else(|| Format::from_path(path))
-        .ok_or_else(|| IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into()))?;
+pub fn import_file(
+    path: &Path,
+    format: Option<Format>,
+    opts: &ImportOptions,
+    doc: &Document,
+) -> Result<ImportResult, IoError> {
+    let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
+        IoError::Format("unknown file type: give a format (dxf, shp or geojson)".into())
+    })?;
     let src = Source::read(path)?;
     importer(format).import(&src, &Context::of(doc), opts)
 }
 
 /// Exports `doc` to a file. `format` defaults to the file extension.
-pub fn export_file(path: &Path, format: Option<Format>, opts: &ExportOptions, doc: &Document) -> Result<Report, IoError> {
-    let format = format
-        .or_else(|| Format::from_path(path))
-        .ok_or_else(|| IoError::Format("unknown file type: give a format (dxf or geojson)".into()))?;
-    let ex = exporter(format).ok_or_else(|| IoError::Format(format!("export to {} is not supported", format.name())))?;
+pub fn export_file(
+    path: &Path,
+    format: Option<Format>,
+    opts: &ExportOptions,
+    doc: &Document,
+) -> Result<Report, IoError> {
+    let format = format.or_else(|| Format::from_path(path)).ok_or_else(|| {
+        IoError::Format("unknown file type: give a format (dxf or geojson)".into())
+    })?;
+    let ex = exporter(format)
+        .ok_or_else(|| IoError::Format(format!("export to {} is not supported", format.name())))?;
     let out = ex.export(doc, opts)?;
     // Atomic: a crash never leaves a half-written file. An old file stays as `<name>.bak`.
-    cadektor_core::fsio::write_atomic(path, &out.bytes).map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
+    cadektor_core::fsio::write_atomic(path, &out.bytes)
+        .map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
     Ok(out.report)
 }
 
@@ -222,7 +253,10 @@ mod tests {
         assert_eq!(Format::from_name("shp"), Some(Format::Shapefile));
         assert_eq!(Format::from_name("json"), Some(Format::GeoJson));
         assert_eq!(Format::from_name("png"), None);
-        assert_eq!(Format::from_path(Path::new("a/b.GeoJSON")), Some(Format::GeoJson));
+        assert_eq!(
+            Format::from_path(Path::new("a/b.GeoJSON")),
+            Some(Format::GeoJson)
+        );
         assert_eq!(Format::from_path(Path::new("noext")), None);
         for f in [Format::Dxf, Format::Shapefile, Format::GeoJson] {
             assert_eq!(Format::from_name(f.name()), Some(f));
@@ -236,11 +270,26 @@ mod tests {
     fn file_errors() {
         let doc = Document::default();
         let o = ImportOptions::default();
-        assert!(matches!(import_file(Path::new("/nonexistent/x.dxf"), None, &o, &doc), Err(IoError::File(_))));
-        assert!(matches!(import_file(Path::new("/nonexistent/x"), None, &o, &doc), Err(IoError::Format(_))));
+        assert!(matches!(
+            import_file(Path::new("/nonexistent/x.dxf"), None, &o, &doc),
+            Err(IoError::File(_))
+        ));
+        assert!(matches!(
+            import_file(Path::new("/nonexistent/x"), None, &o, &doc),
+            Err(IoError::Format(_))
+        ));
         let e = ExportOptions::default();
-        assert!(matches!(export_file(Path::new("x"), None, &e, &doc), Err(IoError::Format(_))));
-        assert!(matches!(export_file(Path::new("x.shp"), None, &e, &doc), Err(IoError::Format(_))));
-        assert!(matches!(export_file(Path::new("/nonexistent/dir/x.dxf"), None, &e, &doc), Err(IoError::File(_))));
+        assert!(matches!(
+            export_file(Path::new("x"), None, &e, &doc),
+            Err(IoError::Format(_))
+        ));
+        assert!(matches!(
+            export_file(Path::new("x.shp"), None, &e, &doc),
+            Err(IoError::Format(_))
+        ));
+        assert!(matches!(
+            export_file(Path::new("/nonexistent/dir/x.dxf"), None, &e, &doc),
+            Err(IoError::File(_))
+        ));
     }
 }

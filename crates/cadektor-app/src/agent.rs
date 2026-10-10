@@ -13,14 +13,14 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use cadektor_core::fsio::{self, AgentInfo};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Time that the UI thread spends on agent requests in one frame.
 pub const FRAME_BUDGET: Duration = Duration::from_millis(8);
@@ -100,10 +100,19 @@ impl AgentServer {
 
     /// Like `poll`, with an explicit time budget. When the budget runs out
     /// the UI is asked to repaint, so the rest is answered in the next frame.
-    pub fn poll_for(&self, budget: Duration, handle: &mut dyn FnMut(&str) -> Option<String>) -> usize {
+    pub fn poll_for(
+        &self,
+        budget: Duration,
+        handle: &mut dyn FnMut(&str) -> Option<String>,
+    ) -> usize {
         let start = Instant::now();
         let mut n = 0;
-        let mut next = self.carry.lock().unwrap_or_else(|e| e.into_inner()).take().or_else(|| self.rx.try_recv().ok());
+        let mut next = self
+            .carry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .or_else(|| self.rx.try_recv().ok());
         while let Some(req) = next.take() {
             next = self.rx.try_recv().ok();
             if req.cancelled.load(Ordering::SeqCst) {
@@ -140,7 +149,8 @@ impl Drop for AgentServer {
 
 fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(format!("no random numbers: {e}")))?;
+    getrandom::fill(&mut bytes)
+        .map_err(|e| std::io::Error::other(format!("no random numbers: {e}")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -148,7 +158,11 @@ fn random_token() -> std::io::Result<String> {
 /// `wake` runs after each request arrives, to repaint the UI.
 /// With `info_path`, the port and token are written there (owner only) and
 /// the file is deleted when the server is dropped.
-pub fn start(port: u16, wake: Arc<dyn Fn() + Send + Sync>, info_path: Option<PathBuf>) -> std::io::Result<AgentServer> {
+pub fn start(
+    port: u16,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    info_path: Option<PathBuf>,
+) -> std::io::Result<AgentServer> {
     start_with(port, wake, info_path, Limits::default())
 }
 
@@ -162,7 +176,13 @@ pub fn start_with(
     let addr = listener.local_addr()?;
     let token = random_token()?;
     if let Some(path) = &info_path {
-        fsio::write_agent_info(path, &AgentInfo { port: addr.port(), token: token.clone() })?;
+        fsio::write_agent_info(
+            path,
+            &AgentInfo {
+                port: addr.port(),
+                token: token.clone(),
+            },
+        )?;
     }
     let (tx, rx) = mpsc::channel::<Request>();
     let stop = Arc::new(AtomicBool::new(false));
@@ -187,7 +207,15 @@ pub fn start_with(
             }
         });
     }
-    Ok(AgentServer { addr, token, rx, carry: std::sync::Mutex::new(None), wake, info_path, stop })
+    Ok(AgentServer {
+        addr,
+        token,
+        rx,
+        carry: std::sync::Mutex::new(None),
+        wake,
+        info_path,
+        stop,
+    })
 }
 
 /// Counts a connected client until its thread ends.
@@ -208,7 +236,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// `Ok(None)` is the end of the stream. A longer line is an error.
 fn read_line_capped<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<Option<String>> {
     let mut buf = Vec::new();
-    let n = r.by_ref().take(max as u64 + 1).read_until(b'\n', &mut buf)?;
+    let n = r
+        .by_ref()
+        .take(max as u64 + 1)
+        .read_until(b'\n', &mut buf)?;
     if n == 0 {
         return Ok(None);
     }
@@ -218,14 +249,21 @@ fn read_line_capped<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<Option
             buf.pop();
         }
     } else if buf.len() > max {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "line too long"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "line too long",
+        ));
     }
-    String::from_utf8(buf).map(Some).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not UTF-8"))
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not UTF-8"))
 }
 
 fn response(id: &Value, body: Value) -> String {
     let mut r = json!({"jsonrpc": "2.0", "id": id});
-    r.as_object_mut().expect("object").extend(body.as_object().expect("object").clone());
+    r.as_object_mut()
+        .expect("object")
+        .extend(body.as_object().expect("object").clone());
     r.to_string()
 }
 
@@ -236,25 +274,50 @@ fn send(out: &mut TcpStream, line: &str) -> bool {
 /// Reads and checks the `auth` line. True if the client may continue.
 fn authenticate<R: BufRead>(reader: &mut R, out: &mut TcpStream, token: &str) -> bool {
     // A web page can send bytes to this port, but not a line that starts with `{`.
-    if reader.fill_buf().map(|b| b.first() != Some(&b'{')).unwrap_or(true) {
+    if reader
+        .fill_buf()
+        .map(|b| b.first() != Some(&b'{'))
+        .unwrap_or(true)
+    {
         return false;
     }
-    let Ok(Some(line)) = read_line_capped(reader, MAX_AUTH_LINE) else { return false };
-    let Ok(req) = serde_json::from_str::<Value>(&line) else { return false };
+    let Ok(Some(line)) = read_line_capped(reader, MAX_AUTH_LINE) else {
+        return false;
+    };
+    let Ok(req) = serde_json::from_str::<Value>(&line) else {
+        return false;
+    };
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let sent = req["params"]["token"].as_str().unwrap_or("");
     if req["method"] == "auth" && constant_time_eq(sent.as_bytes(), token.as_bytes()) {
         send(out, &response(&id, json!({"result": {"ok": true}})))
     } else {
-        send(out, &response(&id, json!({"error": {"code": -32001, "message": "authentication failed"}})));
+        send(
+            out,
+            &response(
+                &id,
+                json!({"error": {"code": -32001, "message": "authentication failed"}}),
+            ),
+        );
         false
     }
 }
 
-fn serve_client(stream: TcpStream, token: &str, limits: Limits, tx: Sender<Request>, wake: Arc<dyn Fn() + Send + Sync>) {
-    let Ok(mut out) = stream.try_clone() else { return };
+fn serve_client(
+    stream: TcpStream,
+    token: &str,
+    limits: Limits,
+    tx: Sender<Request>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    let Ok(mut out) = stream.try_clone() else {
+        return;
+    };
     let _ = out.set_write_timeout(Some(limits.reply_timeout));
-    let mut reader = BufReader::new(DeadlineStream { stream, deadline: Some(Instant::now() + limits.auth_timeout) });
+    let mut reader = BufReader::new(DeadlineStream {
+        stream,
+        deadline: Some(Instant::now() + limits.auth_timeout),
+    });
     if !authenticate(&mut reader, &mut out, token) {
         return;
     }
@@ -265,10 +328,19 @@ fn serve_client(stream: TcpStream, token: &str, limits: Limits, tx: Sender<Reque
             continue;
         }
         // The id is only needed to answer when the UI thread is too slow.
-        let id = serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("id").cloned());
+        let id = serde_json::from_str::<Value>(&line)
+            .ok()
+            .and_then(|v| v.get("id").cloned());
         let (reply, answer) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
-        if tx.send(Request { line, reply, cancelled: cancelled.clone() }).is_err() {
+        if tx
+            .send(Request {
+                line,
+                reply,
+                cancelled: cancelled.clone(),
+            })
+            .is_err()
+        {
             return;
         }
         wake();
@@ -361,7 +433,11 @@ mod tests {
                 }
                 server
             });
-            Ui { stop, handled, thread: Some(thread) }
+            Ui {
+                stop,
+                handled,
+                thread: Some(thread),
+            }
         }
 
         fn handled(&self) -> usize {
@@ -388,7 +464,10 @@ mod tests {
         }
 
         fn send_raw(&mut self, bytes: &[u8]) -> bool {
-            self.out.write_all(bytes).and_then(|_| self.out.flush()).is_ok()
+            self.out
+                .write_all(bytes)
+                .and_then(|_| self.out.flush())
+                .is_ok()
         }
 
         fn send(&mut self, line: &str) -> bool {
@@ -409,7 +488,10 @@ mod tests {
             match self.reader.read(&mut buf) {
                 Ok(0) => true,
                 Ok(_) => false,
-                Err(e) => !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+                Err(e) => !matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
             }
         }
 
@@ -420,13 +502,21 @@ mod tests {
                 match self.reader.read(&mut buf) {
                     Ok(0) => return true,
                     Ok(_) => {}
-                    Err(e) => return !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+                    Err(e) => {
+                        return !matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        );
+                    }
                 }
             }
         }
 
         fn auth(&mut self, token: &str) -> Option<Value> {
-            self.send(&json!({"jsonrpc": "2.0", "id": 0, "method": "auth", "params": {"token": token}}).to_string());
+            self.send(
+                &json!({"jsonrpc": "2.0", "id": 0, "method": "auth", "params": {"token": token}})
+                    .to_string(),
+            );
             self.read()
         }
 
@@ -437,7 +527,12 @@ mod tests {
     }
 
     fn small_limits() -> Limits {
-        Limits { max_line: 1024, max_clients: 4, auth_timeout: Duration::from_millis(300), reply_timeout: Duration::from_secs(5) }
+        Limits {
+            max_line: 1024,
+            max_clients: 4,
+            auth_timeout: Duration::from_millis(300),
+            reply_timeout: Duration::from_secs(5),
+        }
     }
 
     fn started(limits: Limits) -> (Ui, SocketAddr, String) {
@@ -450,14 +545,29 @@ mod tests {
     fn allow_dirs_from_arguments() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(parse_allow_dirs(&a(&["app"])), vec![PathBuf::from(".")]);
-        assert_eq!(parse_allow_dirs(&a(&["app", "--allow-dir", "/a", "--allow-dir=/b", "--allow-dir"])), vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(
+            parse_allow_dirs(&a(&[
+                "app",
+                "--allow-dir",
+                "/a",
+                "--allow-dir=/b",
+                "--allow-dir"
+            ])),
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
     }
 
     #[test]
     fn port_parsing() {
         let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_agent_port(&a(&["app", "--agent-port", "7001"]), Some("9")), Some(7001));
-        assert_eq!(parse_agent_port(&a(&["app", "--agent-port=7002"]), None), Some(7002));
+        assert_eq!(
+            parse_agent_port(&a(&["app", "--agent-port", "7001"]), Some("9")),
+            Some(7001)
+        );
+        assert_eq!(
+            parse_agent_port(&a(&["app", "--agent-port=7002"]), None),
+            Some(7002)
+        );
         assert_eq!(parse_agent_port(&a(&["app"]), Some("7003")), Some(7003));
         assert_eq!(parse_agent_port(&a(&["app"]), Some("x")), None);
     }
@@ -496,7 +606,11 @@ mod tests {
         assert!(resp[0]["result"]["methods"].is_array());
         assert_eq!(resp[1]["result"]["object_count"], 0);
         assert_eq!(resp[2]["result"]["ids"], json!([]));
-        assert_eq!(wakes.load(Ordering::SeqCst), 4, "the auth line does not wake the UI");
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            4,
+            "the auth line does not wake the UI"
+        );
     }
 
     #[test]
@@ -519,7 +633,13 @@ mod tests {
     #[test]
     fn wrong_token_is_refused_and_closed() {
         let (mut ui, addr, token) = started(small_limits());
-        for bad in ["nope".to_string(), String::new(), format!("{token}0"), token[..63].to_string(), token.to_uppercase()] {
+        for bad in [
+            "nope".to_string(),
+            String::new(),
+            format!("{token}0"),
+            token[..63].to_string(),
+            token.to_uppercase(),
+        ] {
             let mut c = Client::connect(addr);
             let r = c.auth(&bad).expect("an error is sent");
             assert_eq!(r["error"]["message"], "authentication failed", "{bad}");
@@ -582,7 +702,10 @@ mod tests {
         // So does a long line that ends.
         let mut c = Client::connect(addr);
         c.auth(&token).unwrap();
-        c.send(&format!("{{\"id\":1,\"method\":\"describe\",\"pad\":\"{}\"}}", "a".repeat(2000)));
+        c.send(&format!(
+            "{{\"id\":1,\"method\":\"describe\",\"pad\":\"{}\"}}",
+            "a".repeat(2000)
+        ));
         assert!(c.is_closed());
         assert_eq!(ui.handled(), 0);
 
@@ -604,7 +727,10 @@ mod tests {
             assert_eq!(c.auth(&token).unwrap()["result"]["ok"], true);
         }
         let mut fifth = Client::connect(addr);
-        fifth.send(&json!({"jsonrpc": "2.0", "id": 0, "method": "auth", "params": {"token": token}}).to_string());
+        fifth.send(
+            &json!({"jsonrpc": "2.0", "id": 0, "method": "auth", "params": {"token": token}})
+                .to_string(),
+        );
         assert!(fifth.is_closed(), "refused without an answer");
         // The four others still work.
         assert_eq!(clients[0].call(1, "selection.get")["id"], 1);
@@ -635,7 +761,10 @@ mod tests {
 
     #[test]
     fn slow_ui_gets_a_timeout_error_and_the_client_can_go_on() {
-        let limits = Limits { reply_timeout: Duration::from_millis(150), ..small_limits() };
+        let limits = Limits {
+            reply_timeout: Duration::from_millis(150),
+            ..small_limits()
+        };
         let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
         let mut c = Client::connect(addr);
@@ -657,12 +786,20 @@ mod tests {
 
     #[test]
     fn timeout_message_says_cancelled() {
-        let limits = Limits { reply_timeout: Duration::from_millis(100), ..small_limits() };
+        let limits = Limits {
+            reply_timeout: Duration::from_millis(100),
+            ..small_limits()
+        };
         let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
         let mut c = Client::connect(server.addr);
         c.auth(&server.token.clone()).unwrap();
         let r = c.call(1, "describe");
-        assert!(r["error"]["message"].as_str().unwrap().contains("cancelled"));
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled")
+        );
     }
 
     #[test]
@@ -679,7 +816,10 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         assert!(c.drains_to_close());
-        assert!(start.elapsed() < Duration::from_secs(2), "closed near the 300 ms deadline");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "closed near the 300 ms deadline"
+        );
         ui.finish();
     }
 
@@ -699,7 +839,10 @@ mod tests {
             thread::sleep(Duration::from_millis(2));
         }
         let mut session = Session::default();
-        assert_eq!(server.poll_for(Duration::ZERO, &mut |line| session.handle_line(line)), 1);
+        assert_eq!(
+            server.poll_for(Duration::ZERO, &mut |line| session.handle_line(line)),
+            1
+        );
         assert!(client.join().unwrap()["result"].is_object());
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
     }
@@ -726,10 +869,22 @@ mod tests {
         let mut session = Session::default();
         let before = wakes.load(Ordering::SeqCst);
         let mut handler = |line: &str| session.handle_line(line);
-        assert_eq!(server.poll_for(Duration::ZERO, &mut handler), 1, "one request per call with no budget");
-        assert_eq!(wakes.load(Ordering::SeqCst), before + 1, "the UI is asked to come back");
+        assert_eq!(
+            server.poll_for(Duration::ZERO, &mut handler),
+            1,
+            "one request per call with no budget"
+        );
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            before + 1,
+            "the UI is asked to come back"
+        );
         assert_eq!(server.poll_for(Duration::from_secs(5), &mut handler), 2);
-        assert_eq!(wakes.load(Ordering::SeqCst), before + 1, "no repaint request when everything was answered");
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            before + 1,
+            "no repaint request when everything was answered"
+        );
         for c in clients {
             assert!(c.join().unwrap()["result"].is_object());
         }
@@ -742,11 +897,20 @@ mod tests {
         let path = dir.join("cadektor").join("agent.json");
         let server = start(0, Arc::new(|| {}), Some(path.clone())).unwrap();
         let info = fsio::read_agent_info(&path).unwrap();
-        assert_eq!(info, AgentInfo { port: server.addr.port(), token: server.token.clone() });
+        assert_eq!(
+            info,
+            AgentInfo {
+                port: server.addr.port(),
+                token: server.token.clone()
+            }
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         let addr = server.addr;
         drop(server);
@@ -754,13 +918,21 @@ mod tests {
 
         // A file that another instance wrote is left alone.
         let server = start(0, Arc::new(|| {}), Some(path.clone())).unwrap();
-        fsio::write_agent_info(&path, &AgentInfo { port: 1, token: "other".into() }).unwrap();
+        fsio::write_agent_info(
+            &path,
+            &AgentInfo {
+                port: 1,
+                token: "other".into(),
+            },
+        )
+        .unwrap();
         drop(server);
         assert_eq!(fsio::read_agent_info(&path).unwrap().token, "other");
         // After the server is dropped the port stops accepting real clients.
         thread::sleep(Duration::from_millis(100));
         let mut c = TcpStream::connect(addr).ok().inspect(|s| {
-            s.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+            s.set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
         });
         if let Some(s) = c.as_mut() {
             let _ = writeln!(s, "{{}}");
@@ -776,7 +948,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let blocker = dir.join("file");
         std::fs::write(&blocker, "x").unwrap();
-        assert!(start(0, Arc::new(|| {}), Some(blocker.join("sub").join("agent.json"))).is_err());
+        assert!(
+            start(
+                0,
+                Arc::new(|| {}),
+                Some(blocker.join("sub").join("agent.json"))
+            )
+            .is_err()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -793,11 +972,28 @@ mod tests {
         let read = |data: &[u8], max| read_line_capped(&mut BufReader::new(data), max);
         assert_eq!(read(b"abc\nrest", 10).unwrap().as_deref(), Some("abc"));
         assert_eq!(read(b"abc\r\n", 10).unwrap().as_deref(), Some("abc"));
-        assert_eq!(read(b"abc", 10).unwrap().as_deref(), Some("abc"), "last line without a line end");
+        assert_eq!(
+            read(b"abc", 10).unwrap().as_deref(),
+            Some("abc"),
+            "last line without a line end"
+        );
         assert_eq!(read(b"", 10).unwrap(), None);
-        assert_eq!(read(b"abcde\n", 5).unwrap().as_deref(), Some("abcde"), "exactly at the limit");
-        assert_eq!(read(b"abcdef\n", 5).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(read(b"abcdef", 5).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(read(&[0xff, b'\n'], 5).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            read(b"abcde\n", 5).unwrap().as_deref(),
+            Some("abcde"),
+            "exactly at the limit"
+        );
+        assert_eq!(
+            read(b"abcdef\n", 5).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            read(b"abcdef", 5).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            read(&[0xff, b'\n'], 5).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 }

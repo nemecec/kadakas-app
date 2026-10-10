@@ -173,9 +173,15 @@ impl DataMap {
             name_ok("kind", &e.kind)?;
             name_ok("IFC class", &e.ifc_class)?;
             if !e.ifc_class.trim().to_ascii_lowercase().starts_with("ifc") {
-                return Err(format!("the IFC class '{}' must start with Ifc", e.ifc_class.trim()));
+                return Err(format!(
+                    "the IFC class '{}' must start with Ifc",
+                    e.ifc_class.trim()
+                ));
             }
-            if self.entities[..i].iter().any(|o| o.kind.eq_ignore_ascii_case(e.kind.trim())) {
+            if self.entities[..i]
+                .iter()
+                .any(|o| o.kind.eq_ignore_ascii_case(e.kind.trim()))
+            {
                 return Err(format!("kind '{}' is mapped twice", e.kind.trim()));
             }
         }
@@ -189,8 +195,14 @@ impl DataMap {
                     name_ok("field", field).map_err(&at)?;
                 }
                 Source::Constant { value } => {
-                    if value.is_null() || value.is_array() || value.is_object() || value.as_f64().is_some_and(|n| !n.is_finite()) {
-                        return Err(at("a constant must be text, a finite number or a boolean".into()));
+                    if value.is_null()
+                        || value.is_array()
+                        || value.is_object()
+                        || value.as_f64().is_some_and(|n| !n.is_finite())
+                    {
+                        return Err(at(
+                            "a constant must be text, a finite number or a boolean".into()
+                        ));
                     }
                 }
             }
@@ -211,9 +223,14 @@ impl DataMap {
     /// Problems of the table against a document: records and fields that do not exist.
     pub fn check_refs(&self, doc: &Document) -> Vec<String> {
         let mut out = Vec::new();
-        let mut check = |what: &str, record_name: &str, field: &str| match doc.resources.record_format_by_name(record_name) {
+        let mut check = |what: &str, record_name: &str, field: &str| match doc
+            .resources
+            .record_format_by_name(record_name)
+        {
             None => out.push(format!("{what}: no record format '{record_name}'")),
-            Some((_, f)) if f.field(field).is_none() => out.push(format!("{what}: record '{record_name}' has no field '{field}'")),
+            Some((_, f)) if f.field(field).is_none() => out.push(format!(
+                "{what}: record '{record_name}' has no field '{field}'"
+            )),
             _ => {}
         };
         for (i, r) in self.rules.iter().enumerate() {
@@ -229,15 +246,30 @@ impl DataMap {
     }
 
     fn entity(&self, kind: &str) -> Option<&EntityMap> {
-        self.entities.iter().find(|e| e.kind.trim().eq_ignore_ascii_case(kind))
+        self.entities
+            .iter()
+            .find(|e| e.kind.trim().eq_ignore_ascii_case(kind))
     }
 
     /// A starting table for landscape objects. Property set names start with `Cadektor_`.
     pub fn landscape_template() -> DataMap {
-        let ent = |kind: &str, class: &str, pre: Option<&str>| EntityMap { kind: kind.into(), ifc_class: class.into(), predefined_type: pre.map(Into::into) };
-        let ifc = |pset: &str, property: &str, ty: IfcType| Target::IfcProperty { pset: pset.into(), property: property.into(), ty };
+        let ent = |kind: &str, class: &str, pre: Option<&str>| EntityMap {
+            kind: kind.into(),
+            ifc_class: class.into(),
+            predefined_type: pre.map(Into::into),
+        };
+        let ifc = |pset: &str, property: &str, ty: IfcType| Target::IfcProperty {
+            pset: pset.into(),
+            property: property.into(),
+            ty,
+        };
         let prop = |n: &str| Source::Property { name: n.into() };
-        let rule = |name: &str, kinds: &[&str], source: Source, target: Target| MapRule { name: name.into(), kinds: kinds.iter().map(|k| k.to_string()).collect(), source, target };
+        let rule = |name: &str, kinds: &[&str], source: Source, target: Target| MapRule {
+            name: name.into(),
+            kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            source,
+            target,
+        };
         let plants = ["plant", "existing_tree"];
         DataMap {
             entities: vec![
@@ -248,18 +280,78 @@ impl DataMap {
                 ent("site_model", "IfcGeographicElement", Some("TERRAIN")),
             ],
             rules: vec![
-                rule("Layer", &[], prop("Layer"), ifc("Cadektor_Source", "Layer", IfcType::Label)),
-                rule("Class", &[], prop("Class"), ifc("Cadektor_Source", "Class", IfcType::Label)),
-                rule("Botanical name", &plants, prop("Botanical"), ifc("Cadektor_Planting", "BotanicalName", IfcType::Label)),
-                rule("Common name", &["plant"], prop("CommonName"), ifc("Cadektor_Planting", "CommonName", IfcType::Label)),
-                rule("Plant code", &["plant"], prop("IdCode"), ifc("Cadektor_Planting", "Code", IfcType::Label)),
-                rule("Spread", &plants, prop("Spread"), ifc("Cadektor_Planting", "Spread", IfcType::Length)),
-                rule("Height", &plants, prop("Height"), ifc("Cadektor_Planting", "Height", IfcType::Length)),
-                rule("Trunk diameter", &["existing_tree"], prop("DBH"), ifc("Cadektor_Planting", "TrunkDiameter", IfcType::Length)),
-                rule("Material", &["hardscape"], prop("Material"), ifc("Cadektor_Hardscape", "Material", IfcType::Label)),
-                rule("Thickness", &["hardscape"], prop("Thickness"), ifc("Cadektor_Hardscape", "Thickness", IfcType::Length)),
-                rule("Area", &["hardscape", "landscape_area"], prop("Area"), ifc("Cadektor_Quantities", "Area", IfcType::Area)),
-                rule("Volume", &["hardscape"], prop("Volume"), ifc("Cadektor_Quantities", "Volume", IfcType::Volume)),
+                rule(
+                    "Layer",
+                    &[],
+                    prop("Layer"),
+                    ifc("Cadektor_Source", "Layer", IfcType::Label),
+                ),
+                rule(
+                    "Class",
+                    &[],
+                    prop("Class"),
+                    ifc("Cadektor_Source", "Class", IfcType::Label),
+                ),
+                rule(
+                    "Botanical name",
+                    &plants,
+                    prop("Botanical"),
+                    ifc("Cadektor_Planting", "BotanicalName", IfcType::Label),
+                ),
+                rule(
+                    "Common name",
+                    &["plant"],
+                    prop("CommonName"),
+                    ifc("Cadektor_Planting", "CommonName", IfcType::Label),
+                ),
+                rule(
+                    "Plant code",
+                    &["plant"],
+                    prop("IdCode"),
+                    ifc("Cadektor_Planting", "Code", IfcType::Label),
+                ),
+                rule(
+                    "Spread",
+                    &plants,
+                    prop("Spread"),
+                    ifc("Cadektor_Planting", "Spread", IfcType::Length),
+                ),
+                rule(
+                    "Height",
+                    &plants,
+                    prop("Height"),
+                    ifc("Cadektor_Planting", "Height", IfcType::Length),
+                ),
+                rule(
+                    "Trunk diameter",
+                    &["existing_tree"],
+                    prop("DBH"),
+                    ifc("Cadektor_Planting", "TrunkDiameter", IfcType::Length),
+                ),
+                rule(
+                    "Material",
+                    &["hardscape"],
+                    prop("Material"),
+                    ifc("Cadektor_Hardscape", "Material", IfcType::Label),
+                ),
+                rule(
+                    "Thickness",
+                    &["hardscape"],
+                    prop("Thickness"),
+                    ifc("Cadektor_Hardscape", "Thickness", IfcType::Length),
+                ),
+                rule(
+                    "Area",
+                    &["hardscape", "landscape_area"],
+                    prop("Area"),
+                    ifc("Cadektor_Quantities", "Area", IfcType::Area),
+                ),
+                rule(
+                    "Volume",
+                    &["hardscape"],
+                    prop("Volume"),
+                    ifc("Cadektor_Quantities", "Volume", IfcType::Volume),
+                ),
             ],
         }
     }
@@ -286,35 +378,58 @@ pub fn evaluate(doc: &Document, map: &DataMap, obj: &Object) -> Mapped {
         if !r.kinds.is_empty() && !r.kinds.iter().any(|k| k.trim().eq_ignore_ascii_case(kind)) {
             continue;
         }
-        let label = if r.name.is_empty() { format!("rule {}", i + 1) } else { format!("rule {} ({})", i + 1, r.name) };
+        let label = if r.name.is_empty() {
+            format!("rule {}", i + 1)
+        } else {
+            format!("rule {} ({})", i + 1, r.name)
+        };
         let v = match source_value(doc, obj, &r.source) {
             Prop::Value(v) => v,
             Prop::NotApplicable => continue,
             Prop::Unknown => {
-                out.problems.push(format!("{label}: the source does not exist"));
+                out.problems
+                    .push(format!("{label}: the source does not exist"));
                 continue;
             }
         };
         match &r.target {
             Target::IfcProperty { pset, property, ty } => match ty.coerce(&v) {
                 Ok(value) => {
-                    out.properties.entry(pset.trim().to_string()).or_default().insert(property.trim().to_string(), IfcValue { ifc_type: *ty, value });
+                    out.properties
+                        .entry(pset.trim().to_string())
+                        .or_default()
+                        .insert(
+                            property.trim().to_string(),
+                            IfcValue {
+                                ifc_type: *ty,
+                                value,
+                            },
+                        );
                 }
                 Err(e) => out.problems.push(format!("{label}: {e}")),
             },
             Target::RecordField { record, field } => {
                 let Some((rid, fmt)) = doc.resources.record_format_by_name(record) else {
-                    out.problems.push(format!("{label}: no record format '{record}'"));
+                    out.problems
+                        .push(format!("{label}: no record format '{record}'"));
                     continue;
                 };
                 let Some(def) = fmt.field(field) else {
-                    out.problems.push(format!("{label}: record '{record}' has no field '{field}'"));
+                    out.problems
+                        .push(format!("{label}: record '{record}' has no field '{field}'"));
                     continue;
                 };
                 match def.coerce(&v) {
                     Ok(value) => {
-                        let name = doc.resources.get(rid).map(|r| r.name.clone()).unwrap_or_default();
-                        out.record_values.entry(name).or_default().insert(def.name.clone(), value);
+                        let name = doc
+                            .resources
+                            .get(rid)
+                            .map(|r| r.name.clone())
+                            .unwrap_or_default();
+                        out.record_values
+                            .entry(name)
+                            .or_default()
+                            .insert(def.name.clone(), value);
                     }
                     Err(e) => out.problems.push(format!("{label}: {e}")),
                 }
@@ -334,12 +449,27 @@ pub fn record_commands(doc: &Document, map: &DataMap) -> (Vec<Command>, Vec<Stri
         let m = evaluate(doc, map, obj);
         problems.extend(m.problems.iter().map(|p| format!("object {}: {p}", obj.id)));
         for (record_name, values) in m.record_values {
-            let Some((rid, fmt)) = doc.resources.record_format_by_name(&record_name) else { continue };
-            let name = doc.resources.get(rid).map(|r| r.name.clone()).unwrap_or_default();
-            let Some(current) = record::values(obj, &name) else { continue };
-            let changed: Map<String, Value> = values.into_iter().filter(|(k, v)| fmt.field(k).is_some() && current.get(k) != Some(v)).collect();
+            let Some((rid, fmt)) = doc.resources.record_format_by_name(&record_name) else {
+                continue;
+            };
+            let name = doc
+                .resources
+                .get(rid)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            let Some(current) = record::values(obj, &name) else {
+                continue;
+            };
+            let changed: Map<String, Value> = values
+                .into_iter()
+                .filter(|(k, v)| fmt.field(k).is_some() && current.get(k) != Some(v))
+                .collect();
             if !changed.is_empty() {
-                cmds.push(Command::SetRecordFields { ids: vec![obj.id], record: rid, values: changed });
+                cmds.push(Command::SetRecordFields {
+                    ids: vec![obj.id],
+                    record: rid,
+                    values: changed,
+                });
             }
         }
     }
@@ -348,9 +478,14 @@ pub fn record_commands(doc: &Document, map: &DataMap) -> (Vec<Command>, Vec<Stri
 
 impl crate::resource::Resources {
     /// The record format with this name (compared without case).
-    pub fn record_format_by_name(&self, name: &str) -> Option<(crate::resource::ResourceId, &record::RecordFormat)> {
+    pub fn record_format_by_name(
+        &self,
+        name: &str,
+    ) -> Option<(crate::resource::ResourceId, &record::RecordFormat)> {
         self.iter().find_map(|r| match &r.body {
-            ResourceBody::RecordFormat(f) if r.name.eq_ignore_ascii_case(name.trim()) => Some((r.id, f.as_ref())),
+            ResourceBody::RecordFormat(f) if r.name.eq_ignore_ascii_case(name.trim()) => {
+                Some((r.id, f.as_ref()))
+            }
             _ => None,
         })
     }
@@ -367,14 +502,44 @@ mod tests {
 
     fn setup() -> (Editor, ObjectId) {
         let mut ed = Editor::default();
-        let b = crate::curve::corners(&[DVec2::ZERO, DVec2::new(2000.0, 0.0), DVec2::new(2000.0, 3000.0), DVec2::new(0.0, 3000.0)]);
-        let out = ed.execute(&Command::AddObject { shape: Shape::Hardscape { boundary: b, material: "Granite".into(), thickness: None, elevation: None }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let b = crate::curve::corners(&[
+            DVec2::ZERO,
+            DVec2::new(2000.0, 0.0),
+            DVec2::new(2000.0, 3000.0),
+            DVec2::new(0.0, 3000.0),
+        ]);
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::Hardscape {
+                    boundary: b,
+                    material: "Granite".into(),
+                    thickness: None,
+                    elevation: None,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         (ed, ObjectId(out.created[0]))
     }
 
     fn add_record(ed: &mut Editor) -> crate::resource::ResourceId {
-        let fmt = RecordFormat { fields: vec![FieldDef::new("Area", FieldType::Area), FieldDef::new("Mat", FieldType::Text), FieldDef::new("Qty", FieldType::Integer)] };
-        crate::resource::ResourceId(ed.execute(&Command::AddResource { name: "Takeoff".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) }).unwrap().created[0])
+        let fmt = RecordFormat {
+            fields: vec![
+                FieldDef::new("Area", FieldType::Area),
+                FieldDef::new("Mat", FieldType::Text),
+                FieldDef::new("Qty", FieldType::Integer),
+            ],
+        };
+        crate::resource::ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Takeoff".into(),
+                body: ResourceBody::RecordFormat(Box::new(fmt)),
+            })
+            .unwrap()
+            .created[0],
+        )
     }
 
     #[test]
@@ -387,9 +552,21 @@ mod tests {
         assert_eq!(m.predefined_type, None);
         assert!(m.problems.is_empty(), "{:?}", m.problems);
         let q = &m.properties["Cadektor_Quantities"];
-        assert_eq!(q["Area"], IfcValue { ifc_type: IfcType::Area, value: json!(6.0) });
-        assert_eq!(m.properties["Cadektor_Hardscape"]["Material"].value, json!("Granite"));
-        assert_eq!(m.properties["Cadektor_Source"]["Class"].value, json!("None"));
+        assert_eq!(
+            q["Area"],
+            IfcValue {
+                ifc_type: IfcType::Area,
+                value: json!(6.0)
+            }
+        );
+        assert_eq!(
+            m.properties["Cadektor_Hardscape"]["Material"].value,
+            json!("Granite")
+        );
+        assert_eq!(
+            m.properties["Cadektor_Source"]["Class"].value,
+            json!("None")
+        );
         assert!(!m.properties.contains_key("Cadektor_Planting"));
         // Round trip through JSON.
         let back: DataMap = serde_json::from_value(serde_json::to_value(&map).unwrap()).unwrap();
@@ -399,16 +576,57 @@ mod tests {
     #[test]
     fn plants_and_trees_map_to_vegetation() {
         let mut ed = Editor::default();
-        let add = |ed: &mut Editor, s: Shape| ObjectId(ed.execute(&Command::AddObject { shape: s, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0]);
-        let p = add(&mut ed, Shape::Plant { at: DVec2::ZERO, species: "Birch".into(), spread: 2000.0, height: 5000.0 });
-        let t = add(&mut ed, Shape::ExistingTree { at: DVec2::ZERO, species: "Oak".into(), dbh: 400.0, spread: 6000.0, height: 12000.0, condition: Default::default(), action: Default::default(), rpz_factor: None, rpz_cap: None });
+        let add = |ed: &mut Editor, s: Shape| {
+            ObjectId(
+                ed.execute(&Command::AddObject {
+                    shape: s,
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let p = add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::ZERO,
+                species: "Birch".into(),
+                spread: 2000.0,
+                height: 5000.0,
+            },
+        );
+        let t = add(
+            &mut ed,
+            Shape::ExistingTree {
+                at: DVec2::ZERO,
+                species: "Oak".into(),
+                dbh: 400.0,
+                spread: 6000.0,
+                height: 12000.0,
+                condition: Default::default(),
+                action: Default::default(),
+                rpz_factor: None,
+                rpz_cap: None,
+            },
+        );
         let map = DataMap::landscape_template();
         let m = evaluate(ed.doc(), &map, ed.doc().object(p).unwrap());
         assert_eq!(m.predefined_type.as_deref(), Some("VEGETATION"));
-        assert_eq!(m.properties["Cadektor_Planting"]["Spread"].value, json!(2000.0));
+        assert_eq!(
+            m.properties["Cadektor_Planting"]["Spread"].value,
+            json!(2000.0)
+        );
         let m = evaluate(ed.doc(), &map, ed.doc().object(t).unwrap());
-        assert_eq!(m.properties["Cadektor_Planting"]["TrunkDiameter"].value, json!(400.0));
-        assert_eq!(m.properties["Cadektor_Planting"]["BotanicalName"].value, json!("Oak"));
+        assert_eq!(
+            m.properties["Cadektor_Planting"]["TrunkDiameter"].value,
+            json!(400.0)
+        );
+        assert_eq!(
+            m.properties["Cadektor_Planting"]["BotanicalName"].value,
+            json!("Oak")
+        );
     }
 
     #[test]
@@ -418,9 +636,37 @@ mod tests {
         let map = DataMap {
             entities: vec![],
             rules: vec![
-                MapRule { name: "area".into(), kinds: vec![], source: Source::Property { name: "Area".into() }, target: Target::RecordField { record: "takeoff".into(), field: "area".into() } },
-                MapRule { name: String::new(), kinds: vec!["Hardscape".into()], source: Source::Constant { value: json!("stone") }, target: Target::RecordField { record: "Takeoff".into(), field: "Mat".into() } },
-                MapRule { name: String::new(), kinds: vec!["plant".into()], source: Source::Constant { value: json!(1) }, target: Target::RecordField { record: "Takeoff".into(), field: "Qty".into() } },
+                MapRule {
+                    name: "area".into(),
+                    kinds: vec![],
+                    source: Source::Property {
+                        name: "Area".into(),
+                    },
+                    target: Target::RecordField {
+                        record: "takeoff".into(),
+                        field: "area".into(),
+                    },
+                },
+                MapRule {
+                    name: String::new(),
+                    kinds: vec!["Hardscape".into()],
+                    source: Source::Constant {
+                        value: json!("stone"),
+                    },
+                    target: Target::RecordField {
+                        record: "Takeoff".into(),
+                        field: "Mat".into(),
+                    },
+                },
+                MapRule {
+                    name: String::new(),
+                    kinds: vec!["plant".into()],
+                    source: Source::Constant { value: json!(1) },
+                    target: Target::RecordField {
+                        record: "Takeoff".into(),
+                        field: "Qty".into(),
+                    },
+                },
             ],
         };
         map.validate().unwrap();
@@ -428,7 +674,12 @@ mod tests {
         // Not attached: nothing to write.
         let (cmds, problems) = record_commands(ed.doc(), &map);
         assert!(cmds.is_empty() && problems.is_empty());
-        ed.execute(&Command::AttachRecord { ids: vec![id], record: rid, values: Map::new() }).unwrap();
+        ed.execute(&Command::AttachRecord {
+            ids: vec![id],
+            record: rid,
+            values: Map::new(),
+        })
+        .unwrap();
         let (cmds, problems) = record_commands(ed.doc(), &map);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(cmds.len(), 1);
@@ -447,16 +698,72 @@ mod tests {
     fn problems_are_reported() {
         let (mut ed, id) = setup();
         add_record(&mut ed);
-        let rule = |source, target| MapRule { name: String::new(), kinds: vec![], source, target };
+        let rule = |source, target| MapRule {
+            name: String::new(),
+            kinds: vec![],
+            source,
+            target,
+        };
         let map = DataMap {
             entities: vec![],
             rules: vec![
-                rule(Source::Property { name: "Bogus".into() }, Target::IfcProperty { pset: "P".into(), property: "X".into(), ty: IfcType::Label }),
-                rule(Source::Property { name: "Layer".into() }, Target::IfcProperty { pset: "P".into(), property: "N".into(), ty: IfcType::Real }),
-                rule(Source::Property { name: "Layer".into() }, Target::RecordField { record: "Nope".into(), field: "F".into() }),
-                rule(Source::Property { name: "Layer".into() }, Target::RecordField { record: "Takeoff".into(), field: "F".into() }),
-                rule(Source::Property { name: "Layer".into() }, Target::RecordField { record: "Takeoff".into(), field: "Qty".into() }),
-                rule(Source::Property { name: "Height".into() }, Target::IfcProperty { pset: "P".into(), property: "H".into(), ty: IfcType::Real }),
+                rule(
+                    Source::Property {
+                        name: "Bogus".into(),
+                    },
+                    Target::IfcProperty {
+                        pset: "P".into(),
+                        property: "X".into(),
+                        ty: IfcType::Label,
+                    },
+                ),
+                rule(
+                    Source::Property {
+                        name: "Layer".into(),
+                    },
+                    Target::IfcProperty {
+                        pset: "P".into(),
+                        property: "N".into(),
+                        ty: IfcType::Real,
+                    },
+                ),
+                rule(
+                    Source::Property {
+                        name: "Layer".into(),
+                    },
+                    Target::RecordField {
+                        record: "Nope".into(),
+                        field: "F".into(),
+                    },
+                ),
+                rule(
+                    Source::Property {
+                        name: "Layer".into(),
+                    },
+                    Target::RecordField {
+                        record: "Takeoff".into(),
+                        field: "F".into(),
+                    },
+                ),
+                rule(
+                    Source::Property {
+                        name: "Layer".into(),
+                    },
+                    Target::RecordField {
+                        record: "Takeoff".into(),
+                        field: "Qty".into(),
+                    },
+                ),
+                rule(
+                    Source::Property {
+                        name: "Height".into(),
+                    },
+                    Target::IfcProperty {
+                        pset: "P".into(),
+                        property: "H".into(),
+                        ty: IfcType::Real,
+                    },
+                ),
             ],
         };
         let m = evaluate(ed.doc(), &map, ed.doc().object(id).unwrap());
@@ -488,21 +795,121 @@ mod tests {
         let mut m = ok.clone();
         m.entities[0].ifc_class = " ".into();
         assert!(m.validate().is_err());
-        let rule = |source, target| DataMap { entities: vec![], rules: vec![MapRule { name: String::new(), kinds: vec![], source, target }] };
-        let t = Target::RecordField { record: "R".into(), field: "F".into() };
-        let ifc = Target::IfcProperty { pset: "P".into(), property: "X".into(), ty: IfcType::Text };
-        assert!(rule(Source::Property { name: "".into() }, t.clone()).validate().unwrap_err().starts_with("rule 1"));
-        assert!(rule(Source::PlantField { field: "".into() }, t.clone()).validate().is_err());
-        assert!(rule(Source::RecordField { record: "".into(), field: "f".into() }, t.clone()).validate().is_err());
-        assert!(rule(Source::RecordField { record: "r".into(), field: "".into() }, t.clone()).validate().is_err());
-        assert!(rule(Source::Constant { value: json!(null) }, t.clone()).validate().is_err());
-        assert!(rule(Source::Constant { value: json!([1]) }, t.clone()).validate().is_err());
-        assert!(rule(Source::Constant { value: json!(true) }, t.clone()).validate().is_ok());
-        let p = Source::Property { name: "Area".into() };
-        assert!(rule(p.clone(), Target::IfcProperty { pset: "".into(), property: "X".into(), ty: IfcType::Text }).validate().is_err());
-        assert!(rule(p.clone(), Target::IfcProperty { pset: "P".into(), property: "".into(), ty: IfcType::Text }).validate().is_err());
-        assert!(rule(p.clone(), Target::RecordField { record: "".into(), field: "F".into() }).validate().is_err());
-        assert!(rule(p.clone(), Target::RecordField { record: "R".into(), field: "".into() }).validate().is_err());
+        let rule = |source, target| DataMap {
+            entities: vec![],
+            rules: vec![MapRule {
+                name: String::new(),
+                kinds: vec![],
+                source,
+                target,
+            }],
+        };
+        let t = Target::RecordField {
+            record: "R".into(),
+            field: "F".into(),
+        };
+        let ifc = Target::IfcProperty {
+            pset: "P".into(),
+            property: "X".into(),
+            ty: IfcType::Text,
+        };
+        assert!(
+            rule(Source::Property { name: "".into() }, t.clone())
+                .validate()
+                .unwrap_err()
+                .starts_with("rule 1")
+        );
+        assert!(
+            rule(Source::PlantField { field: "".into() }, t.clone())
+                .validate()
+                .is_err()
+        );
+        assert!(
+            rule(
+                Source::RecordField {
+                    record: "".into(),
+                    field: "f".into()
+                },
+                t.clone()
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            rule(
+                Source::RecordField {
+                    record: "r".into(),
+                    field: "".into()
+                },
+                t.clone()
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            rule(Source::Constant { value: json!(null) }, t.clone())
+                .validate()
+                .is_err()
+        );
+        assert!(
+            rule(Source::Constant { value: json!([1]) }, t.clone())
+                .validate()
+                .is_err()
+        );
+        assert!(
+            rule(Source::Constant { value: json!(true) }, t.clone())
+                .validate()
+                .is_ok()
+        );
+        let p = Source::Property {
+            name: "Area".into(),
+        };
+        assert!(
+            rule(
+                p.clone(),
+                Target::IfcProperty {
+                    pset: "".into(),
+                    property: "X".into(),
+                    ty: IfcType::Text
+                }
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            rule(
+                p.clone(),
+                Target::IfcProperty {
+                    pset: "P".into(),
+                    property: "".into(),
+                    ty: IfcType::Text
+                }
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            rule(
+                p.clone(),
+                Target::RecordField {
+                    record: "".into(),
+                    field: "F".into()
+                }
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            rule(
+                p.clone(),
+                Target::RecordField {
+                    record: "R".into(),
+                    field: "".into()
+                }
+            )
+            .validate()
+            .is_err()
+        );
         assert!(rule(p, ifc).validate().is_ok());
     }
 
@@ -518,7 +925,16 @@ mod tests {
         assert!(IfcType::Integer.coerce(&json!(2.5)).is_err());
         assert_eq!(IfcType::Length.coerce(&json!(2.5)).unwrap(), json!(2.5));
         assert!(IfcType::Area.coerce(&json!("x")).is_err());
-        for t in [IfcType::Label, IfcType::Text, IfcType::Real, IfcType::Integer, IfcType::Boolean, IfcType::Length, IfcType::Area, IfcType::Volume] {
+        for t in [
+            IfcType::Label,
+            IfcType::Text,
+            IfcType::Real,
+            IfcType::Integer,
+            IfcType::Boolean,
+            IfcType::Length,
+            IfcType::Area,
+            IfcType::Volume,
+        ] {
             assert!(!t.id().is_empty());
         }
     }

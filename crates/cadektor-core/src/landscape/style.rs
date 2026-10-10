@@ -36,7 +36,13 @@ pub struct MixEntry {
 
 impl Default for MixEntry {
     fn default() -> Self {
-        MixEntry { plant: ResourceId(0), percent: 100.0, spacing: None, density: None, min_count: 0 }
+        MixEntry {
+            plant: ResourceId(0),
+            percent: 100.0,
+            spacing: None,
+            density: None,
+            min_count: 0,
+        }
     }
 }
 
@@ -78,26 +84,41 @@ impl LandscapeAreaStyle {
         for (i, e) in self.mix.iter().enumerate() {
             let n = i + 1;
             if !e.percent.is_finite() || e.percent <= 0.0 || e.percent > 100.0 {
-                return Err(format!("percent of plant {n} must be more than 0 and at most 100"));
+                return Err(format!(
+                    "percent of plant {n} must be more than 0 and at most 100"
+                ));
             }
             total += e.percent;
             if e.spacing.is_some() && e.density.is_some() {
                 return Err(format!("plant {n}: give a spacing or a density, not both"));
             }
-            if e.spacing.is_some_and(|s| !s.is_finite() || s <= 0.0 || s > MAX_COORD) {
-                return Err(format!("spacing of plant {n} must be a positive, finite number"));
+            if e.spacing
+                .is_some_and(|s| !s.is_finite() || s <= 0.0 || s > MAX_COORD)
+            {
+                return Err(format!(
+                    "spacing of plant {n} must be a positive, finite number"
+                ));
             }
-            if e.density.is_some_and(|d| !d.is_finite() || d <= 0.0 || d > 1.0e6) {
-                return Err(format!("density of plant {n} must be a positive, finite number (plants per m2)"));
+            if e.density
+                .is_some_and(|d| !d.is_finite() || d <= 0.0 || d > 1.0e6)
+            {
+                return Err(format!(
+                    "density of plant {n} must be a positive, finite number (plants per m2)"
+                ));
             }
             if self.mix[..i].iter().any(|o| o.plant == e.plant) {
                 return Err(format!("plant {n} is in the mix twice"));
             }
         }
         if total > 100.0 + 1e-6 {
-            return Err(format!("the percentages add up to {total}. They must not be more than 100"));
+            return Err(format!(
+                "the percentages add up to {total}. They must not be more than 100"
+            ));
         }
-        if self.line_weight.is_some_and(|w| !(0.0..=1000.0).contains(&w)) {
+        if self
+            .line_weight
+            .is_some_and(|w| !(0.0..=1000.0).contains(&w))
+        {
             return Err("line weight must be a finite number of zero or more".into());
         }
         Ok(())
@@ -114,7 +135,11 @@ mod tests {
     use super::*;
 
     fn entry(plant: u64, percent: f64) -> MixEntry {
-        MixEntry { plant: ResourceId(plant), percent, ..Default::default() }
+        MixEntry {
+            plant: ResourceId(plant),
+            percent,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -130,7 +155,10 @@ mod tests {
 
     #[test]
     fn validate_checks_the_mix() {
-        let ok = LandscapeAreaStyle { mix: vec![entry(1, 60.0), entry(2, 40.0)], ..Default::default() };
+        let ok = LandscapeAreaStyle {
+            mix: vec![entry(1, 60.0), entry(2, 40.0)],
+            ..Default::default()
+        };
         assert!(ok.validate().is_ok());
         assert_eq!(ok.total_percent(), 100.0);
         let bad = |f: &dyn Fn(&mut LandscapeAreaStyle)| {
@@ -143,21 +171,29 @@ mod tests {
         assert!(bad(&|s| s.mix[0].percent = 120.0).contains("percent"));
         assert!(bad(&|s| s.mix[0].percent = 70.0).contains("add up"));
         assert!(bad(&|s| s.mix[1].plant = ResourceId(1)).contains("twice"));
-        assert!(bad(&|s| {
-            s.mix[0].spacing = Some(100.0);
-            s.mix[0].density = Some(4.0);
-        })
-        .contains("not both"));
+        assert!(
+            bad(&|s| {
+                s.mix[0].spacing = Some(100.0);
+                s.mix[0].density = Some(4.0);
+            })
+            .contains("not both")
+        );
         assert!(bad(&|s| s.mix[0].spacing = Some(-1.0)).contains("spacing"));
         assert!(bad(&|s| s.mix[0].spacing = Some(f64::INFINITY)).contains("spacing"));
         assert!(bad(&|s| s.mix[0].density = Some(0.0)).contains("density"));
         assert!(bad(&|s| s.line_weight = Some(-1.0)).contains("line weight"));
-        assert!(bad(&|s| s.mix = (0..=MAX_MIX as u64).map(|i| entry(i, 0.5)).collect()).contains("at most"));
+        assert!(
+            bad(&|s| s.mix = (0..=MAX_MIX as u64).map(|i| entry(i, 0.5)).collect())
+                .contains("at most")
+        );
     }
 
     #[test]
     fn partial_json_uses_defaults() {
-        let s: LandscapeAreaStyle = serde_json::from_str(r#"{"mix": [{"plant": 7, "spacing": 300}], "fields": {"hydrozone": "low"}}"#).unwrap();
+        let s: LandscapeAreaStyle = serde_json::from_str(
+            r#"{"mix": [{"plant": 7, "spacing": 300}], "fields": {"hydrozone": "low"}}"#,
+        )
+        .unwrap();
         assert_eq!(s.mix[0].percent, 100.0);
         assert_eq!(s.mix[0].min_count, 0);
         assert!(!s.show_plants);

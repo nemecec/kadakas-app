@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use cadektor_core::mesh::{Bounds3, Scene};
 use cadektor_core::model::ObjectId;
-use cadektor_render::{pick, Camera, StandardView, ViewSettings};
+use cadektor_render::{Camera, StandardView, ViewSettings, pick};
 use glam::{Vec2, Vec3};
 
 use crate::vertex::LineVertex;
@@ -48,8 +48,17 @@ struct SelectionCache {
 
 impl Default for View3d {
     fn default() -> Self {
-        let settings = ViewSettings { view: StandardView::RightIsometric, ..ViewSettings::default() };
-        View3d { camera: Camera::standard(settings.view, settings.projection), applied: settings, fit_pending: true, selection_cache: None, overlay_rev: 0 }
+        let settings = ViewSettings {
+            view: StandardView::RightIsometric,
+            ..ViewSettings::default()
+        };
+        View3d {
+            camera: Camera::standard(settings.view, settings.projection),
+            applied: settings,
+            fit_pending: true,
+            selection_cache: None,
+            overlay_rev: 0,
+        }
     }
 }
 
@@ -82,7 +91,8 @@ impl View3d {
 
     /// Orbit by a drag of `delta` points.
     pub fn orbit(&mut self, delta: Vec2) {
-        self.camera.orbit(-delta.x * ORBIT_PER_POINT, delta.y * ORBIT_PER_POINT);
+        self.camera
+            .orbit(-delta.x * ORBIT_PER_POINT, delta.y * ORBIT_PER_POINT);
     }
 
     /// Pan by a drag of `delta` points in a viewport `height` points tall.
@@ -92,19 +102,39 @@ impl View3d {
 
     /// Zoom toward the point `at` (points from the top left of the viewport) of a viewport of `size`.
     pub fn zoom_at(&mut self, factor: f32, at: Vec2, size: Vec2) {
-        let ndc = Vec2::new(at.x / size.x.max(1.0) * 2.0 - 1.0, 1.0 - at.y / size.y.max(1.0) * 2.0);
-        self.camera.zoom_at(factor, ndc, size.x.max(1.0) / size.y.max(1.0));
+        let ndc = Vec2::new(
+            at.x / size.x.max(1.0) * 2.0 - 1.0,
+            1.0 - at.y / size.y.max(1.0) * 2.0,
+        );
+        self.camera
+            .zoom_at(factor, ndc, size.x.max(1.0) / size.y.max(1.0));
     }
 
     /// The object under `at` (points from the top left of the viewport).
     pub fn pick(&self, scene: &Scene, at: Vec2, size: Vec2) -> Option<ObjectId> {
-        pick(scene, &self.camera, size.x, size.y, at.x, at.y, PICK_TOLERANCE)
+        pick(
+            scene,
+            &self.camera,
+            size.x,
+            size.y,
+            at.x,
+            at.y,
+            PICK_TOLERANCE,
+        )
     }
 
     /// Selection boxes as a line list, drawn over the scene. Recomputed only when the
     /// selection or the scene changes. The second value changes whenever the lines do.
-    pub fn selection_lines(&mut self, scene: &Scene, scene_rev: u64, selection: &[ObjectId]) -> (Arc<Vec<LineVertex>>, u64) {
-        let fresh = self.selection_cache.as_ref().is_some_and(|c| c.scene_rev == scene_rev && c.ids == selection);
+    pub fn selection_lines(
+        &mut self,
+        scene: &Scene,
+        scene_rev: u64,
+        selection: &[ObjectId],
+    ) -> (Arc<Vec<LineVertex>>, u64) {
+        let fresh = self
+            .selection_cache
+            .as_ref()
+            .is_some_and(|c| c.scene_rev == scene_rev && c.ids == selection);
         if !fresh {
             let mut lines = Vec::new();
             for id in selection {
@@ -112,7 +142,11 @@ impl View3d {
                     box_lines(lo, hi, &mut lines);
                 }
             }
-            self.selection_cache = Some(SelectionCache { scene_rev, ids: selection.to_vec(), lines: Arc::new(lines) });
+            self.selection_cache = Some(SelectionCache {
+                scene_rev,
+                ids: selection.to_vec(),
+                lines: Arc::new(lines),
+            });
             self.overlay_rev += 1;
         }
         let cache = self.selection_cache.as_ref().expect("cache was just set");
@@ -122,12 +156,24 @@ impl View3d {
 
 /// The 12 edges of a box.
 fn box_lines(lo: Vec3, hi: Vec3, out: &mut Vec<LineVertex>) {
-    let corner = |i: usize| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+    let corner = |i: usize| {
+        Vec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        )
+    };
     for i in 0..8usize {
         for bit in [1, 2, 4] {
             if i & bit == 0 {
-                out.push(LineVertex { pos: corner(i).to_array(), color: SELECTION });
-                out.push(LineVertex { pos: corner(i | bit).to_array(), color: SELECTION });
+                out.push(LineVertex {
+                    pos: corner(i).to_array(),
+                    color: SELECTION,
+                });
+                out.push(LineVertex {
+                    pos: corner(i | bit).to_array(),
+                    color: SELECTION,
+                });
             }
         }
     }
@@ -166,7 +212,12 @@ mod tests {
         let out = ed
             .execute(&Command::AddObject {
                 shape: Shape::Hardscape {
-                    boundary: cadektor_core::curve::corners(&[DVec2::splat(-500.0), DVec2::new(500.0, -500.0), DVec2::splat(500.0), DVec2::new(-500.0, 500.0)]),
+                    boundary: cadektor_core::curve::corners(&[
+                        DVec2::splat(-500.0),
+                        DVec2::new(500.0, -500.0),
+                        DVec2::splat(500.0),
+                        DVec2::new(-500.0, 500.0),
+                    ]),
                     material: "m".into(),
                     thickness: None,
                     elevation: None,
@@ -182,15 +233,27 @@ mod tests {
     #[test]
     fn plan_is_the_top_view() {
         assert!(is_plan(ViewSettings::default()));
-        assert!(!is_plan(ViewSettings { view: StandardView::Front, ..Default::default() }));
-        assert!(!is_plan(ViewSettings { view: StandardView::Top, ..Default::default() }), "the 3D Top view is not the plan");
+        assert!(!is_plan(ViewSettings {
+            view: StandardView::Front,
+            ..Default::default()
+        }));
+        assert!(
+            !is_plan(ViewSettings {
+                view: StandardView::Top,
+                ..Default::default()
+            }),
+            "the 3D Top view is not the plan"
+        );
     }
 
     #[test]
     fn camera_follows_the_settings() {
         let mut v = View3d::default();
         let iso = v.camera.eye_dir();
-        let mut s = ViewSettings { view: StandardView::Front, ..Default::default() };
+        let mut s = ViewSettings {
+            view: StandardView::Front,
+            ..Default::default()
+        };
         v.sync(s, false);
         assert!((v.camera.eye_dir() - Vec3::NEG_Y).length() < 1e-5);
         // The user orbits; a sync without a change keeps that.
@@ -215,7 +278,13 @@ mod tests {
     #[test]
     fn drag_directions() {
         let mut v = View3d::default();
-        v.sync(ViewSettings { view: StandardView::Front, ..Default::default() }, true);
+        v.sync(
+            ViewSettings {
+                view: StandardView::Front,
+                ..Default::default()
+            },
+            true,
+        );
         let right = v.camera.right();
         // Dragging right turns the scene to the right: the camera moves to the left.
         v.orbit(Vec2::new(10.0, 0.0));
@@ -230,7 +299,10 @@ mod tests {
         v.pan(Vec2::new(0.0, 0.0), 500.0);
         assert_eq!(v.camera.target, t);
         v.pan(Vec2::new(40.0, 0.0), 500.0);
-        assert!((v.camera.target - t).dot(v.camera.right()) < 0.0, "the scene follows the drag to the right");
+        assert!(
+            (v.camera.target - t).dot(v.camera.right()) < 0.0,
+            "the scene follows the drag to the right"
+        );
     }
 
     #[test]
@@ -270,7 +342,13 @@ mod tests {
     fn picking_goes_through_the_core_ray_test() {
         let (scene, id, _) = scene_with_square();
         let mut v = View3d::default();
-        v.sync(ViewSettings { view: StandardView::Right, ..Default::default() }, true);
+        v.sync(
+            ViewSettings {
+                view: StandardView::Right,
+                ..Default::default()
+            },
+            true,
+        );
         v.fit(scene.bounds, 4.0 / 3.0);
         // Right view: the slab is a thin strip in the middle of the screen.
         let size = Vec2::new(400.0, 300.0);

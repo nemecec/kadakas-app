@@ -23,14 +23,23 @@ pub struct LineVertex {
 pub fn surface_vertices(scene: &Scene) -> Vec<SurfaceVertex> {
     let m = &scene.mesh;
     (0..m.positions.len())
-        .map(|i| SurfaceVertex { pos: m.positions[i].to_array(), normal: m.normals[i].to_array(), color: m.colors[i] })
+        .map(|i| SurfaceVertex {
+            pos: m.positions[i].to_array(),
+            normal: m.normals[i].to_array(),
+            color: m.colors[i],
+        })
         .collect()
 }
 
 /// The end points of the scene's line segments.
 pub fn line_vertices(scene: &Scene) -> Vec<LineVertex> {
     let l = &scene.lines;
-    (0..l.positions.len()).map(|i| LineVertex { pos: l.positions[i].to_array(), color: l.colors[i / 2] }).collect()
+    (0..l.positions.len())
+        .map(|i| LineVertex {
+            pos: l.positions[i].to_array(),
+            color: l.colors[i / 2],
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -45,10 +54,16 @@ mod tests {
     fn vertex_conversion_matches_the_scene() {
         let mut ed = Editor::default();
         ed.execute(&Command::AddObject {
-            shape: Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(100.0) },
+            shape: Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::splat(100.0),
+            },
             layer: None,
             class: None,
-            attrs: Attributes { fill: Some(Color([1, 2, 3, 255])), ..Default::default() },
+            attrs: Attributes {
+                fill: Some(Color([1, 2, 3, 255])),
+                ..Default::default()
+            },
         })
         .unwrap();
         let scene = build(ed.doc());

@@ -22,9 +22,17 @@ impl<W: Write> Exporter<'_, W> {
 
     /// The class and predefined type for an object kind. A class that the writer cannot make
     /// falls back to the default of the kind, with a note.
-    pub(super) fn resolve_class(&mut self, kind: &str, mapped: &Mapped) -> (&'static str, Option<String>, Option<String>) {
+    pub(super) fn resolve_class(
+        &mut self,
+        kind: &str,
+        mapped: &Mapped,
+    ) -> (&'static str, Option<String>, Option<String>) {
         let (default, default_pre) = default_class(kind);
-        let entry = |name: &str| CLASSES.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(name.trim()));
+        let entry = |name: &str| {
+            CLASSES
+                .iter()
+                .find(|(n, _, _)| n.eq_ignore_ascii_case(name.trim()))
+        };
         let default_entry = entry(default).expect("default classes are in the table");
         let (class, wanted_default) = match mapped.ifc_class.as_deref() {
             None => (default_entry, true),
@@ -38,22 +46,45 @@ impl<W: Write> Exporter<'_, W> {
                 }
             },
         };
-        let fallback = if wanted_default { default_pre.map(String::from) } else { None };
+        let fallback = if wanted_default {
+            default_pre.map(String::from)
+        } else {
+            None
+        };
         let mut object_type = None;
-        let pre = match mapped.predefined_type.as_deref().map(|p| p.trim().to_ascii_uppercase()) {
+        let pre = match mapped
+            .predefined_type
+            .as_deref()
+            .map(|p| p.trim().to_ascii_uppercase())
+        {
             None => fallback,
             Some(p) if class.2.contains(&p.as_str()) => Some(p),
             // The Data Manager template says VEGETATION, which IFC4x3 knows. IFC4 writes it as a user-defined type.
-            Some(p) if p == "VEGETATION" && class.0 == "IfcGeographicElement" => Some("USERDEFINED".to_string()),
+            Some(p) if p == "VEGETATION" && class.0 == "IfcGeographicElement" => {
+                Some("USERDEFINED".to_string())
+            }
             Some(p) => {
-                self.note(format!("{p} is not a predefined type of {}: used the default", class.0));
+                self.note(format!(
+                    "{p} is not a predefined type of {}: used the default",
+                    class.0
+                ));
                 fallback
             }
         };
         if pre.as_deref() == Some("USERDEFINED") {
-            let wanted = mapped.predefined_type.as_deref().map(|p| p.trim().to_ascii_uppercase()).filter(|p| p != "USERDEFINED");
+            let wanted = mapped
+                .predefined_type
+                .as_deref()
+                .map(|p| p.trim().to_ascii_uppercase())
+                .filter(|p| p != "USERDEFINED");
             let vegetation = kind == "plant" || kind == "existing_tree" || kind == "landscape_area";
-            object_type = Some(wanted.unwrap_or_else(|| if vegetation { "VEGETATION".to_string() } else { kind.to_ascii_uppercase() }));
+            object_type = Some(wanted.unwrap_or_else(|| {
+                if vegetation {
+                    "VEGETATION".to_string()
+                } else {
+                    kind.to_ascii_uppercase()
+                }
+            }));
         }
         (class.1, pre, object_type)
     }
@@ -72,7 +103,14 @@ impl<W: Write> Exporter<'_, W> {
         let shape = if e.body.reps.is_empty() {
             Value::Null
         } else {
-            Value::Ref(self.ent("IFCPRODUCTDEFINITIONSHAPE", vec![Value::Null, Value::Null, Value::refs(e.body.reps.iter().copied())])?)
+            Value::Ref(self.ent(
+                "IFCPRODUCTDEFINITIONSHAPE",
+                vec![
+                    Value::Null,
+                    Value::Null,
+                    Value::refs(e.body.reps.iter().copied()),
+                ],
+            )?)
         };
         let id = self.ent(
             class,
@@ -110,19 +148,32 @@ impl<W: Write> Exporter<'_, W> {
             self.note(format!("data map, object {}: {p}", obj.id));
         }
         for (set, props) in &mapped.properties {
-            let list: Vec<(String, Value)> = props.iter().map(|(n, v)| (n.clone(), Self::nominal(v))).collect();
+            let list: Vec<(String, Value)> = props
+                .iter()
+                .map(|(n, v)| (n.clone(), Self::nominal(v)))
+                .collect();
             self.pset(set, list);
         }
         for name in obj.data.keys() {
-            let Some(rec) = record::values(obj, name) else { continue };
-            let list: Vec<(String, Value)> = record::fields_only(rec).iter().map(|(k, v)| (k.clone(), json_nominal(v))).collect();
+            let Some(rec) = record::values(obj, name) else {
+                continue;
+            };
+            let list: Vec<(String, Value)> = record::fields_only(rec)
+                .iter()
+                .map(|(k, v)| (k.clone(), json_nominal(v)))
+                .collect();
             self.pset(&format!("ePset_{name}"), list);
         }
         self.write_psets(obj)
     }
 
     /// An `IfcElementQuantity`. Each quantity is a kind (`length`, `area`, `volume`, `count`), a name and a value.
-    pub(super) fn quantities(&mut self, obj: &Object, name: &str, list: &[(&str, String, f64)]) -> R<()> {
+    pub(super) fn quantities(
+        &mut self,
+        obj: &Object,
+        name: &str,
+        list: &[(&str, String, f64)],
+    ) -> R<()> {
         if list.is_empty() {
             return Ok(());
         }
@@ -134,10 +185,27 @@ impl<W: Write> Exporter<'_, W> {
                 "volume" => "IFCQUANTITYVOLUME",
                 _ => "IFCQUANTITYCOUNT",
             };
-            let value = if *kind == "count" { Value::Real(v.max(0.0).round()) } else { Value::Real(r4(*v)) };
-            ids.push(self.ent(entity, vec![Value::s(n), Value::Null, Value::Null, value, Value::Null])?);
+            let value = if *kind == "count" {
+                Value::Real(v.max(0.0).round())
+            } else {
+                Value::Real(r4(*v))
+            };
+            ids.push(self.ent(
+                entity,
+                vec![Value::s(n), Value::Null, Value::Null, value, Value::Null],
+            )?);
         }
-        let q = self.ent("IFCELEMENTQUANTITY", vec![self.guid(&format!("qto:{name}"), obj.id.0), Value::Null, Value::s(name), Value::Null, Value::Null, Value::refs(ids)])?;
+        let q = self.ent(
+            "IFCELEMENTQUANTITY",
+            vec![
+                self.guid(&format!("qto:{name}"), obj.id.0),
+                Value::Null,
+                Value::s(name),
+                Value::Null,
+                Value::Null,
+                Value::refs(ids),
+            ],
+        )?;
         self.define_by(obj, &format!("qto:{name}"), q)
     }
 
@@ -145,29 +213,81 @@ impl<W: Write> Exporter<'_, W> {
     pub(super) fn flush(&mut self) -> R<()> {
         let contained = std::mem::take(&mut self.contained);
         for (key, elements) in contained {
-            let container = if key == 0 { self.site } else { self.storeys[&LayerId(key)].0 };
+            let container = if key == 0 {
+                self.site
+            } else {
+                self.storeys[&LayerId(key)].0
+            };
             self.ent(
                 "IFCRELCONTAINEDINSPATIALSTRUCTURE",
-                vec![self.guid("rel_contained", key), Value::Null, Value::Null, Value::Null, Value::refs(elements), Value::Ref(container)],
+                vec![
+                    self.guid("rel_contained", key),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::refs(elements),
+                    Value::Ref(container),
+                ],
             )?;
         }
         if let Some((building, _)) = self.building {
-            self.ent("IFCRELAGGREGATES", vec![self.guid("rel_site", 0), Value::Null, Value::Null, Value::Null, Value::Ref(self.site), Value::refs([building])])?;
+            self.ent(
+                "IFCRELAGGREGATES",
+                vec![
+                    self.guid("rel_site", 0),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Ref(self.site),
+                    Value::refs([building]),
+                ],
+            )?;
             let storeys: Vec<u64> = self.storeys.values().map(|s| s.0).collect();
-            self.ent("IFCRELAGGREGATES", vec![self.guid("rel_building", 0), Value::Null, Value::Null, Value::Null, Value::Ref(building), Value::refs(storeys)])?;
+            self.ent(
+                "IFCRELAGGREGATES",
+                vec![
+                    self.guid("rel_building", 0),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Ref(building),
+                    Value::refs(storeys),
+                ],
+            )?;
         }
         let sets = std::mem::take(&mut self.layer_sets);
         for (key, (target, elements)) in sets {
             let tag = format!("rel_material:{key}");
-            self.ent("IFCRELASSOCIATESMATERIAL", vec![self.guid(&tag, 0), Value::Null, Value::Null, Value::Null, Value::refs(elements), Value::Ref(target)])?;
+            self.ent(
+                "IFCRELASSOCIATESMATERIAL",
+                vec![
+                    self.guid(&tag, 0),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::refs(elements),
+                    Value::Ref(target),
+                ],
+            )?;
         }
         let layers = std::mem::take(&mut self.class_layers);
         for (class, reps) in layers {
             if class == NONE_CLASS || reps.is_empty() {
                 continue;
             }
-            let name = self.doc.class(class).map_or_else(|| format!("Class {class}"), |c: &Class| c.name.clone());
-            self.ent("IFCPRESENTATIONLAYERASSIGNMENT", vec![Value::s(name.trim()), Value::Null, Value::refs(reps), Value::s(class.0.to_string())])?;
+            let name = self
+                .doc
+                .class(class)
+                .map_or_else(|| format!("Class {class}"), |c: &Class| c.name.clone());
+            self.ent(
+                "IFCPRESENTATIONLAYERASSIGNMENT",
+                vec![
+                    Value::s(name.trim()),
+                    Value::Null,
+                    Value::refs(reps),
+                    Value::s(class.0.to_string()),
+                ],
+            )?;
         }
         Ok(())
     }
@@ -179,7 +299,10 @@ fn json_nominal(v: &Json) -> Value {
         Json::Bool(b) => Value::typed("IFCBOOLEAN", Value::Bool(*b)),
         Json::Number(n) => match n.as_i64() {
             Some(i) => Value::typed("IFCINTEGER", Value::Int(i)),
-            None => Value::typed("IFCREAL", Value::Real(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0))),
+            None => Value::typed(
+                "IFCREAL",
+                Value::Real(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0)),
+            ),
         },
         Json::String(s) => Value::typed("IFCLABEL", Value::s(s)),
         other => Value::typed("IFCTEXT", Value::s(other.to_string())),

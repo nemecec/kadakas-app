@@ -20,6 +20,8 @@ pub const MAX_SEGMENTS: usize = 200_000;
 pub const MAX_LINES: usize = 100_000;
 /// Most cells of one tile grid.
 pub const MAX_CELLS: usize = 40_000;
+/// Most work (edges x cells x pieces) for one tile fill.
+pub const MAX_TILE_WORK: usize = 200_000_000;
 
 /// One piece of a pattern, with the color and weight the pattern asks for (none: the pen of the object).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,35 +33,75 @@ pub struct PatternSeg {
     pub weight: Option<f64>,
 }
 
-/// The parameters where an infinite line crosses the rings, as pairs (enter, leave).
-/// The line is `o + t * u`. The rings fill by the even-odd rule.
-fn line_intervals(o: DVec2, u: DVec2, rings: &[Vec<DVec2>]) -> Vec<(f64, f64)> {
+/// The most crossings between the lines of one hatch family and the edges of the rings. A hatch that
+/// would cross more is made coarser (the spacing doubles) until it fits, so a huge outline stays fast.
+pub const MAX_CROSSINGS: usize = 1_500_000;
+
+/// For each line `k0..=k1` of a family (`d = k * s` from the origin along the normal `n`), the sorted
+/// parameters `t` along `u` where it crosses the rings. Each edge is put only on the lines it crosses,
+/// so the cost is the number of edges plus the number of crossings, not edges times lines.
+/// Returns `None` if there are more than `MAX_CROSSINGS`.
+fn family_crossings(
+    rings: &[Vec<DVec2>],
+    origin: DVec2,
+    u: DVec2,
+    s: f64,
+    k0: i64,
+    k1: i64,
+) -> Option<Vec<Vec<f64>>> {
     let n = DVec2::new(-u.y, u.x);
-    let mut ts: Vec<f64> = Vec::new();
+    let mut ts: Vec<Vec<f64>> = vec![Vec::new(); (k1 - k0 + 1) as usize];
+    let mut total = 0usize;
     for ring in rings {
         let m = ring.len();
         if m < 3 {
             continue;
         }
         for i in 0..m {
-            let (a, b) = (ring[i], ring[(i + 1) % m]);
-            let (da, db) = (n.dot(a - o), n.dot(b - o));
-            // Half open: a vertex on the line counts for one of its two edges.
-            if (da <= 0.0 && db > 0.0) || (db <= 0.0 && da > 0.0) {
-                let q = a + (b - a) * (da / (da - db));
-                ts.push(u.dot(q - o));
+            let (a, b) = (ring[i] - origin, ring[(i + 1) % m] - origin);
+            let (da, db) = (n.dot(a), n.dot(b));
+            let (lo, hi) = (da.min(db), da.max(db));
+            if lo >= hi {
+                continue;
+            }
+            // Half open, as for a vertex that lies on a line: lo <= d < hi.
+            let first = ((lo / s).ceil() as i64).max(k0);
+            let last = (((hi / s).ceil() as i64) - 1).min(k1);
+            if last < first {
+                continue;
+            }
+            total += (last - first + 1) as usize;
+            if total > MAX_CROSSINGS {
+                return None;
+            }
+            let (ua, ub) = (u.dot(a), u.dot(b));
+            for k in first..=last {
+                let f = (k as f64 * s - da) / (db - da);
+                ts[(k - k0) as usize].push(ua + f * (ub - ua));
             }
         }
     }
-    ts.sort_by(f64::total_cmp);
-    ts.chunks_exact(2).map(|c| (c[0], c[1])).filter(|(a, b)| b > a).collect()
+    for line in &mut ts {
+        line.sort_by(f64::total_cmp);
+    }
+    Some(ts)
 }
 
 /// The pieces of `[t0, t1]` that the pattern (dash, gap, dash, ...) draws. The pattern is at `phase`
 /// (a distance into its period) at `t0`. At most `budget` pieces are added.
-fn dash_pieces(t0: f64, t1: f64, pattern: &[f64], phase: f64, out: &mut Vec<(f64, f64)>, budget: &mut usize) {
+fn dash_pieces(
+    t0: f64,
+    t1: f64,
+    pattern: &[f64],
+    phase: f64,
+    out: &mut Vec<(f64, f64)>,
+    budget: &mut usize,
+) {
     let period: f64 = pattern.iter().sum();
-    if pattern.is_empty() || period.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !phase.is_finite() {
+    if pattern.is_empty()
+        || period.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        || !phase.is_finite()
+    {
         if *budget > 0 {
             *budget -= 1;
             out.push((t0, t1));
@@ -118,11 +160,13 @@ fn bbox(rings: &[Vec<DVec2>]) -> Option<(DVec2, DVec2)> {
 /// The lines of a hatch inside the rings.
 pub fn hatch_segments(def: &HatchDef, rings: &[Vec<DVec2>], scale: f64) -> Vec<PatternSeg> {
     let mut out = Vec::new();
-    let Some((lo, hi)) = bbox(rings) else { return out };
+    let Some((lo, hi)) = bbox(rings) else {
+        return out;
+    };
     let f = def.units.factor(scale);
     let mut budget = MAX_SEGMENTS;
     for line in &def.lines {
-        let spacing = line.spacing * f;
+        let mut spacing = line.spacing * f;
         if !(spacing.is_finite() && spacing > 0.0) {
             continue;
         }
@@ -131,22 +175,54 @@ pub fn hatch_segments(def: &HatchDef, rings: &[Vec<DVec2>], scale: f64) -> Vec<P
         let n = DVec2::new(-u.y, u.x);
         let origin = line.origin * f;
         let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-        let (dmin, dmax) = corners.iter().map(|c| n.dot(*c - origin)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), d| (a.min(d), b.max(d)));
-        let (k0, k1) = ((dmin / spacing).ceil(), (dmax / spacing).floor());
-        if !(k0.is_finite() && k1.is_finite()) || k1 < k0 || (k1 - k0) as usize >= MAX_LINES {
-            continue;
+        let (dmin, dmax) = corners
+            .iter()
+            .map(|c| n.dot(*c - origin))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), d| {
+                (a.min(d), b.max(d))
+            });
+        // A hatch that is too dense, or crosses too many edges, is made coarser until it fits.
+        let mut found = None;
+        for _ in 0..16 {
+            let (k0, k1) = ((dmin / spacing).ceil(), (dmax / spacing).floor());
+            if !(k0.is_finite() && k1.is_finite()) || k1 < k0 {
+                break;
+            }
+            if (k1 - k0) as usize >= MAX_LINES {
+                spacing *= 2.0;
+                continue;
+            }
+            match family_crossings(rings, origin, u, spacing, k0 as i64, k1 as i64) {
+                Some(ts) => {
+                    found = Some((k0 as i64, ts));
+                    break;
+                }
+                None => spacing *= 2.0,
+            }
         }
+        let Some((k0, crossings)) = found else {
+            continue;
+        };
         let dash = dash_in(&line.dash, f);
-        let (k0, k1) = (k0 as i64, k1 as i64);
-        for k in k0..=k1 {
+        for (j, ts) in crossings.iter().enumerate() {
+            let k = k0 + j as i64;
             let p0 = origin + n * (k as f64 * spacing);
             let phase = k as f64 * line.offset * f;
-            for (t0, t1) in line_intervals(p0, u, rings) {
+            for pair in ts.chunks_exact(2) {
+                let (t0, t1) = (pair[0], pair[1]);
+                if t1 <= t0 {
+                    continue;
+                }
                 let mut pieces = Vec::new();
                 // The pattern is at its start at the origin of the line, then moves by the offset line by line.
                 dash_pieces(t0, t1, &dash, t0 - phase, &mut pieces, &mut budget);
                 for (s0, s1) in pieces {
-                    out.push(PatternSeg { a: p0 + u * s0, b: p0 + u * s1, color: line.color, weight: line.weight });
+                    out.push(PatternSeg {
+                        a: p0 + u * s0,
+                        b: p0 + u * s1,
+                        color: line.color,
+                        weight: line.weight,
+                    });
                 }
             }
             if budget == 0 {
@@ -158,7 +234,12 @@ pub fn hatch_segments(def: &HatchDef, rings: &[Vec<DVec2>], scale: f64) -> Vec<P
 }
 
 fn inside(p: DVec2, rings: &[Vec<DVec2>]) -> bool {
-    rings.iter().filter(|r| r.len() >= 3 && point_in_polygon(p, r)).count() % 2 == 1
+    rings
+        .iter()
+        .filter(|r| r.len() >= 3 && point_in_polygon(p, r))
+        .count()
+        % 2
+        == 1
 }
 
 /// The parts of the segment `a`-`b` that lie inside the rings.
@@ -203,7 +284,12 @@ pub fn clip_segment(a: DVec2, b: DVec2, rings: &[Vec<DVec2>]) -> Vec<[DVec2; 2]>
 }
 
 /// The parts of a polyline that lie inside the rings.
-pub fn clip_polyline(points: &[DVec2], closed: bool, rings: &[Vec<DVec2>], out: &mut Vec<[DVec2; 2]>) {
+pub fn clip_polyline(
+    points: &[DVec2],
+    closed: bool,
+    rings: &[Vec<DVec2>],
+    out: &mut Vec<[DVec2; 2]>,
+) {
     let n = points.len();
     let segs = if closed { n } else { n.saturating_sub(1) };
     for i in 0..segs {
@@ -213,26 +299,53 @@ pub fn clip_polyline(points: &[DVec2], closed: bool, rings: &[Vec<DVec2>], out: 
 
 /// The repeated symbol of a tile inside the rings. The geometry comes from the 2D components of
 /// the symbol. A missing symbol gives nothing.
-pub fn tile_segments(res: &Resources, def: &TileDef, rings: &[Vec<DVec2>], scale: f64) -> Vec<PatternSeg> {
+pub fn tile_segments(
+    res: &Resources,
+    def: &TileDef,
+    rings: &[Vec<DVec2>],
+    scale: f64,
+) -> Vec<PatternSeg> {
     let mut out = Vec::new();
-    let Some((lo, hi)) = bbox(rings) else { return out };
+    let Some((lo, hi)) = bbox(rings) else {
+        return out;
+    };
     let f = def.units.factor(scale);
     let polys = crate::symbols::symbol_polylines(res, def.symbol, def.scale * f);
     if polys.is_empty() {
         return out;
     }
     // How far the symbol reaches from its insertion point.
-    let reach = polys.iter().flat_map(|(p, _)| p.iter()).fold(0.0f64, |m, p| m.max(p.length()));
+    let reach = polys
+        .iter()
+        .flat_map(|(p, _)| p.iter())
+        .fold(0.0f64, |m, p| m.max(p.length()));
     let (w, h) = (def.width * f, def.height * f);
     let rot = DAffine2::from_angle(def.angle.to_radians());
     let back = rot.inverse();
     // The area in grid coordinates.
-    let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)].map(|c| back.transform_point2(c));
-    let (glo, ghi) = corners.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(a, b), c| (a.min(*c), b.max(*c)));
+    let corners =
+        [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)].map(|c| back.transform_point2(c));
+    let (glo, ghi) = corners.iter().fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(a, b), c| (a.min(*c), b.max(*c)),
+    );
     let shift = def.row_shift * f;
-    let (r0, r1) = (((glo.y - reach) / h).floor() as i64, ((ghi.y + reach) / h).ceil() as i64);
-    let (c0, c1) = (((glo.x - reach - shift.abs()) / w).floor() as i64, ((ghi.x + reach + shift.abs()) / w).ceil() as i64);
+    let (r0, r1) = (
+        ((glo.y - reach) / h).floor() as i64,
+        ((ghi.y + reach) / h).ceil() as i64,
+    );
+    let (c0, c1) = (
+        ((glo.x - reach - shift.abs()) / w).floor() as i64,
+        ((ghi.x + reach + shift.abs()) / w).ceil() as i64,
+    );
     if (r1 - r0 + 1).saturating_mul(c1 - c0 + 1) as usize > MAX_CELLS || !(w > 0.0 && h > 0.0) {
+        return out;
+    }
+    // Clipping costs the edges of the rings for every piece of the symbol in every cell. A tile that
+    // would cost too much is left out (it would be too small to see at that size anyway).
+    let edges: usize = rings.iter().map(Vec::len).sum();
+    let cells = ((r1 - r0 + 1) * (c1 - c0 + 1)) as usize;
+    if edges.saturating_mul(cells).saturating_mul(polys.len()) > MAX_TILE_WORK {
         return out;
     }
     let mut budget = MAX_SEGMENTS;
@@ -242,12 +355,19 @@ pub fn tile_segments(res: &Resources, def: &TileDef, rings: &[Vec<DVec2>], scale
         for c in c0..=c1 {
             let center = rot.transform_point2(DVec2::new(c as f64 * w + row_shift, r as f64 * h));
             // Skip cells whose symbol cannot touch the shape.
-            if center.x + reach < lo.x || center.x - reach > hi.x || center.y + reach < lo.y || center.y - reach > hi.y {
+            if center.x + reach < lo.x
+                || center.x - reach > hi.x
+                || center.y + reach < lo.y
+                || center.y - reach > hi.y
+            {
                 continue;
             }
             pieces.clear();
             for (poly, closed) in &polys {
-                let moved: Vec<DVec2> = poly.iter().map(|p| center + rot.transform_vector2(*p)).collect();
+                let moved: Vec<DVec2> = poly
+                    .iter()
+                    .map(|p| center + rot.transform_vector2(*p))
+                    .collect();
                 clip_polyline(&moved, *closed, rings, &mut pieces);
             }
             for s in &pieces {
@@ -255,7 +375,12 @@ pub fn tile_segments(res: &Resources, def: &TileDef, rings: &[Vec<DVec2>], scale
                     return out;
                 }
                 budget -= 1;
-                out.push(PatternSeg { a: s[0], b: s[1], color: None, weight: None });
+                out.push(PatternSeg {
+                    a: s[0],
+                    b: s[1],
+                    color: None,
+                    weight: None,
+                });
             }
         }
     }
@@ -263,7 +388,12 @@ pub fn tile_segments(res: &Resources, def: &TileDef, rings: &[Vec<DVec2>], scale
 }
 
 /// What a fill pattern draws in the rings. A hatch or a tile gives lines; any other ID gives nothing.
-pub fn fill_segments(res: &Resources, pattern: ResourceId, rings: &[Vec<DVec2>], scale: f64) -> Vec<PatternSeg> {
+pub fn fill_segments(
+    res: &Resources,
+    pattern: ResourceId,
+    rings: &[Vec<DVec2>],
+    scale: f64,
+) -> Vec<PatternSeg> {
     if let Some(h) = res.hatch(pattern) {
         hatch_segments(h, rings, scale)
     } else if let Some(t) = res.tile(pattern) {
@@ -299,13 +429,23 @@ fn point_at(points: &[DVec2], cum: &[f64], s: f64) -> (DVec2, DVec2) {
     };
     let (a, b) = (points[i], points[i + 1]);
     let len = cum[i + 1] - cum[i];
-    let t = if len > 0.0 { ((s - cum[i]) / len).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if len > 0.0 {
+        ((s - cum[i]) / len).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     (a.lerp(b, t), (b - a).normalize_or_zero())
 }
 
 /// Applies a line type to a polyline (already flattened). A line that is too long for the pattern
 /// (more than `MAX_SEGMENTS` repeats) stays solid.
-pub fn line_type_geometry(res: &Resources, def: &LineTypeDef, points: &[DVec2], closed: bool, scale: f64) -> LineTypeGeometry {
+pub fn line_type_geometry(
+    res: &Resources,
+    def: &LineTypeDef,
+    points: &[DVec2],
+    closed: bool,
+    scale: f64,
+) -> LineTypeGeometry {
     let mut pts: Vec<DVec2> = points.iter().copied().filter(|p| p.is_finite()).collect();
     if closed && pts.len() > 1 {
         pts.push(pts[0]);
@@ -321,8 +461,13 @@ pub fn line_type_geometry(res: &Resources, def: &LineTypeDef, points: &[DVec2], 
     }
     let total = *cum.last().expect("not empty");
     let period = def.period() * f;
-    if period.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || total / period > MAX_SEGMENTS as f64 / def.elements.len().max(1) as f64 {
-        return LineTypeGeometry { strokes: vec![pts], marks: Vec::new() };
+    if period.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        || total / period > MAX_SEGMENTS as f64 / def.elements.len().max(1) as f64
+    {
+        return LineTypeGeometry {
+            strokes: vec![pts],
+            marks: Vec::new(),
+        };
     }
     let mut g = LineTypeGeometry::default();
     let mut s = 0.0;
@@ -333,17 +478,31 @@ pub fn line_type_geometry(res: &Resources, def: &LineTypeDef, points: &[DVec2], 
                     let end = (s + length * f).min(total);
                     if end > s {
                         let mut stroke = vec![point_at(&pts, &cum, s).0];
-                        stroke.extend(pts.iter().zip(&cum).filter(|(_, c)| **c > s && **c < end).map(|(p, _)| *p));
+                        stroke.extend(
+                            pts.iter()
+                                .zip(&cum)
+                                .filter(|(_, c)| **c > s && **c < end)
+                                .map(|(p, _)| *p),
+                        );
                         stroke.push(point_at(&pts, &cum, end).0);
                         g.strokes.push(stroke);
                     }
                     s += length * f;
                 }
                 LineElement::Gap { length } => s += length * f,
-                LineElement::Mark { symbol, scale: k, rotate } => {
+                LineElement::Mark {
+                    symbol,
+                    scale: k,
+                    rotate,
+                } => {
                     if s <= total && res.symbol(*symbol).is_some() {
                         let (at, dir) = point_at(&pts, &cum, s.min(total));
-                        g.marks.push(Mark { at, angle: if *rotate { dir.y.atan2(dir.x) } else { 0.0 }, symbol: *symbol, scale: k * f });
+                        g.marks.push(Mark {
+                            at,
+                            angle: if *rotate { dir.y.atan2(dir.x) } else { 0.0 },
+                            symbol: *symbol,
+                            scale: k * f,
+                        });
                     }
                 }
             }
@@ -371,9 +530,13 @@ pub struct Decor {
 /// The outlines of a shape that can have a fill pattern or a line type, as polylines.
 fn outlines(obj: &Object) -> Vec<(Vec<DVec2>, bool)> {
     match &obj.shape {
-        Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::LandscapeArea { .. } | Shape::Hardscape { .. } => {
-            crate::symbols::shape_polylines(&obj.shape)
-        }
+        Shape::Line { .. }
+        | Shape::Rect { .. }
+        | Shape::Circle { .. }
+        | Shape::Arc { .. }
+        | Shape::Polyline { .. }
+        | Shape::LandscapeArea { .. }
+        | Shape::Hardscape { .. } => crate::symbols::shape_polylines(&obj.shape),
         _ => Vec::new(),
     }
 }
@@ -382,7 +545,9 @@ fn outlines(obj: &Object) -> Vec<(Vec<DVec2>, bool)> {
 /// object (the viewport or the style may have changed them). `scale` is model mm per paper mm.
 /// `None` if the object has neither a pattern nor a line type, or its shape cannot have them.
 pub fn decorate(doc: &Document, obj: &Object, attrs: &Attributes, scale: f64) -> Option<Decor> {
-    if attrs.fill_pattern.is_none() && attrs.line_type.is_none() {
+    if (attrs.fill_pattern.is_none() && attrs.line_type.is_none())
+        || obj.data.contains_key(crate::symbols::NO_PATTERN_KEY)
+    {
         return None;
     }
     let lines = outlines(obj);
@@ -391,11 +556,19 @@ pub fn decorate(doc: &Document, obj: &Object, attrs: &Attributes, scale: f64) ->
     }
     let mut d = Decor::default();
     if let Some(p) = attrs.fill_pattern {
-        let mut rings: Vec<Vec<DVec2>> = lines.iter().filter(|(pts, closed)| *closed && pts.len() >= 3).map(|(pts, _)| pts.clone()).collect();
+        let mut rings: Vec<Vec<DVec2>> = lines
+            .iter()
+            .filter(|(pts, closed)| *closed && pts.len() >= 3)
+            .map(|(pts, _)| pts.clone())
+            .collect();
         if !rings.is_empty()
             && let Some(data) = crate::landscape::data(obj)
         {
-            rings.extend(data.holes.iter().map(|h| crate::curve::flatten(h, true, 0.05)));
+            rings.extend(
+                data.holes
+                    .iter()
+                    .map(|h| crate::curve::flatten(h, true, 0.05)),
+            );
         }
         d.fill = fill_segments(&doc.resources, p, &rings, scale);
     }
@@ -450,7 +623,10 @@ mod tests {
         let segs = hatch_segments(&h, &[square(0.0, 0.0, 100.0)], 100.0);
         // Lines at y = 0, 10, ..., 100: the first and last lie on the boundary (half open rule keeps one).
         assert!((10..=11).contains(&segs.len()), "{}", segs.len());
-        assert!(segs.iter().all(|s| (s.a.distance(s.b) - 100.0).abs() < 1e-9));
+        assert!(
+            segs.iter()
+                .all(|s| (s.a.distance(s.b) - 100.0).abs() < 1e-9)
+        );
     }
 
     #[test]
@@ -462,7 +638,9 @@ mod tests {
         // 2 mm on paper at 1:100 is 200 mm in the model: about 5 lines. 2 mm in the model: about 500.
         assert!((5..=6).contains(&paper.len()), "{}", paper.len());
         assert!((500..=501).contains(&world.len()), "{}", world.len());
-        assert!(scales_with_drawing(PatternUnits::Paper) && !scales_with_drawing(PatternUnits::World));
+        assert!(
+            scales_with_drawing(PatternUnits::Paper) && !scales_with_drawing(PatternUnits::World)
+        );
     }
 
     #[test]
@@ -473,7 +651,10 @@ mod tests {
             let segs = hatch_segments(&h, std::slice::from_ref(&tri), 1.0);
             let covered = total_length(&segs) * 7.0;
             let area = polygon_area(&tri);
-            assert!((covered - area).abs() < 0.01 * area, "angle {angle}: {covered} vs {area}");
+            assert!(
+                (covered - area).abs() < 0.01 * area,
+                "angle {angle}: {covered} vs {area}"
+            );
             // Every piece lies inside the triangle.
             for s in &segs {
                 assert!(point_in_polygon((s.a + s.b) / 2.0, &tri));
@@ -490,50 +671,110 @@ mod tests {
         let covered = total_length(&segs) * 5.0;
         let area = polygon_area(&outer) - polygon_area(&hole);
         assert!((covered - area).abs() < 0.01 * area, "{covered} vs {area}");
-        assert!(segs.iter().all(|s| !point_in_polygon((s.a + s.b) / 2.0, &hole)));
+        assert!(
+            segs.iter()
+                .all(|s| !point_in_polygon((s.a + s.b) / 2.0, &hole))
+        );
     }
 
     #[test]
     fn dashes_and_offsets() {
         let rings = [square(0.0, 0.0, 100.0)];
-        let line = HatchLine { dash: vec![10.0, 10.0], ..HatchLine::solid(0.0, 50.0) };
+        let line = HatchLine {
+            dash: vec![10.0, 10.0],
+            ..HatchLine::solid(0.0, 50.0)
+        };
         let segs = hatch_segments(&hatch(vec![line.clone()], PatternUnits::World), &rings, 1.0);
         // Three lines (0, 50, 100: the top one is dropped by the half open rule), each with 5 dashes.
         let len = total_length(&segs);
-        assert!((len - 2.0 * 50.0 * 1.0 * 1.0 - 0.0).abs() < 1e-6 || (len - 150.0).abs() < 1e-6 || (len - 250.0).abs() < 1e-6, "{len}");
+        assert!(
+            (len - 2.0 * 50.0 * 1.0 * 1.0 - 0.0).abs() < 1e-6
+                || (len - 150.0).abs() < 1e-6
+                || (len - 250.0).abs() < 1e-6,
+            "{len}"
+        );
         // An odd pattern repeats, so dash and gap swap on the second turn: 10 on, 10 off, 10 on... (same as 10, 10).
-        let odd = HatchLine { dash: vec![10.0], ..HatchLine::solid(0.0, 50.0) };
+        let odd = HatchLine {
+            dash: vec![10.0],
+            ..HatchLine::solid(0.0, 50.0)
+        };
         let segs_odd = hatch_segments(&hatch(vec![odd], PatternUnits::World), &rings, 1.0);
         assert!((total_length(&segs_odd) - len).abs() < 1e-6);
         // The offset staggers the dashes of neighboring lines.
-        let staggered = HatchLine { offset: 5.0, ..line };
+        let staggered = HatchLine {
+            offset: 5.0,
+            ..line
+        };
         let s2 = hatch_segments(&hatch(vec![staggered], PatternUnits::World), &rings, 1.0);
-        let starts: Vec<f64> = s2.iter().filter(|s| (s.a.y - 50.0).abs() < 1e-9).map(|s| s.a.x).collect();
-        let base: Vec<f64> = segs.iter().filter(|s| (s.a.y - 50.0).abs() < 1e-9).map(|s| s.a.x).collect();
+        let starts: Vec<f64> = s2
+            .iter()
+            .filter(|s| (s.a.y - 50.0).abs() < 1e-9)
+            .map(|s| s.a.x)
+            .collect();
+        let base: Vec<f64> = segs
+            .iter()
+            .filter(|s| (s.a.y - 50.0).abs() < 1e-9)
+            .map(|s| s.a.x)
+            .collect();
         assert!(!starts.is_empty() && !base.is_empty());
         assert!((starts[0] - base[0]).abs() > 1e-6, "{starts:?} {base:?}");
     }
 
     #[test]
     fn hatch_colors_and_weights_pass_through() {
-        let line = HatchLine { color: Some(Color([1, 2, 3, 255])), weight: Some(0.1), ..HatchLine::solid(0.0, 50.0) };
-        let segs = hatch_segments(&hatch(vec![line], PatternUnits::World), &[square(0.0, 0.0, 100.0)], 1.0);
-        assert!(segs.iter().all(|s| s.color == Some(Color([1, 2, 3, 255])) && s.weight == Some(0.1)));
+        let line = HatchLine {
+            color: Some(Color([1, 2, 3, 255])),
+            weight: Some(0.1),
+            ..HatchLine::solid(0.0, 50.0)
+        };
+        let segs = hatch_segments(
+            &hatch(vec![line], PatternUnits::World),
+            &[square(0.0, 0.0, 100.0)],
+            1.0,
+        );
+        assert!(
+            segs.iter()
+                .all(|s| s.color == Some(Color([1, 2, 3, 255])) && s.weight == Some(0.1))
+        );
         assert_eq!(pen_of(&segs[0], Color::BLACK), Color([1, 2, 3, 255]));
-        let plain = PatternSeg { color: None, ..segs[0] };
+        let plain = PatternSeg {
+            color: None,
+            ..segs[0]
+        };
         assert_eq!(pen_of(&plain, Color::BLACK), Color::BLACK);
     }
 
     #[test]
     fn too_dense_or_bad_input_is_safe() {
         let dense = hatch(vec![HatchLine::solid(0.0, 1e-6)], PatternUnits::World);
-        assert!(hatch_segments(&dense, &[square(0.0, 0.0, 1000.0)], 1.0).is_empty());
+        // Too dense: the spacing grows until it fits, so something is drawn but not a million lines.
+        let coarse = hatch_segments(&dense, &[square(0.0, 0.0, 1000.0)], 1.0);
+        assert!(!coarse.is_empty() && coarse.len() <= MAX_LINES);
         assert!(hatch_segments(&dense, &[], 1.0).is_empty());
-        assert!(hatch_segments(&dense, &[vec![v(f64::NAN, 0.0), v(1.0, 0.0), v(0.0, 1.0)]], 1.0).is_empty());
-        let zero = HatchDef { units: PatternUnits::World, lines: vec![HatchLine { spacing: 0.0, ..HatchLine::solid(0.0, 1.0) }] };
+        assert!(
+            hatch_segments(
+                &dense,
+                &[vec![v(f64::NAN, 0.0), v(1.0, 0.0), v(0.0, 1.0)]],
+                1.0
+            )
+            .is_empty()
+        );
+        let zero = HatchDef {
+            units: PatternUnits::World,
+            lines: vec![HatchLine {
+                spacing: 0.0,
+                ..HatchLine::solid(0.0, 1.0)
+            }],
+        };
         assert!(hatch_segments(&zero, &[square(0.0, 0.0, 10.0)], 1.0).is_empty());
         // Many dashes are cut off at the limit.
-        let many = hatch(vec![HatchLine { dash: vec![0.001, 0.001], ..HatchLine::solid(0.0, 10.0) }], PatternUnits::World);
+        let many = hatch(
+            vec![HatchLine {
+                dash: vec![0.001, 0.001],
+                ..HatchLine::solid(0.0, 10.0)
+            }],
+            PatternUnits::World,
+        );
         let segs = hatch_segments(&many, &[square(0.0, 0.0, 1000.0)], 1.0);
         assert!(segs.len() <= MAX_SEGMENTS);
     }
@@ -541,14 +782,25 @@ mod tests {
     #[test]
     fn clipping_a_segment() {
         let rings = [square(0.0, 0.0, 10.0)];
-        assert_eq!(clip_segment(v(-5.0, 5.0), v(15.0, 5.0), &rings), vec![[v(0.0, 5.0), v(10.0, 5.0)]]);
+        assert_eq!(
+            clip_segment(v(-5.0, 5.0), v(15.0, 5.0), &rings),
+            vec![[v(0.0, 5.0), v(10.0, 5.0)]]
+        );
         assert!(clip_segment(v(-5.0, 20.0), v(15.0, 20.0), &rings).is_empty());
-        assert_eq!(clip_segment(v(2.0, 2.0), v(8.0, 8.0), &rings), vec![[v(2.0, 2.0), v(8.0, 8.0)]]);
+        assert_eq!(
+            clip_segment(v(2.0, 2.0), v(8.0, 8.0), &rings),
+            vec![[v(2.0, 2.0), v(8.0, 8.0)]]
+        );
         // Through a hole: two pieces.
         let with_hole = [square(0.0, 0.0, 10.0), square(4.0, 4.0, 2.0)];
         assert_eq!(clip_segment(v(0.0, 5.0), v(10.0, 5.0), &with_hole).len(), 2);
         let mut out = Vec::new();
-        clip_polyline(&[v(-5.0, 5.0), v(5.0, 5.0), v(5.0, 15.0)], false, &rings, &mut out);
+        clip_polyline(
+            &[v(-5.0, 5.0), v(5.0, 5.0), v(5.0, 15.0)],
+            false,
+            &rings,
+            &mut out,
+        );
         assert_eq!(out.len(), 2);
         clip_polyline(&square(2.0, 2.0, 4.0), true, &rings, &mut out);
         assert_eq!(out.len(), 2 + 4);
@@ -556,37 +808,96 @@ mod tests {
 
     fn with_cross_symbol() -> (Resources, ResourceId) {
         let mut res = Resources::default();
-        let item = |a: DVec2, b: DVec2| SymbolItem { shape: Shape::Line { a, b }, attrs: Attributes::default(), class: None };
-        let def = SymbolDef { insertion: v(0.0, 0.0), items: vec![item(v(-1.0, 0.0), v(1.0, 0.0)), item(v(0.0, -1.0), v(0.0, 1.0))], solids: vec![] };
-        res.push(Resource { id: ResourceId(7), name: "Cross".into(), body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))) });
+        let item = |a: DVec2, b: DVec2| SymbolItem {
+            shape: Shape::Line { a, b },
+            attrs: Attributes::default(),
+            class: None,
+        };
+        let def = SymbolDef {
+            insertion: v(0.0, 0.0),
+            items: vec![
+                item(v(-1.0, 0.0), v(1.0, 0.0)),
+                item(v(0.0, -1.0), v(0.0, 1.0)),
+            ],
+            ..Default::default()
+        };
+        res.push(Resource {
+            id: ResourceId(7),
+            name: "Cross".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))),
+        });
         (res, ResourceId(7))
     }
 
     #[test]
     fn a_tile_repeats_a_symbol_inside_the_shape() {
         let (res, sym) = with_cross_symbol();
-        let def = TileDef { symbol: sym, width: 20.0, height: 20.0, row_shift: 0.0, angle: 0.0, scale: 1.0, units: PatternUnits::World };
+        let def = TileDef {
+            symbol: sym,
+            width: 20.0,
+            height: 20.0,
+            row_shift: 0.0,
+            angle: 0.0,
+            scale: 1.0,
+            units: PatternUnits::World,
+        };
         let ring = square(0.0, 0.0, 100.0);
         let segs = tile_segments(&res, &def, std::slice::from_ref(&ring), 1.0);
         // Cells at 0, 20, ..., 100 in both directions: 36 crosses of 2 lines, those on the edge cut in part.
         assert!(segs.len() >= 50, "{}", segs.len());
-        assert!(segs.iter().all(|s| point_in_polygon((s.a + s.b) / 2.0, &ring) || (s.a + s.b).x / 2.0 <= 100.0 + 1e-9));
-        assert!(segs.iter().all(|s| s.a.min(s.b).cmpge(v(-1e-9, -1e-9)).all() && s.a.max(s.b).cmple(v(100.0 + 1e-9, 100.0 + 1e-9)).all()));
+        assert!(
+            segs.iter()
+                .all(|s| point_in_polygon((s.a + s.b) / 2.0, &ring)
+                    || (s.a + s.b).x / 2.0 <= 100.0 + 1e-9)
+        );
+        assert!(
+            segs.iter()
+                .all(|s| s.a.min(s.b).cmpge(v(-1e-9, -1e-9)).all()
+                    && s.a.max(s.b).cmple(v(100.0 + 1e-9, 100.0 + 1e-9)).all())
+        );
         // A brick shift moves every second row.
-        let brick = TileDef { row_shift: 10.0, ..def.clone() };
+        let brick = TileDef {
+            row_shift: 10.0,
+            ..def.clone()
+        };
         let b = tile_segments(&res, &brick, std::slice::from_ref(&ring), 1.0);
         assert_ne!(segs, b);
         // A turned grid still stays inside.
-        let turned = TileDef { angle: 30.0, ..def.clone() };
+        let turned = TileDef {
+            angle: 30.0,
+            ..def.clone()
+        };
         let t = tile_segments(&res, &turned, std::slice::from_ref(&ring), 1.0);
-        assert!(!t.is_empty() && t.iter().all(|s| s.a.min(s.b).cmpge(v(-1e-6, -1e-6)).all() && s.a.max(s.b).cmple(v(100.0 + 1e-6, 100.0 + 1e-6)).all()));
+        assert!(
+            !t.is_empty()
+                && t.iter().all(|s| s.a.min(s.b).cmpge(v(-1e-6, -1e-6)).all()
+                    && s.a.max(s.b).cmple(v(100.0 + 1e-6, 100.0 + 1e-6)).all())
+        );
         // Paper units follow the scale: 20 mm cells at 1:10 are 200 mm, so the grid has few cells.
-        let paper = TileDef { units: PatternUnits::Paper, ..def.clone() };
+        let paper = TileDef {
+            units: PatternUnits::Paper,
+            ..def.clone()
+        };
         let p = tile_segments(&res, &paper, std::slice::from_ref(&ring), 10.0);
         assert!(p.len() < segs.len());
         // Missing symbol, too many cells, bad rings.
-        assert!(tile_segments(&res, &TileDef { symbol: ResourceId(99), ..def.clone() }, std::slice::from_ref(&ring), 1.0).is_empty());
-        let tiny = TileDef { width: 1e-3, height: 1e-3, ..def.clone() };
+        assert!(
+            tile_segments(
+                &res,
+                &TileDef {
+                    symbol: ResourceId(99),
+                    ..def.clone()
+                },
+                std::slice::from_ref(&ring),
+                1.0
+            )
+            .is_empty()
+        );
+        let tiny = TileDef {
+            width: 1e-3,
+            height: 1e-3,
+            ..def.clone()
+        };
         assert!(tile_segments(&res, &tiny, std::slice::from_ref(&ring), 1.0).is_empty());
         assert!(tile_segments(&res, &def, &[], 1.0).is_empty());
     }
@@ -594,27 +905,51 @@ mod tests {
     #[test]
     fn fill_segments_picks_by_type() {
         let (mut res, sym) = with_cross_symbol();
-        res.push(Resource { id: ResourceId(8), name: "H".into(), body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(hatch(vec![HatchLine::solid(0.0, 10.0)], PatternUnits::World)))) });
+        res.push(Resource {
+            id: ResourceId(8),
+            name: "H".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(hatch(
+                vec![HatchLine::solid(0.0, 10.0)],
+                PatternUnits::World,
+            )))),
+        });
         res.push(Resource {
             id: ResourceId(9),
             name: "T".into(),
-            body: ResourceBody::Graphic(Box::new(GraphicResource::Tile(TileDef { symbol: sym, width: 30.0, height: 30.0, row_shift: 0.0, angle: 0.0, scale: 1.0, units: PatternUnits::World }))),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Tile(TileDef {
+                symbol: sym,
+                width: 30.0,
+                height: 30.0,
+                row_shift: 0.0,
+                angle: 0.0,
+                scale: 1.0,
+                units: PatternUnits::World,
+            }))),
         });
         let ring = [square(0.0, 0.0, 100.0)];
         assert!(!fill_segments(&res, ResourceId(8), &ring, 1.0).is_empty());
         assert!(!fill_segments(&res, ResourceId(9), &ring, 1.0).is_empty());
-        assert!(fill_segments(&res, sym, &ring, 1.0).is_empty(), "a symbol is not a pattern");
+        assert!(
+            fill_segments(&res, sym, &ring, 1.0).is_empty(),
+            "a symbol is not a pattern"
+        );
         assert!(fill_segments(&res, ResourceId(1234), &ring, 1.0).is_empty());
     }
 
     fn line_type(elements: Vec<LineElement>) -> LineTypeDef {
-        LineTypeDef { units: PatternUnits::World, elements }
+        LineTypeDef {
+            units: PatternUnits::World,
+            elements,
+        }
     }
 
     #[test]
     fn dashed_lines() {
         let res = Resources::default();
-        let lt = line_type(vec![LineElement::Dash { length: 10.0 }, LineElement::Gap { length: 5.0 }]);
+        let lt = line_type(vec![
+            LineElement::Dash { length: 10.0 },
+            LineElement::Gap { length: 5.0 },
+        ]);
         let g = line_type_geometry(&res, &lt, &[v(0.0, 0.0), v(100.0, 0.0)], false, 1.0);
         // 100 = 6 x 15 + 10: seven dashes, the last one is whole.
         assert_eq!(g.strokes.len(), 7);
@@ -625,14 +960,27 @@ mod tests {
         let g = line_type_geometry(&res, &lt, &[v(0.0, 0.0), v(95.0, 0.0)], false, 1.0);
         assert_eq!(g.strokes.last().unwrap().last().unwrap(), &v(95.0, 0.0));
         // A dash bends around a corner.
-        let g = line_type_geometry(&res, &lt, &[v(0.0, 0.0), v(8.0, 0.0), v(8.0, 20.0)], false, 1.0);
+        let g = line_type_geometry(
+            &res,
+            &lt,
+            &[v(0.0, 0.0), v(8.0, 0.0), v(8.0, 20.0)],
+            false,
+            1.0,
+        );
         assert_eq!(g.strokes[0], vec![v(0.0, 0.0), v(8.0, 0.0), v(8.0, 2.0)]);
         // A closed line returns to its start.
         let g = line_type_geometry(&res, &lt, &square(0.0, 0.0, 30.0), true, 1.0);
-        let len: f64 = g.strokes.iter().map(|s| s.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>()).sum();
+        let len: f64 = g
+            .strokes
+            .iter()
+            .map(|s| s.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>())
+            .sum();
         assert!((len - 80.0).abs() < 1e-6, "{len}");
         // Paper units follow the scale.
-        let paper = LineTypeDef { units: PatternUnits::Paper, ..lt.clone() };
+        let paper = LineTypeDef {
+            units: PatternUnits::Paper,
+            ..lt.clone()
+        };
         let g = line_type_geometry(&res, &paper, &[v(0.0, 0.0), v(1000.0, 0.0)], false, 10.0);
         assert_eq!(g.strokes[0], vec![v(0.0, 0.0), v(100.0, 0.0)]);
     }
@@ -640,64 +988,233 @@ mod tests {
     #[test]
     fn marks_sit_on_the_line() {
         let (res, sym) = with_cross_symbol();
-        let lt = line_type(vec![LineElement::Dash { length: 20.0 }, LineElement::Mark { symbol: sym, scale: 2.0, rotate: true }, LineElement::Gap { length: 10.0 }]);
+        let lt = line_type(vec![
+            LineElement::Dash { length: 20.0 },
+            LineElement::Mark {
+                symbol: sym,
+                scale: 2.0,
+                rotate: true,
+            },
+            LineElement::Gap { length: 10.0 },
+        ]);
         let g = line_type_geometry(&res, &lt, &[v(0.0, 0.0), v(0.0, 100.0)], false, 1.0);
         assert!(!g.marks.is_empty());
-        assert!(g.marks.iter().all(|m| m.at.x == 0.0 && (m.angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9 && m.scale == 2.0 && m.symbol == sym));
+        assert!(g.marks.iter().all(|m| m.at.x == 0.0
+            && (m.angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9
+            && m.scale == 2.0
+            && m.symbol == sym));
         assert_eq!(g.marks[0].at, v(0.0, 20.0));
-        let fixed = line_type(vec![LineElement::Mark { symbol: sym, scale: 1.0, rotate: false }, LineElement::Gap { length: 25.0 }]);
+        let fixed = line_type(vec![
+            LineElement::Mark {
+                symbol: sym,
+                scale: 1.0,
+                rotate: false,
+            },
+            LineElement::Gap { length: 25.0 },
+        ]);
         let g = line_type_geometry(&res, &fixed, &[v(0.0, 0.0), v(0.0, 100.0)], false, 1.0);
         assert!(g.marks.iter().all(|m| m.angle == 0.0));
         assert_eq!(g.marks.len(), 4);
         // A mark of a symbol that is gone is left out.
-        let gone = line_type(vec![LineElement::Mark { symbol: ResourceId(404), scale: 1.0, rotate: true }, LineElement::Gap { length: 25.0 }]);
-        assert!(line_type_geometry(&res, &gone, &[v(0.0, 0.0), v(0.0, 100.0)], false, 1.0).marks.is_empty());
+        let gone = line_type(vec![
+            LineElement::Mark {
+                symbol: ResourceId(404),
+                scale: 1.0,
+                rotate: true,
+            },
+            LineElement::Gap { length: 25.0 },
+        ]);
+        assert!(
+            line_type_geometry(&res, &gone, &[v(0.0, 0.0), v(0.0, 100.0)], false, 1.0)
+                .marks
+                .is_empty()
+        );
     }
 
     #[test]
     fn dense_or_degenerate_lines_stay_solid_or_empty() {
         let res = Resources::default();
-        let lt = line_type(vec![LineElement::Dash { length: 1e-4 }, LineElement::Gap { length: 1e-4 }]);
+        let lt = line_type(vec![
+            LineElement::Dash { length: 1e-4 },
+            LineElement::Gap { length: 1e-4 },
+        ]);
         let g = line_type_geometry(&res, &lt, &[v(0.0, 0.0), v(1e6, 0.0)], false, 1.0);
         assert_eq!(g.strokes, vec![vec![v(0.0, 0.0), v(1e6, 0.0)]]);
-        assert_eq!(line_type_geometry(&res, &lt, &[v(0.0, 0.0)], false, 1.0), LineTypeGeometry::default());
-        assert_eq!(line_type_geometry(&res, &lt, &[v(1.0, 1.0), v(1.0, 1.0)], false, 1.0), LineTypeGeometry::default());
+        assert_eq!(
+            line_type_geometry(&res, &lt, &[v(0.0, 0.0)], false, 1.0),
+            LineTypeGeometry::default()
+        );
+        assert_eq!(
+            line_type_geometry(&res, &lt, &[v(1.0, 1.0), v(1.0, 1.0)], false, 1.0),
+            LineTypeGeometry::default()
+        );
     }
 
     #[test]
     fn decor_gives_fill_dashes_and_marks_for_the_shapes_that_can_have_them() {
         use crate::command::{Command, Editor};
         let mut ed = Editor::default();
-        let mut add = |name: &str, g: GraphicResource| ResourceId(ed.execute(&Command::AddResource { name: name.into(), body: ResourceBody::Graphic(Box::new(g)) }).unwrap().created[0]);
-        let h = add("H", GraphicResource::Hatch(hatch(vec![HatchLine::solid(0.0, 100.0)], PatternUnits::World)));
-        let dot = add("Dot", GraphicResource::Symbol(crate::graphics::SymbolDef { items: vec![crate::graphics::SymbolItem { shape: Shape::Circle { center: DVec2::ZERO, radius: 5.0 }, attrs: Attributes::default(), class: None }], ..Default::default() }));
-        let lt = add("L", GraphicResource::LineType(line_type(vec![LineElement::Dash { length: 100.0 }, LineElement::Mark { symbol: dot, scale: 1.0, rotate: true }, LineElement::Gap { length: 100.0 }])));
-        let rect = Object::new(crate::model::ObjectId(900), crate::model::FIRST_LAYER, crate::model::NONE_CLASS, Shape::Rect { min: v(0.0, 0.0), max: v(1000.0, 500.0) });
+        let mut add = |name: &str, g: GraphicResource| {
+            ResourceId(
+                ed.execute(&Command::AddResource {
+                    name: name.into(),
+                    body: ResourceBody::Graphic(Box::new(g)),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let h = add(
+            "H",
+            GraphicResource::Hatch(hatch(
+                vec![HatchLine::solid(0.0, 100.0)],
+                PatternUnits::World,
+            )),
+        );
+        let dot = add(
+            "Dot",
+            GraphicResource::Symbol(crate::graphics::SymbolDef {
+                items: vec![crate::graphics::SymbolItem {
+                    shape: Shape::Circle {
+                        center: DVec2::ZERO,
+                        radius: 5.0,
+                    },
+                    attrs: Attributes::default(),
+                    class: None,
+                }],
+                ..Default::default()
+            }),
+        );
+        let lt = add(
+            "L",
+            GraphicResource::LineType(line_type(vec![
+                LineElement::Dash { length: 100.0 },
+                LineElement::Mark {
+                    symbol: dot,
+                    scale: 1.0,
+                    rotate: true,
+                },
+                LineElement::Gap { length: 100.0 },
+            ])),
+        );
+        let rect = Object::new(
+            crate::model::ObjectId(900),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(1000.0, 500.0),
+            },
+        );
         let doc = ed.doc();
         let none = Attributes::default();
-        assert!(decorate(doc, &rect, &none, 1.0).is_none(), "no pattern attributes");
-        let both = Attributes { fill_pattern: Some(h), line_type: Some(lt), ..Default::default() };
+        assert!(
+            decorate(doc, &rect, &none, 1.0).is_none(),
+            "no pattern attributes"
+        );
+        let both = Attributes {
+            fill_pattern: Some(h),
+            line_type: Some(lt),
+            ..Default::default()
+        };
         let d = decorate(doc, &rect, &both, 1.0).unwrap();
-        assert!(d.replaces_outline && !d.fill.is_empty() && !d.strokes.is_empty() && !d.marks.is_empty());
-        let fill_only = decorate(doc, &rect, &Attributes { fill_pattern: Some(h), ..Default::default() }, 1.0).unwrap();
+        assert!(
+            d.replaces_outline
+                && !d.fill.is_empty()
+                && !d.strokes.is_empty()
+                && !d.marks.is_empty()
+        );
+        let fill_only = decorate(
+            doc,
+            &rect,
+            &Attributes {
+                fill_pattern: Some(h),
+                ..Default::default()
+            },
+            1.0,
+        )
+        .unwrap();
         assert!(!fill_only.replaces_outline && fill_only.strokes.is_empty());
         // A line type that is gone leaves the outline alone.
-        let gone = decorate(doc, &rect, &Attributes { line_type: Some(ResourceId(999)), ..Default::default() }, 1.0).unwrap();
+        let gone = decorate(
+            doc,
+            &rect,
+            &Attributes {
+                line_type: Some(ResourceId(999)),
+                ..Default::default()
+            },
+            1.0,
+        )
+        .unwrap();
         assert!(!gone.replaces_outline);
         // An open line has no fill. A plant has neither.
-        let line = Object::new(crate::model::ObjectId(901), crate::model::FIRST_LAYER, crate::model::NONE_CLASS, Shape::Line { a: v(0.0, 0.0), b: v(500.0, 0.0) });
+        let line = Object::new(
+            crate::model::ObjectId(901),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(500.0, 0.0),
+            },
+        );
         assert!(decorate(doc, &line, &both, 1.0).unwrap().fill.is_empty());
-        let plant = Object::new(crate::model::ObjectId(902), crate::model::FIRST_LAYER, crate::model::NONE_CLASS, Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 1.0, height: 1.0 });
+        let plant = Object::new(
+            crate::model::ObjectId(902),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            Shape::Plant {
+                at: DVec2::ZERO,
+                species: "x".into(),
+                spread: 1.0,
+                height: 1.0,
+            },
+        );
         assert!(decorate(doc, &plant, &both, 1.0).is_none());
         // Holes of a landscape area are not hatched.
         let mut ed2 = Editor::default();
-        let h2 = ResourceId(ed2.execute(&Command::AddResource { name: "H".into(), body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(hatch(vec![HatchLine::solid(0.0, 10.0)], PatternUnits::World)))) }).unwrap().created[0]);
+        let h2 = ResourceId(
+            ed2.execute(&Command::AddResource {
+                name: "H".into(),
+                body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(hatch(
+                    vec![HatchLine::solid(0.0, 10.0)],
+                    PatternUnits::World,
+                )))),
+            })
+            .unwrap()
+            .created[0],
+        );
         let boundary = crate::curve::corners(&square(0.0, 0.0, 1000.0));
-        let id = ed2.execute(&Command::AddLandscapeArea { boundary, name: "a".into(), patch: Default::default(), layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0];
+        let id = ed2
+            .execute(&Command::AddLandscapeArea {
+                boundary,
+                name: "a".into(),
+                patch: Default::default(),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0];
         let hole = crate::curve::corners(&square(250.0, 250.0, 500.0));
-        ed2.execute(&Command::SetLandscapeArea { ids: vec![crate::model::ObjectId(id)], patch: crate::landscape::LandscapePatch { holes: Some(vec![hole]), ..Default::default() } }).unwrap();
+        ed2.execute(&Command::SetLandscapeArea {
+            ids: vec![crate::model::ObjectId(id)],
+            patch: crate::landscape::LandscapePatch {
+                holes: Some(vec![hole]),
+                ..Default::default()
+            },
+        })
+        .unwrap();
         let o = ed2.doc().object(crate::model::ObjectId(id)).unwrap();
-        let d = decorate(ed2.doc(), o, &Attributes { fill_pattern: Some(h2), ..Default::default() }, 1.0).unwrap();
+        let d = decorate(
+            ed2.doc(),
+            o,
+            &Attributes {
+                fill_pattern: Some(h2),
+                ..Default::default()
+            },
+            1.0,
+        )
+        .unwrap();
         let covered: f64 = d.fill.iter().map(|s| s.a.distance(s.b)).sum::<f64>() * 10.0;
         assert!((covered - 750_000.0).abs() < 0.03 * 750_000.0, "{covered}");
     }
@@ -725,5 +1242,55 @@ mod tests {
         let mut small = 2;
         dash_pieces(0.0, 100.0, &[1.0, 1.0], 0.0, &mut out, &mut small);
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn a_huge_outline_stays_fast_and_dense_hatches_become_coarse() {
+        // A circle of 20 000 vertices with a hatch every 5 units: 400 lines.
+        let ring: Vec<DVec2> = (0..20_000)
+            .map(|k| DVec2::from_angle(std::f64::consts::TAU * k as f64 / 20_000.0) * 1000.0)
+            .collect();
+        let h = hatch(vec![HatchLine::solid(30.0, 5.0)], PatternUnits::World);
+        let t = std::time::Instant::now();
+        let segs = hatch_segments(&h, std::slice::from_ref(&ring), 1.0);
+        assert!(t.elapsed().as_millis() < 500, "{:?}", t.elapsed());
+        let covered = segs.iter().map(|s| s.a.distance(s.b)).sum::<f64>() * 5.0;
+        assert!(
+            (covered - std::f64::consts::PI * 1.0e6).abs() < 0.02 * std::f64::consts::PI * 1.0e6
+        );
+        // A hatch so dense that it would cross too many edges is drawn with a wider spacing.
+        let dense = hatch(vec![HatchLine::solid(0.0, 0.001)], PatternUnits::World);
+        let segs = hatch_segments(&dense, std::slice::from_ref(&ring), 1.0);
+        assert!(!segs.is_empty() && segs.len() <= MAX_CROSSINGS);
+        // The index agrees with the plain rule for a concave outline with a hole.
+        let star = vec![
+            v(0.0, 0.0),
+            v(50.0, 20.0),
+            v(100.0, 0.0),
+            v(80.0, 50.0),
+            v(100.0, 100.0),
+            v(50.0, 70.0),
+            v(0.0, 100.0),
+            v(20.0, 50.0),
+        ];
+        let segs = hatch_segments(
+            &hatch(vec![HatchLine::solid(10.0, 0.5)], PatternUnits::World),
+            std::slice::from_ref(&star),
+            1.0,
+        );
+        let covered = segs.iter().map(|s| s.a.distance(s.b)).sum::<f64>() * 0.5;
+        assert!((covered - polygon_area(&star)).abs() < 0.01 * polygon_area(&star));
+        // A tile on a huge outline with too much work is left out.
+        let sym_res = with_cross_symbol();
+        let tile = TileDef {
+            symbol: sym_res.1,
+            width: 2.0,
+            height: 2.0,
+            row_shift: 0.0,
+            angle: 0.0,
+            scale: 1.0,
+            units: PatternUnits::World,
+        };
+        assert!(tile_segments(&sym_res.0, &tile, std::slice::from_ref(&ring), 1.0).is_empty());
     }
 }

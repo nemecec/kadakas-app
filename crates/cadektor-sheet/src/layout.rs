@@ -28,17 +28,31 @@ pub struct TableLayout {
 
 /// The layout of the calculated worksheet at a text height. An empty worksheet gets one small cell.
 pub fn layout(c: &Computed, text_height: f64) -> TableLayout {
-    let h = if text_height.is_finite() && text_height > 0.0 { text_height } else { 1.0 };
+    let h = if text_height.is_finite() && text_height > 0.0 {
+        text_height
+    } else {
+        1.0
+    };
     let rows = c.rows.clamp(1, MAX_ROWS);
     let cols = c.cols.clamp(1, MAX_COLS);
     let col_widths: Vec<f64> = (1..=cols)
         .map(|col| {
-            let chars = (1..=rows).map(|r| c.display(r, col).chars().count()).max().unwrap_or(0);
+            let chars = (1..=rows)
+                .map(|r| c.display(r, col).chars().count())
+                .max()
+                .unwrap_or(0);
             (chars as f64 * CHAR_WIDTH + PADDING).max(3.0) * h
         })
         .collect();
     let width = col_widths.iter().sum();
-    TableLayout { rows, cols, col_widths, row_height: ROW * h, width, height: ROW * h * f64::from(rows) }
+    TableLayout {
+        rows,
+        cols,
+        col_widths,
+        row_height: ROW * h,
+        width,
+        height: ROW * h * f64::from(rows),
+    }
 }
 
 /// True if the cell holds a number, so a table can line it up on the right.
@@ -67,7 +81,10 @@ mod tests {
         assert_eq!(l.col_widths[1], 6.0, "a short column has the least width");
         assert!((l.col_widths[0] - (16.0 * 0.55 + 0.9) * 2.0).abs() < 1e-9);
         assert_eq!(l.row_height, 3.2);
-        assert!((l.height - 9.6).abs() < 1e-9 && (l.width - l.col_widths.iter().sum::<f64>()).abs() < 1e-9);
+        assert!(
+            (l.height - 9.6).abs() < 1e-9
+                && (l.width - l.col_widths.iter().sum::<f64>()).abs() < 1e-9
+        );
         assert!(is_number(&c, 1, 2) && !is_number(&c, 1, 1));
     }
 

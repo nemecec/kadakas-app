@@ -62,16 +62,33 @@ fn object_uses(o: &Object, id: ResourceId, tag: &Value) -> bool {
         || o.attrs.fill_pattern == Some(id)
         || o.attrs.line_type == Some(id)
         || crate::worksheet_table::data(o).is_some_and(|d| d.worksheet == id)
-        || o.data.values().any(|v| v.get(crate::record::MARKER) == Some(tag))
+        || o.data
+            .values()
+            .any(|v| v.get(crate::record::MARKER) == Some(tag))
 }
 
 /// Who uses the resource. A resource that does not exist has no users.
 pub fn usage(doc: &Document, id: ResourceId) -> Usage {
     let tag = Value::from(id.0);
     Usage {
-        objects: doc.objects.values().filter(|o| object_uses(o, id, &tag)).map(|o| o.id).collect(),
-        classes: doc.classes.iter().filter(|c| c.attrs.fill_pattern == Some(id) || c.attrs.line_type == Some(id)).map(|c| c.id).collect(),
-        resources: doc.resources.iter().filter(|r| r.id != id && body_refs(&r.body).contains(&id)).map(|r| r.id).collect(),
+        objects: doc
+            .objects
+            .values()
+            .filter(|o| object_uses(o, id, &tag))
+            .map(|o| o.id)
+            .collect(),
+        classes: doc
+            .classes
+            .iter()
+            .filter(|c| c.attrs.fill_pattern == Some(id) || c.attrs.line_type == Some(id))
+            .map(|c| c.id)
+            .collect(),
+        resources: doc
+            .resources
+            .iter()
+            .filter(|r| r.id != id && body_refs(&r.body).contains(&id))
+            .map(|r| r.id)
+            .collect(),
     }
 }
 
@@ -89,7 +106,9 @@ pub struct ResourceInfo {
 /// The resources of a document, filtered by type and by a search text (a part of the name or of the
 /// type, compared without case). In creation order.
 pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> Vec<ResourceInfo> {
-    let search = search.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let search = search
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
     let mut uses: HashMap<ResourceId, usize> = HashMap::new();
     // Count once for all resources: objects are many, resources are few.
     let ids: HashSet<ResourceId> = doc.resources.iter().map(|r| r.id).collect();
@@ -102,11 +121,18 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
             }
         }
         for c in &doc.classes {
-            for r in [c.attrs.fill_pattern, c.attrs.line_type].into_iter().flatten() {
+            for r in [c.attrs.fill_pattern, c.attrs.line_type]
+                .into_iter()
+                .flatten()
+            {
                 *uses.entry(r).or_default() += 1;
             }
         }
-        let tags: HashMap<String, ResourceId> = doc.resources.iter().map(|r| (r.id.0.to_string(), r.id)).collect();
+        let tags: HashMap<String, ResourceId> = doc
+            .resources
+            .iter()
+            .map(|r| (r.id.0.to_string(), r.id))
+            .collect();
         for o in doc.objects.values() {
             let mut seen: HashSet<ResourceId> = HashSet::new();
             let mut hit = |r: Option<ResourceId>| {
@@ -140,14 +166,35 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
     doc.resources
         .iter()
         .filter(|r| type_filter.is_none_or(|t| r.body.type_name() == t))
-        .filter(|r| search.as_ref().is_none_or(|s| r.name.to_lowercase().contains(s.as_str()) || r.body.type_name().contains(s.as_str())))
-        .map(|r| ResourceInfo { id: r.id, name: r.name.clone(), type_name: r.body.type_name(), used_by: uses.get(&r.id).copied().unwrap_or(0), depends_on: body_refs(&r.body) })
+        .filter(|r| {
+            search.as_ref().is_none_or(|s| {
+                r.name.to_lowercase().contains(s.as_str())
+                    || r.body.type_name().contains(s.as_str())
+            })
+        })
+        .map(|r| ResourceInfo {
+            id: r.id,
+            name: r.name.clone(),
+            type_name: r.body.type_name(),
+            used_by: uses.get(&r.id).copied().unwrap_or(0),
+            depends_on: body_refs(&r.body),
+        })
         .collect()
 }
 
 /// The types that a purge removes when you name none. Worksheets and data maps are work of their own,
 /// so they stay unless you name them.
-pub const PURGE_TYPES: [&str; 9] = ["symbol", "hatch", "tile", "line_type", "texture", "plant_style", "hardscape_style", "landscape_area_style", "record_format"];
+pub const PURGE_TYPES: [&str; 9] = [
+    "symbol",
+    "hatch",
+    "tile",
+    "line_type",
+    "texture",
+    "plant_style",
+    "hardscape_style",
+    "landscape_area_style",
+    "record_format",
+];
 
 /// The unused resources of these types, in an order that is safe to delete in: a resource comes
 /// before the resources that it uses. Deleting a resource can free others (an unused tile frees its
@@ -162,7 +209,10 @@ pub fn purge_plan(doc: &Document, types: &[&str]) -> Vec<ResourceId> {
                 continue;
             }
             let u = usage(doc, r.id);
-            if u.objects.is_empty() && u.classes.is_empty() && u.resources.iter().all(|x| gone.contains(x)) {
+            if u.objects.is_empty()
+                && u.classes.is_empty()
+                && u.resources.iter().all(|x| gone.contains(x))
+            {
                 gone.insert(r.id);
                 order.push(r.id);
                 changed = true;
@@ -245,7 +295,10 @@ pub fn unique_name(base: &str, taken: &dyn Fn(&str) -> bool) -> String {
     if !taken(base) {
         return base.to_string();
     }
-    (2..).map(|n| format!("{base} {n}")).find(|n| !taken(n)).expect("endless")
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|n| !taken(n))
+        .expect("endless")
 }
 
 struct Planner<'a> {
@@ -268,12 +321,24 @@ impl Planner<'_> {
             return *m;
         }
         let m = self.src.class(c).map(|sc| {
-            if let Some(dc) = self.dst.classes.iter().find(|d| d.name.eq_ignore_ascii_case(&sc.name)) {
+            if let Some(dc) = self
+                .dst
+                .classes
+                .iter()
+                .find(|d| d.name.eq_ignore_ascii_case(&sc.name))
+            {
                 return dc.id;
             }
             let id = ClassId(self.next);
             self.next += 1;
-            self.cmds.push(Command::AddClass { name: sc.name.clone(), attrs: Attributes { fill_pattern: None, line_type: None, ..sc.attrs.clone() } });
+            self.cmds.push(Command::AddClass {
+                name: sc.name.clone(),
+                attrs: Attributes {
+                    fill_pattern: None,
+                    line_type: None,
+                    ..sc.attrs.clone()
+                },
+            });
             self.classes_added.push(sc.name.clone());
             id
         });
@@ -281,20 +346,51 @@ impl Planner<'_> {
         m
     }
 
-    fn place(&mut self, id: ResourceId, dependency: bool, stack: &mut Vec<ResourceId>) -> Result<ResourceId, String> {
+    fn place(
+        &mut self,
+        id: ResourceId,
+        dependency: bool,
+        stack: &mut Vec<ResourceId>,
+    ) -> Result<ResourceId, String> {
         if let Some(d) = self.map.get(&id) {
             return Ok(*d);
         }
-        let r: &Resource = self.src.resources.get(id).ok_or_else(|| format!("the file has no resource {id}"))?;
+        let r: &Resource = self
+            .src
+            .resources
+            .get(id)
+            .ok_or_else(|| format!("the file has no resource {id}"))?;
+        if stack.len() > 32 {
+            return Err(format!(
+                "resource {} needs too many other resources one after the other",
+                r.name
+            ));
+        }
         if stack.contains(&id) {
             return Err(format!("resource {} uses itself", r.name));
         }
         let type_name = r.body.type_name();
-        let existing = self.dst.resources.iter().find(|d| d.body.type_name() == type_name && d.name.eq_ignore_ascii_case(&r.name) && type_name != "unknown").map(|d| (d.id, d.body.clone()));
+        let existing = self
+            .dst
+            .resources
+            .iter()
+            .find(|d| {
+                d.body.type_name() == type_name
+                    && d.name.eq_ignore_ascii_case(&r.name)
+                    && type_name != "unknown"
+            })
+            .map(|d| (d.id, d.body.clone()));
         // Without a name clash or with "reuse" the resource itself needs no look at its dependencies.
         if let (Some((eid, _)), Conflict::Reuse) = (&existing, self.conflict) {
             self.map.insert(id, *eid);
-            self.items.push(ImportItem { src: id, dst: *eid, name: r.name.clone(), type_name, status: ImportStatus::Reused, dependency });
+            self.items.push(ImportItem {
+                src: id,
+                dst: *eid,
+                name: r.name.clone(),
+                type_name,
+                status: ImportStatus::Reused,
+                dependency,
+            });
             return Ok(*eid);
         }
         stack.push(id);
@@ -307,20 +403,31 @@ impl Planner<'_> {
         let mut body = remap_body(&r.body, &|x| map.get(&x).copied().unwrap_or(x));
         if let ResourceBody::Graphic(g) = &mut body {
             let classes: Vec<ClassId> = g.classes();
-            let mapped: HashMap<ClassId, Option<ClassId>> = classes.into_iter().map(|c| (c, self.class_for(c))).collect();
+            let mapped: HashMap<ClassId, Option<ClassId>> = classes
+                .into_iter()
+                .map(|c| (c, self.class_for(c)))
+                .collect();
             g.remap_classes(&|c| mapped.get(&c).copied().flatten());
         }
         let (dst_id, status, name) = match existing {
             // The same name and content: nothing to import.
             Some((eid, old)) if old == body => (eid, ImportStatus::Reused, r.name.clone()),
             Some((eid, _)) if self.conflict == Conflict::Replace => {
-                self.cmds.push(Command::ModifyResource { id: eid, name: None, body: Some(body) });
+                self.cmds.push(Command::ModifyResource {
+                    id: eid,
+                    name: None,
+                    body: Some(body),
+                });
                 (eid, ImportStatus::Replaced, r.name.clone())
             }
             existing => {
-                let (name, status) = if existing.is_some() || self.added.contains(&(type_name, r.name.to_lowercase())) {
+                let (name, status) = if existing.is_some()
+                    || self.added.contains(&(type_name, r.name.to_lowercase()))
+                {
                     let n = unique_name(&r.name, &|n| {
-                        self.dst.resources.iter().any(|d| d.body.type_name() == type_name && d.name.eq_ignore_ascii_case(n)) || self.added.contains(&(type_name, n.to_lowercase()))
+                        self.dst.resources.iter().any(|d| {
+                            d.body.type_name() == type_name && d.name.eq_ignore_ascii_case(n)
+                        }) || self.added.contains(&(type_name, n.to_lowercase()))
                     });
                     (n, ImportStatus::Renamed)
                 } else {
@@ -329,12 +436,22 @@ impl Planner<'_> {
                 let new_id = ResourceId(self.next);
                 self.next += 1;
                 self.added.insert((type_name, name.to_lowercase()));
-                self.cmds.push(Command::AddResource { name: name.clone(), body });
+                self.cmds.push(Command::AddResource {
+                    name: name.clone(),
+                    body,
+                });
                 (new_id, status, name)
             }
         };
         self.map.insert(id, dst_id);
-        self.items.push(ImportItem { src: id, dst: dst_id, name, type_name, status, dependency });
+        self.items.push(ImportItem {
+            src: id,
+            dst: dst_id,
+            name,
+            type_name,
+            status,
+            dependency,
+        });
         Ok(dst_id)
     }
 }
@@ -342,8 +459,24 @@ impl Planner<'_> {
 /// Plans the import of resources from another document, with everything they need. A symbol that
 /// uses a hatch brings the hatch. Classes that symbol components use are added when the document
 /// has no class of that name. `picks` are IDs in `src`.
-pub fn import_plan(dst: &Document, src: &Document, picks: &[ResourceId], conflict: Conflict) -> Result<ImportPlan, String> {
-    let mut p = Planner { dst, src, conflict, next: dst.next_id(), cmds: Vec::new(), map: HashMap::new(), class_map: HashMap::new(), items: Vec::new(), added: HashSet::new(), classes_added: Vec::new() };
+pub fn import_plan(
+    dst: &Document,
+    src: &Document,
+    picks: &[ResourceId],
+    conflict: Conflict,
+) -> Result<ImportPlan, String> {
+    let mut p = Planner {
+        dst,
+        src,
+        conflict,
+        next: dst.next_id(),
+        cmds: Vec::new(),
+        map: HashMap::new(),
+        class_map: HashMap::new(),
+        items: Vec::new(),
+        added: HashSet::new(),
+        classes_added: Vec::new(),
+    };
     for &id in picks {
         p.place(id, false, &mut Vec::new())?;
     }
@@ -356,75 +489,180 @@ pub fn import_plan(dst: &Document, src: &Document, picks: &[ResourceId], conflic
         1 => p.cmds.pop(),
         _ => Some(Command::Batch { commands: p.cmds }),
     };
-    Ok(ImportPlan { command, items: p.items, classes_added: p.classes_added })
+    Ok(ImportPlan {
+        command,
+        items: p.items,
+        classes_added: p.classes_added,
+    })
 }
 
 /// Plans the import of classes (by name) from another document. Classes the document has are skipped.
 /// Returns the command (if any) and the names that were added.
-pub fn import_classes_plan(dst: &Document, src: &Document, names: &[String]) -> Result<(Option<Command>, Vec<String>), String> {
+pub fn import_classes_plan(
+    dst: &Document,
+    src: &Document,
+    names: &[String],
+) -> Result<(Option<Command>, Vec<String>), String> {
     let mut cmds = Vec::new();
     let mut added = Vec::new();
     for n in names {
-        let c = src.classes.iter().find(|c| c.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("the file has no class '{n}'"))?;
-        if dst.classes.iter().any(|d| d.name.eq_ignore_ascii_case(&c.name)) || added.iter().any(|a: &String| a.eq_ignore_ascii_case(&c.name)) {
+        let c = src
+            .classes
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(n))
+            .ok_or_else(|| format!("the file has no class '{n}'"))?;
+        if dst
+            .classes
+            .iter()
+            .any(|d| d.name.eq_ignore_ascii_case(&c.name))
+            || added
+                .iter()
+                .any(|a: &String| a.eq_ignore_ascii_case(&c.name))
+        {
             continue;
         }
-        cmds.push(Command::AddClass { name: c.name.clone(), attrs: Attributes { fill_pattern: None, line_type: None, ..c.attrs.clone() } });
+        cmds.push(Command::AddClass {
+            name: c.name.clone(),
+            attrs: Attributes {
+                fill_pattern: None,
+                line_type: None,
+                ..c.attrs.clone()
+            },
+        });
         added.push(c.name.clone());
     }
-    Ok((if cmds.is_empty() { None } else { Some(Command::Batch { commands: cmds }) }, added))
+    Ok((
+        if cmds.is_empty() {
+            None
+        } else {
+            Some(Command::Batch { commands: cmds })
+        },
+        added,
+    ))
 }
 
 /// Plans the import of design layers (by name). Layers the document has are skipped. A sheet layer cannot be imported this way.
-pub fn import_layers_plan(dst: &Document, src: &Document, names: &[String]) -> Result<(Option<Command>, Vec<String>), String> {
+pub fn import_layers_plan(
+    dst: &Document,
+    src: &Document,
+    names: &[String],
+) -> Result<(Option<Command>, Vec<String>), String> {
     let mut cmds = Vec::new();
     let mut added = Vec::new();
     for n in names {
-        let l = src.layers.iter().find(|l| l.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("the file has no layer '{n}'"))?;
+        let l = src
+            .layers
+            .iter()
+            .find(|l| l.name.eq_ignore_ascii_case(n))
+            .ok_or_else(|| format!("the file has no layer '{n}'"))?;
         if l.kind != LayerKind::Design {
-            return Err(format!("layer '{}' is a sheet layer. Only design layers can be imported", l.name));
+            return Err(format!(
+                "layer '{}' is a sheet layer. Only design layers can be imported",
+                l.name
+            ));
         }
-        if dst.layers.iter().any(|d| d.name.eq_ignore_ascii_case(&l.name)) || added.iter().any(|a: &String| a.eq_ignore_ascii_case(&l.name)) {
+        if dst
+            .layers
+            .iter()
+            .any(|d| d.name.eq_ignore_ascii_case(&l.name))
+            || added
+                .iter()
+                .any(|a: &String| a.eq_ignore_ascii_case(&l.name))
+        {
             continue;
         }
-        cmds.push(Command::AddLayer { name: l.name.clone(), elevation: l.elevation, scale: Some(l.scale), kind: Some(LayerKind::Design) });
+        cmds.push(Command::AddLayer {
+            name: l.name.clone(),
+            elevation: l.elevation,
+            scale: Some(l.scale),
+            kind: Some(LayerKind::Design),
+        });
         added.push(l.name.clone());
     }
-    Ok((if cmds.is_empty() { None } else { Some(Command::Batch { commands: cmds }) }, added))
+    Ok((
+        if cmds.is_empty() {
+            None
+        } else {
+            Some(Command::Batch { commands: cmds })
+        },
+        added,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::command::Editor;
-    use crate::graphics::{GraphicResource, HatchDef, HatchLine, LineElement, LineTypeDef, PatternUnits, SymbolDef, SymbolItem, TileDef};
+    use crate::graphics::{
+        GraphicResource, HatchDef, HatchLine, LineElement, LineTypeDef, PatternUnits, SymbolDef,
+        SymbolItem, TileDef,
+    };
     use crate::model::{Color, NONE_CLASS};
     use crate::plants::style::PlantStyle;
     use glam::DVec2;
 
     fn add(ed: &mut Editor, name: &str, g: GraphicResource) -> ResourceId {
-        ResourceId(ed.execute(&Command::AddResource { name: name.into(), body: ResourceBody::Graphic(Box::new(g)) }).unwrap().created[0])
+        ResourceId(
+            ed.execute(&Command::AddResource {
+                name: name.into(),
+                body: ResourceBody::Graphic(Box::new(g)),
+            })
+            .unwrap()
+            .created[0],
+        )
     }
 
     fn hatch(angle: f64) -> GraphicResource {
-        GraphicResource::Hatch(HatchDef { units: PatternUnits::Paper, lines: vec![HatchLine::solid(angle, 2.0)] })
+        GraphicResource::Hatch(HatchDef {
+            units: PatternUnits::Paper,
+            lines: vec![HatchLine::solid(angle, 2.0)],
+        })
     }
 
     fn symbol(pattern: Option<ResourceId>, class: Option<ClassId>) -> GraphicResource {
         GraphicResource::Symbol(SymbolDef {
-            items: vec![SymbolItem { shape: Shape::Circle { center: DVec2::ZERO, radius: 5.0 }, attrs: Attributes { fill_pattern: pattern, ..Default::default() }, class }],
+            items: vec![SymbolItem {
+                shape: Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 5.0,
+                },
+                attrs: Attributes {
+                    fill_pattern: pattern,
+                    ..Default::default()
+                },
+                class,
+            }],
             ..Default::default()
         })
     }
 
     fn tile(sym: ResourceId) -> GraphicResource {
-        GraphicResource::Tile(TileDef { symbol: sym, width: 10.0, height: 10.0, row_shift: 0.0, angle: 0.0, scale: 1.0, units: PatternUnits::Paper })
+        GraphicResource::Tile(TileDef {
+            symbol: sym,
+            width: 10.0,
+            height: 10.0,
+            row_shift: 0.0,
+            angle: 0.0,
+            scale: 1.0,
+            units: PatternUnits::Paper,
+        })
     }
 
     /// A source document: hatch Diag, symbol Dot (uses Diag), tile Dots (uses Dot), a plant style, a worksheet.
     fn source() -> (Document, ResourceId, ResourceId, ResourceId) {
         let mut ed = Editor::default();
-        let class = ClassId(ed.execute(&Command::AddClass { name: "Trees".into(), attrs: Attributes { pen: Some(Color([0, 90, 0, 255])), fill_pattern: None, ..Default::default() } }).unwrap().created[0]);
+        let class = ClassId(
+            ed.execute(&Command::AddClass {
+                name: "Trees".into(),
+                attrs: Attributes {
+                    pen: Some(Color([0, 90, 0, 255])),
+                    fill_pattern: None,
+                    ..Default::default()
+                },
+            })
+            .unwrap()
+            .created[0],
+        );
         let h = add(&mut ed, "Diag", hatch(45.0));
         let s = add(&mut ed, "Dot", symbol(Some(h), Some(class)));
         let t = add(&mut ed, "Dots", tile(s));
@@ -440,11 +678,52 @@ mod tests {
         assert!(usage(ed.doc(), t).is_unused());
         assert_eq!(usage(ed.doc(), s).resources, vec![t]);
         assert_eq!(usage(ed.doc(), h).resources, vec![s]);
-        ed.execute(&Command::AddObject { shape: Shape::Symbol { symbol: s, at: DVec2::ZERO, rotation: 0.0, scale: 1.0, scale_y: None }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
-        ed.execute(&Command::AddObject { shape: Shape::Circle { center: DVec2::ZERO, radius: 1.0 }, layer: None, class: None, attrs: Attributes { fill_pattern: Some(h), ..Default::default() } }).unwrap();
-        ed.execute(&Command::ModifyClass { id: NONE_CLASS, name: None, visible: None, attrs: Some(Attributes { fill_pattern: Some(h), ..Default::default() }) }).unwrap();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Symbol {
+                symbol: s,
+                at: DVec2::ZERO,
+                rotation: 0.0,
+                scale: 1.0,
+                scale_y: None,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes {
+                fill_pattern: Some(h),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        ed.execute(&Command::ModifyClass {
+            id: NONE_CLASS,
+            name: None,
+            visible: None,
+            attrs: Some(Attributes {
+                fill_pattern: Some(h),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
         let u = usage(ed.doc(), h);
-        assert_eq!((u.objects.len(), u.classes.len(), u.resources.len(), u.total()), (1, 1, 1, 3));
+        assert_eq!(
+            (
+                u.objects.len(),
+                u.classes.len(),
+                u.resources.len(),
+                u.total()
+            ),
+            (1, 1, 1, 3)
+        );
         assert!(!u.is_unused());
         assert_eq!(usage(ed.doc(), s).objects.len(), 1);
         // The list agrees with usage.
@@ -467,13 +746,47 @@ mod tests {
     #[test]
     fn records_worksheets_and_styles_count_as_used() {
         let mut ed = Editor::default();
-        let plant = ResourceId(ed.execute(&Command::AddResource { name: "Oak".into(), body: ResourceBody::plant_style(PlantStyle::default()) }).unwrap().created[0]);
-        let p = ed.execute(&Command::AddPlants { style: Some(plant), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None, variation: None }).unwrap().created[0];
+        let plant = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Oak".into(),
+                body: ResourceBody::plant_style(PlantStyle::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let p = ed
+            .execute(&Command::AddPlants {
+                style: Some(plant),
+                overrides: Default::default(),
+                positions: vec![DVec2::ZERO],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap()
+            .created[0];
         assert_eq!(usage(ed.doc(), plant).objects, vec![ObjectId(p)]);
         assert_eq!(list(ed.doc(), None, None)[0].used_by, 1);
-        let fmt = crate::record::RecordFormat { fields: vec![crate::record::FieldDef::new("Depth", crate::record::FieldType::Dimension)] };
-        let rec = ResourceId(ed.execute(&Command::AddResource { name: "Soil".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) }).unwrap().created[0]);
-        ed.execute(&Command::AttachRecord { ids: vec![ObjectId(p)], record: rec, values: Default::default() }).unwrap();
+        let fmt = crate::record::RecordFormat {
+            fields: vec![crate::record::FieldDef::new(
+                "Depth",
+                crate::record::FieldType::Dimension,
+            )],
+        };
+        let rec = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Soil".into(),
+                body: ResourceBody::RecordFormat(Box::new(fmt)),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::AttachRecord {
+            ids: vec![ObjectId(p)],
+            record: rec,
+            values: Default::default(),
+        })
+        .unwrap();
         assert_eq!(usage(ed.doc(), rec).objects.len(), 1);
         assert_eq!(list(ed.doc(), Some("record_format"), None)[0].used_by, 1);
         // A purge keeps what is used and removes the rest.
@@ -489,16 +802,46 @@ mod tests {
         let s = add(&mut ed, "S", symbol(Some(h), None));
         let t = add(&mut ed, "T", tile(s));
         let keep = add(&mut ed, "Keep", hatch(30.0));
-        ed.execute(&Command::AddObject { shape: Shape::Circle { center: DVec2::ZERO, radius: 1.0 }, layer: None, class: None, attrs: Attributes { fill_pattern: Some(keep), ..Default::default() } }).unwrap();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes {
+                fill_pattern: Some(keep),
+                ..Default::default()
+            },
+        })
+        .unwrap();
         let plan = purge_plan(ed.doc(), &PURGE_TYPES);
         assert_eq!(plan, vec![t, s, h], "the tile first, then what it used");
-        let cmds: Vec<Command> = plan.iter().map(|id| Command::DeleteResource { id: *id, reassign: None }).collect();
+        let cmds: Vec<Command> = plan
+            .iter()
+            .map(|id| Command::DeleteResource {
+                id: *id,
+                reassign: None,
+            })
+            .collect();
         ed.execute(&Command::Batch { commands: cmds }).unwrap();
         assert_eq!(ed.doc().resources.len(), 1);
         assert!(ed.undo());
         assert_eq!(ed.doc().resources.len(), 4);
         // A symbol with an instance stays, and so does what it needs.
-        ed.execute(&Command::AddObject { shape: Shape::Symbol { symbol: s, at: DVec2::ZERO, rotation: 0.0, scale: 1.0, scale_y: None }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Symbol {
+                symbol: s,
+                at: DVec2::ZERO,
+                rotation: 0.0,
+                scale: 1.0,
+                scale_y: None,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
         assert_eq!(purge_plan(ed.doc(), &PURGE_TYPES), vec![t]);
         // Only the types you name.
         assert!(purge_plan(ed.doc(), &["hatch"]).is_empty());
@@ -544,20 +887,29 @@ mod tests {
         let mine = add(&mut ed, "diag", hatch(10.0));
         let plan = import_plan(ed.doc(), &src, &[s], Conflict::Rename).unwrap();
         let it = plan.items.iter().find(|i| i.src == h).unwrap();
-        assert_eq!((it.status, it.name.as_str()), (ImportStatus::Renamed, "Diag 2"));
+        assert_eq!(
+            (it.status, it.name.as_str()),
+            (ImportStatus::Renamed, "Diag 2")
+        );
         ed.execute(plan.command.as_ref().unwrap()).unwrap();
         assert_eq!(ed.doc().resources.hatch(mine).unwrap().lines[0].angle, 10.0);
         assert!(ed.doc().resources.find_graphic("hatch", "Diag 2").is_some());
         // The same import again changes nothing: the symbol and the renamed hatch are the same now? The names differ, so the first clash renames again.
         let again = import_plan(ed.doc(), &src, &[s], Conflict::Rename).unwrap();
-        assert!(again.items.iter().find(|i| i.src == s).unwrap().status == ImportStatus::Reused || again.items.iter().find(|i| i.src == s).unwrap().status == ImportStatus::Renamed);
+        assert!(
+            again.items.iter().find(|i| i.src == s).unwrap().status == ImportStatus::Reused
+                || again.items.iter().find(|i| i.src == s).unwrap().status == ImportStatus::Renamed
+        );
 
         // Reuse: the symbol in the document is taken as it is, and its hatch is not imported.
         let mut ed2 = Editor::default();
         let s2 = add(&mut ed2, "Dot", symbol(None, None));
         let plan = import_plan(ed2.doc(), &src, &[s], Conflict::Reuse).unwrap();
         assert_eq!(plan.items.len(), 1);
-        assert_eq!((plan.items[0].status, plan.items[0].dst), (ImportStatus::Reused, s2));
+        assert_eq!(
+            (plan.items[0].status, plan.items[0].dst),
+            (ImportStatus::Reused, s2)
+        );
         assert!(plan.command.is_none());
         // Replace: the content of the symbol changes, the ID stays.
         let plan = import_plan(ed2.doc(), &src, &[s], Conflict::Replace).unwrap();
@@ -565,7 +917,12 @@ mod tests {
         assert_eq!((it.status, it.dst), (ImportStatus::Replaced, s2));
         ed2.execute(plan.command.as_ref().unwrap()).unwrap();
         let new_hatch = ed2.doc().resources.find_graphic("hatch", "Diag").unwrap();
-        assert_eq!(ed2.doc().resources.symbol(s2).unwrap().items[0].attrs.fill_pattern, Some(new_hatch));
+        assert_eq!(
+            ed2.doc().resources.symbol(s2).unwrap().items[0]
+                .attrs
+                .fill_pattern,
+            Some(new_hatch)
+        );
         assert_eq!(ed2.doc().resources.len(), 2);
         // Importing what is the same already is a no-op.
         let same = import_plan(ed2.doc(), &src, &[s], Conflict::Rename).unwrap();
@@ -594,25 +951,76 @@ mod tests {
     fn line_types_bring_their_marks_and_errors_are_clear() {
         let mut ed = Editor::default();
         let s = add(&mut ed, "Post", symbol(None, None));
-        let lt = add(&mut ed, "Fence", GraphicResource::LineType(LineTypeDef { units: PatternUnits::Paper, elements: vec![LineElement::Dash { length: 5.0 }, LineElement::Mark { symbol: s, scale: 1.0, rotate: true }, LineElement::Gap { length: 1.0 }] }));
+        let lt = add(
+            &mut ed,
+            "Fence",
+            GraphicResource::LineType(LineTypeDef {
+                units: PatternUnits::Paper,
+                elements: vec![
+                    LineElement::Dash { length: 5.0 },
+                    LineElement::Mark {
+                        symbol: s,
+                        scale: 1.0,
+                        rotate: true,
+                    },
+                    LineElement::Gap { length: 1.0 },
+                ],
+            }),
+        );
         let mut dst = Editor::default();
         let plan = import_plan(dst.doc(), ed.doc(), &[lt], Conflict::Rename).unwrap();
         dst.execute(plan.command.as_ref().unwrap()).unwrap();
-        let new_lt = dst.doc().resources.find_graphic("line_type", "Fence").unwrap();
+        let new_lt = dst
+            .doc()
+            .resources
+            .find_graphic("line_type", "Fence")
+            .unwrap();
         let new_s = dst.doc().resources.find_graphic("symbol", "Post").unwrap();
-        assert!(matches!(dst.doc().resources.line_type(new_lt).unwrap().elements[1], LineElement::Mark { symbol, .. } if symbol == new_s));
-        assert!(import_plan(dst.doc(), ed.doc(), &[ResourceId(9999)], Conflict::Rename).unwrap_err().contains("no resource"));
+        assert!(
+            matches!(dst.doc().resources.line_type(new_lt).unwrap().elements[1], LineElement::Mark { symbol, .. } if symbol == new_s)
+        );
+        assert!(
+            import_plan(dst.doc(), ed.doc(), &[ResourceId(9999)], Conflict::Rename)
+                .unwrap_err()
+                .contains("no resource")
+        );
         // A damaged file where a symbol contains itself must not hang.
         let mut loop_doc = ed.doc().clone();
-        if let Some(Resource { body: ResourceBody::Graphic(g), .. }) = loop_doc.resources.get_mut(s) {
-            **g = GraphicResource::Symbol(SymbolDef { items: vec![SymbolItem { shape: Shape::Symbol { symbol: s, at: DVec2::ZERO, rotation: 0.0, scale: 1.0, scale_y: None }, attrs: Attributes::default(), class: None }], ..Default::default() });
+        if let Some(Resource {
+            body: ResourceBody::Graphic(g),
+            ..
+        }) = loop_doc.resources.get_mut(s)
+        {
+            **g = GraphicResource::Symbol(SymbolDef {
+                items: vec![SymbolItem {
+                    shape: Shape::Symbol {
+                        symbol: s,
+                        at: DVec2::ZERO,
+                        rotation: 0.0,
+                        scale: 1.0,
+                        scale_y: None,
+                    },
+                    attrs: Attributes::default(),
+                    class: None,
+                }],
+                ..Default::default()
+            });
         }
-        assert!(import_plan(dst.doc(), &loop_doc, &[s], Conflict::Rename).unwrap_err().contains("uses itself"));
+        assert!(
+            import_plan(dst.doc(), &loop_doc, &[s], Conflict::Rename)
+                .unwrap_err()
+                .contains("uses itself")
+        );
         assert_eq!(Conflict::from_name("Skip"), Some(Conflict::Reuse));
         assert_eq!(Conflict::from_name("overwrite"), Some(Conflict::Replace));
         assert_eq!(Conflict::from_name("rename"), Some(Conflict::Rename));
         assert_eq!(Conflict::from_name("x"), None);
-        for s in [ImportStatus::Added, ImportStatus::Renamed, ImportStatus::Reused, ImportStatus::Replaced] {
+        for s in [
+            ImportStatus::Added,
+            ImportStatus::Renamed,
+            ImportStatus::Reused,
+            ImportStatus::Replaced,
+        ] {
             assert!(!s.id().is_empty());
         }
     }
@@ -620,51 +1028,216 @@ mod tests {
     #[test]
     fn landscape_styles_bring_their_plants() {
         let mut ed = Editor::default();
-        let plant = ResourceId(ed.execute(&Command::AddResource { name: "Lavender".into(), body: ResourceBody::plant_style(PlantStyle::default()) }).unwrap().created[0]);
+        let plant = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Lavender".into(),
+                body: ResourceBody::plant_style(PlantStyle::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
         let mut style = crate::landscape::style::LandscapeAreaStyle::default();
-        style.mix.push(crate::landscape::style::MixEntry { plant, percent: 100.0, ..Default::default() });
-        let area = ResourceId(ed.execute(&Command::AddResource { name: "Meadow".into(), body: ResourceBody::LandscapeAreaStyle(Box::new(style)) }).unwrap().created[0]);
-        assert_eq!(body_refs(&ed.doc().resources.get(area).unwrap().body), vec![plant]);
+        style.mix.push(crate::landscape::style::MixEntry {
+            plant,
+            percent: 100.0,
+            ..Default::default()
+        });
+        let area = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Meadow".into(),
+                body: ResourceBody::LandscapeAreaStyle(Box::new(style)),
+            })
+            .unwrap()
+            .created[0],
+        );
+        assert_eq!(
+            body_refs(&ed.doc().resources.get(area).unwrap().body),
+            vec![plant]
+        );
         let mut dst = Editor::default();
         // The plant is there under another ID already, with the same content: it is reused.
-        dst.execute(&Command::AddObject { shape: Shape::Circle { center: DVec2::ZERO, radius: 1.0 }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
-        dst.execute(&Command::AddResource { name: "Lavender".into(), body: ResourceBody::plant_style(PlantStyle::default()) }).unwrap();
+        dst.execute(&Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        dst.execute(&Command::AddResource {
+            name: "Lavender".into(),
+            body: ResourceBody::plant_style(PlantStyle::default()),
+        })
+        .unwrap();
         let plan = import_plan(dst.doc(), ed.doc(), &[area], Conflict::Rename).unwrap();
-        assert_eq!(plan.items.iter().map(|i| i.status).collect::<Vec<_>>(), vec![ImportStatus::Reused, ImportStatus::Added]);
+        assert_eq!(
+            plan.items.iter().map(|i| i.status).collect::<Vec<_>>(),
+            vec![ImportStatus::Reused, ImportStatus::Added]
+        );
         dst.execute(plan.command.as_ref().unwrap()).unwrap();
-        let new_area = dst.doc().resources.find_landscape_area_style("Meadow").unwrap();
+        let new_area = dst
+            .doc()
+            .resources
+            .find_landscape_area_style("Meadow")
+            .unwrap();
         let new_plant = dst.doc().resources.find_plant_style("Lavender").unwrap();
-        assert_eq!(dst.doc().resources.landscape_area_style(new_area).unwrap().mix[0].plant, new_plant);
+        assert_eq!(
+            dst.doc()
+                .resources
+                .landscape_area_style(new_area)
+                .unwrap()
+                .mix[0]
+                .plant,
+            new_plant
+        );
         assert_eq!(dst.doc().resources.plant_styles().count(), 1);
-        let remapped = remap_body(&ed.doc().resources.get(area).unwrap().body, &|_| ResourceId(77));
+        let remapped = remap_body(&ed.doc().resources.get(area).unwrap().body, &|_| {
+            ResourceId(77)
+        });
         assert_eq!(body_refs(&remapped), vec![ResourceId(77)]);
     }
 
     #[test]
     fn classes_and_layers_import_by_name() {
         let mut src = Editor::default();
-        src.execute(&Command::AddClass { name: "Paving".into(), attrs: Attributes { pen: Some(Color([1, 2, 3, 255])), ..Default::default() } }).unwrap();
-        src.execute(&Command::AddClass { name: "Trees".into(), attrs: Attributes::default() }).unwrap();
-        src.execute(&Command::AddLayer { name: "Site".into(), elevation: 250.0, scale: Some(200.0), kind: None }).unwrap();
-        src.execute(&Command::AddSheet { name: "Sheet A".into(), paper: None, orientation: None, number: None, title: None }).unwrap();
+        src.execute(&Command::AddClass {
+            name: "Paving".into(),
+            attrs: Attributes {
+                pen: Some(Color([1, 2, 3, 255])),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        src.execute(&Command::AddClass {
+            name: "Trees".into(),
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        src.execute(&Command::AddLayer {
+            name: "Site".into(),
+            elevation: 250.0,
+            scale: Some(200.0),
+            kind: None,
+        })
+        .unwrap();
+        src.execute(&Command::AddSheet {
+            name: "Sheet A".into(),
+            paper: None,
+            orientation: None,
+            number: None,
+            title: None,
+        })
+        .unwrap();
         let mut dst = Editor::default();
-        dst.execute(&Command::AddClass { name: "trees".into(), attrs: Attributes::default() }).unwrap();
-        let names = vec!["Paving".to_string(), "Trees".to_string(), "paving".to_string()];
+        dst.execute(&Command::AddClass {
+            name: "trees".into(),
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let names = vec![
+            "Paving".to_string(),
+            "Trees".to_string(),
+            "paving".to_string(),
+        ];
         let (cmd, added) = import_classes_plan(dst.doc(), src.doc(), &names).unwrap();
         assert_eq!(added, vec!["Paving".to_string()]);
         dst.execute(&cmd.unwrap()).unwrap();
-        assert_eq!(dst.doc().classes.iter().find(|c| c.name == "Paving").unwrap().attrs.pen, Some(Color([1, 2, 3, 255])));
-        assert!(import_classes_plan(dst.doc(), src.doc(), &["Nope".to_string()]).unwrap_err().contains("no class"));
-        assert_eq!(import_classes_plan(dst.doc(), src.doc(), &["Trees".to_string()]).unwrap().0, None);
+        assert_eq!(
+            dst.doc()
+                .classes
+                .iter()
+                .find(|c| c.name == "Paving")
+                .unwrap()
+                .attrs
+                .pen,
+            Some(Color([1, 2, 3, 255]))
+        );
+        assert!(
+            import_classes_plan(dst.doc(), src.doc(), &["Nope".to_string()])
+                .unwrap_err()
+                .contains("no class")
+        );
+        assert_eq!(
+            import_classes_plan(dst.doc(), src.doc(), &["Trees".to_string()])
+                .unwrap()
+                .0,
+            None
+        );
 
-        let (cmd, added) = import_layers_plan(dst.doc(), src.doc(), &["Site".to_string(), "site".to_string(), "Layer 1".to_string()]).unwrap();
+        let (cmd, added) = import_layers_plan(
+            dst.doc(),
+            src.doc(),
+            &[
+                "Site".to_string(),
+                "site".to_string(),
+                "Layer 1".to_string(),
+            ],
+        )
+        .unwrap();
         assert_eq!(added, vec!["Site".to_string()]);
         dst.execute(&cmd.unwrap()).unwrap();
         let l = dst.doc().layers.iter().find(|l| l.name == "Site").unwrap();
         assert_eq!((l.elevation, l.scale), (250.0, 200.0));
-        assert!(import_layers_plan(dst.doc(), src.doc(), &["Sheet A".to_string()]).unwrap_err().contains("sheet layer"));
-        assert!(import_layers_plan(dst.doc(), src.doc(), &["Nope".to_string()]).unwrap_err().contains("no layer"));
+        assert!(
+            import_layers_plan(dst.doc(), src.doc(), &["Sheet A".to_string()])
+                .unwrap_err()
+                .contains("sheet layer")
+        );
+        assert!(
+            import_layers_plan(dst.doc(), src.doc(), &["Nope".to_string()])
+                .unwrap_err()
+                .contains("no layer")
+        );
         assert_eq!(unique_name("A", &|n| n == "A" || n == "A 2"), "A 3");
         assert_eq!(unique_name("B", &|_| false), "B");
+    }
+
+    #[test]
+    fn a_very_long_chain_of_dependencies_is_refused() {
+        let mut doc = Document::default();
+        for k in 0..40u64 {
+            let items = if k == 0 {
+                vec![]
+            } else {
+                vec![SymbolItem {
+                    shape: Shape::Symbol {
+                        symbol: ResourceId(100 + k - 1),
+                        at: DVec2::ZERO,
+                        rotation: 0.0,
+                        scale: 1.0,
+                        scale_y: None,
+                    },
+                    attrs: Attributes::default(),
+                    class: None,
+                }]
+            };
+            doc.resources.push(Resource {
+                id: ResourceId(100 + k),
+                name: format!("S{k}"),
+                body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                    items,
+                    ..Default::default()
+                }))),
+            });
+        }
+        let err = import_plan(
+            &Document::default(),
+            &doc,
+            &[ResourceId(139)],
+            Conflict::Rename,
+        )
+        .unwrap_err();
+        assert!(err.contains("too many"), "{err}");
+        assert!(
+            import_plan(
+                &Document::default(),
+                &doc,
+                &[ResourceId(120)],
+                Conflict::Rename
+            )
+            .is_ok()
+        );
     }
 }

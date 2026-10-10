@@ -28,7 +28,12 @@ pub struct Component {
 
 impl Default for Component {
     fn default() -> Self {
-        Component { name: String::new(), material: String::new(), thickness: 100.0, color: None }
+        Component {
+            name: String::new(),
+            material: String::new(),
+            thickness: 100.0,
+            color: None,
+        }
     }
 }
 
@@ -52,7 +57,9 @@ impl Sides {
     }
 
     pub fn from_name(s: &str) -> Option<Self> {
-        [Sides::Both, Sides::Left, Sides::Right].into_iter().find(|x| x.id().eq_ignore_ascii_case(s.trim()))
+        [Sides::Both, Sides::Left, Sides::Right]
+            .into_iter()
+            .find(|x| x.id().eq_ignore_ascii_case(s.trim()))
     }
 
     /// How many edges of a path have the border.
@@ -73,7 +80,12 @@ pub struct Border {
 
 impl Default for Border {
     fn default() -> Self {
-        Border { width: 150.0, material: String::new(), color: None, sides: Sides::Both }
+        Border {
+            width: 150.0,
+            material: String::new(),
+            color: None,
+            sides: Sides::Both,
+        }
     }
 }
 
@@ -93,7 +105,12 @@ pub enum JointKind {
 }
 
 impl JointKind {
-    pub const ALL: [JointKind; 4] = [JointKind::RunningBond, JointKind::Stack, JointKind::Herringbone, JointKind::BasketWeave];
+    pub const ALL: [JointKind; 4] = [
+        JointKind::RunningBond,
+        JointKind::Stack,
+        JointKind::Herringbone,
+        JointKind::BasketWeave,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -106,7 +123,9 @@ impl JointKind {
 
     pub fn from_name(s: &str) -> Option<Self> {
         let key = s.trim().replace([' ', '-'], "_");
-        Self::ALL.into_iter().find(|k| k.id().eq_ignore_ascii_case(&key))
+        Self::ALL
+            .into_iter()
+            .find(|k| k.id().eq_ignore_ascii_case(&key))
     }
 }
 
@@ -127,7 +146,14 @@ pub struct JointPattern {
 
 impl Default for JointPattern {
     fn default() -> Self {
-        JointPattern { kind: JointKind::default(), unit_length: 200.0, unit_width: 100.0, spacing: 5.0, angle: 0.0, color: None }
+        JointPattern {
+            kind: JointKind::default(),
+            unit_length: 200.0,
+            unit_width: 100.0,
+            spacing: 5.0,
+            angle: 0.0,
+            color: None,
+        }
     }
 }
 
@@ -211,7 +237,11 @@ impl HardscapeStyle {
 
     /// The label of a style: the material, else the style name.
     pub fn label(&self, style_name: &str) -> String {
-        if self.material.trim().is_empty() { style_name.to_string() } else { self.material.clone() }
+        if self.material.trim().is_empty() {
+            style_name.to_string()
+        } else {
+            self.material.clone()
+        }
     }
 }
 
@@ -224,8 +254,14 @@ mod tests {
         let mut s = HardscapeStyle::default();
         assert!(s.validate().is_ok());
         assert_eq!(s.total_thickness(), 60.0);
-        s.components.push(Component { thickness: 40.0, ..Component::default() });
-        s.components.push(Component { thickness: 150.0, ..Component::default() });
+        s.components.push(Component {
+            thickness: 40.0,
+            ..Component::default()
+        });
+        s.components.push(Component {
+            thickness: 150.0,
+            ..Component::default()
+        });
         assert_eq!(s.total_thickness(), 250.0);
         assert_eq!(s.label("Style"), "Style");
         s.material = "Setts".into();
@@ -242,13 +278,33 @@ mod tests {
         assert!(bad(&|s| s.thickness = 0.0));
         assert!(bad(&|s| s.thickness = f64::NAN));
         assert!(bad(&|s| s.thickness = 2.0 * MAX_COORD));
-        assert!(bad(&|s| s.components.push(Component { thickness: -1.0, ..Component::default() })));
-        assert!(bad(&|s| s.components = vec![Component::default(); MAX_COMPONENTS + 1]));
-        assert!(bad(&|s| s.border = Some(Border { width: 0.0, ..Border::default() })));
-        assert!(bad(&|s| s.joints = Some(JointPattern { unit_length: 5.0, ..JointPattern::default() })));
-        assert!(bad(&|s| s.joints = Some(JointPattern { unit_width: f64::INFINITY, ..JointPattern::default() })));
-        assert!(bad(&|s| s.joints = Some(JointPattern { spacing: -1.0, ..JointPattern::default() })));
-        assert!(bad(&|s| s.joints = Some(JointPattern { angle: f64::NAN, ..JointPattern::default() })));
+        assert!(bad(&|s| s.components.push(Component {
+            thickness: -1.0,
+            ..Component::default()
+        })));
+        assert!(bad(
+            &|s| s.components = vec![Component::default(); MAX_COMPONENTS + 1]
+        ));
+        assert!(bad(&|s| s.border = Some(Border {
+            width: 0.0,
+            ..Border::default()
+        })));
+        assert!(bad(&|s| s.joints = Some(JointPattern {
+            unit_length: 5.0,
+            ..JointPattern::default()
+        })));
+        assert!(bad(&|s| s.joints = Some(JointPattern {
+            unit_width: f64::INFINITY,
+            ..JointPattern::default()
+        })));
+        assert!(bad(&|s| s.joints = Some(JointPattern {
+            spacing: -1.0,
+            ..JointPattern::default()
+        })));
+        assert!(bad(&|s| s.joints = Some(JointPattern {
+            angle: f64::NAN,
+            ..JointPattern::default()
+        })));
         assert!(!bad(&|s| s.joints = Some(JointPattern::default())));
         assert!(!bad(&|s| s.border = Some(Border::default())));
     }
@@ -259,8 +315,14 @@ mod tests {
             assert_eq!(JointKind::from_name(k.id()), Some(k));
             assert_eq!(serde_json::to_value(k).unwrap(), k.id());
         }
-        assert_eq!(JointKind::from_name("Running bond"), Some(JointKind::RunningBond));
-        assert_eq!(JointKind::from_name("basket-weave"), Some(JointKind::BasketWeave));
+        assert_eq!(
+            JointKind::from_name("Running bond"),
+            Some(JointKind::RunningBond)
+        );
+        assert_eq!(
+            JointKind::from_name("basket-weave"),
+            Some(JointKind::BasketWeave)
+        );
         assert_eq!(JointKind::from_name("x"), None);
         for s in [Sides::Both, Sides::Left, Sides::Right] {
             assert_eq!(Sides::from_name(s.id()), Some(s));
@@ -272,7 +334,8 @@ mod tests {
 
     #[test]
     fn partial_json_uses_defaults() {
-        let s: HardscapeStyle = serde_json::from_str(r#"{"material": "Setts", "joints": {"kind": "stack"}}"#).unwrap();
+        let s: HardscapeStyle =
+            serde_json::from_str(r#"{"material": "Setts", "joints": {"kind": "stack"}}"#).unwrap();
         assert_eq!(s.thickness, 60.0);
         assert_eq!(s.joints.unwrap().kind, JointKind::Stack);
         assert_eq!(s.joints.unwrap().unit_length, 200.0);

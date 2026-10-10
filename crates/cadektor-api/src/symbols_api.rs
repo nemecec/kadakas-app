@@ -6,60 +6,176 @@
 //! `pattern.segments`, and (native only) `resource.list_file|import_from_file|export_to_file`,
 //! `library.list|favorites|favorite_add|favorite_remove`.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use cadektor_core::DVec2;
 use cadektor_core::command::Command;
 use cadektor_core::graphics::{GraphicResource, TYPE_NAMES};
 use cadektor_core::library;
 use cadektor_core::model::*;
 use cadektor_core::resource::{ResourceBody, ResourceId};
-use cadektor_core::DVec2;
 
 use crate::{RpcError, Session};
 
-pub const GROUP_CREATE: (&str, &str) = ("group.create", "Group objects as one undo step. params: {ids? (default: the selection), name?}. The objects must be on one layer and in the same group. Selects the group. Returns {id}.");
-pub const GROUP_UNGROUP: (&str, &str) = ("group.ungroup", "Dissolve groups by one level. params: {ids? (default: the selection)}. Selects the freed members. Returns {members}.");
-pub const GROUP_ENTER: (&str, &str) = ("group.enter", "Enter a group (edit in place): clicks then select its members. params: {id}. The group must be a member of the group you are in now (or at the top). Returns {context}.");
-pub const GROUP_EXIT: (&str, &str) = ("group.exit", "Leave the group you are in, one level. Selects that group. Returns {context}.");
-pub const GROUP_CONTEXT: (&str, &str) = ("group.context", "The groups you have entered, outermost first. Returns {context: [id]}.");
-pub const GROUP_MEMBERS: (&str, &str) = ("group.members", "Members of a group. params: {id, deep? (all levels, default false)}. Returns {members: [id]}.");
-pub const GROUP_MOVE: (&str, &str) = ("group.move", "Move objects or groups as units. params: {ids? (default: the selection), delta: [dx, dy]}.");
-pub const GROUP_ROTATE: (&str, &str) = ("group.rotate", "Rotate objects or groups as units. params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise)}. Hardscapes, landscape areas and site models cannot be turned.");
-pub const GROUP_COPY: (&str, &str) = ("group.copy", "Copy objects or groups (with their members) and move the copies. params: {ids? (default: the selection), delta?: [dx, dy]}. Selects the copies. Returns {ids: [new ids of the copies], members}.");
-pub const SELECTION_CLICK: (&str, &str) = ("selection.click", "Select like a click does: a click on a member of a group selects the top group, unless you entered that group. params: {id, add? (toggle in the selection)}. Returns {ids}.");
-pub const SYMBOL_LIST: (&str, &str) = ("symbol.list", "Symbol definitions with their kind (2d, 3d or hybrid) and the number of instances. Returns {symbols: [{id, name, kind, items, solids, insertion, instances}]}.");
-pub const SYMBOL_GET: (&str, &str) = ("symbol.get", "One symbol definition. params: {id} (the ID or the name).");
-pub const SYMBOL_CREATE: (&str, &str) = ("symbol.create", "Create a symbol definition. params: {name, items? ([{shape, attrs?, class?}], 2D components in definition coordinates: line, rect, circle, arc, polyline, text, symbol), solids? ([{kind: extrusion, outline, base?, height, color?} | {kind: cylinder, center, radius, base?, height, color?}], 3D components), insertion? ([x, y])}. Components without a class take the class of the instance. Returns {id}.");
-pub const SYMBOL_FROM_OBJECTS: (&str, &str) = ("symbol.from_objects", "Make a symbol definition from objects (groups count as their members). params: {name, ids? (default: the selection), insertion? (default: the center), replace? (replace the objects by one instance)}. Returns {id, instance?}.");
-pub const SYMBOL_PLACE: (&str, &str) = ("symbol.place", "Place an instance of a symbol. params: {symbol (ID or name), at: [x, y], rotation? (radians), scale? (default 1; negative mirrors), scale_y? (for an asymmetric scale), layer?, class?}. Returns {id}.");
-pub const SYMBOL_SET: (&str, &str) = ("symbol.set", "Change instances. params: {id | ids, at?, rotation?, scale?, scale_y? (null makes the scale symmetric again), symbol? (another definition)}.");
-pub const SYMBOL_CONVERT_TO_GROUP: (&str, &str) = ("symbol.convert_to_group", "Replace instances by groups of plain objects. params: {ids? (default: the selection)}. Returns {groups: [id]}.");
-pub const SYMBOL_EDIT: (&str, &str) = ("symbol.edit", "Edit the 2D components of a symbol in place (Edit 2D Components). The components appear as a group at the instance, which is hidden, and you enter the group. Edit them with execute, then call symbol.edit_end. params: {id (instance)}. Returns {group}.");
-pub const SYMBOL_EDIT_END: (&str, &str) = ("symbol.edit_end", "Finish editing a symbol: the objects of the edit group become the 2D components, and all instances change. params: {group?} (default: the edit group you are in).");
-pub const RESOURCE_LIST: (&str, &str) = ("resource.list", "All resources of the document (the Resource Manager). params: {type? (plant_style, hardscape_style, landscape_area_style, record_format, data_map, worksheet, symbol, hatch, tile, line_type, texture), search? (part of the name or type), thumbnails? (adds an SVG of each)}. Returns {resources: [{id, name, type, used_by, depends_on, thumbnail?}]}.");
-pub const RESOURCE_GET: (&str, &str) = ("resource.get", "One resource with its content and who uses it. params: {id} (the ID or the name; add type for a name).");
-pub const RESOURCE_CREATE: (&str, &str) = ("resource.create", "Create a symbol, hatch, tile, line type or texture. params: {type, name, ...fields}. hatch: {units? (paper|world), lines: [{angle (degrees), spacing, offset?, origin?, dash? ([dash, gap, ...]), color?, weight?}]}. tile: {symbol, width, height, row_shift?, angle?, scale?, units?}. line_type: {units?, elements: [{kind: dash, length} | {kind: gap, length} | {kind: mark, symbol, scale?, rotate?}]}. texture: {color, size?, reflectivity?, transparency?, image?}. symbol: as symbol.create. Returns {id}.");
-pub const RESOURCE_UPDATE: (&str, &str) = ("resource.update", "Change a graphic resource. params: {id, name? (renames), ...fields as in resource.create}. Fields you give replace the old ones. Every user follows at once.");
-pub const RESOURCE_RENAME: (&str, &str) = ("resource.rename", "Rename any resource. params: {id, name}.");
-pub const RESOURCE_DUPLICATE: (&str, &str) = ("resource.duplicate", "Copy any resource. params: {id, name?}. Returns {id}.");
-pub const RESOURCE_DELETE: (&str, &str) = ("resource.delete", "Delete any resource. params: {id, reassign?}. Fails if it is used, unless reassign names another resource of the same type.");
-pub const RESOURCE_PURGE_UNUSED: (&str, &str) = ("resource.purge_unused", "Delete the resources that nothing uses, as one undo step (a tile that is unused frees its symbol too). params: {types? (default: all but worksheets and data maps), dry_run?}. Returns {removed: [{id, name, type}]}.");
-pub const RESOURCE_THUMBNAIL: (&str, &str) = ("resource.thumbnail", "A thumbnail of a resource. params: {id, size? (px, default 64)}. Returns {svg}.");
-pub const PATTERN_SEGMENTS: (&str, &str) = ("pattern.segments", "The lines that a hatch or tile draws in a polygon, clipped to it (what the canvas, SVG, PDF and DXF draw). params: {pattern (ID or name), ring: [[x, y]], holes? ([[[x, y]]]), scale? (model mm per paper mm, default 100)}. Returns {count, total_length, segments? (the first 1000)}.");
+pub const GROUP_CREATE: (&str, &str) = (
+    "group.create",
+    "Group objects as one undo step. params: {ids? (default: the selection), name?}. The objects must be on one layer and in the same group. Selects the group. Returns {id}.",
+);
+pub const GROUP_UNGROUP: (&str, &str) = (
+    "group.ungroup",
+    "Dissolve groups by one level. params: {ids? (default: the selection)}. Selects the freed members. Returns {members}.",
+);
+pub const GROUP_ENTER: (&str, &str) = (
+    "group.enter",
+    "Enter a group (edit in place): clicks then select its members. params: {id}. The group must be a member of the group you are in now (or at the top). Returns {context}.",
+);
+pub const GROUP_EXIT: (&str, &str) = (
+    "group.exit",
+    "Leave the group you are in, one level. Selects that group. Returns {context}.",
+);
+pub const GROUP_CONTEXT: (&str, &str) = (
+    "group.context",
+    "The groups you have entered, outermost first. Returns {context: [id]}.",
+);
+pub const GROUP_MEMBERS: (&str, &str) = (
+    "group.members",
+    "Members of a group. params: {id, deep? (all levels, default false)}. Returns {members: [id]}.",
+);
+pub const GROUP_MOVE_INTO: (&str, &str) = (
+    "group.move_into",
+    "Move objects into a group. params: {ids? (default: the selection), group}. They must be on the layer of the group. A group that loses its last member goes.",
+);
+pub const GROUP_MOVE_OUT: (&str, &str) = (
+    "group.move_out",
+    "Move objects out of their group, to the top level. params: {ids? (default: the selection)}.",
+);
+pub const GROUP_MOVE: (&str, &str) = (
+    "group.move",
+    "Move objects or groups as units. params: {ids? (default: the selection), delta: [dx, dy]}.",
+);
+pub const GROUP_ROTATE: (&str, &str) = (
+    "group.rotate",
+    "Rotate objects or groups as units. params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise)}. Hardscapes, landscape areas and site models cannot be turned.",
+);
+pub const GROUP_COPY: (&str, &str) = (
+    "group.copy",
+    "Copy objects or groups (with their members) and move the copies. params: {ids? (default: the selection), delta?: [dx, dy]}. Selects the copies. Returns {ids: [new ids of the copies], members}.",
+);
+pub const SELECTION_CLICK: (&str, &str) = (
+    "selection.click",
+    "Select like a click does: a click on a member of a group selects the top group, unless you entered that group. params: {id, add? (toggle in the selection)}. Returns {ids}.",
+);
+pub const SYMBOL_LIST: (&str, &str) = (
+    "symbol.list",
+    "Symbol definitions with their kind (2d, 3d or hybrid) and the number of instances. Returns {symbols: [{id, name, kind, items, solids, insertion, instances}]}.",
+);
+pub const SYMBOL_GET: (&str, &str) = (
+    "symbol.get",
+    "One symbol definition. params: {id} (the ID or the name).",
+);
+pub const SYMBOL_CREATE: (&str, &str) = (
+    "symbol.create",
+    "Create a symbol definition. params: {name, units? (world (default) | paper), insert_class?, rotate_on_insert?, items? ([{shape, attrs?, class?}], 2D components in definition coordinates: line, rect, circle, arc, polyline, text, symbol), solids? ([{kind: extrusion, outline, base?, height, color?} | {kind: cylinder, center, radius, base?, height, color?}], 3D components), insertion? ([x, y])}. Components without a class take the class of the instance. Returns {id}.",
+);
+pub const SYMBOL_FROM_OBJECTS: (&str, &str) = (
+    "symbol.from_objects",
+    "Make a symbol definition from objects (groups count as their members). params: {name, ids? (default: the selection), insertion? (default: the center), replace? (replace the objects by one instance)}. Returns {id, instance?}.",
+);
+pub const SYMBOL_PLACE: (&str, &str) = (
+    "symbol.place",
+    "Place an instance of a symbol. params: {symbol (ID or name), at: [x, y], rotation? (radians), rotate_to? ([x, y]: turn toward this point, for a symbol with rotate_on_insert), scale? (default 1; negative mirrors), scale_y? (for an asymmetric scale), layer?, class? (default: insert_class of the definition)}. A symbol with units paper (north arrow, tag) keeps its paper size at any drawing scale. Returns {id}.",
+);
+pub const SYMBOL_SET: (&str, &str) = (
+    "symbol.set",
+    "Change instances. params: {id | ids, at?, rotation?, scale?, scale_y? (null makes the scale symmetric again), symbol? (another definition)}.",
+);
+pub const SYMBOL_CONVERT_TO_GROUP: (&str, &str) = (
+    "symbol.convert_to_group",
+    "Replace instances by groups of plain objects. params: {ids? (default: the selection)}. Returns {groups: [id]}.",
+);
+pub const SYMBOL_EDIT: (&str, &str) = (
+    "symbol.edit",
+    "Edit the 2D components of a symbol in place (Edit 2D Components). The components appear as a group at the instance, which is hidden, and you enter the group. Edit them with execute, then call symbol.edit_end. params: {id (instance)}. Returns {group}.",
+);
+pub const SYMBOL_EDIT_END: (&str, &str) = (
+    "symbol.edit_end",
+    "Finish editing a symbol: the objects of the edit group become the 2D components, and all instances change. params: {group?} (default: the edit group you are in).",
+);
+pub const RESOURCE_LIST: (&str, &str) = (
+    "resource.list",
+    "All resources of the document (the Resource Manager). params: {type? (plant_style, hardscape_style, landscape_area_style, record_format, data_map, worksheet, symbol, hatch, tile, line_type, texture), search? (part of the name or type), thumbnails? (adds an SVG of each)}. Returns {resources: [{id, name, type, used_by, depends_on, thumbnail?}]}.",
+);
+pub const RESOURCE_GET: (&str, &str) = (
+    "resource.get",
+    "One resource with its content and who uses it. params: {id} (the ID or the name; add type for a name).",
+);
+pub const RESOURCE_CREATE: (&str, &str) = (
+    "resource.create",
+    "Create a symbol, hatch, tile, line type or texture. params: {type, name, ...fields}. hatch: {units? (paper|world), lines: [{angle (degrees), spacing, offset?, origin?, dash? ([dash, gap, ...]), color?, weight?}]}. tile: {symbol, width, height, row_shift?, angle?, scale?, units?}. line_type: {units?, elements: [{kind: dash, length} | {kind: gap, length} | {kind: mark, symbol, scale?, rotate?}]}. texture: {color, size?, reflectivity?, transparency?, image?}. symbol: as symbol.create. Returns {id}.",
+);
+pub const RESOURCE_UPDATE: (&str, &str) = (
+    "resource.update",
+    "Change a graphic resource. params: {id, name? (renames), ...fields as in resource.create}. Fields you give replace the old ones. Every user follows at once.",
+);
+pub const RESOURCE_RENAME: (&str, &str) = (
+    "resource.rename",
+    "Rename any resource. params: {id, name}.",
+);
+pub const RESOURCE_DUPLICATE: (&str, &str) = (
+    "resource.duplicate",
+    "Copy any resource. params: {id, name?}. Returns {id}.",
+);
+pub const RESOURCE_DELETE: (&str, &str) = (
+    "resource.delete",
+    "Delete any resource. params: {id, reassign?}. Fails if it is used, unless reassign names another resource of the same type.",
+);
+pub const RESOURCE_PURGE_UNUSED: (&str, &str) = (
+    "resource.purge_unused",
+    "Delete the resources that nothing uses, as one undo step (a tile that is unused frees its symbol too). params: {types? (default: all but worksheets and data maps), dry_run?}. Returns {removed: [{id, name, type}]}.",
+);
+pub const RESOURCE_THUMBNAIL: (&str, &str) = (
+    "resource.thumbnail",
+    "A thumbnail of a resource. params: {id, size? (px, default 64)}. Returns {svg}.",
+);
+pub const PATTERN_SEGMENTS: (&str, &str) = (
+    "pattern.segments",
+    "The lines that a hatch or tile draws in a polygon, clipped to it (what the canvas, SVG, PDF and DXF draw). params: {pattern (ID or name), ring: [[x, y]], holes? ([[[x, y]]]), scale? (model mm per paper mm, default 100)}. Returns {count, total_length, segments? (the first 1000)}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const RESOURCE_LIST_FILE: (&str, &str) = ("resource.list_file", "What a library file holds. params: {path | library (a file in the library folder)}. Returns {resources: [{id, name, type, depends_on}], classes, layers}.");
+pub const RESOURCE_LIST_FILE: (&str, &str) = (
+    "resource.list_file",
+    "What a library file holds. params: {path | library (a file in the library folder)}. Returns {resources: [{id, name, type, depends_on}], classes, layers}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const RESOURCE_IMPORT_FROM_FILE: (&str, &str) = ("resource.import_from_file", "Import resources from another .cdk.json file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.");
+pub const RESOURCE_IMPORT_FROM_FILE: (&str, &str) = (
+    "resource.import_from_file",
+    "Import resources from another .cdk.json file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const RESOURCE_EXPORT_TO_FILE: (&str, &str) = ("resource.export_to_file", "Save resources (with the ones they need) as a library file. params: {path | library, ids? (default: all), overwrite?}. Returns {path, count}.");
+pub const RESOURCE_EXPORT_TO_FILE: (&str, &str) = (
+    "resource.export_to_file",
+    "Save resources (with the ones they need) as a library file. params: {path | library, ids? (default: all), overwrite?}. Returns {path, count}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const LIBRARY_LIST: (&str, &str) = ("library.list", "The library files in the per-user library folder (set CADEKTOR_LIBRARY_DIR to change it). Returns {dir, files: [{file, resources}]}.");
+pub const LIBRARY_LIST: (&str, &str) = (
+    "library.list",
+    "The library files in the per-user library folder (set CADEKTOR_LIBRARY_DIR to change it). Returns {dir, files: [{file, resources}]}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const LIBRARY_FAVORITES: (&str, &str) = ("library.favorites", "The favorite resources: {library, type, name}. Returns {favorites}.");
+pub const LIBRARY_FAVORITES: (&str, &str) = (
+    "library.favorites",
+    "The favorite resources: {library, type, name}. Returns {favorites}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const LIBRARY_FAVORITE_ADD: (&str, &str) = ("library.favorite_add", "Mark a resource of a library file as a favorite. params: {library, type, name}.");
+pub const LIBRARY_FAVORITE_ADD: (&str, &str) = (
+    "library.favorite_add",
+    "Mark a resource of a library file as a favorite. params: {library, type, name}.",
+);
 #[cfg(not(target_arch = "wasm32"))]
-pub const LIBRARY_FAVORITE_REMOVE: (&str, &str) = ("library.favorite_remove", "Remove a favorite. params: {library, type, name}.");
+pub const LIBRARY_FAVORITE_REMOVE: (&str, &str) = (
+    "library.favorite_remove",
+    "Remove a favorite. params: {library, type, name}.",
+);
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
@@ -83,11 +199,17 @@ pub fn describe() -> Value {
 }
 
 fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: -32602, message: e.to_string() }
+    RpcError {
+        code: -32602,
+        message: e.to_string(),
+    }
 }
 
 fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: 1, message: e.to_string() }
+    RpcError {
+        code: 1,
+        message: e.to_string(),
+    }
 }
 
 fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcError> {
@@ -95,15 +217,23 @@ fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcEr
 }
 
 fn text(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
-    required(m, key)?.as_str().map(str::to_string).ok_or_else(|| bad(format!("'{key}' must be text")))
+    required(m, key)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| bad(format!("'{key}' must be text")))
 }
 
 fn num(v: &Value, key: &str) -> Result<f64, RpcError> {
-    v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(format!("'{key}' must be a number")))
+    v.as_f64()
+        .filter(|x| x.is_finite())
+        .ok_or_else(|| bad(format!("'{key}' must be a number")))
 }
 
 fn point(v: &Value, key: &str) -> Result<DVec2, RpcError> {
-    serde_json::from_value::<DVec2>(v.clone()).ok().filter(|p| p.is_finite()).ok_or_else(|| bad(format!("'{key}' must be [x, y]")))
+    serde_json::from_value::<DVec2>(v.clone())
+        .ok()
+        .filter(|p| p.is_finite())
+        .ok_or_else(|| bad(format!("'{key}' must be [x, y]")))
 }
 
 fn ids_of(s: &Session, m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError> {
@@ -123,12 +253,21 @@ fn ids_of(s: &Session, m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError
 /// A resource by ID or by name. `ty` limits a name lookup to one type (and checks the type of an ID).
 fn resource_ref(doc: &Document, v: &Value, ty: Option<&str>) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| doc.resources.get(*id).is_some_and(|r| ty.is_none_or(|t| r.body.type_name() == t))),
+        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| {
+            doc.resources
+                .get(*id)
+                .is_some_and(|r| ty.is_none_or(|t| r.body.type_name() == t))
+        }),
         Value::String(name) => {
-            let mut hits = doc.resources.iter().filter(|r| r.name.eq_ignore_ascii_case(name.trim()) && ty.is_none_or(|t| r.body.type_name() == t));
+            let mut hits = doc.resources.iter().filter(|r| {
+                r.name.eq_ignore_ascii_case(name.trim())
+                    && ty.is_none_or(|t| r.body.type_name() == t)
+            });
             let first = hits.next().map(|r| r.id);
             if first.is_some() && hits.next().is_some() {
-                return Err(bad(format!("several resources are named '{name}'. Give the ID or the type")));
+                return Err(bad(format!(
+                    "several resources are named '{name}'. Give the ID or the type"
+                )));
             }
             first
         }
@@ -160,9 +299,16 @@ fn resource_json(doc: &Document, id: ResourceId) -> Value {
 }
 
 /// The body of a graphic resource from the fields of a request.
-fn graphic_from(ty: &str, m: &Map<String, Value>, base: Option<&GraphicResource>) -> Result<GraphicResource, RpcError> {
+fn graphic_from(
+    ty: &str,
+    m: &Map<String, Value>,
+    base: Option<&GraphicResource>,
+) -> Result<GraphicResource, RpcError> {
     if !TYPE_NAMES.contains(&ty) {
-        return Err(bad(format!("unknown type '{ty}'. Types: {}", TYPE_NAMES.join(", "))));
+        return Err(bad(format!(
+            "unknown type '{ty}'. Types: {}",
+            TYPE_NAMES.join(", ")
+        )));
     }
     let mut v = match base {
         Some(b) => serde_json::to_value(b).map_err(app)?,
@@ -175,20 +321,59 @@ fn graphic_from(ty: &str, m: &Map<String, Value>, base: Option<&GraphicResource>
             obj.insert(k.clone(), x.clone());
         }
     }
-    let g: GraphicResource = serde_json::from_value(v).map_err(|e| bad(format!("not a valid {ty}: {e}")))?;
+    let g: GraphicResource =
+        serde_json::from_value(v).map_err(|e| bad(format!("not a valid {ty}: {e}")))?;
     g.validate().map_err(bad)?;
     Ok(g)
 }
 
 fn unique_copy_name(doc: &Document, ty: &str, base: &str) -> String {
-    library::unique_name(&format!("{base} copy"), &|n| doc.resources.iter().any(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(n)))
+    library::unique_name(&format!("{base} copy"), &|n| {
+        doc.resources
+            .iter()
+            .any(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(n))
+    })
 }
 
 const METHOD_NAMES: &[&str] = &[
-    "group.create", "group.ungroup", "group.enter", "group.exit", "group.context", "group.members", "group.move", "group.rotate", "group.copy", "selection.click",
-    "symbol.list", "symbol.get", "symbol.create", "symbol.from_objects", "symbol.place", "symbol.set", "symbol.convert_to_group", "symbol.edit", "symbol.edit_end",
-    "resource.list", "resource.get", "resource.create", "resource.update", "resource.rename", "resource.duplicate", "resource.delete", "resource.purge_unused", "resource.thumbnail",
-    "pattern.segments", "resource.list_file", "resource.import_from_file", "resource.export_to_file", "library.list", "library.favorites", "library.favorite_add", "library.favorite_remove",
+    "group.create",
+    "group.move_into",
+    "group.move_out",
+    "group.ungroup",
+    "group.enter",
+    "group.exit",
+    "group.context",
+    "group.members",
+    "group.move",
+    "group.rotate",
+    "group.copy",
+    "selection.click",
+    "symbol.list",
+    "symbol.get",
+    "symbol.create",
+    "symbol.from_objects",
+    "symbol.place",
+    "symbol.set",
+    "symbol.convert_to_group",
+    "symbol.edit",
+    "symbol.edit_end",
+    "resource.list",
+    "resource.get",
+    "resource.create",
+    "resource.update",
+    "resource.rename",
+    "resource.duplicate",
+    "resource.delete",
+    "resource.purge_unused",
+    "resource.thumbnail",
+    "pattern.segments",
+    "resource.list_file",
+    "resource.import_from_file",
+    "resource.export_to_file",
+    "library.list",
+    "library.favorites",
+    "library.favorite_add",
+    "library.favorite_remove",
 ];
 
 /// Handles a method of this module. `None` means that the method is not one of ours.
@@ -220,7 +405,10 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         }
         "group.ungroup" => {
             let ids = ids_of(s, m)?;
-            let members: Vec<ObjectId> = ids.iter().flat_map(|g| s.editor.doc().children(*g)).collect();
+            let members: Vec<ObjectId> = ids
+                .iter()
+                .flat_map(|g| s.editor.doc().children(*g))
+                .collect();
             exec(s, &Command::Ungroup { ids })?;
             s.selection = members.clone();
             Ok(json!({ "members": members }))
@@ -232,14 +420,19 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 return Err(app(format!("object {id} is not a group")));
             }
             if doc.selection_target(id, s.edit_context()) != Some(id) {
-                return Err(app(format!("group {id} is not inside the group you are in")));
+                return Err(app(format!(
+                    "group {id} is not inside the group you are in"
+                )));
             }
             s.context.push(id);
             s.selection.clear();
             Ok(json!({ "context": s.context }))
         }
         "group.exit" => {
-            let left = s.context.pop().ok_or_else(|| app("you are not in a group"))?;
+            let left = s
+                .context
+                .pop()
+                .ok_or_else(|| app("you are not in a group"))?;
             s.selection = vec![left];
             Ok(json!({ "context": s.context }))
         }
@@ -252,6 +445,19 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             }
             let deep = m.get("deep").and_then(Value::as_bool).unwrap_or(false);
             Ok(json!({ "members": if deep { doc.descendants(id) } else { doc.children(id) } }))
+        }
+        "group.move_into" | "group.move_out" => {
+            let ids = ids_of(s, m)?;
+            let parent = if method == "group.move_into" {
+                Some(
+                    serde_json::from_value::<ObjectId>(required(m, "group")?.clone())
+                        .map_err(bad)?,
+                )
+            } else {
+                None
+            };
+            exec(s, &Command::SetParent { ids, parent })?;
+            Ok(json!({ "ok": true }))
         }
         "group.move" => {
             let ids = ids_of(s, m)?;
@@ -268,7 +474,11 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         }
         "group.copy" => {
             let ids = ids_of(s, m)?;
-            let delta = m.get("delta").map(|d| point(d, "delta")).transpose()?.unwrap_or(DVec2::ZERO);
+            let delta = m
+                .get("delta")
+                .map(|d| point(d, "delta"))
+                .transpose()?
+                .unwrap_or(DVec2::ZERO);
             let n = ids.len();
             let out = exec(s, &Command::CopyObjects { ids, delta })?;
             let all: Vec<ObjectId> = out.created.iter().map(|i| ObjectId(*i)).collect();
@@ -278,8 +488,11 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         "selection.click" => {
             let id: ObjectId = serde_json::from_value(required(m, "id")?.clone()).map_err(bad)?;
             let doc = s.editor.doc();
-            doc.object(id).ok_or_else(|| app(format!("object {id} does not exist")))?;
-            let target = doc.selection_target(id, s.edit_context()).ok_or_else(|| app(format!("object {id} is not inside the group you are in")))?;
+            doc.object(id)
+                .ok_or_else(|| app(format!("object {id} does not exist")))?;
+            let target = doc
+                .selection_target(id, s.edit_context())
+                .ok_or_else(|| app(format!("object {id} is not inside the group you are in")))?;
             if m.get("add").and_then(Value::as_bool).unwrap_or(false) {
                 match s.selection.iter().position(|x| *x == target) {
                     Some(i) => {
@@ -310,6 +523,16 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let id = resource_ref(doc, required(m, "id")?, Some("symbol"))?;
             let mut v = resource_json(doc, id);
             v["instances"] = json!(cadektor_core::symbols::instance_ids(doc, id));
+            let (_, truncated) = cadektor_core::symbols::expand_report(
+                &doc.resources,
+                id,
+                &glam::DAffine2::IDENTITY,
+            );
+            if truncated {
+                v["warning"] = json!(
+                    "the symbol is too big or too deep: some components are left out of drawings"
+                );
+            }
             Ok(v)
         }
         "symbol.create" => {
@@ -320,15 +543,32 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 fields.insert("insertion".into(), json!(point(&i, "insertion")?));
             }
             let g = graphic_from("symbol", &fields, None)?;
-            let out = exec(s, &Command::AddResource { name, body: ResourceBody::Graphic(Box::new(g)) })?;
+            let out = exec(
+                s,
+                &Command::AddResource {
+                    name,
+                    body: ResourceBody::Graphic(Box::new(g)),
+                },
+            )?;
             Ok(json!({ "id": out.created[0] }))
         }
         "symbol.from_objects" => {
             let ids = ids_of(s, m)?;
             let name = text(m, "name")?;
-            let insertion = m.get("insertion").map(|i| point(i, "insertion")).transpose()?;
+            let insertion = m
+                .get("insertion")
+                .map(|i| point(i, "insertion"))
+                .transpose()?;
             let replace = m.get("replace").and_then(Value::as_bool).unwrap_or(false);
-            let out = exec(s, &Command::CreateSymbol { name, ids, insertion, replace })?;
+            let out = exec(
+                s,
+                &Command::CreateSymbol {
+                    name,
+                    ids,
+                    insertion,
+                    replace,
+                },
+            )?;
             if let Some(inst) = out.created.get(1) {
                 s.selection = vec![ObjectId(*inst)];
             }
@@ -338,13 +578,55 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let doc = s.editor.doc();
             let symbol = resource_ref(doc, required(m, "symbol")?, Some("symbol"))?;
             let at = point(required(m, "at")?, "at")?;
-            let rotation = m.get("rotation").map(|v| num(v, "rotation")).transpose()?.unwrap_or(0.0);
-            let scale = m.get("scale").map(|v| num(v, "scale")).transpose()?.unwrap_or(1.0);
-            let scale_y = m.get("scale_y").filter(|v| !v.is_null()).map(|v| num(v, "scale_y")).transpose()?;
-            let layer = m.get("layer").map(|v| serde_json::from_value(v.clone())).transpose().map_err(bad)?;
-            let class = m.get("class").map(|v| serde_json::from_value(v.clone())).transpose().map_err(bad)?;
-            let shape = Shape::Symbol { symbol, at, rotation, scale, scale_y };
-            let out = exec(s, &Command::AddObject { shape, layer, class, attrs: Attributes::default() })?;
+            let def = doc.resources.symbol(symbol).expect("checked");
+            // A symbol that turns on insert faces the second point; the class of the definition applies when none is given.
+            let rotate_to = m
+                .get("rotate_to")
+                .map(|v| point(v, "rotate_to"))
+                .transpose()?;
+            let rotation = match (m.get("rotation"), rotate_to) {
+                (Some(v), _) => num(v, "rotation")?,
+                (None, Some(to)) if def.rotate_on_insert => (to - at).y.atan2((to - at).x),
+                _ => 0.0,
+            };
+            let insert_class = def.insert_class;
+            let scale = m
+                .get("scale")
+                .map(|v| num(v, "scale"))
+                .transpose()?
+                .unwrap_or(1.0);
+            let scale_y = m
+                .get("scale_y")
+                .filter(|v| !v.is_null())
+                .map(|v| num(v, "scale_y"))
+                .transpose()?;
+            let layer = m
+                .get("layer")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()
+                .map_err(bad)?;
+            let class = m
+                .get("class")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()
+                .map_err(bad)?
+                .or(insert_class);
+            let shape = Shape::Symbol {
+                symbol,
+                at,
+                rotation,
+                scale,
+                scale_y,
+            };
+            let out = exec(
+                s,
+                &Command::AddObject {
+                    shape,
+                    layer,
+                    class,
+                    attrs: Attributes::default(),
+                },
+            )?;
             Ok(json!({ "id": out.created[0] }))
         }
         "symbol.set" => {
@@ -352,24 +634,53 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let mut cmds = Vec::new();
             for id in ids {
                 let doc = s.editor.doc();
-                let o = doc.object(id).ok_or_else(|| app(format!("object {id} does not exist")))?;
-                let Shape::Symbol { symbol, at, rotation, scale, scale_y } = o.shape.clone() else { return Err(app(format!("object {id} is not a symbol instance"))) };
+                let o = doc
+                    .object(id)
+                    .ok_or_else(|| app(format!("object {id} does not exist")))?;
+                let Shape::Symbol {
+                    symbol,
+                    at,
+                    rotation,
+                    scale,
+                    scale_y,
+                } = o.shape.clone()
+                else {
+                    return Err(app(format!("object {id} is not a symbol instance")));
+                };
                 let symbol = match m.get("symbol") {
                     Some(v) => resource_ref(doc, v, Some("symbol"))?,
                     None => symbol,
                 };
                 let shape = Shape::Symbol {
                     symbol,
-                    at: m.get("at").map(|v| point(v, "at")).transpose()?.unwrap_or(at),
-                    rotation: m.get("rotation").map(|v| num(v, "rotation")).transpose()?.unwrap_or(rotation),
-                    scale: m.get("scale").map(|v| num(v, "scale")).transpose()?.unwrap_or(scale),
+                    at: m
+                        .get("at")
+                        .map(|v| point(v, "at"))
+                        .transpose()?
+                        .unwrap_or(at),
+                    rotation: m
+                        .get("rotation")
+                        .map(|v| num(v, "rotation"))
+                        .transpose()?
+                        .unwrap_or(rotation),
+                    scale: m
+                        .get("scale")
+                        .map(|v| num(v, "scale"))
+                        .transpose()?
+                        .unwrap_or(scale),
                     scale_y: match m.get("scale_y") {
                         Some(Value::Null) => None,
                         Some(v) => Some(num(v, "scale_y")?),
                         None => scale_y,
                     },
                 };
-                cmds.push(Command::ModifyObject { id, shape: Some(shape), layer: None, class: None, attrs: None });
+                cmds.push(Command::ModifyObject {
+                    id,
+                    shape: Some(shape),
+                    layer: None,
+                    class: None,
+                    attrs: None,
+                });
             }
             exec(s, &Command::Batch { commands: cmds })?;
             Ok(json!({ "ok": true }))
@@ -391,7 +702,17 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         "symbol.edit_end" => {
             let group = match m.get("group") {
                 Some(v) => serde_json::from_value(v.clone()).map_err(bad)?,
-                None => s.context.iter().rev().copied().find(|g| s.editor.doc().object(*g).is_some_and(|o| o.data.contains_key(cadektor_core::symbols::EDIT_GROUP_KEY))).ok_or_else(|| app("you are not editing a symbol"))?,
+                None => s
+                    .context
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|g| {
+                        s.editor.doc().object(*g).is_some_and(|o| {
+                            o.data.contains_key(cadektor_core::symbols::EDIT_GROUP_KEY)
+                        })
+                    })
+                    .ok_or_else(|| app("you are not editing a symbol"))?,
             };
             exec(s, &Command::ExitSymbolEdit { group })?;
             s.context.retain(|g| *g != group);
@@ -402,13 +723,17 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let doc = s.editor.doc();
             let ty = m.get("type").and_then(Value::as_str);
             let search = m.get("search").and_then(Value::as_str);
-            let thumbs = m.get("thumbnails").and_then(Value::as_bool).unwrap_or(false);
+            let thumbs = m
+                .get("thumbnails")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let rows: Vec<Value> = library::list(doc, ty, search)
                 .iter()
                 .map(|i| {
                     let mut v = info_json(doc, i);
                     if thumbs {
-                        v["thumbnail"] = json!(cadektor_core::thumbnail::thumbnail(doc, i.id).to_svg(64));
+                        v["thumbnail"] =
+                            json!(cadektor_core::thumbnail::thumbnail(doc, i.id).to_svg(64));
                     }
                     v
                 })
@@ -417,7 +742,11 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         }
         "resource.get" => {
             let doc = s.editor.doc();
-            let id = resource_ref(doc, required(m, "id")?, m.get("type").and_then(Value::as_str))?;
+            let id = resource_ref(
+                doc,
+                required(m, "id")?,
+                m.get("type").and_then(Value::as_str),
+            )?;
             Ok(resource_json(doc, id))
         }
         "resource.create" => {
@@ -430,14 +759,24 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 fields.insert("insertion".into(), json!(point(&i, "insertion")?));
             }
             let g = graphic_from(&ty, &fields, None)?;
-            let out = exec(s, &Command::AddResource { name, body: ResourceBody::Graphic(Box::new(g)) })?;
+            let out = exec(
+                s,
+                &Command::AddResource {
+                    name,
+                    body: ResourceBody::Graphic(Box::new(g)),
+                },
+            )?;
             Ok(json!({ "id": out.created[0] }))
         }
         "resource.update" => {
             let doc = s.editor.doc();
             let id = resource_ref(doc, required(m, "id")?, None)?;
             let cur = doc.resources.get(id).expect("exists");
-            let ResourceBody::Graphic(g) = &cur.body else { return Err(bad("resource.update changes symbols, hatches, tiles, line types and textures. Use the update method of the type, such as plant_style.update")) };
+            let ResourceBody::Graphic(g) = &cur.body else {
+                return Err(bad(
+                    "resource.update changes symbols, hatches, tiles, line types and textures. Use the update method of the type, such as plant_style.update",
+                ));
+            };
             let mut fields = m.clone();
             resolve_names(doc, &mut fields)?;
             let name = match fields.remove("name") {
@@ -446,13 +785,27 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 Some(_) => return Err(bad("'name' must be text")),
             };
             let new = graphic_from(g.type_name(), &fields, Some(g))?;
-            exec(s, &Command::ModifyResource { id, name, body: Some(ResourceBody::Graphic(Box::new(new))) })?;
+            exec(
+                s,
+                &Command::ModifyResource {
+                    id,
+                    name,
+                    body: Some(ResourceBody::Graphic(Box::new(new))),
+                },
+            )?;
             Ok(resource_json(s.editor.doc(), id))
         }
         "resource.rename" => {
             let id = resource_ref(s.editor.doc(), required(m, "id")?, None)?;
             let name = text(m, "name")?;
-            exec(s, &Command::ModifyResource { id, name: Some(name), body: None })?;
+            exec(
+                s,
+                &Command::ModifyResource {
+                    id,
+                    name: Some(name),
+                    body: None,
+                },
+            )?;
             Ok(json!({ "ok": true }))
         }
         "resource.duplicate" => {
@@ -464,13 +817,23 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 Some(_) => return Err(bad("'name' must be text")),
                 None => unique_copy_name(doc, r.body.type_name(), &r.name),
             };
-            let out = exec(s, &Command::AddResource { name, body: r.body.clone() })?;
+            let out = exec(
+                s,
+                &Command::AddResource {
+                    name,
+                    body: r.body.clone(),
+                },
+            )?;
             Ok(json!({ "id": out.created[0] }))
         }
         "resource.delete" => {
             let doc = s.editor.doc();
             let id = resource_ref(doc, required(m, "id")?, None)?;
-            let reassign = m.get("reassign").filter(|v| !v.is_null()).map(|v| resource_ref(doc, v, None)).transpose()?;
+            let reassign = m
+                .get("reassign")
+                .filter(|v| !v.is_null())
+                .map(|v| resource_ref(doc, v, None))
+                .transpose()?;
             exec(s, &Command::DeleteResource { id, reassign })?;
             Ok(json!({ "ok": true }))
         }
@@ -482,9 +845,19 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             };
             let refs: Vec<&str> = types.iter().map(String::as_str).collect();
             let plan = library::purge_plan(doc, &refs);
-            let removed: Vec<Value> = plan.iter().filter_map(|id| doc.resources.get(*id)).map(|r| json!({"id": r.id, "name": r.name, "type": r.body.type_name()})).collect();
+            let removed: Vec<Value> = plan
+                .iter()
+                .filter_map(|id| doc.resources.get(*id))
+                .map(|r| json!({"id": r.id, "name": r.name, "type": r.body.type_name()}))
+                .collect();
             if !m.get("dry_run").and_then(Value::as_bool).unwrap_or(false) && !plan.is_empty() {
-                let commands = plan.iter().map(|id| Command::DeleteResource { id: *id, reassign: None }).collect();
+                let commands = plan
+                    .iter()
+                    .map(|id| Command::DeleteResource {
+                        id: *id,
+                        reassign: None,
+                    })
+                    .collect();
                 exec(s, &Command::Batch { commands })?;
             }
             Ok(json!({ "removed": removed }))
@@ -492,7 +865,11 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         "resource.thumbnail" => {
             let doc = s.editor.doc();
             let id = resource_ref(doc, required(m, "id")?, None)?;
-            let size = m.get("size").and_then(Value::as_u64).unwrap_or(64).clamp(8, 1024) as u32;
+            let size = m
+                .get("size")
+                .and_then(Value::as_u64)
+                .unwrap_or(64)
+                .clamp(8, 1024) as u32;
             Ok(json!({ "svg": cadektor_core::thumbnail::thumbnail(doc, id).to_svg(size) }))
         }
         "pattern.segments" => {
@@ -501,12 +878,17 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             if doc.resources.hatch(id).is_none() && doc.resources.tile(id).is_none() {
                 return Err(bad("the pattern must be a hatch or a tile"));
             }
-            let ring: Vec<DVec2> = serde_json::from_value(required(m, "ring")?.clone()).map_err(bad)?;
+            let ring: Vec<DVec2> =
+                serde_json::from_value(required(m, "ring")?.clone()).map_err(bad)?;
             let mut rings = vec![ring];
             if let Some(h) = m.get("holes") {
                 rings.extend(serde_json::from_value::<Vec<Vec<DVec2>>>(h.clone()).map_err(bad)?);
             }
-            let scale = m.get("scale").map(|v| num(v, "scale")).transpose()?.unwrap_or(100.0);
+            let scale = m
+                .get("scale")
+                .map(|v| num(v, "scale"))
+                .transpose()?
+                .unwrap_or(100.0);
             let segs = cadektor_core::pattern::fill_segments(&doc.resources, id, &rings, scale);
             let total: f64 = segs.iter().map(|g| g.a.distance(g.b)).sum();
             let first: Vec<Value> = segs.iter().take(1000).map(|g| json!([g.a, g.b])).collect();
@@ -515,21 +897,29 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
         #[cfg(not(target_arch = "wasm32"))]
         _ => crate::libfiles::run(s, method, m),
         #[cfg(target_arch = "wasm32")]
-        _ => Err(app("this method needs files, which a browser session does not have")),
+        _ => Err(app(
+            "this method needs files, which a browser session does not have",
+        )),
     }
 }
 
 /// Replaces names by IDs in the fields that refer to resources: `symbol` of a tile, mark elements.
 fn resolve_names(doc: &Document, fields: &mut Map<String, Value>) -> Result<(), RpcError> {
     if let Some(v) = fields.get("symbol").filter(|v| v.is_string()).cloned() {
-        fields.insert("symbol".into(), json!(resource_ref(doc, &v, Some("symbol"))?));
+        fields.insert(
+            "symbol".into(),
+            json!(resource_ref(doc, &v, Some("symbol"))?),
+        );
     }
     if let Some(Value::Array(els)) = fields.get_mut("elements") {
         for e in els {
             if let Some(o) = e.as_object_mut()
                 && let Some(v) = o.get("symbol").filter(|v| v.is_string()).cloned()
             {
-                o.insert("symbol".into(), json!(resource_ref(doc, &v, Some("symbol"))?));
+                o.insert(
+                    "symbol".into(),
+                    json!(resource_ref(doc, &v, Some("symbol"))?),
+                );
             }
         }
     }

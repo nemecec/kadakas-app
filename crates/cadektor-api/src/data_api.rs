@@ -21,38 +21,130 @@ use cadektor_sheet::{export, templates};
 
 use crate::{RpcError, Session, params};
 
-pub const RECORD_FORMAT_LIST: (&str, &str) = ("record_format.list", "Record formats with their fields and the number of objects that use each. Returns {formats: [{id, name, fields, used_by}]}.");
-pub const RECORD_FORMAT_GET: (&str, &str) = ("record_format.get", "One record format. params: {id} (the ID or the name).");
-pub const RECORD_FORMAT_CREATE: (&str, &str) = ("record_format.create", "Create a record format. params: {name, fields: [{name, type, default?, unit?, choices?}]}. type is text, integer, number, boolean, dimension (mm), area (m2), choice (needs choices), date (YYYY-MM-DD), time (HH:MM or HH:MM:SS), volume (m3) or angle (degrees). Returns {id}.");
-pub const RECORD_FORMAT_UPDATE: (&str, &str) = ("record_format.update", "Change a record format. params: {id, name?, fields?}. Attached records follow: they are renamed, fields that are gone are dropped, new fields get their defaults.");
-pub const RECORD_FORMAT_DELETE: (&str, &str) = ("record_format.delete", "Delete a record format. params: {id}. Fails while objects have the record attached.");
-pub const RECORD_ATTACH: (&str, &str) = ("record.attach", "Attach a record to objects. params: {ids, record (ID or name), values?: {field: value}}. Missing fields get the default. Values are checked against the field types. One undo step.");
-pub const RECORD_DETACH: (&str, &str) = ("record.detach", "Remove a record from objects. params: {ids, record}.");
-pub const RECORD_SET: (&str, &str) = ("record.set", "Change field values of attached records. params: {ids, record, values: {field: value}}.");
-pub const RECORD_GET: (&str, &str) = ("record.get", "The records attached to one object. params: {id}. Returns {records: {name: {field: value}}}.");
-pub const DATA_MANAGER_LIST: (&str, &str) = ("data_manager.list", "Data maps (mapping tables). Returns {maps: [{id, name, entities, rules}]}.");
-pub const DATA_MANAGER_GET: (&str, &str) = ("data_manager.get", "One data map. params: {id} (ID or name).");
-pub const DATA_MANAGER_CREATE: (&str, &str) = ("data_manager.create", "Create a data map. params: {name, template?: \"landscape\", entities?, rules?}. See describe.data_manager for the rule format. Returns {id}.");
-pub const DATA_MANAGER_UPDATE: (&str, &str) = ("data_manager.update", "Change a data map. params: {id, name?, entities?, rules?}.");
-pub const DATA_MANAGER_DELETE: (&str, &str) = ("data_manager.delete", "Delete a data map. params: {id}.");
-pub const DATA_MANAGER_CHECK: (&str, &str) = ("data_manager.check", "Check a data map against the document: records and fields that do not exist. params: {id}. Returns {problems}.");
-pub const DATA_MANAGER_EVALUATE: (&str, &str) = ("data_manager.evaluate", "Apply a data map to objects (read only). params: {id, ids?, limit?}. Returns {objects: [{id, kind, ifc_class, predefined_type, properties: {pset: {name: {ifc_type, value}}}, record_values, problems}]}. This is the data for IFC export and data tags.");
-pub const DATA_MANAGER_APPLY: (&str, &str) = ("data_manager.apply", "Write the record targets of a data map into the records of the objects, as one undo step. Only objects that have the record attached change. params: {id}. Returns {changed, problems}.");
-pub const DATA_MANAGER_PROPERTIES: (&str, &str) = ("data_manager.properties", "The names that rules and worksheet columns can read: built-in properties, plant style fields and record fields.");
-pub const WORKSHEET_LIST: (&str, &str) = ("worksheet.list", "Worksheets. Returns {worksheets: [{id, name, cells, databases}]}.");
-pub const WORKSHEET_TEMPLATES: (&str, &str) = ("worksheet.templates", "Built-in report templates: plant_list, hardscape_quantities, area_schedule, tree_survey.");
-pub const WORKSHEET_CREATE: (&str, &str) = ("worksheet.create", "Create a worksheet. params: {name, template?, cells?: {A1: \"text, number or =formula\"}, databases?: [database]}. See describe.worksheet. Returns {id}.");
-pub const WORKSHEET_GET: (&str, &str) = ("worksheet.get", "The definition of a worksheet. params: {id} (ID or name). Returns {id, name, definition}.");
-pub const WORKSHEET_RENAME: (&str, &str) = ("worksheet.rename", "Rename a worksheet. params: {id, name}.");
-pub const WORKSHEET_DELETE: (&str, &str) = ("worksheet.delete", "Delete a worksheet. params: {id}.");
-pub const WORKSHEET_SET_CELL: (&str, &str) = ("worksheet.set_cell", "Set one cell. params: {id, address: \"B2\", input: \"=SUM(B3:B9)\", decimals?, unit?}. An empty input clears the cell. A formula that cannot be read is refused.");
-pub const WORKSHEET_SET_CELLS: (&str, &str) = ("worksheet.set_cells", "Set many cells as one undo step. params: {id, cells: {A1: input, ...}}.");
-pub const WORKSHEET_SET_DATABASE: (&str, &str) = ("worksheet.set_database", "Add or replace a database block. params: {id, index?, database: {name?, anchor?, criteria?, columns: [{header, expr, summary?, decimals?, unit?}], sort?: [{column, descending?}], group_by?, group_mode?: detail|summary, header?, total?}}. Without index the block is added.");
-pub const WORKSHEET_REMOVE_DATABASE: (&str, &str) = ("worksheet.remove_database", "Remove a database block. params: {id, index}.");
-pub const WORKSHEET_EVALUATE: (&str, &str) = ("worksheet.evaluate", "Calculate a worksheet now. params: {id}. Returns {rows, cols, values: [[...]], text: [[...]], cells: {A1: value}, blocks, problems, errors}. An error cell is {error: \"#DIV/0!\"}. Cycles give #CYCLE!.");
-pub const WORKSHEET_PLACE: (&str, &str) = ("worksheet.place", "Place a worksheet in the drawing as a table, on a design layer or a sheet layer (a sheet layer takes paper mm). It draws the calculated cells, prints in PDF and sheet.svg, and follows the document. params: {id, at: [x, y] (top left corner), text_height? (mm, default 3.5), layer?, class?}. Returns {id, size: [w, h]}. The frame is cut to the table size; use worksheet.fit after the worksheet changes.");
-pub const WORKSHEET_FIT: (&str, &str) = ("worksheet.fit", "Fit the frames of worksheet tables to their calculated tables (the top left corner stays). params: {ids?: [object id]} (default: all tables). Returns {fitted}.");
-pub const WORKSHEET_EXPORT: (&str, &str) = ("worksheet.export", "Export a calculated worksheet. params: {id, format: csv | xlsx, path?, overwrite?}. Without a path, csv returns {csv} and xlsx returns {xlsx_base64}. With a path the file is written. XLSX holds values, not formulas.");
+pub const RECORD_FORMAT_LIST: (&str, &str) = (
+    "record_format.list",
+    "Record formats with their fields and the number of objects that use each. Returns {formats: [{id, name, fields, used_by}]}.",
+);
+pub const RECORD_FORMAT_GET: (&str, &str) = (
+    "record_format.get",
+    "One record format. params: {id} (the ID or the name).",
+);
+pub const RECORD_FORMAT_CREATE: (&str, &str) = (
+    "record_format.create",
+    "Create a record format. params: {name, fields: [{name, type, default?, unit?, choices?}]}. type is text, integer, number, boolean, dimension (mm), area (m2), choice (needs choices), date (YYYY-MM-DD), time (HH:MM or HH:MM:SS), volume (m3) or angle (degrees). Returns {id}.",
+);
+pub const RECORD_FORMAT_UPDATE: (&str, &str) = (
+    "record_format.update",
+    "Change a record format. params: {id, name?, fields?}. Attached records follow: they are renamed, fields that are gone are dropped, new fields get their defaults.",
+);
+pub const RECORD_FORMAT_DELETE: (&str, &str) = (
+    "record_format.delete",
+    "Delete a record format. params: {id}. Fails while objects have the record attached.",
+);
+pub const RECORD_ATTACH: (&str, &str) = (
+    "record.attach",
+    "Attach a record to objects. params: {ids, record (ID or name), values?: {field: value}}. Missing fields get the default. Values are checked against the field types. One undo step.",
+);
+pub const RECORD_DETACH: (&str, &str) = (
+    "record.detach",
+    "Remove a record from objects. params: {ids, record}.",
+);
+pub const RECORD_SET: (&str, &str) = (
+    "record.set",
+    "Change field values of attached records. params: {ids, record, values: {field: value}}.",
+);
+pub const RECORD_GET: (&str, &str) = (
+    "record.get",
+    "The records attached to one object. params: {id}. Returns {records: {name: {field: value}}}.",
+);
+pub const DATA_MANAGER_LIST: (&str, &str) = (
+    "data_manager.list",
+    "Data maps (mapping tables). Returns {maps: [{id, name, entities, rules}]}.",
+);
+pub const DATA_MANAGER_GET: (&str, &str) = (
+    "data_manager.get",
+    "One data map. params: {id} (ID or name).",
+);
+pub const DATA_MANAGER_CREATE: (&str, &str) = (
+    "data_manager.create",
+    "Create a data map. params: {name, template?: \"landscape\", entities?, rules?}. See describe.data_manager for the rule format. Returns {id}.",
+);
+pub const DATA_MANAGER_UPDATE: (&str, &str) = (
+    "data_manager.update",
+    "Change a data map. params: {id, name?, entities?, rules?}.",
+);
+pub const DATA_MANAGER_DELETE: (&str, &str) =
+    ("data_manager.delete", "Delete a data map. params: {id}.");
+pub const DATA_MANAGER_CHECK: (&str, &str) = (
+    "data_manager.check",
+    "Check a data map against the document: records and fields that do not exist. params: {id}. Returns {problems}.",
+);
+pub const DATA_MANAGER_EVALUATE: (&str, &str) = (
+    "data_manager.evaluate",
+    "Apply a data map to objects (read only). params: {id, ids?, limit?}. Returns {objects: [{id, kind, ifc_class, predefined_type, properties: {pset: {name: {ifc_type, value}}}, record_values, problems}]}. This is the data for IFC export and data tags.",
+);
+pub const DATA_MANAGER_APPLY: (&str, &str) = (
+    "data_manager.apply",
+    "Write the record targets of a data map into the records of the objects, as one undo step. Only objects that have the record attached change. params: {id}. Returns {changed, problems}.",
+);
+pub const DATA_MANAGER_PROPERTIES: (&str, &str) = (
+    "data_manager.properties",
+    "The names that rules and worksheet columns can read: built-in properties, plant style fields and record fields.",
+);
+pub const WORKSHEET_LIST: (&str, &str) = (
+    "worksheet.list",
+    "Worksheets. Returns {worksheets: [{id, name, cells, databases}]}.",
+);
+pub const WORKSHEET_TEMPLATES: (&str, &str) = (
+    "worksheet.templates",
+    "Built-in report templates: plant_list, hardscape_quantities, area_schedule, tree_survey.",
+);
+pub const WORKSHEET_CREATE: (&str, &str) = (
+    "worksheet.create",
+    "Create a worksheet. params: {name, template?, cells?: {A1: \"text, number or =formula\"}, databases?: [database]}. See describe.worksheet. Returns {id}.",
+);
+pub const WORKSHEET_GET: (&str, &str) = (
+    "worksheet.get",
+    "The definition of a worksheet. params: {id} (ID or name). Returns {id, name, definition}.",
+);
+pub const WORKSHEET_RENAME: (&str, &str) = (
+    "worksheet.rename",
+    "Rename a worksheet. params: {id, name}.",
+);
+pub const WORKSHEET_DELETE: (&str, &str) =
+    ("worksheet.delete", "Delete a worksheet. params: {id}.");
+pub const WORKSHEET_SET_CELL: (&str, &str) = (
+    "worksheet.set_cell",
+    "Set one cell. params: {id, address: \"B2\", input: \"=SUM(B3:B9)\", decimals?, unit?}. An empty input clears the cell. A formula that cannot be read is refused.",
+);
+pub const WORKSHEET_SET_CELLS: (&str, &str) = (
+    "worksheet.set_cells",
+    "Set many cells as one undo step. params: {id, cells: {A1: input, ...}}.",
+);
+pub const WORKSHEET_SET_DATABASE: (&str, &str) = (
+    "worksheet.set_database",
+    "Add or replace a database block. params: {id, index?, database: {name?, anchor?, criteria?, columns: [{header, expr, summary?, decimals?, unit?}], sort?: [{column, descending?}], group_by?, group_mode?: detail|summary, header?, total?}}. Without index the block is added.",
+);
+pub const WORKSHEET_REMOVE_DATABASE: (&str, &str) = (
+    "worksheet.remove_database",
+    "Remove a database block. params: {id, index}.",
+);
+pub const WORKSHEET_EVALUATE: (&str, &str) = (
+    "worksheet.evaluate",
+    "Calculate a worksheet now. params: {id}. Returns {rows, cols, values: [[...]], text: [[...]], cells: {A1: value}, blocks, problems, errors}. An error cell is {error: \"#DIV/0!\"}. Cycles give #CYCLE!.",
+);
+pub const WORKSHEET_PLACE: (&str, &str) = (
+    "worksheet.place",
+    "Place a worksheet in the drawing as a table, on a design layer or a sheet layer (a sheet layer takes paper mm). It draws the calculated cells, prints in PDF and sheet.svg, and follows the document. params: {id, at: [x, y] (top left corner), text_height? (mm, default 3.5), layer?, class?}. Returns {id, size: [w, h]}. The frame is cut to the table size; use worksheet.fit after the worksheet changes.",
+);
+pub const WORKSHEET_FIT: (&str, &str) = (
+    "worksheet.fit",
+    "Fit the frames of worksheet tables to their calculated tables (the top left corner stays). params: {ids?: [object id]} (default: all tables). Returns {fitted}.",
+);
+pub const WORKSHEET_EXPORT: (&str, &str) = (
+    "worksheet.export",
+    "Export a calculated worksheet. params: {id, format: csv | xlsx, path?, overwrite?}. Without a path, csv returns {csv} and xlsx returns {xlsx_base64}. With a path the file is written. XLSX holds values, not formulas.",
+);
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
@@ -140,8 +232,16 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 /// A reference to a resource of one type: an ID, or a name.
 fn resource_ref(doc: &Document, v: &Value, ty: &str) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| doc.resources.get(*id).is_some_and(|r| r.body.type_name() == ty)),
-        Value::String(name) => doc.resources.iter().find(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(name.trim())).map(|r| r.id),
+        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| {
+            doc.resources
+                .get(*id)
+                .is_some_and(|r| r.body.type_name() == ty)
+        }),
+        Value::String(name) => doc
+            .resources
+            .iter()
+            .find(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(name.trim()))
+            .map(|r| r.id),
         _ => None,
     };
     found.ok_or_else(|| bad(format!("no {} {v}", ty.replace('_', " "))))
@@ -166,15 +266,24 @@ fn field_json(f: &FieldDef) -> Value {
 
 fn format_json(doc: &Document, id: ResourceId) -> Value {
     let r = doc.resources.get(id).expect("exists");
-    let ResourceBody::RecordFormat(f) = &r.body else { return Value::Null };
-    let used = doc.objects.values().filter(|o| record::values(o, &r.name).is_some()).count();
+    let ResourceBody::RecordFormat(f) = &r.body else {
+        return Value::Null;
+    };
+    let used = doc
+        .objects
+        .values()
+        .filter(|o| record::values(o, &r.name).is_some())
+        .count();
     json!({"id": id, "name": r.name, "fields": f.fields.iter().map(field_json).collect::<Vec<_>>(), "used_by": used})
 }
 
 fn parse_fields(v: &Value) -> Result<RecordFormat, RpcError> {
     let fields: Vec<FieldDef> = serde_json::from_value(v.clone()).map_err(|e| bad(format!("fields: {e}. Each field is {{name, type (text|integer|number|boolean|dimension|area|choice|date|time|volume|angle), default?, unit?, choices?}}")))?;
     if let Some(f) = fields.iter().find(|f| f.ty == FieldType::Unknown) {
-        return Err(bad(format!("field '{}' has an unknown type. Types: text, integer, number, boolean, dimension, area, choice, date, time, volume, angle", f.name)));
+        return Err(bad(format!(
+            "field '{}' has an unknown type. Types: text, integer, number, boolean, dimension, area, choice, date, time, volume, angle",
+            f.name
+        )));
     }
     Ok(RecordFormat { fields })
 }
@@ -219,7 +328,14 @@ fn worksheet_def(doc: &Document, id: ResourceId) -> Result<WorksheetDef, RpcErro
 
 fn save_worksheet(s: &mut Session, id: ResourceId, def: &WorksheetDef) -> Result<(), RpcError> {
     def.validate().map_err(bad)?;
-    exec(s, Command::ModifyResource { id, name: None, body: Some(ResourceBody::Worksheet(def.to_value())) })?;
+    exec(
+        s,
+        Command::ModifyResource {
+            id,
+            name: None,
+            body: Some(ResourceBody::Worksheet(def.to_value())),
+        },
+    )?;
     Ok(())
 }
 
@@ -295,7 +411,9 @@ fn input_text(v: &Value) -> Result<String, RpcError> {
         Value::String(s) => Ok(s.clone()),
         Value::Number(n) => Ok(n.to_string()),
         Value::Bool(b) => Ok(b.to_string()),
-        other => Err(bad(format!("a cell input is text, a number or a boolean, not {other}"))),
+        other => Err(bad(format!(
+            "a cell input is text, a number or a boolean, not {other}"
+        ))),
     }
 }
 
@@ -344,8 +462,15 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
     match method {
         "record_format.list" => {
             let doc = s.editor.doc();
-            let ids: Vec<ResourceId> = doc.resources.iter().filter(|r| matches!(r.body, ResourceBody::RecordFormat(_))).map(|r| r.id).collect();
-            Ok(json!({"formats": ids.into_iter().map(|id| format_json(doc, id)).collect::<Vec<_>>()}))
+            let ids: Vec<ResourceId> = doc
+                .resources
+                .iter()
+                .filter(|r| matches!(r.body, ResourceBody::RecordFormat(_)))
+                .map(|r| r.id)
+                .collect();
+            Ok(
+                json!({"formats": ids.into_iter().map(|id| format_json(doc, id)).collect::<Vec<_>>()}),
+            )
         }
         "record_format.get" => {
             let IdParam { id } = params(p)?;
@@ -356,31 +481,65 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
         "record_format.create" => {
             let CreateFormat { name, fields } = params(p)?;
             let format = parse_fields(&fields)?;
-            let out = exec(s, Command::AddResource { name, body: ResourceBody::RecordFormat(Box::new(format)) })?;
+            let out = exec(
+                s,
+                Command::AddResource {
+                    name,
+                    body: ResourceBody::RecordFormat(Box::new(format)),
+                },
+            )?;
             Ok(json!({"id": out.created[0]}))
         }
         "record_format.update" => {
             let UpdateFormat { id, name, fields } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "record_format")?;
-            let body = fields.map(|f| parse_fields(&f)).transpose()?.map(|f| ResourceBody::RecordFormat(Box::new(f)));
-            exec(s, Command::ModifyResource { id: rid, name, body })?;
+            let body = fields
+                .map(|f| parse_fields(&f))
+                .transpose()?
+                .map(|f| ResourceBody::RecordFormat(Box::new(f)));
+            exec(
+                s,
+                Command::ModifyResource {
+                    id: rid,
+                    name,
+                    body,
+                },
+            )?;
             Ok(format_json(s.editor.doc(), rid))
         }
         "record_format.delete" => {
             let IdParam { id } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "record_format")?;
-            exec(s, Command::DeleteResource { id: rid, reassign: None })?;
+            exec(
+                s,
+                Command::DeleteResource {
+                    id: rid,
+                    reassign: None,
+                },
+            )?;
             Ok(json!({"ok": true}))
         }
         "record.attach" | "record.detach" | "record.set" => {
-            let RecordOp { ids, record, values } = params(p)?;
+            let RecordOp {
+                ids,
+                record,
+                values,
+            } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &record, "record_format")?;
             object_ids(s.editor.doc(), &ids)?;
             let count = ids.len();
             let cmd = match method {
-                "record.attach" => Command::AttachRecord { ids, record: rid, values },
+                "record.attach" => Command::AttachRecord {
+                    ids,
+                    record: rid,
+                    values,
+                },
                 "record.detach" => Command::DetachRecord { ids, record: rid },
-                _ => Command::SetRecordFields { ids, record: rid, values },
+                _ => Command::SetRecordFields {
+                    ids,
+                    record: rid,
+                    values,
+                },
             };
             exec(s, cmd)?;
             Ok(json!({"objects": count}))
@@ -392,18 +551,28 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             }
             let P { id } = params(p)?;
             let doc = s.editor.doc();
-            let o = doc.object(id).ok_or_else(|| app(format!("object {id} does not exist")))?;
+            let o = doc
+                .object(id)
+                .ok_or_else(|| app(format!("object {id} does not exist")))?;
             let records: Map<String, Value> = doc
                 .resources
                 .iter()
                 .filter(|r| matches!(r.body, ResourceBody::RecordFormat(_)))
-                .filter_map(|r| record::values(o, &r.name).map(|v| (r.name.clone(), Value::Object(record::fields_only(v)))))
+                .filter_map(|r| {
+                    record::values(o, &r.name)
+                        .map(|v| (r.name.clone(), Value::Object(record::fields_only(v))))
+                })
                 .collect();
             Ok(json!({"records": records}))
         }
         "data_manager.list" => {
             let doc = s.editor.doc();
-            let ids: Vec<ResourceId> = doc.resources.iter().filter(|r| matches!(r.body, ResourceBody::DataMap(_))).map(|r| r.id).collect();
+            let ids: Vec<ResourceId> = doc
+                .resources
+                .iter()
+                .filter(|r| matches!(r.body, ResourceBody::DataMap(_)))
+                .map(|r| r.id)
+                .collect();
             Ok(json!({"maps": ids.into_iter().map(|id| map_json(doc, id)).collect::<Vec<_>>()}))
         }
         "data_manager.get" => {
@@ -413,11 +582,20 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             Ok(map_json(doc, rid))
         }
         "data_manager.create" => {
-            let CreateMap { name, template, entities, rules } = params(p)?;
+            let CreateMap {
+                name,
+                template,
+                entities,
+                rules,
+            } = params(p)?;
             let mut map = match template.as_deref() {
                 None => DataMap::default(),
                 Some("landscape") => DataMap::landscape_template(),
-                Some(other) => return Err(bad(format!("unknown template '{other}'. Templates: landscape"))),
+                Some(other) => {
+                    return Err(bad(format!(
+                        "unknown template '{other}'. Templates: landscape"
+                    )));
+                }
             };
             if let Some(e) = entities {
                 map.entities = e;
@@ -425,33 +603,65 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             if let Some(r) = rules {
                 map.rules = r;
             }
-            let out = exec(s, Command::AddResource { name, body: ResourceBody::DataMap(Box::new(map)) })?;
+            let out = exec(
+                s,
+                Command::AddResource {
+                    name,
+                    body: ResourceBody::DataMap(Box::new(map)),
+                },
+            )?;
             Ok(json!({"id": out.created[0]}))
         }
         "data_manager.update" => {
-            let UpdateMap { id, name, entities, rules } = params(p)?;
+            let UpdateMap {
+                id,
+                name,
+                entities,
+                rules,
+            } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "data_map")?;
-            let mut map = s.editor.doc().resources.data_map(rid).cloned().unwrap_or_default();
+            let mut map = s
+                .editor
+                .doc()
+                .resources
+                .data_map(rid)
+                .cloned()
+                .unwrap_or_default();
             if let Some(e) = entities {
                 map.entities = e;
             }
             if let Some(r) = rules {
                 map.rules = r;
             }
-            exec(s, Command::ModifyResource { id: rid, name, body: Some(ResourceBody::DataMap(Box::new(map))) })?;
+            exec(
+                s,
+                Command::ModifyResource {
+                    id: rid,
+                    name,
+                    body: Some(ResourceBody::DataMap(Box::new(map))),
+                },
+            )?;
             Ok(map_json(s.editor.doc(), rid))
         }
         "data_manager.delete" => {
             let IdParam { id } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "data_map")?;
-            exec(s, Command::DeleteResource { id: rid, reassign: None })?;
+            exec(
+                s,
+                Command::DeleteResource {
+                    id: rid,
+                    reassign: None,
+                },
+            )?;
             Ok(json!({"ok": true}))
         }
         "data_manager.check" => {
             let IdParam { id } = params(p)?;
             let doc = s.editor.doc();
             let rid = resource_ref(doc, &id, "data_map")?;
-            Ok(json!({"problems": doc.resources.data_map(rid).map(|m| m.check_refs(doc)).unwrap_or_default()}))
+            Ok(
+                json!({"problems": doc.resources.data_map(rid).map(|m| m.check_refs(doc)).unwrap_or_default()}),
+            )
         }
         "data_manager.evaluate" => {
             let EvalMap { id, ids, limit } = params(p)?;
@@ -466,7 +676,11 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                 None => doc.objects.values().collect(),
             };
             let total = objects.len();
-            let list: Vec<Value> = objects.into_iter().take(limit).map(|o| mapped_json(doc, &map, o)).collect();
+            let list: Vec<Value> = objects
+                .into_iter()
+                .take(limit)
+                .map(|o| mapped_json(doc, &map, o))
+                .collect();
             Ok(json!({"objects": list, "total": total}))
         }
         "data_manager.apply" => {
@@ -491,7 +705,19 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                     _ => None,
                 })
                 .collect();
-            let ifc_types: Vec<&str> = [IfcType::Label, IfcType::Text, IfcType::Real, IfcType::Integer, IfcType::Boolean, IfcType::Length, IfcType::Area, IfcType::Volume].iter().map(|t| t.id()).collect();
+            let ifc_types: Vec<&str> = [
+                IfcType::Label,
+                IfcType::Text,
+                IfcType::Real,
+                IfcType::Integer,
+                IfcType::Boolean,
+                IfcType::Length,
+                IfcType::Area,
+                IfcType::Volume,
+            ]
+            .iter()
+            .map(|t| t.id())
+            .collect();
             Ok(json!({
                 "builtin": props::NAMES,
                 "plant_fields": cadektor_core::plants::style::PlantStyle::field_names(),
@@ -515,19 +741,41 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                 .collect();
             Ok(json!({"worksheets": list}))
         }
-        "worksheet.templates" => Ok(json!({"templates": templates::TEMPLATES.iter().map(|t| json!({"id": t.id, "title": t.title, "description": t.description})).collect::<Vec<_>>()})),
+        "worksheet.templates" => Ok(
+            json!({"templates": templates::TEMPLATES.iter().map(|t| json!({"id": t.id, "title": t.title, "description": t.description})).collect::<Vec<_>>()}),
+        ),
         "worksheet.create" => {
-            let CreateSheet { name, template, cells, databases } = params(p)?;
+            let CreateSheet {
+                name,
+                template,
+                cells,
+                databases,
+            } = params(p)?;
             let mut def = match template.as_deref() {
                 None => WorksheetDef::default(),
-                Some(t) => templates::template(t).ok_or_else(|| bad(format!("unknown template '{t}'. Templates: {}", templates::TEMPLATES.iter().map(|t| t.id).collect::<Vec<_>>().join(", "))))?,
+                Some(t) => templates::template(t).ok_or_else(|| {
+                    bad(format!(
+                        "unknown template '{t}'. Templates: {}",
+                        templates::TEMPLATES
+                            .iter()
+                            .map(|t| t.id)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?,
             };
             for (addr, input) in &cells {
                 def.set_cell(addr, &input_text(input)?, None).map_err(bad)?;
             }
             def.databases.extend(databases);
             def.validate().map_err(bad)?;
-            let out = exec(s, Command::AddResource { name, body: ResourceBody::Worksheet(def.to_value()) })?;
+            let out = exec(
+                s,
+                Command::AddResource {
+                    name,
+                    body: ResourceBody::Worksheet(def.to_value()),
+                },
+            )?;
             Ok(json!({"id": out.created[0]}))
         }
         "worksheet.get" => {
@@ -537,29 +785,58 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             let def = worksheet_def(doc, rid)?;
             let mut v = def.to_value();
             v.as_object_mut().map(|m| m.remove("type"));
-            Ok(json!({"id": rid, "name": doc.resources.get(rid).map(|r| r.name.clone()), "definition": v}))
+            Ok(
+                json!({"id": rid, "name": doc.resources.get(rid).map(|r| r.name.clone()), "definition": v}),
+            )
         }
         "worksheet.rename" => {
             let Rename { id, name } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
-            exec(s, Command::ModifyResource { id: rid, name: Some(name), body: None })?;
+            exec(
+                s,
+                Command::ModifyResource {
+                    id: rid,
+                    name: Some(name),
+                    body: None,
+                },
+            )?;
             Ok(json!({"ok": true}))
         }
         "worksheet.delete" => {
             let IdParam { id } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
-            exec(s, Command::DeleteResource { id: rid, reassign: None })?;
+            exec(
+                s,
+                Command::DeleteResource {
+                    id: rid,
+                    reassign: None,
+                },
+            )?;
             Ok(json!({"ok": true}))
         }
         "worksheet.set_cell" => {
-            let SetCell { id, address, input, decimals, unit } = params(p)?;
+            let SetCell {
+                id,
+                address,
+                input,
+                decimals,
+                unit,
+            } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
             let mut def = worksheet_def(s.editor.doc(), rid)?;
             let format = (decimals.is_some() || unit.is_some()).then(|| {
-                let old = def.cells.get(&address.trim().to_ascii_uppercase()).map(|c| c.format.clone()).unwrap_or_default();
-                CellFormat { decimals: decimals.or(old.decimals), unit: unit.unwrap_or(old.unit) }
+                let old = def
+                    .cells
+                    .get(&address.trim().to_ascii_uppercase())
+                    .map(|c| c.format.clone())
+                    .unwrap_or_default();
+                CellFormat {
+                    decimals: decimals.or(old.decimals),
+                    unit: unit.unwrap_or(old.unit),
+                }
             });
-            def.set_cell(&address, &input_text(&input)?, format).map_err(bad)?;
+            def.set_cell(&address, &input_text(&input)?, format)
+                .map_err(bad)?;
             save_worksheet(s, rid, &def)?;
             Ok(json!({"ok": true}))
         }
@@ -574,7 +851,11 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             Ok(json!({"cells": cells.len()}))
         }
         "worksheet.set_database" => {
-            let SetDatabase { id, index, database } = params(p)?;
+            let SetDatabase {
+                id,
+                index,
+                database,
+            } = params(p)?;
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
             let mut def = worksheet_def(s.editor.doc(), rid)?;
             let at = match index {
@@ -582,7 +863,12 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                     def.databases[i] = database;
                     i
                 }
-                Some(i) => return Err(bad(format!("database {i} does not exist. The worksheet has {}", def.databases.len()))),
+                Some(i) => {
+                    return Err(bad(format!(
+                        "database {i} does not exist. The worksheet has {}",
+                        def.databases.len()
+                    )));
+                }
                 None => {
                     def.databases.push(database);
                     def.databases.len() - 1
@@ -596,7 +882,10 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
             let mut def = worksheet_def(s.editor.doc(), rid)?;
             if index >= def.databases.len() {
-                return Err(bad(format!("database {index} does not exist. The worksheet has {}", def.databases.len())));
+                return Err(bad(format!(
+                    "database {index} does not exist. The worksheet has {}",
+                    def.databases.len()
+                )));
             }
             def.databases.remove(index);
             save_worksheet(s, rid, &def)?;
@@ -605,8 +894,22 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
         "worksheet.evaluate" => {
             let IdParam { id } = params(p)?;
             let c = computed(s, &id)?.0;
-            let values: Vec<Vec<Value>> = (1..=c.rows).map(|r| (1..=c.cols).map(|col| value_json(&c.value(r, col))).collect()).collect();
-            let cells: Map<String, Value> = c.cells().map(|(r, col, v)| (cadektor_sheet::formula::CellRef { row: r, col }.to_string(), value_json(v))).collect();
+            let values: Vec<Vec<Value>> = (1..=c.rows)
+                .map(|r| {
+                    (1..=c.cols)
+                        .map(|col| value_json(&c.value(r, col)))
+                        .collect()
+                })
+                .collect();
+            let cells: Map<String, Value> = c
+                .cells()
+                .map(|(r, col, v)| {
+                    (
+                        cadektor_sheet::formula::CellRef { row: r, col }.to_string(),
+                        value_json(v),
+                    )
+                })
+                .collect();
             Ok(json!({
                 "rows": c.rows,
                 "cols": c.cols,
@@ -627,7 +930,13 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
                 layer: Option<cadektor_core::model::LayerId>,
                 class: Option<cadektor_core::model::ClassId>,
             }
-            let P { id, at, text_height, layer, class } = params(p)?;
+            let P {
+                id,
+                at,
+                text_height,
+                layer,
+                class,
+            } = params(p)?;
             let (c, _) = computed(s, &id)?;
             let rid = resource_ref(s.editor.doc(), &id, "worksheet")?;
             let h = text_height.unwrap_or(cadektor_core::worksheet_table::DEFAULT_TEXT_HEIGHT);
@@ -636,7 +945,18 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             }
             let l = cadektor_sheet::layout(&c, h);
             let size = cadektor_core::DVec2::new(l.width, l.height);
-            let out = exec(s, Command::AddWorksheetTable { worksheet: rid, at, size, text_height: Some(h), layer, class, attrs: Default::default() })?;
+            let out = exec(
+                s,
+                Command::AddWorksheetTable {
+                    worksheet: rid,
+                    at,
+                    size,
+                    text_height: Some(h),
+                    layer,
+                    class,
+                    attrs: Default::default(),
+                },
+            )?;
             Ok(json!({"id": out.created[0], "size": [l.width, l.height]}))
         }
         "worksheet.fit" => {
@@ -647,14 +967,31 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             let P { ids } = params(p)?;
             let doc = s.editor.doc();
             let tables: Vec<(ObjectId, cadektor_core::worksheet_table::TableData)> = match ids {
-                Some(ids) => ids.iter().map(|i| doc.object(*i).and_then(cadektor_core::worksheet_table::data).map(|d| (*i, d)).ok_or_else(|| bad(format!("object {i} is not a worksheet table")))).collect::<Result<_, _>>()?,
-                None => doc.objects.values().filter_map(|o| cadektor_core::worksheet_table::data(o).map(|d| (o.id, d))).collect(),
+                Some(ids) => ids
+                    .iter()
+                    .map(|i| {
+                        doc.object(*i)
+                            .and_then(cadektor_core::worksheet_table::data)
+                            .map(|d| (*i, d))
+                            .ok_or_else(|| bad(format!("object {i} is not a worksheet table")))
+                    })
+                    .collect::<Result<_, _>>()?,
+                None => doc
+                    .objects
+                    .values()
+                    .filter_map(|o| cadektor_core::worksheet_table::data(o).map(|d| (o.id, d)))
+                    .collect(),
             };
             let mut commands = Vec::new();
             for (oid, d) in &tables {
                 let (c, _) = computed(s, &json!(d.worksheet.0))?;
                 let l = cadektor_sheet::layout(&c, d.text_height);
-                commands.push(Command::SetWorksheetTable { ids: vec![*oid], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) });
+                commands.push(Command::SetWorksheetTable {
+                    ids: vec![*oid],
+                    worksheet: None,
+                    text_height: None,
+                    size: Some(cadektor_core::DVec2::new(l.width, l.height)),
+                });
             }
             let fitted = commands.len();
             if fitted > 0 {
@@ -663,7 +1000,12 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
             Ok(json!({"fitted": fitted}))
         }
         "worksheet.export" => {
-            let ExportSheet { id, format, path, overwrite } = params(p)?;
+            let ExportSheet {
+                id,
+                format,
+                path,
+                overwrite,
+            } = params(p)?;
             let (c, name) = computed(s, &id)?;
             let format = format.to_ascii_lowercase();
             let bytes: Vec<u8> = match format.as_str() {
@@ -685,38 +1027,75 @@ fn run(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
 }
 
 /// The calculated worksheet (from the cache) and its name.
-fn computed(s: &Session, id: &Value) -> Result<(std::sync::Arc<cadektor_sheet::Computed>, String), RpcError> {
+fn computed(
+    s: &Session,
+    id: &Value,
+) -> Result<(std::sync::Arc<cadektor_sheet::Computed>, String), RpcError> {
     let doc = s.editor.doc();
     let rid = resource_ref(doc, id, "worksheet")?;
     let def = worksheet_def(doc, rid)?;
-    let name = doc.resources.get(rid).map(|r| r.name.clone()).unwrap_or_default();
+    let name = doc
+        .resources
+        .get(rid)
+        .map(|r| r.name.clone())
+        .unwrap_or_default();
     let ground = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
-    Ok((s.worksheet_cache.get_with(s.editor.revision(), rid.0, &def, doc, &ground), name))
+    Ok((
+        s.worksheet_cache
+            .get_with(s.editor.revision(), rid.0, &def, doc, &ground),
+        name,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn write_export(s: &Session, path: &std::path::Path, ext: &str, overwrite: bool, bytes: &[u8]) -> Result<Value, RpcError> {
-    let path = if s.paths.is_restricted() { s.check_path(path, true, &[ext]).map_err(app)? } else { path.to_path_buf() };
+fn write_export(
+    s: &Session,
+    path: &std::path::Path,
+    ext: &str,
+    overwrite: bool,
+    bytes: &[u8],
+) -> Result<Value, RpcError> {
+    let path = if s.paths.is_restricted() {
+        s.check_path(path, true, &[ext]).map_err(app)?
+    } else {
+        path.to_path_buf()
+    };
     if s.paths.is_restricted() && path.exists() && !overwrite {
-        return Err(app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+        return Err(app(format!(
+            "{} exists: pass \"overwrite\": true to replace it",
+            path.display()
+        )));
     }
-    std::fs::write(&path, bytes).map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
+    std::fs::write(&path, bytes)
+        .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn write_export(_: &Session, _: &std::path::Path, _: &str, _: bool, _: &[u8]) -> Result<Value, RpcError> {
+fn write_export(
+    _: &Session,
+    _: &std::path::Path,
+    _: &str,
+    _: bool,
+    _: &[u8],
+) -> Result<Value, RpcError> {
     Err(app("this build cannot write files. Leave out the path"))
 }
 
 impl Session {
     /// A worksheet with its calculated result, for a host that shows it (the app). The result is
     /// cached by document revision, like the one of `worksheet.evaluate`.
-    pub fn worksheet_result(&self, id: ResourceId) -> Option<(WorksheetDef, std::sync::Arc<cadektor_sheet::Computed>)> {
+    pub fn worksheet_result(
+        &self,
+        id: ResourceId,
+    ) -> Option<(WorksheetDef, std::sync::Arc<cadektor_sheet::Computed>)> {
         let doc = self.editor.doc();
         let def = worksheet_def(doc, id).ok()?;
-        let ground = cadektor_site::SiteTerrain::new(self.site_cache(), self.editor.revision(), doc);
-        let result = self.worksheet_cache.get_with(self.editor.revision(), id.0, &def, doc, &ground);
+        let ground =
+            cadektor_site::SiteTerrain::new(self.site_cache(), self.editor.revision(), doc);
+        let result =
+            self.worksheet_cache
+                .get_with(self.editor.revision(), id.0, &def, doc, &ground);
         Some((def, result))
     }
 }
