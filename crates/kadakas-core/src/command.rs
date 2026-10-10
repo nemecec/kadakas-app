@@ -1595,6 +1595,73 @@ impl Editor {
         true
     }
 
+    /// Makes this document equal to `doc`, which came from other users of a shared document
+    /// (collaboration, PLAT-07). It is not a command: it has no undo step and it empties the undo
+    /// and redo history, because the steps no longer fit the document. It logs one change set with
+    /// the origin `Remote` that lists the added, changed and removed things, so subscribers learn
+    /// exactly what changed and keep their caches for the rest. Returns `None` (and does nothing)
+    /// if the document is already equal. The generator of IDs of the current document stays.
+    pub fn apply_remote(&mut self, mut doc: Document) -> Option<ChangeSet> {
+        if doc == self.doc {
+            return None;
+        }
+        fn objs(d: &Document) -> Vec<(ObjectId, &Object)> {
+            d.objects.iter().map(|(k, v)| (*k, v)).collect()
+        }
+        fn layers(m: &Meta) -> Vec<(LayerId, &Layer)> {
+            m.layers.iter().map(|l| (l.id, l)).collect()
+        }
+        fn classes(m: &Meta) -> Vec<(ClassId, &Class)> {
+            m.classes.iter().map(|l| (l.id, l)).collect()
+        }
+        fn resources(m: &Meta) -> Vec<(ResourceId, &Resource)> {
+            m.resources.iter().map(|l| (l.id, l)).collect()
+        }
+        let (a, c, r) = change::diff_by_id(&objs(&self.doc), &objs(&doc));
+        let mut added = IdsByKind {
+            objects: a,
+            ..Default::default()
+        };
+        let mut changed = IdsByKind {
+            objects: c,
+            ..Default::default()
+        };
+        let mut removed = IdsByKind {
+            objects: r,
+            ..Default::default()
+        };
+        let (old, new) = (Meta::of(&self.doc), Meta::of(&doc));
+        (added.layers, changed.layers, removed.layers) =
+            change::diff_by_id(&layers(&old), &layers(&new));
+        (added.classes, changed.classes, removed.classes) =
+            change::diff_by_id(&classes(&old), &classes(&new));
+        (added.resources, changed.resources, removed.resources) =
+            change::diff_by_id(&resources(&old), &resources(&new));
+        let document = DocumentChanged {
+            active_layer: old.active_layer != new.active_layer,
+            active_class: old.active_class != new.active_class,
+            georef: old.georef != new.georef,
+            drawing: old.drawing != new.drawing,
+        };
+        // The generator of IDs belongs to this editor, not to the document that came in.
+        doc.swap_ids(&mut self.doc);
+        self.doc = doc;
+        self.undo.clear();
+        self.redo.clear();
+        self.revision = next_revision();
+        let cs = ChangeSet {
+            revision: self.revision,
+            op: "remote".into(),
+            origin: Origin::Remote,
+            added,
+            changed,
+            removed,
+            document,
+        };
+        self.log.push(cs.clone());
+        Some(cs)
+    }
+
     /// Who makes the changes from now on. The change sets say it (see `crate::change`). A new
     /// editor starts with `Origin::User`.
     pub fn set_origin(&mut self, origin: Origin) {
@@ -3372,5 +3439,38 @@ mod tests {
                 p: Some(DVec2::new(1.0, 2.0))
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+
+    #[test]
+    fn apply_remote_logs_a_remote_change_set() {
+        let mut ed = Editor::with_sequential_ids();
+        let cmd: Command = serde_json::from_value(serde_json::json!({
+            "op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}
+        }))
+        .unwrap();
+        // The same document, edited elsewhere.
+        let mut ed2 = Editor::new(ed.doc().clone());
+        let id = ed2.execute(&cmd).unwrap().created[0];
+        let other = ed2.doc().clone();
+        let rev = ed.revision();
+        assert_eq!(ed.apply_remote(ed.doc().clone()), None);
+        let cs = ed.apply_remote(other.clone()).unwrap();
+        assert_eq!(cs.origin, Origin::Remote);
+        assert_eq!(cs.added.objects, vec![ObjectId(id)]);
+        assert_ne!(ed.revision(), rev);
+        assert_eq!(ed.changes_since(rev).changes.len(), 1);
+        assert_eq!(ed.doc().objects.len(), 1);
+        assert!(!ed.can_undo());
+        let mut third = other.clone();
+        third.objects.clear();
+        let cs = ed.apply_remote(third).unwrap();
+        assert_eq!(cs.removed.objects, vec![ObjectId(id)]);
+        assert_eq!(Origin::parse("remote"), Some(Origin::Remote));
+        assert_eq!(Origin::Remote.name(), "remote");
     }
 }

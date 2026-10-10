@@ -26,6 +26,9 @@ pub enum Origin {
     /// A plug-in object that its script generated again. A Python script that calls the API is
     /// an `Agent`.
     Script,
+    /// Another user of a shared document (collaboration, PLAT-07). The editor applied their
+    /// changes with `Editor::apply_remote`.
+    Remote,
 }
 
 impl Origin {
@@ -34,6 +37,7 @@ impl Origin {
             Origin::User => "user",
             Origin::Agent => "agent",
             Origin::Script => "script",
+            Origin::Remote => "remote",
         }
     }
 
@@ -42,6 +46,7 @@ impl Origin {
             "user" => Some(Origin::User),
             "agent" => Some(Origin::Agent),
             "script" => Some(Origin::Script),
+            "remote" => Some(Origin::Remote),
             _ => None,
         }
     }

@@ -1102,6 +1102,11 @@ impl Document {
         self.use_sequential_ids(last.saturating_add(1).max(2));
     }
 
+    /// Swaps the generators of IDs of two documents.
+    pub(crate) fn swap_ids(&mut self, other: &mut Document) {
+        std::mem::swap(&mut self.ids, &mut other.ids);
+    }
+
     /// Makes the generator count from `first`: 2, 3, 4 and so on, as small numbers. For tests and
     /// fixtures that need predictable IDs. These IDs are not unique in the world.
     pub fn use_sequential_ids(&mut self, first: u64) {
