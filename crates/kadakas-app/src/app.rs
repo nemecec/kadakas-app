@@ -1517,10 +1517,11 @@ impl KadakasApp {
             QuickCommand::SnapToggle(name) => {
                 let on = self.session.snap.set.get(name).unwrap_or(false);
                 self.session.snap.set.set(name, !on);
+                let label = crate::snap_ui::category_name(name);
                 self.status = if on {
-                    tr!("app-snap-off", name = name)
+                    tr!("app-snap-off", name = label)
                 } else {
-                    tr!("app-snap-on", name = name)
+                    tr!("app-snap-on", name = label)
                 };
             }
             QuickCommand::ShowTab(t) => self.layouts.show_tab(t),
@@ -2407,6 +2408,11 @@ mod tests {
         assert!(app.session.snap.set.angle);
         app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
         assert!(!app.session.snap.set.angle);
+        assert_eq!(app.status, "Snap Angle: off");
+        kadakas_l10n::with_language("et", || {
+            app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
+            assert_eq!(app.status, "Haaramine Nurk: sees");
+        });
         app.run_quick(&ctx, QuickCommand::Action(Action::ToolFillet));
         assert_eq!(app.machine.tool(), Tool::Fillet);
         app.run_quick(&ctx, QuickCommand::ShowTab(Tab::Snapping));

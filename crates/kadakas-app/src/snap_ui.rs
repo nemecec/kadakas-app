@@ -9,6 +9,14 @@ use kadakas_l10n::{msg, tr, translate};
 use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::snap::SnapResult;
 
+/// The name of a snap category in the language of the UI. An unknown id gives itself.
+pub fn category_name(id: &str) -> String {
+    CATEGORIES
+        .iter()
+        .find(|(name, _, _)| *name == id)
+        .map_or_else(|| id.to_string(), |(_, label, _)| translate(label, &[]))
+}
+
 /// What each category of the palette is called and what it does.
 pub const CATEGORIES: [(&str, &str, &str); 11] = [
     (

@@ -42,9 +42,50 @@ impl From<snapping::Snap> for SnapResult {
         SnapResult {
             point: s.point,
             kind: s.kind,
-            cue: s.cue,
+            cue: cue_text(&s),
             guides: s.guides,
         }
+    }
+}
+
+/// The name of a snap kind in the language of the UI (the core crate has English names).
+pub fn kind_name(kind: Kind) -> String {
+    match kind {
+        Kind::Grid => tr!("uic-snap-kind-grid"),
+        Kind::Endpoint => tr!("uic-snap-kind-endpoint"),
+        Kind::Midpoint => tr!("uic-snap-kind-midpoint"),
+        Kind::Center => tr!("uic-snap-kind-center"),
+        Kind::Quadrant => tr!("uic-snap-kind-quadrant"),
+        Kind::Intersection => tr!("uic-snap-kind-intersection"),
+        Kind::Edge => tr!("uic-snap-kind-on-edge"),
+        Kind::Perpendicular => tr!("uic-snap-kind-perpendicular"),
+        Kind::Tangent => tr!("uic-snap-kind-tangent"),
+        Kind::Angle => tr!("uic-snap-kind-angle"),
+        Kind::Distance => tr!("uic-snap-kind-distance"),
+        Kind::SmartPoint => tr!("uic-snap-kind-smart-point"),
+        Kind::SmartEdge => tr!("uic-snap-kind-smart-edge"),
+    }
+}
+
+/// The text of the cue label at the pointer, in the language and the units of the UI.
+fn cue_text(s: &snapping::Snap) -> String {
+    let units = kadakas_units::current();
+    let angle = s.angle_deg.map(|a| units.angle_compact(a));
+    let length = s.length.map(|l| units.length_compact(l));
+    match (s.kind, angle, length) {
+        (Kind::Angle, Some(angle), Some(length)) => {
+            tr!("uic-snap-cue-angle-length", angle = angle, length = length)
+        }
+        (Kind::Angle, Some(angle), None) => tr!("uic-snap-cue-angle", angle = angle),
+        (Kind::Distance, _, Some(length)) => tr!("uic-snap-cue-distance", length = length),
+        (kind, Some(angle), _) => {
+            tr!(
+                "uic-snap-cue-kind-angle",
+                kind = kind_name(kind),
+                angle = angle
+            )
+        }
+        (kind, _, _) => kind_name(kind),
     }
 }
 
@@ -180,6 +221,73 @@ mod tests {
             Some((DVec2::new(1000.0, 1000.0), 10.0)),
         );
         assert!(near.points.is_empty());
+    }
+
+    /// A snap with the data that the cue names.
+    fn snap_with(kind: Kind, angle: Option<f64>, length: Option<f64>) -> snapping::Snap {
+        snapping::Snap {
+            point: DVec2::ZERO,
+            kind,
+            cue: "English".into(),
+            angle_deg: angle,
+            length,
+            guides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_cue_label_speaks_the_language_and_the_units_of_the_ui() {
+        let cue = |s: snapping::Snap| SnapResult::from(s).cue;
+        let all = [
+            (Kind::Grid, "Grid", "Võrk"),
+            (Kind::Endpoint, "Endpoint", "Otspunkt"),
+            (Kind::Midpoint, "Midpoint", "Poolituspunkt"),
+            (Kind::Center, "Center", "Keskpunkt"),
+            (Kind::Quadrant, "Quadrant", "Veerandipunkt"),
+            (Kind::Intersection, "Intersection", "Lõikepunkt"),
+            (Kind::Edge, "On edge", "Serval"),
+            (Kind::Perpendicular, "Perpendicular", "Ristsuund"),
+            (Kind::Tangent, "Tangent", "Puutuja"),
+            (Kind::Angle, "Angle", "Nurk"),
+            (Kind::Distance, "Distance", "Kaugus"),
+            (Kind::SmartPoint, "Smart point", "Nutikas punkt"),
+            (Kind::SmartEdge, "Smart edge", "Nutikas serv"),
+        ];
+        for (kind, en, et) in all {
+            assert_eq!(kind_name(kind), en);
+            assert_eq!(cue(snap_with(kind, None, None)), en);
+            kadakas_l10n::with_language("et", || assert_eq!(kind_name(kind), et));
+        }
+        assert_eq!(
+            cue(snap_with(Kind::Angle, Some(45.0), Some(300.0))),
+            "Angle 45\u{b0}, length 300 mm"
+        );
+        assert_eq!(
+            cue(snap_with(Kind::Angle, Some(45.5), None)),
+            "Angle 45.5\u{b0}"
+        );
+        assert_eq!(
+            cue(snap_with(Kind::Distance, None, Some(250.0))),
+            "Distance 250 mm"
+        );
+        assert_eq!(
+            cue(snap_with(Kind::SmartPoint, Some(90.0), None)),
+            "Smart point + Angle 90\u{b0}"
+        );
+        // Estonian words, a decimal comma and the units of the person.
+        let et = kadakas_units::Settings::default().resolve("et");
+        kadakas_l10n::with_language("et", || {
+            kadakas_units::with_units(et, || {
+                assert_eq!(
+                    cue(snap_with(Kind::Angle, Some(45.5), Some(300.0))),
+                    "Nurk 45,5\u{b0}, pikkus 300 mm"
+                );
+                assert_eq!(
+                    cue(snap_with(Kind::SmartEdge, Some(30.0), None)),
+                    "Nutikas serv + nurk 30\u{b0}"
+                );
+            })
+        });
     }
 
     #[test]

@@ -514,8 +514,14 @@ pub struct Guide {
 pub struct Snap {
     pub point: DVec2,
     pub kind: Kind,
-    /// The text for the cue label at the cursor.
+    /// The text for the cue label at the cursor, in English. A UI that speaks another language
+    /// builds its own text from `kind`, `angle_deg` and `length`.
     pub cue: String,
+    /// The angle in degrees (0 up to 360) when the cue names one: an angle snap, or a smart point
+    /// or edge that also snaps to an angle.
+    pub angle_deg: Option<f64>,
+    /// The length in mm when the cue names one: a distance snap, or an angle snap with a length.
+    pub length: Option<f64>,
     pub guides: Vec<Guide>,
 }
 
@@ -569,9 +575,13 @@ fn priority(k: Kind) -> u8 {
     }
 }
 
+/// An angle in radians as degrees from 0 up to 360.
+fn degrees_0_360(rad: f64) -> f64 {
+    ((rad.to_degrees() % 360.0) + 360.0) % 360.0
+}
+
 fn angle_text(rad: f64) -> String {
-    let deg = rad.to_degrees();
-    let deg = ((deg % 360.0) + 360.0) % 360.0;
+    let deg = degrees_0_360(rad);
     if (deg - deg.round()).abs() < 0.005 {
         format!("{}°", deg.round() as i64)
     } else {
@@ -604,6 +614,8 @@ pub fn snap(
         point,
         kind,
         cue: kind.label().to_string(),
+        angle_deg: None,
+        length: None,
         guides: Vec::new(),
     };
 
@@ -805,6 +817,7 @@ pub fn snap(
                 Kind::Angle.label(),
                 angle_text((x - a).to_angle())
             );
+            s.angle_deg = Some(degrees_0_360((x - a).to_angle()));
         }
         return Some(s);
     }
@@ -832,16 +845,20 @@ pub fn snap(
             };
             let len = point.distance(a);
             let mut text = format!("Angle {}", angle_text(l.d.to_angle()));
+            let mut length = None;
             if set.distance && step > 0.0 {
                 let k = (len / step).round();
                 let target = k * step;
                 if (len - target).abs() <= tol && target > 0.0 {
                     point = a + l.d * target;
                     text = format!("{text}, length {}", length_text(target));
+                    length = Some(target);
                 }
             }
             s.point = point;
             s.cue = text;
+            s.angle_deg = Some(degrees_0_360(l.d.to_angle()));
+            s.length = length;
             s.kind = Kind::Angle;
             s.guides = vec![Guide {
                 a,
@@ -877,6 +894,7 @@ pub fn snap(
                 let p = a + (cursor - a) / len * target;
                 return Some(Snap {
                     cue: format!("Distance {}", length_text(target)),
+                    length: Some(target),
                     ..plain(p, Kind::Distance)
                 });
             }
