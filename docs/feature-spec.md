@@ -564,3 +564,4 @@ The core stays headless and independent of any UI. Several UIs, a collaboration 
 | PLAT-09 | Collaboration server and browser viewer and editor, in a separate repository (`cadektor-server`). | P1 | planned |
 | PLAT-10 | Sandboxed plug-ins as WebAssembly modules that run the same way on the desktop, the server and the browser. This is the chosen extension model for plug-in objects and tools. Python stays for automation scripts. Plug-in object geometry syncs as data, so that other clients do not need to run the plug-in. | P1 | planned |
 | PLAT-11 | A second UI flavor as a separate program on `cadektor-ui-core` (for example a SketchUp-like 3D-first UI). | P2 | planned |
+| PLAT-12 | Multi-document host: the core holds many independent sessions in one process. No shared mutable global state; every cache is per session and bounded, with per-session memory and time limits. A server runs one actor per document in a pool of worker processes. | P0 | planned |
