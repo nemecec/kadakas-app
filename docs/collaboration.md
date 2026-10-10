@@ -7,6 +7,17 @@ crate for the merge rules and the checks, or it may follow this text and write i
 
 Protocol version: **1**.
 
+**Compatibility.** The changes since the first text are all optional, so the version stays 1. New
+things are an extra error code (`document_full`; a client reads any code it does not know as a retry
+error, see section 4.6), the `hash` of an `error`, `hello.last_hash`, and `chain` in `ack`, `Entry`
+and `snapshot`. A new client with an old server: the old server leaves the new fields out, and the
+client works as before. An old client with a new server: it ignores fields it does not know (and an
+old client may stop on an error code that it does not know, so a new server sends `document_full`
+only to a client that can read it, or accepts that an old client treats it as a bad message). A
+new server must read a `hello` and a `submit` without the new fields. Rules 3 (one user per client
+ID), 6 (the hash is `ops_digest`) and 7 (the end of the block) tighten the text of the server side;
+they do not change any message.
+
 ## 1. The idea
 
 - A shared document is a **log of transactions**. The server puts them in one order and gives
@@ -124,6 +135,10 @@ properties.
   `deleted_by`. Otherwise it is alive again, with the properties it had.
 - **set** and **unset**: drop them if the thing is unknown, deleted, or the property is `id`.
   Otherwise write the value (or the removal) with the writer.
+
+A new shared document starts from `docsync::replica_of(&Document::default())`. It has the protected
+things above: the document settings, the first layer and the class "None". An empty
+`Replica::new()` has none of them, so it is not a valid start.
 
 To "drop" means the operation has no effect, and the transaction is still ordered. A dropped
 operation is not an error: every replica drops the same operations.
@@ -249,7 +264,8 @@ one line). The transport is not part of this protocol. Use TLS in any real deplo
 ```
 
 `last_seq` is the last sequence number that the client has, and `log_id` the log it comes from. Both
-are left out if the client has no state yet.
+are left out if the client has no state yet. The optional `last_hash` is the chain hash of the log at
+`last_seq` (section 4.9); a client that does not know it leaves it out.
 
 **`submit`**: a transaction. `{"type": "submit", "op_id": 5, "ops": [ … ]}`
 
@@ -296,9 +312,11 @@ Directly after `welcome`, the server sends **one** of these:
 A client that has no state must never get `entries`. It treats that as a violation and stops.
 
 An **Entry** is `{"seq": 18, "author": "<client uuid>", "user": "<user uuid>", "op_id": 3,
-"ops": [ … ]}`.
+"ops": [ … ]}`, with an optional `"chain"`: the chain hash of the log after this entry (section 4.9).
+The `snapshot` message has the optional `chain` too: the hash at its `seq`.
 
-**`ack`**: `{"type": "ack", "op_id": 5, "seq": 21}`. Sent to the author of a transaction.
+**`ack`**: `{"type": "ack", "op_id": 5, "seq": 21}`. Sent to the author of a transaction. The
+optional `chain` is the chain hash of the log at `seq` (section 4.9).
 
 **`broadcast`**: `{"type": "broadcast", "entry": Entry}`. Sent to every other connected client.
 
@@ -312,7 +330,9 @@ empty `state`, so the others learn who is online.
 `{"type": "blob_missing", "hash": "…"}`.
 
 **`error`**: `{"type": "error", "code": "…", "message": "…", "op_id": 5}`. `op_id` is left out if
-the error is not about one transaction.
+the error is not about one transaction. An error about a `blob_put` (it has no `op_id`) can have a
+`hash`: `{"type": "error", "code": "rate_limited", "message": "…", "hash": "<sha256 hex>"}`. A
+server may also put `hash` on the errors that it sends for blocked submits (rule 7).
 
 ### 4.3 The snapshot
 
@@ -338,8 +358,9 @@ as canonical JSON text, are equal.
 3. **Sign-in and identity.** If the token is not good, send `error` with `auth_failed` and close.
    The server **binds `user` to the identity of the token**: a `hello` whose `user` is not the user
    of the token is `auth_failed`. The `user` in entries and presence always comes from the sign-in,
-   never from a message. The client ID may be any UUID that this user uses; a server must also
-   limit a client ID to one connection at a time (a second connection with the same client ID
+   never from a message. A client ID belongs to the first user who signs in with it (the server keeps this, also
+   when the client is offline). A `hello` with a client ID of another user is `auth_failed`. A server
+   must also limit a client ID to one connection at a time (a second connection with the same client ID
    replaces the first, or is refused).
 4. **Ordering.** For a good `submit`: give the next sequence number, apply the operations to the
    server replica with the writer (client ID, `op_id`), append the entry to the log, send `ack` to
@@ -350,7 +371,10 @@ as canonical JSON text, are equal.
    and signs in again.
 6. **Per-writer numbers.** For each client ID the server keeps only three things: the highest
    `op_id` it ordered (the high-water mark), the sequence number of that transaction, and a hash of
-   its content (use a strong hash, such as SHA-256, of the JSON text). It does not keep a set of all
+   its content. The hash is `kadakas_collab::op::ops_digest(ops)`: SHA-256 of the canonical JSON of
+   the operations (keys of objects sorted, numbers in the shortest form of `serde_json`). The server
+   stores it, so it must stay the same across server versions; a server that writes its own code
+   must compute the same bytes. It does not keep a set of all
    numbers. For a `submit`:
    - `op_id` equal to the high-water mark and the same hash: answer with `ack` and the old sequence
      number. Do not order it again. (A client sends again after a lost connection.)
@@ -358,14 +382,19 @@ as canonical JSON text, are equal.
    - `op_id` above the mark: check and order it.
 7. **Per-connection FIFO.** The server handles the submits of one connection in the order they
    come. If it refuses a submit with a **retry** error (`rate_limited`, `internal`), it must refuse
-   every later submit of that connection with the same code, until the refused number comes again.
-   Otherwise a later transaction could be ordered before the refused one, and edits that depend on
-   it would be lost.
+   every later submit of that connection with the same code, until a submit with the refused number, or a lower
+   one, comes again. Otherwise a later transaction could be ordered before the refused one, and edits that depend on
+   it would be lost. A `blob_put` refused with a retry error blocks the later submits of the
+   connection with the same code, until that blob is put again. (Otherwise the next submit would
+   fail as `invalid_txn`, a reject, and the edit would be lost.) The error of such a `blob_put`
+   has the `hash` of the blob.
 8. **Refuse before ordering** (send `error` with the `op_id`; do not use a sequence number):
    - `invalid_txn`: the transaction is malformed or breaks a limit or a value check (below);
    - `duplicate_uid`: a `create` without `merge` uses an ID that exists or ever existed in the
      replica, also twice in one transaction. (A `create` with `merge` of an ID that exists or is
      deleted is not an error: section 3.3.2.)
+   - `document_full`: the transaction would make the document larger than the server allows (the
+     size of the snapshot). It is a reject: the client drops the transaction.
    - `rate_limited`: the client sends too much (for example more than the server's limit of
      transactions per second or bytes per minute). It is temporary.
 9. **Presence.** Check the numbers (`bad_message` if they are not valid). Send at most one update per
@@ -375,10 +404,9 @@ as canonical JSON text, are equal.
    document. Keep the latest state of each connected client to fill `peers` in `welcome`.
 10. **Leaving.** On `bye` or when the connection ends, send `presence_leave` to the others.
 11. **Log size.** The server may drop old log entries. A client that needs them gets a `snapshot`.
-12. **Relay byte for byte.** The server sends the operations on exactly as it got them (the JSON text
-    of the numbers too). It does not parse numbers to floats and write them again. Clients compare
-    numbers as numbers (`1` and `1.0` are the same), so a program that writes `1.0` for `1` makes no
-    edit.
+12. **Re-serializing.** The server may re-serialize the operations. Each value must stay equal as JSON
+    (keys, strings, and numbers as numbers, with no loss of precision; `kadakas-collab` parses with
+    `float_roundtrip`). Clients compare numbers as numbers.
 
 ### 4.5 Limits and value checks
 
@@ -404,8 +432,17 @@ touches, as the core checks a command: apply the operations to a copy of the pro
 touched things and run `validate_entity` on the result. The check reads the properties as the type
 of the thing, requires finite numbers in range, and runs the checks of the file format for shapes
 (arcs, thickness, viewports and so on). A thing that does not pass makes the transaction
-`invalid_txn`. An edit of a thing that is not there or is deleted is not an error: the merge drops
+`invalid_txn`. A `create` with `merge` of a living thing is checked as the current visible properties
+of the thing with the properties of the `create` written over them. The crate has these checks as
+functions, so a server need not copy them: `validate::check_transaction(replica, ops, blobs)`
+(duplicate IDs and the value checks; `CheckError` tells which code to send),
+`validate::blobs_needed(replica, ops)` (the blobs that the server must have first) and
+`validate::referenced_blobs(replica)` (the blobs to keep, section 4.7). An edit of a thing that is not there or is deleted is not an error: the merge drops
 it. This check is the first defence; the quarantine of section 3.4 is the second one.
+
+**Frames that cannot be read.** A frame that is not JSON or not a known message: `bad_message`
+without `op_id`, and the connection stays. A `submit` whose `ops` cannot be read: `invalid_txn` with
+its `op_id` when it can be read. A frame above the limit: close with WebSocket code 1009.
 
 A client that cannot read a frame from the server, or gets a value that is too deep, does not try
 again in a loop. It stops with a fatal error (`bad_message`) and tells the host. Going back to the
@@ -418,8 +455,9 @@ Every error code has a class. The client acts on the class:
 | Code | Class | The client |
 |---|---|---|
 | `unsupported_protocol`, `auth_failed` | fatal | stops; the host must connect again on purpose |
-| `bad_message`, `invalid_txn`, `duplicate_uid` | reject | drops the transaction and its undo step; its edit leaves the view |
-| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s |
+| `bad_message`, `invalid_txn`, `duplicate_uid`, `document_full` | reject | drops the transaction and its undo step; its edit leaves the view |
+| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s. If the error has a `hash`, the client puts that blob again (`blob_put`) before it sends the transactions again |
+| any other code (the client reads it as `unknown`) | retry when the error has an `op_id`; otherwise the client reports it and goes on | as for a retry error, or reports it |
 | `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
 
 ### 4.7 Blobs
@@ -433,8 +471,9 @@ server does not have is `invalid_txn`. Messages of one connection keep their ord
 arrives first.
 
 A client that finds a reference to a blob it does not have (after a snapshot or an entry) sends
-`blob_get` once, and leaves the object out of its document until `blob` arrives. On `blob_missing` it
-does not ask again on this connection (the list is cleared at the next sign-in). After a sign-in the client sends `blob_put` again for every picture that a
+`blob_get` once, and leaves the object out of its document until `blob` arrives. Old log entries can refer to blobs that were removed later. A client that gets `blob_missing` while
+it catches up keeps the thing waiting for its picture; the state at the head refers only to kept
+blobs. On `blob_missing` it does not ask again on this connection (the list is cleared at the next sign-in). After a sign-in the client sends `blob_put` again for every picture that a
 waiting transaction refers to. The checkpoint and the journal of the client hold the pictures they
 need. The same picture has the same hash, so it is sent once.
 
@@ -466,6 +505,52 @@ too), its waiting transactions and its undo and redo steps refer to, and drops t
   `ack`, move the transaction into the confirmed state.
 - A sequence number that is not the next one means a gap. The client goes offline and connects again
   with its `last_seq`.
+
+### 4.9 Log names
+
+The name of the log (`log_id`) is a promise: **a log with this name holds every entry that the server
+acknowledged under this name.** A client that comes back with the same name and a `last_seq` trusts
+this and asks only for `entries` after it. If the promise breaks, the client keeps state that the
+server does not have, and the two never agree again.
+
+The server must change `log_id` whenever its log might not extend everything it acknowledged under
+that name: after a restore, after loss of storage, or after a write conflict that shows the stored
+head went back. A client that sees a new name takes the `snapshot` and sends again the work that the
+snapshot lacks (section 4.8), so a new name costs one snapshot and loses nothing. When in doubt,
+change the name.
+
+The server cannot see a restore from a backup by itself, so it needs a way to tell. The recommended
+way is the one of `kadakas-server`: a **ledger** and a **chain**.
+
+- **The ledger.** For each document the server writes a small record outside the database, on its own
+  volume that a restore of the database does not touch: the log name, the head sequence number, the
+  chain hash of the head entry, and a flag *clean*. The server writes it when the document loads,
+  every few seconds or every N entries, when the name changes, and at a stop (with *clean* set).
+  When the document loads, the server compares the ledger with the database and gives the document a
+  new name if: the names differ; the database head is below the ledger head; the heads are equal but
+  the chain hashes differ; the database head is above the ledger head and the ledger is not clean (the
+  server did not stop on purpose) or the chain at the ledger head differs; or the document has no
+  ledger record (a missing record is a doubt). An operator can also change the name by hand
+  (a command or an admin call), for example after a restore of the ledger volume. A change of name
+  disconnects the clients of the document.
+- **The chain.** Each entry has a chain hash, `chain_n = SHA256(chain_{n-1} || seq || author || op_id
+  || ops_text)`, with `chain_0` = 32 zero bytes. The exact bytes are in the module `kadakas_collab::chain`
+  (`chain_next`): `chain_{n-1}` as 32 bytes; `seq` and `op_id` as 8 bytes, big endian; `author` as its
+  36 characters of lowercase text; `ops_text` as the compact JSON text of the operations that
+  `chain::ops_text` writes. This is the chain of `kadakas-server` (`log_entries.chain`). Two logs with
+  the same hash at a number have the same entries up to there.
+
+**The chain on the wire (optional).** A server that keeps the chain puts it in `ack` and in each
+`Entry` (`chain`, hex), and in `snapshot` (the hash at its `seq`). A client keeps the hash of its last
+confirmed `seq` with its checkpoint, and sends it in `hello` as `last_hash`. The server compares
+`last_hash` with its own hash at `last_seq`. If they differ, the log of the server is not the log
+that the client knows, even though the name and the numbers fit: the server gives the log a **new
+name** (and, as for any change of name, disconnects the other clients of the document), and the client
+gets a `snapshot`. If the server no longer holds the entry at `last_seq`, it cannot compare, and the
+client gets a `snapshot` anyway. All these fields are optional and have no effect when they are left
+out, so old servers and old clients work with new ones (the protocol version stays 1): a client that
+gets no `chain` sends no `last_hash`, and a server that gets no `last_hash` compares nothing. The test
+sequencer (`Sequencer`) keeps the chain and shows the check.
 
 ## 5. Optimistic apply and rebase
 
@@ -575,8 +660,10 @@ normal `undo` is cleared, because its steps no longer fit. While a session is co
 
 ## 10. Not in version 1
 
-- Creating the first shared document. The server makes it from an uploaded `.kad` file (the function
-  `docsync::replica_of` reads a document into a replica).
+- Creating the first shared document from the content of a `.kad` file. A new, empty shared
+  document starts from `docsync::replica_of(&Document::default())` (section 3.3). Uploading a file as
+  the first content is later: `docsync::replica_of` reads any document into a replica, so the server
+  can use it for this.
 - Permissions, roles and locking of layers.
 - Cutting other big values (a long polyline, a worksheet) into parts.
 - Comments and chat.

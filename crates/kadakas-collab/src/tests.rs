@@ -463,6 +463,7 @@ fn resubmit_after_a_lost_ack_gets_the_old_sequence_number() {
             token: String::new(),
             last_seq: Some(1),
             log_id: None,
+            last_hash: None,
         },
         0,
     );
@@ -474,7 +475,14 @@ fn resubmit_after_a_lost_ack_gets_the_old_sequence_number() {
         },
         0,
     );
-    assert_eq!(outs[0].msg, ServerMsg::Ack { op_id: 1, seq: 1 });
+    assert_eq!(
+        outs[0].msg,
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: net.seq.chain_at(1).map(|c| crate::chain::to_hex(&c))
+        }
+    );
 }
 
 #[test]
@@ -634,6 +642,7 @@ fn a_gap_in_the_sequence_sends_the_client_offline() {
         user: Uid::from_num(9),
         op_id: seq,
         ops: vec![create(seq + 100, 0)],
+        chain: None,
     };
     net.clients[0].handle(ServerMsg::Broadcast { entry: e(1) }, 0);
     assert_eq!(net.clients[0].confirmed_seq(), 1);
@@ -664,7 +673,14 @@ fn a_gap_in_the_sequence_sends_the_client_offline() {
     net.clients[0].handle(ServerMsg::Entries { entries: vec![] }, 0);
     assert_eq!(net.clients[0].state(), ConnState::Online);
     net.clients[0].edit(vec![create(1, 1)]).unwrap();
-    net.clients[0].handle(ServerMsg::Ack { op_id: 1, seq: 7 }, 0);
+    net.clients[0].handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 7,
+            chain: None,
+        },
+        0,
+    );
     assert_eq!(net.clients[0].state(), ConnState::Offline);
     // Entries with a gap during sync.
     net.clients[0].connect();
@@ -706,8 +722,22 @@ fn acks_out_of_order_and_unknown_acks() {
     c.edit(vec![set(1, "a", 2)]).unwrap();
     // The server orders them the other way round: the second first. The set is dropped there
     // (the object does not exist yet), and then the create comes.
-    c.handle(ServerMsg::Ack { op_id: 2, seq: 1 }, 0);
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 2 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 2,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
     assert_eq!(
         c.confirmed().alive(obj(1)).unwrap().get("a"),
@@ -715,18 +745,39 @@ fn acks_out_of_order_and_unknown_acks() {
     );
     assert_eq!(c.view().canonical_text(), c.confirmed().canonical_text());
     // An ack for something unknown does nothing.
-    c.handle(ServerMsg::Ack { op_id: 99, seq: 3 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 99,
+            seq: 3,
+            chain: None,
+        },
+        0,
+    );
     assert_eq!(c.confirmed_seq(), 2);
     // An ack whose number is old only clears the queue.
     c.edit(vec![set(1, "a", 3)]).unwrap();
-    c.handle(ServerMsg::Ack { op_id: 3, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 3,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
 }
 
 #[test]
 fn messages_in_the_wrong_state_are_ignored() {
     let mut c = Client::new(cfg(1));
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     c.handle(
         ServerMsg::Broadcast {
             entry: Entry {
@@ -735,6 +786,7 @@ fn messages_in_the_wrong_state_are_ignored() {
                 user: Uid::from_num(2),
                 op_id: 1,
                 ops: vec![create(1, 1)],
+                chain: None,
             },
         },
         0,
@@ -745,6 +797,7 @@ fn messages_in_the_wrong_state_are_ignored() {
             log_id: "log-1".into(),
             seq: 3,
             state: Replica::new(),
+            chain: None,
         },
         0,
     );
@@ -815,6 +868,7 @@ fn auth_and_protocol_failures_are_final() {
             code: ErrorCode::RateLimited,
             message: "slow down".into(),
             op_id: None,
+            hash: None,
         },
         0,
     );
@@ -828,6 +882,7 @@ fn auth_and_protocol_failures_are_final() {
             code: ErrorCode::UnsupportedProtocol,
             message: "old".into(),
             op_id: None,
+            hash: None,
         },
         0,
     );
@@ -839,7 +894,7 @@ fn auth_and_protocol_failures_are_final() {
 
 #[test]
 fn the_sequencer_checks_messages() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     let conn = s.open();
     assert_eq!(s.connections(), 1);
     // Anything before hello is refused.
@@ -859,6 +914,7 @@ fn the_sequencer_checks_messages() {
         token: String::new(),
         last_seq: Some(50),
         log_id: None,
+        last_hash: None,
     };
     let outs = s.receive(conn, hello(7), 0);
     assert!(matches!(
@@ -1004,7 +1060,7 @@ fn presence_flows_between_clients_and_is_never_saved() {
 
 #[test]
 fn the_server_drops_presence_that_comes_too_fast() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     let a = s.open();
     let b = s.open();
     for (c, u) in [(a, 1), (b, 2)] {
@@ -1018,6 +1074,7 @@ fn the_server_drops_presence_that_comes_too_fast() {
                 token: String::new(),
                 last_seq: None,
                 log_id: None,
+                last_hash: None,
             },
             0,
         );
@@ -1148,6 +1205,7 @@ fn document_changes_travel_as_operations() {
                 user: a.user(),
                 op_id: txn.op_id,
                 ops: txn.ops,
+                chain: None,
             }],
         },
         0,
@@ -1517,7 +1575,7 @@ fn op_id_reused_takes_the_client_offline_and_fixes_the_numbers_at_the_next_sign_
 
 #[test]
 fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conn = s.open();
     let hello = ClientMsg::Hello {
@@ -1528,6 +1586,7 @@ fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
         token: String::new(),
         last_seq: None,
         log_id: None,
+        last_hash: None,
     };
     s.receive(conn, hello, 0);
     let submit = |op_id, a| ClientMsg::Submit {
@@ -1542,7 +1601,11 @@ fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
     // refused.
     assert_eq!(
         s.receive(conn, submit(1, 1), 0)[0].msg,
-        ServerMsg::Ack { op_id: 1, seq: 1 }
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: s.chain_at(1).map(|c| crate::chain::to_hex(&c))
+        }
     );
     assert!(matches!(
         s.receive(conn, submit(1, 2), 0)[0].msg,
@@ -1645,6 +1708,43 @@ fn a_transient_error_keeps_the_transaction_and_tries_again_later() {
     assert!(net.seq.replica().alive(obj(3)).is_some());
     let order: Vec<u64> = net.seq.log().iter().map(|e| e.op_id).collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "in order: {order:?}");
+}
+
+#[test]
+fn an_unknown_error_code_does_not_stop_the_client() {
+    let unknown = |op: Option<u64>| {
+        let text = match op {
+            Some(n) => {
+                format!(r#"{{"type":"error","code":"quota_exceeded","message":"new","op_id":{n}}}"#)
+            }
+            None => r#"{"type":"error","code":"quota_exceeded","message":"new"}"#.to_string(),
+        };
+        serde_json::from_str::<ServerMsg>(&text).unwrap()
+    };
+    // With an op_id: a retry. The transaction stays and goes through later.
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    let op = net.clients[0].pending()[0].op_id;
+    net.clients[0].handle(unknown(Some(op)), net.now);
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    assert_eq!(net.clients[0].pending().len(), 1, "kept");
+    net.now += 300;
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    // Without an op_id: reported, and the client goes on.
+    net.clients[0].take_events();
+    net.clients[0].handle(unknown(None), net.now);
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    assert!(matches!(
+        net.clients[0].take_events()[0],
+        ClientEvent::ServerError {
+            code: ErrorCode::Unknown,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -1781,12 +1881,20 @@ fn an_ack_for_a_transaction_that_came_as_an_entry_rebuilds_the_view() {
                 user: Uid::from_num(2),
                 op_id: 1,
                 ops: vec![create(5, 5)],
+                chain: None,
             },
         },
         0,
     );
     // The server says that our transaction has the old number 1.
-    c.handle(ServerMsg::Ack { op_id: 1, seq: 1 }, 0);
+    c.handle(
+        ServerMsg::Ack {
+            op_id: 1,
+            seq: 1,
+            chain: None,
+        },
+        0,
+    );
     assert!(c.pending().is_empty());
     assert_eq!(c.view().canonical_text(), c.confirmed().canonical_text());
 }
@@ -1846,6 +1954,7 @@ fn a_big_import_is_split_into_transactions_and_arrives() {
             token: String::new(),
             last_seq: Some(0),
             log_id: Some("log-1".into()),
+            last_hash: None,
         },
         0,
     ) {
@@ -1898,6 +2007,7 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
                 token: String::new(),
                 last_seq: None,
                 log_id: None,
+                last_hash: None,
             },
             0,
         );
@@ -1977,7 +2087,7 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
 
 #[test]
 fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conns: Vec<ConnId> = (1..=2)
         .map(|u| {
@@ -1992,6 +2102,7 @@ fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
                     token: String::new(),
                     last_seq: None,
                     log_id: None,
+                    last_hash: None,
                 },
                 0,
             );
@@ -2086,7 +2197,7 @@ fn blobs_travel_by_hash_and_the_object_waits_for_its_picture() {
     let text = "A".repeat(crate::blob::MIN_BLOB_BYTES + 1);
     let shape = json!({"kind": "underlay", "png": text, "opacity": 1.0});
     let (reference, hash, data) = externalize(&shape).unwrap();
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conn = s.open();
     s.receive(
@@ -2099,6 +2210,7 @@ fn blobs_travel_by_hash_and_the_object_waits_for_its_picture() {
             token: String::new(),
             last_seq: None,
             log_id: None,
+            last_hash: None,
         },
         0,
     );
@@ -2277,6 +2389,7 @@ fn a_waiting_transaction_sends_its_picture_again_after_a_sign_in() {
             log_id: "log-1".into(),
             seq: 0,
             state: Replica::new(),
+            chain: None,
         },
         0,
     );
@@ -2433,4 +2546,276 @@ fn a_missing_picture_is_asked_for_again_after_a_new_sign_in() {
         1,
         "asked again on the new connection"
     );
+}
+
+#[test]
+fn a_hello_without_log_id_gets_a_snapshot_not_entries() {
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let hello = |last_seq, log_id: Option<&str>| ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq,
+        log_id: log_id.map(str::to_string),
+        last_hash: None,
+    };
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), None), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
+    s.close(conn);
+    // With the log's own name, the same state gets entries.
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), Some("log-1")), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Entries { .. }));
+    s.close(conn);
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), Some("other")), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
+}
+
+#[test]
+fn a_refused_blob_is_put_again_before_the_transaction_is_sent_again() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::RateLimited, 1);
+    let (op, hash) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.flush(0);
+    net.deliver(0);
+    // The blob was refused, and the submit after it was blocked with the same code.
+    assert!(!net.seq.has_blob(&hash));
+    assert!(net.seq.replica().alive(obj(1)).is_none());
+    assert_eq!(net.clients[0].pending().len(), 1, "kept");
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    net.now += 300;
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.has_blob(&hash), "the blob came again");
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    assert!(net.clients[0].pending().is_empty());
+}
+
+#[test]
+fn a_blob_refused_with_a_reject_code_is_reported_and_blocks_nothing() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::DocumentFull, 1);
+    let (op, hash) = picture_op(1, 'S');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.clients[0].take_events();
+    net.settle();
+    assert!(!net.seq.has_blob(&hash));
+    // The reject code has no retry and no block: the transaction was ordered.
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+}
+
+#[test]
+fn document_full_drops_the_transaction() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::DocumentFull, 1);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    assert!(net.clients[0].pending().is_empty());
+    assert!(net.seq.replica().alive(obj(1)).is_none());
+}
+
+#[test]
+fn a_blocked_connection_is_free_again_with_a_lower_number() {
+    // Rule 7: the block ends when a submit with the refused number, or a lower one, comes again.
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    s.check_entities(false);
+    let conn = s.open();
+    let hello = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+        last_hash: None,
+    };
+    s.receive(conn, hello, 0);
+    let submit = |n: u64| ClientMsg::Submit {
+        op_id: n,
+        ops: vec![create(n, 1)],
+    };
+    s.inject_errors(ErrorCode::Internal, 1);
+    let first = s.receive(conn, submit(5), 0);
+    assert!(matches!(
+        first[0].msg,
+        ServerMsg::Error { op_id: Some(5), .. }
+    ));
+    let later = s.receive(conn, submit(6), 0);
+    assert!(matches!(
+        later[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::Internal,
+            op_id: Some(6),
+            ..
+        }
+    ));
+    // A lower number frees the connection.
+    let free = s.receive(conn, submit(4), 0);
+    assert!(matches!(free[0].msg, ServerMsg::Ack { .. }));
+    let free = s.receive(conn, submit(7), 0);
+    assert!(matches!(free[0].msg, ServerMsg::Ack { .. }));
+}
+
+#[test]
+fn a_client_id_belongs_to_the_first_user_who_signs_in_with_it() {
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let hello = |user: u64, client: u64| ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(user),
+        client: Uid::from_num(client),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+        last_hash: None,
+    };
+    let a = s.open();
+    assert!(matches!(
+        s.receive(a, hello(1, 50), 0)[0].msg,
+        ServerMsg::Welcome { .. }
+    ));
+    // The first user goes offline. The client ID stays theirs.
+    s.close(a);
+    let b = s.open();
+    assert!(matches!(
+        s.receive(b, hello(2, 50), 0)[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::AuthFailed,
+            ..
+        }
+    ));
+    // Another client ID of the second user is fine, and so is the first user again.
+    let c = s.open();
+    assert!(matches!(
+        s.receive(c, hello(2, 51), 0).last().unwrap().msg,
+        ServerMsg::Snapshot { .. }
+    ));
+    let d = s.open();
+    assert!(matches!(
+        s.receive(d, hello(1, 50), 0).last().unwrap().msg,
+        ServerMsg::Snapshot { .. }
+    ));
+}
+
+#[test]
+fn the_chain_follows_the_log_and_a_restored_history_gets_a_new_log_name() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    // The client keeps the chain hash of its last entry, and it is the one of the server.
+    let head = net.seq.seq();
+    assert_eq!(
+        net.clients[0].chain().map(str::to_string),
+        net.seq.chain_at(head).map(|c| crate::chain::to_hex(&c))
+    );
+    assert!(net.clients[0].chain().is_some());
+    assert_eq!(
+        net.clients[0].checkpoint().unwrap().chain.as_deref(),
+        net.clients[0].chain()
+    );
+    // The same log, back again: entries, and no new name.
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    assert_eq!(net.clients[0].log_id(), Some("log-1"));
+
+    // A restore: a log with the same name and the same head, but other entries.
+    let mut restored = Sequencer::new(replica_of(&Document::default()));
+    restored.check_entities(false);
+    let other = restored.open();
+    let hello = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(99),
+        client: Uid::from_num(99),
+        name: "o".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+        last_hash: None,
+    };
+    restored.receive(other, hello, 0);
+    restored.receive(
+        other,
+        ClientMsg::Submit {
+            op_id: 1,
+            ops: vec![create(2, 1)],
+        },
+        0,
+    );
+    assert_eq!(restored.seq(), head);
+    net.seq = restored;
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    // The server saw the other history and gave the log a new name. The client took the
+    // snapshot and sent its own work again.
+    assert_ne!(net.clients[0].log_id(), Some("log-1"));
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_some(), "sent again");
+    assert!(net.seq.replica().alive(obj(2)).is_some());
+}
+
+#[test]
+fn a_server_without_the_chain_and_a_client_without_the_chain_still_work() {
+    // An old server: no chain in entries, acks or snapshots. The client sends no `last_hash`.
+    let mut net = Net::new(2);
+    net.seq.keep_chain(false);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.clients[0].chain(), None);
+    assert_eq!(net.clients[1].chain(), None);
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    assert_eq!(net.clients[0].log_id(), Some("log-1"));
+
+    // An old client: `last_hash` is not in its hello. The server compares nothing.
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let conn = s.open();
+    let old: ClientMsg = serde_json::from_str(&format!(
+        r#"{{"type":"hello","protocol":1,"user":"{}","client":"{}","name":"n","token":"","last_seq":0,"log_id":"log-1"}}"#,
+        Uid::from_num(1),
+        Uid::from_num(1)
+    ))
+    .unwrap();
+    let outs = s.receive(conn, old, 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Entries { .. }));
+    // A new client with a wrong hash at a number the server holds: a new name.
+    s.close(conn);
+    let conn = s.open();
+    let wrong = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: Some(0),
+        log_id: Some("log-1".into()),
+        last_hash: Some("11".repeat(32)),
+    };
+    let outs = s.receive(conn, wrong, 0);
+    let ServerMsg::Welcome { log_id, .. } = &outs[0].msg else {
+        panic!("welcome first");
+    };
+    assert_ne!(log_id, "log-1");
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
 }

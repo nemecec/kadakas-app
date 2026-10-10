@@ -43,6 +43,10 @@ pub struct Entry {
     /// The number of the transaction for its author (`Txn::op_id`).
     pub op_id: u64,
     pub ops: Vec<Op>,
+    /// The chain hash after this entry (hex, see [`crate::chain`]). A server that keeps the
+    /// chain sends it; old servers leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
 }
 
 impl Entry {
@@ -77,6 +81,12 @@ pub enum ErrorCode {
     /// The pair (client, `op_id`) was used before with other content, or is below the highest
     /// number that the server has for this client. The client numbers the transaction again.
     OpIdReused,
+    /// The document would become too large (the limit of the snapshot). Refused for good.
+    DocumentFull,
+    /// A code that this version does not know (a newer server). The client treats it as a retry
+    /// error when it has an `op_id`, and otherwise reports it and goes on.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What a client does when it gets an error.
@@ -104,10 +114,11 @@ impl ErrorCode {
     pub fn class(self) -> ErrorClass {
         match self {
             ErrorCode::UnsupportedProtocol | ErrorCode::AuthFailed => ErrorClass::Fatal,
-            ErrorCode::BadMessage | ErrorCode::DuplicateUid | ErrorCode::InvalidTxn => {
-                ErrorClass::Reject
-            }
-            ErrorCode::RateLimited | ErrorCode::Internal => ErrorClass::Retry,
+            ErrorCode::BadMessage
+            | ErrorCode::DuplicateUid
+            | ErrorCode::InvalidTxn
+            | ErrorCode::DocumentFull => ErrorClass::Reject,
+            ErrorCode::RateLimited | ErrorCode::Internal | ErrorCode::Unknown => ErrorClass::Retry,
             ErrorCode::OpIdReused => ErrorClass::Renumber,
         }
     }
@@ -132,6 +143,11 @@ pub enum ClientMsg {
         /// The `log_id` that the client saw last, with its state.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         log_id: Option<String>,
+        /// The chain hash (hex) at `last_seq`, if the client knows it. A server that keeps the
+        /// chain compares it with its own. If they differ, the log of the server is not the log
+        /// of the client, and the server gives it a new `log_id` (section 4.9).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_hash: Option<String>,
     },
     /// A transaction. The server answers with `ack`, or with `error` that has this `op_id`. The
     /// server must treat a second submit with the same client, `op_id` and content as the first
@@ -180,12 +196,21 @@ pub enum ServerMsg {
         log_id: String,
         seq: u64,
         state: Replica,
+        /// The chain hash at `seq` (hex), if the server keeps the chain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<String>,
     },
     /// The entries after the `last_seq` of the client, in order. Maybe empty. It follows
     /// `welcome` when the client can catch up. A client without state must not get it.
     Entries { entries: Vec<Entry> },
     /// The transaction `op_id` of this client has the sequence number `seq`.
-    Ack { op_id: u64, seq: u64 },
+    Ack {
+        op_id: u64,
+        seq: u64,
+        /// The chain hash at `seq` (hex), if the server keeps the chain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chain: Option<String>,
+    },
     /// An entry of another client.
     Broadcast { entry: Entry },
     /// The presence of another client.
@@ -207,6 +232,10 @@ pub enum ServerMsg {
         /// The transaction that was refused, if the error is about one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         op_id: Option<u64>,
+        /// The blob that the error is about, for a refused `blob_put` (it has no `op_id`). With a
+        /// retry class, the client puts this blob again before it sends the transaction again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
     },
 }
 
@@ -236,6 +265,7 @@ mod tests {
             user,
             op_id: 2,
             ops: vec![op.clone()],
+            chain: None,
         };
         assert_eq!(entry.txn().op_id, 2);
         let t = round(&ClientMsg::Hello {
@@ -246,6 +276,7 @@ mod tests {
             token: "t".into(),
             last_seq: Some(3),
             log_id: Some("log".into()),
+            last_hash: None,
         });
         assert!(t.contains(r#""type":"hello""#));
         round(&ClientMsg::Hello {
@@ -256,6 +287,7 @@ mod tests {
             token: String::new(),
             last_seq: None,
             log_id: None,
+            last_hash: None,
         });
         round(&ClientMsg::Submit {
             op_id: 1,
@@ -291,11 +323,32 @@ mod tests {
             log_id: "log".into(),
             seq: 9,
             state: Replica::new(),
+            chain: None,
         });
         round(&ServerMsg::Entries {
             entries: vec![entry.clone()],
         });
-        round(&ServerMsg::Ack { op_id: 1, seq: 2 });
+        round(&ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: None,
+        });
+        let t = round(&ServerMsg::Ack {
+            op_id: 1,
+            seq: 2,
+            chain: Some("ab".repeat(32)),
+        });
+        assert!(t.contains(r#""chain":"abab"#));
+        // Messages of the first version have none of the optional fields.
+        let old: ServerMsg = serde_json::from_str(r#"{"type":"ack","op_id":1,"seq":2}"#).unwrap();
+        assert_eq!(
+            old,
+            ServerMsg::Ack {
+                op_id: 1,
+                seq: 2,
+                chain: None
+            }
+        );
         round(&ServerMsg::Broadcast { entry });
         round(&ServerMsg::Presence {
             client,
@@ -308,12 +361,14 @@ mod tests {
             code: ErrorCode::DuplicateUid,
             message: "x".into(),
             op_id: Some(3),
+            hash: Some("h".into()),
         });
         assert!(t.contains("duplicate_uid"));
         round(&ServerMsg::Error {
             code: ErrorCode::Internal,
             message: "x".into(),
             op_id: None,
+            hash: None,
         });
     }
 
@@ -326,13 +381,49 @@ mod tests {
             (ErrorCode::BadMessage, Reject),
             (ErrorCode::DuplicateUid, Reject),
             (ErrorCode::InvalidTxn, Reject),
+            (ErrorCode::DocumentFull, Reject),
             (ErrorCode::RateLimited, Retry),
             (ErrorCode::Internal, Retry),
             (ErrorCode::OpIdReused, Renumber),
+            (ErrorCode::Unknown, Retry),
         ];
         for (code, class) in all {
             assert_eq!(code.class(), class, "{code:?}");
             assert_eq!(code.is_fatal(), class == Fatal);
+        }
+    }
+
+    #[test]
+    fn a_code_from_a_newer_server_reads_as_unknown() {
+        let m: ServerMsg =
+            serde_json::from_str(r#"{"type":"error","code":"from_the_future","message":"x"}"#)
+                .unwrap();
+        assert!(matches!(
+            m,
+            ServerMsg::Error {
+                code: ErrorCode::Unknown,
+                op_id: None,
+                ..
+            }
+        ));
+        assert!(!ErrorCode::Unknown.is_fatal());
+    }
+
+    #[test]
+    fn numbers_keep_every_digit_when_read_and_written_again() {
+        // The crate parses with `float_roundtrip`: a server that re-serializes must not lose digits.
+        for text in [
+            "0.1",
+            "0.30000000000000004",
+            "123456.789012345",
+            "1e-7",
+            "5e22",
+        ] {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            let again: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+            assert_eq!(v, again, "{text}");
+            assert_eq!(v.as_f64(), text.parse::<f64>().ok(), "{text}");
         }
     }
 

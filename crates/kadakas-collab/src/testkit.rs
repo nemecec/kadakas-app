@@ -26,18 +26,17 @@
 //! - Can answer the next submits with an error of your choice (for tests of retry).
 
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use kadakas_core::uid::Uid;
-use serde_json::{Map, Value};
 
-use crate::op::{Op, Target, Writer, validate_ops};
+use crate::chain::{self, CHAIN_START};
+use crate::op::{Op, Writer, ops_digest, validate_ops};
 use crate::presence::{self, Peer, PresenceState, Throttle};
 use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
 use crate::transport::{Endpoint, MemPeer, MemTransport, Transport, TransportError, mem_pair};
-use crate::validate::validate_entity;
+use crate::validate::{CheckError, check_duplicates, check_transaction};
 
 /// A connection number, made by [`Sequencer::open`].
 pub type ConnId = u64;
@@ -64,7 +63,7 @@ struct Conn {
 struct WriterRecord {
     high: u64,
     seq: u64,
-    hash: u64,
+    hash: [u8; 32],
 }
 
 /// The reference sequencer.
@@ -89,16 +88,25 @@ pub struct Sequencer {
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
     /// Blobs by hash.
     blobs: BTreeMap<String, String>,
-}
-
-fn hash_ops(ops: &[Op]) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_string(ops).unwrap_or_default().hash(&mut h);
-    h.finish()
+    /// The chain hash of each entry of `log`, and the chain hash before the first of them.
+    chains: Vec<[u8; 32]>,
+    base_chain: [u8; 32],
+    /// False: act as a server that does not keep the chain (the old protocol).
+    use_chain: bool,
+    epoch: u32,
+    /// client ID -> the first user who signed in with it.
+    owners: BTreeMap<Uid, Uid>,
+    /// The next blob_put calls fail with this error (nothing is kept).
+    inject_blob: Option<(ErrorCode, usize)>,
+    /// Per connection: a blob_put was refused with a retry error. Every later submit gets the
+    /// same error, until that blob is put again.
+    blob_blocked: BTreeMap<ConnId, (ErrorCode, String)>,
 }
 
 impl Sequencer {
-    /// A sequencer for a document in this state, at sequence number 0.
+    /// A sequencer for a document in this state, at sequence number 0. A new shared document
+    /// starts from `docsync::replica_of(&Document::default())`: it has the protected first layer,
+    /// the class "None" and the document settings. An empty `Replica::new()` has none of them.
     pub fn new(initial: Replica) -> Sequencer {
         Sequencer {
             replica: initial,
@@ -116,6 +124,13 @@ impl Sequencer {
             check_entities: true,
             blocked: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            chains: Vec::new(),
+            base_chain: CHAIN_START,
+            use_chain: true,
+            epoch: 0,
+            owners: BTreeMap::new(),
+            inject_blob: None,
+            blob_blocked: BTreeMap::new(),
         }
     }
 
@@ -143,9 +158,48 @@ impl Sequencer {
         self.log_id = id.to_string();
     }
 
+    /// Gives the log a new name, as a server does after a restore (section 4.9). Clients that
+    /// come back with the old name get a snapshot. The sequencer does it by itself when a client
+    /// says (`last_hash`) that its log has other entries at the same sequence number.
+    pub fn new_epoch(&mut self) {
+        self.epoch += 1;
+        self.log_id = format!("log-e{}", self.epoch);
+    }
+
+    /// Switches the hash chain off or on (it is on by default). Off, the sequencer sends no
+    /// `chain` and ignores `last_hash`, like a server of the first version of the protocol.
+    pub fn keep_chain(&mut self, on: bool) {
+        self.use_chain = on;
+    }
+
+    /// The chain hash after the entry `seq`, if the log still holds it (or `seq` is just before
+    /// its first entry).
+    pub fn chain_at(&self, seq: u64) -> Option<[u8; 32]> {
+        if seq < self.log_start || seq > self.seq {
+            None
+        } else if seq == self.log_start {
+            Some(self.base_chain)
+        } else {
+            Some(self.chains[(seq - self.log_start - 1) as usize])
+        }
+    }
+
+    fn chain_text(&self, seq: u64) -> Option<String> {
+        self.chain_at(seq)
+            .filter(|_| self.use_chain)
+            .map(|c| chain::to_hex(&c))
+    }
+
     /// Makes the next `count` submits fail with this error (nothing is ordered).
     pub fn inject_errors(&mut self, code: ErrorCode, count: usize) {
         self.inject = Some((code, count));
+    }
+
+    /// Makes the next `count` `blob_put` messages fail with this error. The error names the blob
+    /// (`hash`). With a retry class, the submits of the connection fail with the same code until
+    /// the blob is put again (rule 7).
+    pub fn inject_blob_errors(&mut self, code: ErrorCode, count: usize) {
+        self.inject_blob = Some((code, count));
     }
 
     /// Keeps only the last `n` log entries. A client that is further behind gets a snapshot.
@@ -158,6 +212,8 @@ impl Sequencer {
         if self.log.len() > self.log_limit {
             let cut = self.log.len() - self.log_limit;
             self.log.drain(..cut);
+            self.base_chain = self.chains[cut - 1];
+            self.chains.drain(..cut);
             self.log_start += cut as u64;
         }
     }
@@ -209,6 +265,7 @@ impl Sequencer {
     /// The connection ended. The others hear that the client left.
     pub fn close(&mut self, conn: ConnId) -> Vec<Out> {
         self.blocked.remove(&conn);
+        self.blob_blocked.remove(&conn);
         match self.conns.remove(&conn) {
             Some(Conn {
                 who: Some((client, _)),
@@ -278,6 +335,7 @@ impl Sequencer {
                     token,
                     last_seq,
                     log_id,
+                    last_hash,
                 },
                 None,
             ) => {
@@ -293,6 +351,25 @@ impl Sequencer {
                         Some(bound) if bound.is_none_or(|u| u == user) => {}
                         _ => return reply(error(ErrorCode::AuthFailed, "wrong token", None)),
                     }
+                }
+                // A client ID belongs to the first user who signs in with it, also when that
+                // client is offline later.
+                if *self.owners.entry(client).or_insert(user) != user {
+                    return reply(error(
+                        ErrorCode::AuthFailed,
+                        "this client ID belongs to another user",
+                        None,
+                    ));
+                }
+                // The client says which history it has. If this log has another one at that
+                // number, the log is not the one the client knew: it gets a new name.
+                if self.use_chain
+                    && log_id.as_deref() == Some(self.log_id.as_str())
+                    && let (Some(n), Some(h)) = (last_seq, last_hash.as_deref())
+                    && let Some(mine) = self.chain_text(n)
+                    && mine != h
+                {
+                    self.new_epoch();
                 }
                 self.join(conn, user, client, &name, last_seq, log_id)
             }
@@ -326,6 +403,18 @@ impl Sequencer {
                 )
             }
             (ClientMsg::BlobPut { hash, data }, Some(_)) => {
+                if let Some((code, n)) = self.inject_blob {
+                    self.inject_blob = (n > 1).then_some((code, n - 1));
+                    if code.class() == crate::protocol::ErrorClass::Retry {
+                        self.blob_blocked.insert(conn, (code, hash.clone()));
+                    }
+                    return reply(ServerMsg::Error {
+                        code,
+                        message: "injected by the test".into(),
+                        op_id: None,
+                        hash: Some(hash),
+                    });
+                }
                 if data.len() > crate::blob::MAX_BLOB_BYTES
                     || crate::blob::sha256_hex(data.as_bytes()) != hash
                 {
@@ -334,6 +423,13 @@ impl Sequencer {
                         "the hash is not the hash of the data",
                         None,
                     ));
+                }
+                if self
+                    .blob_blocked
+                    .get(&conn)
+                    .is_some_and(|(_, h)| *h == hash)
+                {
+                    self.blob_blocked.remove(&conn);
                 }
                 self.blobs.insert(hash, data);
                 Vec::new()
@@ -394,7 +490,7 @@ impl Sequencer {
                 peers,
             },
         });
-        let same_log = log_id.as_ref().is_none_or(|l| *l == self.log_id);
+        let same_log = log_id.as_deref() == Some(self.log_id.as_str());
         let can_resume = same_log && last_seq.is_some_and(|n| n >= self.log_start && n <= self.seq);
         out.push(Out {
             conn,
@@ -408,64 +504,11 @@ impl Sequencer {
                     log_id: self.log_id.clone(),
                     seq: self.seq,
                     state: self.replica.clone(),
+                    chain: self.chain_text(self.seq),
                 }
             },
         });
         out
-    }
-
-    /// Checks the things that the operations touch, as a server must: each thing must stay a
-    /// valid thing. It applies the operations to copies of the properties of the touched things.
-    /// An edit of a thing that is not there is not an error: the merge drops it.
-    fn check_things(&self, ops: &[Op]) -> Result<(), String> {
-        let mut props: BTreeMap<Target, Map<String, Value>> = BTreeMap::new();
-        let mut order: Vec<Target> = Vec::new();
-        for op in ops {
-            let t = op.target();
-            let current = |this: &Self| this.replica.alive(t).map(|e| e.visible());
-            match op {
-                Op::Create { props: p, .. } => {
-                    props.insert(t, p.clone().into_iter().collect());
-                }
-                Op::Set { prop, value, .. } => {
-                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
-                        continue;
-                    };
-                    m.insert(prop.clone(), value.clone());
-                }
-                Op::Unset { prop, .. } => {
-                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
-                        continue;
-                    };
-                    m.remove(prop);
-                }
-                _ => continue,
-            }
-            if !order.contains(&t) {
-                order.push(t);
-            }
-        }
-        for t in order {
-            // Pictures are in blobs: put them back to check the thing.
-            let full = crate::blob::inline_props(&props[&t], &|h| self.blobs.get(h).cloned())
-                .map_err(|h| format!("the blob {h} was not sent before the transaction"))?;
-            validate_entity(t.kind, t.id, &full)
-                .map_err(|e| format!("{:?} {}: {e}", t.kind, t.id))?;
-        }
-        Ok(())
-    }
-
-    /// The working copy of the properties of a thing: the one that was made before, or the
-    /// current ones. `None` if the thing is not there.
-    fn entry_props(
-        props: &mut BTreeMap<Target, Map<String, Value>>,
-        t: Target,
-        current: Option<Map<String, Value>>,
-    ) -> Option<&mut Map<String, Value>> {
-        match props.entry(t) {
-            std::collections::btree_map::Entry::Occupied(e) => Some(e.into_mut()),
-            std::collections::btree_map::Entry::Vacant(v) => Some(v.insert(current?)),
-        }
     }
 
     fn submit(
@@ -487,6 +530,14 @@ impl Sequencer {
             }
             self.blocked.remove(&conn);
         }
+        if let Some((code, hash)) = self.blob_blocked.get(&conn).cloned() {
+            return reply(ServerMsg::Error {
+                code,
+                message: "a blob was refused".into(),
+                op_id: Some(op_id),
+                hash: Some(hash),
+            });
+        }
         if let Some((code, n)) = self.inject {
             self.inject = (n > 1).then_some((code, n - 1));
             if code.class() == crate::protocol::ErrorClass::Retry {
@@ -494,10 +545,14 @@ impl Sequencer {
             }
             return reply(error(code, "injected by the test", Some(op_id)));
         }
-        let hash = hash_ops(&ops);
+        let hash = ops_digest(&ops);
         if let Some(w) = self.writers.get(&client) {
             if op_id == w.high && hash == w.hash {
-                return reply(ServerMsg::Ack { op_id, seq: w.seq });
+                return reply(ServerMsg::Ack {
+                    op_id,
+                    seq: w.seq,
+                    chain: self.chain_text(w.seq),
+                });
             }
             if op_id <= w.high {
                 return reply(error(
@@ -510,37 +565,32 @@ impl Sequencer {
         if let Err(e) = validate_ops(&ops) {
             return reply(error(ErrorCode::InvalidTxn, &e.to_string(), Some(op_id)));
         }
-        let mut made: Vec<Target> = Vec::new();
-        for op in &ops {
-            if let Op::Create { target, merge, .. } = op {
-                let again = self.replica.contains(*target) || made.contains(target);
-                // A derived ID may be made again with `merge`. If the thing was deleted, the
-                // operation is dropped by the merge (the thing stays deleted); the rest of the
-                // transaction is ordered as usual. Any other repeat is refused.
-                if again && !*merge {
-                    return reply(error(
-                        ErrorCode::DuplicateUid,
-                        &format!("the ID {} is used", target.id),
-                        Some(op_id),
-                    ));
-                }
-                made.push(*target);
-            }
-        }
-        if self.check_entities
-            && let Err(e) = self.check_things(&ops)
-        {
-            return reply(error(ErrorCode::InvalidTxn, &e, Some(op_id)));
+        let blobs = |h: &str| self.blobs.get(h).cloned();
+        let checked = if self.check_entities {
+            check_transaction(&self.replica, &ops, &blobs)
+        } else {
+            check_duplicates(&self.replica, &ops)
+        };
+        if let Err(e) = checked {
+            let code = match e {
+                CheckError::DuplicateUid(_) => ErrorCode::DuplicateUid,
+                _ => ErrorCode::InvalidTxn,
+            };
+            return reply(error(code, &e.to_string(), Some(op_id)));
         }
         self.seq += 1;
         self.replica.apply_all(Writer { client, op: op_id }, &ops);
+        let prev = self.chain_at(self.seq - 1).expect("the log holds its head");
+        let link = chain::chain_next(&prev, self.seq, client, op_id, &ops);
         let entry = Entry {
             seq: self.seq,
             author: client,
             user,
             op_id,
             ops,
+            chain: self.use_chain.then(|| chain::to_hex(&link)),
         };
+        self.chains.push(link);
         self.log.push(entry.clone());
         self.trim();
         self.writers.insert(
@@ -554,6 +604,7 @@ impl Sequencer {
         let mut out = reply(ServerMsg::Ack {
             op_id,
             seq: self.seq,
+            chain: entry.chain.clone(),
         });
         out.extend(self.to_others(conn, ServerMsg::Broadcast { entry }));
         out
@@ -565,6 +616,7 @@ fn error(code: ErrorCode, message: &str, op_id: Option<u64>) -> ServerMsg {
         code,
         message: message.to_string(),
         op_id,
+        hash: None,
     }
 }
 

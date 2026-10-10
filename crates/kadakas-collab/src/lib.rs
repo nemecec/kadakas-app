@@ -21,6 +21,7 @@
 //! [`Uid`]: kadakas_core::uid::Uid
 
 pub mod blob;
+pub mod chain;
 pub mod client;
 pub mod docsync;
 pub mod materialize;
