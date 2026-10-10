@@ -2463,7 +2463,8 @@ mod tests {
     fn new_forms_differ_between_plants_but_not_between_builds() {
         use crate::plants::style::PlantStyle;
         use crate::resource::{ResourceBody, ResourceId};
-        let mut ed = Editor::default();
+        // Sequential ids: the variant is the id modulo VARIANTS, so random ids could collide.
+        let mut ed = Editor::new(Document::with_sequential_ids());
         let style = PlantStyle {
             form: PlantForm::MultiStem,
             spread: 3000.0,
