@@ -715,4 +715,218 @@ mod tests {
         }
         assert!(!m.annot_hint(&s2).is_empty());
     }
+
+    fn cx<'a>(doc: &'a Document, s: &'a ToolSettings) -> Ctx<'a> {
+        Ctx {
+            doc,
+            selection: &[],
+            settings: s,
+            tol: 1.0,
+            context: None,
+        }
+    }
+
+    fn doc_with(shapes: Vec<Shape>) -> Document {
+        let mut ed = kadakas_core::command::Editor::default();
+        for shape in shapes {
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        }
+        ed.doc().clone()
+    }
+
+    fn machine(tool: Tool) -> ToolMachine {
+        let mut m = ToolMachine::default();
+        m.set_tool(tool);
+        m
+    }
+
+    #[test]
+    fn list_dimensions_finish_with_enter_or_a_double_click() {
+        let doc = Document::default();
+        for mode in [
+            DimToolMode::Chain,
+            DimToolMode::Baseline,
+            DimToolMode::Ordinate,
+        ] {
+            let mut s = ToolSettings::default();
+            s.annot.dim_mode = mode;
+            let mut m = machine(Tool::Dimension);
+            // Nothing is made before there are enough points.
+            assert!(m.handle(Input::Enter, &cx(&doc, &s)).is_empty());
+            // One point is too few: Enter makes nothing and starts again.
+            click(&mut m, &doc, &s, DVec2::ZERO);
+            assert!(m.handle(Input::Enter, &cx(&doc, &s)).is_empty());
+            for x in [0.0, 1000.0, 3000.0] {
+                click(&mut m, &doc, &s, DVec2::new(x, 0.0));
+            }
+            assert!(m.preview(DVec2::new(4000.0, 0.0), &cx(&doc, &s)) != Preview::None);
+            let input = if mode == DimToolMode::Chain {
+                Input::DoubleClick
+            } else {
+                Input::Enter
+            };
+            let Annot::Dimension(d) = made(&m.handle(input, &cx(&doc, &s))) else {
+                panic!()
+            };
+            assert_eq!(d.mode, mode.mode());
+            assert!(d.points.len() >= 3);
+        }
+    }
+
+    #[test]
+    fn the_angular_dimension_previews_before_the_third_click() {
+        let doc = Document::default();
+        let mut s = ToolSettings::default();
+        s.annot.dim_mode = DimToolMode::Angular;
+        let mut m = machine(Tool::Dimension);
+        assert_eq!(m.preview(DVec2::X, &cx(&doc, &s)), Preview::None);
+        click(&mut m, &doc, &s, DVec2::ZERO);
+        click(&mut m, &doc, &s, DVec2::new(1000.0, 0.0));
+        assert!(m.preview(DVec2::new(0.0, 1000.0), &cx(&doc, &s)) != Preview::None);
+    }
+
+    #[test]
+    fn radial_diameter_and_arc_length_read_a_circle_or_an_arc() {
+        let doc = doc_with(vec![
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1000.0,
+            },
+            Shape::Arc {
+                center: DVec2::new(5000.0, 0.0),
+                radius: 1000.0,
+                start: 0.0,
+                end: std::f64::consts::FRAC_PI_2,
+            },
+            Shape::Line {
+                a: DVec2::new(0.0, 3000.0),
+                b: DVec2::new(2000.0, 3000.0),
+            },
+        ]);
+        let on_circle = DVec2::new(1000.0, 0.0);
+        let on_arc = DVec2::new(6000.0, 0.0);
+        let on_line = DVec2::new(1000.0, 3000.0);
+        for mode in [DimToolMode::Radial, DimToolMode::Diameter] {
+            let mut s = ToolSettings::default();
+            s.annot.dim_mode = mode;
+            let mut m = machine(Tool::Dimension);
+            for p in [on_circle, on_arc] {
+                let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, p)) else {
+                    panic!()
+                };
+                assert_eq!(d.mode, mode.mode());
+                assert_eq!(d.anchors.len(), 1);
+            }
+            assert!(matches!(
+                click(&mut m, &doc, &s, on_line)[0],
+                Effect::Notice(_)
+            ));
+            assert_eq!(m.preview(on_arc, &cx(&doc, &s)), Preview::None);
+        }
+        let mut s = ToolSettings::default();
+        s.annot.dim_mode = DimToolMode::ArcLength;
+        let mut m = machine(Tool::Dimension);
+        let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, on_arc)) else {
+            panic!()
+        };
+        assert_eq!(d.mode, DimMode::ArcLength);
+        assert_eq!(d.points.len(), 3);
+        // A full circle has no arc length.
+        assert!(matches!(
+            click(&mut m, &doc, &s, on_circle)[0],
+            Effect::Notice(_)
+        ));
+        // Nothing under the pointer.
+        assert!(matches!(
+            click(&mut m, &doc, &s, DVec2::new(-9000.0, 0.0))[0],
+            Effect::Notice(_)
+        ));
+    }
+
+    #[test]
+    fn a_dimension_between_object_corners_keeps_the_anchors() {
+        let doc = doc_with(vec![Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::new(5000.0, 0.0),
+        }]);
+        let s = ToolSettings::default();
+        let mut m = machine(Tool::Dimension);
+        click(&mut m, &doc, &s, DVec2::ZERO);
+        click(&mut m, &doc, &s, DVec2::new(5000.0, 0.0));
+        let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, DVec2::new(2000.0, 900.0))) else {
+            panic!()
+        };
+        assert_eq!(d.anchors.len(), 2);
+        // A callout that starts on a corner is anchored too.
+        let mut m = machine(Tool::Callout);
+        click(&mut m, &doc, &s, DVec2::ZERO);
+        let Annot::Callout(c) = made(&click(&mut m, &doc, &s, DVec2::new(900.0, 900.0))) else {
+            panic!()
+        };
+        assert!(c.leaders[0].anchor.is_some());
+    }
+
+    #[test]
+    fn the_data_tag_tool_tags_the_clicked_object() {
+        use kadakas_core::annot::style::{AnnotResource, TagStyle};
+        use kadakas_core::resource::ResourceBody;
+        let mut ed = kadakas_core::command::Editor::default();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1000.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        let s = ToolSettings::default();
+        let mut m = machine(Tool::DataTag);
+        // Without a tag style the tool says so.
+        let Effect::Notice(text) = &click(&mut m, ed.doc(), &s, DVec2::new(1000.0, 0.0))[0] else {
+            panic!()
+        };
+        assert!(text.contains("tag style"));
+        ed.execute(&Command::AddResource {
+            name: "Tag".into(),
+            body: ResourceBody::annot(AnnotResource::TagStyle(TagStyle::default())),
+        })
+        .unwrap();
+        let Annot::DataTag(t) = made(&click(&mut m, ed.doc(), &s, DVec2::new(1000.0, 0.0))) else {
+            panic!()
+        };
+        assert!(ed.doc().object(t.object).is_some());
+        let Effect::Notice(text) = &click(&mut m, ed.doc(), &s, DVec2::new(-9000.0, 0.0))[0] else {
+            panic!()
+        };
+        assert!(text.contains("object to tag"));
+        // Other inputs do nothing.
+        assert!(m.handle(Input::Enter, &cx(ed.doc(), &s)).is_empty());
+    }
+
+    #[test]
+    fn small_inputs_of_the_annotation_tools_make_nothing() {
+        let doc = Document::default();
+        let s = ToolSettings::default();
+        for tool in [Tool::NorthArrow, Tool::ScaleBar, Tool::Callout] {
+            let mut m = machine(tool);
+            assert!(m.handle(Input::Enter, &cx(&doc, &s)).is_empty());
+        }
+        let mut m = machine(Tool::RevisionCloud);
+        click(&mut m, &doc, &s, DVec2::ZERO);
+        click(&mut m, &doc, &s, DVec2::X);
+        assert!(m.handle(Input::Enter, &cx(&doc, &s)).is_empty());
+        assert!(m.handle(Input::Move(DVec2::X), &cx(&doc, &s)).is_empty());
+        assert!(m.handle(Input::Enter, &cx(&doc, &s)).is_empty());
+        for tool in Tool::ANNOTATION {
+            assert!(!machine(tool).annot_hint(&s).is_empty());
+        }
+    }
 }

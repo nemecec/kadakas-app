@@ -662,6 +662,58 @@ mod tests {
     }
 
     #[test]
+    fn tools_and_actions_map_both_ways() {
+        let all = [
+            &Tool::BASIC[..],
+            &Tool::LANDSCAPE[..],
+            &Tool::SITE[..],
+            &Tool::ANNOTATION[..],
+            &Tool::IRRIGATION[..],
+            &Tool::MODIFY[..],
+        ]
+        .concat();
+        for t in all {
+            assert_eq!(Action::for_tool(t).tool(), Some(t), "{t:?}");
+        }
+        // The three dimension keys all select the Dimension tool.
+        for a in [
+            Action::ToolDimension,
+            Action::ToolAngularDim,
+            Action::ToolRadialDim,
+        ] {
+            assert_eq!(a.tool(), Some(Tool::Dimension));
+        }
+        assert_eq!(Action::Undo.tool(), None);
+        for a in Action::ALL {
+            assert_eq!(Action::from_id(a.id()), Some(*a));
+            assert!(!a.label().is_empty());
+            assert!(a.implemented());
+        }
+        assert_eq!(Action::from_id("nope"), None);
+        assert!(Action::PanLeft.repeats() && Action::NudgeDown.repeats());
+        assert!(!Action::Undo.repeats());
+    }
+
+    #[test]
+    fn chords_have_text_for_menus_and_for_files() {
+        let c = chord("Cmd/Ctrl+Shift+Z");
+        assert_eq!(c.display(true), "Cmd+Shift+Z");
+        assert_eq!(c.display(false), "Ctrl+Shift+Z");
+        assert_eq!(chord("Alt+2").display(true), "Option+2");
+        assert_eq!(chord("Escape").display(false), "Esc");
+        assert_eq!(chord("Backtick").display(false), "`");
+        assert_eq!(c.to_text(), "Cmd/Ctrl+Shift+Z");
+        let mac_ctrl = Chord::parse_for("Ctrl+Alt+Q", true).unwrap();
+        assert_eq!(mac_ctrl.to_text(), "Ctrl+Alt+Q");
+        assert_eq!(Chord::parse_for(&mac_ctrl.to_text(), true), Ok(mac_ctrl));
+        // A trailing plus is the Plus key.
+        assert_eq!(chord("Cmd/Ctrl++").key, Key::Plus);
+        let km = Keymap::defaults();
+        assert!(!km.hint(Action::Undo).is_empty());
+        assert_eq!(km.hint(Action::ToolGrading), "");
+    }
+
+    #[test]
     fn parses_chords() {
         assert_eq!(
             chord("Cmd/Ctrl+Shift+Z"),

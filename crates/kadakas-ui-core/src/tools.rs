@@ -1820,4 +1820,296 @@ mod tests {
         };
         assert_eq!((m.floors, m.height), (None, 7000.0));
     }
+
+    fn ctx<'a>(f: &'a Fixture) -> Ctx<'a> {
+        Ctx {
+            doc: f.session.editor.doc(),
+            selection: &f.session.selection,
+            settings: &f.settings,
+            tol: 5.0,
+            context: None,
+        }
+    }
+
+    fn all_tools() -> Vec<Tool> {
+        [
+            &Tool::BASIC[..],
+            &Tool::LANDSCAPE[..],
+            &Tool::SITE[..],
+            &Tool::ANNOTATION[..],
+            &Tool::IRRIGATION[..],
+            &Tool::MODIFY[..],
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn every_tool_has_a_name_and_every_group_is_complete() {
+        let tools = all_tools();
+        assert_eq!(tools.len(), 28);
+        for t in &tools {
+            assert!(!t.name().is_empty());
+        }
+        assert!(SelectMode::ALL.iter().all(|m| !m.label().is_empty()));
+        assert!(ModifierMode::ALL.iter().all(|m| !m.name().is_empty()));
+    }
+
+    #[test]
+    fn every_tool_has_a_hint_and_a_readout_while_idle_or_busy() {
+        for tool in all_tools() {
+            let mut f = Fixture::new(tool);
+            let idle = f.m.hint_for(&f.settings);
+            if !matches!(tool, Tool::Extend | Tool::Split | Tool::Scale) {
+                assert!(!idle.is_empty(), "{tool:?}");
+            }
+            assert!(f.m.readout(DVec2::ZERO, &f.settings).is_empty());
+            f.click(0.0, 0.0);
+            let _ = f.m.hint_for(&f.settings);
+            let _ = f.m.readout(DVec2::new(10.0, 10.0), &f.settings);
+            let _ = f.m.preview(DVec2::new(10.0, 10.0), &ctx(&f));
+            f.m.cancel();
+            assert!(!f.m.is_busy());
+        }
+    }
+
+    #[test]
+    fn the_tool_remembers_its_points_and_takes_them_back() {
+        let mut f = Fixture::new(Tool::Polyline);
+        assert_eq!((f.m.anchor(), f.m.prior_direction()), (None, None));
+        f.click(0.0, 0.0);
+        f.click(100.0, 0.0);
+        f.click(100.0, 50.0);
+        assert_eq!(f.m.anchor(), Some(DVec2::new(100.0, 50.0)));
+        let dir = f.m.prior_direction().unwrap();
+        assert!((dir - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        assert!(
+            f.m.readout(DVec2::new(200.0, 50.0), &f.settings)
+                .contains("Points 3")
+        );
+        f.m.pop_point();
+        assert_eq!(f.m.anchor(), Some(DVec2::new(100.0, 0.0)));
+        f.m.pop_point();
+        f.m.pop_point();
+        assert!(!f.m.is_busy());
+        f.m.pop_point();
+
+        let mut f = Fixture::new(Tool::Line);
+        f.click(0.0, 0.0);
+        assert_eq!(f.m.prior_direction(), None);
+        f.m.pop_point();
+        assert!(!f.m.is_busy());
+        // A drag has no anchor and moves its ids.
+        let mut f = Fixture::new(Tool::Select);
+        f.send(Input::Press {
+            p: DVec2::ZERO,
+            shift: false,
+        });
+        assert!(f.m.is_busy());
+        assert_eq!(f.m.anchor(), None);
+        assert_eq!(f.m.prior_direction(), None);
+        f.m.pop_point();
+        assert!(f.m.is_busy());
+    }
+
+    #[test]
+    fn rectangle_circle_and_line_have_a_readout_and_a_preview() {
+        let mut f = Fixture::new(Tool::Rect);
+        f.click(0.0, 0.0);
+        assert!(
+            f.m.readout(DVec2::new(30.0, 20.0), &f.settings)
+                .contains("Width 30.0")
+        );
+        assert!(matches!(
+            f.m.preview(DVec2::new(30.0, 20.0), &ctx(&f)),
+            Preview::Shape(Shape::Rect { .. })
+        ));
+        let mut f = Fixture::new(Tool::Circle);
+        f.click(0.0, 0.0);
+        assert!(
+            f.m.readout(DVec2::new(30.0, 40.0), &f.settings)
+                .contains("Radius 50.0")
+        );
+        let mut f = Fixture::new(Tool::Line);
+        f.click(0.0, 0.0);
+        assert!(
+            f.m.readout(DVec2::new(30.0, 40.0), &f.settings)
+                .contains("Length 50.0")
+        );
+        // A text tool previews its text.
+        let mut f = Fixture::new(Tool::Text);
+        f.settings.text = "Hello".into();
+        assert!(matches!(
+            f.m.preview(DVec2::ZERO, &ctx(&f)),
+            Preview::Shape(Shape::Text { .. })
+        ));
+        assert_eq!(f.click(5.0, 5.0).len(), 1);
+        f.settings.text.clear();
+        assert!(f.click(5.0, 5.0).is_empty());
+        assert!(f.send(Input::Enter).is_empty());
+    }
+
+    fn with_objects(f: &mut Fixture) {
+        for (a, b) in [(0.0, 0.0), (200.0, 0.0)] {
+            f.session
+                .editor
+                .execute(&Command::AddObject {
+                    shape: Shape::Circle {
+                        center: DVec2::new(a, b),
+                        radius: 20.0,
+                    },
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_lasso_and_the_box_add_to_the_selection_with_shift() {
+        let mut f = Fixture::new(Tool::Select);
+        f.settings.select_mode = SelectMode::Lasso;
+        with_objects(&mut f);
+        // A lasso around the first circle, drawn left to right.
+        f.click(-100.0, -100.0);
+        f.send(Input::Move(DVec2::new(100.0, -100.0)));
+        f.send(Input::Move(DVec2::new(100.0, 100.0)));
+        assert!(f.m.readout(DVec2::ZERO, &f.settings).contains("Lasso"));
+        assert!(matches!(
+            f.m.preview(DVec2::new(100.0, 100.0), &ctx(&f)),
+            Preview::Lasso { .. }
+        ));
+        f.send(Input::Release(DVec2::new(-100.0, 100.0)));
+        assert_eq!(f.session.selection.len(), 1);
+        // A lasso with too few points selects nothing new.
+        f.click(500.0, 500.0);
+        assert!(f.send(Input::Release(DVec2::new(500.0, 500.0))).is_empty());
+        assert!(
+            f.session.selection.is_empty(),
+            "a click on empty space clears"
+        );
+        // A box with Shift keeps the old selection and adds the other circle.
+        f.settings.select_mode = SelectMode::Rectangle;
+        f.send(Input::Press {
+            p: DVec2::new(150.0, -50.0),
+            shift: true,
+        });
+        f.send(Input::Move(DVec2::new(260.0, 50.0)));
+        assert!(f.m.readout(DVec2::ZERO, &f.settings).contains("Box"));
+        assert!(matches!(
+            f.m.preview(DVec2::new(260.0, 50.0), &ctx(&f)),
+            Preview::Box { .. }
+        ));
+        f.send(Input::Release(DVec2::new(260.0, 50.0)));
+        assert_eq!(f.session.selection.len(), 1);
+        f.send(Input::Press {
+            p: DVec2::new(-50.0, -50.0),
+            shift: true,
+        });
+        f.send(Input::Release(DVec2::new(50.0, 50.0)));
+        assert_eq!(f.session.selection.len(), 2);
+        // A click without a drag keeps the selection of a box.
+        f.send(Input::Press {
+            p: DVec2::new(900.0, 900.0),
+            shift: true,
+        });
+        assert!(f.send(Input::Release(DVec2::new(900.0, 900.0))).is_empty());
+        assert_eq!(f.session.selection.len(), 2);
+        // Moving does nothing outside of a drag, a box or a lasso.
+        assert!(f.send(Input::Move(DVec2::X)).is_empty());
+        assert!(f.send(Input::Release(DVec2::X)).is_empty());
+        assert!(f.send(Input::Enter).is_empty());
+    }
+
+    #[test]
+    fn dragging_a_selected_object_moves_the_whole_selection() {
+        let mut f = Fixture::new(Tool::Select);
+        with_objects(&mut f);
+        f.click(20.0, 0.0);
+        f.send(Input::Release(DVec2::new(20.0, 0.0)));
+        // Shift-click adds the other circle, then a drag on a selected one moves both.
+        f.send(Input::Press {
+            p: DVec2::new(220.0, 0.0),
+            shift: true,
+        });
+        assert_eq!(f.session.selection.len(), 2);
+        f.click(20.0, 0.0);
+        assert_eq!(f.m.moving_ids().len(), 2);
+        f.send(Input::Move(DVec2::new(50.0, 10.0)));
+        assert!(
+            f.m.readout(DVec2::new(50.0, 10.0), &f.settings)
+                .contains("Move dX 30.0")
+        );
+        assert!(matches!(
+            f.m.preview(DVec2::new(50.0, 10.0), &ctx(&f)),
+            Preview::Move { .. }
+        ));
+        let fx = f.send(Input::Release(DVec2::new(50.0, 10.0)));
+        assert!(matches!(fx[0], Effect::Exec(Command::MoveObjects { .. })));
+    }
+
+    #[test]
+    fn polygon_tools_finish_with_their_settings() {
+        // A landscape area without a style and with the name of the settings.
+        let mut f = Fixture::new(Tool::LandscapeArea);
+        f.settings.area_name = "Lawn".into();
+        for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::DoubleClick);
+        assert!(matches!(
+            &f.shapes()[0],
+            Shape::LandscapeArea { name, .. } if name == "Lawn"
+        ));
+        // A hardscape path needs two points.
+        let mut f = Fixture::new(Tool::Hardscape);
+        f.settings.areas.path = true;
+        f.click(0.0, 0.0);
+        assert!(f.send(Input::Enter).is_empty());
+        f.click(0.0, 0.0);
+        f.click(1000.0, 0.0);
+        let fx = f.send(Input::Enter);
+        assert!(matches!(
+            fx[0],
+            Effect::Exec(Command::AddHardscape { boundary: None, .. })
+        ));
+        // A massing model.
+        let mut f = Fixture::new(Tool::Massing);
+        for (x, y) in [(0.0, 0.0), (5000.0, 0.0), (5000.0, 4000.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        assert!(matches!(&f.shapes()[0], Shape::Massing(_)));
+        // A pad with an end elevation gets a slope. A grade limit has none.
+        let mut f = Fixture::new(Tool::SiteModifier);
+        f.settings.pad_end_elevation = Some(500.0);
+        for (x, y) in [(0.0, 0.0), (5000.0, 0.0), (5000.0, 4000.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        assert!(matches!(
+            &f.shapes()[0],
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad { slope: Some(_), .. },
+                ..
+            }
+        ));
+        // Too few points make nothing. Other inputs are ignored.
+        let mut f = Fixture::new(Tool::Polyline);
+        f.click(0.0, 0.0);
+        assert!(f.send(Input::Enter).is_empty());
+        assert!(f.send(Input::Move(DVec2::X)).is_empty());
+    }
+
+    #[test]
+    fn the_grading_tool_finishes_a_wall_with_enter_and_ignores_other_input() {
+        let mut f = Fixture::new(Tool::Grading);
+        f.click(0.0, 0.0);
+        f.click(0.0, 0.0);
+        f.click(1000.0, 0.0);
+        assert!(f.send(Input::Move(DVec2::X)).is_empty());
+        assert_eq!(f.send(Input::Enter).len(), 1);
+        f.settings.grading.mode = crate::grading::GradingMode::Spot;
+        assert!(f.send(Input::Enter).is_empty());
+    }
 }
