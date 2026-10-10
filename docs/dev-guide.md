@@ -15,10 +15,10 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 |---|---|---|
 | `cadektor-core` | Document model, commands, undo, geometry, curves, mesh | none of ours |
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
-| `cadektor-io` | DXF, Shapefile and GeoJSON import and export, CRS conversion (native only) | core |
+| `cadektor-io` | DXF, Shapefile and GeoJSON import and export, DWG through an external converter, CRS conversion (native only) | core, script (process groups for the converter) |
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code | core, sheet |
 | `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, io |
-| `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
+| `cadektor-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, io, site |
 | `cadektor-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core, render |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
 | `cadektor-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core |

@@ -677,6 +677,7 @@ version = "0.1.0"
 dependencies = [
  "cadektor-annot",
  "cadektor-core",
+ "cadektor-script",
  "cadektor-site",
  "encoding_rs",
  "proj4rs",

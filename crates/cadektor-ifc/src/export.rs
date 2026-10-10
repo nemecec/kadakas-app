@@ -47,6 +47,7 @@ fn skip(reason: &str) -> Outcome {
 const DEFAULT_GREEN: [u8; 4] = [70, 130, 60, 255];
 const TRUNK_BROWN: [u8; 4] = [105, 80, 55, 255];
 const TERRAIN_BROWN: [u8; 4] = [150, 130, 100, 255];
+const MESH_GREY: [u8; 4] = [190, 190, 190, 255];
 const MIN_SIZE: f64 = 10.0;
 
 /// The IFC classes that the writer can make, with their entity names and predefined types.
@@ -107,7 +108,7 @@ fn default_class(kind: &str) -> (&'static str, Option<&'static str>) {
     match kind {
         "hardscape" => ("IfcSlab", Some("BASESLAB")),
         "site_model" => ("IfcGeographicElement", Some("TERRAIN")),
-        "massing" => ("IfcBuildingElementProxy", Some("NOTDEFINED")),
+        "massing" | "mesh3d" => ("IfcBuildingElementProxy", Some("NOTDEFINED")),
         _ => ("IfcGeographicElement", Some("USERDEFINED")),
     }
 }

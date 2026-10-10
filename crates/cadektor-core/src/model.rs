@@ -240,6 +240,9 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scale_y: Option<f64>,
     },
+    /// A generic 3D object: a triangle mesh with absolute coordinates (see `mesh3d`). The IFC importer uses it
+    /// for slabs, coverings and other shapes that have no native Cadektor object.
+    Mesh3d(Box<crate::mesh3d::Mesh3d>),
     /// An irrigation object: outlet, line, point of connection, valve or controller
     /// (see `crate::irrigation`). In JSON it is `{"kind": "irrigation", "type": "outlet", ...}`.
     Irrigation(Box<crate::irrigation::IrrigationShape>),
@@ -307,6 +310,7 @@ impl Shape {
             Shape::Symbol { .. } => "symbol",
             Shape::Massing(_) => "massing",
             Shape::Underlay(_) => "underlay",
+            Shape::Mesh3d(_) => "mesh3d",
             Shape::Irrigation(i) => i.kind(),
         }
     }
@@ -344,6 +348,7 @@ impl Shape {
             Shape::Group { .. } => true,
             Shape::Massing(m) => m.is_finite(),
             Shape::Underlay(u) => u.is_finite(),
+            Shape::Mesh3d(m) => m.is_finite(),
             Shape::Irrigation(i) => i.is_finite(),
             Shape::Symbol {
                 at,
@@ -450,6 +455,10 @@ impl Shape {
                 v(&u.min);
                 v(&u.max);
             }
+            Shape::Mesh3d(m) => m
+                .vertices
+                .iter()
+                .for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
             Shape::Symbol {
                 at,
                 rotation,
@@ -574,6 +583,7 @@ impl Shape {
         match self {
             Shape::Massing(m) => m.problem(),
             Shape::Underlay(u) => u.problem(),
+            Shape::Mesh3d(m) => m.problem(),
             _ => None,
         }
     }
@@ -595,6 +605,10 @@ impl Shape {
                 mv(&mut u.max);
             }
             Shape::Group { .. } => {}
+            Shape::Mesh3d(m) => m.vertices.iter_mut().for_each(|p| {
+                p.x += d.x;
+                p.y += d.y;
+            }),
             Shape::Irrigation(i) => i.translate(d),
             Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
@@ -657,6 +671,10 @@ impl Shape {
             Shape::Annotation(a) => a.bounds(),
             Shape::Massing(m) => curve::bounds(&m.footprint, true),
             Shape::Underlay(u) => (u.min, u.max),
+            Shape::Mesh3d(m) => {
+                let (lo, hi) = m.bounds3();
+                (lo.truncate(), hi.truncate())
+            }
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),

@@ -827,6 +827,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 f.commit |= crate::gis_ui::massing_fields(ui, m);
                 f.count(ui, m.footprint.len());
             }
+            Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
             Shape::Underlay(u) => f.commit |= crate::gis_ui::underlay_fields(ui, u),
             Shape::SiteModel {
                 points,

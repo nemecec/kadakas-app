@@ -441,6 +441,63 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
 // ---------------------------------------------------------------------------
 // Building
 
+/// Corners of triangles closer than this angle share one smooth normal. Sharper edges stay hard.
+const HARD_EDGE_DEGREES: f32 = 35.0;
+
+/// Adds an indexed mesh with normals that are smooth across soft edges and hard at sharp edges, so a
+/// box shades flat and a rounded column shades round. A vertex is split into one copy per smoothing group.
+fn add_shaded(mesh: &mut Mesh, pts: &[Vec3], tris: &[[u32; 3]], color: [u8; 4], object: ObjectId) {
+    let valid: Vec<[usize; 3]> = tris
+        .iter()
+        .map(|t| t.map(|i| i as usize))
+        .filter(|t| t.iter().all(|&i| i < pts.len()))
+        .collect();
+    // Area weighted face normals (the cross product is twice the area times the unit normal).
+    let faces: Vec<Vec3> = valid
+        .iter()
+        .map(|&[a, b, c]| (pts[b] - pts[a]).cross(pts[c] - pts[a]))
+        .collect();
+    let mut incident: Vec<Vec<usize>> = vec![Vec::new(); pts.len()];
+    for (t, tri) in valid.iter().enumerate() {
+        for &i in tri {
+            incident[i].push(t);
+        }
+    }
+    let cos = HARD_EDGE_DEGREES.to_radians().cos();
+    // For each (triangle, corner): the index of its vertex copy.
+    let mut corner = vec![[0u32; 3]; valid.len()];
+    let base = mesh.positions.len() as u32;
+    let mut count = 0u32;
+    for (v, list) in incident.iter().enumerate() {
+        // Groups: a sum of normals and the triangle corners in it.
+        let mut groups: Vec<(Vec3, Vec<usize>)> = Vec::new();
+        for &t in list {
+            let n = faces[t].normalize_or_zero();
+            match groups
+                .iter_mut()
+                .find(|(sum, _)| sum.normalize_or_zero().dot(n) >= cos)
+            {
+                Some((sum, members)) => {
+                    *sum += faces[t];
+                    members.push(t);
+                }
+                None => groups.push((faces[t], vec![t])),
+            }
+        }
+        for (sum, members) in groups {
+            mesh.vertex(pts[v], sum.normalize_or_zero(), color);
+            for t in members {
+                let k = valid[t].iter().position(|&i| i == v).unwrap_or(0);
+                corner[t][k] = base + count;
+            }
+            count += 1;
+        }
+    }
+    for c in corner {
+        mesh.tri(c[0], c[1], c[2], object);
+    }
+}
+
 fn z_of(layer: &Layer) -> f64 {
     layer.elevation
 }
@@ -745,6 +802,17 @@ impl Builder<'_> {
                 self.plant(&build, z, edge, id);
             }
             Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Underlay(_) => {}
+            Shape::Mesh3d(m) => {
+                // Absolute coordinates: the layer elevation does not apply.
+                let color = m.color.map(rgba).or(fill).unwrap_or([190, 190, 190, 255]);
+                let pts: Vec<Vec3> = m
+                    .vertices
+                    .iter()
+                    .map(|p| Vec3::new((p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32))
+                    .collect();
+                self.scene.mesh.part = PART_MAIN;
+                add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
+            }
             Shape::Massing(m) => {
                 let color = fill.unwrap_or(crate::massing::DEFAULT_COLOR);
                 let mut sink = SceneSink {
@@ -2551,5 +2619,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn mesh3d_shades_hard_edges_flat_and_soft_edges_smooth() {
+        use crate::mesh3d::Mesh3d;
+        let cube = |lo: f64, hi: f64| {
+            let v = |x: bool, y: bool, z: bool| {
+                DVec3::new(
+                    if x { hi } else { lo },
+                    if y { hi } else { lo },
+                    if z { hi } else { lo },
+                )
+            };
+            Mesh3d {
+                name: String::new(),
+                vertices: vec![
+                    v(false, false, false),
+                    v(true, false, false),
+                    v(true, true, false),
+                    v(false, true, false),
+                    v(false, false, true),
+                    v(true, false, true),
+                    v(true, true, true),
+                    v(false, true, true),
+                ],
+                triangles: vec![
+                    [0, 2, 1],
+                    [0, 3, 2],
+                    [4, 5, 6],
+                    [4, 6, 7],
+                    [0, 1, 5],
+                    [0, 5, 4],
+                    [1, 2, 6],
+                    [1, 6, 5],
+                    [2, 3, 7],
+                    [2, 7, 6],
+                    [3, 0, 4],
+                    [3, 4, 7],
+                ],
+                color: None,
+            }
+        };
+        let mut ed = Editor::default();
+        add(&mut ed, Shape::Mesh3d(Box::new(cube(0.0, 100.0))));
+        let s = build(ed.doc());
+        // Every corner of a box has three faces: 24 vertices, and every normal is along an axis.
+        assert_eq!(s.mesh.positions.len(), 24);
+        assert!(s.mesh.normals.iter().all(|n| {
+            let a = n.abs();
+            (a.max_element() - 1.0).abs() < 1e-5 && (a.x + a.y + a.z - 1.0).abs() < 1e-5
+        }));
+        // A flat piece (two triangles in one plane) keeps its shared vertices.
+        let mut flat = cube(0.0, 100.0);
+        flat.vertices.truncate(4);
+        flat.triangles = vec![[0, 2, 1], [0, 3, 2]];
+        let mut ed = Editor::default();
+        add(&mut ed, Shape::Mesh3d(Box::new(flat)));
+        assert_eq!(build(ed.doc()).mesh.positions.len(), 4);
     }
 }
