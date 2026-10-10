@@ -285,6 +285,7 @@ pub fn flat_name(method: &str) -> String {
 pub fn flat_tools() -> Vec<Value> {
     let mut tools: Vec<Value> = METHODS
         .iter()
+        .filter(|(m, _)| !STREAM_METHODS.contains(m))
         .map(|(m, d)| json!({"name": flat_name(m), "description": d, "inputSchema": {"type": "object", "additionalProperties": true}}))
         .collect();
     for (m, d) in FILE_METHODS {

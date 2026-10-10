@@ -51,7 +51,10 @@ def test_every_api_method_is_in_exactly_one_domain_tool(mcp):
         seen += tool["inputSchema"]["properties"]["method"]["enum"]
     assert len(seen) == len(set(seen))
     api = {m["name"] for m in mcp.method_json("describe", "describe")["methods"]}
-    assert api | {"file.save", "file.open"} == set(seen)
+    # The methods that need a message stream are not tools: a tool call returns one result.
+    stream = {"events.subscribe", "events.unsubscribe"}
+    assert stream <= api
+    assert (api - stream) | {"file.save", "file.open"} == set(seen)
     for tool in tools.values():
         for method in tool["inputSchema"]["properties"]["method"]["enum"]:
             assert f"- {method}:" in tool["description"], (tool["name"], method)
