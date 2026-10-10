@@ -147,6 +147,8 @@ fn fetch_one(
     plan: &TilePlan,
 ) -> Result<(Rgba, bool, usize)> {
     let size = (plan.width, plan.height);
+    // The address policy comes first: a cached tile must not get around it.
+    http.check(&plan.url)?;
     // A tile from the disk is used only if it is a good picture of the right size.
     if let Some(c) = cache
         && let Some(bytes) = c.get(&plan.url)
@@ -275,6 +277,31 @@ mod tests {
             height: 4,
             url: url.into(),
         }
+    }
+
+    #[test]
+    fn the_address_policy_applies_before_the_cache() {
+        struct Deny(Fake);
+        impl Fetch for Deny {
+            fn get(&self, url: &str) -> Result<Response> {
+                self.0.get(url)
+            }
+            fn check(&self, url: &str) -> Result<()> {
+                Err(GisError::Url(format!("{url} is not on the list")))
+            }
+        }
+        let mut f = Fake::default();
+        f.answers.insert("u0".into(), png(4, 4, [1, 2, 3, 255]));
+        let dir = std::env::temp_dir().join(format!("cadektor-mosaic-deny-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = TileCache::new(&dir, 1 << 20);
+        let plans = [plan(0, "u0")];
+        // A tile is in the cache from an earlier, allowed fetch.
+        fetch_tiles(&f, Some(&cache), &plans).unwrap();
+        let denied = Deny(f);
+        let e = fetch_tiles(&denied, Some(&cache), &plans).unwrap_err();
+        assert!(matches!(e, GisError::Url(_)), "{e:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

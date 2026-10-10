@@ -154,6 +154,10 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
     let start = Instant::now();
     let mut failure = None;
     let status = loop {
+        // Kill the group before the leader is collected (see `kill_tree`).
+        if cadektor_sys::process::ended_not_collected(&child) {
+            kill_tree(&mut child);
+        }
         match child.try_wait() {
             Ok(Some(s)) => break Some(s),
             Ok(None) => {}

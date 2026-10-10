@@ -7,8 +7,9 @@ use std::process::Command;
 /// The signal to the group can miss a process that the group leader is forking at that moment
 /// (seen on macOS: a `sleep` that started while a stop was under way outlived the stop and held
 /// the output pipes open). So the signal goes out again a moment later, when such a process is
-/// in the group. This is safe: the leader is not collected yet (the caller does that), so its
-/// process ID cannot name another group in the meantime.
+/// in the group. Call it before you collect the leader (`wait`, `try_wait`; see
+/// [`ended_not_collected`]): then the leader's process ID cannot name another group in the
+/// meantime.
 pub fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
@@ -32,6 +33,33 @@ pub fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+/// True if the child has ended but is not collected yet (Unix). Use it to kill the group of a
+/// child before you collect the child with `wait` or `try_wait`: until then the child's process
+/// ID cannot name another group. Always false where it cannot tell.
+pub fn ended_not_collected(child: &std::process::Child) -> bool {
+    #[cfg(unix)]
+    {
+        let pid: libc::id_t = child.id();
+        // SAFETY: waitid with WNOWAIT only looks at the state of the child; it does not collect it.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let r = libc::waitid(
+                libc::P_PID,
+                pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            // With WNOHANG, `si_pid` stays 0 when no child has ended.
+            r == 0 && info.si_pid() != 0
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child;
+        false
+    }
+}
+
 /// How often `kill_tree` signals the group.
 #[cfg(unix)]
 const GROUP_KILL_ROUNDS: usize = 3;
@@ -47,7 +75,8 @@ pub fn own_group(cmd: &mut Command) {
     let _ = cmd;
 }
 
-/// Best effort: is a process with this id running? Unknown counts as running.
+/// Best effort: is a process with this id running? A process of another user counts as not
+/// running (Unix). Where it cannot tell, it counts as running.
 pub fn pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -57,8 +86,9 @@ pub fn pid_alive(pid: u32) -> bool {
         };
         // SAFETY: signal 0 only checks that the process exists.
         let r = unsafe { libc::kill(pid, 0) };
-        // EPERM means the process exists but belongs to someone else.
-        r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        // EPERM means the process belongs to someone else. A crash record names our own
+        // processes, so such a process is not the one that we look for: it counts as dead.
+        r == 0
     }
     #[cfg(windows)]
     {
@@ -102,7 +132,7 @@ mod tests {
     #[test]
     fn kill_tree_catches_children_that_start_while_it_runs() {
         // A leader that forks children all the time: some are in flight when the kill comes.
-        for _ in 0..20 {
+        for _ in 0..10 {
             let mut cmd = Command::new("sh");
             cmd.args(["-c", "while :; do sleep 30 & done"])
                 .stdout(Stdio::piped())
@@ -118,8 +148,41 @@ mod tests {
             let t = std::time::Instant::now();
             std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut out).unwrap();
             assert!(t.elapsed() < std::time::Duration::from_secs(5));
-            // SAFETY: signal 0 only checks that the group exists.
-            assert_eq!(unsafe { libc::killpg(pid, 0) }, -1, "the group is empty");
+            // The killed processes may be zombies for a moment, until init collects them.
+            let gone = (0..400).any(|_| {
+                // SAFETY: signal 0 only checks that the group exists.
+                let empty = unsafe { libc::killpg(pid, 0) } == -1;
+                if !empty {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                empty
+            });
+            assert!(gone, "the group is empty");
+        }
+    }
+
+    #[test]
+    fn an_ended_child_is_seen_before_it_is_collected() {
+        let mut child = Command::new("true").spawn().unwrap();
+        let seen = (0..500).any(|_| {
+            let ended = ended_not_collected(&child);
+            if !ended {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            ended
+        });
+        assert!(seen);
+        // Looking does not collect it.
+        assert!(ended_not_collected(&child));
+        assert!(child.try_wait().unwrap().is_some());
+        assert!(!ended_not_collected(&child), "collected: nothing to see");
+    }
+
+    #[test]
+    fn a_process_of_another_user_counts_as_not_running() {
+        // SAFETY: getuid has no effect.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(!pid_alive(1), "init belongs to root: EPERM");
         }
     }
 

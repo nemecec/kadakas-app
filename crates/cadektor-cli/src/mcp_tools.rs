@@ -35,7 +35,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "document",
-        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility, the document files and the change events (`events.poll`; MCP cannot receive the pushed messages).",
+        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility, the document files and the change events (`events.poll`; MCP has no pushed messages).",
         prefixes: &[
             "execute",
             "document",
@@ -213,9 +213,17 @@ pub fn domain_of(method: &str) -> Option<&'static Domain> {
     DOMAINS.iter().find(|d| d.prefixes.contains(&p))
 }
 
-/// Every method that the server offers: the API methods and the file methods of the CLI.
+/// Methods that need a message stream. MCP tools return one result, so they are not offered.
+const STREAM_METHODS: &[&str] = &["events.subscribe", "events.unsubscribe"];
+
+/// Every method that the server offers as a tool: the API methods and the file methods of the
+/// CLI, except the ones that need a message stream.
 pub fn all_methods() -> impl Iterator<Item = (&'static str, &'static str)> {
-    METHODS.iter().chain(FILE_METHODS.iter()).copied()
+    METHODS
+        .iter()
+        .chain(FILE_METHODS.iter())
+        .copied()
+        .filter(|(m, _)| !STREAM_METHODS.contains(m))
 }
 
 /// The methods of one domain with their descriptions.

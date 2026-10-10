@@ -141,7 +141,7 @@ for message in doc.events.take():
     print(change["op"], change["origin"], change["added"]["objects"])
 ```
 
-A change set has these fields: `revision`, `op` (the command name, or `undo`, `redo` or `rollback`), `origin` (`user`, `agent` or `script`), `added`, `changed` and `removed` (each lists the IDs of `objects`, `layers`, `classes` and `resources`), and `document` (flags: `active_layer`, `active_class`, `georef`, `drawing`). A batch or an undo group gives one change set. A command that fails gives none. When you replace the whole document, you get `events.reset` instead: read the document again.
+A change set has these fields: `revision`, `op` (the command name, or `undo`, `redo` or `rollback`), `origin` (`user`: the person at the app; `agent`: any program that calls the API, your Python script too; `script`: a plug-in object that its script generated again), `added`, `changed` and `removed` (each lists the IDs of `objects`, `layers`, `classes` and `resources`), and `document` (flags: `active_layer`, `active_class`, `georef`, `drawing`). A batch or an undo group gives one change set. A command that fails gives none. When you replace the whole document, you get `events.reset` instead: read the document again.
 
 | Name | Use |
 |---|---|

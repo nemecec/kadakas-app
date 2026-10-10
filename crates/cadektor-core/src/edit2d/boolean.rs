@@ -224,7 +224,11 @@ pub fn cut_by_line(poly: &Poly, a: DVec2, b: DVec2) -> Result<(Vec<Poly>, Vec<Po
         lo = lo.min(*p);
         hi = hi.max(*p);
     }
-    let reach = 2.0 * (hi - lo).length() + 2.0 * ((lo + hi) / 2.0 - a).length() + 1.0;
+    // Start from the point of the line nearest to the shape: then the half-plane rectangles stay
+    // as small as the shape needs, and far-away points do not cost precision.
+    let centre = (lo + hi) / 2.0;
+    let a = a + u * (centre - a).dot(u);
+    let reach = 2.0 * (hi - lo).length() + 2.0 * (centre - a).length() + 1.0;
     let side = |s: f64| -> Contour {
         let (p, q) = (a - u * reach, a + u * reach);
         let ring = vec![p, q, q + n * (s * reach), p + n * (s * reach)];

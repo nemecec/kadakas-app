@@ -121,6 +121,9 @@ pub struct ScriptHost {
     state: Arc<Mutex<State>>,
 }
 
+/// How long the host waits for the output readers after the script has ended.
+const READER_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
 fn lock(s: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -273,6 +276,13 @@ impl ScriptHost {
                         return;
                     };
                     let stop_requested = r.stop_requested;
+                    // Kill the group before the leader is collected: a process that the script
+                    // left behind would hold the output pipes open.
+                    if let Some(c) = r.child.as_mut()
+                        && cadektor_sys::process::ended_not_collected(c)
+                    {
+                        kill_tree(c);
+                    }
                     if let Some(Ok(Some(s))) = r.child.as_mut().map(|c| c.try_wait()) {
                         break if stop_requested {
                             Status::Stopped
@@ -286,8 +296,16 @@ impl ScriptHost {
                 }
                 thread::sleep(std::time::Duration::from_millis(20));
             };
+            // The readers get a short time to finish. A process that left its group may keep a
+            // pipe open; we do not wait for it.
+            let until = Instant::now() + READER_GRACE;
             for p in pumps {
-                let _ = p.join();
+                while !p.is_finished() && Instant::now() < until {
+                    thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if p.is_finished() {
+                    let _ = p.join();
+                }
             }
             let note = match &status {
                 Status::Exited(0) => "finished".to_string(),

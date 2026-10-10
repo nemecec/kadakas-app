@@ -325,7 +325,7 @@ class Events:
     After ``subscribe()`` the program sends a message for each change: ``{"method":
     "events.change", "params": {revision, op, origin, added, changed, removed, document}}``.
     ``added``, ``changed`` and ``removed`` list the IDs of ``objects``, ``layers``, ``classes`` and
-    ``resources``. ``origin`` is ``user``, ``agent`` or ``script``. A message ``events.reset`` says
+    ``resources``. ``origin`` is ``user`` (the person at the app), ``agent`` (any program that calls the API, a Python script too) or ``script`` (a plug-in object that its script made again). A message ``events.reset`` says
     that the whole document was replaced: read it again. Over stdio the messages come before the
     reply of the call that made the change, so ``take()`` has them when the call returns. A
     connection to the app also gets the changes that the user makes, at any time: use ``wait()``.

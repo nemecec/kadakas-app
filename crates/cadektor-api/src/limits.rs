@@ -38,7 +38,9 @@ pub struct SessionLimits {
     pub script_timeout: Duration,
     /// Time limit of one request to a map service.
     pub gis_timeout: Duration,
-    /// Size of the tile cache on disk, in bytes.
+    /// Size of the tile cache on disk, in bytes. The default folder is shared by all sessions of
+    /// the user, and each save trims it to the limit of the session that saves. A host with many
+    /// sessions gives each one its own folder (`GisState::cache_dir`) or sets one limit for all.
     pub gis_cache_bytes: u64,
 }
 

@@ -197,6 +197,12 @@ pub struct Response {
 /// Anything that can fetch an address. Tests use it to stand in for a server.
 pub trait Fetch: Send + Sync {
     fn get(&self, url: &str) -> Result<Response>;
+
+    /// Says if the address may be used at all (the address policy). A tile cache asks this before
+    /// it hands out a file, so a cached tile does not get around the policy.
+    fn check(&self, _url: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The HTTP client.
@@ -257,6 +263,10 @@ fn resolve(base: &ParsedUrl, location: &str) -> String {
 }
 
 impl Fetch for HttpClient {
+    fn check(&self, url: &str) -> Result<()> {
+        self.policy.check(url.trim())
+    }
+
     fn get(&self, url: &str) -> Result<Response> {
         let mut url = url.trim().to_string();
         for _ in 0..=MAX_REDIRECTS {

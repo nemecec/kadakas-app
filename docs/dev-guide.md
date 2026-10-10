@@ -66,8 +66,8 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 
 - A session owns all of its state. A library crate has no `static` with document data. A `static` is allowed for an id allocator (the editor revision, the GUID counter) or for a table that never changes.
 - Every cache is per session and bounded: `RevCache` for one entry by revision, `LruCache` for many. The site analysis cache is in `SiteCache`, which `Session` owns.
-- `SessionLimits` sets the limits of one session: objects, memory, request time, picture size and so on. `Session::set_limits` changes them. A call that breaks a limit is undone.
-- New ids are UUIDv7 (`Document::alloc_id`). A web build must call `Document::seed_ids(ms, salt)` once, because `std::time` is not available there. Tests and fixtures use `Document::with_sequential_ids()` or `cadektor serve --sequential-ids`.
+- `SessionLimits` sets the limits of one session: objects, memory, undo history bytes, request time, picture size and so on. `Session::set_limits` changes them. A call that changes the document and breaks the object or memory limit is undone. A session that is over the limit without a change only drops its caches, so reads and saves keep working. `document.load` and `file.open` refuse a document that does not fit before they replace the open one. The estimate counts the objects, the undo steps and the change log.
+- New ids are UUIDv7 (`Document::alloc_id`). A web build must call `cadektor_core::uid::set_host_seed(ms, salt)` once before it makes a document (the app does this in `new_web` with `Date.now()` and `crypto.getRandomValues`), because `std` has no clock or process there. Tests and fixtures use `Document::with_sequential_ids()` or `cadektor serve --sequential-ids`.
 
 ## Quality rules
 

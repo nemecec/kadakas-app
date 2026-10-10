@@ -502,6 +502,9 @@ type QuantityCache = Option<(
 thread_local! {
     static CACHE: RefCell<HashMap<ObjectId, (u64, Rc<Extras>)>> = RefCell::new(HashMap::new());
     /// The revision of the document that is drawn now, set by the canvas for each frame.
+    /// A revision names one state of one document: the editor takes it from a counter that all
+    /// editors share, so two documents never have the same revision, and this key is also the
+    /// identity of the document.
     static REVISION: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// The quantities that Object Info shows, for one object and one document revision.
     static QUANTITIES: RefCell<QuantityCache> = const { RefCell::new(None) };

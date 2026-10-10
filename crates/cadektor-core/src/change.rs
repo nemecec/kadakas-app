@@ -23,7 +23,8 @@ pub enum Origin {
     User,
     /// An agent, through the API.
     Agent,
-    /// A script that the app started.
+    /// A plug-in object that its script generated again. A Python script that calls the API is
+    /// an `Agent`.
     Script,
 }
 
