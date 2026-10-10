@@ -2021,9 +2021,26 @@ fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
         .msg,
         ServerMsg::Ack { .. }
     ));
+    // A merge create of a thing that was deleted is dropped by the merge; the transaction is
+    // ordered and the thing stays deleted.
+    assert!(matches!(
+        s.receive(conns[0], submit(4, vec![Op::Delete { target: derived }]), 0)[0].msg,
+        ServerMsg::Ack { .. }
+    ));
+    let other = Target::new(Kind::Object, Uid::from_num(70));
+    assert!(matches!(
+        s.receive(
+            conns[1],
+            submit(2, vec![make(derived, true), make(other, false)]),
+            0
+        )[0]
+        .msg,
+        ServerMsg::Ack { .. }
+    ));
+    assert!(s.replica().alive(derived).is_none() && s.replica().alive(other).is_some());
     // An ordinary ID is refused, and so is a derived ID without the flag.
     assert!(matches!(
-        s.receive(conns[0], submit(3, vec![make(derived, false)]), 0)[0].msg,
+        s.receive(conns[0], submit(5, vec![make(derived, false)]), 0)[0].msg,
         ServerMsg::Error {
             code: ErrorCode::DuplicateUid,
             ..
@@ -2266,4 +2283,154 @@ fn a_waiting_transaction_sends_its_picture_again_after_a_sign_in() {
     let out = c.take_outbox();
     assert!(matches!(out[0], ClientMsg::BlobPut { .. }));
     assert!(matches!(out[1], ClientMsg::Submit { .. }));
+}
+
+fn picture_op(n: u64, fill: char) -> (Op, String) {
+    let text = fill.to_string().repeat(crate::blob::MIN_BLOB_BYTES + 3);
+    let hash = crate::blob::sha256_hex(text.as_bytes());
+    (
+        Op::Create {
+            target: obj(n),
+            props: [(
+                "shape".to_string(),
+                json!({"kind": "underlay", "png": text}),
+            )]
+            .into(),
+            merge: false,
+        },
+        hash,
+    )
+}
+
+#[test]
+fn a_picture_is_sent_again_after_the_server_went_back() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let (op, hash) = picture_op(1, 'P');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.settle();
+    assert!(net.seq.has_blob(&hash));
+    // A server that lost everything, with another log: the work is sent again, with its picture.
+    let mut restored = Sequencer::new(replica_of(&Document::default()));
+    restored.check_entities(false);
+    restored.set_log_id("log-2");
+    net.seq = restored;
+    net.disconnect(0);
+    net.connect(0);
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    assert!(net.seq.has_blob(&hash), "the picture came again");
+}
+
+#[test]
+fn undo_sends_a_picture_that_the_server_dropped() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    let (op, first) = picture_op(1, 'Q');
+    net.clients[0].edit(vec![op]).unwrap();
+    // The picture is replaced by another one. Nothing refers to the first picture any more.
+    let (op2, second) = picture_op(2, 'T');
+    let Op::Create { props, .. } = op2 else {
+        unreachable!()
+    };
+    net.clients[0]
+        .edit(vec![Op::Set {
+            target: obj(1),
+            prop: "shape".into(),
+            value: props["shape"].clone(),
+        }])
+        .unwrap();
+    net.settle();
+    assert!(net.seq.has_blob(&first) && net.seq.has_blob(&second));
+    // The server cleans up the picture that nothing refers to. Undo brings the reference back,
+    // so the client sends the picture again, before the transaction.
+    net.seq.forget_blobs();
+    assert!(net.clients[0].undo().done);
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.has_blob(&first));
+    assert_eq!(
+        crate::blob::blob_ref(
+            net.seq
+                .replica()
+                .alive(obj(1))
+                .unwrap()
+                .get("shape")
+                .unwrap()
+        ),
+        Some(first.as_str())
+    );
+    // Redo needs the second picture.
+    net.seq.forget_blobs();
+    assert!(net.clients[0].redo().done);
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.has_blob(&second));
+}
+
+#[test]
+fn the_checkpoint_keeps_the_pictures_that_something_refers_to() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    // A picture that a transaction used and the server refused: nothing refers to it any more.
+    net.seq.inject_errors(ErrorCode::InvalidTxn, 1);
+    let (op, lost) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.settle();
+    // A picture in a deleted object is kept (an undo can bring the object back).
+    let (op, kept) = picture_op(2, 'S');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.clients[0].edit(vec![del(2)]).unwrap();
+    net.settle();
+    let blobs = net.clients[0].checkpoint().unwrap().blobs;
+    assert!(!blobs.contains_key(&lost));
+    assert!(blobs.contains_key(&kept));
+    assert!(net.clients[0].journal().blobs.is_empty());
+}
+
+#[test]
+fn a_missing_picture_is_asked_for_again_after_a_new_sign_in() {
+    let mut r = Replica::new();
+    r.insert_baseline(
+        Target::new(Kind::Object, Uid::from_num(6)),
+        serde_json::from_value(json!({"shape": {"kind": "underlay", "png": {"$blob": "ab"}}}))
+            .unwrap(),
+    );
+    let mut c = Client::with_state(cfg(3), r, 0, "log-1");
+    let online = |c: &mut Client| {
+        c.connect();
+        c.handle(
+            ServerMsg::Welcome {
+                protocol: PROTOCOL_VERSION,
+                log_id: "log-1".into(),
+                head_seq: 0,
+                your_last_op: 0,
+                peers: vec![],
+            },
+            0,
+        );
+        c.handle(ServerMsg::Entries { entries: vec![] }, 0);
+        c.take_outbox();
+    };
+    let gets = |out: Vec<ClientMsg>| {
+        out.into_iter()
+            .filter(|m| matches!(m, ClientMsg::BlobGet { .. }))
+            .count()
+    };
+    online(&mut c);
+    c.tick(1);
+    assert_eq!(gets(c.take_outbox()), 1);
+    c.handle(ServerMsg::BlobMissing { hash: "ab".into() }, 2);
+    c.connection_lost();
+    online(&mut c);
+    c.tick(3);
+    assert_eq!(
+        gets(c.take_outbox()),
+        1,
+        "asked again on the new connection"
+    );
 }

@@ -620,7 +620,15 @@ fn plan_reset(
         Ok(shapes) => {
             let origin = origin_of(shapes.iter().map(|g| g.shape.clone()));
             // The ids follow from the object, the new generation and the place in the list.
-            let next = generation + 1;
+            // The first generation whose first shape ID is free in the shared state. After an undo
+            // of a regeneration the next number can be one whose shapes are deleted: their IDs
+            // stay taken, so the number is skipped.
+            let mut next = generation + 1;
+            while !shapes.is_empty()
+                && crate::collab_api::knows_object(s, Uid::derive(id.0, next, 0))
+            {
+                next += 1;
+            }
             let planned: Vec<ObjectId> = (0..shapes.len() as u64)
                 .map(|k| ObjectId(Uid::derive(id.0, next, k)))
                 .collect();

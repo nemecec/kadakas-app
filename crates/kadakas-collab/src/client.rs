@@ -226,6 +226,8 @@ pub struct Client {
     retry: Option<Retry>,
     /// The blobs (pictures) that this client has, by hash.
     blobs: BTreeMap<String, String>,
+    /// The blobs that were sent on this connection. A blob is sent again on a new connection.
+    put_on_conn: BTreeSet<String>,
     /// Blobs that were asked for, and blobs that the server does not have.
     asked: BTreeSet<String>,
     missing: BTreeSet<String>,
@@ -263,6 +265,7 @@ impl Client {
             changed: false,
             retry: None,
             blobs: BTreeMap::new(),
+            put_on_conn: BTreeSet::new(),
             asked: BTreeSet::new(),
             missing: BTreeSet::new(),
             blob_scan: false,
@@ -440,6 +443,7 @@ impl Client {
         }
         self.state = ConnState::Connecting;
         self.regress = false;
+        self.put_on_conn.clear();
         self.outbox.clear();
         self.outbox.push(ClientMsg::Hello {
             protocol: PROTOCOL_VERSION,
@@ -487,6 +491,7 @@ impl Client {
         }
         self.peers.clear();
         self.retry = None;
+        self.put_on_conn.clear();
         self.save_checkpoint();
     }
 
@@ -496,7 +501,7 @@ impl Client {
     /// when online, to the server. Operations without effect are dropped from the transaction.
     /// Returns the transaction number.
     pub fn edit(&mut self, ops: Vec<Op>) -> Result<u64, EditError> {
-        let (op_id, inverse) = self.commit(ops)?;
+        let (op_id, inverse) = self.commit(ops, false)?;
         self.undo.push(UndoEntry {
             of_op: op_id,
             inverse,
@@ -556,7 +561,7 @@ impl Client {
 
     /// Applies the operations to the view, queues the transaction, and returns its number and
     /// the inverse operations (in the order to apply them).
-    fn commit(&mut self, ops: Vec<Op>) -> Result<(u64, Vec<Op>), EditError> {
+    fn commit(&mut self, ops: Vec<Op>, force_put: bool) -> Result<(u64, Vec<Op>), EditError> {
         validate_ops(&ops)?;
         let ops = self.externalize(ops);
         let op_id = self.last_op + 1;
@@ -577,6 +582,7 @@ impl Client {
         }
         self.last_op = op_id;
         if self.state == ConnState::Online {
+            self.put_blobs(&applied, force_put);
             self.outbox.push(ClientMsg::Submit {
                 op_id,
                 ops: applied.clone(),
@@ -589,18 +595,12 @@ impl Client {
         Ok((op_id, inverse))
     }
 
-    /// Replaces big pictures in the operations by references (see `blob`), keeps the pictures, and
-    /// queues them for the server before the transaction (when online).
+    /// Replaces big pictures in the operations by references (see `blob`) and keeps the pictures.
+    /// They go to the server with `put_blobs`, before the transaction that refers to them.
     fn externalize(&mut self, mut ops: Vec<Op>) -> Vec<Op> {
         let put = |this: &mut Client, v: &mut Value| {
             if let Some((r, hash, data)) = blob::externalize(v) {
                 *v = r;
-                if this.state == ConnState::Online {
-                    this.outbox.push(ClientMsg::BlobPut {
-                        hash: hash.clone(),
-                        data: data.clone(),
-                    });
-                }
                 this.blobs.insert(hash, data);
             }
         };
@@ -616,6 +616,26 @@ impl Client {
             }
         }
         ops
+    }
+
+    /// Queues a `blob_put` for every picture that these operations refer to and that this
+    /// connection has not sent yet. It covers new edits, undo and redo, a connection that starts
+    /// again, a server that went back, and a put that failed.
+    /// With `force`, also the ones that this connection sent before: the server may have dropped
+    /// a picture that nothing referred to (an undo refers to it again).
+    fn put_blobs(&mut self, ops: &[Op], force: bool) {
+        for op in ops {
+            for h in op_blob_refs(op) {
+                if let Some(data) = self.blobs.get(&h)
+                    && (self.put_on_conn.insert(h.clone()) || force)
+                {
+                    self.outbox.push(ClientMsg::BlobPut {
+                        hash: h,
+                        data: data.clone(),
+                    });
+                }
+            }
+        }
     }
 
     /// The document that the view describes, with the pictures it refers to (see
@@ -665,7 +685,7 @@ impl Client {
         if keep.is_empty() {
             return (report, None);
         }
-        match self.commit(keep) {
+        match self.commit(keep, true) {
             Ok((op_id, inverse)) => {
                 // The host's document does not have this change yet.
                 self.changed = true;
@@ -738,10 +758,17 @@ impl Client {
     }
 
     fn resend_from(&mut self, from_op: u64) {
-        for t in self.pending.iter().filter(|t| t.op_id >= from_op) {
+        let txns: Vec<Txn> = self
+            .pending
+            .iter()
+            .filter(|t| t.op_id >= from_op)
+            .cloned()
+            .collect();
+        for t in txns {
+            self.put_blobs(&t.ops, false);
             self.outbox.push(ClientMsg::Submit {
                 op_id: t.op_id,
-                ops: t.ops.clone(),
+                ops: t.ops,
             });
         }
     }
@@ -898,7 +925,7 @@ impl Client {
             self.finish_sync();
             let mut resent = 0;
             for chunk in docsync::split(lost) {
-                if self.commit(chunk).is_ok() {
+                if self.commit(chunk, false).is_ok() {
                     resent += 1;
                 }
             }
@@ -1052,7 +1079,11 @@ impl Client {
                     message,
                 });
             }
-            (None, _) => self.events.push(ClientEvent::ServerError { code, message }),
+            (None, _) => {
+                // The error may be about a blob_put that failed: send the pictures again.
+                self.put_on_conn.clear();
+                self.events.push(ClientEvent::ServerError { code, message });
+            }
         }
     }
 
@@ -1109,35 +1140,16 @@ impl Client {
         self.blob_scan = true;
         self.asked.clear();
         self.state = ConnState::Online;
-        // The pictures that waiting transactions refer to go first.
-        let mut sent = BTreeSet::new();
-        for t in &self.pending {
-            for op in &t.ops {
-                let hashes: Vec<String> = match op {
-                    Op::Create { props, .. } => blob::refs_in(props),
-                    Op::Set { prop, value, .. } if prop == "shape" => blob::blob_ref(value)
-                        .map(str::to_string)
-                        .into_iter()
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                for h in hashes {
-                    if let Some(data) = self.blobs.get(&h)
-                        && sent.insert(h.clone())
-                    {
-                        self.outbox.push(ClientMsg::BlobPut {
-                            hash: h,
-                            data: data.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        self.retry = None;
-        for t in &self.pending {
+        // The pictures that waiting transactions refer to go first. The server may be another
+        // one (a restore), so the pictures that were asked for or missing are tried again too.
+        self.put_on_conn.clear();
+        self.missing.clear();
+        let txns: Vec<Txn> = self.pending.iter().cloned().collect();
+        for t in txns {
+            self.put_blobs(&t.ops, false);
             self.outbox.push(ClientMsg::Submit {
                 op_id: t.op_id,
-                ops: t.ops.clone(),
+                ops: t.ops,
             });
         }
         self.out_presence.resend();
@@ -1172,30 +1184,43 @@ impl Client {
             pending: self.pending.iter().cloned().collect(),
             undo: self.undo.clone(),
             redo: self.redo.clone(),
-            blobs: self.pending_blobs(),
+            blobs: self.journal_blobs(),
         }
     }
 
-    /// The blobs that the waiting transactions refer to.
-    fn pending_blobs(&self) -> BTreeMap<String, String> {
-        let mut out = BTreeMap::new();
+    /// The blobs that the waiting transactions and the undo and redo steps refer to.
+    fn journal_blobs(&self) -> BTreeMap<String, String> {
+        let mut want = BTreeSet::new();
         for t in &self.pending {
-            for op in &t.ops {
-                let h = match op {
-                    Op::Create { props, .. } => blob::refs_in(props).into_iter().next(),
-                    Op::Set { prop, value, .. } if prop == "shape" => {
-                        blob::blob_ref(value).map(str::to_string)
-                    }
-                    _ => None,
-                };
-                if let Some(h) = h
-                    && let Some(d) = self.blobs.get(&h)
-                {
-                    out.insert(h, d.clone());
-                }
-            }
+            want.extend(t.ops.iter().flat_map(op_blob_refs));
         }
-        out
+        for u in self.undo.iter().chain(&self.redo) {
+            want.extend(u.inverse.iter().flat_map(op_blob_refs));
+        }
+        self.blobs
+            .iter()
+            .filter(|(h, _)| want.contains(*h))
+            .map(|(h, d)| (h.clone(), d.clone()))
+            .collect()
+    }
+
+    /// The blobs that the checkpoint keeps: the ones that the confirmed state refers to (deleted
+    /// things too, because an undo can bring them back), and the ones of the journal.
+    fn checkpoint_blobs(&self) -> BTreeMap<String, String> {
+        let mut want: BTreeSet<String> = self.journal_blobs().into_keys().collect();
+        for (_, e) in self.confirmed.things() {
+            want.extend(
+                e.props
+                    .values()
+                    .filter(|s| !s.removed)
+                    .filter_map(|s| blob::blob_ref(&s.value).map(str::to_string)),
+            );
+        }
+        self.blobs
+            .iter()
+            .filter(|(h, _)| want.contains(*h))
+            .map(|(h, d)| (h.clone(), d.clone()))
+            .collect()
     }
 
     /// The checkpoint as it would be saved, if the client has a confirmed state.
@@ -1204,7 +1229,7 @@ impl Client {
             log_id: self.log_id.clone().unwrap_or_default(),
             seq: self.confirmed_seq,
             state: self.confirmed.clone(),
-            blobs: self.blobs.clone(),
+            blobs: self.checkpoint_blobs(),
         })
     }
 
@@ -1293,4 +1318,16 @@ fn apply_with_inverse(r: &mut Replica, w: Writer, ops: Vec<Op>) -> (Vec<Op>, Vec
     }
     inverse.reverse();
     (applied, inverse)
+}
+
+/// The blobs that one operation refers to.
+fn op_blob_refs(op: &Op) -> Vec<String> {
+    match op {
+        Op::Create { props, .. } => blob::refs_in(props),
+        Op::Set { prop, value, .. } if prop == "shape" => blob::blob_ref(value)
+            .map(str::to_string)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
 }

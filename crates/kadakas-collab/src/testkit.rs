@@ -162,6 +162,16 @@ impl Sequencer {
         }
     }
 
+    /// True if the sequencer has this blob.
+    pub fn has_blob(&self, hash: &str) -> bool {
+        self.blobs.contains_key(hash)
+    }
+
+    /// Forgets all blobs, as a clean-up of the server does.
+    pub fn forget_blobs(&mut self) {
+        self.blobs.clear();
+    }
+
     pub fn replica(&self) -> &Replica {
         &self.replica
     }
@@ -504,9 +514,10 @@ impl Sequencer {
         for op in &ops {
             if let Op::Create { target, merge, .. } = op {
                 let again = self.replica.contains(*target) || made.contains(target);
-                // A derived ID may be made again; a thing that is deleted stays deleted.
-                let allowed = *merge && self.replica.alive(*target).is_some();
-                if again && !allowed && !(*merge && made.contains(target)) {
+                // A derived ID may be made again with `merge`. If the thing was deleted, the
+                // operation is dropped by the merge (the thing stays deleted); the rest of the
+                // transaction is ordered as usual. Any other repeat is refused.
+                if again && !*merge {
                     return reply(error(
                         ErrorCode::DuplicateUid,
                         &format!("the ID {} is used", target.id),

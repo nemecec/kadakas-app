@@ -113,6 +113,17 @@ impl Session {
     }
 }
 
+/// True if the shared state has a thing with this ID, also a deleted one. A regeneration of a
+/// plug-in object does not reuse the IDs of a generation that was undone: the ID of a deleted
+/// thing stays taken for good.
+pub(crate) fn knows_object(s: &Session, id: Uid) -> bool {
+    use kadakas_collab::{Kind, Target};
+    s.collab
+        .link
+        .as_ref()
+        .is_some_and(|l| l.client.view().contains(Target::new(Kind::Object, id)))
+}
+
 /// True if the session is connected or connecting to a shared document. The normal `undo` and
 /// `redo` refuse then.
 pub(crate) fn is_connected(s: &Session) -> bool {

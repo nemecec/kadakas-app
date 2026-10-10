@@ -845,6 +845,64 @@ fn a_picture_is_sent_once_as_a_blob_and_not_with_every_edit() {
     );
 }
 
+#[test]
+fn a_new_regeneration_after_an_undo_does_not_delete_the_shapes() {
+    let (_hub, mut a, mut b) = pair();
+    let planter = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
+    );
+    for s in [&mut a, &mut b] {
+        s.scripting.allow_agent_scripts = true;
+        call(s, "plugins.install", json!({"path": planter}));
+    }
+    let placed = call(
+        &mut a,
+        "plugins.place",
+        json!({"plugin": "org.kadakas.raised-planter", "min": [0, 0], "max": [2000, 800]}),
+    );
+    let id = placed["id"].as_str().unwrap().to_string();
+    let count = a.editor.doc().objects.len();
+    let sync_all = |a: &mut Session, b: &mut Session, from: u64| {
+        for t in 0..4 {
+            call(a, "collab.sync", json!({"now_ms": from + t}));
+            call(b, "collab.sync", json!({"now_ms": from + t}));
+        }
+    };
+    sync_all(&mut a, &mut b, 2_000);
+    // place, set_params, undo, set_params
+    call(
+        &mut a,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 150.0}}),
+    );
+    sync_all(&mut a, &mut b, 3_000);
+    let r = call(&mut a, "collab.undo", json!({"now_ms": 3_100}));
+    assert_eq!(r["done"], true);
+    sync_all(&mut a, &mut b, 3_200);
+    assert!(same(&a, &b));
+    assert_eq!(a.editor.doc().objects.len(), count);
+    call(
+        &mut a,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 90.0}}),
+    );
+    sync_all(&mut a, &mut b, 4_000);
+    // The shapes are there on both sessions, and the same.
+    assert!(same(&a, &b));
+    assert_eq!(a.editor.doc().objects.len(), count, "no shape was lost");
+    assert_eq!(b.editor.doc().objects.len(), count);
+    // The same from the other session, too.
+    call(
+        &mut b,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 110.0}}),
+    );
+    sync_all(&mut a, &mut b, 5_000);
+    assert!(same(&a, &b));
+    assert_eq!(b.editor.doc().objects.len(), count);
+}
+
 // ----- real commands on two sessions -----
 
 mod real_commands {

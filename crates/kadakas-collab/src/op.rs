@@ -182,6 +182,8 @@ pub enum InvalidTxn {
     BadProp(String),
     #[error("the settings of the document cannot be created")]
     CreateDocument,
+    #[error("`merge` is only for objects with a derived ID: {0}")]
+    BadMerge(Uid),
     #[error("a value of {0:?} is nested deeper than {MAX_JSON_DEPTH} levels")]
     TooDeep(String),
     #[error(
@@ -281,9 +283,16 @@ pub fn validate_ops(ops: &[Op]) -> Result<(), InvalidTxn> {
     let mut total = 0;
     for op in ops {
         match op {
-            Op::Create { target, props, .. } => {
+            Op::Create {
+                target,
+                props,
+                merge,
+            } => {
                 if target.kind == Kind::Document {
                     return Err(InvalidTxn::CreateDocument);
+                }
+                if *merge && (target.kind != Kind::Object || !target.id.is_derived()) {
+                    return Err(InvalidTxn::BadMerge(target.id));
                 }
                 for (k, v) in props {
                     check_prop(k)?;
@@ -383,6 +392,26 @@ mod tests {
             merge: false,
         };
         assert_eq!(validate_ops(&[doc]), Err(InvalidTxn::CreateDocument));
+        // `merge` is for objects with a derived ID only.
+        let derived = Uid::derive(Uid::from_num(1), 2, 0);
+        let make = |target, merge| Op::Create {
+            target,
+            props: BTreeMap::new(),
+            merge,
+        };
+        assert_eq!(
+            validate_ops(&[make(Target::new(Kind::Object, derived), true)]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_ops(&[make(t(1), true)]),
+            Err(InvalidTxn::BadMerge(Uid::from_num(1)))
+        );
+        assert!(matches!(
+            validate_ops(&[make(Target::new(Kind::Layer, derived), true)]),
+            Err(InvalidTxn::BadMerge(_))
+        ));
+        assert!(!InvalidTxn::BadMerge(derived).to_string().is_empty());
         let ok = Op::Create {
             target: t(1),
             props: [("shape".to_string(), json!({}))].into(),
