@@ -19,11 +19,13 @@
 //! - [`warp`]: move a picture from one CRS to the model frame of the document.
 //! - [`geoimage`]: a PNG or JPEG with a world file, or a GeoTIFF.
 //! - [`wfs`], [`gml`]: WFS 2.0 GetFeature as GeoJSON or GML 3.2 (simple features).
+//! - [`coords`]: the coordinate readout (easting, northing, longitude, latitude).
 //! - [`reproject`]: change the CRS of a document, with a dry-run report.
 //! - [`job`]: run a fetch on a worker thread, so the UI never waits.
 
 pub mod cache;
 pub mod caps;
+pub mod coords;
 pub mod geoimage;
 pub mod gml;
 pub mod http;

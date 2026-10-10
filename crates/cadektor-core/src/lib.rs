@@ -16,6 +16,7 @@ pub mod hardscape;
 pub mod landscape;
 pub mod library;
 pub mod massing;
+pub mod massing_batch;
 pub mod mesh;
 pub mod model;
 pub mod pattern;

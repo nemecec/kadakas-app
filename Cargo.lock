@@ -565,6 +565,7 @@ dependencies = [
  "base64 0.22.1",
  "cadektor-annot",
  "cadektor-core",
+ "cadektor-gis",
  "cadektor-ifc",
  "cadektor-io",
  "cadektor-print",
