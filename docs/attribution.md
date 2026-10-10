@@ -16,6 +16,8 @@ SketchUp is a trademark of Trimble Inc. The feature spec names a SketchUp-like u
 
 Every Rust crate that we ship is listed in `THIRD_PARTY_NOTICES.txt` with its license and its license text. The file is made by `scripts/notices.sh` (cargo-about). `cargo deny check` allows permissive licenses only (`deny.toml`).
 
+New with the launcher (PLAT-06, `kadakas-update`): `ed25519-dalek` and `curve25519-dalek` (BSD-3-Clause, by the dalek-cryptography authors) check the signature of update manifests. `sha2` (RustCrypto, MIT OR Apache-2.0) makes the SHA-256 of downloads. `tar` and `flate2` (MIT OR Apache-2.0) unpack the update archives. Their helper crates (`ed25519`, `signature`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`, `fiat-crypto`, `digest`, `block-buffer`, `crypto-common`, `generic-array`, `cpufeatures`, `rand_core`, `filetime`) are listed in `THIRD_PARTY_NOTICES.txt` too. `ureq` (HTTP client) was already in use by `kadakas-gis`.
+
 ## Icons
 
 | Item | License | Source |

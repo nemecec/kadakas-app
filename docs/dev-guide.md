@@ -26,6 +26,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
 | `kadakas-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core, render |
 | `kadakas-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core, sys |
+| `kadakas-update` | Launcher logic: signed update manifests (ed25519), the HTTP trait, checked downloads, safe unpacking, versioned installs with rollback, launcher settings, UI flavors (native only; holds no private key) | sys |
 | `kadakas-io` | DXF, Shapefile and GeoJSON import and export, DWG through an external converter, CRS conversion through `crs` (native only) | core, annot, sys, crs, site |
 | `kadakas-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, crs, io |
 | `kadakas-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, crs, sys, io, site |
