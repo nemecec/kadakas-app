@@ -243,6 +243,8 @@ pub enum Command {
         #[serde(default)]
         revision: Option<String>,
     },
+    /// Set the stable project GUID (22 characters of the IFC base64 alphabet). IFC export sets it once.
+    SetProjectGuid { guid: String },
     /// Store a saved view. A view with the same name is replaced.
     SaveView { view: Box<crate::sheets::SavedView> },
     DeleteView { name: String },
@@ -831,6 +833,7 @@ impl<'a> Tx<'a> {
             Command::AddSheet { .. }
             | Command::SetSheet { .. }
             | Command::SetProject { .. }
+            | Command::SetProjectGuid { .. }
             | Command::SaveView { .. }
             | Command::DeleteView { .. }
             | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,

@@ -1,0 +1,17 @@
+[package]
+name = "cadektor-ifc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-io = { version = "0.1.0", path = "../cadektor-io" }
+cadektor-site = { version = "0.1.0", path = "../cadektor-site" }
+i_overlay = "9.0.1"
+glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"

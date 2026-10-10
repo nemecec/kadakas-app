@@ -17,7 +17,7 @@ jobs:
       - run: cargo test --workspace
       - uses: astral-sh/setup-uv@v6
       - run: cargo build -p cadektor-cli
-      - run: uv run --with pytest --with ezdxf pytest tests/behavior -q
+      - run: uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior -q
   wasm:
     runs-on: ubuntu-latest
     steps:

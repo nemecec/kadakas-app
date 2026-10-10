@@ -10,6 +10,7 @@ pub mod geom;
 pub mod georef;
 pub mod graphics;
 pub mod group;
+pub mod guid;
 pub mod hardscape;
 pub mod landscape;
 pub mod library;
