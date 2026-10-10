@@ -94,6 +94,18 @@ pub enum PointMode {
     WithZ,
 }
 
+/// How DXF 3DFACE entities are imported.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaceMode {
+    /// Each face is a closed 3D polygon (`polyline3d`), which can be source data of a site model.
+    /// This is the default.
+    #[default]
+    Polygons,
+    /// All faces of a DXF layer are merged into one mesh object (`mesh3d`).
+    Mesh,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImportOptions {
@@ -111,6 +123,8 @@ pub struct ImportOptions {
     /// DXF: most objects that exploded blocks may make. The import fails above it.
     pub max_exploded: usize,
     pub points: PointMode,
+    /// DXF: 3DFACE entities become 3D polygons (default) or one mesh per DXF layer.
+    pub faces: FaceMode,
     /// DXF: import HATCH boundaries as closed polylines.
     pub hatches: bool,
     /// Largest distance of an approximated curve from the true curve, in mm.
@@ -137,6 +151,7 @@ impl Default for ImportOptions {
             origin: OriginMode::Center,
             max_exploded: 100_000,
             points: PointMode::All,
+            faces: FaceMode::Polygons,
             hatches: true,
             tolerance: 2.0,
             default_text_height: 250.0,
@@ -181,6 +196,28 @@ pub enum ExportOrigin {
     Document,
 }
 
+/// Which surface of a site model a DXF export writes as a 3D mesh (in addition to the contours).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteMesh {
+    /// No mesh: contours and source points only. This is the default.
+    #[default]
+    None,
+    Existing,
+    Proposed,
+}
+
+/// How a DXF export writes a triangle mesh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshEntity {
+    /// One POLYLINE (polyface mesh) with shared vertices. This is the default.
+    #[default]
+    Polyface,
+    /// One 3DFACE entity per triangle.
+    Face3d,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportOptions {
@@ -194,6 +231,13 @@ pub struct ExportOptions {
     pub visible_only: bool,
     /// Largest distance of an approximated curve from the true curve, in mm.
     pub tolerance: f64,
+    /// DXF: dimensions, callouts and text annotations become native DIMENSION, LEADER and MTEXT
+    /// entities where they can (default). False: all annotations are lines and text.
+    pub native_annotations: bool,
+    /// DXF: also write the surface of site models as a 3D mesh.
+    pub site_mesh: SiteMesh,
+    /// DXF: how meshes (mesh objects and the site mesh) are written.
+    pub mesh_entity: MeshEntity,
 }
 
 impl Default for ExportOptions {
@@ -204,6 +248,9 @@ impl Default for ExportOptions {
             unit: Unit::Mm,
             visible_only: false,
             tolerance: 1.0,
+            native_annotations: true,
+            site_mesh: SiteMesh::None,
+            mesh_entity: MeshEntity::Polyface,
         }
     }
 }

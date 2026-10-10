@@ -4,7 +4,6 @@
 use cadektor_core::curve::{self, Seg};
 use cadektor_core::model::{Attributes, Color, Document, Object, Shape};
 use cadektor_core::plants::graphic;
-use cadektor_core::plants::link;
 use cadektor_core::plants::schedule::{self, TagCounts};
 use cadektor_core::plants::style::PlantGraphic;
 use cadektor_core::plants::tree::{self, TreeAction};
@@ -346,7 +345,7 @@ fn shape_core(
             height,
         } => out.push(text(xf.p(*at), t, xf.len(*height), ink)),
         Shape::Plant { at, spread, .. } => {
-            let look = link::look(doc, obj);
+            let look = cadektor_core::viewrules::plant_look(doc, obj);
             let own = attrs_set(obj);
             let (pen, fill) = if own {
                 (st.stroke, st.fill)
@@ -455,10 +454,24 @@ fn shape_core(
         Shape::PlantTag {
             at, anchor, height, ..
         } => {
-            let t = schedule::tag_info_with(doc, obj.id, counts)
-                .map_or_else(|| "?".to_string(), |t| t.text());
+            let layout = schedule::tag_info_with(doc, obj.id, counts).map(|t| t.layout(*height));
             out.push(path(mapped(&[*anchor, *at], xf), false, &st));
-            out.push(text(xf.p(*at), &t, xf.len(*height), ink));
+            match layout {
+                None => out.push(text(xf.p(*at), "?", xf.len(*height), ink)),
+                Some(l) => {
+                    if let Some((c, r)) = l.bubble {
+                        out.push(path(circle_segs(xf.p(*at + c), xf.len(r)), true, &st));
+                    }
+                    for t in &l.texts {
+                        let w = xf.len(*height) * 0.55 * t.text.chars().count() as f64;
+                        let mut p = xf.p(*at + t.at);
+                        if t.centered {
+                            p.x -= w / 2.0;
+                        }
+                        out.push(text(p, &t.text, xf.len(*height), ink));
+                    }
+                }
+            }
         }
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
             // The style gives pen and fill where the object has none of its own. The attributes

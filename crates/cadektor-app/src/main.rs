@@ -29,11 +29,13 @@ mod keymap;
 mod layout;
 mod panels;
 mod plant_draw;
+mod plant_sheet_ui;
 mod plant_ui;
 mod prefs;
 mod present_ui;
 mod quick_search;
 mod resource_ui;
+mod rules_ui;
 mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_ui;

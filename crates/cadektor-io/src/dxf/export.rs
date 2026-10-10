@@ -22,6 +22,8 @@ use super::nearest_aci;
 use crate::options::{ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
+mod native;
+
 /// Longest text that one TEXT entity holds. Longer text becomes MTEXT.
 const TEXT_LIMIT: usize = 250;
 
@@ -184,6 +186,11 @@ struct Ctx<'a> {
     layer_mode: LayerMode,
     doc: &'a Document,
     plant_blocks: BTreeSet<String>,
+    /// Anonymous blocks of native dimensions (`*D1`, ...).
+    anon_blocks: Vec<native::AnonBlock>,
+    native_annotations: bool,
+    site_mesh: crate::options::SiteMesh,
+    mesh_entity: crate::options::MeshEntity,
     /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
     shift: DVec2,
 }
@@ -262,6 +269,10 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         layer_mode: opts.layer_mode,
         doc,
         plant_blocks: BTreeSet::new(),
+        anon_blocks: Vec::new(),
+        native_annotations: opts.native_annotations,
+        site_mesh: opts.site_mesh,
+        mesh_entity: opts.mesh_entity,
         shift: DVec2::ZERO,
     };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
@@ -548,7 +559,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.pair(0, "ENDTAB");
     // BLOCK_RECORD: model space, paper space and one per plant symbol.
     let plant_names: Vec<String> = cx.plant_blocks.iter().cloned().collect();
-    tables.table("BLOCK_RECORD", H_BLOCK_RECORD_TABLE, 2 + plant_names.len());
+    tables.table(
+        "BLOCK_RECORD",
+        H_BLOCK_RECORD_TABLE,
+        2 + plant_names.len() + cx.anon_blocks.len(),
+    );
     tables.record("BLOCK_RECORD", H_MODEL_RECORD, H_BLOCK_RECORD_TABLE);
     tables.pair(100, "AcDbBlockTableRecord");
     tables.pair(2, "*Model_Space");
@@ -558,12 +573,16 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.pair(2, "*Paper_Space");
     tables.pair(340, H_PAPER_LAYOUT);
     let mut plant_blocks: Vec<(String, String)> = Vec::new();
-    for n in &plant_names {
+    for n in plant_names
+        .iter()
+        .cloned()
+        .chain(cx.anon_blocks.iter().map(|b| b.name.clone()))
+    {
         let h = tables.handle();
         tables.record("BLOCK_RECORD", &h, H_BLOCK_RECORD_TABLE);
         tables.pair(100, "AcDbBlockTableRecord");
-        tables.pair(2, n);
-        plant_blocks.push((n.clone(), h));
+        tables.pair(2, &n);
+        plant_blocks.push((n, h));
     }
     tables.pair(0, "ENDTAB");
 
@@ -600,12 +619,16 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         blocks.pair(8, "0");
         blocks.pair(100, "AcDbBlockBegin");
         blocks.pair(2, n);
-        blocks.pair(70, 0);
+        // An anonymous block (a dimension) has flag 1.
+        blocks.pair(70, i32::from(n.starts_with("*D")));
         blocks.num(10, 0.0);
         blocks.num(20, 0.0);
         blocks.num(30, 0.0);
         blocks.pair(3, n);
         blocks.pair(1, "");
+        if let Some(b) = cx.anon_blocks.iter().find(|b| &b.name == n) {
+            native::write_block_prims(&mut blocks, cx.unit, &b.prims);
+        }
         if n.starts_with("PLANT") {
             for (a, b) in [((-1.0, 0.0), (1.0, 0.0)), ((0.0, -1.0), (0.0, 1.0))] {
                 blocks.start("LINE");
@@ -770,6 +793,38 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         objects.pair(6, "BYLAYER");
     }
 
+    // The georeference as a GEODATA object, when the CRS is an EPSG code.
+    let mut geodata = false;
+    if let Some(g) = &doc.georef
+        && !g.crs.trim().is_empty()
+    {
+        match native::epsg_of(g) {
+            Some(epsg) => {
+                let unit_mm = opts.unit.mm_per_unit();
+                // The drawing axes are the model axes in both modes (a rotation is not applied to the
+                // coordinates), so grid north is turned by the rotation of the georeference.
+                let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
+                let design = match opts.origin {
+                    ExportOrigin::File => g.origin * 1000.0 / unit_mm,
+                    ExportOrigin::Document => DVec2::ZERO,
+                };
+                native::geodata(
+                    &mut objects,
+                    &epsg,
+                    design,
+                    g.origin,
+                    north,
+                    opts.unit.insunits(),
+                    unit_mm / 1000.0,
+                );
+                geodata = true;
+            }
+            None => report.note(
+                "the CRS is not an EPSG code, so the file has no GEODATA object. The coordinates are still real-world numbers",
+            ),
+        }
+    }
+
     let mut hdr = W::new(0);
     hdr.pair(0, "SECTION");
     hdr.pair(2, "HEADER");
@@ -789,11 +844,15 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     // CLASSES: the object classes that OBJECTS uses.
     hdr.pair(0, "SECTION");
     hdr.pair(2, "CLASSES");
-    for (name, cpp) in [
+    let mut classes = vec![
         ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
         ("ACDBPLACEHOLDER", "AcDbPlaceHolder"),
         ("LAYOUT", "AcDbLayout"),
-    ] {
+    ];
+    if geodata {
+        classes.push(("GEODATA", "AcDbGeoData"));
+    }
+    for (name, cpp) in classes {
         hdr.pair(0, "CLASS");
         hdr.pair(1, name);
         hdr.pair(2, cpp);
@@ -998,6 +1057,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
             w.pair(100, "AcDbPoint");
             cx.pt3(w, 10, p.x, p.y, p.z);
         }
+        Shape::Mesh3d(m) => native::mesh_object(w, cx, o, layer, hidden, m),
         Shape::Polyline3d { points, closed } => polyline3d(
             w,
             cx,
@@ -1040,6 +1100,21 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 // The object was shifted already, so its points are in the final coordinates.
                 cx.pt3(w, 10, p.x, p.y, p.z);
             }
+            // The triangles of the surface, on request.
+            let which = match cx.site_mesh {
+                crate::options::SiteMesh::None => None,
+                crate::options::SiteMesh::Existing => Some(cadektor_site::Surface::Existing),
+                crate::options::SiteMesh::Proposed => Some(cadektor_site::Surface::Proposed),
+            };
+            if let Some(which) = which {
+                let tin = site.surface(which);
+                let vertices: Vec<cadektor_core::DVec3> = tin
+                    .vertices
+                    .iter()
+                    .map(|v| cadektor_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z))
+                    .collect();
+                native::mesh(w, cx, o, layer, hidden, &vertices, &tin.triangles);
+            }
         }
         // An annotation is written as lines and text (exploded), because its look comes from styles
         // and live data. Dimensions, callouts, tags, legends and so on look the same in the CAD program.
@@ -1057,6 +1132,9 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
 /// starts half its estimated width to the left, because the TEXT entity here is left aligned.
 fn annotation_entities(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) {
     use cadektor_core::annot::draw::{Prim, text_width};
+    if cx.native_annotations && native::annotation(w, cx, o, layer, hidden) {
+        return;
+    }
     for p in cadektor_annot::prims(cx.doc, o) {
         match p {
             Prim::Poly { pts, closed, .. } => {

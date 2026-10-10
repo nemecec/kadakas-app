@@ -262,6 +262,9 @@ pub struct Drawing {
     /// Materials in use, the sun and the render style (see `crate::present`).
     #[serde(default)]
     pub presentation: crate::present::Presentation,
+    /// The N/E grid, the display of phases and the data visualization (see `crate::viewrules`).
+    #[serde(default, skip_serializing_if = "crate::viewrules::ViewRules::is_empty")]
+    pub view_rules: crate::viewrules::ViewRules,
     /// Layers and classes that show in grey (see `crate::visibility`).
     #[serde(default)]
     pub grey: crate::visibility::GreySet,

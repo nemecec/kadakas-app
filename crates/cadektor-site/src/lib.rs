@@ -6,6 +6,7 @@
 //! types. `model` connects them to the document of `cadektor-core`, and `draw` draws site
 //! models through the extension hooks of core.
 
+pub mod check;
 pub mod contour;
 pub mod drape;
 pub mod draw;

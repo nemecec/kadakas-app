@@ -20,9 +20,9 @@ pub(crate) fn is_ifc(format: Option<&str>, path: &Path) -> bool {
 /// Options and mappings of the IFC export, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "format": "ifc: export IFC4 (IFC4 ADD2 TC1, STEP physical file). import.file reads IFC2x3, IFC4 and IFC4x3 (see import below).",
+        "format": "ifc: export IFC4 (IFC4 ADD2 TC1, the default), IFC2x3 or IFC4x3 (ADD2) as a STEP physical file (option version). import.file reads IFC2x3, IFC4 and IFC4x3 (see import below).",
         "options": {
-            "version": "IFC4 (the only value for now)",
+            "version": "IFC4 (default) | IFC2X3 | IFC4X3. IFC2X3: owner history, building element proxies instead of geographic elements, surface models instead of triangulated face sets, and the map conversion as the property sets ePSet_MapConversion and ePSet_ProjectedCRS of the site. IFC4X3: vegetation has its own predefined type (VEGETATION); the site, the terrain (IfcGeographicElement TERRAIN) and the map conversion are as in IFC4. No IfcAlignment",
             "classes_as_layers": "true (default): one IfcPresentationLayerAssignment per class",
             "include_2d": "false (default). true writes 2D objects, text and survey points as IfcAnnotation",
             "layers_as_storeys": "false (default): all elements belong to the IfcSite. true adds an IfcBuilding with one IfcBuildingStorey per design layer",
@@ -41,7 +41,7 @@ pub(crate) fn describe() -> Value {
             "other": "2D objects and map underlays are skipped and listed in the report"
         },
         "import": import_describe(),
-        "georeference": "IfcMapConversion and IfcProjectedCRS (EPSG name) from the document georeference, and RefLatitude/RefLongitude of the IfcSite when the CRS is known. Needs a CRS in the georeference.",
+        "georeference": "IfcMapConversion and IfcProjectedCRS (EPSG name) from the document georeference (IFC2x3: property sets of the site), and RefLatitude/RefLongitude of the IfcSite when the CRS is known. Needs a CRS in the georeference.",
         "global_ids": "GlobalIds come from the project GUID (project.get shows it) and the object IDs, so they stay the same in every export. Every new or loaded document has one. An export never changes the document. project.new_guid makes a fresh GUID, for a copy of a template.",
         "examples": [
             {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "options": {"layers_as_storeys": false}, "overwrite": true}}

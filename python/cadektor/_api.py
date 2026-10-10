@@ -184,7 +184,7 @@ class Api:
         return self._call("plant_style.sample_csv", params or None)
 
     def plants_place(self, **params: Any) -> Any:
-        """Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}. Any spacing may be the text "spread": one canopy diameter of the plant. Returns {created: [id], count, tag?}.
+        """Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), on_terrain? (true stands each plant on the proposed ground of the site model on its layer, see plants.drape), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}; hedgerow {path, closed?, spacing, rows? (1 to 20, default 2), row_spacing? (needed for more than one row), stagger? (default true: every second row starts half a spacing along)}. Any spacing may be the text "spread": one canopy diameter of the plant. Returns {created: [id], count, tag?}.
 
         JSON-RPC method ``plants.place``."""
         return self._call("plants.place", params or None)
@@ -206,6 +206,18 @@ class Api:
 
         JSON-RPC method ``report.existing_trees``."""
         return self._call("report.existing_trees", params or None)
+
+    def plants_drape(self, **params: Any) -> Any:
+        """Place plants on the terrain height: store the height of the proposed ground (site model) under each plant, so the 3D view and the plant height report stand the plant on the ground. params: {ids? (plants and existing trees; default all), release? (true removes the stored height: the plant goes back to the elevation of its layer)}. Run it again after the terrain changes. One undo step. Returns {updated, outside_model (plants off the site model take the height of its nearest edge), skipped (no site model on the layer)}.
+
+        JSON-RPC method ``plants.drape``."""
+        return self._call("plants.drape", params or None)
+
+    def plant_tag_set(self, **params: Any) -> Any:
+        """Set the format of plant tags. params: {ids (plant tags), levels? (1 to 3: 1 shows the ID code and the count, 2 adds the plant name, 3 adds the size and the container), bubble? (the ID code sits in a circle)}. Stored in the data key tag_format. Returns {ids, levels, bubble}.
+
+        JSON-RPC method ``plant_tag.set``."""
+        return self._call("plant_tag.set", params or None)
 
     def record_format_list(self, **params: Any) -> Any:
         """Record formats with their fields and the number of objects that use each. Returns {formats: [{id, name, fields, used_by}]}.
@@ -861,6 +873,12 @@ class Api:
         JSON-RPC method ``irrigation.report.materials``."""
         return self._call("irrigation.report.materials", params or None)
 
+    def irrigation_report_hydrozones(self, **params: Any) -> Any:
+        """Hydrozone report: the plants grouped by the hydrozone field of their plant style (water_need: very_low | low | moderate | high, hydrozone, plant_factor, irrigated), linked to the irrigation zones. A hydrozone named Z3, 3 or Zone 3 matches irrigation zone 3. params: {eto? (reference evapotranspiration in mm per year, default 1000), target_depth?, tolerance?, format?: csv}. Returns {rows: [{hydrozone, plants, by_need, canopy_area_m2, plant_factor, annual_water_l, mixed, not_irrigated, zone?: {zone, head_count, flow_lpm, area_m2, precipitation_mm_h, run_time_min}}], warnings, eto}. The plant factors are the middle of the public WUCOLS classes. The irrigation network is optional.
+
+        JSON-RPC method ``irrigation.report.hydrozones``."""
+        return self._call("irrigation.report.hydrozones", params or None)
+
     def wall_style_create(self, **params: Any) -> Any:
         """Create a wall style (a resource). params: {name, thickness? (mm, default 300; with components it is their total), material?, components? ([{name, material, thickness}], across the thickness), coping? ({height, overhang? (past each face), material?} or null), color? ([r,g,b,a])}. Returns {id}.
 
@@ -904,13 +922,13 @@ class Api:
         return self._call("wall.report", params or None)
 
     def grade_add(self, **params: Any) -> Any:
-        """Add a grade object: a line from a to b with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. params: {a: [x, y], b: [x, y], elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.
+        """Add a grade object: a line from a to b, or a curve (path), with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. On a curve the slope is along the curve. params: {a: [x, y], b: [x, y] | path: [vertices] (a curve with arcs; instead of a and b), site_modifier? (the grade changes the proposed surface: a strip of width along the path follows its elevations; no snap), width? (mm, default 1500), elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.
 
         JSON-RPC method ``grade.add``."""
         return self._call("grade.add", params or None)
 
     def grade_set(self, **params: Any) -> Any:
-        """Change a grade object. params: {id, a?, b?, ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.
+        """Change a grade object. params: {id, a?, b?, path? (replaces the shape with a curve), ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.
 
         JSON-RPC method ``grade.set``."""
         return self._call("grade.set", params or None)
@@ -968,6 +986,18 @@ class Api:
 
         JSON-RPC method ``section.place``."""
         return self._call("section.place", params or None)
+
+    def pad_add(self, **params: Any) -> Any:
+        """Add a pad: a site modifier that sets the ground inside its boundary to a level. params: {boundary: [vertices] (arcs allowed), elevation (mm), slope? ({direction (radians the ground falls), percent}), retaining_edge? (true or the settings of pad.retaining_edge: a wall along the edge), layer?, class?}. Where pads overlap, the later one wins. A pad without a grade limit has a vertical edge. Returns {id, wall?, quantities?}.
+
+        JSON-RPC method ``pad.add``."""
+        return self._call("pad.add", params or None)
+
+    def pad_retaining_edge(self, **params: Any) -> Any:
+        """Give a pad a retaining edge: a closed landscape wall along its boundary, with its top at the level of the pad plus top_offset, standing on the existing ground. The wall is centered on the edge. The pad must be level. Calling it again replaces the wall. params: {id (a pad), enabled? (false removes the wall; default true), thickness? (mm, default 300), top_offset? (mm, default 0), embed? (mm below the ground, default 0), style? (wall style ID or name), class?}. One undo step. Returns {id, wall, quantities} (the rows of wall.report).
+
+        JSON-RPC method ``pad.retaining_edge``."""
+        return self._call("pad.retaining_edge", params or None)
 
     def plugin_define(self, **params: Any) -> Any:
         """Create a plug-in object definition (a resource). params: {name, shape_type: point | linear | rectangle | path, params?: [{name, label?, type: number | length | text | bool | choice | color | record, default?, min?, max?, options? (choice), fields? (record: the same kind of entries, no nested records)}], script, description?, timeout_ms? (10 to 60000, default 5000)}. The script defines reset(params, geometry) and returns a list of shapes (see describe.scripting). Creating a definition runs nothing. Returns {id}.
@@ -1370,6 +1400,90 @@ class Api:
 
         JSON-RPC method ``site.contours``."""
         return self._call("site.contours", params or None)
+
+    def survey_import_points(self, **params: Any) -> Any:
+        """Import survey points from delimited text (CSV, TXT) as 3D loci with their code. params: {text | path, columns? (the column order, default ["P","N","E","Z","Code"]; letters or words: P/id, N/northing, E/easting, Z/elevation, C/code, D/description, - to skip), delimiter? (auto | comma | semicolon | tab | pipe | space), skip_lines? (default: the first line is skipped if it is not numbers), unit? (m default, mm, cm, ft, inch: unit of N and E), z_unit? (default: unit), crs? (EPSG code of a new georeference), shift? (default true: a survey more than 1 km from the origin gets a georeference at its center), layer?, class?}. The points go in model millimeters. Northing is Y, easting is X. Each locus has the data keys point_id, code and description. Returns {imported, skipped: [{line, reason}], georeference?, ids_from, ids_to}.
+
+        JSON-RPC method ``survey.import_points``."""
+        return self._call("survey.import_points", params or None)
+
+    def tree_import_survey(self, **params: Any) -> Any:
+        """Import a tree survey from delimited text as existing trees. The first line is a header: ID, E (or X), N (or Y), Species, DBH, Height, Spread, Condition, Action, Notes. A unit in the header ((cm), [mm], _m) wins. params: {text | path, delimiter?, unit? (N and E, default m), dbh_unit? (default cm), size_unit? (height and spread, default m), crs?, shift?, layer?, class?}. Returns {imported, skipped, georeference?, ids_from, ids_to}. The report is report.existing_trees.
+
+        JSON-RPC method ``tree.import_survey``."""
+        return self._call("tree.import_survey", params or None)
+
+    def site_check(self, **params: Any) -> Any:
+        """Check the source data of a site model: duplicate XY with different Z, spikes (a point far from the plane of its neighbors) and crossing breaklines at different heights. params: {id, xy_tolerance? (mm, default 1), z_tolerance? (mm, default 10), spike_threshold? (mm, default 1000), max_issues? (default 1000)}. Returns {clean, counts: {duplicate_xy, spikes, crossing_breaklines, exact_duplicates}, vertices_checked, truncated, issues: [{kind, ...}]}.
+
+        JSON-RPC method ``site.check``."""
+        return self._call("site.check", params or None)
+
+    def site_simplify(self, **params: Any) -> Any:
+        """Simplify the source data of a site model: remove copies, loose points that their neighbors predict within the tolerance, and line vertices within the tolerance of the line between their neighbors. One undo step. params: {id, tolerance (mm, positive), dry_run?}. Returns {removed_duplicates, removed_points, removed_vertices, points, lines}.
+
+        JSON-RPC method ``site.simplify``."""
+        return self._call("site.simplify", params or None)
+
+    def georef_survey_point(self, **params: Any) -> Any:
+        """Set the georeference from a known point (the Survey Point tool). The drawing does not move. params: {model: [x, y] (mm) | object (ID of an object whose position is used), map: [easting, northing] (m), crs? (default: the CRS of the document), rotation? (default: the current one), second? ({model | object, map}: a second known point sets the rotation)}. Returns {georeference, scale?} where scale is the map distance over the model distance of the two points (1 when they agree).
+
+        JSON-RPC method ``georef.survey_point``."""
+        return self._call("georef.survey_point", params or None)
+
+    def view_rules_get(self, **params: Any) -> Any:
+        """The display rules of the document: {ne_grid?, phases?, visualization?}. They change how objects look, not the objects.
+
+        JSON-RPC method ``view_rules.get``."""
+        return self._call("view_rules.get", params or None)
+
+    def grid_set(self, **params: Any) -> Any:
+        """Show the northing/easting grid of the georeference (2D plan and SVG). params: {spacing (m, positive; null removes the grid), labels? (default true), label_height? (model mm, 0 = automatic), color? ([r,g,b,a])}. Needs a georeference to draw (set one with georef.survey_point or gis.georef.set). Returns {ne_grid, georeferenced}.
+
+        JSON-RPC method ``grid.set``."""
+        return self._call("grid.set", params or None)
+
+    def phase_set(self, **params: Any) -> Any:
+        """Set the phase of objects: existing, new (the default) or demolished. params: {ids, phase}. It is a data field (key phase), so reports and data tags can read it (property Phase). One undo step.
+
+        JSON-RPC method ``phase.set``."""
+        return self._call("phase.set", params or None)
+
+    def phase_display(self, **params: Any) -> Any:
+        """Display rules for phases. params: {enabled? (false turns the rules off; null removes them), existing?, new?, demolished? ({visible?, pen?, fill?, weight_factor?}: pen and fill are [r,g,b,a] or null; fill [0,0,0,0] is no fill)}. Defaults: existing grey, new as drawn, demolished red without fill. Returns {phases}.
+
+        JSON-RPC method ``phase.display``."""
+        return self._call("phase.display", params or None)
+
+    def phase_report(self, **params: Any) -> Any:
+        """Object counts by phase and kind. Returns {rows: [{phase, kind, count}], totals: {existing, new, demolished}}.
+
+        JSON-RPC method ``phase.report``."""
+        return self._call("phase.report", params or None)
+
+    def visualization_set(self, **params: Any) -> Any:
+        """Color objects by criteria (data visualization). An override layer: no object or data changes. params: {name?, field (a property such as Condition, Plant.category, Phase, Area or a record field Soil.Depth), rules: [{criterion: {type: equals, value} | {type: range, min?, max?} | {type: otherwise}, color: [r,g,b,a], label?}] (the first rule that fits wins), target? (fill | pen | both, default fill), kinds? ([shape kinds]; empty = all), include_missing? (objects without the property go to the otherwise rule), enabled?}. Returns {visualization, legend}.
+
+        JSON-RPC method ``visualization.set``."""
+        return self._call("visualization.set", params or None)
+
+    def visualization_auto(self, **params: Any) -> Any:
+        """Color by a property with rules made from the values in the document: one color per distinct value (at most 40), or bins equal ranges of a number. params: {field, bins? (2 to 64: ranges of a number, light to dark blue), kinds?, target? (fill | pen | both), name?}. Same result as visualization.set.
+
+        JSON-RPC method ``visualization.auto``."""
+        return self._call("visualization.auto", params or None)
+
+    def visualization_get(self, **params: Any) -> Any:
+        """The active visualization with its legend: {visualization, legend: [{label, color, count}], unmatched}.
+
+        JSON-RPC method ``visualization.get``."""
+        return self._call("visualization.get", params or None)
+
+    def visualization_clear(self, **params: Any) -> Any:
+        """Remove the visualization. Objects look as before.
+
+        JSON-RPC method ``visualization.clear``."""
+        return self._call("visualization.clear", params or None)
 
     def view_screenshot(self, **params: Any) -> Any:
         """A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (cadektor app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.
@@ -1867,6 +1981,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "plants.set_style",
     "report.plant_schedule",
     "report.existing_trees",
+    "plants.drape",
+    "plant_tag.set",
     "record_format.list",
     "record_format.get",
     "record_format.create",
@@ -1976,6 +2092,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "irrigation.report.pipes",
     "irrigation.report.pressure",
     "irrigation.report.materials",
+    "irrigation.report.hydrozones",
     "wall_style.create",
     "wall_style.list",
     "wall_style.update",
@@ -1994,6 +2111,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "section.set",
     "section.profile",
     "section.place",
+    "pad.add",
+    "pad.retaining_edge",
     "plugin.define",
     "plugin.update",
     "plugin.delete",
@@ -2061,6 +2180,20 @@ METHOD_NAMES: tuple[str, ...] = (
     "site.drape",
     "site.refresh",
     "site.contours",
+    "survey.import_points",
+    "tree.import_survey",
+    "site.check",
+    "site.simplify",
+    "georef.survey_point",
+    "view_rules.get",
+    "grid.set",
+    "phase.set",
+    "phase.display",
+    "phase.report",
+    "visualization.set",
+    "visualization.auto",
+    "visualization.get",
+    "visualization.clear",
     "view.screenshot",
     "edit.rotate",
     "edit.scale",

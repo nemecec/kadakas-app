@@ -71,7 +71,22 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
             }
         });
     match ps.mode {
-        PlantMode::Single | PlantMode::Poly => {}
+        PlantMode::Single => {
+            ui.checkbox(&mut ps.existing_tree, "Existing (survey) tree")
+                .on_hover_text("Place an existing tree with a root protection zone, not a plant");
+            if ps.existing_tree {
+                ui.horizontal(|ui| {
+                    ui.label("Trunk diameter");
+                    ui.add(
+                        DragValue::new(&mut ps.tree_dbh)
+                            .speed(10.0)
+                            .range(10.0..=5000.0)
+                            .suffix(" mm"),
+                    );
+                });
+            }
+        }
+        PlantMode::Poly => {}
         PlantMode::Path | PlantMode::Fill => {
             let choices = ps.by_choices();
             if !choices.contains(&ps.by) {
@@ -104,6 +119,18 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
                     );
                 });
             }
+        }
+        PlantMode::Hedgerow => {
+            spacing_row(ui, ps, "Spacing in a row");
+            ui.horizontal(|ui| {
+                ui.label("Rows");
+                ui.add(DragValue::new(&mut ps.rows).speed(0.2).range(1..=20));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Row spacing");
+                ui.add(mm(&mut ps.row_spacing));
+            });
+            ui.checkbox(&mut ps.stagger, "Stagger the rows");
         }
         PlantMode::Grid | PlantMode::Triangular => {
             spacing_row(
@@ -175,6 +202,7 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
 
 #[derive(Default)]
 pub struct PlantUi {
+    sheet: crate::plant_sheet_ui::PlantSheet,
     selected: Option<ResourceId>,
     buffer: Option<Buffer>,
     reassign: Option<ResourceId>,
@@ -341,6 +369,49 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             commit |= r.lost_focus();
             ui.end_row();
         });
+    ui.label("Irrigation and care");
+    egui::Grid::new("plant_style_care")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Water need");
+            let before = st.irrigation.water_need;
+            egui::ComboBox::from_id_salt("plant_water_need")
+                .selected_text(st.irrigation.water_need.id())
+                .show_ui(ui, |ui| {
+                    for w in cadektor_core::plants::care::WaterNeed::ALL {
+                        ui.selectable_value(&mut st.irrigation.water_need, w, w.id());
+                    }
+                });
+            commit |= st.irrigation.water_need != before;
+            ui.end_row();
+            ui.label("Hydrozone");
+            commit |= ui
+                .text_edit_singleline(&mut st.irrigation.hydrozone)
+                .on_hover_text("Z3 matches irrigation zone 3")
+                .lost_focus();
+            ui.end_row();
+            ui.label("Irrigated");
+            commit |= ui.checkbox(&mut st.irrigation.irrigated, "").changed();
+            ui.end_row();
+            ui.label("Maintenance interval");
+            commit |= ui
+                .text_edit_singleline(&mut st.maintenance.interval)
+                .lost_focus();
+            ui.end_row();
+            ui.label("Pruning");
+            commit |= ui
+                .text_edit_singleline(&mut st.maintenance.pruning)
+                .lost_focus();
+            ui.end_row();
+            ui.label("Hours per year");
+            let r = ui.add(
+                DragValue::new(&mut st.maintenance.hours_per_year)
+                    .speed(0.1)
+                    .range(0.0..=100_000.0),
+            );
+            commit |= r.drag_stopped() || r.lost_focus();
+            ui.end_row();
+        });
     commit |= color_row(ui, "Fill color", &mut st.fill);
     commit |= color_row(ui, "Pen color", &mut st.pen);
     ui.label("Custom data");
@@ -425,6 +496,13 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                     });
                 }
             });
+            if ui
+                .button("Spreadsheet view...")
+                .on_hover_text("All plant styles in one table, for batch editing")
+                .clicked()
+            {
+                st.sheet.open = true;
+            }
             if rows.is_empty() {
                 ui.weak("No plant styles yet. Create one, or import a CSV list.");
             }
@@ -524,6 +602,7 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                 }
             });
         });
+    crate::plant_sheet_ui::window(ui.ctx(), session, &mut st.sheet, status);
     for c in commands {
         let out = run_command(session, &c, status);
         match (&c, out) {
@@ -653,6 +732,73 @@ const OVERRIDES: [(&str, &str); 5] = [
 ];
 
 /// The plant style part of Object Info: the style, and which fields the plant overrides.
+/// Stand the plant on the terrain height of the site model, or let it go back to its layer.
+pub fn terrain_buttons(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
+    let has_ground = session
+        .editor
+        .doc()
+        .object(id)
+        .is_some_and(|o| link::ground_z(o).is_some());
+    ui.horizontal(|ui| {
+        if ui
+            .button("Place on terrain")
+            .on_hover_text("Stand the plant on the ground height of the site model")
+            .clicked()
+        {
+            match session.handle("plants.drape", json!({"ids": [id]})) {
+                Ok(v) if v["updated"] == 0 => {
+                    *status = "No site model on the layer of this plant".into()
+                }
+                Ok(_) => {}
+                Err(e) => *status = format!("Error: {}", e.message),
+            }
+        }
+        if ui
+            .add_enabled(has_ground, egui::Button::new("Release"))
+            .on_hover_text("Back to the elevation of the layer")
+            .clicked()
+            && let Err(e) = session.handle("plants.drape", json!({"ids": [id], "release": true}))
+        {
+            *status = format!("Error: {}", e.message);
+        }
+    });
+}
+
+/// The format of a plant tag: how many levels it shows, and the ID bubble.
+pub fn plant_tag_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
+    let Some(obj) = session.editor.doc().object(id) else {
+        return;
+    };
+    let current = schedule::TagFormat::of(obj);
+    let mut f = current;
+    ui.separator();
+    ui.strong("Tag format");
+    egui::ComboBox::from_id_salt(("plant_tag_levels", id))
+        .selected_text(match f.levels {
+            1 => "Level 1: ID and count",
+            2 => "Level 2: plus plant name",
+            _ => "Level 3: plus size and container",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut f.levels, 1, "Level 1: ID and count");
+            ui.selectable_value(&mut f.levels, 2, "Level 2: plus plant name");
+            ui.selectable_value(&mut f.levels, 3, "Level 3: plus size and container");
+        });
+    ui.checkbox(&mut f.bubble, "ID bubble");
+    if f != current {
+        let cmd = Command::SetData {
+            id,
+            set: [(
+                schedule::TAG_FORMAT_KEY.to_string(),
+                json!({"levels": f.levels, "bubble": f.bubble}),
+            )]
+            .into(),
+            remove: Vec::new(),
+        };
+        run_command(session, &cmd, status);
+    }
+}
+
 pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
     let doc = session.editor.doc();
     let Some(obj) = doc.object(id) else { return };

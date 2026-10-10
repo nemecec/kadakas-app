@@ -10,6 +10,9 @@ use std::io::Write;
 mod elements;
 mod finish;
 mod massing;
+mod schema;
+
+pub use schema::Schema;
 
 use cadektor_core::curve;
 use cadektor_core::datamap::{self, DataMap, IfcType, IfcValue, Mapped};
@@ -142,6 +145,13 @@ pub struct Exporter<'a, W: Write> {
     opts: &'a IfcOptions,
     map: DataMap,
     ground: SiteTerrain<'a>,
+    schema: Schema,
+    /// `IfcOwnerHistory` (IFC2x3 needs one on every rooted entity).
+    owner_history: Option<u64>,
+    /// `IfcPresentationStyleAssignment` of each surface style (IFC2x3).
+    style_assignments: BTreeMap<u64, u64>,
+    /// `IfcAxis2Placement2D` at the origin (IFC2x3 profiles).
+    origin2d: Option<u64>,
     w: StepWriter<W>,
     pub report: Report,
     project: String,
@@ -185,19 +195,25 @@ impl<'a, W: Write> Exporter<'a, W> {
             .clone()
             .unwrap_or_else(|| default_time(&p.date));
         let name = opts.file_name.clone().unwrap_or_else(|| "model.ifc".into());
-        let w = StepWriter::begin(
+        let schema = opts.schema();
+        let w = StepWriter::begin_schema(
             out,
             &name,
             &time,
             &p.drawn_by,
             &p.client,
-            "ViewDefinition [ReferenceView_V1.2]",
+            schema.view(),
+            schema.file_schema(),
         )?;
         Ok(Exporter {
             doc,
             opts,
             map,
             ground: SiteTerrain::new(cache, 0, doc),
+            schema,
+            owner_history: None,
+            style_assignments: BTreeMap::new(),
+            origin2d: None,
             w,
             report: Report::new("ifc"),
             project,
@@ -247,8 +263,88 @@ impl<'a, W: Write> Exporter<'a, W> {
 
     // ------------------------------------------------------------ low level
 
-    fn ent(&mut self, name: &str, attrs: Vec<Value>) -> R<u64> {
-        Ok(self.w.entity(name, &attrs)?)
+    fn ent(&mut self, name: &str, mut attrs: Vec<Value>) -> R<u64> {
+        // A profile of IFC2x3 must have a position.
+        if self.schema == Schema::Ifc2x3
+            && name == "IFCCIRCLEPROFILEDEF"
+            && attrs.get(2) == Some(&Value::Null)
+        {
+            let at = match self.origin2d {
+                Some(a) => a,
+                None => {
+                    let p = self.pt2(DVec2::ZERO)?;
+                    let a = self
+                        .w
+                        .entity("IFCAXIS2PLACEMENT2D", &[Value::Ref(p), Value::Null])?;
+                    self.origin2d = Some(a);
+                    a
+                }
+            };
+            attrs[2] = Value::Ref(at);
+        }
+        let (name, attrs) = schema::adapt(self.schema, name, attrs, self.owner_history);
+        Ok(self.w.entity(&name, &attrs)?)
+    }
+
+    /// The owner history of an IFC2x3 file: the application, and a person and organization for it.
+    fn make_owner_history(&mut self) -> R<()> {
+        let p = &self.doc.drawing.project;
+        let org = self.ent(
+            "IFCORGANIZATION",
+            vec![
+                Value::Null,
+                Value::s("Cadektor"),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        )?;
+        let person = self.ent(
+            "IFCPERSON",
+            vec![
+                Value::Null,
+                Self::name_value(&p.drawn_by),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        )?;
+        let user = self.ent(
+            "IFCPERSONANDORGANIZATION",
+            vec![Value::Ref(person), Value::Ref(org), Value::Null],
+        )?;
+        let app = self.ent(
+            "IFCAPPLICATION",
+            vec![
+                Value::Ref(org),
+                Value::s(env!("CARGO_PKG_VERSION")),
+                Value::s("Cadektor"),
+                Value::s("Cadektor"),
+            ],
+        )?;
+        let time = self
+            .opts
+            .time_stamp
+            .clone()
+            .unwrap_or_else(|| default_time(&p.date));
+        let oh = self.ent(
+            "IFCOWNERHISTORY",
+            vec![
+                Value::Ref(user),
+                Value::Ref(app),
+                Value::Null,
+                Value::e("NOCHANGE"),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Int(schema::epoch_seconds(&time)),
+            ],
+        )?;
+        self.owner_history = Some(oh);
+        Ok(())
     }
 
     fn note(&mut self, text: String) {
@@ -297,6 +393,9 @@ impl<'a, W: Write> Exporter<'a, W> {
 
     fn header_structure(&mut self) -> R<()> {
         let doc = self.doc;
+        if self.schema == Schema::Ifc2x3 {
+            self.make_owner_history()?;
+        }
         let geo = doc.georef.as_ref().and_then(GeoInfo::from_georef);
         let si = |w: &mut Self, t: &str, prefix: Value, name: &str| {
             w.ent(
@@ -329,7 +428,16 @@ impl<'a, W: Write> Exporter<'a, W> {
             ],
         )?;
 
-        if let Some(g) = &geo {
+        if let (Some(g), Schema::Ifc2x3) = (&geo, self.schema) {
+            // IFC2x3 has no map conversion. The values go to property sets of the site, below.
+            self.report.georeferenced = true;
+            if g.lat_lon.is_none() {
+                self.note(format!(
+                    "latitude and longitude of the site could not be derived from the CRS '{}'",
+                    g.crs_name
+                ));
+            }
+        } else if let Some(g) = &geo {
             let metre = self.ent(
                 "IFCSIUNIT",
                 vec![
@@ -436,6 +544,65 @@ impl<'a, W: Write> Exporter<'a, W> {
                 Value::refs([self.site]),
             ],
         )?;
+        if let (Some(g), Schema::Ifc2x3) = (&geo, self.schema) {
+            self.site_georeference_psets(g)?;
+        }
+        Ok(())
+    }
+
+    /// The map conversion and the CRS as property sets of the site, as IFC2x3 georeferencing
+    /// does it (`ePSet_MapConversion` and `ePSet_ProjectedCRS`).
+    fn site_georeference_psets(&mut self, g: &GeoInfo) -> R<()> {
+        let mut conv: Vec<(&str, Value)> = Vec::new();
+        for (name, v) in [
+            ("Eastings", g.eastings),
+            ("Northings", g.northings),
+            ("OrthogonalHeight", 0.0),
+        ] {
+            conv.push((name, Value::typed("IFCLENGTHMEASURE", Value::Real(v))));
+        }
+        for (name, v) in [
+            ("XAxisAbscissa", g.x_abscissa),
+            ("XAxisOrdinate", g.x_ordinate),
+            ("Scale", g.scale),
+        ] {
+            conv.push((name, Value::typed("IFCREAL", Value::Real(v))));
+        }
+        let mut crs: Vec<(&str, Value)> =
+            vec![("Name", Value::typed("IFCLABEL", Value::s(&g.crs_name)))];
+        if let Some(d) = &g.description {
+            crs.push(("Description", Value::typed("IFCTEXT", Value::s(d))));
+        }
+        for (set, props) in [("ePSet_MapConversion", conv), ("ePSet_ProjectedCRS", crs)] {
+            let mut ids = Vec::new();
+            for (name, v) in props {
+                ids.push(self.ent(
+                    "IFCPROPERTYSINGLEVALUE",
+                    vec![Value::s(name), Value::Null, v, Value::Null],
+                )?);
+            }
+            let pset = self.ent(
+                "IFCPROPERTYSET",
+                vec![
+                    self.guid(set, 0),
+                    Value::Null,
+                    Value::s(set),
+                    Value::Null,
+                    Value::refs(ids),
+                ],
+            )?;
+            self.ent(
+                "IFCRELDEFINESBYPROPERTIES",
+                vec![
+                    self.guid(&format!("rel_{set}"), 0),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::refs([self.site]),
+                    Value::Ref(pset),
+                ],
+            )?;
+        }
         Ok(())
     }
 
@@ -544,6 +711,12 @@ impl<'a, W: Write> Exporter<'a, W> {
         items: &[u64],
     ) -> R<u64> {
         let sub = self.sub_context(ctx, kind, view)?;
+        // IFC2x3 has no triangulated face set: a mesh is a surface model.
+        let rep_type = if self.schema == Schema::Ifc2x3 && rep_type == "Tessellation" {
+            "SurfaceModel"
+        } else {
+            rep_type
+        };
         self.ent(
             "IFCSHAPEREPRESENTATION",
             vec![
@@ -589,10 +762,24 @@ impl<'a, W: Write> Exporter<'a, W> {
                 s
             }
         };
+        // IFC2x3 names a presentation style assignment, not the style itself.
+        let target = if self.schema == Schema::Ifc2x3 {
+            match self.style_assignments.get(&style) {
+                Some(a) => *a,
+                None => {
+                    let a =
+                        self.ent("IFCPRESENTATIONSTYLEASSIGNMENT", vec![Value::refs([style])])?;
+                    self.style_assignments.insert(style, a);
+                    a
+                }
+            }
+        } else {
+            style
+        };
         for item in items {
             self.ent(
                 "IFCSTYLEDITEM",
-                vec![Value::Ref(*item), Value::refs([style]), Value::Null],
+                vec![Value::Ref(*item), Value::refs([target]), Value::Null],
             )?;
         }
         Ok(())

@@ -1114,6 +1114,10 @@
       ],
       "description": "The kind of a vertex. `arc` has a radius."
     },
+    "ViewRules": {
+      "description": "Display rules: {ne_grid?: {spacing, labels?, label_height?, color?}, phases?: {enabled, existing, new, demolished}, visualization?: {name, field, rules, target?, enabled?, kinds?, include_missing?}}. See view_rules.get and the methods grid.set, phase.display and visualization.set.",
+      "type": "object"
+    },
     "VisMode": {
       "enum": [
         "visible",
@@ -1579,6 +1583,23 @@
       },
       "required": [
         "op"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Replace the display rules: the N/E grid, the phase display and the data visualization.",
+      "properties": {
+        "op": {
+          "const": "set_view_rules",
+          "type": "string"
+        },
+        "rules": {
+          "$ref": "#/$defs/ViewRules"
+        }
+      },
+      "required": [
+        "op",
+        "rules"
       ],
       "type": "object"
     },

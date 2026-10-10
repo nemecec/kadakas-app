@@ -56,8 +56,9 @@ def main(path):
         })
 
     guids = [e.GlobalId for e in model.by_type("IfcRoot")]
-    conversion = model.by_type("IfcMapConversion")
-    crs = model.by_type("IfcProjectedCRS")
+    has_map = model.schema != "IFC2X3"
+    conversion = model.by_type("IfcMapConversion") if has_map else []
+    crs = model.by_type("IfcProjectedCRS") if has_map else []
     site = model.by_type("IfcSite")[0]
     project = model.by_type("IfcProject")[0]
     out = {

@@ -130,11 +130,18 @@ def test_dxf_export_has_annotation_lines_and_text(cad, tmp_path):
     ezdxf = pytest.importorskip("ezdxf")
     cad.result("dimension.add", {"mode": "horizontal", "points": [[0, 0], [5000, 0]]})
     path = tmp_path / "a.dxf"
-    cad.result("export.file", {"format": "dxf", "path": str(path)})
+    cad.result("export.file", {"format": "dxf", "path": str(path), "options": {"native_annotations": False}})
     doc = ezdxf.readfile(path)
     texts = [e.dxf.text for e in doc.modelspace().query("TEXT")]
     assert "5000" in texts
     assert len(doc.modelspace().query("LWPOLYLINE")) >= 3
+    # By default a dimension is a native DIMENSION with its block.
+    native = tmp_path / "native.dxf"
+    cad.result("export.file", {"format": "dxf", "path": str(native)})
+    doc = ezdxf.readfile(native)
+    (dim,) = doc.modelspace().query("DIMENSION")
+    assert dim.dxf.text == "5000"
+    assert "5000" in [e.dxf.text for e in doc.blocks.get(dim.dxf.geometry).query("TEXT")]
 
 
 @pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext is not installed")

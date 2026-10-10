@@ -3,11 +3,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::IfcError;
+pub use crate::export::Schema;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IfcOptions {
-    /// The IFC version. Only `IFC4` (IFC4 ADD2 TC1) is written for now.
+    /// The IFC version: `IFC4` (IFC4 ADD2 TC1, the default), `IFC2X3` (TC1) or `IFC4X3` (IFC4X3 ADD2).
     pub version: String,
     /// Write one presentation layer (`IfcPresentationLayerAssignment`) per class. Default: on.
     pub classes_as_layers: bool,
@@ -63,12 +64,9 @@ impl IfcOptions {
 
     /// Checks the values.
     pub fn check(&self) -> Result<(), IfcError> {
-        if !matches!(
-            self.version.trim().to_ascii_uppercase().as_str(),
-            "IFC4" | "4"
-        ) {
+        if Schema::from_name(&self.version).is_none() {
             return Err(IfcError::Option(format!(
-                "IFC version '{}' is not supported: only IFC4 can be written",
+                "IFC version '{}' is not supported: write IFC2X3, IFC4 or IFC4X3",
                 self.version
             )));
         }
@@ -88,6 +86,13 @@ impl IfcOptions {
             ));
         }
         Ok(())
+    }
+}
+
+impl IfcOptions {
+    /// The schema that the version names. IFC4 for a bad name (`check` refuses those).
+    pub fn schema(&self) -> Schema {
+        Schema::from_name(&self.version).unwrap_or_default()
     }
 }
 
@@ -117,12 +122,17 @@ mod tests {
         assert!(!o.classes_as_layers && o.include_2d);
         assert!(IfcOptions::default().classes_as_layers);
         assert!(!IfcOptions::default().include_2d);
+        assert_eq!(IfcOptions::default().schema(), Schema::Ifc4);
+        for (v, s) in [("IFC2x3", Schema::Ifc2x3), ("ifc4x3", Schema::Ifc4x3)] {
+            let o = IfcOptions::from_json(&json!({"version": v})).unwrap();
+            assert_eq!(o.schema(), s);
+        }
     }
 
     #[test]
     fn bad_options_are_refused() {
         for bad in [
-            json!({"version": "IFC2X3"}),
+            json!({"version": "IFC5"}),
             json!({"area_thickness": 0}),
             json!({"area_thickness": -1}),
             json!({"time_stamp": "yesterday"}),

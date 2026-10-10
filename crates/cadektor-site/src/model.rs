@@ -88,6 +88,11 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
                 let own = modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o));
                 mods.extend(own.map(|m| (false, m)));
                 mods.extend(
+                    crate::grading::grade::pads_of(o)
+                        .into_iter()
+                        .map(|m| (false, m)),
+                );
+                mods.extend(
                     crate::grading::wall::pads_of(doc, o)
                         .into_iter()
                         .map(|m| (true, m)),

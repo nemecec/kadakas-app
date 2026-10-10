@@ -20,6 +20,7 @@ mod group_ops;
 mod plant_ops;
 mod present_ops;
 mod record_ops;
+mod retaining_ops;
 mod table_ops;
 mod transform_ops;
 
@@ -128,6 +129,10 @@ pub enum Command {
     /// Set or clear the georeference of the document.
     SetGeoreference {
         georef: Option<crate::georef::Georeference>,
+    },
+    /// Replace the display rules: the N/E grid, the phase display and the data visualization.
+    SetViewRules {
+        rules: Box<crate::viewrules::ViewRules>,
     },
     /// Set or clear the sun (heliodon) of the document.
     SetSun {
@@ -1086,6 +1091,10 @@ impl<'a> Tx<'a> {
                 }
                 self.doc.georef = georef.clone();
             }
+            Command::SetViewRules { rules } => {
+                rules.validate().map_err(CommandError::Invalid)?;
+                self.doc.drawing.view_rules = (**rules).clone();
+            }
             Command::SetSun { .. }
             | Command::SetMaterialSlot { .. }
             | Command::SetRenderStyle { .. } => self.run_present(cmd)?,
@@ -1174,6 +1183,7 @@ impl<'a> Tx<'a> {
             }
         }
         self.annot_after(cmd)?;
+        self.retaining_after(cmd)?;
         self.present_prune();
         Ok(())
     }

@@ -1718,6 +1718,8 @@ impl CadektorApp {
             Tab::Navigation => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
+                    ui.add_space(12.0);
+                    crate::rules_ui::section(ui, &mut self.session, &mut self.status);
                 });
             }
             Tab::Resources => {

@@ -28,16 +28,19 @@ pub enum PlantMode {
     Fill,
     /// A plant at every click, placed together when Enter finishes.
     Poly,
+    /// Staggered rows along a path: click the points, Enter finishes.
+    Hedgerow,
 }
 
 impl PlantMode {
-    pub const ALL: [PlantMode; 6] = [
+    pub const ALL: [PlantMode; 7] = [
         PlantMode::Single,
         PlantMode::Path,
         PlantMode::Grid,
         PlantMode::Triangular,
         PlantMode::Fill,
         PlantMode::Poly,
+        PlantMode::Hedgerow,
     ];
 
     pub fn label(self) -> &'static str {
@@ -48,6 +51,7 @@ impl PlantMode {
             PlantMode::Triangular => "Triangular",
             PlantMode::Fill => "Fill area",
             PlantMode::Poly => "Poly",
+            PlantMode::Hedgerow => "Hedgerow",
         }
     }
 
@@ -61,6 +65,9 @@ impl PlantMode {
             PlantMode::Triangular => "Click two corners. Plants go on a staggered grid.",
             PlantMode::Fill => "Click the corners of an area. Enter or double-click fills it.",
             PlantMode::Poly => "Click a point for each plant. Enter or double-click places them.",
+            PlantMode::Hedgerow => {
+                "Click the points of a path. Enter or double-click places staggered rows along it."
+            }
         }
     }
 
@@ -119,6 +126,16 @@ pub struct PlantSettings {
     pub random_rotation: bool,
     /// The same seed gives the same plants.
     pub seed: u64,
+    /// Hedgerow: number of rows.
+    pub rows: usize,
+    /// Hedgerow: distance between rows.
+    pub row_spacing: f64,
+    /// Hedgerow: shift every second row by half a spacing.
+    pub stagger: bool,
+    /// Single mode places an existing (survey) tree instead of a plant.
+    pub existing_tree: bool,
+    /// Trunk diameter of the existing tree in mm.
+    pub tree_dbh: f64,
 }
 
 impl Default for PlantSettings {
@@ -138,6 +155,11 @@ impl Default for PlantSettings {
             size_variation: 0.0,
             random_rotation: false,
             seed: 1,
+            rows: 2,
+            row_spacing: 1000.0,
+            stagger: true,
+            existing_tree: false,
+            tree_dbh: 300.0,
         }
     }
 }
@@ -282,10 +304,63 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
             }
         }
         PlantMode::Poly => PlaceSpec::Poly { points: vertices },
+        PlantMode::Hedgerow => {
+            if pts.len() < 2 {
+                return Err("a path needs 2 or more points".into());
+            }
+            PlaceSpec::Hedgerow {
+                path: vertices,
+                closed: false,
+                spacing: spacing_x,
+                rows: ps.rows,
+                row_spacing: Some(ps.row_spacing),
+                stagger: ps.stagger,
+            }
+        }
     })
 }
 
+/// The command for one existing tree: the species, spread and height come from the Data bar
+/// (or from the plant style), the trunk diameter from the tool settings.
+fn existing_tree_command(cx: &Ctx, at: DVec2) -> Command {
+    let (style, overrides) = plant_params(cx);
+    let (species, spread, height) = match style.and_then(|id| cx.doc.resources.plant_style(id)) {
+        Some(st) => (st.species(""), st.spread, st.height),
+        None => (
+            overrides
+                .get("botanical_name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            cx.settings.spread,
+            cx.settings.plant_height,
+        ),
+    };
+    Command::AddObject {
+        shape: Shape::ExistingTree {
+            at,
+            species,
+            dbh: cx.settings.plant.tree_dbh,
+            spread,
+            height,
+            condition: Default::default(),
+            action: Default::default(),
+            rpz_factor: None,
+            rpz_cap: None,
+        },
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    }
+}
+
 fn finish(cx: &Ctx, pts: &[DVec2]) -> Vec<Effect> {
+    if cx.settings.plant.mode == PlantMode::Single
+        && cx.settings.plant.existing_tree
+        && let Some(at) = pts.first()
+    {
+        return vec![Effect::Exec(existing_tree_command(cx, *at))];
+    }
     let result = spec_for(&cx.settings.plant, pts, spread_now(cx))
         .and_then(|spec| placement::place(&spec).map_err(|e| e.0));
     match result {
@@ -311,7 +386,7 @@ impl ToolMachine {
                         }
                     }
                 }
-                PlantMode::Path | PlantMode::Fill | PlantMode::Poly => {
+                PlantMode::Path | PlantMode::Fill | PlantMode::Poly | PlantMode::Hedgerow => {
                     match &mut self.state {
                         State::Points(pts) => {
                             if pts.last() != Some(&p) {
@@ -324,7 +399,10 @@ impl ToolMachine {
                 }
             },
             Input::DoubleClick | Input::Enter
-                if matches!(mode, PlantMode::Path | PlantMode::Fill | PlantMode::Poly) =>
+                if matches!(
+                    mode,
+                    PlantMode::Path | PlantMode::Fill | PlantMode::Poly | PlantMode::Hedgerow
+                ) =>
             {
                 match std::mem::replace(&mut self.state, State::Idle) {
                     State::Points(pts) => finish(cx, &pts),
@@ -338,7 +416,10 @@ impl ToolMachine {
     pub(super) fn plant_preview(&self, cursor: DVec2, cx: &Ctx) -> Preview {
         let mode = cx.settings.plant.mode;
         match (&self.state, mode) {
-            (State::Points(pts), PlantMode::Path | PlantMode::Poly | PlantMode::Fill) => {
+            (
+                State::Points(pts),
+                PlantMode::Path | PlantMode::Poly | PlantMode::Fill | PlantMode::Hedgerow,
+            ) => {
                 let mut v: Vec<DVec2> = pts.clone();
                 v.push(cursor);
                 Preview::Path {
@@ -509,6 +590,53 @@ mod tests {
         f.s.editor
             .execute(&Command::DeleteResource { id, reassign: None })
             .unwrap_err();
+    }
+
+    #[test]
+    fn single_mode_can_place_an_existing_tree() {
+        let mut f = Fx::new(PlantMode::Single);
+        f.settings.plant.existing_tree = true;
+        f.settings.plant.tree_dbh = 450.0;
+        f.click(1000.0, 2000.0);
+        assert_eq!(f.plants(), 0);
+        let o = f.s.editor.doc().objects.values().next().unwrap();
+        assert!(
+            matches!(&o.shape, Shape::ExistingTree { at, dbh, species, .. }
+            if *at == DVec2::new(1000.0, 2000.0) && *dbh == 450.0 && species == "Acer campestre")
+        );
+        // With a style, the style gives species, spread and height.
+        f.style();
+        f.click(5000.0, 0.0);
+        let last = f.s.editor.doc().objects.values().last().unwrap();
+        assert!(
+            matches!(&last.shape, Shape::ExistingTree { spread, height, .. } if *spread == 1000.0 && *height == 2000.0)
+        );
+        assert!(f.s.editor.undo());
+    }
+
+    #[test]
+    fn hedgerow_mode_places_staggered_rows_on_enter() {
+        let mut f = Fx::new(PlantMode::Hedgerow);
+        f.style();
+        f.settings.plant.spacing = 1000.0;
+        f.settings.plant.rows = 2;
+        f.settings.plant.row_spacing = 600.0;
+        f.click(0.0, 0.0);
+        f.click(4000.0, 0.0);
+        assert!(matches!(
+            f.preview(DVec2::new(5.0, 5.0)),
+            Preview::Path { closed: false, .. }
+        ));
+        f.send(Input::Enter);
+        assert_eq!(f.plants(), 5 + 4);
+        assert!(f.s.editor.undo());
+        assert_eq!(f.plants(), 0);
+        // One point is not a path.
+        f.click(0.0, 0.0);
+        f.send(Input::Enter);
+        assert!(f.notices.iter().any(|n| n.contains("2 or more points")));
+        assert_eq!(PlantMode::Hedgerow.label(), "Hedgerow");
+        assert!(!PlantMode::Hedgerow.help().is_empty());
     }
 
     #[test]

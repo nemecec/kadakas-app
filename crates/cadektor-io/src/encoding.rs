@@ -2,6 +2,21 @@
 
 use encoding_rs::Encoding;
 
+/// Text of a file with an unknown encoding: UTF-16 by its byte order mark, UTF-8 (with or without a
+/// mark), else Windows-1252.
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some((enc, skip)) = Encoding::for_bom(bytes) {
+        return enc
+            .decode_without_bom_handling(&bytes[skip..])
+            .0
+            .into_owned();
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+    }
+}
+
 /// The encoding of a Windows or East Asian code page number (1250, 932, ...).
 pub fn for_code_page(n: u32) -> Option<&'static Encoding> {
     let label = match n {
@@ -62,6 +77,17 @@ pub fn from_dbf_language_driver(id: u8) -> Option<&'static Encoding> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_is_decoded_by_mark_then_utf8_then_windows_1252() {
+        use super::decode_text;
+        assert_eq!(decode_text("a;b\u{e4}".as_bytes()), "a;b\u{e4}");
+        assert_eq!(decode_text(b"\xEF\xBB\xBFx"), "x");
+        assert_eq!(decode_text(b"\xff\xfea\x00b\x00"), "ab");
+        assert_eq!(decode_text(b"\xfe\xff\x00a\x00b"), "ab");
+        // A byte that is not UTF-8: Windows-1252 reads it as a letter.
+        assert_eq!(decode_text(b"P\xe4\xe4"), "P\u{e4}\u{e4}");
+    }
+
     use super::*;
 
     #[test]

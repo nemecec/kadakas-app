@@ -1213,10 +1213,17 @@ impl Document {
             && !crate::symbols::is_being_edited(obj)
     }
 
+    /// True if the object is drawn: visible, and not hidden by the phase display rules. Only
+    /// drawing and picking use this. Calculations (terrain, quantities, reports) use `is_visible`:
+    /// display rules never change a result.
+    pub fn is_displayed(&self, obj: &Object) -> bool {
+        self.is_visible(obj) && !crate::viewrules::hidden_by_phase(self, obj)
+    }
+
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
     /// active sheet layer.
     pub fn is_pickable(&self, obj: &Object) -> bool {
-        (self.is_visible(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
+        (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
             && !self.is_grey(obj)
     }
 

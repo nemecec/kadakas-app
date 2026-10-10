@@ -59,11 +59,19 @@ pub const PLANT_STYLE_SAMPLE_CSV: (&str, &str) = (
 );
 pub const PLANTS_PLACE: (&str, &str) = (
     "plants.place",
-    "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.",
+    "Place plants in one undo step. params: {mode, style? (ID or name), overrides? ({field: value}), variation? ({seed?, size? (0 to 0.9: size changes by up to this fraction), rotation? (bool)}; the same seed gives the same plants), layer?, class?, tag? (true adds a plant tag), on_terrain? (true stands each plant on the proposed ground of the site model on its layer, see plants.drape), source? (ID of a polyline, rect, circle, landscape area or hardscape to use as the path, boundary or rectangle)} and by mode: single {at}; path {path, closed?, spacing?, count?}; grid {min, max, spacing | spacing_x+spacing_y, margin?}; triangular {min, max, spacing, margin?}; fill {boundary, spacing | count | density (plants per m2), pattern? (triangular|rectangular), margin?, holes? ([[points], ...], areas that stay empty)}; poly {points}; hedgerow {path, closed?, spacing, rows? (1 to 20, default 2), row_spacing? (needed for more than one row), stagger? (default true: every second row starts half a spacing along)}. Any spacing may be the text \"spread\": one canopy diameter of the plant. Returns {created: [id], count, tag?}.",
 );
 pub const PLANTS_SET_STYLE: (&str, &str) = (
     "plants.set_style",
     "Link plants to a style, change their overrides, or unlink them. params: {ids, style? (ID or name), overrides?, unlink?}.",
+);
+pub const PLANTS_DRAPE: (&str, &str) = (
+    "plants.drape",
+    "Place plants on the terrain height: store the height of the proposed ground (site model) under each plant, so the 3D view and the plant height report stand the plant on the ground. params: {ids? (plants and existing trees; default all), release? (true removes the stored height: the plant goes back to the elevation of its layer)}. Run it again after the terrain changes. One undo step. Returns {updated, outside_model (plants off the site model take the height of its nearest edge), skipped (no site model on the layer)}.",
+);
+pub const PLANT_TAG_SET: (&str, &str) = (
+    "plant_tag.set",
+    "Set the format of plant tags. params: {ids (plant tags), levels? (1 to 3: 1 shows the ID code and the count, 2 adds the plant name, 3 adds the size and the container), bubble? (the ID code sits in a circle)}. Stored in the data key tag_format. Returns {ids, levels, bubble}.",
 );
 pub const REPORT_PLANT_SCHEDULE: (&str, &str) = (
     "report.plant_schedule",
@@ -78,7 +86,7 @@ pub const REPORT_EXISTING_TREES: (&str, &str) = (
 pub fn describe() -> Value {
     json!({
         "styles": "A plant style is a document resource. A plant refers to a style (by style) and can override single fields (by instance). Plants without a style keep their own species, spread and height.",
-        "place_modes": ["single", "path", "grid", "triangular", "fill", "poly"],
+        "place_modes": ["single", "path", "grid", "triangular", "fill", "poly", "hedgerow"],
         "existing_tree": "add_object with shape {kind: existing_tree, at, species?, dbh, spread, height, condition? (good|fair|poor|dead), action? (retain|remove|relocate), rpz_factor? (default 12)}. The root protection radius is rpz_factor x dbh.",
         "plant_tag": "add_object with shape {kind: plant_tag, at, anchor, style, height?}, or plants.place with tag: true. Shows the ID code and the number of plants of the style on the layer.",
         "examples": [
@@ -178,6 +186,8 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
             | "plant_style.sample_csv"
             | "plants.place"
             | "plants.set_style"
+            | "plant_tag.set"
+            | "plants.drape"
             | "report.plant_schedule"
             | "report.existing_trees"
     );
@@ -271,6 +281,53 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                 .map_err(RpcError::from)?;
             s.prune_selection();
             Ok(json!({ "ok": true }))
+        }
+        "plants.drape" => drape(s, m),
+        "plant_tag.set" => {
+            let ids: Vec<ObjectId> =
+                serde_json::from_value(required(m, "ids")?.clone()).map_err(bad)?;
+            if ids.is_empty() {
+                return Err(bad("give at least one tag ID"));
+            }
+            let doc = s.editor.doc();
+            let mut fmt = None;
+            for id in &ids {
+                let o = doc
+                    .object(*id)
+                    .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+                if !matches!(o.shape, Shape::PlantTag { .. }) {
+                    return Err(bad(format!(
+                        "object {id} is a {}, not a plant tag",
+                        o.shape.kind()
+                    )));
+                }
+                fmt.get_or_insert(schedule::TagFormat::of(o));
+            }
+            let mut f = fmt.unwrap_or_default();
+            if let Some(l) = m.get("levels").filter(|v| !v.is_null()) {
+                f.levels =
+                    l.as_u64()
+                        .filter(|n| (1..=3).contains(n))
+                        .ok_or_else(|| bad("levels must be 1, 2 or 3"))? as u8;
+            }
+            if let Some(b) = m.get("bubble").filter(|v| !v.is_null()) {
+                f.bubble = b
+                    .as_bool()
+                    .ok_or_else(|| bad("bubble must be true or false"))?;
+            }
+            let value = json!({"levels": f.levels, "bubble": f.bubble});
+            let commands = ids
+                .iter()
+                .map(|id| Command::SetData {
+                    id: *id,
+                    set: [(schedule::TAG_FORMAT_KEY.to_string(), value.clone())].into(),
+                    remove: Vec::new(),
+                })
+                .collect();
+            s.editor
+                .execute(&Command::Batch { commands })
+                .map_err(RpcError::from)?;
+            Ok(json!({"ids": ids, "levels": f.levels, "bubble": f.bubble}))
         }
         "plant_style.import_csv" => import_csv(s, m),
         "plant_style.export_csv" => {
@@ -475,13 +532,82 @@ fn spread_of(doc: &Document, m: &Map<String, Value>) -> Result<f64, RpcError> {
     Ok(link::merge(&base, &overrides).map_err(bad)?.spread)
 }
 
+/// Plants and existing trees on the terrain. `ids`: default all of them.
+fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    use cadektor_core::hardscape::TerrainSource;
+    let release = m.get("release").and_then(Value::as_bool).unwrap_or(false);
+    let doc = s.editor.doc();
+    let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
+        Some(v) => serde_json::from_value(v.clone()).map_err(bad)?,
+        None => doc
+            .objects
+            .values()
+            .filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
+            .map(|o| o.id)
+            .collect(),
+    };
+    let terrain = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+    let (mut commands, mut outside, mut skipped) = (Vec::new(), 0usize, 0usize);
+    for id in ids {
+        let o = doc
+            .object(id)
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+        let at = match &o.shape {
+            Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => *at,
+            other => {
+                return Err(bad(format!(
+                    "object {id} is a {}: only plants and existing trees can be placed on the terrain",
+                    other.kind()
+                )));
+            }
+        };
+        if release {
+            commands.push(Command::SetData {
+                id,
+                set: Default::default(),
+                remove: vec![link::GROUND_Z_KEY.to_string()],
+            });
+            continue;
+        }
+        match terrain.elevation(o, at) {
+            Some(z) => {
+                if !terrain.covered(o, at) {
+                    outside += 1;
+                }
+                commands.push(Command::SetData {
+                    id,
+                    set: [(link::GROUND_Z_KEY.to_string(), json!(z))].into(),
+                    remove: Vec::new(),
+                });
+            }
+            None => skipped += 1,
+        }
+    }
+    let updated = commands.len();
+    drop(terrain);
+    if !commands.is_empty() {
+        s.editor
+            .execute(&Command::Batch { commands })
+            .map_err(RpcError::from)?;
+    }
+    Ok(json!({"updated": updated, "outside_model": outside, "skipped": skipped}))
+}
+
 fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let doc = s.editor.doc();
     let mut spec = m.clone();
     if let Some(src) = spec.remove("source").filter(|v| !v.is_null()) {
         use_source(doc, serde_json::from_value(src).map_err(bad)?, &mut spec)?;
     }
-    for k in ["style", "overrides", "layer", "class", "tag", "variation"] {
+    for k in [
+        "style",
+        "overrides",
+        "layer",
+        "class",
+        "tag",
+        "variation",
+        "on_terrain",
+    ] {
         spec.remove(k);
     }
     // `"spacing": "spread"` means one canopy diameter, from the style and its overrides.
@@ -558,6 +684,42 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             class,
             attrs: Attributes::default(),
         });
+    }
+    // On the terrain: the ground height under each new plant, in the same undo step. The ids of
+    // the plants are the next ones, in the order of the positions.
+    let on_terrain = match m.get("on_terrain") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => return Err(bad("'on_terrain' must be true or false")),
+    };
+    if on_terrain {
+        use cadektor_core::hardscape::TerrainSource;
+        let first = doc.next_id();
+        let probe_layer = layer.unwrap_or(doc.active_layer);
+        let terrain = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
+        let mut sets = Vec::new();
+        for (i, p) in positions.iter().enumerate() {
+            let probe = Object::new(
+                ObjectId(0),
+                probe_layer,
+                class.unwrap_or(doc.active_class),
+                Shape::Plant {
+                    at: *p,
+                    species: String::new(),
+                    spread: 1.0,
+                    height: 1.0,
+                },
+            );
+            if let Some(z) = terrain.elevation(&probe, *p) {
+                sets.push(Command::SetData {
+                    id: ObjectId(first + i as u64),
+                    set: [(link::GROUND_Z_KEY.to_string(), json!(z))].into(),
+                    remove: Vec::new(),
+                });
+            }
+        }
+        drop(terrain);
+        commands.extend(sets);
     }
     let out = s
         .editor

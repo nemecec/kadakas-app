@@ -40,6 +40,47 @@ impl Georeference {
     }
 }
 
+impl Georeference {
+    /// The georeference in which the model position `model` (mm) is the known map position
+    /// `map` (meters). The model does not move: only the map origin changes. `rotation` is
+    /// the angle of the model X axis against the map X axis.
+    pub fn from_known_point(
+        crs: &str,
+        model: DVec2,
+        map: DVec2,
+        rotation: f64,
+        user_origin: DVec2,
+    ) -> Georeference {
+        Georeference {
+            crs: crs.to_string(),
+            origin: map - DVec2::from_angle(rotation).rotate(model / 1000.0),
+            rotation,
+            user_origin,
+        }
+    }
+
+    /// The georeference from two known points. The rotation follows from the direction of the
+    /// line between them. Also returns the scale ratio (map distance over model distance in
+    /// meters). It is 1 when the points agree. `None` if a point repeats.
+    pub fn from_two_points(
+        crs: &str,
+        model: [DVec2; 2],
+        map: [DVec2; 2],
+        user_origin: DVec2,
+    ) -> Option<(Georeference, f64)> {
+        let (dm, dp) = (model[1] - model[0], map[1] - map[0]);
+        if dm.length() < 1e-9 || dp.length() < 1e-9 || !(dm.is_finite() && dp.is_finite()) {
+            return None;
+        }
+        let rotation = dp.to_angle() - dm.to_angle();
+        let scale = dp.length() / (dm.length() / 1000.0);
+        Some((
+            Georeference::from_known_point(crs, model[0], map[0], rotation, user_origin),
+            scale,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +111,40 @@ mod tests {
             }
             .is_finite()
         );
+    }
+
+    #[test]
+    fn a_known_point_sets_the_origin_and_two_points_set_the_rotation() {
+        let g = Georeference::from_known_point(
+            "EPSG:3067",
+            DVec2::new(5000.0, 2000.0),
+            DVec2::new(385_005.0, 6_672_002.0),
+            0.0,
+            DVec2::ZERO,
+        );
+        assert_eq!(g.origin, DVec2::new(385_000.0, 6_672_000.0));
+        assert_eq!(
+            g.to_map(DVec2::new(5000.0, 2000.0)),
+            DVec2::new(385_005.0, 6_672_002.0)
+        );
+        let rot = 0.4;
+        let (m1, m2) = (DVec2::new(1000.0, 1000.0), DVec2::new(9000.0, 4000.0));
+        let truth = Georeference {
+            crs: "EPSG:3067".into(),
+            origin: DVec2::new(100.0, 200.0),
+            rotation: rot,
+            user_origin: DVec2::ZERO,
+        };
+        let (g, scale) = Georeference::from_two_points(
+            "EPSG:3067",
+            [m1, m2],
+            [truth.to_map(m1), truth.to_map(m2)],
+            DVec2::ZERO,
+        )
+        .unwrap();
+        assert!((g.rotation - rot).abs() < 1e-9 && (scale - 1.0).abs() < 1e-9);
+        assert!(g.origin.distance(truth.origin) < 1e-6);
+        assert!(Georeference::from_two_points("", [m1, m1], [m1, m2], DVec2::ZERO).is_none());
+        assert!(Georeference::from_two_points("", [m1, m2], [m1, m1], DVec2::ZERO).is_none());
     }
 }

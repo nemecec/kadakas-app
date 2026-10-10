@@ -42,7 +42,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 pub(crate) fn describe() -> Value {
     json!({
         "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)"],
-        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed)",
@@ -55,6 +55,7 @@ pub(crate) fn describe() -> Value {
             "target_crs": "GIS: CRS of a new georeference. Default: UTM zone for lon/lat data, else the file CRS",
             "class_field": "GIS: attribute whose value names the class of each object. Default: the file name",
             "origin": "center (default) | file. A drawing whose center is more than 1 km from (0, 0) is shifted to the origin, and the shift is saved as the document georeference (empty CRS if the file has none). file keeps the numbers of the file (objects beyond 1e9 mm are skipped). A document that has a georeference keeps its own origin",
+            "faces": "DXF: polygons (default: each 3DFACE is a closed polyline3d, source data for a site model) | mesh (all faces of a DXF layer become one mesh3d). POLYFACE and POLYGON MESH polylines always become mesh3d",
             "max_exploded": "DXF: most objects that exploded blocks may make. Default 100000. The import fails above it",
             "max_objects": "stop after this many objects. Default 500000"
         },
@@ -63,6 +64,9 @@ pub(crate) fn describe() -> Value {
             "unit": "mm (default) | cm | m | km | inch | foot | yard | mile. DXF only",
             "origin": "file (default): real-world coordinates, the origin shift of the georeference is added back (a rotation is not applied in DXF). document: model coordinates",
             "visible_only": "false (default)",
+            "native_annotations": "DXF: true (default). Linear, radial and diameter dimensions become DIMENSION entities (each with its block), callouts become LEADER and MTEXT, text becomes MTEXT. Other annotations are lines and text. false: all annotations are lines and text",
+            "site_mesh": "DXF: none (default) | existing | proposed. Also writes the triangles of a site model surface as a 3D mesh",
+            "mesh_entity": "DXF: polyface (default: a POLYLINE polyface mesh) | face3d (one 3DFACE per triangle). For mesh3d objects and the site mesh",
             "tolerance": "mm, curve approximation. Default 1"
         },
         "ifc": crate::ifc_api::describe(),
@@ -76,6 +80,7 @@ pub(crate) fn describe() -> Value {
             {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "overwrite": true}}
         ],
         "paths": "A server for agents only reads and writes inside the folder of the open document and the folders that its owner allows with --allow-dir (default: the folder where it started). The extension must match the format, and export.file needs {overwrite: true} to replace a file.",
+        "dxf_georeference": "A DXF export of a document with an EPSG georeference writes a GEODATA object (projected grid, the design point and the reference point, the unit and the north direction, and the CRS as an EPSG alias). The coordinates are real-world numbers (origin: file) or model numbers (origin: document). Other CRSs get a note and no GEODATA",
         "georeference": "Imports of GIS files set the document georeference: {crs, origin: [x, y] in meters, rotation, user_origin}. Geometry stays near 0. Set it with the command {op: set_georeference, georef: {crs: \"EPSG:3067\", origin: [385000, 6672000]}}. document.summary shows it."
     })
 }

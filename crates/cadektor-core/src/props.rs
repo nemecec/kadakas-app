@@ -39,6 +39,7 @@ pub enum Prop {
 pub const NAMES: &[&str] = &[
     "Id",
     "Kind",
+    "Phase",
     "Layer",
     "Class",
     "Name",
@@ -330,6 +331,7 @@ fn builtin(
     match key(name).as_str() {
         "id" => Prop::Value(Value::from(obj.id.0)),
         "kind" | "type" => text(shape.kind()),
+        "phase" => text(crate::viewrules::phase_of(obj).id()),
         "layer" => doc
             .layer(obj.layer)
             .map_or(Prop::NotApplicable, |l| text(l.name.clone())),

@@ -61,7 +61,11 @@ impl<W: Write> Exporter<'_, W> {
             Some(p) if class.2.contains(&p.as_str()) => Some(p),
             // The Data Manager template says VEGETATION, which IFC4x3 knows. IFC4 writes it as a user-defined type.
             Some(p) if p == "VEGETATION" && class.0 == "IfcGeographicElement" => {
-                Some("USERDEFINED".to_string())
+                if self.schema == Schema::Ifc4x3 {
+                    Some("VEGETATION".to_string())
+                } else {
+                    Some("USERDEFINED".to_string())
+                }
             }
             Some(p) => {
                 self.note(format!(
@@ -86,6 +90,16 @@ impl<W: Write> Exporter<'_, W> {
                 }
             }));
         }
+        // IFC4x3 has a vegetation type, so the user-defined stand-in is not needed.
+        let (pre, object_type) = if self.schema == Schema::Ifc4x3
+            && class.0 == "IfcGeographicElement"
+            && pre.as_deref() == Some("USERDEFINED")
+            && object_type.as_deref() == Some("VEGETATION")
+        {
+            (Some("VEGETATION".to_string()), None)
+        } else {
+            (pre, object_type)
+        };
         (class.1, pre, object_type)
     }
 

@@ -35,10 +35,12 @@ pub mod sheets;
 pub mod site;
 pub mod snapping;
 pub mod sun;
+pub mod survey;
 pub mod svg;
 pub mod symbols;
 pub mod thumbnail;
 pub mod underlay;
+pub mod viewrules;
 pub mod visibility;
 pub mod worksheet_table;
 

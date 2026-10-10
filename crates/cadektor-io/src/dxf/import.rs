@@ -12,6 +12,7 @@ use cadektor_core::DVec2;
 use cadektor_core::DVec3;
 use cadektor_core::curve::{Vertex, VertexKind, corners};
 use cadektor_core::georef::Georeference;
+use cadektor_core::mesh3d::Mesh3d;
 use cadektor_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 use super::parse::{self, Dxf, Entity, LayerDef};
@@ -58,6 +59,30 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
     let doc_has_georef = ctx.georef.is_some();
+    // A GEODATA object with an EPSG code gives the georeference. The design point becomes the origin
+    // of the model, and the grid north gives the rotation.
+    if !doc_has_georef
+        && opts.origin == OriginMode::Center
+        && let Some(gd) = &dxf.geodata
+        && let Some(crs) = gd.epsg()
+        && gd.design.iter().chain(&gd.reference).all(|v| v.is_finite())
+        && gd.reference.iter().all(|v| v.abs() < 1.0e9)
+        && gd.design.iter().all(|v| (v * scale).abs() < 1.0e12)
+    {
+        b.set_offset(DVec2::from(gd.design) * scale);
+        b.set_georef(Georeference {
+            crs: crs.clone(),
+            origin: DVec2::from(gd.reference),
+            rotation: gd.north[0].atan2(gd.north[1]),
+            user_origin: DVec2::ZERO,
+        });
+        b.report.georeferenced = true;
+        b.report.note(&format!(
+            "the file has a GEODATA object: the drawing is placed in {crs}"
+        ));
+        walk(&dxf, opts, &mut b, scale)?;
+        return Ok(b.finish());
+    }
     if doc_has_georef || opts.origin == OriginMode::Center {
         let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
         probe.set_probe();
@@ -109,6 +134,7 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
         visits: 0,
         exploded: 0,
         overflow: false,
+        faces: Default::default(),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -120,6 +146,7 @@ fn walk(dxf: &Dxf, opts: &ImportOptions, b: &mut Builder, scale: f64) -> Result<
     for e in &dxf.entities {
         w.entity(e, &root);
     }
+    w.flush_faces();
     if w.overflow {
         return Err(IoError::Format(format!(
             "the blocks make more than {} objects (nested or array INSERTs): raise the max_exploded option or turn off explode_blocks",
@@ -233,6 +260,129 @@ struct Walker<'a> {
     /// Entities visited inside blocks. The import fails above `max_exploded`.
     exploded: usize,
     overflow: bool,
+    /// 3DFACE meshes by DXF layer name (option `faces: mesh`).
+    faces: std::collections::BTreeMap<String, FaceMesh>,
+}
+
+/// Vertices and triangles of the 3D faces of one layer.
+#[derive(Default)]
+struct FaceMesh {
+    vertices: Vec<DVec3>,
+    triangles: Vec<[u32; 3]>,
+    index: HashMap<[u64; 3], u32>,
+}
+
+impl FaceMesh {
+    fn vertex(&mut self, p: DVec3) -> u32 {
+        let key = [
+            (p.x + 0.0).to_bits(),
+            (p.y + 0.0).to_bits(),
+            (p.z + 0.0).to_bits(),
+        ];
+        *self.index.entry(key).or_insert_with(|| {
+            self.vertices.push(p);
+            (self.vertices.len() - 1) as u32
+        })
+    }
+
+    /// Adds a face of 3 or 4 corners as one or two triangles.
+    fn face(&mut self, pts: &[DVec3]) {
+        let ids: Vec<u32> = pts.iter().map(|p| self.vertex(*p)).collect();
+        if ids.len() >= 3 {
+            self.triangles.push([ids[0], ids[1], ids[2]]);
+        }
+        if ids.len() == 4 {
+            self.triangles.push([ids[0], ids[2], ids[3]]);
+        }
+    }
+}
+
+/// A mesh from a polyface mesh (POLYLINE flag 64): vertices with flag 192 and face records with
+/// flag 128 that name them by 1-based index. Faces of 4 corners become 2 triangles.
+fn polyface_mesh(e: &Entity, xf: &Xf) -> Result<Mesh3d, Skip> {
+    let mut vertices: Vec<DVec3> = Vec::new();
+    for v in &e.children {
+        if v.int(70).unwrap_or(0) & 64 != 0 {
+            let p = DVec3::new(v.fd(10, 0.0), v.fd(20, 0.0), v.fd(30, 0.0));
+            vertices.push(xf.apply(p.truncate()).extend(xf.z(p.z)));
+        }
+    }
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    for v in &e.children {
+        let flags = v.int(70).unwrap_or(0);
+        if flags & 128 == 0 || flags & 64 != 0 {
+            continue;
+        }
+        // A negative index marks an invisible edge. Zero ends the list.
+        let idx: Vec<usize> = (71..=74)
+            .map_while(|c| v.int(c))
+            .take_while(|i| *i != 0)
+            .map(|i| i.unsigned_abs() as usize)
+            .collect();
+        if idx.len() < 3 || idx.iter().any(|i| *i > vertices.len()) {
+            continue;
+        }
+        let at = |k: usize| (idx[k] - 1) as u32;
+        triangles.push([at(0), at(1), at(2)]);
+        if idx.len() == 4 && idx[3] != idx[2] {
+            triangles.push([at(0), at(2), at(3)]);
+        }
+    }
+    if triangles.is_empty() {
+        return Err("polyface mesh without faces");
+    }
+    Ok(Mesh3d {
+        name: String::new(),
+        vertices,
+        triangles,
+        color: None,
+    })
+}
+
+/// A mesh from a polygon mesh (POLYLINE flag 16): an M by N grid of vertices (codes 71 and 72).
+/// Flags 1 and 32 close the mesh in the M and N directions.
+fn grid_mesh(e: &Entity, xf: &Xf) -> Result<Mesh3d, Skip> {
+    let (mc, nc) = (
+        e.int(71).unwrap_or(0).max(0) as usize,
+        e.int(72).unwrap_or(0).max(0) as usize,
+    );
+    let flags = e.int(70).unwrap_or(0);
+    let verts: Vec<DVec3> = e
+        .children
+        .iter()
+        .filter(|v| v.int(70).unwrap_or(0) & 128 == 0)
+        .map(|v| {
+            let p = DVec3::new(v.fd(10, 0.0), v.fd(20, 0.0), v.fd(30, 0.0));
+            xf.apply(p.truncate()).extend(xf.z(p.z))
+        })
+        .collect();
+    if mc < 2 || nc < 2 || verts.len() != mc * nc || mc * nc > 1_000_000 {
+        return Err("polygon mesh with a wrong vertex count");
+    }
+    let at = |i: usize, j: usize| (i % mc) * nc + (j % nc);
+    let (im, jn) = (
+        if flags & 1 != 0 { mc } else { mc - 1 },
+        if flags & 32 != 0 { nc } else { nc - 1 },
+    );
+    let mut triangles = Vec::new();
+    for i in 0..im {
+        for j in 0..jn {
+            let (a, b, c, d) = (
+                at(i, j) as u32,
+                at(i + 1, j) as u32,
+                at(i + 1, j + 1) as u32,
+                at(i, j + 1) as u32,
+            );
+            triangles.push([a, b, c]);
+            triangles.push([a, c, d]);
+        }
+    }
+    Ok(Mesh3d {
+        name: String::new(),
+        vertices: verts,
+        triangles,
+        color: None,
+    })
 }
 
 fn layer_pen(def: &LayerDef) -> Option<Color> {
@@ -330,6 +480,34 @@ impl Walker<'_> {
                 a.fill = item.fill;
             }
             self.b.add(&e.kind, item.shape, layer, class, a, item.data);
+        }
+    }
+
+    /// Adds the merged 3D faces as mesh objects, one per DXF layer.
+    fn flush_faces(&mut self) {
+        let faces = std::mem::take(&mut self.faces);
+        for (layer_name, m) in faces {
+            let (layer, class, defaults) = self.target(&layer_name);
+            let mesh = Mesh3d {
+                name: String::new(),
+                vertices: m.vertices,
+                triangles: m.triangles,
+                color: None,
+            };
+            let attrs = Attributes {
+                pen: defaults.pen,
+                fill: defaults.fill,
+                line_weight: defaults.line_weight,
+                ..Default::default()
+            };
+            self.b.add(
+                "3DFACE",
+                Shape::Mesh3d(Box::new(mesh)),
+                layer,
+                class,
+                attrs,
+                BTreeMap::new(),
+            );
         }
     }
 
@@ -488,8 +666,13 @@ impl Walker<'_> {
             }
             "POLYLINE" => {
                 let flags = e.int(70).unwrap_or(0);
-                if flags & (16 | 64) != 0 {
-                    return Err("mesh polylines are not supported");
+                if flags & 64 != 0 {
+                    out.push(Item::new(Shape::Mesh3d(Box::new(polyface_mesh(e, xf)?))));
+                    return Ok(());
+                }
+                if flags & 16 != 0 {
+                    out.push(Item::new(Shape::Mesh3d(Box::new(grid_mesh(e, xf)?))));
+                    return Ok(());
                 }
                 let closed = flags & 1 != 0;
                 let verts = e
@@ -702,6 +885,14 @@ impl Walker<'_> {
                 }
                 if pts.len() < 3 {
                     return Err("degenerate face");
+                }
+                if self.opts.faces == crate::options::FaceMode::Mesh {
+                    let layer_name = match (&cx.layer, e.layer()) {
+                        (Some(l), "0") => l.clone(),
+                        (_, l) => l.to_string(),
+                    };
+                    self.faces.entry(layer_name).or_default().face(&pts);
+                    return Ok(());
                 }
                 out.push(Item::new(Shape::Polyline3d {
                     points: pts,

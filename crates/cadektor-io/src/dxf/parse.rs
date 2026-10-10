@@ -95,12 +95,37 @@ pub struct Block {
     pub entities: Vec<Entity>,
 }
 
+/// The georeference of a DXF file (GEODATA): the point of the drawing that has a known map position,
+/// the map position, and grid north in drawing coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeoData {
+    pub design: [f64; 2],
+    pub reference: [f64; 2],
+    pub north: [f64; 2],
+    /// The coordinate system definition (text; for an EPSG code it holds `EPSG:<n>`).
+    pub definition: String,
+}
+
+impl GeoData {
+    /// The `EPSG:<n>` name found in the definition.
+    pub fn epsg(&self) -> Option<String> {
+        let at = self.definition.find("EPSG:")?;
+        let digits: String = self.definition[at + 5..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!digits.is_empty()).then(|| format!("EPSG:{digits}"))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Dxf {
     pub header: HashMap<String, Vec<(i32, String)>>,
     pub layers: Vec<LayerDef>,
     pub blocks: HashMap<String, Block>,
     pub entities: Vec<Entity>,
+    /// The GEODATA object of the file (the georeference), if it has one.
+    pub geodata: Option<GeoData>,
     /// The file ended before `EOF`.
     pub truncated: bool,
 }
@@ -237,6 +262,22 @@ pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
             "TABLES" => read_tables(&mut dxf, body),
             "BLOCKS" => read_blocks(&mut dxf, body),
             "ENTITIES" => dxf.entities = nest_polylines(records(body)),
+            "OBJECTS" => {
+                dxf.geodata = records(body)
+                    .iter()
+                    .find(|e| e.kind == "GEODATA")
+                    .map(|e| GeoData {
+                        design: [e.fd(10, 0.0), e.fd(20, 0.0)],
+                        reference: [e.fd(11, 0.0), e.fd(21, 0.0)],
+                        north: [e.fd(12, 0.0), e.fd(22, 1.0)],
+                        definition: e
+                            .items
+                            .iter()
+                            .filter(|(c, _)| *c == 301 || *c == 303)
+                            .map(|(_, v)| v.as_str())
+                            .collect(),
+                    });
+            }
             _ => {}
         }
         i = (end + 1).min(items.len());
@@ -413,5 +454,20 @@ mod tests {
         let d = parse(b"0\nSECTION\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nA\n0\nLINE\n0\nENDSEC\n0\nEOF\n").unwrap();
         assert!(d.truncated);
         assert_eq!(d.blocks["A"].entities.len(), 1);
+    }
+
+    #[test]
+    fn geodata_names_its_epsg_code() {
+        let mut g = GeoData {
+            design: [0.0; 2],
+            reference: [0.0; 2],
+            north: [0.0, 1.0],
+            definition: "<Alias id=\"EPSG:3067\">".into(),
+        };
+        assert_eq!(g.epsg().as_deref(), Some("EPSG:3067"));
+        g.definition = "no code EPSG:x".into();
+        assert_eq!(g.epsg(), None);
+        g.definition.clear();
+        assert_eq!(g.epsg(), None);
     }
 }

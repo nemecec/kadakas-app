@@ -1208,7 +1208,7 @@ fn files_are_written_atomically() {
     ));
     // Bad options fail before anything is written.
     let bad_opts = IfcOptions {
-        version: "IFC2X3".into(),
+        version: "IFC5".into(),
         ..Default::default()
     };
     assert!(crate::export_file(&dir.join("b.ifc"), &doc, &bad_opts).is_err());
@@ -1628,4 +1628,135 @@ proptest! {
         // Same input, same bytes.
         prop_assert_eq!(&text, &String::from_utf8(export_bytes(ed.doc(), &opts).unwrap().0).unwrap());
     }
+}
+
+// ---------------------------------------------------------------- schema versions
+
+fn with_version(v: &str) -> IfcOptions {
+    IfcOptions {
+        version: v.into(),
+        include_2d: true,
+        ..IfcOptions::default()
+    }
+}
+
+#[test]
+fn ifc2x3_has_an_owner_history_proxies_and_surface_models() {
+    let doc = sample();
+    let f = parsed(&doc, &with_version("IFC2X3"));
+    assert_eq!(f.schemas(), vec!["IFC2X3".to_string()]);
+    assert!(f.dangling().is_empty(), "{:?}", f.dangling());
+    let c = count(&f);
+    assert_eq!(c["IFCOWNERHISTORY"], 1);
+    for gone in [
+        "IFCGEOGRAPHICELEMENT",
+        "IFCTRIANGULATEDFACESET",
+        "IFCMAPCONVERSION",
+        "IFCPROJECTEDCRS",
+        "IFCCARTESIANPOINTLIST3D",
+    ] {
+        assert!(!c.contains_key(gone), "{gone}");
+    }
+    assert!(c["IFCBUILDINGELEMENTPROXY"] >= 4);
+    assert!(c["IFCFACEBASEDSURFACEMODEL"] >= 1 && c["IFCFACE"] >= 100);
+    assert!(c["IFCPRESENTATIONSTYLEASSIGNMENT"] >= 1);
+    // Every rooted entity names the owner history.
+    let oh = f
+        .entities
+        .iter()
+        .find(|e| e.name == "IFCOWNERHISTORY")
+        .unwrap()
+        .id;
+    for e in &f.entities {
+        if matches!(
+            e.name.as_str(),
+            "IFCSITE" | "IFCPROJECT" | "IFCSLAB" | "IFCPROPERTYSET" | "IFCELEMENTQUANTITY"
+        ) {
+            assert_eq!(e.attrs[1], Value::Ref(oh), "{}", e.name);
+        }
+    }
+    // The georeference is in property sets of the site.
+    let names: Vec<String> = f
+        .entities
+        .iter()
+        .filter(|e| e.name == "IFCPROPERTYSET")
+        .filter_map(|e| match &e.attrs[2] {
+            Value::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"ePSet_MapConversion".to_string()));
+    assert!(names.contains(&"ePSet_ProjectedCRS".to_string()));
+    // The circle profiles have a position.
+    for e in f
+        .entities
+        .iter()
+        .filter(|e| e.name == "IFCCIRCLEPROFILEDEF")
+    {
+        assert!(matches!(e.attrs[2], Value::Ref(_)));
+    }
+    // No attribute of the IFC4-only kind is left.
+    for e in f.entities.iter().filter(|e| e.name == "IFCMATERIAL") {
+        assert_eq!(e.attrs.len(), 1);
+    }
+    for e in f
+        .entities
+        .iter()
+        .filter(|e| e.name == "IFCSURFACESTYLERENDERING")
+    {
+        assert_eq!(e.attrs.len(), 9);
+    }
+}
+
+#[test]
+fn ifc4x3_names_vegetation_and_counts_in_integers() {
+    let doc = sample();
+    let f = parsed(&doc, &with_version("IFC4X3"));
+    assert_eq!(f.schemas(), vec!["IFC4X3_ADD2".to_string()]);
+    assert!(f.dangling().is_empty());
+    let c = count(&f);
+    assert!(c.contains_key("IFCMAPCONVERSION") && c.contains_key("IFCTRIANGULATEDFACESET"));
+    let enums: Vec<String> = f
+        .entities
+        .iter()
+        .filter(|e| e.name == "IFCGEOGRAPHICELEMENT")
+        .filter_map(|e| match e.attrs.last() {
+            Some(Value::Enum(p)) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(enums.contains(&"VEGETATION".to_string()) && enums.contains(&"TERRAIN".to_string()));
+    assert!(!enums.contains(&"USERDEFINED".to_string()));
+    for e in f.entities.iter().filter(|e| e.name == "IFCQUANTITYCOUNT") {
+        assert!(matches!(e.attrs[3], Value::Int(_)));
+    }
+    for e in f.entities.iter().filter(|e| e.name == "IFCANNOTATION") {
+        assert_eq!(e.attrs.len(), 8);
+    }
+    // Default IFC4 is unchanged.
+    let f4 = parsed(&doc, &IfcOptions::default());
+    assert_eq!(f4.schemas(), vec!["IFC4".to_string()]);
+    assert!(!count(&f4).contains_key("IFCOWNERHISTORY"));
+}
+
+#[test]
+fn ifc2x3_without_a_georeference_or_with_a_bad_crs_still_writes() {
+    let mut ed = Editor::default();
+    add(&mut ed, site_shape());
+    let f = parsed(ed.doc(), &with_version("IFC2X3"));
+    assert!(!f.entities.iter().any(|e| e.name == "IFCPROPERTYSET"
+        && matches!(&e.attrs[2], Value::Str(s) if s.starts_with("ePSet"))));
+    run(
+        &mut ed,
+        Command::SetGeoreference {
+            georef: Some(Georeference {
+                crs: "EPSG:3067".into(),
+                origin: v2(1.0, 2.0),
+                rotation: 0.0,
+                user_origin: DVec2::ZERO,
+            }),
+        },
+    );
+    let f = parsed(ed.doc(), &with_version("IFC2X3"));
+    assert!(f.dangling().is_empty());
 }

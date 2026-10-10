@@ -386,3 +386,7 @@ mod tests {
         assert!(a.contains("2020-12"));
     }
 }
+
+schema_impl!(crate::viewrules::ViewRules, "ViewRules", |_g| opaque(
+    "Display rules: {ne_grid?: {spacing, labels?, label_height?, color?}, phases?: {enabled, existing, new, demolished}, visualization?: {name, field, rules, target?, enabled?, kinds?, include_missing?}}. See view_rules.get and the methods grid.set, phase.display and visualization.set."
+));

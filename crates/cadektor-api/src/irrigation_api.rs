@@ -94,6 +94,10 @@ pub const REPORT_PRESSURE: (&str, &str) = (
     "irrigation.report.pressure",
     "Pressure analysis per zone. params: {tolerance?, format?: csv}. Returns {zones: [{zone, flow_lpm, critical, critical_path, outlets: [{id, label, flow_lpm, pressure_kpa, min_kpa, margin_kpa, ok}], warnings}]}.",
 );
+pub const REPORT_HYDROZONES: (&str, &str) = (
+    "irrigation.report.hydrozones",
+    "Hydrozone report: the plants grouped by the hydrozone field of their plant style (water_need: very_low | low | moderate | high, hydrozone, plant_factor, irrigated), linked to the irrigation zones. A hydrozone named Z3, 3 or Zone 3 matches irrigation zone 3. params: {eto? (reference evapotranspiration in mm per year, default 1000), target_depth?, tolerance?, format?: csv}. Returns {rows: [{hydrozone, plants, by_need, canopy_area_m2, plant_factor, annual_water_l, mixed, not_irrigated, zone?: {zone, head_count, flow_lpm, area_m2, precipitation_mm_h, run_time_min}}], warnings, eto}. The plant factors are the middle of the public WUCOLS classes. The irrigation network is optional.",
+);
 pub const REPORT_MATERIALS: (&str, &str) = (
     "irrigation.report.materials",
     "Materials list: heads, pipes, valves, POCs and controllers with quantities and prices from the catalog. params: {tolerance?, format?: csv}. Returns {rows: [{category, item, quantity, unit, unit_price, total}], total_cost}.",
@@ -703,6 +707,108 @@ fn calculate(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError>
     }))
 }
 
+/// Plants by hydrozone, linked to the zone schedule of the irrigation network (if there is one).
+fn hydrozone_report(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    use cadektor_core::plants::care;
+    let eto = num(m, "eto")?.unwrap_or(1000.0);
+    if eto <= 0.0 {
+        return Err(bad("'eto' must be a positive number of mm per year"));
+    }
+    let rows = care::hydrozones(s.editor.doc(), eto);
+    // The network is optional: a document without irrigation objects has no zones.
+    let schedule = analysis(s, m)
+        .ok()
+        .map(|a| {
+            report::zone_schedule(
+                &a,
+                &areas(m).unwrap_or_default(),
+                num(m, "target_depth").ok().flatten().unwrap_or(10.0),
+            )
+        })
+        .filter(|sch| !sch.rows.is_empty());
+    let mut warnings: Vec<String> = Vec::new();
+    let mut used_zones: Vec<u32> = Vec::new();
+    let mut out: Vec<Value> = Vec::new();
+    for r in &rows {
+        let mut v = json!(r);
+        if let (Some(sch), Some(n)) = (&schedule, care::zone_number(&r.hydrozone)) {
+            match sch.rows.iter().find(|z| z.zone == n) {
+                Some(z) => {
+                    used_zones.push(n);
+                    v["zone"] = json!({
+                        "zone": z.zone,
+                        "head_count": z.head_count,
+                        "flow_lpm": z.flow_lpm,
+                        "area_m2": z.area_m2,
+                        "precipitation_mm_h": z.precipitation_mm_h,
+                        "run_time_min": z.run_time_min,
+                    });
+                }
+                None => warnings.push(format!(
+                    "hydrozone '{}' has no irrigation zone {n} in the network",
+                    r.hydrozone
+                )),
+            }
+        } else if r.hydrozone.is_empty() && r.plants > r.not_irrigated {
+            warnings.push(format!(
+                "{} irrigated plant(s) have no hydrozone",
+                r.plants - r.not_irrigated
+            ));
+        }
+        if r.mixed {
+            warnings.push(format!(
+                "hydrozone '{}' mixes plants whose water needs are more than one class apart",
+                r.hydrozone
+            ));
+        }
+        out.push(v);
+    }
+    if let Some(sch) = &schedule {
+        for z in &sch.rows {
+            if !used_zones.contains(&z.zone) && !rows.is_empty() {
+                warnings.push(format!(
+                    "irrigation zone {} has no hydrozone of plants",
+                    z.zone
+                ));
+            }
+        }
+    }
+    if csv_requested(m) {
+        let mut table = vec![
+            [
+                "Hydrozone",
+                "Plants",
+                "Canopy area m2",
+                "Plant factor",
+                "Annual water l",
+                "Mixed",
+                "Zone flow l/min",
+                "Zone run time min",
+            ]
+            .map(String::from)
+            .to_vec(),
+        ];
+        for (r, v) in rows.iter().zip(&out) {
+            table.push(vec![
+                r.hydrozone.clone(),
+                r.plants.to_string(),
+                format!("{:.2}", r.canopy_area_m2),
+                format!("{:.2}", r.plant_factor),
+                format!("{:.0}", r.annual_water_l),
+                if r.mixed { "yes" } else { "no" }.into(),
+                v["zone"]["flow_lpm"]
+                    .as_f64()
+                    .map_or(String::new(), |f| format!("{f:.1}")),
+                v["zone"]["run_time_min"]
+                    .as_f64()
+                    .map_or(String::new(), |f| format!("{f:.0}")),
+            ]);
+        }
+        return Ok(json!({"csv": write_csv(&table)}));
+    }
+    Ok(json!({"rows": out, "warnings": warnings, "eto": eto}))
+}
+
 fn reports(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let a = analysis(s, m)?;
     let csv = csv_requested(m);
@@ -884,6 +990,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "irrigation.layout.fill" | "irrigation.layout.edge" | "irrigation.layout.drip" => {
             layout(s, method, m)
         }
+        "irrigation.report.hydrozones" => hydrozone_report(s, m),
         "irrigation.report.zones"
         | "irrigation.report.pipes"
         | "irrigation.report.pressure"

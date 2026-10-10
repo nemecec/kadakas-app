@@ -98,6 +98,9 @@ impl<W: Write> Exporter<'_, W> {
 
     /// An `IfcTriangulatedFaceSet`, written straight to the file.
     pub(super) fn tessellation(&mut self, points: &[DVec3], idx: &[u32]) -> R<u64> {
+        if self.schema == Schema::Ifc2x3 {
+            return self.surface_model(points, idx);
+        }
         let list = self.w.entity_with("IFCCARTESIANPOINTLIST3D", |out| {
             out.write_all(b"(")?;
             for (i, p) in points.iter().enumerate() {
@@ -131,6 +134,29 @@ impl<W: Write> Exporter<'_, W> {
                 out.write_all(b"),$")
             })
             .map_err(Into::into)
+    }
+
+    /// A mesh for IFC2x3: an `IfcFaceBasedSurfaceModel` of triangular faces.
+    fn surface_model(&mut self, points: &[DVec3], idx: &[u32]) -> R<u64> {
+        let mut pts = Vec::with_capacity(points.len());
+        for p in points {
+            pts.push(self.pt3([p.x, p.y, p.z])?);
+        }
+        let mut faces = Vec::new();
+        for t in idx.chunks_exact(3) {
+            if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
+                continue;
+            }
+            let corners = t.iter().map(|i| pts[*i as usize]);
+            let poly = self.ent("IFCPOLYLOOP", vec![Value::refs(corners)])?;
+            let bound = self.ent(
+                "IFCFACEOUTERBOUND",
+                vec![Value::Ref(poly), Value::Bool(true)],
+            )?;
+            faces.push(self.ent("IFCFACE", vec![Value::refs([bound])])?);
+        }
+        let set = self.ent("IFCCONNECTEDFACESET", vec![Value::refs(faces)])?;
+        self.ent("IFCFACEBASEDSURFACEMODEL", vec![Value::refs([set])])
     }
 
     pub(super) fn color_of(&self, obj: &Object, default: [u8; 4]) -> [u8; 4] {

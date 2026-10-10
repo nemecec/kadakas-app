@@ -4,7 +4,7 @@ Cadektor is a clean-room, open-source CAD/BIM desktop app. A web build is a bonu
 
 Source of truth for Vectorworks behavior: `docs/research/vectorworks-public-features.md` (public pages only).
 
-Priority: P0 = MVP, P1 = v1, P2 = later. Status: done = built and tested (in the core crate, the API crates or the app), planned = not built.
+Priority: P0 = MVP, P1 = v1, P2 = later. Status: done = built and tested (in the core crate, the API crates or the app), planned = not built, deferred to Later = left out of v1 on purpose.
 
 ## 1. Goals and non-goals
 
@@ -91,7 +91,7 @@ Non-goals
 | DOC-11 | Layer elevation and 3D height. A design layer has an `elevation` (mm, `add_layer`, `modify_layer`, undoable). It is the zero of the 3D model on the layer: a hardscape top is `elevation` above it and its bottom is `thickness` lower, a massing base and a plant stand on it, and a section or elevation drawing follows. Checked by `crates/cadektor-core/tests/layer_elevation.rs` and `tests/behavior/test_layer_elevation.py`. Stories (named floor levels that group layers) are architecture work and are deferred to "Later" (section 6). | P1 | done |
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. The command `set_visibility` and the methods `visibility.get|set` set the mode of layers and classes in one undo step. A grey layer or class is drawn faint and without colors in the canvas and in the SVG (a group with `data-visibility="grey"`), cannot be selected or edited (commands refuse its objects, `selection.set` and `objects.query {select}` skip them, and nothing can be added to a grey layer), and does not snap unless "Snap to grey layers and classes" is on. It stays in 3D views, other exports and sheet viewports (a viewport has its own visibility overrides). The active layer cannot be grey. Trim and extend still use grey objects of the same layer as cutters and boundaries (they are only read). The flags are stored in `drawing.grey`, so older files load and older apps ignore them. | P1 | done |
 | DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
-| DOC-14 | Phases (existing, new, demolished). | P1 | planned |
+| DOC-14 | Phases (existing, new, demolished). | P1 | done: phase existing, new (default) or demolished is an object data field (`phase.set`, property `Phase`). Display rules (`phase.display`) recolor or hide each phase in the plan, SVG and sheets. `phase.report` counts by phase and kind. Section Display rules in the app. The 3D view and the exports ignore the rules. |
 | DOC-15 | Symbols and symbol definitions: a resource with 2D components and optional 3D components (hybrid), an insertion point, and instances (`Shape::Symbol`) with position, rotation, symmetric or asymmetric scale and a class. Editing the definition changes all instances at once. Convert to group, Edit 2D components in place (`edit_symbol`, `exit_symbol_edit`), nested symbols (loops are refused). Plug-in object symbols (red and blue) are out of scope. | P1 | done |
 | DOC-16 | Resource libraries: import resources of any type from another `.cdk.json` file by type and name, with what they need (a tile brings its symbol, which brings its hatch), classes of symbol components by name, rename on a name clash (or reuse, or replace), one undo step. Classes and design layers can be imported by name. A per-user library folder (`CADEKTOR_LIBRARY_DIR`, default `~/.config/cadektor/library`), favorites, export of a library file. File access follows the path policy. | P1 | done |
 | DOC-17 | Project sharing, file merge. | P2 | planned |
@@ -160,7 +160,7 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| SIT-01 | 3D point source data: survey points, 3D loci, 3D polygons. | P0 | partial: 3D loci and 3D polylines move into a site model (survey point import comes with the file format work) |
+| SIT-01 | 3D point source data: survey points, 3D loci, 3D polygons. | P0 | done: `survey.import_points` reads CSV and TXT point files (P, N, E, Z, code) with a configurable column order, delimiter (comma, semicolon, tab, pipe, space or auto) and units into 3D loci with `point_id`, `code` and `description` data, and a georeference when the survey is far from the origin. 3D loci and 3D polygons move into a site model. One undo step. |
 | SIT-02 | Triangulated existing surface. | P0 | done |
 | SIT-03 | Proposed surface from modifiers. | P0 | done |
 | SIT-04 | Pad modifier. | P0 | done (flat or sloped by elevation at end; overlapping pads nest, the later one wins; exact vertical edge without grade limits, no gap) |
@@ -170,11 +170,11 @@ Non-goals
 | SIT-07 | Contours for existing and proposed surfaces. | P0 | done (major and minor, smooth option, labels) |
 | SIT-08 | Elevation lookup at a point. | P0 | done (`site.elevation`, draping API in `cadektor-site`) |
 | SIT-09 | Display choice: existing, proposed, both (2D and 3D). | P1 | done |
-| SIT-10 | Pad with retaining edge. | P1 | planned |
-| SIT-18 | Grade object with end tags. | P1 | partial: a straight grade between two points, with two elevations, or an elevation and a slope (percent, ratio or angle), or snapped live to the site model. Slope arrow, slope label and end elevations in 2D. API `grade.*`, Grading tool. No curved grades, and it does not act as a site modifier yet. |
-| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). Walls are done (HRD-07). | P1 | partial: hardscape and wall |
+| SIT-10 | Pad with retaining edge. | P1 | done: API `pad.add` and `pad.retaining_edge` make a closed landscape wall along the boundary of a level pad, with its top at the pad level plus an offset, a style, thickness and quantities. The pad and the wall keep each other's ID (`retaining_edge`, `retaining_pad`). The wall is centered on the edge. A sloped pad is refused. No mode in the Site Modifiers tool yet. |
+| SIT-18 | Grade object with end tags. | P1 | done: a grade is a line or a curve (open polyline with arcs, `grade.add` with `path`) with elevations at both ends or an elevation and a slope (percent, ratio or angle), or snapped live to the site model. On a curve the slope follows the length of the curve. A grade can act as a site modifier (`site_modifier`, `width`): a strip along its path sets the proposed surface. Slope arrow, slope label and end elevations in 2D. API `grade.*`. The Grading tool draws straight grades; make curves through the API. |
+| SIT-12 | Aligned modifiers (to hardscape, wall, polygon). Hardscapes are done (HRD-10). Walls are done (HRD-07): `wall.add` with `site_modifier`. A grade follows the same rule (SIT-18). A polygon gives a pad (`pad.add`). | P1 | done: hardscape, wall, grade and polygon |
 | SIT-13 | Stake / spot elevation object. | P1 | done: a point that reads the existing and proposed height live (label in paper units, prefix, decimals). Stake mode shows northing and easting from the georeference, or local meters without one. API `spot.*`, Grading tool. |
-| SIT-14 | Source data checks: find errors, simplify. | P1 | planned |
+| SIT-14 | Source data checks: find errors, simplify. | P1 | done: `site.check` finds duplicate XY with a different Z, spikes (a point far from the plane of its neighbors) and crossing breaklines at different heights, with a report. `site.simplify` removes copies, loose points that their neighbors predict and straight line vertices within a tolerance (one undo step, `dry_run`). Pure code in `cadektor-site::check`. API only: no window in the app. |
 | SIT-15 | Slope and aspect analysis display. | P2 | partial: slope analysis and elevation analysis (hypsometric) as color bands per triangle, with user limits and colors, on the existing or proposed surface, in the 2D plan and the 3D view, with a legend object (band labels and areas). The triangles of a band merge into rings (a 50 000 point site draws in well under a second), cached by content. Sheets and PDF show the contours, the colors, the legend, wall tags, grade arrows and labels, spot labels and section ends, from the same drawing primitives as the canvas and the SVG (turned text stays horizontal on a sheet). API `site.analysis`. No aspect analysis. |
 | SIT-16 | Point cloud as source (LAS/E57). | P2 | planned |
 | SIT-17 | Volume fill and grading impact report. | P2 | planned |
@@ -193,7 +193,7 @@ Non-goals
 | PLT-07 | Resource Manager palette for plant styles: list, create, edit, duplicate, delete, CSV import and export. | P1 | done |
 | PLT-08 | Create plant styles from a list (CSV mapping): columns by header or explicit mapping, units per column, skip or update duplicates, and CSV export. | P1 | done |
 | PLT-09 | 3D plant representation as generated geometry: tree, columnar, conical, spreading and shrub mound forms. | P1 | done |
-| PLT-10 | Place plants on terrain height. | P1 | planned |
+| PLT-10 | Place plants on terrain height. | P1 | done: `plants.place` with `on_terrain` and `plants.drape` store the ground height under plants and existing trees (`ground_z`); the 3D view and the glTF, OBJ and section output stand them on it. Object Info has Place on terrain and Release. Run it again after the terrain changes. IFC and DXF output use the layer elevation. |
 | PLT-11 | Plant schedule: live `report.plant_schedule` with counts and prices, CSV export and a palette in the app. | P0 | done |
 | PLT-12 | Import plant data from nursery lists as CSV (see PLT-08). | P2 | done |
 | PLT-13 | Plant tool modes: single, along a path (spacing, count or both), rectangular grid, triangular grid, fill an area (spacing, count or density) and poly. One undo step per placement. The placement math is a pure, tested module. | P0 | done |
@@ -204,9 +204,9 @@ Non-goals
 | PLT-23 | Quantity by area for groundcovers in the plant schedule (price per m2). | P1 | done |
 | PLT-24 | Tree protection zone for plants of the tree category, with the rule and cap of existing trees (12 x trunk diameter, at most 15 m). | P1 | done |
 | PLT-25 | Fill an area with holes, and spacing equal to the plant spread. | P1 | done |
-| PLT-16 | Plant images, maintenance and irrigation fields in plant styles. | P1 | planned |
-| PLT-17 | Plant tags with three levels of fields and an ID bubble. | P1 | planned |
-| PLT-18 | Plant style spreadsheet view for batch editing. | P1 | planned |
+| PLT-16 | Plant images, maintenance and irrigation fields in plant styles. | P1 | partly done: maintenance fields (interval, pruning, fertilizer, hours per year) and irrigation fields (water need class, hydrozone, plant factor, irrigated) are in plant styles, the style form, the API and the CSV catalog. The image is a reference to a texture resource (`image`); no picture file is stored or shown yet. |
+| PLT-17 | Plant tags with three levels of fields and an ID bubble. | P1 | done: plant tags have three levels (1: ID code and count, 2: plus plant name, 3: plus size and container) and an ID bubble (`plant_tag.set`, data key `tag_format`, Object Info). Drawn in the canvas, SVG and sheets. The DXF export skips tags. |
+| PLT-18 | Plant style spreadsheet view for batch editing. | P1 | done: Plant style spreadsheet window in the app (Resource Manager > Spreadsheet view): all styles in one table with sort, filter, cell edits, and "Apply to shown rows" for one field in one undo step. |
 | PLT-19 | 3D plants from symbols and billboards. | P2 | partial: five more parametric forms (weeping, palm, columnar conifer, multi-stem, hedge), a level of detail with billboards (see X3D-07 to X3D-09). Plants from 3D symbols are missing. |
 | PLT-20 | Copy plant data from partner nursery sites. | P2 | planned |
 
@@ -222,7 +222,7 @@ Non-goals
 | LND-06 | Mix by percentage of the area with minimum counts. | P1 | done |
 | LND-07 | Representative plant scatter in 2D: deterministic symbols from the mix, outside the holes, tree protection zones included. | P1 | done |
 | LND-08 | Quantities per plant style from the net area (`report.landscape_areas`). The plant list (`report.plant_list`) adds them to the single plants, one row per style. Groundcovers counted by area keep their price per m2. | P0 | done |
-| LND-09 | Hedgerow mode (staggered rows). | P1 | planned |
+| LND-09 | Hedgerow mode (staggered rows). | P1 | done: placement mode `hedgerow` (rows along a path, row spacing, stagger) in `plants.place` and in the Plant tool. A property test checks the spacing. |
 | LND-10 | Hydrozone and water budget reports. Data fields of the style are in the report. | P2 | planned |
 | LND-11 | Holes: parts of an area that stay empty (`landscape_area.set` with holes or exclude). They move with the area. Overlapping holes count once, and holes must stay inside the boundary. | P1 | done |
 | LND-12 | Draped landscape area: a 3D face on the site model, and the draped surface area in the report. | P1 | done |
@@ -248,11 +248,11 @@ Non-goals
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| TRE-01 | Existing tree object: position, species, trunk, canopy spread. | P1 | planned |
-| TRE-02 | Status: keep, remove, protect. | P1 | planned |
+| TRE-01 | Existing tree object: position, species, trunk, canopy spread. | P1 | done: the existing tree object has position, species, trunk diameter, canopy spread, height and condition (PLT-14). The Plant tool places existing trees (Single mode, "Existing (survey) tree"); `tree.import_survey` and `add_object` make them too. |
+| TRE-02 | Status: keep, remove, protect. | P1 | done: action retain, remove (dashed canopy, cross) or relocate, and the root protection zone (12 x DBH, at most 15 m) that is always drawn. |
 | TRE-03 | Canopy spread in eight directions. | P2 | planned |
-| TRE-04 | Tree survey import from CSV. | P1 | planned |
-| TRE-05 | Tree report. | P1 | planned |
+| TRE-04 | Tree survey import from CSV. | P1 | done: `tree.import_survey` reads a tree survey (CSV or TXT) by header names (ID, E/X, N/Y, species, DBH, height, spread, condition, action) with units in the header or options, and places the trees in map coordinates. |
+| TRE-05 | Tree report. | P1 | done: `report.existing_trees` (DBH, spread, height, condition, action, root protection radius) and the worksheet template `tree_survey`. |
 | TRE-06 | Export trees as Shapefile. | P2 | planned |
 
 ### 4.10 GIS and georeferencing
@@ -265,7 +265,7 @@ Non-goals
 | GIS-04 | Coordinate transform (via a PROJ-compatible library). Uses `proj4rs`. | P0 | done |
 | GIS-05 | Shapefile import (points, lines, polygons with holes, Z values, dbf attributes). Export is planned. | P0 | done |
 | GIS-06 | GeoJSON import and export. | P0 | done |
-| GIS-07 | Survey point tool (set known point). | P1 | planned |
+| GIS-07 | Survey point tool (set known point). | P1 | done: `georef.survey_point` sets the georeference from one known point (model position or object, and map position) or from two points (it also sets the rotation, and reports the scale). The drawing does not move. The Display rules section of the app has Set from selected point. |
 | GIS-08 | Georeferenced images: PNG or JPEG with a world file (`.pgw`, `.jgw`, `.wld`) and a `.prj`, and GeoTIFF (8 or 16 bit gray, RGB, RGBA; tiepoint and pixel scale or model transformation; GeoKeys give the CRS). The picture is warped into the model frame and becomes an image underlay (`gis.geoimage.import`). A document without georeference gets one from the picture. | P1 | done |
 | GIS-09 | Map backgrounds from WMS 1.3.0 (and 1.1.1) and WMTS 1.0.0 (`gis.wms.*`, `gis.wmts.*`). GetCapabilities gives layers, CRSs and formats. The view is cut into tiles on a fixed grid (so the cache works while you pan), requested in the document CRS when the server offers it, else in EPSG:3857 or EPSG:4326, and warped in software. WMS 1.3.0 axis order is handled (latitude first for EPSG:4326, northing first for a table of known grids such as EPSG:3301, 3035 and 3006; the Swiss and Finnish grids are easting first). GetCapabilities asks for version 1.3.0 and falls back to a request without a version; a DOCTYPE in the document (WMS 1.1.1) is dropped and never read. Tiles are cached on disk with a size limit (default 256 MB, oldest first) and an expiry of 7 days. A tile is stored only after it has been decoded at the expected size, so error answers are never cached; the header size is checked before any pixel memory is allocated. `gis.cache.clear` and the dialog clear the cache. Requests have timeouts, a size limit and manual redirects. Crate `cadektor-gis`. | P2 | done |
 | GIS-12 | Image underlay (shape kind `underlay`): a georeferenced PNG (RGBA, at most 4096 pixels per side) on a layer with an opacity. It is drawn below the vector objects in the canvas, in SVG, in sheets and in PDF (embedded image, at most 2048 pixels per side there). It has no 3D form and IFC export skips it. `gis.wms.refresh` fetches it again for a new view. | P1 | done |
@@ -274,8 +274,8 @@ Non-goals
 | GIS-15 | Coordinate readout in the Data bar: northing and easting of the cursor in the document CRS, or latitude and longitude (click to switch). `gis.coords` gives the same to agents. | P1 | done |
 | GIS-16 | Network policy: agents may fetch only addresses on an allow list that the owner sets (`--allow-url` for `cadektor serve`, `mcp` and the app; default none). Only http and https; no user name in an address; redirects are checked again; answers have a time and a size limit. The dialogs of the user are trusted. Network calls run on worker threads: the app never waits (`gis.job.status` for agents). A result is applied only to the document and the georeference it was started for, and `gis.job.cancel` stops the worker at its next request. | P0 | done |
 | GIS-17 | App dialogs: File > Map Sources (add a WMS, WMTS or WFS source, layer picker with filter, geoimage file, agent allow list, tile cache size) and File > Change CRS (preview and apply). | P1 | done |
-| GIS-10 | Northing/Easting grid display. | P1 | planned |
-| GIS-11 | Georeference carried through IFC and DXF export. IFC: `IfcMapConversion`, `IfcProjectedCRS` and site latitude/longitude are done. DXF: planned. | P1 | partly done |
+| GIS-10 | Northing/Easting grid display. | P1 | done: `grid.set` shows northing and easting lines with labels from the georeference (spacing in map units, rotation honored) in the plan and in SVG. Not in sheet viewports yet. |
+| GIS-11 | Georeference carried through IFC and DXF export. IFC: `IfcMapConversion`, `IfcProjectedCRS` and site latitude/longitude (IFC2x3: property sets `ePSet_MapConversion` and `ePSet_ProjectedCRS` of the site). DXF: real-world coordinates and a GEODATA object (projected grid, design and reference point, unit, north direction, EPSG alias). | P1 | done: DXF import does not read GEODATA; a CRS that is not an EPSG code gets a note and no GEODATA |
 
 ### 4.11 Irrigation
 
@@ -283,7 +283,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| IRR-01 | Plant irrigation record fields (water need, hydrozone). | P1 | planned |
+| IRR-01 | Plant irrigation record fields (water need, hydrozone). | P1 | done: plant styles have a water need class (very low, low, moderate, high), a hydrozone and a plant factor. `irrigation.report.hydrozones` groups the plants by hydrozone, gives the canopy area and the yearly water need for a given ETo, flags mixed zones, and links a hydrozone named like irrigation zone 3 (Z3, 3, Zone 3) to the zone schedule (heads, flow, run time). |
 | IRR-02 | Outlet objects (spray head, rotor, drip emitter, bubbler): a point with model, spray arc, direction and radius. They draw a translucent coverage fan in 2D, in the color of the zone. Undoable through `add_object`, `modify_object`, move and rotate. | P1 | done |
 | IRR-03 | Irrigation lines (mainline, lateral, drip line) with pipe size and material. Points of connection (static pressure, available flow), control valves (zone, flow factor kv, controller and station) and controllers (stations). | P1 | done |
 | IRR-04 | Zone assignment and coverage: an outlet belongs to the zone of the nearest valve upstream. "Calculate" stores the zone in the outlets (one undo step). Colors per zone. | P1 | done |
@@ -305,10 +305,10 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | RPT-01 | Plant and area reports through the API. | P0 | done |
 | RPT-02 | Record formats: typed fields (text, integer, number, boolean, dimension, area, choice list) with defaults and units, as resources. Attach, detach and edit records on objects (undoable, validated). Record format editor and Data tab of Object Info. | P0 | done |
 | RPT-03 | Worksheet resource (`cadektor-sheet`): cells, formulas (+ - * / ^ &, comparisons, references A1 and B2:C5, SUM AVERAGE MIN MAX COUNT IF ROUND CONCAT and more), formats (decimals, unit), live recalculation cached by revision, cycles give #CYCLE!. Worksheet window with grid and formula bar. | P1 | done |
-| RPT-04 | Preformatted reports: `report.plant_list`, `report.landscape_areas` and `report.hardscape` are done, with CSV. Printable layouts are not. | P0 | planned |
+| RPT-04 | Preformatted reports: `report.plant_list`, `report.landscape_areas` and `report.hardscape` are done, with CSV. Printable layouts are not. | P0 | done: `report.plant_list`, `report.landscape_areas` and `report.hardscape` with CSV, the worksheet templates (`worksheet.templates`) and printable layouts through worksheet tables on sheets (RPT-11). |
 | RPT-05 | Export worksheet to CSV. | P0 | done |
-| RPT-06 | Data tag styles and tag placement. | P1 | planned |
-| RPT-07 | Data visualizations (color by criteria). | P1 | planned |
+| RPT-06 | Data tag styles and tag placement. | P1 | done: tag styles (`tag_style.*`), `data_tag.add` and `data_tag.tag_all`, the Data Tag tool (ANN-12). |
+| RPT-07 | Data visualizations (color by criteria). | P1 | done: `visualization.set` and `visualization.auto` color objects by criteria (a value, a range, otherwise) on any property, as a display rule. No object or data changes. Shown in the plan, SVG and sheet viewports with a legend (`visualization.get`) and in the Display rules section. The 3D view and the exports ignore it. |
 | RPT-08 | Graphic legends. | P2 | planned |
 | RPT-09 | Worksheet database rows linked to live objects: criteria (kind, layer, class, record, field comparisons, style), column expressions (Area, Length, Perimeter, Count, Layer, Class, Style, plant and record fields), sort, group, subtotals and totals. Database setup in the worksheet window. | P1 | done |
 | RPT-10 | Export worksheet to XLSX (values and number formats, own small writer, no extra crate). | P2 | done |
@@ -352,13 +352,13 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| ARC-01 | Wall object with style, height, components. | P1 | planned |
-| ARC-02 | Door and window in walls. | P1 | planned |
-| ARC-03 | Slab and roof. | P1 | planned |
-| ARC-04 | Stories linked to layers. | P1 | planned |
-| ARC-05 | Space object with area. | P2 | planned |
-| ARC-06 | Stairs. | P2 | planned |
-| ARC-07 | Columns and beams. | P2 | planned |
+| ARC-01 | Wall object with style, height, components. | P1 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-02 | Door and window in walls. | P1 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-03 | Slab and roof. | P1 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-04 | Stories linked to layers. | P1 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-05 | Space object with area. | P2 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-06 | Stairs. | P2 | deferred to Later (the architecture features wait; landscape comes first) |
+| ARC-07 | Columns and beams. | P2 | deferred to Later (the architecture features wait; landscape comes first) |
 | ARC-08 | Section viewports from the model. | P2 | done (X3D-10 to X3D-16: cuts through any 3D object) |
 | ARC-09 | Massing model (shape kind `massing`, tool Massing Model `Alt+Shift+M`, `massing.*`): a footprint polygon (curves allowed), an eave height or floors times a floor height, and a flat, gable or hip roof with a pitch. A closed solid in 3D (exact volume). Gable and hip roofs need a convex footprint; on a non-convex one (an L shape) the roof is built flat and the API and the property panel warn (a straight-skeleton roof is not built). Roof lines in 2D, base from the site model of the layer (lowest ground under the footprint) or a given base height. Quantities: footprint, gross floor area (footprint times floors), volume, roof and wall area. Also in the Data Manager (`Floors`, `GrossFloorArea`, `Volume`, `Height`, `Roof`). | P2 | done |
 | ARC-10 | Create massing from shapes (`massing.from_shapes`): closed polygons (for example imported WFS building footprints) become massing models in one step. The height comes from a data field (`height`, `building:height`, ... or a named field, with a unit scale) or a number of floors (`levels`, `floors`, ...). A shape in a group gives a model in the same group. The data moves over. | P2 | done |
@@ -371,8 +371,8 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | IOP-01 | DXF import and export (2D, layers, blocks). ASCII DXF. Bulges stay exact arcs. | P0 | done |
 | IOP-02 | IFC4 export (IFC4 ADD2 TC1) with property sets, quantities, materials, styles and georeference. Crate `cadektor-ifc`, `export.file` with format `ifc`. Terrain, hardscape (`IfcSlab`), landscape areas and plants (`IfcGeographicElement`). Validated with IfcOpenShell. IFC4 has no VEGETATION type, so vegetation is USERDEFINED with ObjectType VEGETATION. | P0 | done |
 | IOP-03 | IFC import (`import.file`, format `ifc`; crate `cadektor-ifc`, module `import`). Geometry: `IfcExtrudedAreaSolid` (rectangle, rounded rectangle, circle, ellipse, I shape, arbitrary closed profile, profile with voids, composite curve with arcs), `IfcTriangulatedFaceSet`, `IfcPolygonalFaceSet`, `IfcFacetedBrep`, `IfcShellBasedSurfaceModel`, `IfcMappedItem`, `IfcBooleanClippingResult` with a half space, `IfcBoundingBox`. Unsupported geometry is reported, and a box representation stands in for it. Placement chains and units (SI prefixes, feet and other conversion based units). Storeys become design layers with their elevation, presentation layers become classes, property sets and quantity sets become records (one record format per set) or object data. Terrain (`IfcGeographicElement` TERRAIN, `IfcSite` with a face set) becomes a site model (its vertices are the source points; Cadektor makes the TIN) or, with `terrain: mesh`, a mesh. Slabs, coverings, walls and all other elements become the generic mesh object (shape kind `mesh3d`) with the IFC class in `data.ifc_class`; nothing becomes a hardscape. Vegetation becomes a landscape area (thin flat extrusion, arcs stay exact, holes kept) or a plant (size from the box around the geometry), else a mesh. A mapped item that is used twice or more and has upright extrusions only becomes a symbol with 3D components (a mirrored or scaled use stays a mesh; the position follows IfcOpenShell: target times map origin). One work budget per product (items, copies, triangles) and one evaluation per mapped source keep nested files fast. Property sets reuse record formats of the document with the same name and compatible fields; one-of-a-kind sets go into object data (`ifc_psets`) past 40 formats. Vegetation is matched by whole words of the object type, and the predefined type wins. The IFC2x3 georeference comes from `ePSet_MapConversion`. `IfcMapConversion` sets an empty georeference or moves the geometry into a document georeference with the same CRS. One undo step, a report with counts, skipped items and notes. Openings are not cut, and `IfcSpace` is skipped. Fixtures in `tests/fixtures/ifc`, IfcOpenShell files in `tests/behavior/test_ifc_import.py`. | P0 | done |
-| IOP-04 | IFC 2x3 import and export. Import is done (see IOP-03). Export writes IFC4 only. | P1 | partly done |
-| IOP-05 | IFC4x3 (site, terrain, georeference). Import reads the files, the classes (`IfcPavement`, `IfcCourse`, `IfcEarthworks*`, `IfcGeotechnicalStratum`) and `IfcMapConversion`. Alignments and sectioned solids are not read. Export writes IFC4 only. | P1 | partly done |
+| IOP-04 | IFC 2x3 import and export. Import is done (see IOP-03). Export: option `version` IFC2X3 (owner history, building element proxies, surface models, georeference as property sets). | P1 | done: validated with IfcOpenShell |
+| IOP-05 | IFC4x3 (site, terrain, georeference). Import reads the files, the classes (`IfcPavement`, `IfcCourse`, `IfcEarthworks*`, `IfcGeotechnicalStratum`) and `IfcMapConversion`. Alignments and sectioned solids are not read. Export: option `version` IFC4X3 (IFC4X3_ADD2): site, terrain as `IfcGeographicElement` TERRAIN, vegetation with its own type, `IfcMapConversion`. No `IfcAlignment`. | P1 | done: validated with IfcOpenShell |
 | IOP-06 | Shapefile and GeoJSON (see GIS). | P0 | done |
 | IOP-07 | Data mapping rules to IFC fields: a Data Manager mapping table (resource) from object parameters to record fields and IFC property sets, with an evaluation function and API. The IFC writer itself is IOP-02. | P1 | done |
 | IOP-20 | Streaming STEP reader (`cadektor_ifc::reader`): one pass over the file, in blocks, builds an index of 24 bytes per entity (byte range and class, no parsing). The file stays on disk, and an entity is read and parsed when asked for, with a cache. Caps for file size (1 GiB), entity count (20 million), nesting and list length. No recursion in the scanner. Broken statements are skipped, a cut-off file keeps its complete entities. Comments, complex entities, `''` and `\X2\` strings. Proptest: random bytes, truncated and mutated files never panic, and a batch from a mutated file always runs. | P0 | done |
@@ -380,7 +380,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | 3D-20 | Generic 3D mesh object (shape kind `mesh3d`): vertices in absolute model coordinates (mm) and triangles, an optional color and name. Drawn in the 3D view and render, a box in plan, moved with the 2D move, reprojected with the georeference, exported to IFC as `IfcBuildingElementProxy` (or `IfcSlab` and `IfcCovering` when the object data says so). Made by the IFC import. | P1 | done |
 | IOP-15 | IFC export options: classes become presentation layers, 2D annotations on or off, design layers as building storeys on or off, a named data map. GlobalIds stay stable (project GUID in the document). | P1 | done |
 | IOP-08 | PDF export. | P1 | done |
-| IOP-09 | DXF 3D entities. | P1 | planned |
+| IOP-09 | DXF 3D entities. | P1 | done: 3D polylines (import and export), 3DFACE import (3D polygons, or one mesh per layer with the option `faces: mesh`), POLYFACE and polygon mesh import (`mesh3d`), mesh export as POLYFACE or 3DFACE (`mesh_entity`), and the site surface as a mesh (`site_mesh`). Checked with the ezdxf audit. |
 | IOP-10 | DWG import and export. | P2 | planned |
 | IOP-11 | OBJ, STL, STEP. | P2 | partial: OBJ done (X3D-03). STL and STEP are missing. FBX and 3DS are out of scope. |
 | IOP-12 | Point cloud import. | P2 | planned |
@@ -506,8 +506,8 @@ Annotation objects are `Shape::Annotation` (module `cadektor_core::annot`, crate
 | ANN-08 | North arrow (three styles, rotation, true north from the georeference). | P1 | done |
 | ANN-09 | Scale bar that follows the scale of the layer or viewport, or its own scale; m, mm, ft. | P1 | done |
 | ANN-10 | Revision clouds with revision data (mark, date, description, author), `revision.list`. In viewports the annotation space takes all annotation objects in paper mm. | P1 | done |
-| ANN-11 | Output: canvas, SVG, sheet PDF/SVG/PNG, DXF (exploded into lines and text; native DIMENSION, MTEXT and LEADER entities are missing). | P1 | partial |
-| ANN-12 | App tools: Dimension (modes), Callout, Data Tag, North Arrow, Scale Bar, Revision Cloud, Graphic Legend command, Object Info fields. No editor windows for the styles (use the API). | P1 | partial |
+| ANN-11 | Output: canvas, SVG, sheet PDF/SVG/PNG, DXF. In DXF, linear, radial and diameter dimensions are native DIMENSION entities with their anonymous blocks, callouts are LEADER and MTEXT, and text is MTEXT (option `native_annotations`, default on). Other kinds (chain, baseline, ordinate, angular and arc length dimensions, data tags, legends, north arrows, scale bars, revision clouds) stay lines and text. | P1 | done where a native form exists. Checked with the ezdxf audit. |
+| ANN-12 | App tools: Dimension (modes), Callout, Data Tag, North Arrow, Scale Bar, Revision Cloud, Graphic Legend command, Object Info fields. No editor windows for the styles (use the API). | P1 | partial: verified. The tools Dimension (all modes), Callout, Data Tag, North Arrow, Scale Bar and Revision Cloud, the Graphic Legend command and the Object Info fields exist. No editor windows for the styles (use the API). |
 | ANN-13 | API: `*_style.*`, `notes_db.*`, `dimension.add`, `callout.add`, `data_tag.*`, `legend.add`, `north_arrow.add`, `scale_bar.add`, `revision_cloud.add`, `annotation.*`, `revision.list`. | P1 | done |
 
 ### 4.20 3D output and section drawings

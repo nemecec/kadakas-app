@@ -13,6 +13,7 @@ pub mod crs;
 pub mod dwg;
 pub mod dxf;
 mod encoding;
+pub use encoding::decode_text;
 pub mod geojson;
 pub mod gis;
 pub mod options;
@@ -25,7 +26,10 @@ use std::path::Path;
 use cadektor_core::command::Command;
 use cadektor_core::model::{ClassId, Document, Layer, LayerId};
 
-pub use options::{ExportOptions, ExportOrigin, ImportOptions, LayerMode, OriginMode, Unit};
+pub use options::{
+    ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, MeshEntity, OriginMode,
+    SiteMesh, Unit,
+};
 pub use report::{Report, Skipped};
 
 /// A file format that this crate can read or write.
