@@ -2592,3 +2592,43 @@ fn a_blocked_connection_is_free_again_with_a_lower_number() {
     let free = s.receive(conn, submit(7), 0);
     assert!(matches!(free[0].msg, ServerMsg::Ack { .. }));
 }
+
+#[test]
+fn a_client_id_belongs_to_the_first_user_who_signs_in_with_it() {
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let hello = |user: u64, client: u64| ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(user),
+        client: Uid::from_num(client),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+    };
+    let a = s.open();
+    assert!(matches!(
+        s.receive(a, hello(1, 50), 0)[0].msg,
+        ServerMsg::Welcome { .. }
+    ));
+    // The first user goes offline. The client ID stays theirs.
+    s.close(a);
+    let b = s.open();
+    assert!(matches!(
+        s.receive(b, hello(2, 50), 0)[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::AuthFailed,
+            ..
+        }
+    ));
+    // Another client ID of the second user is fine, and so is the first user again.
+    let c = s.open();
+    assert!(matches!(
+        s.receive(c, hello(2, 51), 0).last().unwrap().msg,
+        ServerMsg::Snapshot { .. }
+    ));
+    let d = s.open();
+    assert!(matches!(
+        s.receive(d, hello(1, 50), 0).last().unwrap().msg,
+        ServerMsg::Snapshot { .. }
+    ));
+}

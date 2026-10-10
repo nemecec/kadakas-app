@@ -340,8 +340,9 @@ as canonical JSON text, are equal.
 3. **Sign-in and identity.** If the token is not good, send `error` with `auth_failed` and close.
    The server **binds `user` to the identity of the token**: a `hello` whose `user` is not the user
    of the token is `auth_failed`. The `user` in entries and presence always comes from the sign-in,
-   never from a message. The client ID may be any UUID that this user uses; a server must also
-   limit a client ID to one connection at a time (a second connection with the same client ID
+   never from a message. A client ID belongs to the first user who signs in with it (the server keeps this, also
+   when the client is offline). A `hello` with a client ID of another user is `auth_failed`. A server
+   must also limit a client ID to one connection at a time (a second connection with the same client ID
    replaces the first, or is refused).
 4. **Ordering.** For a good `submit`: give the next sequence number, apply the operations to the
    server replica with the writer (client ID, `op_id`), append the entry to the log, send `ack` to

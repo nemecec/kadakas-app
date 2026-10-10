@@ -87,6 +87,8 @@ pub struct Sequencer {
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
     /// Blobs by hash.
     blobs: BTreeMap<String, String>,
+    /// client ID -> the first user who signed in with it.
+    owners: BTreeMap<Uid, Uid>,
     /// The next blob_put calls fail with this error (nothing is kept).
     inject_blob: Option<(ErrorCode, usize)>,
     /// Per connection: a blob_put was refused with a retry error. Every later submit gets the
@@ -113,6 +115,7 @@ impl Sequencer {
             check_entities: true,
             blocked: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            owners: BTreeMap::new(),
             inject_blob: None,
             blob_blocked: BTreeMap::new(),
         }
@@ -300,6 +303,15 @@ impl Sequencer {
                         Some(bound) if bound.is_none_or(|u| u == user) => {}
                         _ => return reply(error(ErrorCode::AuthFailed, "wrong token", None)),
                     }
+                }
+                // A client ID belongs to the first user who signs in with it, also when that
+                // client is offline later.
+                if *self.owners.entry(client).or_insert(user) != user {
+                    return reply(error(
+                        ErrorCode::AuthFailed,
+                        "this client ID belongs to another user",
+                        None,
+                    ));
                 }
                 self.join(conn, user, client, &name, last_seq, log_id)
             }
