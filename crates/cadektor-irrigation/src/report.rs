@@ -13,8 +13,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use cadektor_core::DVec2;
+use cadektor_core::csv::write_rows as write_csv;
 use cadektor_core::irrigation::LineType;
-use cadektor_core::plants::catalog::write_csv;
 use serde::Serialize;
 
 use crate::extract::Analysis;

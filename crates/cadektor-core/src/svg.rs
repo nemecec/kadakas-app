@@ -7,8 +7,8 @@ use glam::DVec2;
 use crate::curve;
 use crate::model::*;
 use crate::plants::graphic::{self, GraphicPath};
-use crate::plants::schedule;
 use crate::plants::style::PlantGraphic;
+use crate::plants::tag as schedule;
 use crate::plants::tree::{self, TreeAction};
 
 /// Bounds of all visible objects, or `None` for an empty drawing.

@@ -722,7 +722,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     let mut v = info_json(doc, i);
                     if thumbs {
                         v["thumbnail"] =
-                            json!(cadektor_core::thumbnail::thumbnail(doc, i.id).to_svg(64));
+                            json!(cadektor_render::thumbnail::thumbnail(doc, i.id).to_svg(64));
                     }
                     v
                 })
@@ -859,7 +859,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 .and_then(Value::as_u64)
                 .unwrap_or(64)
                 .clamp(8, 1024) as u32;
-            Ok(json!({ "svg": cadektor_core::thumbnail::thumbnail(doc, id).to_svg(size) }))
+            Ok(json!({ "svg": cadektor_render::thumbnail::thumbnail(doc, id).to_svg(size) }))
         }
         "pattern.segments" => {
             let doc = s.editor.doc();

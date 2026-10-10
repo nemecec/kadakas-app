@@ -2,11 +2,12 @@
 
 use serde::Serialize;
 
-use crate::model::{Document, ObjectId, Shape};
-use crate::plants::catalog::write_csv;
-use crate::plants::schedule::schedule;
-use crate::plants::style::{PlantCategory, QuantityType};
-use crate::resource::ResourceId;
+use cadektor_core::csv::write_rows as write_csv;
+use cadektor_core::model::{Document, ObjectId, Shape};
+use cadektor_core::plants::style::{PlantCategory, QuantityType};
+use cadektor_core::resource::ResourceId;
+
+use crate::schedule::schedule;
 
 /// The share of one landscape area in a row.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -95,7 +96,7 @@ pub fn plant_list(doc: &Document) -> PlantList {
         let Shape::LandscapeArea { name, .. } = &obj.shape else {
             continue;
         };
-        let Some(q) = super::quantities(doc, obj) else {
+        let Some(q) = cadektor_core::landscape::quantities(doc, obj) else {
             continue;
         };
         let area_name = if name.trim().is_empty() {

@@ -579,6 +579,7 @@ dependencies = [
  "cadektor-ifc",
  "cadektor-io",
  "cadektor-irrigation",
+ "cadektor-plants",
  "cadektor-print",
  "cadektor-render",
  "cadektor-script",
@@ -604,6 +605,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-gis",
  "cadektor-irrigation",
+ "cadektor-plants",
  "cadektor-print",
  "cadektor-render",
  "cadektor-script",
@@ -721,6 +723,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadektor-plants"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "glam",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "cadektor-print"
 version = "0.1.0"
 dependencies = [
@@ -753,6 +767,7 @@ dependencies = [
  "glam",
  "png",
  "proptest",
+ "serde_json",
  "zune-core",
  "zune-jpeg",
 ]
@@ -774,6 +789,7 @@ name = "cadektor-sheet"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
+ "cadektor-plants",
  "proptest",
  "serde",
  "serde_json",

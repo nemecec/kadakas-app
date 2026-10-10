@@ -3,8 +3,8 @@
 use super::*;
 use crate::landscape::style::MixEntry;
 use crate::plants::link::{self, PlantLink};
-use crate::plants::placement::MAX_POINTS;
 use crate::plants::style::PlantStyle;
+use crate::plants::variation::MAX_POINTS;
 use crate::resource::Resource;
 
 fn invalid(m: impl Into<String>) -> CommandError {
@@ -1061,7 +1061,7 @@ mod tests {
     fn vary(
         ed: &mut Editor,
         style: Option<ResourceId>,
-        v: crate::plants::placement::Variation,
+        v: crate::plants::variation::Variation,
         n: usize,
     ) -> Vec<ObjectId> {
         let cmd = Command::AddPlants {
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[test]
     fn variation_changes_size_and_rotation_deterministically() {
-        use crate::plants::placement::Variation;
+        use crate::plants::variation::Variation;
         let mut ed = Editor::default();
         let id = add_style(&mut ed, "A", 4000.0);
         let v = Variation {
@@ -1145,7 +1145,7 @@ mod tests {
 
     #[test]
     fn variation_respects_locked_sizes_and_checks_its_values() {
-        use crate::plants::placement::Variation;
+        use crate::plants::variation::Variation;
         let (mut ed, id) = locked_style();
         let ids = vary(
             &mut ed,

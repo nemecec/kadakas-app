@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use cadektor_api::Session;
 use cadektor_core::resource::ResourceId;
-use cadektor_core::thumbnail::{SIZE, Thumbnail, thumbnail};
+use cadektor_render::thumbnail::{SIZE, Thumbnail, thumbnail};
 use egui::epaint::PathStroke;
 use egui::{Color32, Pos2, Sense, Ui, Vec2};
 use serde_json::{Value, json};

@@ -284,7 +284,6 @@ fn check(doc: &Document) {
             .total_plan_area_m2
             .is_finite()
     );
-    assert!(landscape::plant_list(doc).total_count < usize::MAX);
 }
 
 proptest! {

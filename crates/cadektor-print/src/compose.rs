@@ -6,7 +6,7 @@ use std::sync::Arc;
 use cadektor_core::ground::{GroundSource, NoTerrain};
 use cadektor_core::mesh;
 use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
-use cadektor_core::plants::schedule;
+use cadektor_core::plants::tag as schedule;
 use cadektor_core::present::RenderStyle;
 use cadektor_core::sheets::{self, Fields, TitleBlock, Viewport, title_block_geometry};
 use cadektor_render::{Camera, FOV_Y, Projection, RenderMode, StandardView};

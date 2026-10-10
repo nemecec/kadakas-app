@@ -4,9 +4,9 @@
 //! places them in the grid.
 
 use cadektor_core::ground::{GroundSource, NoTerrain};
-use cadektor_core::landscape::plant_list::{PlantListRow, plant_list};
 use cadektor_core::model::{Document, Object};
 use cadektor_core::props::{self, Prop};
+use cadektor_plants::plant_list::{PlantListRow, plant_list};
 
 use crate::def::{ColumnDef, DatabaseDef, GroupMode, RowSource, Summary};
 use crate::eval::{Env, eval};

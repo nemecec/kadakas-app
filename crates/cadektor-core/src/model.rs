@@ -2384,11 +2384,6 @@ mod tests {
             ),
             (None, "Quercus robur", 6000.0, 12000.0)
         );
-        let s = crate::plants::schedule::schedule(&doc);
-        assert_eq!(
-            (s.rows[0].name.as_str(), s.rows[0].count),
-            ("Quercus robur", 1)
-        );
         // Saving a document without resources writes no `resources` key, so old apps still read it.
         assert!(
             serde_json::to_value(&doc)

@@ -5,11 +5,10 @@
 //! model is a pure module with its own tests.
 
 pub mod care;
-pub mod catalog;
 pub mod form3d;
 pub mod graphic;
 pub mod link;
-pub mod placement;
-pub mod schedule;
 pub mod style;
+pub mod tag;
 pub mod tree;
+pub mod variation;

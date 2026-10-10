@@ -5,11 +5,11 @@ use std::fmt::Write;
 
 use glam::{DAffine2, DVec2};
 
-use crate::graphics::{GraphicResource, PatternUnits};
-use crate::model::{Color, Document, Shape};
-use crate::pattern;
-use crate::resource::{ResourceBody, ResourceId};
-use crate::symbols;
+use cadektor_core::graphics::{GraphicResource, PatternUnits};
+use cadektor_core::model::{Color, Document, Shape};
+use cadektor_core::pattern;
+use cadektor_core::resource::{ResourceBody, ResourceId};
+use cadektor_core::symbols;
 
 /// Side of the thumbnail box.
 pub const SIZE: f64 = 100.0;
@@ -373,12 +373,12 @@ pub fn thumbnail(doc: &Document, id: ResourceId) -> Thumbnail {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::{Command, Editor};
-    use crate::graphics::{
+    use cadektor_core::command::{Command, Editor};
+    use cadektor_core::graphics::{
         HatchDef, HatchLine, LineElement, LineTypeDef, SymbolDef, SymbolItem, TextureDef, TileDef,
     };
-    use crate::model::Attributes;
-    use crate::plants::style::PlantStyle;
+    use cadektor_core::model::Attributes;
+    use cadektor_core::plants::style::PlantStyle;
 
     fn add(ed: &mut Editor, name: &str, body: ResourceBody) -> ResourceId {
         ResourceId(
@@ -434,7 +434,7 @@ mod tests {
                         class: None,
                     },
                 ],
-                solids: vec![crate::graphics::Solid3d::Cylinder {
+                solids: vec![cadektor_core::graphics::Solid3d::Cylinder {
                     center: DVec2::new(500.0, 500.0),
                     radius: 100.0,
                     base: 0.0,

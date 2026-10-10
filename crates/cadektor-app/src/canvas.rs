@@ -6,7 +6,7 @@ use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
 
-use cadektor_core::plants::schedule::{TagCounts, tag_counts};
+use cadektor_core::plants::tag::{TagCounts, tag_counts};
 
 use crate::plant_draw;
 use crate::snap::SnapResult;
@@ -423,7 +423,7 @@ fn draw_shape_or_object(
         Shape::PlantTag {
             at, anchor, height, ..
         } => {
-            let layout = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts)
+            let layout = cadektor_core::plants::tag::tag_info_with(doc, o.id, counts)
                 .map(|t| t.layout(*height));
             plant_draw::draw_tag(
                 painter,

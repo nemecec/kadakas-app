@@ -5,13 +5,13 @@ use cadektor_api::Session;
 use cadektor_core::command::Command;
 use cadektor_core::model::{Color, Document, ObjectId, Shape};
 use cadektor_core::plants::link;
-use cadektor_core::plants::placement::Pattern;
-use cadektor_core::plants::schedule;
 use cadektor_core::plants::style::{
     PlantCategory, PlantForm, PlantGraphic, PlantStyle, QuantityType,
 };
 use cadektor_core::plants::tree::{self, DEFAULT_RPZ_FACTOR};
 use cadektor_core::resource::{ResourceBody, ResourceId};
+use cadektor_plants::placement::Pattern;
+use cadektor_plants::schedule;
 use egui::{DragValue, Ui};
 use serde_json::{Map, Value, json};
 
@@ -770,7 +770,7 @@ pub fn plant_tag_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: 
     let Some(obj) = session.editor.doc().object(id) else {
         return;
     };
-    let current = schedule::TagFormat::of(obj);
+    let current = cadektor_core::plants::tag::TagFormat::of(obj);
     let mut f = current;
     ui.separator();
     ui.strong("Tag format");
@@ -790,7 +790,7 @@ pub fn plant_tag_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: 
         let cmd = Command::SetData {
             id,
             set: [(
-                schedule::TAG_FORMAT_KEY.to_string(),
+                cadektor_core::plants::tag::TAG_FORMAT_KEY.to_string(),
                 json!({"levels": f.levels, "bubble": f.bubble}),
             )]
             .into(),

@@ -265,7 +265,7 @@ schema_impl!(
     "Orientation",
     |_g| string_enum::<crate::sheets::Orientation>()
 );
-schema_impl!(crate::plants::placement::Variation, "Variation", |_g| {
+schema_impl!(crate::plants::variation::Variation, "Variation", |_g| {
     opaque("Random variation of placed plants: seed and ranges.")
 });
 schema_impl!(

@@ -6,11 +6,11 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use cadektor_core::command::Command;
+use cadektor_core::csv::write_rows as write_csv;
 use cadektor_core::curve::Vertex;
 use cadektor_core::massing::{Massing, RoofStyle};
 use cadektor_core::massing_batch::{self, FromShapesOptions};
 use cadektor_core::model::{Attributes, ClassId, LayerId, ObjectId, Shape};
-use cadektor_core::plants::catalog::write_csv;
 use cadektor_site::SiteTerrain;
 
 use crate::errors::bad;

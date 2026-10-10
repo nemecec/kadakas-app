@@ -6,7 +6,6 @@
 //! `Object::data["landscape_area"]`. An area without this key is a plain outline with a name:
 //! files from before landscape area styles load as these.
 
-pub mod plant_list;
 pub mod style;
 
 use std::fmt::Write;
@@ -18,7 +17,6 @@ use i_overlay::float::single::SingleFloatOverlay;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use plant_list::{PlantList, PlantListRow, plant_list, plant_list_csv};
 pub use style::{LandscapeAreaStyle, MixEntry};
 
 use crate::curve::{self, Vertex};

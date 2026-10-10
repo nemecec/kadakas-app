@@ -13,9 +13,9 @@ use serde_json::{Map, Value, json};
 
 use cadektor_core::DVec2;
 use cadektor_core::command::Command;
+use cadektor_core::csv::write_rows as write_csv;
 use cadektor_core::irrigation::{IrrigationShape, LineType};
 use cadektor_core::model::*;
-use cadektor_core::plants::catalog::write_csv;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_irrigation::catalog::{self, Catalog};
 use cadektor_irrigation::extract::{DEFAULT_TOLERANCE, ExtractOptions, analyze_with};

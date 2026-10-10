@@ -14,8 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use cadektor_core::csv::{parse as parse_csv, write_rows as write_csv};
 use cadektor_core::model::Document;
-use cadektor_core::plants::catalog::{parse_csv, write_csv};
 use cadektor_core::resource::ResourceBody;
 
 /// The kind of an outlet.

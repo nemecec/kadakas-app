@@ -4,8 +4,8 @@
 use cadektor_core::curve::{self, Seg};
 use cadektor_core::model::{Attributes, Color, Document, Object, Shape};
 use cadektor_core::plants::graphic;
-use cadektor_core::plants::schedule::{self, TagCounts};
 use cadektor_core::plants::style::PlantGraphic;
+use cadektor_core::plants::tag::{self as schedule, TagCounts};
 use cadektor_core::plants::tree::{self, TreeAction};
 use cadektor_core::sheets::{Annotation, AnnotationItem, Viewport};
 use cadektor_core::svg::site_outline;

@@ -185,7 +185,7 @@ pub enum Command {
         class: Option<ClassId>,
         /// Random size and rotation, from a seed. Plant `i` gets the same values every time.
         #[serde(default)]
-        variation: Option<crate::plants::placement::Variation>,
+        variation: Option<crate::plants::variation::Variation>,
     },
     /// Link plants to a style, replace their overrides, or unlink them.
     SetPlantStyle {

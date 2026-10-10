@@ -9,6 +9,7 @@ pub mod raster;
 pub mod shade;
 pub mod styled;
 pub mod texture;
+pub mod thumbnail;
 pub mod views;
 
 pub use camera::{Camera, FOV_Y};

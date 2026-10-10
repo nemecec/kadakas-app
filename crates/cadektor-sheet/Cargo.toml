@@ -9,6 +9,7 @@ description = "Worksheets: a spreadsheet grid with formulas and database rows ov
 
 [dependencies]
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-plants = { version = "0.1.0", path = "../cadektor-plants" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 

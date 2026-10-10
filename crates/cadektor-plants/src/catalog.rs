@@ -12,8 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use super::style::{PlantCategory, PlantForm, PlantGraphic, PlantStyle};
-use crate::model::Color;
+use cadektor_core::csv::parse;
+use cadektor_core::model::Color;
+use cadektor_core::plants::style::{PlantCategory, PlantForm, PlantGraphic, PlantStyle};
 
 /// Fields that a column can set, in export order.
 pub const FIELDS: [&str; 19] = [
@@ -64,100 +65,6 @@ impl Unit {
             Unit::M => 1000.0,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// CSV text
-
-/// Splits CSV text into rows of fields. Blank lines are skipped.
-pub fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let delim = detect_delimiter(text);
-    let mut rows = Vec::new();
-    let mut row: Vec<String> = Vec::new();
-    let mut field = String::new();
-    let mut quoted = false;
-    let mut was_quoted = false;
-    let mut chars = text.chars().peekable();
-    let end_row = |row: &mut Vec<String>,
-                   field: &mut String,
-                   rows: &mut Vec<Vec<String>>,
-                   was_quoted: &mut bool| {
-        row.push(std::mem::take(field));
-        let blank = row.len() == 1 && row[0].trim().is_empty() && !*was_quoted;
-        if !blank {
-            rows.push(std::mem::take(row));
-        } else {
-            row.clear();
-        }
-        *was_quoted = false;
-    };
-    while let Some(c) = chars.next() {
-        if quoted {
-            if c == '"' {
-                if chars.peek() == Some(&'"') {
-                    chars.next();
-                    field.push('"');
-                } else {
-                    quoted = false;
-                }
-            } else {
-                field.push(c);
-            }
-        } else if c == '"' && field.trim().is_empty() {
-            field.clear();
-            quoted = true;
-            was_quoted = true;
-        } else if c == delim {
-            row.push(std::mem::take(&mut field));
-        } else if c == '\n' {
-            end_row(&mut row, &mut field, &mut rows, &mut was_quoted);
-        } else if c == '\r' {
-            // Part of CRLF, or a lone CR as a line end.
-            if chars.peek() == Some(&'\n') {
-                continue;
-            }
-            end_row(&mut row, &mut field, &mut rows, &mut was_quoted);
-        } else {
-            field.push(c);
-        }
-    }
-    if quoted {
-        return Err("a quoted field is not closed".into());
-    }
-    if !field.is_empty() || !row.is_empty() || was_quoted {
-        end_row(&mut row, &mut field, &mut rows, &mut was_quoted);
-    }
-    Ok(rows)
-}
-
-/// The delimiter that the first line uses most, outside quotes.
-fn detect_delimiter(text: &str) -> char {
-    let mut counts = [0usize; 3];
-    let mut quoted = false;
-    for c in text.chars() {
-        match c {
-            '"' => quoted = !quoted,
-            '\n' | '\r' if !quoted => break,
-            ',' if !quoted => counts[0] += 1,
-            ';' if !quoted => counts[1] += 1,
-            '\t' if !quoted => counts[2] += 1,
-            _ => {}
-        }
-    }
-    let best = (0..3)
-        .max_by_key(|i| (counts[*i], std::cmp::Reverse(*i)))
-        .unwrap();
-    if counts[best] == 0 {
-        ','
-    } else {
-        [',', ';', '\t'][best]
-    }
-}
-
-/// Writes rows as CSV text (see `crate::csv`: quoting and the formula guard).
-pub fn write_csv(rows: &[Vec<String>]) -> String {
-    crate::csv::write_rows(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +268,7 @@ pub struct ImportResult {
 
 /// Reads plant styles from CSV text.
 pub fn import(text: &str, opts: &ImportOptions) -> Result<ImportResult, String> {
-    let rows = parse_csv(text)?;
+    let rows = parse(text)?;
     let Some((head, body)) = rows.split_first() else {
         return Err("the file is empty".into());
     };
@@ -485,7 +392,7 @@ fn read_row(
                         Ok(c) => s.pen = c,
                         Err(e) => warns.push(e),
                     },
-                    "water_need" => match super::care::WaterNeed::from_name(cell) {
+                    "water_need" => match cadektor_core::plants::care::WaterNeed::from_name(cell) {
                         Some(w) => s.irrigation.water_need = w,
                         None => warns.push(format!(
                             "'{cell}' is not a water need. Use very low, low, moderate or high"
@@ -602,7 +509,7 @@ pub fn export<'a>(styles: impl IntoIterator<Item = (&'a str, &'a PlantStyle)>) -
         );
         rows.push(r);
     }
-    write_csv(&rows)
+    cadektor_core::csv::write_rows(&rows)
 }
 
 /// A sample catalog, for the documentation and for tests.
@@ -614,8 +521,7 @@ mod tests {
 
     #[test]
     fn parses_quotes_line_breaks_and_delimiters() {
-        let rows =
-            parse_csv("a,b\r\n\"x, y\",\"he said \"\"hi\"\"\"\n\n\"multi\nline\",z").unwrap();
+        let rows = parse("a,b\r\n\"x, y\",\"he said \"\"hi\"\"\"\n\n\"multi\nline\",z").unwrap();
         assert_eq!(
             rows,
             vec![
@@ -624,13 +530,13 @@ mod tests {
                 vec!["multi\nline", "z"]
             ]
         );
-        assert_eq!(parse_csv("a;b\n1,5;2").unwrap()[1], vec!["1,5", "2"]);
-        assert_eq!(parse_csv("a\tb\n1\t2").unwrap()[1], vec!["1", "2"]);
-        assert_eq!(parse_csv("\u{feff}a,b\n1,2\r3,4").unwrap().len(), 3);
-        assert_eq!(parse_csv("a,b\n\"\",x").unwrap()[1], vec!["", "x"]);
-        assert!(parse_csv("a,\"b").is_err());
-        assert!(parse_csv("").unwrap().is_empty());
-        assert_eq!(parse_csv("a,b\n\"\"\n").unwrap().len(), 2);
+        assert_eq!(parse("a;b\n1,5;2").unwrap()[1], vec!["1,5", "2"]);
+        assert_eq!(parse("a\tb\n1\t2").unwrap()[1], vec!["1", "2"]);
+        assert_eq!(parse("\u{feff}a,b\n1,2\r3,4").unwrap().len(), 3);
+        assert_eq!(parse("a,b\n\"\",x").unwrap()[1], vec!["", "x"]);
+        assert!(parse("a,\"b").is_err());
+        assert!(parse("").unwrap().is_empty());
+        assert_eq!(parse("a,b\n\"\"\n").unwrap().len(), 2);
     }
 
     #[test]
@@ -642,8 +548,11 @@ mod tests {
             " lead".into(),
             "".into(),
         ]];
-        assert_eq!(write_csv(&rows), "a b,\"c,d\",\"e\"\"f\",\" lead\",\n");
-        assert_eq!(parse_csv(&write_csv(&rows)).unwrap(), rows);
+        assert_eq!(
+            cadektor_core::csv::write_rows(&rows),
+            "a b,\"c,d\",\"e\"\"f\",\" lead\",\n"
+        );
+        assert_eq!(parse(&cadektor_core::csv::write_rows(&rows)).unwrap(), rows);
     }
 
     #[test]
@@ -737,7 +646,7 @@ mod tests {
         assert_eq!(s.style.category, PlantCategory::Tree);
         assert_eq!(
             s.style.irrigation.water_need,
-            crate::plants::care::WaterNeed::Low
+            cadektor_core::plants::care::WaterNeed::Low
         );
     }
 
@@ -967,7 +876,7 @@ mod tests {
     #[test]
     fn export_of_nothing_is_only_the_header() {
         let text = export(std::iter::empty());
-        assert_eq!(parse_csv(&text).unwrap().len(), 1);
+        assert_eq!(parse(&text).unwrap().len(), 1);
         assert!(text.starts_with("name,botanical_name"));
     }
 

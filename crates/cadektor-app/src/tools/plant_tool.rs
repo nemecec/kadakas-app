@@ -1,12 +1,13 @@
-//! The Plant tool and its placement modes. The math is in `cadektor_core::plants::placement`.
+//! The Plant tool and its placement modes. The math is in `cadektor_plants::placement`.
 //! This module collects the clicks and turns them into one `Batch` command.
 
 use cadektor_core::command::Command;
 use cadektor_core::curve;
 use cadektor_core::model::{Attributes, Shape};
-use cadektor_core::plants::placement::{self, Pattern, PlaceSpec, Variation};
-use cadektor_core::plants::schedule::group_tag;
+use cadektor_core::plants::tag::group_tag;
+use cadektor_core::plants::variation::Variation;
 use cadektor_core::resource::ResourceId;
+use cadektor_plants::placement::{self, Pattern, PlaceSpec};
 use glam::DVec2;
 use serde_json::{Map, Value};
 
@@ -467,10 +468,10 @@ mod tests {
     use super::super::*;
     use super::spec_for;
     use cadektor_api::Session;
-    use cadektor_core::plants::placement::Pattern;
     use cadektor_core::plants::style::PlantStyle;
     use cadektor_core::resource::ResourceBody;
     use cadektor_core::resource::ResourceId;
+    use cadektor_plants::placement::Pattern;
 
     struct Fx {
         s: Session,

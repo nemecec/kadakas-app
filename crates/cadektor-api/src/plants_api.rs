@@ -10,12 +10,14 @@ use cadektor_core::DVec2;
 use cadektor_core::command::Command;
 use cadektor_core::curve::{self, Vertex};
 use cadektor_core::model::*;
-use cadektor_core::plants::catalog::{self, ImportOptions, Unit};
 use cadektor_core::plants::link;
-use cadektor_core::plants::placement::{self, PlaceSpec, Variation};
-use cadektor_core::plants::schedule;
 use cadektor_core::plants::style::PlantStyle;
+use cadektor_core::plants::tag::group_tag;
+use cadektor_core::plants::variation::Variation;
 use cadektor_core::resource::{ResourceBody, ResourceId};
+use cadektor_plants::catalog::{self, ImportOptions, Unit};
+use cadektor_plants::placement::{self, PlaceSpec};
+use cadektor_plants::schedule;
 
 use crate::errors::bad;
 use crate::{RpcError, Session};
@@ -301,7 +303,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                         o.shape.kind()
                     )));
                 }
-                fmt.get_or_insert(schedule::TagFormat::of(o));
+                fmt.get_or_insert(cadektor_core::plants::tag::TagFormat::of(o));
             }
             let mut f = fmt.unwrap_or_default();
             if let Some(l) = m.get("levels").filter(|v| !v.is_null()) {
@@ -320,7 +322,11 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                 .iter()
                 .map(|id| Command::SetData {
                     id: *id,
-                    set: [(schedule::TAG_FORMAT_KEY.to_string(), value.clone())].into(),
+                    set: [(
+                        cadektor_core::plants::tag::TAG_FORMAT_KEY.to_string(),
+                        value.clone(),
+                    )]
+                    .into(),
                     remove: Vec::new(),
                 })
                 .collect();
@@ -679,7 +685,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .map_err(bad)?
             .spread;
         commands.push(Command::AddObject {
-            shape: schedule::group_tag(sid, &positions, spread),
+            shape: group_tag(sid, &positions, spread),
             layer,
             class,
             attrs: Attributes::default(),

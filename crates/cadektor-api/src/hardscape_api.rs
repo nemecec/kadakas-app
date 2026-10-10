@@ -11,12 +11,12 @@ use serde_json::{Map, Value, json};
 
 use cadektor_core::DVec2;
 use cadektor_core::command::Command;
+use cadektor_core::csv::write_rows as write_csv;
 use cadektor_core::curve::{self, Vertex};
 use cadektor_core::hardscape::offset::Align;
 use cadektor_core::hardscape::{self, HardscapePatch, HardscapeStyle, Join, Mode, Slope};
 use cadektor_core::landscape::{self, LandscapeAreaStyle, LandscapePatch};
 use cadektor_core::model::*;
-use cadektor_core::plants::catalog::write_csv;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_site::SiteTerrain;
 
@@ -787,10 +787,10 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             Ok(v)
         }
         "report.plant_list" => {
-            let list = landscape::plant_list(s.editor.doc());
+            let list = cadektor_plants::plant_list::plant_list(s.editor.doc());
             let mut v = serde_json::to_value(&list).unwrap();
             if csv {
-                v["csv"] = json!(landscape::plant_list_csv(&list));
+                v["csv"] = json!(cadektor_plants::plant_list::plant_list_csv(&list));
             }
             Ok(v)
         }

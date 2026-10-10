@@ -142,7 +142,7 @@ pub fn draw_tag(
     at: DVec2,
     anchor: DVec2,
     height: f64,
-    layout: Option<&cadektor_core::plants::schedule::TagLayout>,
+    layout: Option<&cadektor_core::plants::tag::TagLayout>,
     st: Style,
     offset: DVec2,
 ) {
@@ -269,12 +269,12 @@ mod tests {
                 st,
                 DVec2::ZERO,
             );
-            let info = cadektor_core::plants::schedule::TagInfo {
+            let info = cadektor_core::plants::tag::TagInfo {
                 code: "AC".into(),
                 count: 3,
                 name: "Maple".into(),
                 details: "C10".into(),
-                format: cadektor_core::plants::schedule::TagFormat {
+                format: cadektor_core::plants::tag::TagFormat {
                     levels: 3,
                     bubble: true,
                 },

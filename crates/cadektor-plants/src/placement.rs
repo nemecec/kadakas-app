@@ -27,13 +27,12 @@
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::curve::{self, Vertex};
-use crate::geom::dist_to_segment;
+use cadektor_core::curve::{self, Vertex};
+use cadektor_core::geom::dist_to_segment;
+use cadektor_core::plants::variation::MAX_POINTS;
 
 /// The smallest spacing, in mm.
 pub const MIN_SPACING: f64 = 10.0;
-/// The most plants that one request may make.
-pub const MAX_POINTS: usize = 20_000;
 /// Chord tolerance when a boundary or path has curves, in mm.
 const FLATTEN_TOLERANCE: f64 = 2.0;
 const EPS: f64 = 1e-9;
@@ -139,69 +138,6 @@ fn yes() -> bool {
     true
 }
 
-/// Random variation of placed plants. The same seed always gives the same plants.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Variation {
-    pub seed: u64,
-    /// Size changes by up to this fraction up or down: 0.2 is 80% to 120%. From 0 to 0.9.
-    pub size: f64,
-    /// Turn each plant by a random angle.
-    pub rotation: bool,
-}
-
-impl Default for Variation {
-    fn default() -> Self {
-        Variation {
-            seed: 1,
-            size: 0.0,
-            rotation: false,
-        }
-    }
-}
-
-impl Variation {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.size.is_finite() && (0.0..=0.9).contains(&self.size) {
-            Ok(())
-        } else {
-            Err("size variation must be from 0 to 0.9".into())
-        }
-    }
-
-    /// True if the variation changes anything.
-    pub fn is_active(&self) -> bool {
-        self.size > 0.0 || self.rotation
-    }
-
-    /// For each of `n` plants: the size factor and the rotation in radians. Plant `i` always gets the
-    /// same values for the same seed, whatever `n` is.
-    pub fn factors(&self, n: usize) -> Vec<(f64, f64)> {
-        (0..n as u64)
-            .map(|i| {
-                let a = unit(self.seed, 2 * i);
-                let b = unit(self.seed, 2 * i + 1);
-                let scale = 1.0 + self.size * (2.0 * a - 1.0);
-                let angle = if self.rotation {
-                    b * std::f64::consts::TAU
-                } else {
-                    0.0
-                };
-                (scale, angle)
-            })
-            .collect()
-    }
-}
-
-/// A number from 0 (included) to 1 (excluded), the same for the same seed and index (splitmix64).
-fn unit(seed: u64, index: u64) -> f64 {
-    let mut z = seed.wrapping_add(index.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    (z >> 11) as f64 / (1u64 << 53) as f64
-}
-
 /// The plant positions for a request.
 pub fn place(spec: &PlaceSpec) -> Result<Vec<DVec2>, PlaceError> {
     let pts = match spec {
@@ -297,7 +233,7 @@ pub fn place(spec: &PlaceSpec) -> Result<Vec<DVec2>, PlaceError> {
 fn finite(pts: &[DVec2]) -> Result<(), PlaceError> {
     if pts
         .iter()
-        .all(|p| p.is_finite() && p.abs().max_element() <= crate::model::MAX_COORD)
+        .all(|p| p.is_finite() && p.abs().max_element() <= cadektor_core::model::MAX_COORD)
     {
         Ok(())
     } else {
@@ -812,10 +748,10 @@ pub fn fill_with_holes(
             )
         }
         (None, Some(n), None) => {
-            let size = crate::geom::polygon_area(ring)
+            let size = cadektor_core::geom::polygon_area(ring)
                 - holes
                     .iter()
-                    .map(|h| crate::geom::polygon_area(h))
+                    .map(|h| cadektor_core::geom::polygon_area(h))
                     .sum::<f64>();
             fill_by_count(&area, size.max(0.0), n, pattern, margin)
         }
@@ -899,7 +835,8 @@ fn fill_by_count(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::corners;
+    use cadektor_core::curve::corners;
+    use cadektor_core::plants::variation::Variation;
     use proptest::prelude::*;
 
     fn v(x: f64, y: f64) -> DVec2 {
@@ -1230,7 +1167,7 @@ mod tests {
             Vertex::corner(v(4000.0, 0.0)),
             Vertex::new(
                 v(4000.0, 4000.0),
-                crate::curve::VertexKind::Arc { radius: 1500.0 },
+                cadektor_core::curve::VertexKind::Arc { radius: 1500.0 },
             ),
             Vertex::corner(v(0.0, 4000.0)),
         ];
@@ -1500,7 +1437,7 @@ mod tests {
                 for margin in [0.0, 30.0] {
                     let plain = {
                         let edge = distance_to_ring(&ring, p);
-                        edge >= margin && crate::geom::point_in_polygon(p, &ring)
+                        edge >= margin && cadektor_core::geom::point_in_polygon(p, &ring)
                     };
                     assert_eq!(index.contains(p, margin), plain, "{p:?} {margin}");
                 }

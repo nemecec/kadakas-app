@@ -321,8 +321,8 @@ mod tests {
     #[test]
     fn plant_list_includes_landscape_area_mixes_like_the_report() {
         use cadektor_core::landscape::LandscapePatch;
-        use cadektor_core::landscape::plant_list::plant_list;
         use cadektor_core::landscape::style::{LandscapeAreaStyle, MixEntry};
+        use cadektor_plants::plant_list::plant_list;
         let mut ed = scene();
         let maple = ed.doc().resources.find_plant_style("Maple").unwrap();
         let sedge = cadektor_core::resource::ResourceId(
