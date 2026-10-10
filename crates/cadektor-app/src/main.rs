@@ -11,6 +11,7 @@ mod gpu3d;
 mod hit;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;
+mod irrigation_ui;
 mod keymap;
 mod panels;
 mod plant_draw;

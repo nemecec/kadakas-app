@@ -171,6 +171,7 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
         Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Symbol { .. } => {}
+        Shape::Irrigation(i) => crate::irrigation_ui::draw(painter, view, i, st, offset),
     }
 }
 

@@ -31,6 +31,16 @@ pub const TEMPLATES: &[TemplateInfo] = &[
         title: "Existing tree survey",
         description: "Existing trees with trunk diameter, spread, height, condition, action and root protection radius.",
     },
+    TemplateInfo {
+        id: "irrigation_heads",
+        title: "Irrigation heads",
+        description: "Irrigation outlets per model and zone: count and the spray angle of the first.",
+    },
+    TemplateInfo {
+        id: "irrigation_pipes",
+        title: "Irrigation pipes",
+        description: "Irrigation lines per type, material and size: count and length in m.",
+    },
 ];
 
 fn col(header: &str, expr: &str) -> ColumnDef {
@@ -129,6 +139,36 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
                 column: 0,
                 descending: false,
             }],
+            ..DatabaseDef::default()
+        },
+        "irrigation_heads" => DatabaseDef {
+            name: "Irrigation heads".into(),
+            criteria: "Kind = \"irrigation_outlet\"".into(),
+            columns: vec![
+                col("Model", "Model"),
+                col("Zone", "Zone"),
+                sum("Count", "Count", None, ""),
+            ],
+            sort: vec![SortKey {
+                column: 1,
+                descending: false,
+            }],
+            group_by: Some(0),
+            group_mode: GroupMode::Summary,
+            ..DatabaseDef::default()
+        },
+        "irrigation_pipes" => DatabaseDef {
+            name: "Irrigation pipes".into(),
+            criteria: "Kind = \"irrigation_line\"".into(),
+            columns: vec![
+                col("Type", "LineType"),
+                col("Material", "Material"),
+                col("Size", "Size"),
+                sum("Lines", "Count", None, ""),
+                sum("Length", "Length", Some(2), "m"),
+            ],
+            group_by: Some(0),
+            group_mode: GroupMode::Detail,
             ..DatabaseDef::default()
         },
         _ => return None,
@@ -253,7 +293,7 @@ mod tests {
 
     #[test]
     fn all_templates_are_valid_and_listed() {
-        assert_eq!(TEMPLATES.len(), 4);
+        assert_eq!(TEMPLATES.len(), 6);
         for t in TEMPLATES {
             let w = template(t.id).unwrap();
             w.validate().unwrap();
@@ -422,5 +462,43 @@ mod tests {
             ]
         );
         assert_eq!(c.grid()[2][1], "Ash");
+    }
+    #[test]
+    fn irrigation_templates_list_heads_and_pipes() {
+        use cadektor_core::irrigation::{IrrigationShape, LineType};
+        let mut ed = Editor::default();
+        let mut irr = |s: IrrigationShape| add(&mut ed, Shape::Irrigation(Box::new(s)));
+        let outlet = |x: f64, model: &str, zone: Option<u32>| IrrigationShape::Outlet {
+            at: DVec2::new(x, 0.0),
+            model: model.into(),
+            arc: 360.0,
+            direction: 0.0,
+            radius: None,
+            zone,
+        };
+        irr(outlet(0.0, "Spray-4.0", Some(1)));
+        irr(outlet(1.0, "Spray-4.0", Some(1)));
+        irr(outlet(2.0, "Rotor-8", Some(2)));
+        let line = |len: f64, t: LineType, size: &str| IrrigationShape::Line {
+            points: vec![DVec2::ZERO, DVec2::new(len, 0.0)],
+            line_type: t,
+            size: size.into(),
+            material: "PE".into(),
+            emitter_spacing: None,
+            emitter_flow: None,
+        };
+        irr(line(20_000.0, LineType::Mainline, "50"));
+        irr(line(5_000.0, LineType::Lateral, "32"));
+        irr(line(7_500.0, LineType::Lateral, "32"));
+        let c = compute(&template("irrigation_heads").unwrap(), ed.doc());
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.grid()[1][0], "Rotor-8");
+        assert_eq!(c.value(2, 3), Value::Number(1.0));
+        assert_eq!(c.value(3, 3), Value::Number(2.0));
+        assert_eq!(c.value(c.rows, 3), Value::Number(3.0));
+        let c = compute(&template("irrigation_pipes").unwrap(), ed.doc());
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        assert_eq!(c.grid()[1][..3], ["lateral", "PE", "32"]);
+        assert_eq!(c.value(c.rows, 5), Value::Number(32.5));
     }
 }

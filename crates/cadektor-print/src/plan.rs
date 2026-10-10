@@ -439,6 +439,7 @@ fn shape_core(
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
         Shape::Group { .. } => {}
+        Shape::Irrigation(i) => irrigation_prims(i, &st, xf, out),
         Shape::Symbol { .. } => {
             // A symbol in paper units keeps its paper size at the scale of the drawing that shows it.
             let paper_scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
@@ -451,6 +452,66 @@ fn shape_core(
                 };
                 shape_prims_deep(doc, &v, &a, xf, counts, tables, out, depth + 1);
             }
+        }
+    }
+}
+
+/// Irrigation objects: a translucent fan per outlet (in the color of its zone), lines, and small
+/// markers for points of connection, valves and controllers.
+fn irrigation_prims(
+    i: &cadektor_core::irrigation::IrrigationShape,
+    st: &Style,
+    xf: &Xf,
+    out: &mut Vec<Prim>,
+) {
+    use cadektor_core::irrigation::{IrrigationShape as I, sector_points, zone_color};
+    let rgba = |c: [u8; 3], a: u8| Some([c[0], c[1], c[2], a]);
+    match i {
+        I::Outlet {
+            at,
+            arc,
+            direction,
+            radius,
+            zone,
+            ..
+        } => {
+            let c = zone_color(zone.unwrap_or(0));
+            if let Some(r) = radius {
+                let pts = sector_points(*at, *r, *arc, *direction, 48);
+                let s = Style {
+                    stroke: rgba(c, 255),
+                    fill: rgba(c, 64),
+                    width: st.width,
+                };
+                out.push(path(mapped(&pts, xf), true, &s));
+            }
+            let s = Style {
+                stroke: Some([0, 0, 0, 255]),
+                fill: rgba(c, 255),
+                width: st.width,
+            };
+            out.push(path(circle_segs(xf.p(*at), xf.len(300.0)), true, &s));
+        }
+        I::Line { points, .. } => out.push(path(
+            mapped(points, xf),
+            false,
+            &Style {
+                stroke: rgba([30, 80, 170], 255),
+                fill: None,
+                width: st.width,
+            },
+        )),
+        I::Poc { at, .. } | I::Controller { at, .. } | I::Valve { at, .. } => {
+            let c = match i {
+                I::Valve { zone, .. } => zone_color(*zone),
+                _ => [20, 50, 140],
+            };
+            let s = Style {
+                stroke: rgba(c, 255),
+                fill: rgba(c, 96),
+                width: st.width,
+            };
+            out.push(path(circle_segs(xf.p(*at), xf.len(500.0)), true, &s));
         }
     }
 }

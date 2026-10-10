@@ -80,6 +80,7 @@ Tool keys switch the active tool.
 | Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
+| Irrigation tool (Cadektor; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
 
 ## Tool modes
 

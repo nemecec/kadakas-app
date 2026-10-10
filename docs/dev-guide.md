@@ -17,7 +17,8 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
 | `cadektor-io` | DXF, Shapefile and GeoJSON import and export, CRS conversion (native only) | core |
 | `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc (native only) |
+| `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc (native only), irrigation |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 

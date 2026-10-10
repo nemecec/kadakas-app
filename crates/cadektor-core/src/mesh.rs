@@ -704,6 +704,8 @@ impl Builder<'_> {
             Shape::Viewport(_) | Shape::TitleBlock(_) => {}
             // A group draws through its members.
             Shape::Group { .. } => {}
+            // Irrigation objects are flat and drawn in 2D only.
+            Shape::Irrigation(_) => {}
             Shape::Symbol { .. } => {
                 // The 3D components if there are some. Otherwise the 2D components, flat at the layer.
                 let solids = crate::symbols::instance_solids(self.doc, obj);

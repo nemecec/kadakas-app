@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod data_api;
 mod hardscape_api;
+mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod plants_api;
@@ -220,6 +221,25 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::REPORT_HARDSCAPE,
     hardscape_api::REPORT_LANDSCAPE_AREAS,
     hardscape_api::REPORT_PLANT_LIST,
+    // Irrigation (see irrigation_api.rs).
+    irrigation_api::OUTLET_ADD,
+    irrigation_api::LINE_ADD,
+    irrigation_api::POC_ADD,
+    irrigation_api::VALVE_ADD,
+    irrigation_api::CONTROLLER_ADD,
+    irrigation_api::SET,
+    irrigation_api::CATALOG_GET,
+    irrigation_api::CATALOG_SET,
+    irrigation_api::CATALOG_IMPORT_CSV,
+    irrigation_api::CATALOG_EXPORT_CSV,
+    irrigation_api::CALCULATE,
+    irrigation_api::LAYOUT_FILL,
+    irrigation_api::LAYOUT_EDGE,
+    irrigation_api::LAYOUT_DRIP,
+    irrigation_api::REPORT_ZONES,
+    irrigation_api::REPORT_PIPES,
+    irrigation_api::REPORT_PRESSURE,
+    irrigation_api::REPORT_MATERIALS,
     // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
     symbols_api::GROUP_CREATE,
     symbols_api::GROUP_UNGROUP,
@@ -451,6 +471,7 @@ impl Session {
                 "plants": plants_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
+                "irrigation": irrigation_api::describe(),
                     "sheets": sheets_api::describe(),
                 "resources": symbols_api::describe(),
                 });
@@ -650,6 +671,9 @@ impl Session {
             "export.file" => self.export_file(p)?,
             _ => {
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = irrigation_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 return plants_api::handle(self, method, p.clone())

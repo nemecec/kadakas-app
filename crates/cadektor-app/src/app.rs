@@ -647,7 +647,12 @@ impl CadektorApp {
     /// have one group (the vertex modes), so only group 1 does anything for them.
     fn mode_group(&mut self, group: usize) {
         let tool = self.machine.tool();
-        if tool == Tool::Plant && group == 1 {
+        if tool == Tool::Irrigation && group == 1 {
+            let irr = &mut self.settings.irrigation;
+            irr.mode = irr.mode.next();
+            self.machine.cancel();
+            self.status = format!("Irrigation mode: {}", irr.mode.label());
+        } else if tool == Tool::Plant && group == 1 {
             self.settings.plant.mode = self.settings.plant.mode.next();
             self.machine.cancel();
             self.status = format!("Placement mode: {}", self.settings.plant.mode.label());

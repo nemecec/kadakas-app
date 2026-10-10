@@ -272,14 +272,24 @@ Non-goals
 
 ### 4.11 Irrigation
 
+Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. The drawing objects are one `Shape::Irrigation` variant in the core (`irrigation.rs`). Units: mm, degrees, kPa, l/min.
+
 | ID | Feature | Pri | Status |
 |---|---|---|---|
 | IRR-01 | Plant irrigation record fields (water need, hydrozone). | P1 | planned |
-| IRR-02 | Sprinkler head object with radius and flow. | P2 | planned |
-| IRR-03 | Pipe and valve objects. | P2 | planned |
-| IRR-04 | Zone assignment and coverage check. | P2 | planned |
-| IRR-05 | Irrigation schedule report. | P2 | planned |
+| IRR-02 | Outlet objects (spray head, rotor, drip emitter, bubbler): a point with model, spray arc, direction and radius. They draw a translucent coverage fan in 2D, in the color of the zone. Undoable through `add_object`, `modify_object`, move and rotate. | P1 | done |
+| IRR-03 | Irrigation lines (mainline, lateral, drip line) with pipe size and material. Points of connection (static pressure, available flow), control valves (zone, flow factor kv, controller and station) and controllers (stations). | P1 | done |
+| IRR-04 | Zone assignment and coverage: an outlet belongs to the zone of the nearest valve upstream. "Calculate" stores the zone in the outlets (one undo step). Colors per zone. | P1 | done |
+| IRR-05 | Reports: zone schedule (heads per model, flow, area, precipitation rate, run time for a target depth), pipe schedule (length per type, material and size), pressure analysis per zone and a materials list, as JSON and CSV. Worksheet templates `irrigation_heads` and `irrigation_pipes`, and worksheet properties (Model, Zone, Arc, LineType, Size, Material, Length, ...). | P1 | done |
 | IRR-06 | Water budget report. | P2 | planned |
+| IRR-07 | Irrigation catalog as document resources (head models with radius, arc range, flow and pressure; pipe sizes with inner diameter; pipe materials with the Hazen-Williams coefficient) over a built-in catalog. CSV import and export with the plant catalog reader. | P1 | done |
+| IRR-08 | Hydraulics: Hazen-Williams pressure loss with C by material, valve loss from kv, velocity check (warning above 1.5 m/s), precipitation rate from the flow and area. Documented formulas and units, unit tests against hand calculations. | P1 | done |
+| IRR-09 | Network from geometry: points within a tolerance (default 50 mm) are one node. Tree solving POC, mainline, valves, laterals, outlets for one zone at a time. Pressure at every outlet, critical outlet and path, warnings (low pressure, velocity, supply flow, unconnected outlets, loops, catalog gaps, spray arc range, controller stations). | P1 | done |
+| IRR-10 | Layout helpers (pure functions with property tests): fill an area with heads in a square or triangular pattern at head-to-head spacing, heads along an edge, parallel drip lines in an area. | P1 | done |
+| IRR-11 | Agent API `irrigation.*` with `describe` examples: `outlet.add`, `line.add`, `poc.add`, `valve.add`, `controller.add`, `set`, `catalog.get|set|import_csv|export_csv`, `calculate`, `layout.fill|edge|drip`, `report.zones|pipes|pressure|materials`. | P1 | done |
+| IRR-12 | Irrigation tool in the app (`Alt+Shift+I`) with modes Outlet, Line, POC, Valve and Controller (`U` cycles the modes), snapping that joins line ends, fields and catalog lists in Object Info, and a Calculate command that shows the result and the warnings in Object Info. | P1 | done |
+| IRR-13 | Elevation and slope in the pressure calculation, flow that changes with pressure, loops (looped mains), master valves with several zones at once. | P2 | planned |
+| IRR-14 | Irrigation objects in IFC and DXF export. | P2 | planned |
 
 ### 4.12 Reports, worksheets, data tags
 

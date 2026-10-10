@@ -11,7 +11,9 @@ use glam::DVec2;
 
 use crate::hit;
 
+mod irrigation_tool;
 mod plant_tool;
+pub use irrigation_tool::{IrrMode, IrrSettings};
 pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +29,8 @@ pub enum Tool {
     Hardscape,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
+    /// Irrigation: one tool with modes (outlet, line, POC, valve, controller).
+    Irrigation,
 }
 
 /// What the Site Modifiers tool makes.
@@ -61,6 +65,7 @@ impl Tool {
     ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
     pub const SITE: [Tool; 1] = [Tool::SiteModifier];
+    pub const IRRIGATION: [Tool; 1] = [Tool::Irrigation];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -74,6 +79,7 @@ impl Tool {
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
             Tool::SiteModifier => "Site Modifiers",
+            Tool::Irrigation => "Irrigation",
         }
     }
 }
@@ -188,6 +194,8 @@ pub struct ToolSettings {
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area_ui::AreaToolSettings,
+    /// Mode and options of the Irrigation tool.
+    pub irrigation: IrrSettings,
 }
 
 impl Default for ToolSettings {
@@ -208,6 +216,7 @@ impl Default for ToolSettings {
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
             areas: Default::default(),
+            irrigation: Default::default(),
         }
     }
 }
@@ -458,6 +467,7 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
+            Tool::Irrigation => self.handle_irrigation(input, cx),
             Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => {
                 match input {
                     Input::Press { p, .. } => {
@@ -616,6 +626,7 @@ impl ToolMachine {
                     .map_or(Preview::None, Preview::Shape)
             }
             (_, Tool::Plant) => self.plant_preview(cursor, cx),
+            (_, Tool::Irrigation) => self.irrigation_preview(cursor, cx),
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
@@ -714,6 +725,9 @@ impl ToolMachine {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
             (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Irrigation, _) => {
+                "Pick a mode (Outlet, Line, POC, Valve, Controller) in the Tool bar. Click to place. A line: Enter or double-click finishes. Esc cancels."
+            }
             (Tool::Plant, _) => {
                 "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
             }

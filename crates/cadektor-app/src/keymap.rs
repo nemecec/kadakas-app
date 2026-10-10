@@ -144,6 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
+    ToolIrrigation => "tool.irrigation", "Irrigation tool", ["Alt+Shift+I"], true;
     ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
     ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
     ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
@@ -214,6 +215,7 @@ impl Action {
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
+            Action::ToolIrrigation => Tool::Irrigation,
             _ => return None,
         })
     }
@@ -230,6 +232,7 @@ impl Action {
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
+            Tool::Irrigation => Action::ToolIrrigation,
         }
     }
 
