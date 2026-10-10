@@ -8170,7 +8170,7 @@ Used by: the monospace font in the egui default fonts (epaint_default_fonts); ht
 
 The work in the Hack project is Copyright 2018 Source Foundry Authors and licensed under the MIT License.
 Hack is based on DejaVu (public domain) and Bitstream Vera Sans Mono
-(Copyright 2003 Bitstream Inc., Bitstream Vera License).
+(Copyright 2003 Bitstream Inc., Bitstream Vera License, below).
 
 MIT License
 
@@ -8193,6 +8193,26 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Bitstream Vera License (for the Bitstream Vera Sans Mono part of Hack)
+
+BITSTREAM VERA LICENSE
+
+Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream Vera is a trademark of Bitstream, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of the fonts accompanying this license ("Fonts") and associated documentation files (the "Font Software"), to reproduce and distribute the Font Software, including without limitation the rights to use, copy, merge, publish, distribute, and/or sell copies of the Font Software, and to permit persons to whom the Font Software is furnished to do so, subject to the following conditions:
+
+The above copyright and trademark notices and this permission notice shall be included in all copies of one or more of the Font Software typefaces.
+
+The Font Software may be modified, altered, or added to, and in particular the designs of glyphs or characters in the Fonts may be modified and additional glyphs or characters may be added to the Fonts, only if the fonts are renamed to names not containing either the words "Bitstream" or the word "Vera".
+
+This License becomes null and void to the extent applicable to Fonts or Font Software that has been modified and is distributed under the "Bitstream Vera" names.
+
+The Font Software may be sold as part of a larger software package but no copy of one or more of the Font Software typefaces may be sold by itself.
+
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL BITSTREAM OR THE GNOME FOUNDATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.
+
+Except as contained in this notice, the names of Gnome, the Gnome Foundation, and Bitstream Inc., shall not be used in advertising or otherwise to promote the sale, use or other dealings in this Font Software without prior written authorization from the Gnome Foundation or Bitstream Inc., respectively. For further information, contact: fonts at gnome dot org.
 
 --------------------------------------------------------------------------------
 emoji-icon-font (MIT License)
@@ -8226,19 +8246,49 @@ Ubuntu-Light and Noto Emoji fonts
 --------------------------------------------------------------------------------
 Used by: the proportional font and the emoji font in the egui default fonts
 
-Ubuntu-Light is licensed under the Ubuntu Font Licence 1.0 (Canonical Ltd). Noto Emoji is licensed
-under the SIL Open Font License 1.1 (Google). Both license texts are in the LICENSE TEXTS section above
+Ubuntu-Light: Copyright 2011 Canonical Ltd. Licensed under the Ubuntu Font Licence 1.0.
+Noto Emoji: Copyright 2013 Google Inc. All Rights Reserved. Licensed under the SIL Open Font License 1.1. Both license texts are in the LICENSE TEXTS section above
 (entries "Ubuntu Font Licence v1.0" and "SIL Open Font License 1.1").
 
 --------------------------------------------------------------------------------
-EPSG Geodetic Parameter Dataset
+EPSG Geodetic Parameter Dataset (derived definitions)
 --------------------------------------------------------------------------------
 Used by: the coordinate system definitions of the crs-definitions crate (cadektor-crs); https://epsg.org
 
-Coordinate reference system definitions come from the EPSG Geodetic Parameter Dataset, maintained by the
-IOGP Geomatics Committee (https://epsg.org). The dataset is subject to the EPSG Terms of Use
-(https://epsg.org/terms-of-use.html). The crs-definitions crate (CC0-1.0) packs the definitions as text.
-The EPSG name and dataset belong to IOGP.
+Includes coordinate system definitions derived from the EPSG Geodetic Parameter Dataset
+(https://epsg.org), owned by IOGP, through PostGIS spatial_ref_sys and the crs-definitions crate
+(CC0-1.0). These definitions are not the EPSG Dataset and may differ from it. The EPSG Dataset is
+subject to the EPSG Terms of Use (https://epsg.org/terms-of-use.html).
+
+--------------------------------------------------------------------------------
+GeographicLib geodesic routines (MIT/X11 License)
+--------------------------------------------------------------------------------
+Used by: native builds only. C code in the proj4rs-geodesic crate, reached through cadektor-crs and
+proj4rs (the aeqd projection). The web build does not include it. https://geographiclib.sourceforge.io/
+
+Copyright (c) Charles Karney (2012-2022) <charles@karney.com> and licensed under the MIT/X11 License.
+
+MIT License
+
+Copyright (c) Charles Karney (2012-2022) <charles@karney.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 --------------------------------------------------------------------------------
 Cadektor icons (Apache-2.0 OR MIT)
@@ -8246,11 +8296,13 @@ Cadektor icons (Apache-2.0 OR MIT)
 Used by: the icons in assets/icons/cadektor/
 
 Drawn for this project from written ideas. They are covered by the project license (LICENSE-APACHE and LICENSE-MIT).
+The application icons in packaging/icons/ are our own work, under the same license.
 
 --------------------------------------------------------------------------------
 Trademarks
 --------------------------------------------------------------------------------
 Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not
 affiliated with, endorsed by, or sponsored by Vectorworks, Inc.
-AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. SketchUp is a trademark of Trimble Inc.
-All other names belong to their owners.
+AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the
+file formats that Cadektor reads or writes, or to compare workflows. Cadektor is not affiliated with
+their owners. All other names belong to their owners.

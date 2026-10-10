@@ -103,6 +103,7 @@ pub struct CadektorApp {
     /// Autosave, crash recovery and the Preferences dialog.
     autosave: crate::autosave_ui::AutosaveUi,
     about: crate::about::About,
+    prefs_ui: crate::prefs_ui::PrefsDialog,
     /// Files that the browser has picked, waiting for the next frame.
     #[cfg(target_arch = "wasm32")]
     web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
@@ -262,6 +263,7 @@ impl CadektorApp {
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
+            prefs_ui: crate::prefs_ui::PrefsDialog::default(),
             #[cfg(target_arch = "wasm32")]
             web_inbox: Default::default(),
             #[cfg(target_arch = "wasm32")]
@@ -468,7 +470,7 @@ impl CadektorApp {
             MenuAction::ZoomFit => self.zoom_fit(),
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
-            MenuAction::Preferences => self.autosave.open_preferences(),
+            MenuAction::Preferences => self.prefs_ui.open(),
             MenuAction::DuplicateArray
             | MenuAction::AddSurface
             | MenuAction::SubtractSurface
@@ -1874,7 +1876,12 @@ impl eframe::App for CadektorApp {
             self.session.editor.doc(),
         );
         self.about.show(&ctx);
-        if let Some(r) = self.autosave.show(&ctx, &mut self.prefs.icon_size) {
+        if self.autosave.take_prefs_request() {
+            self.prefs_ui.open();
+        }
+        self.prefs_ui
+            .show(&ctx, &mut self.prefs.icon_size, &mut self.autosave);
+        if let Some(r) = self.autosave.show(&ctx) {
             self.replace_document(r.doc, None);
             self.status = r.status;
         }

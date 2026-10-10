@@ -143,6 +143,8 @@ pub fn write_durable(
         }
         f.write_all(bytes)?;
         f.sync_all()?;
+        // Close the file before the rename (Windows needs it). On wasm `File` has no drop code.
+        #[allow(clippy::drop_non_drop)]
         drop(f);
         std::fs::rename(&tmp, path)?;
         if let Some(dir) = path.parent() {

@@ -533,7 +533,7 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
             };
             let r = crate::icons::select_button_for(
                 ui,
-                IconRole::Palette,
+                IconRole::Bar,
                 icon,
                 mode.label(),
                 settings.select_mode == mode,

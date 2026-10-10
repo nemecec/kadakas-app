@@ -1,4 +1,4 @@
-//! The autosave state of the app, the recovery dialog and File > Preferences.
+//! The autosave state of the app, the recovery dialog and the Autosave settings (shown in `prefs_ui`).
 
 use cadektor_core::model::Document;
 
@@ -13,7 +13,7 @@ pub struct Recovered {
 pub struct AutosaveUi {
     pub settings: AutosaveSettings,
     sched: Scheduler,
-    prefs_open: bool,
+    want_prefs: bool,
     /// The last problem, shown in the Preferences dialog.
     error: Option<String>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -39,7 +39,7 @@ impl AutosaveUi {
         AutosaveUi {
             settings: AutosaveSettings::default(),
             sched: Scheduler::new(0.0, 0),
-            prefs_open: false,
+            want_prefs: false,
             error: None,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
@@ -70,10 +70,6 @@ impl AutosaveUi {
         {
             self.web_copy = crate::autosave::web::get();
         }
-    }
-
-    pub fn open_preferences(&mut self) {
-        self.prefs_open = true;
     }
 
     /// Call once per frame. Saves a copy when one is due. The document is copied (cheap compared
@@ -171,79 +167,55 @@ impl AutosaveUi {
     }
 
     /// Shows the dialogs. Returns a document when the user opens a recovered copy.
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        icon_size: &mut crate::icon_size::IconSize,
-    ) -> Option<Recovered> {
-        self.preferences(ctx, icon_size);
+    pub fn show(&mut self, ctx: &egui::Context) -> Option<Recovered> {
         self.recovery_dialog(ctx)
     }
 
-    fn preferences(&mut self, ctx: &egui::Context, icon_size: &mut crate::icon_size::IconSize) {
-        if !self.prefs_open {
-            return;
-        }
-        let mut open = true;
+    /// The Autosave part of the Preferences dialog (see `prefs_ui`). A change is sanitized and
+    /// saved at once.
+    pub fn settings_section(&mut self, ui: &mut egui::Ui) {
         let before = self.settings.clone();
-        egui::Window::new("Preferences")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.heading("Appearance");
-                ui.horizontal(|ui| {
-                    ui.label("Icon size");
-                    for z in crate::icon_size::IconSize::ALL {
-                        ui.selectable_value(icon_size, z, z.label());
-                    }
-                });
-                ui.add_space(6.0);
-                ui.heading("Autosave");
-                let s = &mut self.settings;
-                ui.checkbox(&mut s.enabled, "Save a recovery copy while I work");
-                ui.add_enabled_ui(s.enabled, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Every");
-                        ui.add(
-                            egui::DragValue::new(&mut s.interval_minutes)
-                                .range(1..=AutosaveSettings::MAX_MINUTES),
-                        );
-                        ui.label("minutes with changes");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Or after");
-                        ui.add(egui::DragValue::new(&mut s.every_ops).range(0..=10_000));
-                        ui.label("operations (0 = off)");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Keep the last");
-                        ui.add(
-                            egui::DragValue::new(&mut s.keep).range(1..=AutosaveSettings::MAX_KEEP),
-                        );
-                        ui.label("versions");
-                    });
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.checkbox(
-                        &mut s.save_over_file,
-                        "Also save over my file (off: recovery copies only)",
-                    );
-                });
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(dir) = crate::autosave::recovery_dir() {
-                    ui.label(format!("Recovery folder: {}", dir.display()));
-                    if ui.button("Show recovery folder").clicked() {
-                        let _ = std::fs::create_dir_all(&dir);
-                        let _ = crate::autosave::reveal(&dir);
-                    }
-                }
-                #[cfg(target_arch = "wasm32")]
-                ui.label("The browser keeps one recovery copy in its local storage.");
-                if let Some(e) = &self.error {
-                    ui.colored_label(ui.visuals().warn_fg_color, e);
-                }
+        ui.heading("Autosave");
+        let s = &mut self.settings;
+        ui.checkbox(&mut s.enabled, "Save a recovery copy while I work");
+        ui.add_enabled_ui(s.enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Every");
+                ui.add(
+                    egui::DragValue::new(&mut s.interval_minutes)
+                        .range(1..=AutosaveSettings::MAX_MINUTES),
+                );
+                ui.label("minutes with changes");
             });
-        self.prefs_open = open;
+            ui.horizontal(|ui| {
+                ui.label("Or after");
+                ui.add(egui::DragValue::new(&mut s.every_ops).range(0..=10_000));
+                ui.label("operations (0 = off)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Keep the last");
+                ui.add(egui::DragValue::new(&mut s.keep).range(1..=AutosaveSettings::MAX_KEEP));
+                ui.label("versions");
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.checkbox(
+                &mut s.save_over_file,
+                "Also save over my file (off: recovery copies only)",
+            );
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = crate::autosave::recovery_dir() {
+            ui.label(format!("Recovery folder: {}", dir.display()));
+            if ui.button("Show recovery folder").clicked() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = crate::autosave::reveal(&dir);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        ui.label("The browser keeps one recovery copy in its local storage.");
+        if let Some(e) = &self.error {
+            ui.colored_label(ui.visuals().warn_fg_color, e);
+        }
         self.settings = self.settings.clone().sanitized();
         if self.settings != before {
             #[cfg(not(target_arch = "wasm32"))]
@@ -251,6 +223,11 @@ impl AutosaveUi {
                 self.error = Some(format!("Cannot save the preferences: {e}"));
             }
         }
+    }
+
+    /// True once after the recovery dialog failed: the error shows in the Preferences dialog.
+    pub fn take_prefs_request(&mut self) -> bool {
+        std::mem::take(&mut self.want_prefs)
     }
 
     /// Opens a recovered copy. Its files stay until the first autosave of the document is on disk,
@@ -336,7 +313,7 @@ impl AutosaveUi {
             Choice::Open(i) => {
                 let r = self.open_recovered(i);
                 if r.is_none() {
-                    self.prefs_open = true;
+                    self.want_prefs = true;
                 }
                 r
             }

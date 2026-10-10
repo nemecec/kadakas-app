@@ -1,7 +1,7 @@
 //! The icon size preference and the size of each kind of icon, in points.
 //!
 //! The user picks Small, Medium or Large. Palettes (tool palette and tool sets) use 16, 24 or 32
-//! points. The view bar and the Object Info palette use 16, 20 or 24. Menus and lists always use
+//! points. The view bar and the tool-set mode bars use 16, 20 or 24. Menus and lists always use
 //! 16. The app stores the choice in the egui context each frame, so the icon code needs no extra
 //! arguments for it.
 
@@ -22,7 +22,8 @@ pub enum IconSize {
 pub enum IconRole {
     /// The tool palette and the tool sets.
     Palette,
-    /// The view bar and the Object Info palette.
+    /// The view bar and the mode bars. The Object Info palette has no icons yet; this size is
+    /// reserved for it.
     Bar,
     /// Menus and lists.
     Menu,
@@ -107,6 +108,21 @@ mod tests {
             serde_json::from_str::<IconSize>("\"small\"").unwrap(),
             IconSize::Small
         );
+    }
+
+    #[test]
+    fn a_new_icon_size_empties_the_icon_cache() {
+        let ctx = egui::Context::default();
+        let _ = crate::icons::texture(&ctx, "line", 24.0).unwrap();
+        let _ = crate::icons::texture(&ctx, "arc", 24.0).unwrap();
+        assert_eq!(crate::icons::cached_keys(&ctx), [("arc", 24), ("line", 24)]);
+        set(&ctx, IconSize::Large);
+        let _ = crate::icons::texture(&ctx, "line", 32.0).unwrap();
+        // The 24 px entries are gone; only the new one is left.
+        assert_eq!(crate::icons::cached_keys(&ctx), [("line", 32)]);
+        // The same size again keeps the cache.
+        let _ = crate::icons::texture(&ctx, "arc", 32.0).unwrap();
+        assert_eq!(crate::icons::cached_keys(&ctx).len(), 2);
     }
 
     #[test]

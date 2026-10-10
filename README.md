@@ -218,7 +218,7 @@ Licensed under either of Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)) o
 
 Third-party licenses are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). [docs/attribution.md](docs/attribution.md) lists the libraries, icons, fonts, data and sources that we use.
 
-Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc. AutoCAD and DWG are trademarks of Autodesk, Inc. SketchUp is a trademark of Trimble Inc.
+Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc. AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Cadektor reads or writes, or to compare workflows. Cadektor is not affiliated with their owners.
 
 ## IFC import
 

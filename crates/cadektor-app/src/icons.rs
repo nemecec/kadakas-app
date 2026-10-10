@@ -803,6 +803,16 @@ pub fn texture(ctx: &Context, name: &str, size: f32) -> Option<TextureHandle> {
         .clone()
 }
 
+/// The cache keys (name and pixel size) of the icon textures made so far. For tests.
+#[cfg(test)]
+pub fn cached_keys(ctx: &Context) -> Vec<Key> {
+    let cache = ctx.data_mut(|d| d.get_temp_mut_or_default::<Cache>(egui::Id::NULL).clone());
+    let guard = cache.0.lock().unwrap();
+    let mut keys: Vec<Key> = guard.1.keys().copied().collect();
+    keys.sort();
+    keys
+}
+
 /// The icon as an image widget, tinted with the text color of `ui`. `None` if the icon is missing.
 pub fn image(ui: &Ui, name: &str, size: f32) -> Option<egui::Image<'static>> {
     let color = if ui.is_enabled() {

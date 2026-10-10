@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 use crate::icon_size::IconSize;
 use crate::theme::ThemeChoice;
 
+/// Reads the icon size; any value that is not a known size gives the default.
+fn icon_size_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<IconSize, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
 /// Settings that the user changes in the window.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -21,6 +27,8 @@ pub struct Prefs {
     /// Show the SmartCursor cue label at the pointer.
     pub cues: bool,
     /// Small, Medium or Large icons (palettes 16/24/32 pt, bars 16/20/24 pt, menus 16 pt).
+    /// An unknown value in the file gives Medium; the rest of the file still counts.
+    #[serde(deserialize_with = "icon_size_or_default")]
     pub icon_size: IconSize,
 }
 
@@ -107,6 +115,16 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cadektor-prefs-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn an_unknown_icon_size_does_not_reset_the_file() {
+        for bad in ["\"huge\"", "3", "null", "{}"] {
+            let text = format!(r#"{{"cues": false, "icon_size": {bad}}}"#);
+            let p: Prefs = serde_json::from_str(&text).unwrap();
+            assert_eq!(p.icon_size, IconSize::Medium);
+            assert!(!p.cues);
+        }
     }
 
     #[test]

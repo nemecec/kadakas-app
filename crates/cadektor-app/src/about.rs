@@ -12,8 +12,7 @@ pub const LICENSE: &str = "Apache-2.0 OR MIT";
 pub const TRADEMARK: &str = "Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc.";
 
 /// Other trademarks that the documents name.
-pub const OTHER_TRADEMARKS: &str =
-    "AutoCAD and DWG are trademarks of Autodesk, Inc. SketchUp is a trademark of Trimble Inc.";
+pub const OTHER_TRADEMARKS: &str = "AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Cadektor reads or writes, or to compare workflows. Cadektor is not affiliated with their owners.";
 
 /// The version line, for example `Version 0.1.0`.
 pub fn version_line() -> String {
