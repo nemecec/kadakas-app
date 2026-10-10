@@ -106,6 +106,20 @@ struct RemoteArgs {
     /// (`https://maps.example.org/wms/`). Repeat for more. Default: none, so agents cannot use the network.
     #[arg(long = "allow-url", value_name = "URL")]
     allow_url: Vec<String>,
+    /// The default server for `collab.connect`, for example `ws://127.0.0.1:8787` (a base
+    /// address; the call gives `doc`) or `wss://host/ws/<document>`. A server that is not on this
+    /// computer must be allowed with `--allow-url` and must use `wss://`.
+    #[arg(long = "collab-url", value_name = "URL", env = "KADAKAS_COLLAB_URL")]
+    collab_url: Option<String>,
+    /// The default token for `collab.connect`. The token stays in memory. A flag is visible to
+    /// other programs on this computer (`ps`): prefer the environment variable.
+    #[arg(
+        long = "collab-token",
+        value_name = "TOKEN",
+        env = "KADAKAS_COLLAB_TOKEN",
+        hide_env_values = true
+    )]
+    collab_token: Option<String>,
     /// Let requests from agents run Python scripts (`script.run`, and plug-in objects with their own
     /// scripts). Default: off. The plug-in objects that ship with the app always run.
     #[arg(long = "allow-agent-scripts")]
@@ -146,6 +160,12 @@ impl Backend {
         };
         session.paths =
             kadakas_api::PathPolicy::restricted(dirs).with_converters(remote.allow_converters);
+        // The same list decides which collaboration servers (not on this computer) may be used.
+        session.set_collab_allowed_urls(remote.allow_url.clone());
+        session.set_collab_endpoint_factory(Box::new(|url, token| {
+            kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
+        }));
+        session.set_collab_defaults(remote.collab_url, remote.collab_token);
         session.gis.urls = kadakas_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
         session.scripting.trust = kadakas_api::TrustStore::load_default();

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod collab_api;
+pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]

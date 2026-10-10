@@ -4,9 +4,26 @@
 //! `collab.presence`, `collab.undo`, `collab.redo`.
 //!
 //! The session holds a [`kadakas_collab::transport::Link`]: a collaboration client and its
-//! connection. The *host* decides where the session can connect: it gives the session an
-//! [`Endpoint`] (`Session::set_collab_endpoint`). A native host can give a WebSocket endpoint
-//! from its own crate; tests give an in-memory one. This crate has no network code for it.
+//! connection. The *host* decides where the session can connect. This crate has no network code:
+//!
+//! - `Session::set_collab_endpoint` gives a ready [`Endpoint`] (tests give an in-memory one).
+//!   `collab.connect` without a `url` uses it.
+//! - `Session::set_collab_endpoint_factory` gives a function that makes an endpoint from a
+//!   `url` and a `token` (the program `kadakas` gives the WebSocket of `kadakas-collab-ws`).
+//!   `collab.connect {url, token, doc}` uses it, after the URL policy below.
+//! - `Session::set_collab_defaults` gives the default `url` and `token` (the environment
+//!   variables `KADAKAS_COLLAB_URL` and `KADAKAS_COLLAB_TOKEN`, or the flags of the program).
+//!
+//! **The URL policy.** A server on this computer (`localhost`, `127.0.0.0/8`, `::1`) is always
+//! allowed. Any other server must be on the list of `--allow-url`
+//! (`Session::set_collab_allowed_urls`), and it must use `wss://`, because the token would cross
+//! the network. An address with a user name, a password or a query is refused. **Tokens stay in
+//! memory**: they are not in the status, the events, the journal or any error text.
+//!
+//! **Reconnecting.** A session that connected with a `url` connects again by itself when the
+//! connection is lost, with a back-off of 250 ms up to 30 s. The tries happen inside the calls
+//! that move messages (`collab.sync`, `collab.presence`, `collab.undo`), so the document is
+//! never changed behind the back of the caller. `collab.disconnect` stops it.
 //!
 //! # The document
 //!
@@ -31,7 +48,8 @@
 use kadakas_collab::client::{Client, ClientConfig, ClientEvent, ConnState};
 use kadakas_collab::materialize::{Materialized, Quarantined};
 use kadakas_collab::presence::{PresenceState, Viewport};
-use kadakas_collab::transport::{Endpoint, Link};
+use kadakas_collab::transport::{Endpoint, Link, Reconnector};
+use kadakas_collab::url::CollabUrl;
 use kadakas_core::model::Document;
 use kadakas_core::uid::Uid;
 use serde::Deserialize;
@@ -42,11 +60,11 @@ use crate::{RpcError, Session};
 
 pub const STATUS: (&str, &str) = (
     "collab.status",
-    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
+    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
 );
 pub const CONNECT: (&str, &str) = (
     "collab.connect",
-    "Connect to the endpoint that the host gave this session. Refused in a session with predictable IDs (sequential ids). params: {user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), token? (for the server), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.",
+    "Connect to a shared document. Refused in a session with predictable IDs (sequential ids). params: {url? (the server: ws://host:port/ws/<doc> or wss://..., or the base address of the server together with doc; default: the endpoint the host gave, or the default URL from KADAKAS_COLLAB_URL or --collab-url), doc? (the document ID, UUID text; needed when url is a base address), token? (for the server; default: KADAKAS_COLLAB_TOKEN or --collab-token; it stays in memory only), user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.",
 );
 pub const DISCONNECT: (&str, &str) = (
     "collab.disconnect",
@@ -72,13 +90,13 @@ pub const REDO: (&str, &str) = (
 pub fn describe() -> Value {
     json!({
         "model": "The server orders the edits of all users. Edits are property-level: create, delete, set and unset a property of an object, layer, class or resource, by ID. The last edit in server order wins per property. A delete wins over later edits. Your own edits show at once and are replayed on the server order (rebase).",
-        "endpoint": "The host gives the session an endpoint. Without one, collab.connect fails. The protocol is in docs/collaboration.md.",
+        "endpoint": "collab.connect {url, token, doc} connects to a server by WebSocket (ws:// or wss://). Without a url it uses the endpoint that the host gave or the default URL (KADAKAS_COLLAB_URL, --collab-url). A server on this computer is always allowed; any other server must be on the --allow-url list and use wss://. Tokens stay in memory: never in files, the status or logs. After a lost connection the session connects again by itself (back-off 250 ms to 30 s) during collab.sync; collab.disconnect stops that. The protocol is in docs/collaboration.md.",
         "undo": "collab.undo takes back only your own edits, as new edits. While the session is connected, the normal undo and redo refuse and point to collab.undo.",
         "presence": "Cursor, selection and viewport of each client. Not part of the document and not saved.",
         "remote_changes": "A change of another user reaches the document as one change set with the origin remote (events.change). The selection, the group context and the caches stay. The undo history of the normal undo is cleared.",
         "limits": "The stacking order of objects and layers is shared (fractional keys). A session with predictable IDs cannot connect. The points of a site model are cut into chunks by position: if one user inserts or removes a point while another moves a point of the same model, the points can end up wrong; edit one site model at a time.",
         "examples": [
-            {"method": "collab.connect", "params": {"name": "Ann"}},
+            {"method": "collab.connect", "params": {"url": "ws://127.0.0.1:8787", "doc": "00000000-0000-0000-0000-000000000000", "token": "<token from the admin of the server>", "name": "Ann"}},
             {"method": "collab.sync", "params": {}},
             {"method": "collab.presence", "params": {"cursor": [1200.0, 800.0], "selection": ["00000000-0000-0000-0000-000000000002"]}},
             {"method": "collab.undo", "params": {}}
@@ -90,6 +108,18 @@ pub fn describe() -> Value {
 #[derive(Default)]
 pub struct CollabState {
     endpoint: Option<Box<dyn Endpoint>>,
+    /// The endpoint was made from a `url` (so the session may connect again by itself).
+    endpoint_from_url: bool,
+    /// Makes an endpoint from a URL and a token (the host gives it).
+    factory: Option<EndpointFactory>,
+    /// The default URL and token. In memory only.
+    default_url: Option<String>,
+    default_token: Option<String>,
+    /// The `--allow-url` list for servers that are not on this computer.
+    allowed_urls: Vec<String>,
+    reconnect: Reconnector,
+    /// Why the last try to connect failed.
+    last_error: Option<String>,
     link: Option<Link>,
     /// The revision of the document that was last copied into the client.
     synced_rev: u64,
@@ -103,11 +133,35 @@ pub struct CollabState {
     kept_events: Vec<ClientEvent>,
 }
 
+/// Makes an endpoint from a checked URL (`scheme://host:port/ws/<doc>`) and a token. The text of
+/// an error must not contain the token.
+pub type EndpointFactory =
+    Box<dyn Fn(&str, Option<&str>) -> Result<Box<dyn Endpoint>, String> + Send>;
+
 impl Session {
     /// Gives the session the place to connect to (see `collab.connect`). The host decides where
     /// agents may connect.
     pub fn set_collab_endpoint(&mut self, endpoint: Box<dyn Endpoint>) {
         self.collab.endpoint = Some(endpoint);
+        self.collab.endpoint_from_url = false;
+    }
+
+    /// Lets `collab.connect {url}` make WebSocket endpoints (see [`EndpointFactory`]).
+    pub fn set_collab_endpoint_factory(&mut self, factory: EndpointFactory) {
+        self.collab.factory = Some(factory);
+    }
+
+    /// The URL and the token that `collab.connect` uses when the call has none. The token is kept
+    /// in memory only.
+    pub fn set_collab_defaults(&mut self, url: Option<String>, token: Option<String>) {
+        self.collab.default_url = url.filter(|u| !u.trim().is_empty());
+        self.collab.default_token = token.filter(|t| !t.is_empty());
+    }
+
+    /// The servers that are not on this computer and that `collab.connect` may use (the entries of
+    /// `--allow-url`: a host, `*.domain` or an address prefix).
+    pub fn set_collab_allowed_urls(&mut self, entries: Vec<String>) {
+        self.collab.allowed_urls = entries;
     }
 
     /// The collaboration client, if `collab.connect` made one.
@@ -199,13 +253,19 @@ fn quarantined_json(q: &[Quarantined]) -> Value {
 
 fn status(s: &Session) -> Value {
     let endpoint = s.collab.endpoint.as_ref().map(|e| e.describe());
+    let reconnecting = s.collab.reconnect.enabled;
+    let last_error = &s.collab.last_error;
     match &s.collab.link {
-        None => json!({"state": "none", "endpoint": endpoint}),
+        None => {
+            json!({"state": "none", "endpoint": endpoint, "reconnecting": false, "last_error": last_error})
+        }
         Some(l) => {
             let c = &l.client;
             json!({
                 "state": state_name(c.state()),
                 "endpoint": endpoint,
+                "reconnecting": reconnecting,
+                "last_error": last_error,
                 "user": c.user(),
                 "client": c.client_id(),
                 "name": c.name(),
@@ -270,11 +330,18 @@ fn open_store(s: &Session, base: &str) -> Result<FileStore, RpcError> {
 
 fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let now = now_ms(m)?;
-    if s.collab.endpoint.is_none() {
-        return Err(RpcError::policy(
-            "this session has no collaboration endpoint: the host has not set one",
-        ));
+    let text = |key: &str| m.get(key).and_then(Value::as_str).map(str::to_string);
+    for key in ["url", "doc", "token", "user", "name", "store"] {
+        if m.get(key).is_some_and(|v| !v.is_string() && !v.is_null()) {
+            return Err(bad(format!("{key} must be text")));
+        }
     }
+    let token = text("token")
+        .filter(|t| !t.is_empty())
+        .or_else(|| s.collab.default_token.clone());
+    let use_url = text("url").is_some()
+        || (s.collab.default_url.is_some()
+            && (s.collab.endpoint.is_none() || text("doc").is_some()));
     if s.sequential_ids {
         return Err(RpcError::policy(
             "a session with predictable (sequential) IDs cannot join a shared document: its IDs would meet the IDs of other users",
@@ -285,7 +352,22 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             "already connected: call collab.disconnect first",
         ));
     }
-    let text = |key: &str| m.get(key).and_then(Value::as_str).map(str::to_string);
+    let mut new_endpoint = None;
+    if use_url {
+        let url = text("url")
+            .or_else(|| s.collab.default_url.clone())
+            .expect("checked above");
+        new_endpoint = Some(url_endpoint(
+            s,
+            &url,
+            text("doc").as_deref(),
+            token.as_deref(),
+        )?);
+    } else if s.collab.endpoint.is_none() {
+        return Err(RpcError::policy(
+            "this session has no collaboration endpoint: give url (and token, doc), or set KADAKAS_COLLAB_URL or --collab-url",
+        ));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let store = match text("store") {
         Some(base) => Some(open_store(s, &base)?),
@@ -330,7 +412,7 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             user,
             client: Document::default().alloc_id(),
             name: text("name").unwrap_or_default(),
-            token: text("token").unwrap_or_default(),
+            token: token.clone().unwrap_or_default(),
         };
         #[cfg(not(target_arch = "wasm32"))]
         let client = match store {
@@ -341,9 +423,25 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         let client = Client::new(cfg);
         s.collab.link = Some(Link::new(client));
     }
+    if reuse && let (Some(t), Some(l)) = (token, s.collab.link.as_mut()) {
+        // A new token (the old one ran out): the next `hello` carries it.
+        l.client.set_token(t);
+    }
+    if let Some(ep) = new_endpoint {
+        s.collab.endpoint = Some(ep);
+        s.collab.endpoint_from_url = true;
+    }
+    let from_url = s.collab.endpoint_from_url;
     let endpoint = s.collab.endpoint.as_mut().expect("checked above");
     let link = s.collab.link.as_mut().expect("made above");
-    link.connect(endpoint.as_mut()).map_err(RpcError::app)?;
+    if let Err(e) = link.connect(endpoint.as_mut()) {
+        s.collab.last_error = Some(e.to_string());
+        return Err(RpcError::app(e));
+    }
+    s.collab.last_error = None;
+    // A session that connected by URL connects again by itself after a loss.
+    s.collab.reconnect = Reconnector::new();
+    s.collab.reconnect.enabled = from_url;
     // The document is not the state of the client yet: nothing of it goes out before the first
     // sync gave the client a state and a shadow.
     sync_cycle(s, now)?;
@@ -358,7 +456,66 @@ fn journal_user(st: &FileStore) -> Option<Uid> {
     serde_json::from_str::<Journal>(&text).ok().map(|j| j.user)
 }
 
+/// Makes the endpoint for a `url` (and `doc`) after the URL policy.
+fn url_endpoint(
+    s: &Session,
+    url: &str,
+    doc: Option<&str>,
+    token: Option<&str>,
+) -> Result<Box<dyn Endpoint>, RpcError> {
+    let Some(factory) = &s.collab.factory else {
+        return Err(RpcError::policy(
+            "this program cannot open network connections for collaboration (the host gave the session no WebSocket support)",
+        ));
+    };
+    let mut u = CollabUrl::parse(url).map_err(|e| bad(e.to_string()))?;
+    let has_doc = u.path.split('/').rev().nth(1) == Some("ws");
+    match (has_doc, doc) {
+        (false, Some(d)) => {
+            let id = Uid::parse(d).ok_or_else(|| bad("doc must be a UUID text"))?;
+            u = u.with_document(&id.to_string());
+        }
+        (false, None) => {
+            return Err(bad(
+                "give doc (the document ID), or a url that ends in /ws/<document ID>",
+            ));
+        }
+        (true, Some(d))
+            if !u
+                .path
+                .to_ascii_lowercase()
+                .ends_with(&format!("/ws/{}", d.to_ascii_lowercase())) =>
+        {
+            return Err(bad("doc is not the document in the url"));
+        }
+        _ => {}
+    }
+    check_url_policy(&u, &s.collab.allowed_urls)?;
+    factory(&u.display(), token).map_err(RpcError::app)
+}
+
+/// A server on this computer is always allowed. Any other server must be on the list and use
+/// `wss://`.
+fn check_url_policy(u: &CollabUrl, allowed: &[String]) -> Result<(), RpcError> {
+    if u.is_loopback() {
+        return Ok(());
+    }
+    if !allowed.iter().any(|e| u.matches_entry(e)) {
+        return Err(RpcError::policy(format!(
+            "{}://{}:{} is not on the list of allowed addresses. The owner of the program can allow it with --allow-url {}",
+            u.scheme, u.host, u.port, u.host
+        )));
+    }
+    if u.scheme != "wss" {
+        return Err(RpcError::policy(
+            "a server that is not on this computer must use wss://: the token would cross the network as plain text",
+        ));
+    }
+    Ok(())
+}
+
 fn disconnect(s: &mut Session) -> Result<Value, RpcError> {
+    s.collab.reconnect.enabled = false;
     if let Some(l) = s.collab.link.as_mut() {
         l.disconnect();
     }
@@ -475,6 +632,15 @@ fn pump(s: &mut Session, now: u64) -> Moved {
     let Some(link) = s.collab.link.as_mut() else {
         return total;
     };
+    if let Some(ep) = s.collab.endpoint.as_mut()
+        && s.collab.reconnect.enabled
+    {
+        match s.collab.reconnect.poll(link, ep.as_mut(), now) {
+            Some(e) => s.collab.last_error = Some(e.to_string()),
+            None if link.is_connected() => s.collab.last_error = None,
+            None => {}
+        }
+    }
     for _ in 0..4 {
         let r = link.pump(now);
         total.received += r.received;

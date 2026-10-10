@@ -11,8 +11,13 @@ repository.workspace = true
 kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
+kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
 
 [[bin]]
 name = "kadakas"

@@ -549,3 +549,179 @@ fn connect_without_an_address_reads_the_runtime_file() {
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stderr).contains("no running Kadakas app"));
 }
+
+// ----- collaboration over WebSocket -----
+
+/// A running `kadakas serve` that the test talks to line by line.
+struct Agent {
+    child: std::process::Child,
+    out: BufReader<std::process::ChildStdout>,
+    next_id: u64,
+}
+
+impl Agent {
+    fn start(args: &[&str], env: &[(&str, &str)], dir: &Path) -> Agent {
+        let mut cmd = Command::new(BIN);
+        cmd.arg("serve")
+            .args(args)
+            .current_dir(dir)
+            .env_remove("KADAKAS_COLLAB_URL")
+            .env_remove("KADAKAS_COLLAB_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        Agent {
+            child,
+            out,
+            next_id: 1,
+        }
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{}", rpc(id, method, params)).unwrap();
+        stdin.flush().unwrap();
+        let mut line = String::new();
+        self.out.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{line}: {e}"));
+        assert_eq!(v["id"], id);
+        v
+    }
+
+    fn ok(&mut self, method: &str, params: Value) -> Value {
+        let v = self.call(method, params);
+        assert!(v.get("error").is_none(), "{method}: {v}");
+        v["result"].clone()
+    }
+
+    /// Syncs until the document has `n` objects. Returns their IDs, sorted.
+    fn wait_objects(&mut self, n: usize) -> Vec<String> {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            self.ok("collab.sync", json!({}));
+            let list = self.ok("objects.list", json!({}));
+            let mut ids: Vec<String> = list["objects"]
+                .as_array()
+                .or_else(|| list.as_array())
+                .unwrap()
+                .iter()
+                .map(|o| o["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            if ids.len() == n {
+                return ids;
+            }
+            assert!(std::time::Instant::now() < end, "timeout: {n} objects");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+const COLLAB_DOC: &str = "0190f1c2-7a3b-7c1d-8e2f-123456789abc";
+
+#[test]
+fn serve_connects_to_a_collaboration_server_with_env_defaults() {
+    use kadakas_collab::docsync;
+    use kadakas_collab::testkit::Sequencer;
+    use kadakas_collab_ws::testserver::TestServer;
+    use kadakas_core::model::Document;
+    use kadakas_core::uid::Uid;
+
+    let srv = TestServer::start_with(Sequencer::new(docsync::replica_of(&Document::default())));
+    let secret = "env.token-SECRET-42";
+    srv.require_token(secret, Uid::from_num(1));
+    let dir = temp("collab");
+    let base = srv.base_url();
+    let env = [
+        ("KADAKAS_COLLAB_URL", base.as_str()),
+        ("KADAKAS_COLLAB_TOKEN", secret),
+    ];
+    let mut a = Agent::start(&[], &env, &dir);
+    let st = a.ok(
+        "collab.connect",
+        json!({"doc": COLLAB_DOC, "user": Uid::from_num(1).to_string(), "name": "Ann"}),
+    );
+    assert!(!st.to_string().contains(secret));
+    // The shared document replaces the open one: edit after the client is online.
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while a.ok("collab.sync", json!({}))["status"]["state"] != "online" {
+        assert!(std::time::Instant::now() < end, "never online");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    a.ok(
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [100, 50]}}}),
+    );
+    // Wait until the server has the edit.
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while srv.with(|s| s.seq()) == 0 {
+        let last = a.ok("collab.sync", json!({}));
+        assert!(
+            std::time::Instant::now() < end,
+            "the edit never arrived: {last}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let seen = srv.seen();
+    assert_eq!(seen[0].path, format!("/ws/{COLLAB_DOC}"));
+    assert_eq!(
+        seen[0].authorization.as_deref(),
+        Some(format!("Bearer {secret}").as_str())
+    );
+
+    // A second program with the flags sees the object. (The test server checks one token, so
+    // the second user connects to a second server with the same state.)
+    let srv2 = TestServer::start_with(Sequencer::new(srv.with(|s| s.replica().clone())));
+    srv2.require_token("flag-token", Uid::from_num(2));
+    let mut b = Agent::start(
+        &[
+            "--collab-url",
+            &srv2.base_url(),
+            "--collab-token",
+            "flag-token",
+        ],
+        &[],
+        &dir,
+    );
+    b.ok(
+        "collab.connect",
+        json!({"doc": COLLAB_DOC, "user": Uid::from_num(2).to_string(), "name": "Bo"}),
+    );
+    b.wait_objects(1);
+}
+
+#[test]
+fn serve_refuses_a_server_that_is_not_on_this_computer() {
+    let dir = temp("collab-policy");
+    let mut a = Agent::start(&[], &[], &dir);
+    let v = a.call(
+        "collab.connect",
+        json!({"url": "wss://collab.example.org", "doc": COLLAB_DOC}),
+    );
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("--allow-url collab.example.org"), "{msg}");
+    drop(a);
+    // With the flag the policy passes and the connection fails later (no such host).
+    let mut a = Agent::start(&["--allow-url", "collab.invalid"], &[], &dir);
+    let v = a.call(
+        "collab.connect",
+        json!({"url": "wss://collab.invalid", "doc": COLLAB_DOC}),
+    );
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(!msg.contains("allow-url"), "{msg}");
+}
