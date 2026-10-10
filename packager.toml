@@ -11,7 +11,7 @@
 # The package name. Set here so cargo-packager need not look for a Cargo.toml.
 name = "cadektor"
 product-name = "Cadektor"
-identifier = "net.cadektor.app"
+identifier = "net.cadektor.Cadektor"
 version = "0.1.0"
 description = "CAD for landscape architects"
 authors = ["The Cadektor authors"]
@@ -41,9 +41,10 @@ icons = [
   "packaging/icons/icon.ico",
 ]
 
-# Cadektor documents end in .cdk.json.
+# Cadektor documents end in .cdk. The old .cdk.json files still open (File > Open), but the system
+# does not hand them to the app by double click.
 [[file-associations]]
-extensions = ["cdk.json"]
+extensions = ["cdk"]
 name = "Cadektor drawing"
 description = "Cadektor drawing"
 mime-type = "application/vnd.cadektor.drawing+json"

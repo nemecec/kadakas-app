@@ -8,7 +8,7 @@
   <true/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
-  <!-- The .cdk.json document type. The type conforms to JSON, so other tools can still read the files. -->
+  <!-- The .cdk document type. The files are JSON, so the type conforms to JSON and other tools can still read them. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
@@ -24,7 +24,7 @@
       <dict>
         <key>public.filename-extension</key>
         <array>
-          <string>cdk.json</string>
+          <string>cdk</string>
         </array>
         <key>public.mime-type</key>
         <string>application/vnd.cadektor.drawing+json</string>

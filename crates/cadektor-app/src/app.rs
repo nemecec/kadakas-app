@@ -79,6 +79,9 @@ pub struct CadektorApp {
     /// Files that the browser has picked, waiting for the next frame.
     #[cfg(target_arch = "wasm32")]
     web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
+    /// Set when a download of the document has finished. Then the browser copy is not needed.
+    #[cfg(target_arch = "wasm32")]
+    web_saved: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl CadektorApp {
@@ -193,6 +196,8 @@ impl CadektorApp {
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             #[cfg(target_arch = "wasm32")]
             web_inbox: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            web_saved: Default::default(),
         }
     }
 
@@ -447,7 +452,7 @@ impl CadektorApp {
         let (inbox, ctx) = (self.web_inbox.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             if let Some(f) = rfd::AsyncFileDialog::new()
-                .add_filter("Cadektor", &["json"])
+                .add_filter("Cadektor", &["cdk", "json"])
                 .pick_file()
                 .await
             {
@@ -465,14 +470,9 @@ impl CadektorApp {
             .path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map_or("drawing.cdk.json".into(), |n| {
-                n.to_string_lossy().into_owned()
-            });
+            .map_or("drawing.cdk".into(), |n| n.to_string_lossy().into_owned());
         match serde_json::to_vec_pretty(self.session.editor.doc()) {
-            Ok(bytes) => {
-                self.download(&name, bytes);
-                self.autosave.saved();
-            }
+            Ok(bytes) => self.download(&name, bytes, Some(self.web_saved.clone())),
             Err(e) => self.status = e.to_string(),
         }
     }
@@ -480,11 +480,16 @@ impl CadektorApp {
     #[cfg(target_arch = "wasm32")]
     fn export_svg(&mut self) {
         let svg = cadektor_core::svg::render(self.session.editor.doc(), 1600);
-        self.download("drawing.svg", svg.into_bytes());
+        self.download("drawing.svg", svg.into_bytes(), None);
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn download(&mut self, name: &str, bytes: Vec<u8>) {
+    fn download(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+        done: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+    ) {
         let name = name.to_string();
         self.status = format!("Downloading {name}");
         wasm_bindgen_futures::spawn_local(async move {
@@ -492,8 +497,10 @@ impl CadektorApp {
                 .set_file_name(&name)
                 .save_file()
                 .await
+                && h.write(&bytes).await.is_ok()
+                && let Some(done) = done
             {
-                let _ = h.write(&bytes).await;
+                done.set(true);
             }
         });
     }
@@ -501,6 +508,10 @@ impl CadektorApp {
     /// Web: opens the files that the browser handed over.
     #[cfg(target_arch = "wasm32")]
     fn take_web_files(&mut self) {
+        // The browser copy goes only after a download really worked.
+        if self.web_saved.take() {
+            self.autosave.saved();
+        }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
         for (name, bytes) in files {
             let parsed = String::from_utf8(bytes)
@@ -519,7 +530,7 @@ impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Cadektor", &["json"])
+            .add_filter("Cadektor", &["cdk", "json"])
             .pick_file()
         else {
             return;
@@ -540,8 +551,8 @@ impl CadektorApp {
             (Some(p), false) => p.clone(),
             _ => {
                 let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Cadektor", &["json"])
-                    .set_file_name("drawing.cdk.json")
+                    .add_filter("Cadektor", &["cdk"])
+                    .set_file_name("drawing.cdk")
                     .save_file()
                 else {
                     return;
@@ -551,7 +562,14 @@ impl CadektorApp {
         };
         match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
-                self.status = format!("Saved {}", path.display());
+                self.status = if file_io::is_legacy_name(&path) {
+                    format!(
+                        "Saved {}. File > Save As makes a file with the new .cdk extension.",
+                        path.display()
+                    )
+                } else {
+                    format!("Saved {}", path.display())
+                };
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -1120,13 +1138,12 @@ impl eframe::App for CadektorApp {
         }
         #[cfg(target_arch = "wasm32")]
         self.take_web_files();
-        {
-            let (revision, path) = (self.session.editor.revision(), self.path.clone());
-            let doc = self.session.editor.doc();
-            self.autosave.tick(&ctx, revision, path.as_deref(), || {
-                serde_json::to_vec(doc).ok()
-            });
-        }
+        self.autosave.tick(
+            &ctx,
+            self.session.editor.revision(),
+            self.path.as_deref(),
+            self.session.editor.doc(),
+        );
         if let Some(r) = self.autosave.show(&ctx) {
             self.replace_document(r.doc, None);
             self.status = r.status;

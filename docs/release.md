@@ -7,7 +7,7 @@ This page tells how to build the installers of Cadektor and where the files go o
 We use `cargo-packager` (settings in `packager.toml`). We chose it over `cargo-bundle` for these reasons.
 
 - It builds all targets we need: `.app` and `.dmg` (macOS), NSIS `.exe` and WiX `.msi` (Windows), AppImage and `.deb` (Linux). `cargo-bundle` has no Windows installer and no AppImage.
-- One file, `packager.toml`, holds the settings for all systems. It also holds the file type association (`.cdk.json`) and the extra binary.
+- One file, `packager.toml`, holds the settings for all systems. It also holds the file type association (`.cdk`) and the extra binary.
 - It is maintained, and it can sign and update packages later without a change of tool.
 
 ## Build on your own machine
@@ -29,9 +29,9 @@ The icon is our own. `python3 packaging/icons/make_icons.py` draws `icon.svg` an
 
 ## macOS notes
 
-- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.cadektor.drawing` (it conforms to `public.json`) and makes Cadektor the owner of `.cdk.json` files.
+- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.cadektor.drawing` (it conforms to `public.json`) and makes Cadektor the owner of `.cdk` files. Old `.cdk.json` files still open with File > Open, but a double click does not open them in Cadektor.
 - The `.app` build was checked on macOS 26 (Apple silicon). The `.dmg` step runs a Finder script for the window layout. It needs a normal desktop session, and it timed out in a headless run. Run it on a Mac with a user logged in.
-- macOS looks at the last part of a name when it chooses an app, so `drawing.cdk.json` can look like a plain `.json` file to some tools. Test the double click on a real Mac before the first release.
+- The bundle id is `net.cadektor.Cadektor`. Test the double click on a `.cdk` file on a real Mac before the first release.
 
 ## Where is the `cadektor` command line tool?
 
@@ -53,9 +53,11 @@ An MCP client config on macOS looks like this.
 ## Release workflow
 
 `.github/workflows/release.yml` runs when you push a tag that starts with `v` (for example `v0.1.0`). It builds the
-installers on macOS (arm64 and x86_64), Windows and Linux, builds the web version, and makes a draft GitHub release
+installers on macOS (`macos-14` for arm64, `macos-15-intel` for Intel), Windows and Linux, builds the web version, and makes a draft GitHub release
 with all files. You can also start it by hand from the Actions page. Nobody has run it on GitHub yet. Expect to fix
 small problems at the first run (for example the runner image names).
+
+The workflow has read-only rights, except the publish job (`contents: write`). All actions are pinned to commit SHAs, and `cargo-packager` to version 0.11.8 (`CARGO_PACKAGER_VERSION`). Update them on purpose, not by accident.
 
 Steps for a release: change `version` in `packager.toml` and in the crates, commit, tag (`git tag v0.1.0`), push the tag, check the draft release, publish it.
 

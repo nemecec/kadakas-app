@@ -20,6 +20,14 @@ pub struct AutosaveUi {
     recovery: Option<crate::autosave::Recovery>,
     #[cfg(not(target_arch = "wasm32"))]
     crashed: Vec<crate::autosave::Crashed>,
+    /// A recovered session whose files stay until the recovered document has been autosaved.
+    #[cfg(not(target_arch = "wasm32"))]
+    keep: Option<crate::autosave::Crashed>,
+    /// The number of the autosave job that makes `keep` unnecessary.
+    #[cfg(not(target_arch = "wasm32"))]
+    keep_until: Option<u64>,
+    /// Save at the next frame, whatever the schedule says (after a recovery).
+    force: bool,
     /// The browser holds an autosaved copy from an earlier visit.
     #[cfg(target_arch = "wasm32")]
     web_copy: Option<String>,
@@ -37,6 +45,11 @@ impl AutosaveUi {
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]
             crashed: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            keep: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            keep_until: None,
+            force: false,
             #[cfg(target_arch = "wasm32")]
             web_copy: None,
         }
@@ -63,49 +76,79 @@ impl AutosaveUi {
         self.prefs_open = true;
     }
 
-    /// Call once per frame. Saves a copy when one is due. `doc_bytes` is called only then.
+    /// Call once per frame. Saves a copy when one is due. The document is copied (cheap compared
+    /// with writing JSON); the writer thread makes the JSON and writes the file.
     pub fn tick(
         &mut self,
         ctx: &egui::Context,
         revision: u64,
         path: Option<&std::path::Path>,
-        doc_bytes: impl FnOnce() -> Option<Vec<u8>>,
+        doc: &Document,
     ) {
         let now = ctx.input(|i| i.time);
         if self.settings.enabled {
             // Wake up now and then, so that a time-based save also happens without input.
             ctx.request_repaint_after(std::time::Duration::from_secs(30));
         }
-        if !self.sched.due(&self.settings, now, revision) {
+        self.release_recovered_files();
+        let due = self.settings.enabled
+            && (std::mem::take(&mut self.force) || self.sched.due(&self.settings, now, revision));
+        if !due {
             return;
         }
-        let Some(bytes) = doc_bytes() else { return };
         self.sched.mark(now, revision);
-        self.submit(bytes, path);
+        self.submit(doc, path);
+    }
+
+    /// Deletes the files of a recovered session once the recovered document is safe in a new autosave.
+    fn release_recovered_files(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(seq), Some(r)) = (self.keep_until, &self.recovery)
+            && r.completed() >= seq
+        {
+            self.keep_until = None;
+            if let Some(c) = self.keep.take() {
+                c.discard();
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn submit(&mut self, bytes: Vec<u8>, path: Option<&std::path::Path>) {
+    fn submit(&mut self, doc: &Document, path: Option<&std::path::Path>) {
         if let Some(r) = &mut self.recovery {
             let over = path
                 .filter(|_| self.settings.save_over_file)
                 .map(std::path::Path::to_path_buf);
-            r.submit(crate::autosave::Job {
-                bytes,
+            let manual_seen = over.as_deref().map_or(0, crate::autosave::manual_saves);
+            let seq = r.submit(crate::autosave::Job {
+                doc: doc.clone(),
                 original: path.map(std::path::Path::to_path_buf),
                 keep: self.settings.keep as usize,
                 over,
+                manual_seen,
             });
+            if self.keep.is_some() {
+                self.keep_until = Some(seq);
+            }
             self.error = r.last_error().map(|e| format!("Last autosave failed: {e}"));
         }
     }
 
+    /// The browser has no writer thread. Large documents are skipped: local storage holds about 5 MB.
     #[cfg(target_arch = "wasm32")]
-    fn submit(&mut self, bytes: Vec<u8>, _path: Option<&std::path::Path>) {
-        let text = String::from_utf8_lossy(&bytes);
-        self.error = crate::autosave::web::put(&text)
-            .err()
-            .map(|e| format!("Last autosave failed: {e}"));
+    fn submit(&mut self, doc: &Document, _path: Option<&std::path::Path>) {
+        self.error = match serde_json::to_string(doc) {
+            Ok(text) if crate::autosave::fits_browser_storage(text.len()) => {
+                crate::autosave::web::put(&text)
+                    .err()
+                    .map(|e| format!("Last autosave failed: {e}"))
+            }
+            Ok(text) => Some(format!(
+                "No autosave: the drawing is {} MB, more than the browser can store",
+                text.len() / 1_000_000 + 1
+            )),
+            Err(e) => Some(format!("No autosave: {e}")),
+        };
     }
 
     /// The user saved the document: an old browser copy is not needed any more.
@@ -117,8 +160,13 @@ impl AutosaveUi {
     /// Clean exit: removes the lock and the autosaved versions.
     pub fn finish(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(r) = self.recovery.take() {
-            r.finish();
+        {
+            if let Some(r) = self.recovery.take() {
+                r.finish();
+            }
+            if let Some(c) = self.keep.take() {
+                c.discard();
+            }
         }
     }
 
@@ -193,6 +241,34 @@ impl AutosaveUi {
         }
     }
 
+    /// Opens a recovered copy. Its files stay until the first autosave of the document is on disk,
+    /// so a second crash right after the recovery loses nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_recovered(&mut self, i: usize) -> Option<Recovered> {
+        match self.crashed[i].load() {
+            Ok((doc, from)) => {
+                let status = format!("Recovered {}. Save it to keep it.", from.display());
+                let session = self.crashed.remove(i);
+                if self.settings.enabled && self.recovery.is_some() {
+                    // An older pending session is safe once the newer one is kept.
+                    if let Some(old) = self.keep.replace(session) {
+                        old.discard();
+                    }
+                    self.keep_until = None;
+                    self.force = true;
+                } else {
+                    // No autosave: the user chose to keep no copies.
+                    session.discard();
+                }
+                Some(Recovered { doc, status })
+            }
+            Err(e) => {
+                self.error = Some(format!("Cannot open the recovered copy: {e}"));
+                None
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn recovery_dialog(&mut self, ctx: &egui::Context) -> Option<Recovered> {
         if self.crashed.is_empty() {
@@ -245,19 +321,13 @@ impl AutosaveUi {
                 self.crashed.remove(i).discard();
                 None
             }
-            Choice::Open(i) => match self.crashed[i].load() {
-                Ok((doc, from)) => {
-                    // The copy is in memory now. Keep the files until the next autosave.
-                    let status = format!("Recovered {}. Save it to keep it.", from.display());
-                    self.crashed.remove(i).discard();
-                    Some(Recovered { doc, status })
-                }
-                Err(e) => {
-                    self.error = Some(format!("Cannot open the recovered copy: {e}"));
+            Choice::Open(i) => {
+                let r = self.open_recovered(i);
+                if r.is_none() {
                     self.prefs_open = true;
-                    None
                 }
-            },
+                r
+            }
         }
     }
 
@@ -296,5 +366,102 @@ impl AutosaveUi {
                 None
             }
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use crate::autosave::{Job, Recovery, find_crashed_with};
+    use std::time::Duration;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cadektor-ui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn job(doc: &Document) -> Job {
+        Job {
+            doc: doc.clone(),
+            original: None,
+            keep: 3,
+            over: None,
+            manual_seen: 0,
+        }
+    }
+
+    /// A session that wrote one version and then crashed.
+    fn crashed_session(dir: &std::path::Path) {
+        let mut old = Recovery::start(dir.to_path_buf()).unwrap();
+        let n = old.submit(job(&Document::default()));
+        while old.completed() < n {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        old.simulate_crash();
+    }
+
+    #[test]
+    fn recovery_files_stay_until_the_recovered_document_is_autosaved() {
+        let dir = temp("keep");
+        crashed_session(&dir);
+        let mut ui = AutosaveUi::inert();
+        ui.crashed = find_crashed_with(&dir, Duration::ZERO);
+        assert_eq!(ui.crashed.len(), 1);
+        ui.recovery = Some(Recovery::start(dir.clone()).unwrap());
+
+        let r = ui.open_recovered(0).expect("opens");
+        assert_eq!(r.doc, Document::default());
+        let files = |dir: &std::path::Path| std::fs::read_dir(dir).unwrap().count();
+        assert!(ui.keep.is_some(), "the recovery files are kept");
+        assert!(
+            files(&dir) >= 3,
+            "lock, version and meta of the old session stay"
+        );
+
+        // The next frame saves the recovered document. Only then are the old files released.
+        let ctx = egui::Context::default();
+        ui.tick(&ctx, 0, None, &r.doc);
+        let seq = ui.keep_until.expect("a job is waiting");
+        while ui.recovery.as_ref().unwrap().completed() < seq {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        ui.tick(&ctx, 0, None, &r.doc);
+        assert!(ui.keep.is_none());
+        assert!(find_crashed_with(&dir, Duration::ZERO).is_empty());
+        ui.finish();
+        assert_eq!(files(&dir), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn with_autosave_off_a_recovery_is_not_kept() {
+        let dir = temp("off");
+        crashed_session(&dir);
+        let mut ui = AutosaveUi::inert();
+        ui.settings.enabled = false;
+        ui.crashed = find_crashed_with(&dir, Duration::ZERO);
+        assert!(ui.open_recovered(0).is_some());
+        assert!(ui.keep.is_none());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_damaged_recovery_reports_an_error_and_keeps_the_files() {
+        let dir = temp("damaged");
+        crashed_session(&dir);
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            if e.file_name().to_string_lossy().ends_with(".cdk.json") {
+                std::fs::write(e.path(), "{broken").unwrap();
+            }
+        }
+        let mut ui = AutosaveUi::inert();
+        ui.crashed = find_crashed_with(&dir, Duration::ZERO);
+        assert!(ui.open_recovered(0).is_none());
+        assert_eq!(ui.crashed.len(), 1);
+        assert!(ui.error.is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

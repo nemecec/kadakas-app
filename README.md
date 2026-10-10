@@ -11,7 +11,7 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 - `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/cadektor-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
-Documents are JSON files (`*.cdk.json`). Units are millimeters, the Y axis points up, angles are in radians.
+Documents are JSON files with the extension `.cdk`. Older files named `*.cdk.json` still open, and File > Save keeps their name (File > Save As offers `.cdk`). Units are millimeters, the Y axis points up, angles are in radians.
 See `docs/feature-spec.md` for the plan.
 
 ## Build

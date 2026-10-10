@@ -7,6 +7,8 @@ mod annot_ui;
 mod app;
 mod area_ui;
 mod autosave;
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave_fs;
 mod autosave_ui;
 mod canvas;
 mod canvas3d;

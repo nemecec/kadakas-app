@@ -1,4 +1,5 @@
-//! Document files: JSON of `Document`, extension `.cdk.json`.
+//! Document files: JSON of `Document`. The extension is `.cdk`. Files that end in `.cdk.json`
+//! (the old extension) still open and save, and Save As offers `.cdk`.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,15 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
 }
 
 /// Saves atomically (temporary file, then rename) and keeps the old file as `.bak`.
+/// It counts as a manual save: a late autosave of the same file is dropped (see `autosave_fs`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn write_document(path: &Path, doc: &Document) -> Result<(), String> {
+    crate::autosave::manual_save(path, || write_document_raw(path, doc))
+}
+
+/// `write_document` without the manual save bookkeeping.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
     let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
     fsio::write_atomic(path, text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
@@ -29,14 +38,19 @@ pub fn write_svg(path: &Path, doc: &Document) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// Adds `.cdk.json` unless the name already has it.
+/// Adds `.cdk` unless the name already ends in `.cdk` or in the old `.cdk.json`.
 pub fn with_extension(path: &Path) -> std::path::PathBuf {
     let s = path.to_string_lossy();
-    if s.ends_with(".cdk.json") {
+    if s.ends_with(".cdk") || s.ends_with(".cdk.json") {
         path.to_path_buf()
     } else {
-        format!("{s}.cdk.json").into()
+        format!("{s}.cdk").into()
     }
+}
+
+/// True for the old `.cdk.json` extension. Save keeps such a file as it is. Save As offers `.cdk`.
+pub fn is_legacy_name(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".cdk.json")
 }
 
 /// What an agent request changed in the app besides the document.
@@ -77,7 +91,7 @@ pub fn agent_line(
     let write = method == "file.save";
     let checked = req["params"]["path"].as_str().map(|t| {
         session
-            .check_path(Path::new(t), write, &["json"])
+            .check_path(Path::new(t), write, &["cdk", "json"])
             .map_err(|e| (1, e))
     });
     let result = match checked {
@@ -160,11 +174,14 @@ mod tests {
 
     #[test]
     fn extension_helper() {
-        assert_eq!(with_extension(Path::new("a")).to_str(), Some("a.cdk.json"));
+        assert_eq!(with_extension(Path::new("a")).to_str(), Some("a.cdk"));
+        assert_eq!(with_extension(Path::new("a.cdk")).to_str(), Some("a.cdk"));
         assert_eq!(
             with_extension(Path::new("a.cdk.json")).to_str(),
             Some("a.cdk.json")
         );
+        assert!(is_legacy_name(Path::new("a.cdk.json")));
+        assert!(!is_legacy_name(Path::new("a.cdk")));
     }
 
     fn temp(name: &str) -> PathBuf {
@@ -197,6 +214,26 @@ mod tests {
             "Layer 1"
         );
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn restricted_agents_may_use_cdk_and_old_json_files_but_not_other_extensions() {
+        let dir = temp("agent-ext");
+        let mut s = Session::default();
+        s.paths = cadektor_api::PathPolicy::restricted(vec![dir.clone()]);
+        let (mut path, mut fx) = (None, AgentEffects::default());
+        for (name, ok) in [("a.cdk", true), ("b.cdk.json", true), ("c.txt", false)] {
+            let p = dir.join(name);
+            let r = call(
+                &mut s,
+                &mut path,
+                &mut fx,
+                json!({"id": 1, "method": "file.save", "params": {"path": p}}),
+            );
+            assert_eq!(r.get("error").is_none(), ok, "{name}: {r}");
+            assert_eq!(p.exists(), ok, "{name}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
