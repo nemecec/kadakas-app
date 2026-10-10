@@ -9,36 +9,94 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use cadektor_core::DVec2;
 use cadektor_core::command::Command;
 use cadektor_core::model::*;
 use cadektor_core::sheets::*;
-use cadektor_core::DVec2;
 use cadektor_render::{Projection, RenderMode, StandardView};
 
 use crate::{RpcError, Session};
 
-pub const SHEET_LIST: (&str, &str) = ("sheet.list", "Sheet layers with page size, number, title, and the IDs of their viewports and title blocks. Returns {sheets: [{layer, name, number, title, paper, orientation, width_mm, height_mm, viewports, title_blocks}]}.");
-pub const SHEET_CREATE: (&str, &str) = ("sheet.create", "Add a sheet layer (paper space, mm, scale 1:1). params: {name, paper? (a0 a1 a2 a3 a4 letter legal tabloid arch_c arch_d arch_e, or {width_mm, height_mm}; default a3), orientation? (landscape | portrait), number?, title?}. Returns {layer}.");
-pub const SHEET_SET: (&str, &str) = ("sheet.set", "Change the page of a sheet layer. params: {layer (ID or name), paper?, orientation?, number?, title?}.");
-pub const SHEET_RENDER: (&str, &str) = ("sheet.render", "Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model.");
-pub const PROJECT_GET: (&str, &str) = ("project.get", "Project data for title blocks: name, client, address, drawn_by, date, revision.");
-pub const PROJECT_NEW_GUID: (&str, &str) = ("project.new_guid", "Give the project a new GUID (one undo step). IFC GlobalIds come from it, so use it for a copy of a template. Returns {guid}.");
-pub const PROJECT_SET: (&str, &str) = ("project.set", "Change project data. params: any of name, client, address, drawn_by, date, revision.");
-pub const VIEWPORT_CREATE: (&str, &str) = ("viewport.create", "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe, 3D only), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images. Returns the viewport with its id.");
-pub const VIEWPORT_GET: (&str, &str) = ("viewport.get", "One viewport with all settings, overrides and annotations. params: {id}.");
-pub const VIEWPORT_LIST: (&str, &str) = ("viewport.list", "Viewports. params: {sheet?}. Returns {viewports: [{id, sheet, name, scale, view, layers, min, max}]}.");
-pub const VIEWPORT_UPDATE: (&str, &str) = ("viewport.update", "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.");
-pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = ("viewport.set_override", "Visibility and graphic overrides in one viewport. params: {id, layers? ({layer: true | false | null}; true or false replaces the document visibility, null removes the override), classes? ({class: {visible?, pen?, fill?, line_weight?} | null}; a field set to null is removed; pen and fill are [r,g,b,a]; line_weight is mm on paper), reset? (true clears all overrides first)}. Precedence: the object's own attributes, then this override (only for attributes the object leaves to its class), then the class, then defaults. A viewport keeps its own visibility; it does not follow the document. Layer and class keys are IDs or names.");
-pub const VIEWPORT_ANNOTATE: (&str, &str) = ("viewport.annotate", "Annotations of a viewport: objects in paper mm, measured from the lower left corner of the frame (they move with the viewport). params: {id, add? ([{kind: line, a, b} | {kind: text, at, text, height} | {kind: dimension, a, b, offset, text?} | {kind: shape, shape: {kind: rect | circle | arc | polyline | line | text, ...}}, each with optional class and attrs]), remove? ([annotation id]), clear? (bool)}. Returns {added: [annotation id], count}.");
-pub const TITLE_BLOCK_CREATE: (&str, &str) = ("title_block.create", "Add a border, grid reference and title block to a sheet layer. It follows the page size. params: {sheet, margin? (mm, default 10), grid_columns? (0 to 26), grid_rows? (0 to 99), layout? (omit for the standard layout; or {width, height, cells: [{x, y, w, h, label, text, size}]} in mm from the lower left corner of the block), fields? ({name: text}, for {field.name})}. Cell text may use {project.name}, {project.client}, {project.address}, {project.drawn_by}, {project.date}, {project.revision}, {sheet.number}, {sheet.title}, {sheet.scale}, {sheet.paper}, {sheet.index}, {sheet.count} and {field.<name>}. Returns {id}.");
-pub const TITLE_BLOCK_UPDATE: (&str, &str) = ("title_block.update", "Change a title block. params: {id, and any of margin, grid_columns, grid_rows, layout (null for the standard layout), fields}.");
-pub const TITLE_BLOCK_RESOLVE: (&str, &str) = ("title_block.resolve", "The title block as drawn: border, grid labels and cells with their filled text. params: {id}.");
-pub const SAVED_VIEW_LIST: (&str, &str) = ("saved_view.list", "Saved views. Returns {views: [{name, layers, classes, active_layer, active_class, zoom, pan, view, projection, mode}]}.");
-pub const SAVED_VIEW_SAVE: (&str, &str) = ("saved_view.save", "Save the current view: the visibility of all layers and classes, the active layer and class, and the 3D view settings. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle)}. A view with the same name is replaced.");
-pub const SAVED_VIEW_RESTORE: (&str, &str) = ("saved_view.restore", "Apply a saved view (one undo step): layer and class visibility, active layer and class, and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.");
-pub const SAVED_VIEW_DELETE: (&str, &str) = ("saved_view.delete", "Delete a saved view. params: {name}.");
+pub const SHEET_LIST: (&str, &str) = (
+    "sheet.list",
+    "Sheet layers with page size, number, title, and the IDs of their viewports and title blocks. Returns {sheets: [{layer, name, number, title, paper, orientation, width_mm, height_mm, viewports, title_blocks}]}.",
+);
+pub const SHEET_CREATE: (&str, &str) = (
+    "sheet.create",
+    "Add a sheet layer (paper space, mm, scale 1:1). params: {name, paper? (a0 a1 a2 a3 a4 letter legal tabloid arch_c arch_d arch_e, or {width_mm, height_mm}; default a3), orientation? (landscape | portrait), number?, title?}. Returns {layer}.",
+);
+pub const SHEET_SET: (&str, &str) = (
+    "sheet.set",
+    "Change the page of a sheet layer. params: {layer (ID or name), paper?, orientation?, number?, title?}.",
+);
+pub const SHEET_RENDER: (&str, &str) = (
+    "sheet.render",
+    "Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model.",
+);
+pub const PROJECT_GET: (&str, &str) = (
+    "project.get",
+    "Project data for title blocks: name, client, address, drawn_by, date, revision.",
+);
+pub const PROJECT_NEW_GUID: (&str, &str) = (
+    "project.new_guid",
+    "Give the project a new GUID (one undo step). IFC GlobalIds come from it, so use it for a copy of a template. Returns {guid}.",
+);
+pub const PROJECT_SET: (&str, &str) = (
+    "project.set",
+    "Change project data. params: any of name, client, address, drawn_by, date, revision.",
+);
+pub const VIEWPORT_CREATE: (&str, &str) = (
+    "viewport.create",
+    "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe, 3D only), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images. Returns the viewport with its id.",
+);
+pub const VIEWPORT_GET: (&str, &str) = (
+    "viewport.get",
+    "One viewport with all settings, overrides and annotations. params: {id}.",
+);
+pub const VIEWPORT_LIST: (&str, &str) = (
+    "viewport.list",
+    "Viewports. params: {sheet?}. Returns {viewports: [{id, sheet, name, scale, view, layers, min, max}]}.",
+);
+pub const VIEWPORT_UPDATE: (&str, &str) = (
+    "viewport.update",
+    "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.",
+);
+pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = (
+    "viewport.set_override",
+    "Visibility and graphic overrides in one viewport. params: {id, layers? ({layer: true | false | null}; true or false replaces the document visibility, null removes the override), classes? ({class: {visible?, pen?, fill?, line_weight?} | null}; a field set to null is removed; pen and fill are [r,g,b,a]; line_weight is mm on paper), reset? (true clears all overrides first)}. Precedence: the object's own attributes, then this override (only for attributes the object leaves to its class), then the class, then defaults. A viewport keeps its own visibility; it does not follow the document. Layer and class keys are IDs or names.",
+);
+pub const VIEWPORT_ANNOTATE: (&str, &str) = (
+    "viewport.annotate",
+    "Annotations of a viewport: objects in paper mm, measured from the lower left corner of the frame (they move with the viewport). params: {id, add? ([{kind: line, a, b} | {kind: text, at, text, height} | {kind: dimension, a, b, offset, text?} | {kind: shape, shape: {kind: rect | circle | arc | polyline | line | text, ...}}, each with optional class and attrs]), remove? ([annotation id]), clear? (bool)}. Returns {added: [annotation id], count}.",
+);
+pub const TITLE_BLOCK_CREATE: (&str, &str) = (
+    "title_block.create",
+    "Add a border, grid reference and title block to a sheet layer. It follows the page size. params: {sheet, margin? (mm, default 10), grid_columns? (0 to 26), grid_rows? (0 to 99), layout? (omit for the standard layout; or {width, height, cells: [{x, y, w, h, label, text, size}]} in mm from the lower left corner of the block), fields? ({name: text}, for {field.name})}. Cell text may use {project.name}, {project.client}, {project.address}, {project.drawn_by}, {project.date}, {project.revision}, {sheet.number}, {sheet.title}, {sheet.scale}, {sheet.paper}, {sheet.index}, {sheet.count} and {field.<name>}. Returns {id}.",
+);
+pub const TITLE_BLOCK_UPDATE: (&str, &str) = (
+    "title_block.update",
+    "Change a title block. params: {id, and any of margin, grid_columns, grid_rows, layout (null for the standard layout), fields}.",
+);
+pub const TITLE_BLOCK_RESOLVE: (&str, &str) = (
+    "title_block.resolve",
+    "The title block as drawn: border, grid labels and cells with their filled text. params: {id}.",
+);
+pub const SAVED_VIEW_LIST: (&str, &str) = (
+    "saved_view.list",
+    "Saved views. Returns {views: [{name, layers, classes, active_layer, active_class, zoom, pan, view, projection, mode}]}.",
+);
+pub const SAVED_VIEW_SAVE: (&str, &str) = (
+    "saved_view.save",
+    "Save the current view: the visibility of all layers and classes, the active layer and class, and the 3D view settings. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle)}. A view with the same name is replaced.",
+);
+pub const SAVED_VIEW_RESTORE: (&str, &str) = (
+    "saved_view.restore",
+    "Apply a saved view (one undo step): layer and class visibility, active layer and class, and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.",
+);
+pub const SAVED_VIEW_DELETE: (&str, &str) =
+    ("saved_view.delete", "Delete a saved view. params: {name}.");
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
@@ -61,19 +119,42 @@ pub fn describe() -> Value {
 }
 
 fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: -32602, message: e.to_string() }
+    RpcError {
+        code: -32602,
+        message: e.to_string(),
+    }
 }
 
 fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError { code: 1, message: e.to_string() }
+    RpcError {
+        code: 1,
+        message: e.to_string(),
+    }
 }
 
 type Res = Result<Value, RpcError>;
 
 const KNOWN: &[&str] = &[
-    "sheet.list", "sheet.create", "sheet.set", "sheet.render", "project.get", "project.set", "project.new_guid", "viewport.create", "viewport.get", "viewport.list",
-    "viewport.update", "viewport.set_override", "viewport.annotate", "title_block.create", "title_block.update", "title_block.resolve", "saved_view.list",
-    "saved_view.save", "saved_view.restore", "saved_view.delete",
+    "sheet.list",
+    "sheet.create",
+    "sheet.set",
+    "sheet.render",
+    "project.get",
+    "project.set",
+    "project.new_guid",
+    "viewport.create",
+    "viewport.get",
+    "viewport.list",
+    "viewport.update",
+    "viewport.set_override",
+    "viewport.annotate",
+    "title_block.create",
+    "title_block.update",
+    "title_block.resolve",
+    "saved_view.list",
+    "saved_view.save",
+    "saved_view.restore",
+    "saved_view.delete",
 ];
 
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Res> {
@@ -94,7 +175,9 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
         "project.set" => project_set(s, p),
         "project.new_guid" => {
             let guid = cadektor_core::guid::random();
-            s.editor.execute(&Command::SetProjectGuid { guid: guid.clone() }).map_err(app)?;
+            s.editor
+                .execute(&Command::SetProjectGuid { guid: guid.clone() })
+                .map_err(app)?;
             Ok(json!({ "guid": guid }))
         }
         "viewport.create" => viewport_create(s, p),
@@ -114,7 +197,9 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
         "saved_view.restore" => saved_view_restore(s, p),
         "saved_view.delete" => {
             let name = str_field(p, "name")?;
-            s.editor.execute(&Command::DeleteView { name }).map_err(app)?;
+            s.editor
+                .execute(&Command::DeleteView { name })
+                .map_err(app)?;
             Ok(json!({"ok": true}))
         }
         _ => unreachable!("checked by KNOWN"),
@@ -124,11 +209,17 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
 // ---------------------------------------------------------------- lookups
 
 fn str_field(p: &Value, key: &str) -> Result<String, RpcError> {
-    p.get(key).and_then(Value::as_str).map(str::to_string).ok_or_else(|| bad(format!("params.{key} is required (text)")))
+    p.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| bad(format!("params.{key} is required (text)")))
 }
 
 fn object_id(p: &Value) -> Result<(ObjectId, ()), RpcError> {
-    p.get("id").and_then(Value::as_u64).map(|i| (ObjectId(i), ())).ok_or_else(|| bad("params.id is required (an object ID)"))
+    p.get("id")
+        .and_then(Value::as_u64)
+        .map(|i| (ObjectId(i), ()))
+        .ok_or_else(|| bad("params.id is required (an object ID)"))
 }
 
 /// A layer from an ID or a name.
@@ -139,7 +230,11 @@ fn layer_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
             .parse::<u64>()
             .ok()
             .and_then(|i| doc.layer(LayerId(i)))
-            .or_else(|| doc.layers.iter().find(|l| l.name.eq_ignore_ascii_case(t.trim())))
+            .or_else(|| {
+                doc.layers
+                    .iter()
+                    .find(|l| l.name.eq_ignore_ascii_case(t.trim()))
+            })
             .map(|l| l.id),
         _ => None,
     };
@@ -161,7 +256,11 @@ fn class_ref(doc: &Document, v: &Value) -> Result<ClassId, RpcError> {
             .parse::<u64>()
             .ok()
             .and_then(|i| doc.class(ClassId(i)))
-            .or_else(|| doc.classes.iter().find(|c| c.name.eq_ignore_ascii_case(t.trim())))
+            .or_else(|| {
+                doc.classes
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(t.trim()))
+            })
             .map(|c| c.id),
         _ => None,
     };
@@ -169,10 +268,12 @@ fn class_ref(doc: &Document, v: &Value) -> Result<ClassId, RpcError> {
 }
 
 fn norm_view(name: &str) -> Result<String, RpcError> {
-    StandardView::from_name(name).map(|v| v.id().to_string()).ok_or_else(|| {
-        let all: Vec<&str> = StandardView::ALL.iter().map(|v| v.id()).collect();
-        bad(format!("unknown view '{name}'. Views: {}", all.join(", ")))
-    })
+    StandardView::from_name(name)
+        .map(|v| v.id().to_string())
+        .ok_or_else(|| {
+            let all: Vec<&str> = StandardView::ALL.iter().map(|v| v.id()).collect();
+            bad(format!("unknown view '{name}'. Views: {}", all.join(", ")))
+        })
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(v: Value) -> Result<T, RpcError> {
@@ -182,7 +283,10 @@ fn parse<T: for<'de> Deserialize<'de>>(v: Value) -> Result<T, RpcError> {
 fn paper_from(p: &Value) -> Result<Option<PaperSize>, RpcError> {
     let custom = |w: &Value, h: &Value| -> Result<PaperSize, RpcError> {
         match (w.as_f64(), h.as_f64()) {
-            (Some(w), Some(h)) => Ok(PaperSize::Custom { width_mm: w, height_mm: h }),
+            (Some(w), Some(h)) => Ok(PaperSize::Custom {
+                width_mm: w,
+                height_mm: h,
+            }),
             _ => Err(bad("a custom paper needs width_mm and height_mm (numbers)")),
         }
     };
@@ -194,7 +298,10 @@ fn paper_from(p: &Value) -> Result<Option<PaperSize>, RpcError> {
         },
         Some(Value::String(t)) => PaperSize::from_id(t).map(Some).ok_or_else(|| {
             let all: Vec<&str> = PaperSize::NAMED.iter().map(|p| p.id()).collect();
-            bad(format!("unknown paper '{t}'. Use {} or {{width_mm, height_mm}}", all.join(", ")))
+            bad(format!(
+                "unknown paper '{t}'. Use {} or {{width_mm, height_mm}}",
+                all.join(", ")
+            ))
         }),
         Some(o @ Value::Object(m)) => {
             if let Some(c) = m.get("custom") {
@@ -210,7 +317,9 @@ fn paper_from(p: &Value) -> Result<Option<PaperSize>, RpcError> {
 fn orientation_from(p: &Value) -> Result<Option<Orientation>, RpcError> {
     match p.get("orientation") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(t)) => Orientation::from_id(t).map(Some).ok_or_else(|| bad("orientation is landscape or portrait")),
+        Some(Value::String(t)) => Orientation::from_id(t)
+            .map(Some)
+            .ok_or_else(|| bad("orientation is landscape or portrait")),
         Some(_) => Err(bad("orientation is landscape or portrait")),
     }
 }
@@ -222,9 +331,17 @@ fn opt_str(p: &Value, key: &str) -> Option<String> {
 // ---------------------------------------------------------------- sheets and project
 
 fn sheet_json(doc: &Document, layer: &Layer) -> Value {
-    let sheet = doc.sheet(layer.id).unwrap_or_else(|| Sheet::new("", layer.name.clone()));
+    let sheet = doc
+        .sheet(layer.id)
+        .unwrap_or_else(|| Sheet::new("", layer.name.clone()));
     let size = sheet.size_mm();
-    let on_sheet = |want: &str| -> Vec<ObjectId> { doc.objects.values().filter(|o| o.layer == layer.id && o.shape.kind() == want).map(|o| o.id).collect() };
+    let on_sheet = |want: &str| -> Vec<ObjectId> {
+        doc.objects
+            .values()
+            .filter(|o| o.layer == layer.id && o.shape.kind() == want)
+            .map(|o| o.id)
+            .collect()
+    };
     json!({
         "layer": layer.id, "name": layer.name, "number": sheet.number, "title": sheet.title,
         "paper": sheet.paper, "orientation": sheet.orientation, "width_mm": size.x, "height_mm": size.y,
@@ -238,14 +355,26 @@ fn sheet_list(doc: &Document) -> Value {
 
 fn sheet_create(s: &mut Session, p: &Value) -> Res {
     let name = str_field(p, "name")?;
-    let cmd = Command::AddSheet { name, paper: paper_from(p)?, orientation: orientation_from(p)?, number: opt_str(p, "number"), title: opt_str(p, "title") };
+    let cmd = Command::AddSheet {
+        name,
+        paper: paper_from(p)?,
+        orientation: orientation_from(p)?,
+        number: opt_str(p, "number"),
+        title: opt_str(p, "title"),
+    };
     let out = s.editor.execute(&cmd).map_err(app)?;
     Ok(json!({"layer": out.created[0]}))
 }
 
 fn sheet_set(s: &mut Session, p: &Value) -> Res {
     let layer = sheet_ref(s.editor.doc(), p.get("layer").unwrap_or(&Value::Null))?;
-    let cmd = Command::SetSheet { layer, paper: paper_from(p)?, orientation: orientation_from(p)?, number: opt_str(p, "number"), title: opt_str(p, "title") };
+    let cmd = Command::SetSheet {
+        layer,
+        paper: paper_from(p)?,
+        orientation: orientation_from(p)?,
+        number: opt_str(p, "number"),
+        title: opt_str(p, "title"),
+    };
     s.editor.execute(&cmd).map_err(app)?;
     let doc = s.editor.doc();
     Ok(sheet_json(doc, doc.layer(layer).expect("checked")))
@@ -275,7 +404,9 @@ fn viewport_json(doc: &Document, id: ObjectId) -> Res {
 }
 
 fn find_viewport(doc: &Document, id: ObjectId) -> Result<(&Object, &Viewport), RpcError> {
-    let o = doc.object(id).ok_or_else(|| app(format!("object {id} does not exist")))?;
+    let o = doc
+        .object(id)
+        .ok_or_else(|| app(format!("object {id} does not exist")))?;
     match &o.shape {
         Shape::Viewport(v) => Ok((o, v)),
         _ => Err(bad(format!("object {id} is not a viewport"))),
@@ -301,12 +432,16 @@ fn viewport_list(s: &Session, p: &Value) -> Res {
 }
 
 fn layer_list(doc: &Document, v: &Value) -> Result<Vec<LayerId>, RpcError> {
-    let arr = v.as_array().ok_or_else(|| bad("layers must be a list of layer IDs or names"))?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| bad("layers must be a list of layer IDs or names"))?;
     let mut out = Vec::new();
     for x in arr {
         let id = layer_ref(doc, x)?;
         if doc.layer(id).is_some_and(|l| l.kind != LayerKind::Design) {
-            return Err(bad(format!("layer {id} is a sheet layer. A viewport shows design layers")));
+            return Err(bad(format!(
+                "layer {id} is a sheet layer. A viewport shows design layers"
+            )));
         }
         if !out.contains(&id) {
             out.push(id);
@@ -335,7 +470,10 @@ fn scale_from(p: &Value) -> Result<Option<f64>, RpcError> {
     match p.get("scale") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(t)) if t.eq_ignore_ascii_case("fit") => Ok(None),
-        Some(v) => v.as_f64().map(Some).ok_or_else(|| bad("scale is a number such as 100 (for 1:100) or \"fit\"")),
+        Some(v) => v
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| bad("scale is a number such as 100 (for 1:100) or \"fit\"")),
     }
 }
 
@@ -345,7 +483,12 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
     let c: CreateViewport = parse(p.clone())?;
     let page = doc.sheet(sheet).expect("checked").size_mm();
     let layers = match p.get("layers") {
-        None | Some(Value::Null) => doc.layers.iter().filter(|l| l.kind == LayerKind::Design).map(|l| l.id).collect(),
+        None | Some(Value::Null) => doc
+            .layers
+            .iter()
+            .filter(|l| l.kind == LayerKind::Design)
+            .map(|l| l.id)
+            .collect(),
         Some(v) => layer_list(doc, v)?,
     };
     let (min, max) = match (c.min, c.max, c.at, c.size) {
@@ -354,7 +497,13 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
         (None, None, None, None) => (DVec2::new(15.0, 55.0), page - DVec2::splat(15.0)),
         _ => return Err(bad("give min and max, or at and size")),
     };
-    let mut vp = Viewport::new(min, max, DVec2::ZERO, scale_from(p)?.unwrap_or(100.0), layers);
+    let mut vp = Viewport::new(
+        min,
+        max,
+        DVec2::ZERO,
+        scale_from(p)?.unwrap_or(100.0),
+        layers,
+    );
     if let Some(v) = &c.view {
         vp.view = norm_view(v)?;
     }
@@ -374,18 +523,35 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
     if scale_from(p)?.is_none() {
         vp.scale = fitted.scale;
     }
-    let cmd = Command::AddObject { shape: Shape::Viewport(Box::new(vp)), layer: Some(sheet), class: None, attrs: Attributes::default() };
+    let cmd = Command::AddObject {
+        shape: Shape::Viewport(Box::new(vp)),
+        layer: Some(sheet),
+        class: None,
+        attrs: Attributes::default(),
+    };
     let out = s.editor.execute(&cmd).map_err(app)?;
     viewport_json(s.editor.doc(), ObjectId(out.created[0]))
 }
 
 /// Applies `f` to a copy of the viewport and stores the result as one undo step.
-fn change_viewport(s: &mut Session, id: ObjectId, f: impl FnOnce(&Document, &mut Viewport) -> Result<(), RpcError>) -> Res {
+fn change_viewport(
+    s: &mut Session,
+    id: ObjectId,
+    f: impl FnOnce(&Document, &mut Viewport) -> Result<(), RpcError>,
+) -> Res {
     let doc = s.editor.doc();
     let (_, vp) = find_viewport(doc, id)?;
     let mut vp = vp.clone();
     f(doc, &mut vp)?;
-    s.editor.execute(&Command::ModifyObject { id, shape: Some(Shape::Viewport(Box::new(vp))), layer: None, class: None, attrs: None }).map_err(app)?;
+    s.editor
+        .execute(&Command::ModifyObject {
+            id,
+            shape: Some(Shape::Viewport(Box::new(vp))),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .map_err(app)?;
     viewport_json(s.editor.doc(), id)
 }
 
@@ -396,13 +562,27 @@ fn viewport_update(s: &mut Session, p: &Value) -> Res {
         // Merge the given keys into the viewport JSON, so one validation path covers all fields.
         let mut v = serde_json::to_value(&*vp).unwrap();
         let obj = v.as_object_mut().expect("a viewport is an object");
-        for key in ["name", "min", "max", "center", "mode", "dpi", "crop", "show_frame"] {
+        for key in [
+            "name",
+            "min",
+            "max",
+            "center",
+            "mode",
+            "dpi",
+            "crop",
+            "show_frame",
+        ] {
             if let Some(x) = p.get(key) {
                 obj.insert(key.into(), x.clone());
             }
         }
         if let Some(x) = p.get("view") {
-            obj.insert("view".into(), json!(norm_view(x.as_str().ok_or_else(|| bad("view must be text"))?)?));
+            obj.insert(
+                "view".into(),
+                json!(norm_view(
+                    x.as_str().ok_or_else(|| bad("view must be text"))?
+                )?),
+            );
         }
         if let Some(x) = p.get("layers") {
             obj.insert("layers".into(), json!(layer_list(doc, x)?));
@@ -411,7 +591,8 @@ fn viewport_update(s: &mut Session, p: &Value) -> Res {
             obj.insert("scale".into(), json!(sc));
         }
         *vp = parse(v)?;
-        let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(false) || matches!(p.get("scale"), Some(Value::String(t)) if t.eq_ignore_ascii_case("fit"));
+        let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(false)
+            || matches!(p.get("scale"), Some(Value::String(t)) if t.eq_ignore_ascii_case("fit"));
         if fit {
             vp.fit(doc);
         }
@@ -428,7 +609,10 @@ fn viewport_override(s: &mut Session, p: &Value) -> Res {
             vp.class_overrides.clear();
         }
         if let Some(m) = p.get("layers") {
-            for (k, v) in m.as_object().ok_or_else(|| bad("layers is an object {layer: true | false | null}"))? {
+            for (k, v) in m
+                .as_object()
+                .ok_or_else(|| bad("layers is an object {layer: true | false | null}"))?
+            {
                 let l = layer_ref(doc, &json!(k))?;
                 match v {
                     Value::Null => {
@@ -442,18 +626,27 @@ fn viewport_override(s: &mut Session, p: &Value) -> Res {
             }
         }
         if let Some(m) = p.get("classes") {
-            for (k, v) in m.as_object().ok_or_else(|| bad("classes is an object {class: {...} | null}"))? {
+            for (k, v) in m
+                .as_object()
+                .ok_or_else(|| bad("classes is an object {class: {...} | null}"))?
+            {
                 let c = class_ref(doc, &json!(k))?;
                 if v.is_null() {
                     vp.class_overrides.remove(&c);
                     continue;
                 }
-                let fields = v.as_object().ok_or_else(|| bad("a class override is an object or null"))?;
-                let mut cur = serde_json::to_value(vp.class_overrides.get(&c).cloned().unwrap_or_default()).unwrap();
+                let fields = v
+                    .as_object()
+                    .ok_or_else(|| bad("a class override is an object or null"))?;
+                let mut cur =
+                    serde_json::to_value(vp.class_overrides.get(&c).cloned().unwrap_or_default())
+                        .unwrap();
                 let cur_map = cur.as_object_mut().expect("an override is an object");
                 for (f, x) in fields {
                     if !["visible", "pen", "fill", "line_weight"].contains(&f.as_str()) {
-                        return Err(bad(format!("unknown override field '{f}'. Use visible, pen, fill, line_weight")));
+                        return Err(bad(format!(
+                            "unknown override field '{f}'. Use visible, pen, fill, line_weight"
+                        )));
                     }
                     if x.is_null() {
                         cur_map.remove(f);
@@ -489,7 +682,10 @@ fn viewport_annotate(s: &mut Session, p: &Value) -> Res {
         }
         if let Some(r) = p.get("remove") {
             let ids: Vec<u32> = parse(r.clone())?;
-            if let Some(missing) = ids.iter().find(|i| !vp.annotations.iter().any(|a| a.id == **i)) {
+            if let Some(missing) = ids
+                .iter()
+                .find(|i| !vp.annotations.iter().any(|a| a.id == **i))
+            {
                 return Err(bad(format!("the viewport has no annotation {missing}")));
             }
             vp.annotations.retain(|a| !ids.contains(&a.id));
@@ -502,19 +698,28 @@ fn viewport_annotate(s: &mut Session, p: &Value) -> Res {
                     None => NONE_CLASS,
                 };
                 let aid = vp.next_annotation_id();
-                vp.annotations.push(Annotation { id: aid, class, attrs: n.attrs, item: n.item });
+                vp.annotations.push(Annotation {
+                    id: aid,
+                    class,
+                    attrs: n.attrs,
+                    item: n.item,
+                });
                 added.push(aid);
             }
         }
         Ok(())
     })?;
-    Ok(json!({"added": added, "count": out["annotations"].as_array().map_or(0, Vec::len), "viewport": out}))
+    Ok(
+        json!({"added": added, "count": out["annotations"].as_array().map_or(0, Vec::len), "viewport": out}),
+    )
 }
 
 // ---------------------------------------------------------------- title blocks
 
 fn find_title_block(doc: &Document, id: ObjectId) -> Result<(&Object, &TitleBlock), RpcError> {
-    let o = doc.object(id).ok_or_else(|| app(format!("object {id} does not exist")))?;
+    let o = doc
+        .object(id)
+        .ok_or_else(|| app(format!("object {id} does not exist")))?;
     match &o.shape {
         Shape::TitleBlock(t) => Ok((o, t)),
         _ => Err(bad(format!("object {id} is not a title block"))),
@@ -544,7 +749,12 @@ fn title_block_from(base: TitleBlock, p: &Value) -> Result<TitleBlock, RpcError>
 fn title_block_create(s: &mut Session, p: &Value) -> Res {
     let sheet = sheet_ref(s.editor.doc(), p.get("sheet").unwrap_or(&Value::Null))?;
     let tb = title_block_from(TitleBlock::default(), p)?;
-    let cmd = Command::AddObject { shape: Shape::TitleBlock(tb), layer: Some(sheet), class: None, attrs: Attributes::default() };
+    let cmd = Command::AddObject {
+        shape: Shape::TitleBlock(tb),
+        layer: Some(sheet),
+        class: None,
+        attrs: Attributes::default(),
+    };
     let out = s.editor.execute(&cmd).map_err(app)?;
     Ok(json!({"id": out.created[0]}))
 }
@@ -553,7 +763,15 @@ fn title_block_update(s: &mut Session, p: &Value) -> Res {
     let (id, _) = object_id(p)?;
     let (_, tb) = find_title_block(s.editor.doc(), id)?;
     let tb = title_block_from(tb.clone(), p)?;
-    s.editor.execute(&Command::ModifyObject { id, shape: Some(Shape::TitleBlock(tb.clone())), layer: None, class: None, attrs: None }).map_err(app)?;
+    s.editor
+        .execute(&Command::ModifyObject {
+            id,
+            shape: Some(Shape::TitleBlock(tb.clone())),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .map_err(app)?;
     Ok(serde_json::to_value(&tb).unwrap())
 }
 
@@ -561,7 +779,10 @@ fn title_block_resolve(s: &Session, p: &Value) -> Res {
     let (id, _) = object_id(p)?;
     let doc = s.editor.doc();
     let (o, tb) = find_title_block(doc, id)?;
-    let page = doc.sheet(o.layer).ok_or_else(|| app("the title block is not on a sheet layer"))?.size_mm();
+    let page = doc
+        .sheet(o.layer)
+        .ok_or_else(|| app("the title block is not on a sheet layer"))?
+        .size_mm();
     let g = title_block_geometry(tb, &Fields::of(doc, o.layer, tb), page);
     Ok(json!({
         "border": [g.border.0, g.border.1],
@@ -585,19 +806,34 @@ fn saved_view_save(s: &mut Session, p: &Value) -> Res {
         active_layer: Some(doc.active_layer),
         active_class: Some(doc.active_class),
         zoom: p.get("zoom").and_then(Value::as_f64),
-        pan: p.get("pan").map(|v| parse::<DVec2>(v.clone())).transpose()?,
+        pan: p
+            .get("pan")
+            .map(|v| parse::<DVec2>(v.clone()))
+            .transpose()?,
         view: Some(s.view.view.id().to_string()),
         projection: Some(s.view.projection.id().to_string()),
         mode: Some(s.view.mode.id().to_string()),
     };
-    s.editor.execute(&Command::SaveView { view: Box::new(view.clone()) }).map_err(app)?;
+    s.editor
+        .execute(&Command::SaveView {
+            view: Box::new(view.clone()),
+        })
+        .map_err(app)?;
     Ok(serde_json::to_value(view).unwrap())
 }
 
 fn saved_view_restore(s: &mut Session, p: &Value) -> Res {
     let name = str_field(p, "name")?;
-    s.editor.execute(&Command::RestoreView { name: name.clone() }).map_err(app)?;
-    let view = s.editor.doc().drawing.saved_view(&name).cloned().expect("restored");
+    s.editor
+        .execute(&Command::RestoreView { name: name.clone() })
+        .map_err(app)?;
+    let view = s
+        .editor
+        .doc()
+        .drawing
+        .saved_view(&name)
+        .cloned()
+        .expect("restored");
     s.apply_saved_view(&view);
     Ok(serde_json::to_value(view).unwrap())
 }
@@ -638,13 +874,17 @@ fn sheet_render(s: &mut Session, p: &Value) -> Res {
     let format = opt_str(p, "format").unwrap_or_else(|| "svg".into());
     let page = s.sheet_page(layer)?;
     match format.as_str() {
-        "svg" => Ok(json!({"svg": cadektor_print::svg::page_svg(&page), "width_mm": page.size.x, "height_mm": page.size.y})),
+        "svg" => Ok(
+            json!({"svg": cadektor_print::svg::page_svg(&page), "width_mm": page.size.x, "height_mm": page.size.y}),
+        ),
         "png" => {
             let dpi = p.get("dpi").and_then(Value::as_f64).unwrap_or(100.0);
             let bytes = cadektor_print::png::page_png(&page, dpi).map_err(app)?;
             use base64::Engine;
             let (w, h) = png_size(&bytes);
-            Ok(json!({"png_base64": base64::engine::general_purpose::STANDARD.encode(bytes), "width": w, "height": h}))
+            Ok(
+                json!({"png_base64": base64::engine::general_purpose::STANDARD.encode(bytes), "width": w, "height": h}),
+            )
         }
         _ => Err(bad("format is svg or png")),
     }
@@ -658,10 +898,15 @@ fn sheet_render(_: &mut Session, _: &Value) -> Res {
 #[cfg(not(target_arch = "wasm32"))]
 impl Session {
     /// The display list of a sheet. It is rebuilt only when the document changed.
-    pub fn sheet_page(&mut self, layer: LayerId) -> Result<std::sync::Arc<cadektor_print::Page>, RpcError> {
+    pub fn sheet_page(
+        &mut self,
+        layer: LayerId,
+    ) -> Result<std::sync::Arc<cadektor_print::Page>, RpcError> {
         let revision = self.editor.revision();
         let ground = cadektor_site::SiteTerrain::new(&self.site_cache, revision, self.editor.doc());
-        self.sheet_cache.page_on(self.editor.doc(), revision, layer, &ground).map_err(app)
+        self.sheet_cache
+            .page_on(self.editor.doc(), revision, layer, &ground)
+            .map_err(app)
     }
 }
 
@@ -682,34 +927,69 @@ pub(crate) fn is_sheet_format(f: &str) -> bool {
 impl Session {
     /// `export.file` with the format `pdf`, `sheet_svg` or `sheet_png`. The path rules are those of
     /// the other formats: `check_path` for agents, and `overwrite` to replace a file in a restricted session.
-    pub(crate) fn export_sheet_file(&mut self, format: &str, path: std::path::PathBuf, options: &Value, overwrite: bool, checked: bool) -> Res {
+    pub(crate) fn export_sheet_file(
+        &mut self,
+        format: &str,
+        path: std::path::PathBuf,
+        options: &Value,
+        overwrite: bool,
+        checked: bool,
+    ) -> Res {
         use cadektor_print as print;
         let ext = match format {
             "pdf" => "pdf",
             "sheet_svg" => "svg",
             _ => "png",
         };
-        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+        {
             return Err(bad(format!("the file name must end with .{ext}")));
         }
         if path.is_dir() {
             return Err(bad(format!("{} is a folder", path.display())));
         }
-        let path = if checked { self.check_path(&path, true, &[ext]).map_err(app)? } else { path };
+        let path = if checked {
+            self.check_path(&path, true, &[ext]).map_err(app)?
+        } else {
+            path
+        };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+            return Err(app(format!(
+                "{} exists: pass \"overwrite\": true to replace it",
+                path.display()
+            )));
         }
-        let options = if options.is_null() { json!({}) } else { options.clone() };
+        let options = if options.is_null() {
+            json!({})
+        } else {
+            options.clone()
+        };
         let doc = self.editor.doc();
         let (bytes, extra) = if format == "pdf" {
             let ids: Option<Vec<LayerId>> = match options.get("sheets") {
                 None | Some(Value::Null) => None,
-                Some(v) => Some(v.as_array().ok_or_else(|| bad("sheets is a list of sheet layer IDs or names"))?.iter().map(|x| sheet_ref(doc, x)).collect::<Result<_, _>>()?),
+                Some(v) => Some(
+                    v.as_array()
+                        .ok_or_else(|| bad("sheets is a list of sheet layer IDs or names"))?
+                        .iter()
+                        .map(|x| sheet_ref(doc, x))
+                        .collect::<Result<_, _>>()?,
+                ),
             };
             let list = print::select_sheets(doc, ids.as_deref()).map_err(bad)?;
             let revision = self.editor.revision();
-            let ground = cadektor_site::SiteTerrain::new(&self.site_cache, revision, self.editor.doc());
-            let bytes = print::export_pdf_on(self.editor.doc(), revision, &mut self.sheet_cache, &list, &ground).map_err(app)?;
+            let ground =
+                cadektor_site::SiteTerrain::new(&self.site_cache, revision, self.editor.doc());
+            let bytes = print::export_pdf_on(
+                self.editor.doc(),
+                revision,
+                &mut self.sheet_cache,
+                &list,
+                &ground,
+            )
+            .map_err(app)?;
             (bytes, json!({"pages": list.len()}))
         } else {
             let layer = sheet_ref(doc, options.get("sheet").unwrap_or(&Value::Null))?;
@@ -725,7 +1005,9 @@ impl Session {
         };
         print::write_file(&path, &bytes).map_err(app)?;
         let mut out = json!({"path": path.display().to_string(), "bytes": bytes.len()});
-        out.as_object_mut().expect("object").extend(extra.as_object().cloned().unwrap_or_default());
+        out.as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().cloned().unwrap_or_default());
         Ok(out)
     }
 }

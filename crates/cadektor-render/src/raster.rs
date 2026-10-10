@@ -31,12 +31,21 @@ impl Image {
         for _ in 0..width as usize * height as usize {
             rgba.extend_from_slice(&fill);
         }
-        Image { width, height, rgba }
+        Image {
+            width,
+            height,
+            rgba,
+        }
     }
 
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let i = (y as usize * self.width as usize + x as usize) * 4;
-        [self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3]]
+        [
+            self.rgba[i],
+            self.rgba[i + 1],
+            self.rgba[i + 2],
+            self.rgba[i + 3],
+        ]
     }
 
     fn put(&mut self, x: usize, y: usize, c: [u8; 4]) {
@@ -67,7 +76,12 @@ pub struct RenderOptions {
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { width: 800, height: 600, mode: RenderMode::Shaded, background: BACKGROUND }
+        RenderOptions {
+            width: 800,
+            height: 600,
+            mode: RenderMode::Shaded,
+            background: BACKGROUND,
+        }
     }
 }
 
@@ -104,7 +118,11 @@ struct Target {
 impl Target {
     fn to_screen(&self, c: Vec4) -> Vec3 {
         let (w, h) = (self.img.width as f32, self.img.height as f32);
-        Vec3::new((c.x / c.w * 0.5 + 0.5) * w, (0.5 - c.y / c.w * 0.5) * h, c.z / c.w)
+        Vec3::new(
+            (c.x / c.w * 0.5 + 0.5) * w,
+            (0.5 - c.y / c.w * 0.5) * h,
+            c.z / c.w,
+        )
     }
 
     fn triangle(&mut self, p: [Vec3; 3], color: [u8; 4]) {
@@ -114,15 +132,27 @@ impl Target {
         }
         let (w, h) = (self.img.width as i64, self.img.height as i64);
         let min_x = (p.iter().map(|v| v.x).fold(f32::INFINITY, f32::min).floor() as i64).max(0);
-        let max_x = (p.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max).ceil() as i64).min(w - 1);
+        let max_x = (p
+            .iter()
+            .map(|v| v.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil() as i64)
+            .min(w - 1);
         let min_y = (p.iter().map(|v| v.y).fold(f32::INFINITY, f32::min).floor() as i64).max(0);
-        let max_y = (p.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max).ceil() as i64).min(h - 1);
+        let max_y = (p
+            .iter()
+            .map(|v| v.y)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .ceil() as i64)
+            .min(h - 1);
         let inv = 1.0 / area;
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-                let w0 = ((p[2].x - p[1].x) * (cy - p[1].y) - (p[2].y - p[1].y) * (cx - p[1].x)) * inv;
-                let w1 = ((p[0].x - p[2].x) * (cy - p[2].y) - (p[0].y - p[2].y) * (cx - p[2].x)) * inv;
+                let w0 =
+                    ((p[2].x - p[1].x) * (cy - p[1].y) - (p[2].y - p[1].y) * (cx - p[1].x)) * inv;
+                let w1 =
+                    ((p[0].x - p[2].x) * (cy - p[2].y) - (p[0].y - p[2].y) * (cx - p[2].x)) * inv;
                 let w2 = 1.0 - w0 - w1;
                 if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                     continue;
@@ -139,10 +169,18 @@ impl Target {
 
     fn line(&mut self, a: Vec3, b: Vec3, color: [u8; 4]) {
         let (w, h) = (self.img.width as i64, self.img.height as i64);
-        let steps = (b.x - a.x).abs().max((b.y - a.y).abs()).ceil().clamp(1.0, 20_000.0);
+        let steps = (b.x - a.x)
+            .abs()
+            .max((b.y - a.y).abs())
+            .ceil()
+            .clamp(1.0, 20_000.0);
         for k in 0..=steps as usize {
             let t = k as f32 / steps;
-            let (x, y, z) = (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+            let (x, y, z) = (
+                a.x + (b.x - a.x) * t,
+                a.y + (b.y - a.y) * t,
+                a.z + (b.z - a.z) * t,
+            );
             let (xi, yi) = (x.floor() as i64, y.floor() as i64);
             if xi < 0 || yi < 0 || xi >= w || yi >= h || !(0.0..=1.0).contains(&z) {
                 continue;
@@ -157,7 +195,10 @@ impl Target {
 /// Draws the scene with the camera.
 pub fn render(scene: &Scene, camera: &Camera, opts: &RenderOptions) -> Image {
     let (w, h) = (opts.width.max(1), opts.height.max(1));
-    let mut target = Target { img: Image::new(w, h, opts.background), depth: vec![f32::INFINITY; w as usize * h as usize] };
+    let mut target = Target {
+        img: Image::new(w, h, opts.background),
+        depth: vec![f32::INFINITY; w as usize * h as usize],
+    };
     if scene.is_empty() {
         return target.img;
     }
@@ -170,13 +211,24 @@ pub fn render(scene: &Scene, camera: &Camera, opts: &RenderOptions) -> Image {
         let clips: Vec<Vec4> = mesh.positions.iter().map(|p| clip(*p)).collect();
         let (eye, fwd) = (camera.eye(), camera.forward());
         for t in 0..mesh.triangle_count() {
-            let i = [mesh.indices[t * 3] as usize, mesh.indices[t * 3 + 1] as usize, mesh.indices[t * 3 + 2] as usize];
+            let i = [
+                mesh.indices[t * 3] as usize,
+                mesh.indices[t * 3 + 1] as usize,
+                mesh.indices[t * 3 + 2] as usize,
+            ];
             let c = [clips[i[0]], clips[i[1]], clips[i[2]]];
             // Whole triangle outside one side of the view: skip it early.
-            if c.iter().all(|v| v.x < -v.w) || c.iter().all(|v| v.x > v.w) || c.iter().all(|v| v.y < -v.w) || c.iter().all(|v| v.y > v.w) || c.iter().all(|v| v.z > v.w) || c.iter().all(|v| v.z < 0.0) {
+            if c.iter().all(|v| v.x < -v.w)
+                || c.iter().all(|v| v.x > v.w)
+                || c.iter().all(|v| v.y < -v.w)
+                || c.iter().all(|v| v.y > v.w)
+                || c.iter().all(|v| v.z > v.w)
+                || c.iter().all(|v| v.z < 0.0)
+            {
                 continue;
             }
-            let mut n = (mesh.normals[i[0]] + mesh.normals[i[1]] + mesh.normals[i[2]]).normalize_or_zero();
+            let mut n =
+                (mesh.normals[i[0]] + mesh.normals[i[1]] + mesh.normals[i[2]]).normalize_or_zero();
             let to_eye = match camera.projection {
                 Projection::Orthographic => -fwd,
                 Projection::Perspective => (eye - mesh.positions[i[0]]).normalize_or_zero(),
@@ -186,7 +238,12 @@ pub fn render(scene: &Scene, camera: &Camera, opts: &RenderOptions) -> Image {
             }
             let f = lambert(n);
             let base = mesh.colors[i[0]];
-            let color = [(base[0] as f32 * f) as u8, (base[1] as f32 * f) as u8, (base[2] as f32 * f) as u8, 255];
+            let color = [
+                (base[0] as f32 * f) as u8,
+                (base[1] as f32 * f) as u8,
+                (base[2] as f32 * f) as u8,
+                255,
+            ];
             let mut poly = [Vec4::ZERO; 4];
             let count = clip_near(&c, &mut poly);
             if count < 3 {
@@ -235,9 +292,28 @@ mod tests {
         add(&mut ed, square(500.0), Some([200, 30, 30, 255]));
         let scene = scene_of(&ed);
         // 100 px for 2000 mm: 20 mm per pixel. The square spans pixels 25 to 74.
-        let img = render(&scene, &top_ortho(1000.0), &RenderOptions { width: 100, height: 100, ..Default::default() });
+        let img = render(
+            &scene,
+            &top_ortho(1000.0),
+            &RenderOptions {
+                width: 100,
+                height: 100,
+                ..Default::default()
+            },
+        );
         assert_eq!((img.width, img.height), (100, 100));
-        for (x, y, inside) in [(24, 50, false), (25, 50, true), (74, 50, true), (76, 50, false), (50, 24, false), (50, 25, true), (50, 74, true), (50, 76, false), (0, 0, false), (99, 99, false)] {
+        for (x, y, inside) in [
+            (24, 50, false),
+            (25, 50, true),
+            (74, 50, true),
+            (76, 50, false),
+            (50, 24, false),
+            (50, 25, true),
+            (50, 74, true),
+            (50, 76, false),
+            (0, 0, false),
+            (99, 99, false),
+        ] {
             let px = img.pixel(x, y);
             if inside {
                 assert_ne!(px, BACKGROUND, "({x},{y}) should be the square");
@@ -252,8 +328,23 @@ mod tests {
         assert!((c[0] as f32 - 200.0 * expect).abs() <= 1.0);
         // Y is up on screen: a mark at +Y is in the upper half.
         let mut ed = Editor::default();
-        add(&mut ed, Shape::Rect { min: DVec2::new(-100.0, 400.0), max: DVec2::new(100.0, 800.0) }, Some([0, 0, 200, 255]));
-        let img = render(&scene_of(&ed), &top_ortho(1000.0), &RenderOptions { width: 100, height: 100, ..Default::default() });
+        add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::new(-100.0, 400.0),
+                max: DVec2::new(100.0, 800.0),
+            },
+            Some([0, 0, 200, 255]),
+        );
+        let img = render(
+            &scene_of(&ed),
+            &top_ortho(1000.0),
+            &RenderOptions {
+                width: 100,
+                height: 100,
+                ..Default::default()
+            },
+        );
         assert_ne!(img.pixel(50, 20), BACKGROUND);
         assert_eq!(img.pixel(50, 65), BACKGROUND);
     }
@@ -261,12 +352,44 @@ mod tests {
     #[test]
     fn nearer_surfaces_hide_farther_ones_whatever_the_draw_order() {
         let low = |ed: &mut Editor| {
-            add(ed, Shape::Hardscape { boundary: cadektor_core::curve::corners(&[DVec2::splat(-500.0), DVec2::new(500.0, -500.0), DVec2::splat(500.0), DVec2::new(-500.0, 500.0)]), material: "a".into(), thickness: Some(100.0), elevation: Some(0.0) }, Some([255, 0, 0, 255]));
+            add(
+                ed,
+                Shape::Hardscape {
+                    boundary: cadektor_core::curve::corners(&[
+                        DVec2::splat(-500.0),
+                        DVec2::new(500.0, -500.0),
+                        DVec2::splat(500.0),
+                        DVec2::new(-500.0, 500.0),
+                    ]),
+                    material: "a".into(),
+                    thickness: Some(100.0),
+                    elevation: Some(0.0),
+                },
+                Some([255, 0, 0, 255]),
+            );
         };
         let high = |ed: &mut Editor| {
-            add(ed, Shape::Hardscape { boundary: cadektor_core::curve::corners(&[DVec2::splat(-300.0), DVec2::new(300.0, -300.0), DVec2::splat(300.0), DVec2::new(-300.0, 300.0)]), material: "b".into(), thickness: Some(100.0), elevation: Some(500.0) }, Some([0, 255, 0, 255]));
+            add(
+                ed,
+                Shape::Hardscape {
+                    boundary: cadektor_core::curve::corners(&[
+                        DVec2::splat(-300.0),
+                        DVec2::new(300.0, -300.0),
+                        DVec2::splat(300.0),
+                        DVec2::new(-300.0, 300.0),
+                    ]),
+                    material: "b".into(),
+                    thickness: Some(100.0),
+                    elevation: Some(500.0),
+                },
+                Some([0, 255, 0, 255]),
+            );
         };
-        let opts = RenderOptions { width: 100, height: 100, ..Default::default() };
+        let opts = RenderOptions {
+            width: 100,
+            height: 100,
+            ..Default::default()
+        };
         for order in [0, 1] {
             let mut ed = Editor::default();
             if order == 0 {
@@ -278,9 +401,15 @@ mod tests {
             }
             let img = render(&scene_of(&ed), &top_ortho(1000.0), &opts);
             let center = img.pixel(50, 50);
-            assert!(center[1] > center[0], "order {order}: the high green slab is in front: {center:?}");
+            assert!(
+                center[1] > center[0],
+                "order {order}: the high green slab is in front: {center:?}"
+            );
             let ring = img.pixel(33, 50); // inside the red slab, outside the green one (x about -340)
-            assert!(ring[0] > ring[1], "order {order}: red visible at the edge: {ring:?}");
+            assert!(
+                ring[0] > ring[1],
+                "order {order}: red visible at the edge: {ring:?}"
+            );
         }
         // Seen from below, the low slab is nearest instead.
         let mut ed = Editor::default();
@@ -296,16 +425,44 @@ mod tests {
     #[test]
     fn perspective_makes_near_things_bigger() {
         let mut ed = Editor::default();
-        add(&mut ed, Shape::Hardscape { boundary: cadektor_core::curve::corners(&[DVec2::splat(-500.0), DVec2::new(500.0, -500.0), DVec2::splat(500.0), DVec2::new(-500.0, 500.0)]), material: "a".into(), thickness: Some(100.0), elevation: Some(2000.0) }, Some([255, 0, 0, 255]));
+        add(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: cadektor_core::curve::corners(&[
+                    DVec2::splat(-500.0),
+                    DVec2::new(500.0, -500.0),
+                    DVec2::splat(500.0),
+                    DVec2::new(-500.0, 500.0),
+                ]),
+                material: "a".into(),
+                thickness: Some(100.0),
+                elevation: Some(2000.0),
+            },
+            Some([255, 0, 0, 255]),
+        );
         let scene = scene_of(&ed);
         let count = |proj| {
             let mut cam = Camera::standard(StandardView::Top, proj);
             cam.distance = 4000.0;
-            let img = render(&scene, &cam, &RenderOptions { width: 120, height: 120, ..Default::default() });
-            img.rgba.chunks(4).filter(|p| p[0] > 150 && p[1] < 60).count()
+            let img = render(
+                &scene,
+                &cam,
+                &RenderOptions {
+                    width: 120,
+                    height: 120,
+                    ..Default::default()
+                },
+            );
+            img.rgba
+                .chunks(4)
+                .filter(|p| p[0] > 150 && p[1] < 60)
+                .count()
         };
         // The slab top is 2000 mm closer than the target plane: it looks twice as big in perspective.
-        let (o, p) = (count(Projection::Orthographic), count(Projection::Perspective));
+        let (o, p) = (
+            count(Projection::Orthographic),
+            count(Projection::Perspective),
+        );
         assert!(p as f32 > o as f32 * 2.5, "ortho {o}, perspective {p}");
     }
 
@@ -314,14 +471,27 @@ mod tests {
         let mut ed = Editor::default();
         add(&mut ed, square(500.0), Some([200, 30, 30, 255]));
         let scene = scene_of(&ed);
-        let opts = RenderOptions { width: 100, height: 100, mode: RenderMode::Wireframe, ..Default::default() };
+        let opts = RenderOptions {
+            width: 100,
+            height: 100,
+            mode: RenderMode::Wireframe,
+            ..Default::default()
+        };
         let img = render(&scene, &top_ortho(1000.0), &opts);
         assert_eq!(img.pixel(50, 50), BACKGROUND, "no fill");
         assert_ne!(img.pixel(25, 50), BACKGROUND, "outline is drawn");
         // A perspective camera very close to the scene still renders.
         let mut cam = Camera::standard(StandardView::Front, Projection::Perspective);
         cam.distance = 5.0;
-        let img = render(&scene, &cam, &RenderOptions { width: 50, height: 50, ..Default::default() });
+        let img = render(
+            &scene,
+            &cam,
+            &RenderOptions {
+                width: 50,
+                height: 50,
+                ..Default::default()
+            },
+        );
         assert_eq!(img.rgba.len(), 50 * 50 * 4);
         // A camera inside a big slab: triangles cross the near plane.
         let mut ed = Editor::default();
@@ -329,13 +499,32 @@ mod tests {
         let mut cam = Camera::standard(StandardView::RightIsometric, Projection::Perspective);
         cam.distance = 100.0;
         cam.target = Vec3::new(0.0, 0.0, 10.0);
-        let img = render(&scene_of(&ed), &cam, &RenderOptions { width: 50, height: 50, ..Default::default() });
-        assert!(img.rgba.chunks(4).any(|p| p != BACKGROUND), "the floor is visible");
+        let img = render(
+            &scene_of(&ed),
+            &cam,
+            &RenderOptions {
+                width: 50,
+                height: 50,
+                ..Default::default()
+            },
+        );
+        assert!(
+            img.rgba.chunks(4).any(|p| p != BACKGROUND),
+            "the floor is visible"
+        );
     }
 
     #[test]
     fn empty_scene_is_background_and_png_is_valid() {
-        let img = render(&Scene::default(), &Camera::default(), &RenderOptions { width: 32, height: 16, ..Default::default() });
+        let img = render(
+            &Scene::default(),
+            &Camera::default(),
+            &RenderOptions {
+                width: 32,
+                height: 16,
+                ..Default::default()
+            },
+        );
         assert!(img.rgba.chunks(4).all(|p| p == BACKGROUND));
         let png = img.to_png();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -346,19 +535,48 @@ mod tests {
         assert_eq!((info.width, info.height), (32, 16));
         assert_eq!(&buf[..info.buffer_size()], &img.rgba[..]);
         // Zero sizes are made one pixel.
-        let img = render(&Scene::default(), &Camera::default(), &RenderOptions { width: 0, height: 0, ..Default::default() });
+        let img = render(
+            &Scene::default(),
+            &Camera::default(),
+            &RenderOptions {
+                width: 0,
+                height: 0,
+                ..Default::default()
+            },
+        );
         assert_eq!((img.width, img.height), (1, 1));
     }
 
     #[test]
     fn plants_render_in_isometric_view() {
         let mut ed = Editor::default();
-        add(&mut ed, Shape::Plant { at: DVec2::ZERO, species: "Oak".into(), spread: 4000.0, height: 8000.0 }, None);
+        add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::ZERO,
+                species: "Oak".into(),
+                spread: 4000.0,
+                height: 8000.0,
+            },
+            None,
+        );
         let scene = scene_of(&ed);
         let mut cam = Camera::standard(StandardView::RightIsometric, Projection::Orthographic);
         cam.fit(scene.bounds, 1.0);
-        let img = render(&scene, &cam, &RenderOptions { width: 120, height: 120, ..Default::default() });
-        let green = img.rgba.chunks(4).filter(|p| p[1] > p[0] && p[1] > p[2] && *p != &BACKGROUND[..]).count();
+        let img = render(
+            &scene,
+            &cam,
+            &RenderOptions {
+                width: 120,
+                height: 120,
+                ..Default::default()
+            },
+        );
+        let green = img
+            .rgba
+            .chunks(4)
+            .filter(|p| p[1] > p[0] && p[1] > p[2] && *p != &BACKGROUND[..])
+            .count();
         assert!(green > 500, "canopy pixels: {green}");
     }
 }

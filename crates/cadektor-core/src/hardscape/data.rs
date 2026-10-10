@@ -45,7 +45,9 @@ impl Mode {
     }
 
     pub fn from_name(s: &str) -> Option<Self> {
-        [Mode::Slab, Mode::Path].into_iter().find(|m| m.id().eq_ignore_ascii_case(s.trim()))
+        [Mode::Slab, Mode::Path]
+            .into_iter()
+            .find(|m| m.id().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -97,8 +99,14 @@ impl Slope {
     pub fn fall(&self) -> Option<(f64, f64)> {
         match self {
             Slope::Cross { percent, angle_deg } => Some((*percent, *angle_deg)),
-            Slope::Angle { degrees, angle_deg } => Some((100.0 * degrees.to_radians().tan(), *angle_deg)),
-            Slope::RiseRun { rise, run, angle_deg } => Some((100.0 * rise / run, *angle_deg)),
+            Slope::Angle { degrees, angle_deg } => {
+                Some((100.0 * degrees.to_radians().tan(), *angle_deg))
+            }
+            Slope::RiseRun {
+                rise,
+                run,
+                angle_deg,
+            } => Some((100.0 * rise / run, *angle_deg)),
             Slope::None | Slope::Edges { .. } => None,
         }
     }
@@ -160,7 +168,10 @@ impl HardscapeData {
             return Err("numbers must be finite".into());
         }
         if self.mode == Mode::Path && self.center.len() < if self.closed { 3 } else { 2 } {
-            return Err(format!("a path needs a center line of {} or more points", if self.closed { 3 } else { 2 }));
+            return Err(format!(
+                "a path needs a center line of {} or more points",
+                if self.closed { 3 } else { 2 }
+            ));
         }
         if !self.offset.is_finite() || self.offset.abs() > MAX_COORD {
             return Err("the offset must be a finite number".into());
@@ -171,12 +182,17 @@ impl HardscapeData {
         match &self.slope {
             Slope::None => {}
             Slope::Edges { elevations } => {
-                if elevations.iter().any(|e| !e.is_finite() || e.abs() > MAX_COORD) {
+                if elevations
+                    .iter()
+                    .any(|e| !e.is_finite() || e.abs() > MAX_COORD)
+                {
                     return Err("edge elevations must be finite numbers".into());
                 }
                 let need = if self.mode == Mode::Path { 2 } else { 3 };
                 if elevations.len() < need {
-                    return Err(format!("a slope by edge elevations needs {need} or more elevations"));
+                    return Err(format!(
+                        "a slope by edge elevations needs {need} or more elevations"
+                    ));
                 }
             }
             Slope::Cross { .. } | Slope::Angle { .. } | Slope::RiseRun { .. } => {
@@ -192,7 +208,9 @@ impl HardscapeData {
                 }
                 let (percent, angle) = self.slope.fall().expect("falls");
                 if !percent.is_finite() || percent.abs() > MAX_SLOPE_PERCENT || !angle.is_finite() {
-                    return Err(format!("the slope must be a finite number, at most {MAX_SLOPE_PERCENT} percent"));
+                    return Err(format!(
+                        "the slope must be a finite number, at most {MAX_SLOPE_PERCENT} percent"
+                    ));
                 }
             }
         }
@@ -226,7 +244,12 @@ impl HardscapeData {
         if self.mode != Mode::Path {
             return Vec::new();
         }
-        curve::corners(&offset::path_outline(&self.axis(), self.width, self.join, self.closed))
+        curve::corners(&offset::path_outline(
+            &self.axis(),
+            self.width,
+            self.join,
+            self.closed,
+        ))
     }
 }
 
@@ -241,16 +264,24 @@ pub fn data(obj: &Object) -> Option<HardscapeData> {
 
 /// Writes the settings of a hardscape object.
 pub fn set_data(obj: &mut Object, d: &HardscapeData) {
-    obj.data.insert(KEY.into(), serde_json::to_value(d).expect("settings are JSON"));
+    obj.data.insert(
+        KEY.into(),
+        serde_json::to_value(d).expect("settings are JSON"),
+    );
 }
 
 /// True if the object has settings that cannot be read. Such objects are left alone.
 pub fn has_unreadable_data(obj: &Object) -> bool {
-    obj.data.get(KEY).is_some_and(|v| !matches!(v, Value::Null)) && data(obj).is_none() && matches!(obj.shape, Shape::Hardscape { .. })
+    obj.data.get(KEY).is_some_and(|v| !matches!(v, Value::Null))
+        && data(obj).is_none()
+        && matches!(obj.shape, Shape::Hardscape { .. })
 }
 
 /// The hardscape style an object refers to, if the style exists.
-pub fn style_of(doc: &Document, obj: &Object) -> Option<(ResourceId, super::style::HardscapeStyle)> {
+pub fn style_of(
+    doc: &Document,
+    obj: &Object,
+) -> Option<(ResourceId, super::style::HardscapeStyle)> {
     let id = data(obj)?.style?;
     Some((id, doc.resources.hardscape_style(id)?.clone()))
 }
@@ -262,9 +293,20 @@ pub fn style_id(obj: &Object) -> Option<ResourceId> {
 
 /// Copies the material and the total thickness of the style into the shape.
 pub fn sync_shape(doc: &Document, obj: &mut Object) {
-    let Some((id, style)) = style_of(doc, obj) else { return };
-    let name = doc.resources.get(id).map(|r| r.name.clone()).unwrap_or_default();
-    if let Shape::Hardscape { material, thickness, .. } = &mut obj.shape {
+    let Some((id, style)) = style_of(doc, obj) else {
+        return;
+    };
+    let name = doc
+        .resources
+        .get(id)
+        .map(|r| r.name.clone())
+        .unwrap_or_default();
+    if let Shape::Hardscape {
+        material,
+        thickness,
+        ..
+    } = &mut obj.shape
+    {
         *material = style.label(&name);
         *thickness = Some(style.total_thickness());
     }
@@ -309,7 +351,10 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         return Err(format!("object {} is not a hardscape", obj.id));
     }
     if has_unreadable_data(obj) {
-        return Err(format!("object {} has hardscape data that cannot be read", obj.id));
+        return Err(format!(
+            "object {} has hardscape data that cannot be read",
+            obj.id
+        ));
     }
     if patch.unstyle && patch.style.is_some() {
         return Err("give a style or unstyle, not both".into());
@@ -363,14 +408,29 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         && elevations.len() != boundary.len()
     {
         let plane = super::surface::surface_of(obj, data(obj).as_ref(), None).plane;
-        d.slope = Slope::Edges { elevations: curve::positions(boundary).iter().map(|p| plane.z(*p)).collect() };
+        d.slope = Slope::Edges {
+            elevations: curve::positions(boundary)
+                .iter()
+                .map(|p| plane.z(*p))
+                .collect(),
+        };
     }
     d.validate()?;
-    let Shape::Hardscape { boundary, material, thickness, elevation } = &mut shape else { unreachable!("checked above") };
+    let Shape::Hardscape {
+        boundary,
+        material,
+        thickness,
+        elevation,
+    } = &mut shape
+    else {
+        unreachable!("checked above")
+    };
     if d.mode == Mode::Path {
         let outline = d.outline();
         if outline.len() < 3 {
-            return Err("the path has no length. Give a center line with two different points".into());
+            return Err(
+                "the path has no length. Give a center line with two different points".into(),
+            );
         }
         *boundary = outline;
     } else if patch.mode == Some(Mode::Slab) {
@@ -395,7 +455,10 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
         && d.mode == Mode::Slab
         && elevations.len() != boundary.len()
     {
-        return Err(format!("give one elevation per boundary corner ({} corners)", boundary.len()));
+        return Err(format!(
+            "give one elevation per boundary corner ({} corners)",
+            boundary.len()
+        ));
     }
     obj.shape = shape;
     set_data(obj, &d);
@@ -408,13 +471,22 @@ pub fn apply_patch(doc: &Document, obj: &mut Object, patch: &HardscapePatch) -> 
 /// object had before, so the slope stays as it was. `before` is the object before the edit.
 pub fn fix_edge_elevations(before: &Object, after: &mut Object) {
     let Some(mut d) = data(after) else { return };
-    let Slope::Edges { elevations } = &d.slope else { return };
-    let Shape::Hardscape { boundary, .. } = &after.shape else { return };
+    let Slope::Edges { elevations } = &d.slope else {
+        return;
+    };
+    let Shape::Hardscape { boundary, .. } = &after.shape else {
+        return;
+    };
     if d.mode != Mode::Slab || elevations.len() == boundary.len() {
         return;
     }
     let plane = super::surface::surface_of(before, data(before).as_ref(), None).plane;
-    d.slope = Slope::Edges { elevations: curve::positions(boundary).iter().map(|p| plane.z(*p)).collect() };
+    d.slope = Slope::Edges {
+        elevations: curve::positions(boundary)
+            .iter()
+            .map(|p| plane.z(*p))
+            .collect(),
+    };
     set_data(after, &d);
 }
 
@@ -446,15 +518,42 @@ mod tests {
     use crate::resource::{Resource, ResourceBody};
 
     fn slab() -> Object {
-        let b = curve::corners(&[DVec2::ZERO, DVec2::new(3000.0, 0.0), DVec2::new(3000.0, 2000.0), DVec2::new(0.0, 2000.0)]);
-        Object::new(ObjectId(5), LayerId(1), ClassId(0), Shape::Hardscape { boundary: b, material: "Gravel".into(), thickness: None, elevation: None })
+        let b = curve::corners(&[
+            DVec2::ZERO,
+            DVec2::new(3000.0, 0.0),
+            DVec2::new(3000.0, 2000.0),
+            DVec2::new(0.0, 2000.0),
+        ]);
+        Object::new(
+            ObjectId(5),
+            LayerId(1),
+            ClassId(0),
+            Shape::Hardscape {
+                boundary: b,
+                material: "Gravel".into(),
+                thickness: None,
+                elevation: None,
+            },
+        )
     }
 
     fn doc_with_style() -> (Document, ResourceId) {
         let mut doc = Document::default();
         let id = ResourceId(doc.alloc_id().unwrap());
-        let style = super::super::style::HardscapeStyle { material: "Setts".into(), thickness: 60.0, components: vec![super::super::style::Component { thickness: 140.0, ..Default::default() }], ..Default::default() };
-        doc.resources.push(Resource { id, name: "Setts".into(), body: ResourceBody::HardscapeStyle(Box::new(style)) });
+        let style = super::super::style::HardscapeStyle {
+            material: "Setts".into(),
+            thickness: 60.0,
+            components: vec![super::super::style::Component {
+                thickness: 140.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        doc.resources.push(Resource {
+            id,
+            name: "Setts".into(),
+            body: ResourceBody::HardscapeStyle(Box::new(style)),
+        });
         (doc, id)
     }
 
@@ -463,8 +562,17 @@ mod tests {
         let o = slab();
         assert!(data(&o).is_none());
         assert!(!has_unreadable_data(&o));
-        let mut text = Object::new(ObjectId(6), LayerId(1), ClassId(0), Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-        text.data.insert(KEY.into(), serde_json::json!({"mode": "path"}));
+        let mut text = Object::new(
+            ObjectId(6),
+            LayerId(1),
+            ClassId(0),
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        text.data
+            .insert(KEY.into(), serde_json::json!({"mode": "path"}));
         assert!(data(&text).is_none(), "only hardscapes have settings");
     }
 
@@ -472,21 +580,62 @@ mod tests {
     fn patch_sets_style_and_copies_into_the_shape() {
         let (doc, sid) = doc_with_style();
         let mut o = slab();
-        apply_patch(&doc, &mut o, &HardscapePatch { style: Some(sid), elevation: Some(30.0), ..Default::default() }).unwrap();
+        apply_patch(
+            &doc,
+            &mut o,
+            &HardscapePatch {
+                style: Some(sid),
+                elevation: Some(30.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let d = data(&o).unwrap();
         assert_eq!(d.style, Some(sid));
         assert_eq!(style_id(&o), Some(sid));
-        let Shape::Hardscape { material, thickness, elevation, .. } = &o.shape else { panic!() };
-        assert_eq!((material.as_str(), *thickness, *elevation), ("Setts", Some(200.0), Some(30.0)));
+        let Shape::Hardscape {
+            material,
+            thickness,
+            elevation,
+            ..
+        } = &o.shape
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (material.as_str(), *thickness, *elevation),
+            ("Setts", Some(200.0), Some(30.0))
+        );
         assert_eq!(style_of(&doc, &o).unwrap().0, sid);
         // Unstyle keeps the copied fields.
-        apply_patch(&doc, &mut o, &HardscapePatch { unstyle: true, ..Default::default() }).unwrap();
+        apply_patch(
+            &doc,
+            &mut o,
+            &HardscapePatch {
+                unstyle: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(data(&o).unwrap().style.is_none());
         assert!(style_of(&doc, &o).is_none());
-        let Shape::Hardscape { material, .. } = &o.shape else { panic!() };
+        let Shape::Hardscape { material, .. } = &o.shape else {
+            panic!()
+        };
         assert_eq!(material, "Setts");
         // A style and unstyle together are refused.
-        assert!(apply_patch(&doc, &mut o, &HardscapePatch { style: Some(sid), unstyle: true, ..Default::default() }).is_err());
+        assert!(
+            apply_patch(
+                &doc,
+                &mut o,
+                &HardscapePatch {
+                    style: Some(sid),
+                    unstyle: true,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -494,28 +643,65 @@ mod tests {
         let (doc, _) = doc_with_style();
         let mut o = slab();
         let before = o.clone();
-        let p = HardscapePatch { center: Some(curve::corners(&[DVec2::ZERO, DVec2::new(4000.0, 0.0)])), width: Some(1000.0), ..Default::default() };
+        let p = HardscapePatch {
+            center: Some(curve::corners(&[DVec2::ZERO, DVec2::new(4000.0, 0.0)])),
+            width: Some(1000.0),
+            ..Default::default()
+        };
         apply_patch(&doc, &mut o, &p).unwrap();
         let d = data(&o).unwrap();
         assert_eq!(d.mode, Mode::Path);
         assert!((o.shape.area().unwrap() - 4.0e6).abs() < 1e-6);
         // A new width changes the outline.
-        apply_patch(&doc, &mut o, &HardscapePatch { width: Some(2000.0), ..Default::default() }).unwrap();
+        apply_patch(
+            &doc,
+            &mut o,
+            &HardscapePatch {
+                width: Some(2000.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!((o.shape.area().unwrap() - 8.0e6).abs() < 1e-6);
         // Moving the object moves the center line.
         translate_data(&mut o, DVec2::new(10.0, 20.0));
         assert_eq!(data(&o).unwrap().center[0].p, DVec2::new(10.0, 20.0));
         // Back to a slab keeps the outline.
-        apply_patch(&doc, &mut o, &HardscapePatch { mode: Some(Mode::Slab), ..Default::default() }).unwrap();
+        apply_patch(
+            &doc,
+            &mut o,
+            &HardscapePatch {
+                mode: Some(Mode::Slab),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(data(&o).unwrap().center.is_empty());
         // Errors leave the object alone.
         let mut o2 = before.clone();
-        let bad = HardscapePatch { center: Some(curve::corners(&[DVec2::ZERO, DVec2::ZERO])), ..Default::default() };
-        assert!(apply_patch(&doc, &mut o2, &bad).unwrap_err().contains("no length"));
+        let bad = HardscapePatch {
+            center: Some(curve::corners(&[DVec2::ZERO, DVec2::ZERO])),
+            ..Default::default()
+        };
+        assert!(
+            apply_patch(&doc, &mut o2, &bad)
+                .unwrap_err()
+                .contains("no length")
+        );
         assert_eq!(o2, before);
-        let bad = HardscapePatch { mode: Some(Mode::Path), ..Default::default() };
-        assert!(apply_patch(&doc, &mut o2, &bad).unwrap_err().contains("center line"));
-        let bad = HardscapePatch { width: Some(-1.0), ..Default::default() };
+        let bad = HardscapePatch {
+            mode: Some(Mode::Path),
+            ..Default::default()
+        };
+        assert!(
+            apply_patch(&doc, &mut o2, &bad)
+                .unwrap_err()
+                .contains("center line")
+        );
+        let bad = HardscapePatch {
+            width: Some(-1.0),
+            ..Default::default()
+        };
         assert!(apply_patch(&doc, &mut o2, &bad).is_err());
     }
 
@@ -524,38 +710,183 @@ mod tests {
         let (doc, _) = doc_with_style();
         let mut o = slab();
         let try_patch = |o: &mut Object, p: HardscapePatch| apply_patch(&doc, o, &p);
-        assert!(try_patch(&mut o, HardscapePatch { thickness: Some(0.0), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { elevation: Some(f64::NAN), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Cross { percent: f64::NAN, angle_deg: 0.0 }), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Cross { percent: 5000.0, angle_deg: 0.0 }), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Edges { elevations: vec![0.0, 1.0] }), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Edges { elevations: vec![0.0, 1.0, f64::INFINITY, 2.0] }), ..Default::default() }).is_err());
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Edges { elevations: vec![0.0, 1.0, 2.0] }), ..Default::default() }).is_err(), "four corners need four elevations");
-        assert!(try_patch(&mut o, HardscapePatch { slope: Some(Slope::Edges { elevations: vec![0.0, 1.0, 2.0, 3.0] }), material: Some("Slate".into()), thickness: Some(80.0), ..Default::default() }).is_ok());
-        let Shape::Hardscape { material, thickness, .. } = &o.shape else { panic!() };
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    thickness: Some(0.0),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    elevation: Some(f64::NAN),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Cross {
+                        percent: f64::NAN,
+                        angle_deg: 0.0
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Cross {
+                        percent: 5000.0,
+                        angle_deg: 0.0
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Edges {
+                        elevations: vec![0.0, 1.0]
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Edges {
+                        elevations: vec![0.0, 1.0, f64::INFINITY, 2.0]
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Edges {
+                        elevations: vec![0.0, 1.0, 2.0]
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err(),
+            "four corners need four elevations"
+        );
+        assert!(
+            try_patch(
+                &mut o,
+                HardscapePatch {
+                    slope: Some(Slope::Edges {
+                        elevations: vec![0.0, 1.0, 2.0, 3.0]
+                    }),
+                    material: Some("Slate".into()),
+                    thickness: Some(80.0),
+                    ..Default::default()
+                }
+            )
+            .is_ok()
+        );
+        let Shape::Hardscape {
+            material,
+            thickness,
+            ..
+        } = &o.shape
+        else {
+            panic!()
+        };
         assert_eq!((material.as_str(), *thickness), ("Slate", Some(80.0)));
         assert_eq!(data(&o).unwrap().slope.id(), "edges");
         assert!(HardscapePatch::default().is_empty());
-        assert!(!HardscapePatch { drape: Some(true), ..Default::default() }.is_empty());
+        assert!(
+            !HardscapePatch {
+                drape: Some(true),
+                ..Default::default()
+            }
+            .is_empty()
+        );
         // Not a hardscape.
-        let mut line = Object::new(ObjectId(9), LayerId(1), ClassId(0), Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-        assert!(try_patch(&mut line, HardscapePatch { drape: Some(true), ..Default::default() }).is_err());
+        let mut line = Object::new(
+            ObjectId(9),
+            LayerId(1),
+            ClassId(0),
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        assert!(
+            try_patch(
+                &mut line,
+                HardscapePatch {
+                    drape: Some(true),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
         // Unreadable data.
         let mut weird = slab();
-        weird.data.insert(KEY.into(), serde_json::json!({"mode": 5}));
+        weird
+            .data
+            .insert(KEY.into(), serde_json::json!({"mode": 5}));
         assert!(has_unreadable_data(&weird));
-        assert!(try_patch(&mut weird, HardscapePatch { drape: Some(true), ..Default::default() }).is_err());
+        assert!(
+            try_patch(
+                &mut weird,
+                HardscapePatch {
+                    drape: Some(true),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn slope_and_mode_names() {
         assert_eq!(Slope::None.id(), "none");
-        assert_eq!(Slope::Cross { percent: 1.0, angle_deg: 0.0 }.id(), "cross");
+        assert_eq!(
+            Slope::Cross {
+                percent: 1.0,
+                angle_deg: 0.0
+            }
+            .id(),
+            "cross"
+        );
         assert_eq!(Mode::from_name(" Path "), Some(Mode::Path));
         assert_eq!(Mode::from_name("x"), None);
         assert_eq!(Mode::Slab.id(), "slab");
-        let d: HardscapeData = serde_json::from_value(serde_json::json!({"slope": {"type": "cross", "percent": 2}})).unwrap();
-        assert_eq!(d.slope, Slope::Cross { percent: 2.0, angle_deg: 0.0 });
+        let d: HardscapeData =
+            serde_json::from_value(serde_json::json!({"slope": {"type": "cross", "percent": 2}}))
+                .unwrap();
+        assert_eq!(
+            d.slope,
+            Slope::Cross {
+                percent: 2.0,
+                angle_deg: 0.0
+            }
+        );
         assert_eq!(d.width, 1200.0);
     }
 }

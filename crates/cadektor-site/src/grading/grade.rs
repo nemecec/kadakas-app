@@ -36,11 +36,19 @@ impl SlopeSpec {
             SlopeSpec::Percent(p) => finite("slope percent", p),
             SlopeSpec::Ratio(r) => {
                 finite("slope ratio", r)?;
-                if r == 0.0 { Err("a ratio of 0 is not a slope; use 1:N with N other than 0".into()) } else { Ok(100.0 / r) }
+                if r == 0.0 {
+                    Err("a ratio of 0 is not a slope; use 1:N with N other than 0".into())
+                } else {
+                    Ok(100.0 / r)
+                }
             }
             SlopeSpec::Angle(a) => {
                 finite("slope angle", a)?;
-                if a.abs() >= 90.0 { Err("a slope angle must be between -90 and 90 degrees".into()) } else { Ok(a.to_radians().tan() * 100.0) }
+                if a.abs() >= 90.0 {
+                    Err("a slope angle must be between -90 and 90 degrees".into())
+                } else {
+                    Ok(a.to_radians().tan() * 100.0)
+                }
             }
         }
     }
@@ -66,7 +74,15 @@ pub struct GradeData {
 
 impl Default for GradeData {
     fn default() -> Self {
-        GradeData { elevation_a: 0.0, elevation_b: None, slope: None, snap: None, site: None, label: true, end_tags: true }
+        GradeData {
+            elevation_a: 0.0,
+            elevation_b: None,
+            slope: None,
+            snap: None,
+            site: None,
+            label: true,
+            end_tags: true,
+        }
     }
 }
 
@@ -76,7 +92,9 @@ impl GradeData {
         if let Some(b) = self.elevation_b {
             finite("elevation_b", b)?;
         }
-        if self.elevation_a.abs() > MAX_COORD || self.elevation_b.is_some_and(|b| b.abs() > MAX_COORD) {
+        if self.elevation_a.abs() > MAX_COORD
+            || self.elevation_b.is_some_and(|b| b.abs() > MAX_COORD)
+        {
             return Err("an elevation is too large".into());
         }
         if let Some(s) = self.slope {
@@ -122,7 +140,12 @@ impl Grade {
 }
 
 /// Solves the grade between two points.
-pub fn solve(a: DVec2, b: DVec2, d: &GradeData, ground: Option<Ground<'_>>) -> Result<Grade, String> {
+pub fn solve(
+    a: DVec2,
+    b: DVec2,
+    d: &GradeData,
+    ground: Option<Ground<'_>>,
+) -> Result<Grade, String> {
     let length = a.distance(b);
     if !(length > 0.0 && length.is_finite()) {
         return Err("the end points of a grade must be apart".into());
@@ -130,7 +153,12 @@ pub fn solve(a: DVec2, b: DVec2, d: &GradeData, ground: Option<Ground<'_>>) -> R
     let (za, zb) = match (d.snap, ground) {
         (Some(f), Some(g)) => match (g(a, f), g(b, f)) {
             (Some(za), Some(zb)) => (za, zb),
-            _ => return Err("an end point is outside the site model, so it cannot pick up an elevation".into()),
+            _ => {
+                return Err(
+                    "an end point is outside the site model, so it cannot pick up an elevation"
+                        .into(),
+                );
+            }
         },
         (Some(_), None) => return Err("there is no site model to pick up elevations from".into()),
         (None, _) => {
@@ -166,7 +194,9 @@ pub fn data(obj: &Object) -> Option<GradeData> {
 
 /// The grade of an object, if it is a grade object that can be solved.
 pub fn evaluate(obj: &Object, ground: Option<Ground<'_>>) -> Option<(GradeData, Grade)> {
-    let Shape::Line { a, b } = &obj.shape else { return None };
+    let Shape::Line { a, b } = &obj.shape else {
+        return None;
+    };
     let d = data(obj)?;
     let g = solve(*a, *b, &d, ground).ok()?;
     Some((d, g))
@@ -186,7 +216,10 @@ pub fn svg(id: ObjectId, d: &GradeData, g: &Grade, scale: f64) -> String {
         if g.rise.abs() > 1e-9 {
             let d2 = if g.falls() { dir } else { -dir };
             let tip = mid + d2 * size / 2.0;
-            let (p, q) = (mid - d2 * size / 2.0 + n * size / 2.5, mid - d2 * size / 2.0 - n * size / 2.5);
+            let (p, q) = (
+                mid - d2 * size / 2.0 + n * size / 2.5,
+                mid - d2 * size / 2.0 - n * size / 2.5,
+            );
             let _ = writeln!(
                 out,
                 r#"<polygon points="{},{} {},{} {},{}" fill="black" data-kind="grade-arrow" data-grade="{id}"/>"#,
@@ -194,7 +227,11 @@ pub fn svg(id: ObjectId, d: &GradeData, g: &Grade, scale: f64) -> String {
             );
         } else {
             let (p, q) = (mid + n * size / 2.0, mid - n * size / 2.0);
-            let _ = writeln!(out, r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" data-kind="grade-arrow" data-grade="{id}"/>"#, p.x, -p.y, q.x, -q.y);
+            let _ = writeln!(
+                out,
+                r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" data-kind="grade-arrow" data-grade="{id}"/>"#,
+                p.x, -p.y, q.x, -q.y
+            );
         }
         let at = mid + n * height * 0.8;
         let mut angle = (-dir.y).atan2(dir.x).to_degrees();
@@ -259,61 +296,161 @@ mod tests {
 
     #[test]
     fn two_elevations_give_the_slope() {
-        let d = GradeData { elevation_a: 10_000.0, elevation_b: Some(10_500.0), ..GradeData::default() };
+        let d = GradeData {
+            elevation_a: 10_000.0,
+            elevation_b: Some(10_500.0),
+            ..GradeData::default()
+        };
         let g = solve(a(), b(25_000.0), &d, None).unwrap();
         assert_eq!((g.rise, g.elevation_b), (500.0, 10_500.0));
         assert!((g.percent - 2.0).abs() < 1e-12);
         assert!((g.ratio.unwrap() - 50.0).abs() < 1e-9);
         assert!(!g.falls());
         assert_eq!(g.label(), "2.0% (1:50)");
-        let down = GradeData { elevation_b: Some(9_000.0), ..d.clone() };
+        let down = GradeData {
+            elevation_b: Some(9_000.0),
+            ..d.clone()
+        };
         let g = solve(a(), b(10_000.0), &down, None).unwrap();
         assert!(g.falls() && (g.percent + 10.0).abs() < 1e-12);
         assert_eq!(g.label(), "10.0% (1:10)");
-        let level = GradeData { elevation_b: Some(10_000.0), ..d };
+        let level = GradeData {
+            elevation_b: Some(10_000.0),
+            ..d
+        };
         let g = solve(a(), b(10_000.0), &level, None).unwrap();
         assert!(g.ratio.is_none() && g.label().contains("level"));
     }
 
     #[test]
     fn elevation_and_slope_give_the_end() {
-        let d = GradeData { elevation_a: 1000.0, slope: Some(SlopeSpec::Percent(-4.0)), ..GradeData::default() };
+        let d = GradeData {
+            elevation_a: 1000.0,
+            slope: Some(SlopeSpec::Percent(-4.0)),
+            ..GradeData::default()
+        };
         let g = solve(a(), b(5000.0), &d, None).unwrap();
         assert!((g.elevation_b - 800.0).abs() < 1e-9);
         // A longer line gets a different end elevation: the grade follows its end points.
         let g = solve(a(), b(10_000.0), &d, None).unwrap();
         assert!((g.elevation_b - 600.0).abs() < 1e-9);
-        let ratio = GradeData { slope: Some(SlopeSpec::Ratio(20.0)), ..d.clone() };
+        let ratio = GradeData {
+            slope: Some(SlopeSpec::Ratio(20.0)),
+            ..d.clone()
+        };
         assert!((solve(a(), b(2000.0), &ratio, None).unwrap().rise - 100.0).abs() < 1e-9);
-        assert!(solve(a(), b(2000.0), &GradeData { slope: Some(SlopeSpec::Ratio(0.0)), ..d.clone() }, None).is_err());
+        assert!(
+            solve(
+                a(),
+                b(2000.0),
+                &GradeData {
+                    slope: Some(SlopeSpec::Ratio(0.0)),
+                    ..d.clone()
+                },
+                None
+            )
+            .is_err()
+        );
         assert!(solve(a(), b(2000.0), &GradeData::default(), None).is_err());
     }
 
     #[test]
     fn bad_input_is_refused() {
-        let d = GradeData { elevation_b: Some(1.0), ..GradeData::default() };
+        let d = GradeData {
+            elevation_b: Some(1.0),
+            ..GradeData::default()
+        };
         assert!(solve(a(), a(), &d, None).is_err());
         assert!(solve(a(), DVec2::new(f64::NAN, 0.0), &d, None).is_err());
         assert!(d.validate().is_ok());
         assert!(GradeData::default().validate().is_err());
-        assert!(GradeData { elevation_a: f64::NAN, ..d.clone() }.validate().is_err());
-        assert!(GradeData { elevation_b: Some(f64::NAN), ..d.clone() }.validate().is_err());
-        assert!(GradeData { elevation_a: 1e12, ..d.clone() }.validate().is_err());
-        assert!(GradeData { elevation_b: Some(-1e12), ..d.clone() }.validate().is_err());
-        assert!(GradeData { slope: Some(SlopeSpec::Angle(95.0)), ..d.clone() }.validate().is_err());
-        assert!(GradeData { snap: Some(Follow::Existing), ..GradeData::default() }.validate().is_ok());
+        assert!(
+            GradeData {
+                elevation_a: f64::NAN,
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GradeData {
+                elevation_b: Some(f64::NAN),
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GradeData {
+                elevation_a: 1e12,
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GradeData {
+                elevation_b: Some(-1e12),
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GradeData {
+                slope: Some(SlopeSpec::Angle(95.0)),
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GradeData {
+                snap: Some(Follow::Existing),
+                ..GradeData::default()
+            }
+            .validate()
+            .is_ok()
+        );
     }
 
     #[test]
     fn snapping_reads_the_ground() {
-        let ground = |p: DVec2, f: Follow| (p.x >= 0.0).then(|| if f == Follow::Existing { p.x / 10.0 } else { p.x / 5.0 });
-        let d = GradeData { snap: Some(Follow::Existing), ..GradeData::default() };
+        let ground = |p: DVec2, f: Follow| {
+            (p.x >= 0.0).then(|| {
+                if f == Follow::Existing {
+                    p.x / 10.0
+                } else {
+                    p.x / 5.0
+                }
+            })
+        };
+        let d = GradeData {
+            snap: Some(Follow::Existing),
+            ..GradeData::default()
+        };
         let g = solve(a(), b(1000.0), &d, Some(&ground)).unwrap();
         assert_eq!((g.elevation_a, g.elevation_b), (0.0, 100.0));
-        let p = GradeData { snap: Some(Follow::Proposed), ..GradeData::default() };
-        assert_eq!(solve(a(), b(1000.0), &p, Some(&ground)).unwrap().elevation_b, 200.0);
-        assert!(solve(DVec2::new(-5.0, 0.0), b(1000.0), &d, Some(&ground)).unwrap_err().contains("outside"));
-        assert!(solve(a(), b(1000.0), &d, None).unwrap_err().contains("no site model"));
+        let p = GradeData {
+            snap: Some(Follow::Proposed),
+            ..GradeData::default()
+        };
+        assert_eq!(
+            solve(a(), b(1000.0), &p, Some(&ground))
+                .unwrap()
+                .elevation_b,
+            200.0
+        );
+        assert!(
+            solve(DVec2::new(-5.0, 0.0), b(1000.0), &d, Some(&ground))
+                .unwrap_err()
+                .contains("outside")
+        );
+        assert!(
+            solve(a(), b(1000.0), &d, None)
+                .unwrap_err()
+                .contains("no site model")
+        );
     }
 
     proptest! {
@@ -338,18 +475,51 @@ mod tests {
     #[test]
     fn objects_update_when_the_end_moves() {
         let mut ed = Editor::default();
-        let d = GradeData { elevation_a: 1000.0, slope: Some(SlopeSpec::Percent(2.0)), ..GradeData::default() };
-        let id = add_with(&mut ed, Shape::Line { a: a(), b: b(10_000.0) }, KEY, serde_json::to_value(&d).unwrap());
+        let d = GradeData {
+            elevation_a: 1000.0,
+            slope: Some(SlopeSpec::Percent(2.0)),
+            ..GradeData::default()
+        };
+        let id = add_with(
+            &mut ed,
+            Shape::Line {
+                a: a(),
+                b: b(10_000.0),
+            },
+            KEY,
+            serde_json::to_value(&d).unwrap(),
+        );
         let (_, g) = evaluate(ed.doc().object(id).unwrap(), None).unwrap();
         assert!((g.elevation_b - 1200.0).abs() < 1e-9);
-        ed.execute(&cadektor_core::command::Command::ModifyObject { id, shape: Some(Shape::Line { a: a(), b: b(20_000.0) }), layer: None, class: None, attrs: None }).unwrap();
+        ed.execute(&cadektor_core::command::Command::ModifyObject {
+            id,
+            shape: Some(Shape::Line {
+                a: a(),
+                b: b(20_000.0),
+            }),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .unwrap();
         let (_, g) = evaluate(ed.doc().object(id).unwrap(), None).unwrap();
         assert!((g.elevation_b - 1400.0).abs() < 1e-9);
         // Other objects and broken settings give nothing.
-        let circle = add(&mut ed, Shape::Circle { center: a(), radius: 5.0 });
+        let circle = add(
+            &mut ed,
+            Shape::Circle {
+                center: a(),
+                radius: 5.0,
+            },
+        );
         assert!(evaluate(ed.doc().object(circle).unwrap(), None).is_none());
         assert!(data(ed.doc().object(circle).unwrap()).is_none());
-        let broken = add_with(&mut ed, Shape::Line { a: a(), b: b(10.0) }, KEY, json!({"slope": "steep"}));
+        let broken = add_with(
+            &mut ed,
+            Shape::Line { a: a(), b: b(10.0) },
+            KEY,
+            json!({"slope": "steep"}),
+        );
         assert!(evaluate(ed.doc().object(broken).unwrap(), None).is_none());
         let none = add_with(&mut ed, Shape::Line { a: a(), b: b(10.0) }, KEY, json!({}));
         assert!(evaluate(ed.doc().object(none).unwrap(), None).is_none());
@@ -357,32 +527,92 @@ mod tests {
 
     #[test]
     fn drawing_the_grade() {
-        let d = GradeData { elevation_a: 1000.0, elevation_b: Some(1200.0), ..GradeData::default() };
+        let d = GradeData {
+            elevation_a: 1000.0,
+            elevation_b: Some(1200.0),
+            ..GradeData::default()
+        };
         let g = solve(a(), b(10_000.0), &d, None).unwrap();
         let svg = svg(ObjectId(7), &d, &g, 100.0);
-        assert!(svg.contains("grade-arrow") && svg.contains("grade-label") && svg.matches("grade-tag").count() == 2);
+        assert!(
+            svg.contains("grade-arrow")
+                && svg.contains("grade-label")
+                && svg.matches("grade-tag").count() == 2
+        );
         assert!(svg.contains("2.0% (1:50)") && !svg.contains(">1<") && !svg.contains(">1.2<"));
         assert!(svg.contains(">1.00<") && svg.contains(">1.20<"));
         // The arrow points downhill: for a rise from a to b it points to a (left).
-        let tip: Vec<&str> = svg.lines().next().unwrap().split('"').nth(1).unwrap().split(' ').collect();
+        let tip: Vec<&str> = svg
+            .lines()
+            .next()
+            .unwrap()
+            .split('"')
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .collect();
         assert!(tip[0].split(',').next().unwrap().parse::<f64>().unwrap() < 5000.0);
-        let down = GradeData { elevation_b: Some(800.0), ..d.clone() };
+        let down = GradeData {
+            elevation_b: Some(800.0),
+            ..d.clone()
+        };
         let g2 = solve(a(), b(10_000.0), &down, None).unwrap();
         let s2 = super::svg(ObjectId(7), &down, &g2, 100.0);
-        let tip2: f64 = s2.lines().next().unwrap().split('"').nth(1).unwrap().split(' ').next().unwrap().split(',').next().unwrap().parse().unwrap();
+        let tip2: f64 = s2
+            .lines()
+            .next()
+            .unwrap()
+            .split('"')
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert!(tip2 > 5000.0);
         // Level ground has a bar. Rotation keeps the text upright for lines that run to the left.
-        let level = GradeData { elevation_b: Some(1000.0), label: true, end_tags: false, ..d.clone() };
+        let level = GradeData {
+            elevation_b: Some(1000.0),
+            label: true,
+            end_tags: false,
+            ..d.clone()
+        };
         let g3 = solve(b(10_000.0), a(), &level, None).unwrap();
         let s3 = super::svg(ObjectId(7), &level, &g3, 100.0);
         assert!(s3.contains("<line") && !s3.contains("grade-tag") && s3.contains("rotate(0"));
-        let s4 = super::svg(ObjectId(7), &GradeData { label: false, end_tags: false, ..d.clone() }, &g, 100.0);
+        let s4 = super::svg(
+            ObjectId(7),
+            &GradeData {
+                label: false,
+                end_tags: false,
+                ..d.clone()
+            },
+            &g,
+            100.0,
+        );
         assert!(s4.is_empty());
         // Steep lines in both directions rotate by less than 90 degrees.
-        for (p, q) in [(DVec2::new(0.0, 0.0), DVec2::new(1.0, 5.0)), (DVec2::new(0.0, 0.0), DVec2::new(-1.0, 5.0)), (DVec2::new(0.0, 5.0), DVec2::new(1.0, 0.0)), (DVec2::new(0.0, 5.0), DVec2::new(-1.0, 0.0))] {
+        for (p, q) in [
+            (DVec2::new(0.0, 0.0), DVec2::new(1.0, 5.0)),
+            (DVec2::new(0.0, 0.0), DVec2::new(-1.0, 5.0)),
+            (DVec2::new(0.0, 5.0), DVec2::new(1.0, 0.0)),
+            (DVec2::new(0.0, 5.0), DVec2::new(-1.0, 0.0)),
+        ] {
             let gg = solve(p, q, &d, None).unwrap();
             let s = super::svg(ObjectId(1), &d, &gg, 100.0);
-            let r: f64 = s.split("rotate(").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+            let r: f64 = s
+                .split("rotate(")
+                .nth(1)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
             assert!(r.abs() <= 90.0);
         }
     }

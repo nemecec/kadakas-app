@@ -79,7 +79,11 @@ impl Value {
 
     /// The target of a reference.
     pub fn as_ref_id(&self) -> Option<u64> {
-        if let Value::Ref(id) = self { Some(*id) } else { None }
+        if let Value::Ref(id) = self {
+            Some(*id)
+        } else {
+            None
+        }
     }
 
     /// Calls `f` with every reference inside the value.
@@ -115,7 +119,11 @@ pub fn format_real(x: f64) -> String {
     } else {
         let s = format!("{x:E}");
         let (mantissa, exp) = s.split_once('E').unwrap_or((&s, "0"));
-        let mantissa = if mantissa.contains('.') { mantissa.to_string() } else { format!("{mantissa}.") };
+        let mantissa = if mantissa.contains('.') {
+            mantissa.to_string()
+        } else {
+            format!("{mantissa}.")
+        };
         format!("{mantissa}E{exp}")
     }
 }
@@ -160,7 +168,8 @@ pub fn decode_string(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::new();
     let mut i = 0;
-    let hex = |digits: &[u8]| u32::from_str_radix(std::str::from_utf8(digits).unwrap_or("zz"), 16).ok();
+    let hex =
+        |digits: &[u8]| u32::from_str_radix(std::str::from_utf8(digits).unwrap_or("zz"), 16).ok();
     while i < b.len() {
         match b[i] {
             b'\'' if b.get(i + 1) == Some(&b'\'') => {
@@ -171,16 +180,18 @@ pub fn decode_string(s: &str) -> String {
                 out.push('\\');
                 i += 2;
             }
-            b'\\' if b[i..].starts_with(b"\\X\\") && i + 5 <= b.len() => match hex(&b[i + 3..i + 5]).and_then(char::from_u32) {
-                Some(c) => {
-                    out.push(c);
-                    i += 5;
+            b'\\' if b[i..].starts_with(b"\\X\\") && i + 5 <= b.len() => {
+                match hex(&b[i + 3..i + 5]).and_then(char::from_u32) {
+                    Some(c) => {
+                        out.push(c);
+                        i += 5;
+                    }
+                    None => {
+                        out.push('\\');
+                        i += 1;
+                    }
                 }
-                None => {
-                    out.push('\\');
-                    i += 1;
-                }
-            },
+            }
             b'\\' if b[i..].starts_with(b"\\X2\\") || b[i..].starts_with(b"\\X4\\") => {
                 let width = if b[i + 2] == b'2' { 4 } else { 8 };
                 let end = s[i + 4..].find("\\X0\\").map(|p| p + i + 4);
@@ -191,10 +202,17 @@ pub fn decode_string(s: &str) -> String {
                 };
                 let digits = &b[i + 4..end];
                 if width == 4 {
-                    let units: Vec<u16> = digits.chunks(4).filter_map(|d| hex(d).map(|u| u as u16)).collect();
+                    let units: Vec<u16> = digits
+                        .chunks(4)
+                        .filter_map(|d| hex(d).map(|u| u as u16))
+                        .collect();
                     out.extend(char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')));
                 } else {
-                    out.extend(digits.chunks(8).filter_map(|d| hex(d).and_then(char::from_u32)));
+                    out.extend(
+                        digits
+                            .chunks(8)
+                            .filter_map(|d| hex(d).and_then(char::from_u32)),
+                    );
                 }
                 i = end + 4;
             }
@@ -217,7 +235,14 @@ pub struct StepWriter<W: Write> {
 
 impl<W: Write> StepWriter<W> {
     /// Starts a file: writes the header section and opens the data section.
-    pub fn begin(mut out: W, file_name: &str, time_stamp: &str, author: &str, organization: &str, view: &str) -> io::Result<Self> {
+    pub fn begin(
+        mut out: W,
+        file_name: &str,
+        time_stamp: &str,
+        author: &str,
+        organization: &str,
+        view: &str,
+    ) -> io::Result<Self> {
         writeln!(out, "ISO-10303-21;")?;
         writeln!(out, "HEADER;")?;
         writeln!(out, "FILE_DESCRIPTION(('{}'),'2;1');", encode_string(view))?;
@@ -255,7 +280,11 @@ impl<W: Write> StepWriter<W> {
 
     /// Writes an entity whose attribute text comes from `body`. Use it for big lists that should not
     /// be built in memory.
-    pub fn entity_with(&mut self, name: &str, body: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    pub fn entity_with(
+        &mut self,
+        name: &str,
+        body: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+    ) -> io::Result<u64> {
         let id = self.next;
         write!(self.out, "#{id}={name}(")?;
         body(&mut self.out)?;
@@ -284,9 +313,13 @@ pub struct StepFile {
 impl StepFile {
     /// The schema names of `FILE_SCHEMA`.
     pub fn schemas(&self) -> Vec<String> {
-        let Some(at) = self.header.find("FILE_SCHEMA") else { return Vec::new() };
+        let Some(at) = self.header.find("FILE_SCHEMA") else {
+            return Vec::new();
+        };
         let rest = &self.header[at..];
-        let Some(end) = rest.find(';') else { return Vec::new() };
+        let Some(end) = rest.find(';') else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         let mut parts = rest[..end].split('\'');
         parts.next();
@@ -299,7 +332,10 @@ impl StepFile {
 
     /// The entity with this ID.
     pub fn get(&self, id: u64) -> Option<&Entity> {
-        self.entities.binary_search_by_key(&id, |e| e.id).ok().map(|i| &self.entities[i])
+        self.entities
+            .binary_search_by_key(&id, |e| e.id)
+            .ok()
+            .map(|i| &self.entities[i])
     }
 
     /// References to IDs that no entity defines: pairs of the entity and the missing target.
@@ -346,7 +382,10 @@ impl Parser<'_> {
 
     fn word(&mut self) -> &str {
         let start = self.i;
-        while self.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
             self.i += 1;
         }
         &self.s[start..self.i]
@@ -354,7 +393,9 @@ impl Parser<'_> {
 
     fn value(&mut self) -> Result<Value, String> {
         self.skip_space();
-        let Some(c) = self.peek() else { return Err("unexpected end of file".into()) };
+        let Some(c) = self.peek() else {
+            return Err("unexpected end of file".into());
+        };
         match c {
             b'$' => {
                 self.i += 1;
@@ -367,7 +408,9 @@ impl Parser<'_> {
             b'#' => {
                 self.i += 1;
                 let n = self.word().to_string();
-                n.parse().map(Value::Ref).map_err(|_| format!("bad reference #{n}"))
+                n.parse()
+                    .map(Value::Ref)
+                    .map_err(|_| format!("bad reference #{n}"))
             }
             b'\'' => {
                 self.i += 1;
@@ -375,7 +418,9 @@ impl Parser<'_> {
                 loop {
                     match self.peek() {
                         None => return Err("string is not closed".into()),
-                        Some(b'\'') if self.s.as_bytes().get(self.i + 1) == Some(&b'\'') => self.i += 2,
+                        Some(b'\'') if self.s.as_bytes().get(self.i + 1) == Some(&b'\'') => {
+                            self.i += 2
+                        }
                         Some(b'\'') => break,
                         Some(_) => self.i += 1,
                     }
@@ -418,14 +463,20 @@ impl Parser<'_> {
             c if c.is_ascii_digit() || c == b'-' || c == b'+' => {
                 let start = self.i;
                 self.i += 1;
-                while self.peek().is_some_and(|c| c.is_ascii_digit() || matches!(c, b'.' | b'E' | b'e' | b'-' | b'+')) {
+                while self.peek().is_some_and(|c| {
+                    c.is_ascii_digit() || matches!(c, b'.' | b'E' | b'e' | b'-' | b'+')
+                }) {
                     self.i += 1;
                 }
                 let t = &self.s[start..self.i];
                 if t.contains(['.', 'E', 'e']) {
-                    t.parse().map(Value::Real).map_err(|_| format!("bad number {t}"))
+                    t.parse()
+                        .map(Value::Real)
+                        .map_err(|_| format!("bad number {t}"))
                 } else {
-                    t.parse().map(Value::Int).map_err(|_| format!("bad number {t}"))
+                    t.parse()
+                        .map(Value::Int)
+                        .map_err(|_| format!("bad number {t}"))
                 }
             }
             c if c.is_ascii_alphabetic() => {
@@ -446,9 +497,16 @@ impl Parser<'_> {
 /// Reads a STEP physical file. It handles the header and the simple entity instances of the data section.
 pub fn parse(text: &str) -> Result<StepFile, String> {
     let header_start = text.find("HEADER;").ok_or("no HEADER section")? + "HEADER;".len();
-    let header_end = text[header_start..].find("ENDSEC;").ok_or("HEADER is not closed")? + header_start;
-    let data_start = text[header_end..].find("DATA;").ok_or("no DATA section")? + header_end + "DATA;".len();
-    let mut p = Parser { s: text, i: data_start };
+    let header_end = text[header_start..]
+        .find("ENDSEC;")
+        .ok_or("HEADER is not closed")?
+        + header_start;
+    let data_start =
+        text[header_end..].find("DATA;").ok_or("no DATA section")? + header_end + "DATA;".len();
+    let mut p = Parser {
+        s: text,
+        i: data_start,
+    };
     let mut entities = Vec::new();
     loop {
         p.skip_space();
@@ -456,7 +514,10 @@ pub fn parse(text: &str) -> Result<StepFile, String> {
             break;
         }
         p.eat(b'#')?;
-        let id: u64 = p.word().parse().map_err(|_| format!("bad entity number at byte {}", p.i))?;
+        let id: u64 = p
+            .word()
+            .parse()
+            .map_err(|_| format!("bad entity number at byte {}", p.i))?;
         p.eat(b'=')?;
         p.skip_space();
         let name = p.word().to_string();
@@ -486,7 +547,10 @@ pub fn parse(text: &str) -> Result<StepFile, String> {
         entities.push(Entity { id, name, attrs });
     }
     entities.sort_by_key(|e| e.id);
-    Ok(StepFile { header: text[header_start..header_end].to_string(), entities })
+    Ok(StepFile {
+        header: text[header_start..header_end].to_string(),
+        entities,
+    })
 }
 
 #[cfg(test)]
@@ -504,7 +568,10 @@ mod tests {
         assert_eq!(encode_string("plain"), "plain");
         assert_eq!(encode_string("it's"), "it''s");
         assert_eq!(encode_string("a\\b"), "a\\\\b");
-        assert_eq!(encode_string("Pähkinä"), "P\\X2\\00E4\\X0\\hkin\\X2\\00E4\\X0\\");
+        assert_eq!(
+            encode_string("Pähkinä"),
+            "P\\X2\\00E4\\X0\\hkin\\X2\\00E4\\X0\\"
+        );
         assert_eq!(encode_string("äö"), "\\X2\\00E400F6\\X0\\");
         assert_eq!(encode_string("a\nb"), "a\\X2\\000A\\X0\\b");
         // A character outside the BMP becomes a surrogate pair.
@@ -514,7 +581,15 @@ mod tests {
 
     #[test]
     fn strings_round_trip() {
-        for s in ["", "abc", "it's \\ here", "Pähkinäpuu", "\u{1F333} tree", "line\nbreak", "日本語"] {
+        for s in [
+            "",
+            "abc",
+            "it's \\ here",
+            "Pähkinäpuu",
+            "\u{1F333} tree",
+            "line\nbreak",
+            "日本語",
+        ] {
             assert_eq!(decode_string(&encode_string(s)), s, "{s:?}");
         }
         assert_eq!(decode_string("\\X\\E4"), "ä");
@@ -555,7 +630,10 @@ mod tests {
             Value::Ref(7),
             Value::typed("IFCLABEL", Value::s("x")),
         ]);
-        assert_eq!(text(&v), "($,*,-3,2.,'a''b',.MILLI.,.T.,.F.,#7,IFCLABEL('x'))");
+        assert_eq!(
+            text(&v),
+            "($,*,-3,2.,'a''b',.MILLI.,.T.,.F.,#7,IFCLABEL('x'))"
+        );
         assert_eq!(text(&Value::refs([1, 2])), "(#1,#2)");
         assert_eq!(text(&Value::reals(&[0.5, 1.0])), "(0.5,1.)");
         assert_eq!(Value::Ref(4).as_ref_id(), Some(4));
@@ -563,9 +641,19 @@ mod tests {
     }
 
     fn sample() -> Vec<u8> {
-        let mut w = StepWriter::begin(Vec::new(), "a'b.ifc", "2000-01-01T00:00:00", "Ünal", "Org", "ReferenceView_V1.2").unwrap();
+        let mut w = StepWriter::begin(
+            Vec::new(),
+            "a'b.ifc",
+            "2000-01-01T00:00:00",
+            "Ünal",
+            "Org",
+            "ReferenceView_V1.2",
+        )
+        .unwrap();
         assert_eq!(w.next_id(), 1);
-        let p = w.entity("IFCCARTESIANPOINT", &[Value::reals(&[0.0, 1.5, -2.0])]).unwrap();
+        let p = w
+            .entity("IFCCARTESIANPOINT", &[Value::reals(&[0.0, 1.5, -2.0])])
+            .unwrap();
         let q = w
             .entity_with("IFCPOLYLINE", |out| {
                 out.write_all(b"(")?;
@@ -573,7 +661,16 @@ mod tests {
                 out.write_all(b")")
             })
             .unwrap();
-        w.entity("IFCTHING", &[Value::Ref(q), Value::s("ä"), Value::List(vec![]), Value::typed("IFCLENGTHMEASURE", Value::Real(3.0))]).unwrap();
+        w.entity(
+            "IFCTHING",
+            &[
+                Value::Ref(q),
+                Value::s("ä"),
+                Value::List(vec![]),
+                Value::typed("IFCLENGTHMEASURE", Value::Real(3.0)),
+            ],
+        )
+        .unwrap();
         w.finish().unwrap()
     }
 
@@ -596,11 +693,17 @@ mod tests {
         assert_eq!(f.schemas(), vec!["IFC4".to_string()]);
         assert_eq!(f.entities.len(), 3);
         assert_eq!(f.get(1).unwrap().name, "IFCCARTESIANPOINT");
-        assert_eq!(f.get(1).unwrap().attrs, vec![Value::reals(&[0.0, 1.5, -2.0])]);
+        assert_eq!(
+            f.get(1).unwrap().attrs,
+            vec![Value::reals(&[0.0, 1.5, -2.0])]
+        );
         let thing = f.get(3).unwrap();
         assert_eq!(thing.attrs[1], Value::s("ä"));
         assert_eq!(thing.attrs[2], Value::List(vec![]));
-        assert_eq!(thing.attrs[3], Value::typed("IFCLENGTHMEASURE", Value::Real(3.0)));
+        assert_eq!(
+            thing.attrs[3],
+            Value::typed("IFCLENGTHMEASURE", Value::Real(3.0))
+        );
         assert!(f.dangling().is_empty());
         assert!(f.get(99).is_none());
     }
@@ -631,12 +734,36 @@ mod tests {
             let file = format!("HEADER;\nENDSEC;\nDATA;\n{bad}\nENDSEC;");
             assert!(parse(&file).is_err(), "{bad}");
         }
-        assert_eq!(StepFile { header: String::new(), entities: vec![] }.schemas(), Vec::<String>::new());
-        assert_eq!(StepFile { header: "FILE_SCHEMA".into(), entities: vec![] }.schemas(), Vec::<String>::new());
-        let f = parse("HEADER;\nENDSEC;\nDATA;\n#1=A(1,1.5E3,-2,.T.,.F.,.ENUM.,$,*);\nENDSEC;").unwrap();
+        assert_eq!(
+            StepFile {
+                header: String::new(),
+                entities: vec![]
+            }
+            .schemas(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            StepFile {
+                header: "FILE_SCHEMA".into(),
+                entities: vec![]
+            }
+            .schemas(),
+            Vec::<String>::new()
+        );
+        let f = parse("HEADER;\nENDSEC;\nDATA;\n#1=A(1,1.5E3,-2,.T.,.F.,.ENUM.,$,*);\nENDSEC;")
+            .unwrap();
         assert_eq!(
             f.entities[0].attrs,
-            vec![Value::Int(1), Value::Real(1500.0), Value::Int(-2), Value::Bool(true), Value::Bool(false), Value::e("ENUM"), Value::Null, Value::Derived]
+            vec![
+                Value::Int(1),
+                Value::Real(1500.0),
+                Value::Int(-2),
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::e("ENUM"),
+                Value::Null,
+                Value::Derived
+            ]
         );
     }
 }

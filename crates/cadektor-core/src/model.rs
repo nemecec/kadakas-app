@@ -8,11 +8,11 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::curve::{Vertex, VertexKind};
-pub use crate::site::{ModifierKind, PadSlope, SiteLine, SiteSettings};
 use crate::curve;
+pub use crate::curve::{Vertex, VertexKind};
 use crate::plants::tree::{self, TreeAction, TreeCondition};
 use crate::resource::{ResourceId, Resources};
+pub use crate::site::{ModifierKind, PadSlope, SiteLine, SiteSettings};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -76,9 +76,26 @@ pub struct Attributes {
     /// Line weight in millimeters on paper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_weight: Option<f64>,
+    /// A hatch or tile resource that fills closed shapes, drawn in the pen color over the fill color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_pattern: Option<ResourceId>,
+    /// A line type resource (dashes, and symbols along the line) for the outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_type: Option<ResourceId>,
 }
 
 impl Attributes {
+    /// These attributes, with every field they leave empty taken from `base`.
+    pub fn over(&self, base: &Attributes) -> Attributes {
+        Attributes {
+            pen: self.pen.or(base.pen),
+            fill: self.fill.or(base.fill),
+            line_weight: self.line_weight.or(base.line_weight),
+            fill_pattern: self.fill_pattern.or(base.fill_pattern),
+            line_type: self.line_type.or(base.line_type),
+        }
+    }
+
     pub fn is_finite(&self) -> bool {
         self.line_weight.is_none_or(f64::is_finite)
     }
@@ -92,15 +109,41 @@ pub const MAX_COORD: f64 = 1.0e9;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
-    Line { a: DVec2, b: DVec2 },
-    Rect { min: DVec2, max: DVec2 },
-    Circle { center: DVec2, radius: f64 },
+    Line {
+        a: DVec2,
+        b: DVec2,
+    },
+    Rect {
+        min: DVec2,
+        max: DVec2,
+    },
+    Circle {
+        center: DVec2,
+        radius: f64,
+    },
     /// Counterclockwise arc. Angles are radians. A sweep of 2π or more is a full circle.
-    Arc { center: DVec2, radius: f64, start: f64, end: f64 },
-    Polyline { points: Vec<Vertex>, closed: bool },
-    Text { at: DVec2, text: String, height: f64 },
+    Arc {
+        center: DVec2,
+        radius: f64,
+        start: f64,
+        end: f64,
+    },
+    Polyline {
+        points: Vec<Vertex>,
+        closed: bool,
+    },
+    Text {
+        at: DVec2,
+        text: String,
+        height: f64,
+    },
     /// Plant instance. `spread` is the canopy diameter.
-    Plant { at: DVec2, species: String, spread: f64, height: f64 },
+    Plant {
+        at: DVec2,
+        species: String,
+        spread: f64,
+        height: f64,
+    },
     /// Existing (survey) tree. `dbh` is the trunk diameter, `spread` the canopy diameter.
     /// The root protection zone has a radius of `rpz_factor` times `dbh` (default 12), at most `rpz_cap` (see `plants::tree`).
     ExistingTree {
@@ -130,7 +173,10 @@ pub enum Shape {
         height: f64,
     },
     /// Planting area with a plant mix, bounded by a closed outline.
-    LandscapeArea { boundary: Vec<Vertex>, name: String },
+    LandscapeArea {
+        boundary: Vec<Vertex>,
+        name: String,
+    },
     /// Paved area (path, patio, drive).
     /// `thickness` (default 150 mm) is measured down from the top surface. `elevation` (default 0)
     /// is the height of the top surface above the layer elevation.
@@ -143,9 +189,14 @@ pub enum Shape {
         elevation: Option<f64>,
     },
     /// Survey point with a Z value.
-    Locus3d { p: DVec3 },
+    Locus3d {
+        p: DVec3,
+    },
     /// Polygon or contour with a Z value per vertex.
-    Polyline3d { points: Vec<DVec3>, closed: bool },
+    Polyline3d {
+        points: Vec<DVec3>,
+        closed: bool,
+    },
     /// Terrain. The source data (3D points and 3D polygons) lives inside the site model.
     /// The TIN, contours and volumes are derived by `cadektor-site` and never saved.
     SiteModel {
@@ -157,11 +208,36 @@ pub enum Shape {
         settings: SiteSettings,
     },
     /// A pad or grade limits that change the proposed surface of the site models on the same layer.
-    SiteModifier { modifier: ModifierKind, boundary: Vec<Vertex> },
+    SiteModifier {
+        modifier: ModifierKind,
+        boundary: Vec<Vertex>,
+    },
     /// Viewport on a sheet layer: design layers at a scale. Coordinates are paper mm (see `sheets`).
     Viewport(Box<crate::sheets::Viewport>),
     /// Border, grid reference and title block on a sheet layer.
     TitleBlock(crate::sheets::TitleBlock),
+    /// A group. Its members have this object as their `parent`. The group has no drawing of its own.
+    Group {
+        #[serde(default)]
+        name: String,
+    },
+    /// An instance of a symbol definition (a resource). `at` is where the insertion point of the
+    /// definition goes. The instance is turned by `rotation` (radians) and scaled by `scale`
+    /// (in x, and in y too unless `scale_y` is set) about that point. A negative scale mirrors.
+    Symbol {
+        symbol: ResourceId,
+        at: DVec2,
+        #[serde(default)]
+        rotation: f64,
+        #[serde(default = "default_symbol_scale")]
+        scale: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_y: Option<f64>,
+    },
+}
+
+fn default_symbol_scale() -> f64 {
+    1.0
 }
 
 /// Default text height of a plant tag, in mm.
@@ -177,10 +253,12 @@ pub const LOCUS_MARKER_HALF: f64 = 100.0;
 /// Area of the XY projection of a polygon, in square model units.
 fn polygon_area_xy(points: &[DVec3]) -> f64 {
     let n = points.len();
-    let twice: f64 = (0..n).map(|i| {
-        let (a, b) = (points[i], points[(i + 1) % n]);
-        a.x * b.y - b.x * a.y
-    }).sum();
+    let twice: f64 = (0..n)
+        .map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
     twice.abs() / 2.0
 }
 
@@ -188,7 +266,11 @@ fn polygon_area_xy(points: &[DVec3]) -> f64 {
 /// An end angle below the start wraps around, so 270 degrees to 0 is a quarter turn.
 pub fn arc_sweep(start: f64, end: f64) -> f64 {
     let d = end - start;
-    if d.abs() >= std::f64::consts::TAU { std::f64::consts::TAU } else { d.rem_euclid(std::f64::consts::TAU) }
+    if d.abs() >= std::f64::consts::TAU {
+        std::f64::consts::TAU
+    } else {
+        d.rem_euclid(std::f64::consts::TAU)
+    }
 }
 
 impl Shape {
@@ -211,6 +293,8 @@ impl Shape {
             Shape::SiteModifier { .. } => "site_modifier",
             Shape::Viewport(_) => "viewport",
             Shape::TitleBlock(_) => "title_block",
+            Shape::Group { .. } => "group",
+            Shape::Symbol { .. } => "symbol",
         }
     }
 
@@ -218,7 +302,9 @@ impl Shape {
     pub fn vertices(&self) -> Option<&Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. }
+            | Shape::Hardscape { boundary, .. }
+            | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -226,7 +312,9 @@ impl Shape {
     pub fn vertices_mut(&mut self) -> Option<&mut Vec<Vertex>> {
         match self {
             Shape::Polyline { points, .. } => Some(points),
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => Some(boundary),
+            Shape::LandscapeArea { boundary, .. }
+            | Shape::Hardscape { boundary, .. }
+            | Shape::SiteModifier { boundary, .. } => Some(boundary),
             _ => None,
         }
     }
@@ -237,26 +325,79 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.problem().is_none(),
             Shape::TitleBlock(tb) => tb.problem().is_none(),
+            Shape::Group { .. } => true,
+            Shape::Symbol {
+                at,
+                rotation,
+                scale,
+                scale_y,
+                ..
+            } => {
+                v(at)
+                    && rotation.is_finite()
+                    && scale.is_finite()
+                    && scale_y.is_none_or(f64::is_finite)
+            }
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
-            Shape::SiteModel { points, lines, settings } => {
-                points.iter().all(|p| p.is_finite()) && lines.iter().all(|l| l.points.iter().all(|p| p.is_finite())) && settings.is_finite()
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            } => {
+                points.iter().all(|p| p.is_finite())
+                    && lines.iter().all(|l| l.points.iter().all(|p| p.is_finite()))
+                    && settings.is_finite()
             }
-            Shape::SiteModifier { modifier, boundary } => modifier.is_finite() && boundary.iter().all(Vertex::is_finite),
+            Shape::SiteModifier { modifier, boundary } => {
+                modifier.is_finite() && boundary.iter().all(Vertex::is_finite)
+            }
             Shape::Line { a, b } => v(a) && v(b),
             Shape::Rect { min, max } => v(min) && v(max),
             Shape::Circle { center, radius } => v(center) && radius.is_finite(),
-            Shape::Arc { center, radius, start, end } => v(center) && radius.is_finite() && start.is_finite() && end.is_finite(),
+            Shape::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => v(center) && radius.is_finite() && start.is_finite() && end.is_finite(),
             Shape::Text { at, height, .. } => v(at) && height.is_finite(),
-            Shape::Plant { at, spread, height, .. } => v(at) && spread.is_finite() && height.is_finite(),
-            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
-                v(at) && dbh.is_finite() && spread.is_finite() && height.is_finite() && rpz_factor.is_none_or(f64::is_finite) && rpz_cap.is_none_or(f64::is_finite)
+            Shape::Plant {
+                at, spread, height, ..
+            } => v(at) && spread.is_finite() && height.is_finite(),
+            Shape::ExistingTree {
+                at,
+                dbh,
+                spread,
+                height,
+                rpz_factor,
+                rpz_cap,
+                ..
+            } => {
+                v(at)
+                    && dbh.is_finite()
+                    && spread.is_finite()
+                    && height.is_finite()
+                    && rpz_factor.is_none_or(f64::is_finite)
+                    && rpz_cap.is_none_or(f64::is_finite)
             }
-            Shape::PlantTag { at, anchor, height, .. } => v(at) && v(anchor) && height.is_finite(),
-            Shape::Hardscape { boundary, thickness, elevation, .. } => {
-                boundary.iter().all(Vertex::is_finite) && thickness.is_none_or(f64::is_finite) && elevation.is_none_or(f64::is_finite)
+            Shape::PlantTag {
+                at, anchor, height, ..
+            } => v(at) && v(anchor) && height.is_finite(),
+            Shape::Hardscape {
+                boundary,
+                thickness,
+                elevation,
+                ..
+            } => {
+                boundary.iter().all(Vertex::is_finite)
+                    && thickness.is_none_or(f64::is_finite)
+                    && elevation.is_none_or(f64::is_finite)
             }
-            Shape::Polyline { points, .. } | Shape::LandscapeArea { boundary: points, .. } => points.iter().all(Vertex::is_finite),
+            Shape::Polyline { points, .. }
+            | Shape::LandscapeArea {
+                boundary: points, ..
+            } => points.iter().all(Vertex::is_finite),
         }
     }
 
@@ -275,13 +416,43 @@ impl Shape {
         };
         match self {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
-            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
+            Shape::Symbol {
+                at,
+                rotation,
+                scale,
+                scale_y,
+                ..
+            } => {
+                v(at);
+                [*rotation, *scale]
+                    .into_iter()
+                    .chain(scale_y.iter().copied())
+                    .for_each(&mut *f);
+            }
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
-            Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
-            Shape::SiteModel { points, lines, settings } => {
-                points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f));
-                lines.iter().flat_map(|l| &l.points).for_each(|p| p.to_array().into_iter().for_each(&mut *f));
-                [settings.minor_interval, settings.major_interval, settings.datum].into_iter().for_each(&mut *f);
+            Shape::Polyline3d { points, .. } => points
+                .iter()
+                .for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            } => {
+                points
+                    .iter()
+                    .for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                lines
+                    .iter()
+                    .flat_map(|l| &l.points)
+                    .for_each(|p| p.to_array().into_iter().for_each(&mut *f));
+                [
+                    settings.minor_interval,
+                    settings.major_interval,
+                    settings.datum,
+                ]
+                .into_iter()
+                .for_each(&mut *f);
             }
             Shape::SiteModifier { modifier, boundary } => {
                 modifier.numbers().into_iter().for_each(&mut *f);
@@ -299,7 +470,12 @@ impl Shape {
                 v(center);
                 f(*radius);
             }
-            Shape::Arc { center, radius, start, end } => {
+            Shape::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => {
                 v(center);
                 [*radius, *start, *end].into_iter().for_each(&mut *f);
             }
@@ -307,25 +483,49 @@ impl Shape {
                 v(at);
                 f(*height);
             }
-            Shape::Plant { at, spread, height, .. } => {
+            Shape::Plant {
+                at, spread, height, ..
+            } => {
                 v(at);
                 f(*spread);
                 f(*height);
             }
-            Shape::ExistingTree { at, dbh, spread, height, rpz_factor, rpz_cap, .. } => {
+            Shape::ExistingTree {
+                at,
+                dbh,
+                spread,
+                height,
+                rpz_factor,
+                rpz_cap,
+                ..
+            } => {
                 v(at);
-                [*dbh, *spread, *height].into_iter().chain(rpz_factor.iter().copied()).chain(rpz_cap.iter().copied()).for_each(&mut *f);
+                [*dbh, *spread, *height]
+                    .into_iter()
+                    .chain(rpz_factor.iter().copied())
+                    .chain(rpz_cap.iter().copied())
+                    .for_each(&mut *f);
             }
-            Shape::PlantTag { at, anchor, height, .. } => {
+            Shape::PlantTag {
+                at, anchor, height, ..
+            } => {
                 v(at);
                 v(anchor);
                 f(*height);
             }
-            Shape::Hardscape { boundary, thickness, elevation, .. } => {
+            Shape::Hardscape {
+                boundary,
+                thickness,
+                elevation,
+                ..
+            } => {
                 boundary.iter().for_each(|x| vertex(x, f));
                 thickness.iter().chain(elevation.iter()).for_each(|x| f(*x));
             }
-            Shape::Polyline { points, .. } | Shape::LandscapeArea { boundary: points, .. } => points.iter().for_each(|x| vertex(x, f)),
+            Shape::Polyline { points, .. }
+            | Shape::LandscapeArea {
+                boundary: points, ..
+            } => points.iter().for_each(|x| vertex(x, f)),
         }
     }
 
@@ -346,6 +546,8 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.translate(d),
             Shape::TitleBlock(tb) => tb.translate(d),
+            Shape::Group { .. } => {}
+            Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
                 p.x += d.x;
                 p.y += d.y;
@@ -355,10 +557,13 @@ impl Shape {
                 p.y += d.y;
             }),
             Shape::SiteModel { points, lines, .. } => {
-                points.iter_mut().chain(lines.iter_mut().flat_map(|l| l.points.iter_mut())).for_each(|p| {
-                    p.x += d.x;
-                    p.y += d.y;
-                });
+                points
+                    .iter_mut()
+                    .chain(lines.iter_mut().flat_map(|l| l.points.iter_mut()))
+                    .for_each(|p| {
+                        p.x += d.x;
+                        p.y += d.y;
+                    });
             }
             Shape::Line { a, b } => {
                 mv(a);
@@ -369,15 +574,23 @@ impl Shape {
                 mv(max);
             }
             Shape::Circle { center, .. } | Shape::Arc { center, .. } => mv(center),
-            Shape::Text { at, .. } | Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => mv(at),
+            Shape::Text { at, .. } | Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => {
+                mv(at)
+            }
             Shape::PlantTag { at, anchor, .. } => {
                 mv(at);
                 mv(anchor);
             }
             Shape::Polyline { points, .. }
-            | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::SiteModifier { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => points.iter_mut().for_each(|x| mv(&mut x.p)),
+            | Shape::LandscapeArea {
+                boundary: points, ..
+            }
+            | Shape::SiteModifier {
+                boundary: points, ..
+            }
+            | Shape::Hardscape {
+                boundary: points, ..
+            } => points.iter_mut().for_each(|x| mv(&mut x.p)),
         }
     }
 
@@ -392,25 +605,43 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => (vp.min, vp.max),
             Shape::TitleBlock(tb) => tb.bounds(),
+            // The size of these depends on the document. See `Document::object_bounds`.
+            Shape::Group { .. } => from_points(&[]),
+            Shape::Symbol { at, .. } => (*at, *at),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
             }
             Shape::SiteModel { points, lines, .. } => {
-                let all: Vec<DVec2> = points.iter().chain(lines.iter().flat_map(|l| &l.points)).map(|p| p.truncate()).collect();
+                let all: Vec<DVec2> = points
+                    .iter()
+                    .chain(lines.iter().flat_map(|l| &l.points))
+                    .map(|p| p.truncate())
+                    .collect();
                 from_points(&all)
             }
             Shape::Line { a, b } => from_points(&[*a, *b]),
             Shape::Rect { min, max } => from_points(&[*min, *max]),
-            Shape::Circle { center, radius } => (*center - DVec2::splat(*radius), *center + DVec2::splat(*radius)),
-            Shape::Arc { center, radius, start, end } => {
+            Shape::Circle { center, radius } => (
+                *center - DVec2::splat(*radius),
+                *center + DVec2::splat(*radius),
+            ),
+            Shape::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => {
                 // The arc touches its endpoints, and each axis extreme that lies within the sweep.
                 let sweep = arc_sweep(*start, *end);
                 let mut pts = vec![
                     *center + DVec2::from_angle(*start) * *radius,
                     *center + DVec2::from_angle(*start + sweep) * *radius,
                 ];
-                for (k, axis) in [DVec2::X, DVec2::Y, DVec2::NEG_X, DVec2::NEG_Y].into_iter().enumerate() {
+                for (k, axis) in [DVec2::X, DVec2::Y, DVec2::NEG_X, DVec2::NEG_Y]
+                    .into_iter()
+                    .enumerate()
+                {
                     let angle = k as f64 * std::f64::consts::FRAC_PI_2;
                     if (angle - start).rem_euclid(std::f64::consts::TAU) <= sweep {
                         pts.push(*center + axis * *radius);
@@ -426,18 +657,34 @@ impl Shape {
                 let r = DVec2::splat(spread / 2.0);
                 (*at - r, *at + r)
             }
-            Shape::ExistingTree { at, spread, dbh, rpz_factor, rpz_cap, .. } => {
-                let r = DVec2::splat((spread / 2.0).max(tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap)));
+            Shape::ExistingTree {
+                at,
+                spread,
+                dbh,
+                rpz_factor,
+                rpz_cap,
+                ..
+            } => {
+                let r =
+                    DVec2::splat((spread / 2.0).max(tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap)));
                 (*at - r, *at + r)
             }
-            Shape::PlantTag { at, anchor, height, .. } => {
+            Shape::PlantTag {
+                at, anchor, height, ..
+            } => {
                 // The label is about eight characters wide.
                 from_points(&[*at, *at + DVec2::new(*height * 0.6 * 8.0, *height), *anchor])
             }
             Shape::Polyline { points, closed } => curve::bounds(points, *closed),
-            Shape::LandscapeArea { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. }
-            | Shape::SiteModifier { boundary: points, .. } => curve::bounds(points, true),
+            Shape::LandscapeArea {
+                boundary: points, ..
+            }
+            | Shape::Hardscape {
+                boundary: points, ..
+            }
+            | Shape::SiteModifier {
+                boundary: points, ..
+            } => curve::bounds(points, true),
         }
     }
 
@@ -446,11 +693,23 @@ impl Shape {
         match self {
             Shape::Rect { min, max } => Some(((max.x - min.x) * (max.y - min.y)).abs()),
             Shape::Circle { radius, .. } => Some(std::f64::consts::PI * radius * radius),
-            Shape::Polyline3d { points, closed: true } => Some(polygon_area_xy(points)),
-            Shape::Polyline { points, closed: true }
-            | Shape::LandscapeArea { boundary: points, .. }
-            | Shape::SiteModifier { boundary: points, .. }
-            | Shape::Hardscape { boundary: points, .. } => Some(curve::area(points)),
+            Shape::Polyline3d {
+                points,
+                closed: true,
+            } => Some(polygon_area_xy(points)),
+            Shape::Polyline {
+                points,
+                closed: true,
+            }
+            | Shape::LandscapeArea {
+                boundary: points, ..
+            }
+            | Shape::SiteModifier {
+                boundary: points, ..
+            }
+            | Shape::Hardscape {
+                boundary: points, ..
+            } => Some(curve::area(points)),
             _ => None,
         }
     }
@@ -474,7 +733,15 @@ pub struct Object {
 
 impl Object {
     pub fn new(id: ObjectId, layer: LayerId, class: ClassId, shape: Shape) -> Self {
-        Object { id, layer, class, shape, attrs: Attributes::default(), data: BTreeMap::new(), parent: None }
+        Object {
+            id,
+            layer,
+            class,
+            shape,
+            attrs: Attributes::default(),
+            data: BTreeMap::new(),
+            parent: None,
+        }
     }
 
     /// True if every number in the object is finite.
@@ -630,6 +897,7 @@ impl Default for Document {
                     pen: Some(Color::BLACK),
                     fill: Some(Color::NONE),
                     line_weight: Some(0.25),
+                    ..Attributes::default()
                 },
             }],
             objects: Objects::new(),
@@ -662,7 +930,8 @@ impl Document {
             return Err(LoadError::Newer(version));
         }
         migrate(&mut value, version)?;
-        let mut doc: Document = serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
+        let mut doc: Document =
+            serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.validate().map_err(LoadError::Invalid)?;
         Ok(doc)
     }
@@ -706,29 +975,47 @@ impl Document {
         if self.layers.is_empty() {
             return Err("document has no layers".into());
         }
-        if let Some(l) = self.layers.iter().find(|l| l.elevation.is_nan() || l.elevation.abs() > MAX_COORD) {
+        if let Some(l) = self
+            .layers
+            .iter()
+            .find(|l| l.elevation.is_nan() || l.elevation.abs() > MAX_COORD)
+        {
             return Err(format!("layer {} has an elevation out of range", l.id));
         }
-        if let Some(o) = self.objects.values().find(|o| self.layer(o.layer).is_none() || self.class(o.class).is_none()) {
-            return Err(format!("object {} refers to a missing layer or class", o.id));
+        if let Some(o) = self
+            .objects
+            .values()
+            .find(|o| self.layer(o.layer).is_none() || self.class(o.class).is_none())
+        {
+            return Err(format!(
+                "object {} refers to a missing layer or class",
+                o.id
+            ));
         }
         if let Some(o) = self.objects.values().find(|o| {
             !o.is_finite()
                 || !o.shape.is_in_range()
                 || !o.shape.has_valid_thickness()
                 || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
-                || o.shape.vertices().is_some_and(|vs| vs.iter().any(|v| matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0)))
+                || o.shape.vertices().is_some_and(|vs| {
+                    vs.iter()
+                        .any(|v| matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0))
+                })
         }) {
             return Err(format!("object {} has an invalid shape", o.id));
         }
         if let Some(o) = self.objects.values().find(|o| {
-            let sheet = self.layer(o.layer).is_some_and(|l| l.kind == LayerKind::Sheet);
+            let sheet = self
+                .layer(o.layer)
+                .is_some_and(|l| l.kind == LayerKind::Sheet);
             let paper_only = matches!(o.shape, Shape::Viewport(_) | Shape::TitleBlock(_));
             (sheet && !crate::sheets::allowed_on_sheet(&o.shape)) || (paper_only && !sheet)
         }) {
             return Err(format!("object {} is on the wrong kind of layer", o.id));
         }
         self.resources.validate()?;
+        crate::symbols::repair_edits(self);
+        crate::group::check_tree(self)?;
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {
             return Err("active layer or class does not exist".into());
         }
@@ -759,18 +1046,19 @@ impl Document {
     /// Effective attributes: object overrides, then class defaults.
     pub fn resolved_attrs(&self, obj: &Object) -> Attributes {
         let class = self.class(obj.class).map(|c| &c.attrs);
-        Attributes {
-            pen: obj.attrs.pen.or(class.and_then(|c| c.pen)),
-            fill: obj.attrs.fill.or(class.and_then(|c| c.fill)),
-            line_weight: obj.attrs.line_weight.or(class.and_then(|c| c.line_weight)),
+        match class {
+            Some(c) => obj.attrs.over(c),
+            None => obj.attrs.clone(),
         }
     }
 
     /// True if the object shows in the model: its design layer and class are visible.
     /// Objects on sheet layers are paper space and never show in the model (see `is_shown`).
     pub fn is_visible(&self, obj: &Object) -> bool {
-        self.layer(obj.layer).is_some_and(|l| l.visible && l.kind == LayerKind::Design)
+        self.layer(obj.layer)
+            .is_some_and(|l| l.visible && l.kind == LayerKind::Design)
             && self.class(obj.class).is_some_and(|c| c.visible)
+            && !crate::symbols::is_being_edited(obj)
     }
 
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
@@ -781,7 +1069,9 @@ impl Document {
 
     /// True if the layer and the class of the object are visible, on any kind of layer.
     pub fn is_shown(&self, obj: &Object) -> bool {
-        self.layer(obj.layer).is_some_and(|l| l.visible) && self.class(obj.class).is_some_and(|c| c.visible)
+        self.layer(obj.layer).is_some_and(|l| l.visible)
+            && self.class(obj.class).is_some_and(|c| c.visible)
+            && !crate::symbols::is_being_edited(obj)
     }
 }
 
@@ -813,17 +1103,84 @@ mod tests {
     #[test]
     fn shape_kinds() {
         let cases = [
-            (Shape::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) }, "line"),
-            (Shape::Rect { min: v(0.0, 0.0), max: v(1.0, 1.0) }, "rect"),
-            (Shape::Circle { center: v(0.0, 0.0), radius: 1.0 }, "circle"),
-            (Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: 0.0, end: 1.0 }, "arc"),
-            (Shape::Polyline { points: crate::curve::corners(&[]), closed: false }, "polyline"),
-            (Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: 1.0 }, "text"),
-            (Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: 1.0 }, "plant"),
-            (Shape::LandscapeArea { boundary: crate::curve::corners(&[]), name: "n".into() }, "landscape_area"),
-            (Shape::Hardscape { boundary: crate::curve::corners(&[]), material: "m".into(), thickness: None, elevation: None }, "hardscape"),
+            (
+                Shape::Line {
+                    a: v(0.0, 0.0),
+                    b: v(1.0, 1.0),
+                },
+                "line",
+            ),
+            (
+                Shape::Rect {
+                    min: v(0.0, 0.0),
+                    max: v(1.0, 1.0),
+                },
+                "rect",
+            ),
+            (
+                Shape::Circle {
+                    center: v(0.0, 0.0),
+                    radius: 1.0,
+                },
+                "circle",
+            ),
+            (
+                Shape::Arc {
+                    center: v(0.0, 0.0),
+                    radius: 1.0,
+                    start: 0.0,
+                    end: 1.0,
+                },
+                "arc",
+            ),
+            (
+                Shape::Polyline {
+                    points: crate::curve::corners(&[]),
+                    closed: false,
+                },
+                "polyline",
+            ),
+            (
+                Shape::Text {
+                    at: v(0.0, 0.0),
+                    text: "t".into(),
+                    height: 1.0,
+                },
+                "text",
+            ),
+            (
+                Shape::Plant {
+                    at: v(0.0, 0.0),
+                    species: "s".into(),
+                    spread: 1.0,
+                    height: 1.0,
+                },
+                "plant",
+            ),
+            (
+                Shape::LandscapeArea {
+                    boundary: crate::curve::corners(&[]),
+                    name: "n".into(),
+                },
+                "landscape_area",
+            ),
+            (
+                Shape::Hardscape {
+                    boundary: crate::curve::corners(&[]),
+                    material: "m".into(),
+                    thickness: None,
+                    elevation: None,
+                },
+                "hardscape",
+            ),
             (Shape::Locus3d { p: DVec3::ZERO }, "locus3d"),
-            (Shape::Polyline3d { points: vec![], closed: false }, "polyline3d"),
+            (
+                Shape::Polyline3d {
+                    points: vec![],
+                    closed: false,
+                },
+                "polyline3d",
+            ),
         ];
         for (shape, kind) in cases {
             assert_eq!(shape.kind(), kind);
@@ -834,15 +1191,49 @@ mod tests {
     fn translate_moves_every_point_of_every_shape() {
         let d = v(1.0, -2.0);
         let mut shapes = vec![
-            Shape::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) },
-            Shape::Rect { min: v(0.0, 0.0), max: v(2.0, 2.0) },
-            Shape::Circle { center: v(5.0, 5.0), radius: 1.0 },
-            Shape::Arc { center: v(5.0, 5.0), radius: 1.0, start: 0.0, end: 1.0 },
-            Shape::Polyline { points: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0)]), closed: true },
-            Shape::Text { at: v(3.0, 3.0), text: "x".into(), height: 2.0 },
-            Shape::Plant { at: v(3.0, 3.0), species: "x".into(), spread: 2.0, height: 2.0 },
-            Shape::LandscapeArea { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), name: "a".into() },
-            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]), material: "m".into(), thickness: None, elevation: None },
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(1.0, 1.0),
+            },
+            Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(2.0, 2.0),
+            },
+            Shape::Circle {
+                center: v(5.0, 5.0),
+                radius: 1.0,
+            },
+            Shape::Arc {
+                center: v(5.0, 5.0),
+                radius: 1.0,
+                start: 0.0,
+                end: 1.0,
+            },
+            Shape::Polyline {
+                points: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0)]),
+                closed: true,
+            },
+            Shape::Text {
+                at: v(3.0, 3.0),
+                text: "x".into(),
+                height: 2.0,
+            },
+            Shape::Plant {
+                at: v(3.0, 3.0),
+                species: "x".into(),
+                spread: 2.0,
+                height: 2.0,
+            },
+            Shape::LandscapeArea {
+                boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]),
+                name: "a".into(),
+            },
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)]),
+                material: "m".into(),
+                thickness: None,
+                elevation: None,
+            },
         ];
         for s in &mut shapes {
             let before = s.bounds();
@@ -851,116 +1242,351 @@ mod tests {
             assert_vec_close(after.0, before.0 + d);
             assert_vec_close(after.1, before.1 + d);
         }
-        let mut c = Shape::Circle { center: v(5.0, 5.0), radius: 1.0 };
+        let mut c = Shape::Circle {
+            center: v(5.0, 5.0),
+            radius: 1.0,
+        };
         c.translate(d);
-        assert_eq!(c, Shape::Circle { center: v(6.0, 3.0), radius: 1.0 });
-        let mut r = Shape::Rect { min: v(0.0, 0.0), max: v(2.0, 2.0) };
+        assert_eq!(
+            c,
+            Shape::Circle {
+                center: v(6.0, 3.0),
+                radius: 1.0
+            }
+        );
+        let mut r = Shape::Rect {
+            min: v(0.0, 0.0),
+            max: v(2.0, 2.0),
+        };
         r.translate(d);
-        assert_eq!(r, Shape::Rect { min: v(1.0, -2.0), max: v(3.0, 0.0) });
-        let mut l = Shape::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) };
+        assert_eq!(
+            r,
+            Shape::Rect {
+                min: v(1.0, -2.0),
+                max: v(3.0, 0.0)
+            }
+        );
+        let mut l = Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(1.0, 1.0),
+        };
         l.translate(d);
-        assert_eq!(l, Shape::Line { a: v(1.0, -2.0), b: v(2.0, -1.0) });
-        let mut t = Shape::Text { at: v(3.0, 3.0), text: "x".into(), height: 2.0 };
+        assert_eq!(
+            l,
+            Shape::Line {
+                a: v(1.0, -2.0),
+                b: v(2.0, -1.0)
+            }
+        );
+        let mut t = Shape::Text {
+            at: v(3.0, 3.0),
+            text: "x".into(),
+            height: 2.0,
+        };
         t.translate(d);
-        assert_eq!(t, Shape::Text { at: v(4.0, 1.0), text: "x".into(), height: 2.0 });
+        assert_eq!(
+            t,
+            Shape::Text {
+                at: v(4.0, 1.0),
+                text: "x".into(),
+                height: 2.0
+            }
+        );
     }
 
     #[test]
     fn locus3d_and_polyline3d_translate_in_xy_only() {
-        let mut l = Shape::Locus3d { p: DVec3::new(1.0, 2.0, 3.0) };
+        let mut l = Shape::Locus3d {
+            p: DVec3::new(1.0, 2.0, 3.0),
+        };
         l.translate(v(10.0, -1.0));
-        assert_eq!(l, Shape::Locus3d { p: DVec3::new(11.0, 1.0, 3.0) });
-        let mut p = Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 5.0), DVec3::new(1.0, 1.0, 6.0)], closed: false };
+        assert_eq!(
+            l,
+            Shape::Locus3d {
+                p: DVec3::new(11.0, 1.0, 3.0)
+            }
+        );
+        let mut p = Shape::Polyline3d {
+            points: vec![DVec3::new(0.0, 0.0, 5.0), DVec3::new(1.0, 1.0, 6.0)],
+            closed: false,
+        };
         p.translate(v(1.0, 2.0));
-        assert_eq!(p, Shape::Polyline3d { points: vec![DVec3::new(1.0, 2.0, 5.0), DVec3::new(2.0, 3.0, 6.0)], closed: false });
+        assert_eq!(
+            p,
+            Shape::Polyline3d {
+                points: vec![DVec3::new(1.0, 2.0, 5.0), DVec3::new(2.0, 3.0, 6.0)],
+                closed: false
+            }
+        );
     }
 
     #[test]
     fn locus3d_and_polyline3d_bounds_ignore_z() {
-        let (lo, hi) = Shape::Locus3d { p: DVec3::new(4.0, -2.0, 99.0) }.bounds();
+        let (lo, hi) = Shape::Locus3d {
+            p: DVec3::new(4.0, -2.0, 99.0),
+        }
+        .bounds();
         assert_eq!((lo, hi), (v(4.0, -2.0), v(4.0, -2.0)));
-        let pts = vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, -1.0, 50.0), DVec3::new(2.0, 6.0, -3.0)];
-        assert_eq!(Shape::Polyline3d { points: pts, closed: true }.bounds(), (v(0.0, -1.0), v(4.0, 6.0)));
+        let pts = vec![
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(4.0, -1.0, 50.0),
+            DVec3::new(2.0, 6.0, -3.0),
+        ];
+        assert_eq!(
+            Shape::Polyline3d {
+                points: pts,
+                closed: true
+            }
+            .bounds(),
+            (v(0.0, -1.0), v(4.0, 6.0))
+        );
     }
 
     #[test]
     fn polyline3d_area_is_the_xy_area_when_closed() {
-        let sq = vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(3.0, 0.0, 9.0), DVec3::new(3.0, 3.0, 2.0), DVec3::new(0.0, 3.0, 0.0)];
-        assert_eq!(Shape::Polyline3d { points: sq.clone(), closed: true }.area(), Some(9.0));
+        let sq = vec![
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(3.0, 0.0, 9.0),
+            DVec3::new(3.0, 3.0, 2.0),
+            DVec3::new(0.0, 3.0, 0.0),
+        ];
+        assert_eq!(
+            Shape::Polyline3d {
+                points: sq.clone(),
+                closed: true
+            }
+            .area(),
+            Some(9.0)
+        );
         let cw: Vec<DVec3> = sq.iter().rev().copied().collect();
-        assert_eq!(Shape::Polyline3d { points: cw, closed: true }.area(), Some(9.0));
-        assert_eq!(Shape::Polyline3d { points: sq, closed: false }.area(), None);
+        assert_eq!(
+            Shape::Polyline3d {
+                points: cw,
+                closed: true
+            }
+            .area(),
+            Some(9.0)
+        );
+        assert_eq!(
+            Shape::Polyline3d {
+                points: sq,
+                closed: false
+            }
+            .area(),
+            None
+        );
         assert_eq!(Shape::Locus3d { p: DVec3::ZERO }.area(), None);
     }
 
     #[test]
     fn locus3d_and_polyline3d_finite_range_and_serde() {
-        let ok = Shape::Locus3d { p: DVec3::new(1.0, 2.0, 3.0) };
+        let ok = Shape::Locus3d {
+            p: DVec3::new(1.0, 2.0, 3.0),
+        };
         assert!(ok.is_finite() && ok.is_in_range());
-        assert!(!Shape::Locus3d { p: DVec3::new(0.0, 0.0, f64::NAN) }.is_finite());
-        assert!(!Shape::Locus3d { p: DVec3::new(0.0, 0.0, 2.0 * MAX_COORD) }.is_in_range());
-        let far = Shape::Polyline3d { points: vec![DVec3::ZERO, DVec3::new(0.0, 0.0, -2.0 * MAX_COORD)], closed: false };
+        assert!(
+            !Shape::Locus3d {
+                p: DVec3::new(0.0, 0.0, f64::NAN)
+            }
+            .is_finite()
+        );
+        assert!(
+            !Shape::Locus3d {
+                p: DVec3::new(0.0, 0.0, 2.0 * MAX_COORD)
+            }
+            .is_in_range()
+        );
+        let far = Shape::Polyline3d {
+            points: vec![DVec3::ZERO, DVec3::new(0.0, 0.0, -2.0 * MAX_COORD)],
+            closed: false,
+        };
         assert!(far.is_finite() && !far.is_in_range());
-        assert!(!Shape::Polyline3d { points: vec![DVec3::new(f64::INFINITY, 0.0, 0.0)], closed: false }.is_finite());
+        assert!(
+            !Shape::Polyline3d {
+                points: vec![DVec3::new(f64::INFINITY, 0.0, 0.0)],
+                closed: false
+            }
+            .is_finite()
+        );
         let j = serde_json::to_value(&ok).unwrap();
-        assert_eq!(j, serde_json::json!({"kind": "locus3d", "p": [1.0, 2.0, 3.0]}));
-        let pl = Shape::Polyline3d { points: vec![DVec3::new(0.0, 1.0, 2.0)], closed: true };
+        assert_eq!(
+            j,
+            serde_json::json!({"kind": "locus3d", "p": [1.0, 2.0, 3.0]})
+        );
+        let pl = Shape::Polyline3d {
+            points: vec![DVec3::new(0.0, 1.0, 2.0)],
+            closed: true,
+        };
         let j = serde_json::to_value(&pl).unwrap();
-        assert_eq!(j, serde_json::json!({"kind": "polyline3d", "points": [[0.0, 1.0, 2.0]], "closed": true}));
+        assert_eq!(
+            j,
+            serde_json::json!({"kind": "polyline3d", "points": [[0.0, 1.0, 2.0]], "closed": true})
+        );
         assert_eq!(serde_json::from_value::<Shape>(j).unwrap(), pl);
     }
 
     #[test]
     fn bounds_of_every_shape() {
-        let (lo, hi) = Shape::Line { a: v(3.0, -1.0), b: v(-2.0, 5.0) }.bounds();
+        let (lo, hi) = Shape::Line {
+            a: v(3.0, -1.0),
+            b: v(-2.0, 5.0),
+        }
+        .bounds();
         assert_eq!((lo, hi), (v(-2.0, -1.0), v(3.0, 5.0)));
 
         // A rect with min above max still gives a normalized box.
-        let (lo, hi) = Shape::Rect { min: v(5.0, 5.0), max: v(1.0, 2.0) }.bounds();
+        let (lo, hi) = Shape::Rect {
+            min: v(5.0, 5.0),
+            max: v(1.0, 2.0),
+        }
+        .bounds();
         assert_eq!((lo, hi), (v(1.0, 2.0), v(5.0, 5.0)));
 
-        let (lo, hi) = Shape::Circle { center: v(1.0, 1.0), radius: 2.0 }.bounds();
+        let (lo, hi) = Shape::Circle {
+            center: v(1.0, 1.0),
+            radius: 2.0,
+        }
+        .bounds();
         assert_eq!((lo, hi), (v(-1.0, -1.0), v(3.0, 3.0)));
 
         // An arc of 1 radian (less than a quarter turn) from angle 0 touches only the +X extreme.
-        let (lo, hi) = Shape::Arc { center: v(0.0, 0.0), radius: 4.0, start: 0.0, end: 1.0 }.bounds();
+        let (lo, hi) = Shape::Arc {
+            center: v(0.0, 0.0),
+            radius: 4.0,
+            start: 0.0,
+            end: 1.0,
+        }
+        .bounds();
         assert_vec_close(lo, v(4.0 * 1f64.cos(), 0.0));
         assert_vec_close(hi, v(4.0, 4.0 * 1f64.sin()));
 
         // Text width is 0.6 * height per character, counted in chars not bytes.
-        let (lo, hi) = Shape::Text { at: v(1.0, 2.0), text: "héé".into(), height: 10.0 }.bounds();
+        let (lo, hi) = Shape::Text {
+            at: v(1.0, 2.0),
+            text: "héé".into(),
+            height: 10.0,
+        }
+        .bounds();
         assert_vec_close(lo, v(1.0, 2.0));
         assert_vec_close(hi, v(1.0 + 18.0, 12.0));
 
-        let (lo, hi) = Shape::Plant { at: v(10.0, 10.0), species: "Oak".into(), spread: 4.0, height: 8.0 }.bounds();
+        let (lo, hi) = Shape::Plant {
+            at: v(10.0, 10.0),
+            species: "Oak".into(),
+            spread: 4.0,
+            height: 8.0,
+        }
+        .bounds();
         assert_eq!((lo, hi), (v(8.0, 8.0), v(12.0, 12.0)));
 
         let poly = vec![v(0.0, 0.0), v(4.0, -1.0), v(2.0, 6.0)];
         let expected = (v(0.0, -1.0), v(4.0, 6.0));
-        assert_eq!(Shape::Polyline { points: crate::curve::corners(&poly.clone()), closed: false }.bounds(), expected);
-        assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&poly.clone()), name: "a".into() }.bounds(), expected);
-        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&poly), material: "m".into(), thickness: None, elevation: None }.bounds(), expected);
+        assert_eq!(
+            Shape::Polyline {
+                points: crate::curve::corners(&poly.clone()),
+                closed: false
+            }
+            .bounds(),
+            expected
+        );
+        assert_eq!(
+            Shape::LandscapeArea {
+                boundary: crate::curve::corners(&poly.clone()),
+                name: "a".into()
+            }
+            .bounds(),
+            expected
+        );
+        assert_eq!(
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&poly),
+                material: "m".into(),
+                thickness: None,
+                elevation: None
+            }
+            .bounds(),
+            expected
+        );
     }
 
     #[test]
     fn area_of_closed_shapes() {
-        assert_eq!(Shape::Rect { min: v(0.0, 0.0), max: v(4.0, -3.0) }.area(), Some(12.0));
-        let circle = Shape::Circle { center: v(0.0, 0.0), radius: 2.0 }.area().unwrap();
+        assert_eq!(
+            Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(4.0, -3.0)
+            }
+            .area(),
+            Some(12.0)
+        );
+        let circle = Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 2.0,
+        }
+        .area()
+        .unwrap();
         assert!((circle - 4.0 * std::f64::consts::PI).abs() < 1e-9);
 
         let square = vec![v(0.0, 0.0), v(3.0, 0.0), v(3.0, 3.0), v(0.0, 3.0)];
-        assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: true }.area(), Some(9.0));
-        assert_eq!(Shape::Polyline { points: crate::curve::corners(&square.clone()), closed: false }.area(), None);
-        assert_eq!(Shape::Hardscape { boundary: crate::curve::corners(&square.clone()), material: "m".into(), thickness: None, elevation: None }.area(), Some(9.0));
+        assert_eq!(
+            Shape::Polyline {
+                points: crate::curve::corners(&square.clone()),
+                closed: true
+            }
+            .area(),
+            Some(9.0)
+        );
+        assert_eq!(
+            Shape::Polyline {
+                points: crate::curve::corners(&square.clone()),
+                closed: false
+            }
+            .area(),
+            None
+        );
+        assert_eq!(
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&square.clone()),
+                material: "m".into(),
+                thickness: None,
+                elevation: None
+            }
+            .area(),
+            Some(9.0)
+        );
 
         let tri = vec![v(0.0, 0.0), v(4.0, 0.0), v(0.0, 3.0)];
-        assert_eq!(Shape::LandscapeArea { boundary: crate::curve::corners(&tri), name: "t".into() }.area(), Some(6.0));
+        assert_eq!(
+            Shape::LandscapeArea {
+                boundary: crate::curve::corners(&tri),
+                name: "t".into()
+            }
+            .area(),
+            Some(6.0)
+        );
 
         let open_shapes = [
-            Shape::Line { a: v(0.0, 0.0), b: v(1.0, 0.0) },
-            Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: 0.0, end: 1.0 },
-            Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: 1.0 },
-            Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: 1.0 },
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(1.0, 0.0),
+            },
+            Shape::Arc {
+                center: v(0.0, 0.0),
+                radius: 1.0,
+                start: 0.0,
+                end: 1.0,
+            },
+            Shape::Text {
+                at: v(0.0, 0.0),
+                text: "t".into(),
+                height: 1.0,
+            },
+            Shape::Plant {
+                at: v(0.0, 0.0),
+                species: "s".into(),
+                spread: 1.0,
+                height: 1.0,
+            },
         ];
         for s in open_shapes {
             assert_eq!(s.area(), None, "{}", s.kind());
@@ -985,7 +1611,10 @@ mod tests {
         let mut doc = Document::default();
         assert_eq!(doc.alloc_id(), Some(2));
         assert_eq!(doc.alloc_id(), Some(3));
-        let o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        let o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
         doc.objects.insert(o.id, o);
         assert_eq!(doc.object(ObjectId(7)).unwrap().id, ObjectId(7));
         doc.object_mut(ObjectId(7)).unwrap().layer = LayerId(9);
@@ -1000,11 +1629,19 @@ mod tests {
             id: ClassId(5),
             name: "Trees".into(),
             visible: true,
-            attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([1, 2, 3, 255])), line_weight: Some(0.5) },
+            attrs: Attributes {
+                pen: Some(Color([0, 128, 0, 255])),
+                fill: Some(Color([1, 2, 3, 255])),
+                line_weight: Some(0.5),
+                ..Default::default()
+            },
         });
 
         // No object overrides: every value comes from the class.
-        let mut o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        let mut o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
         o.class = ClassId(5);
         let a = doc.resolved_attrs(&o);
         assert_eq!(a.pen, Some(Color([0, 128, 0, 255])));
@@ -1012,7 +1649,12 @@ mod tests {
         assert_eq!(a.line_weight, Some(0.5));
 
         // Object overrides win per field; unset fields still come from the class.
-        o.attrs = Attributes { pen: Some(Color::BLACK), fill: None, line_weight: Some(2.0) };
+        o.attrs = Attributes {
+            pen: Some(Color::BLACK),
+            fill: None,
+            line_weight: Some(2.0),
+            ..Default::default()
+        };
         let a = doc.resolved_attrs(&o);
         assert_eq!(a.pen, Some(Color::BLACK));
         assert_eq!(a.fill, Some(Color([1, 2, 3, 255])));
@@ -1027,7 +1669,10 @@ mod tests {
     #[test]
     fn is_visible_respects_layer_and_class_visibility() {
         let mut doc = Document::default();
-        let o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        let o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
         assert!(doc.is_visible(&o));
 
         doc.layers[0].visible = false;
@@ -1040,10 +1685,16 @@ mod tests {
 
         let mut orphan = o.clone();
         orphan.layer = LayerId(42);
-        assert!(!doc.is_visible(&orphan), "object on a missing layer is hidden");
+        assert!(
+            !doc.is_visible(&orphan),
+            "object on a missing layer is hidden"
+        );
         let mut orphan = o;
         orphan.class = ClassId(42);
-        assert!(!doc.is_visible(&orphan), "object with a missing class is hidden");
+        assert!(
+            !doc.is_visible(&orphan),
+            "object with a missing class is hidden"
+        );
     }
 
     // ---- regression tests for the review fixes ----
@@ -1051,7 +1702,15 @@ mod tests {
     #[test]
     fn arc_bounds_cover_endpoints_and_axis_extremes_inside_the_sweep() {
         let pi = std::f64::consts::PI;
-        let arc = |start, end| Shape::Arc { center: v(1.0, 2.0), radius: 10.0, start, end }.bounds();
+        let arc = |start, end| {
+            Shape::Arc {
+                center: v(1.0, 2.0),
+                radius: 10.0,
+                start,
+                end,
+            }
+            .bounds()
+        };
         // Half circle over the top: touches +X, +Y and -X.
         let (lo, hi) = arc(0.0, pi);
         assert_vec_close(lo, v(-9.0, 2.0));
@@ -1065,7 +1724,11 @@ mod tests {
         assert_vec_close(hi, v(11.0, 2.0 + 10.0 * (pi / 3.0).sin()));
         assert_vec_close(lo, v(1.0 + 5.0, 2.0 - 10.0 * (pi / 3.0).sin()));
         // Full circle (also written with a negative sweep) is the whole box.
-        for (s, e) in [(0.3, 0.3 + 2.0 * pi), (0.3, 0.3 - 2.0 * pi), (0.0, 10.0 * pi)] {
+        for (s, e) in [
+            (0.3, 0.3 + 2.0 * pi),
+            (0.3, 0.3 - 2.0 * pi),
+            (0.0, 10.0 * pi),
+        ] {
             let (lo, hi) = arc(s, e);
             assert_vec_close(lo, v(-9.0, -8.0));
             assert_vec_close(hi, v(11.0, 12.0));
@@ -1087,25 +1750,86 @@ mod tests {
     fn shape_is_finite_checks_every_number() {
         let nan = f64::NAN;
         let bad = [
-            Shape::Line { a: v(nan, 0.0), b: v(0.0, 0.0) },
-            Shape::Rect { min: v(0.0, 0.0), max: v(0.0, f64::INFINITY) },
-            Shape::Circle { center: v(0.0, 0.0), radius: nan },
-            Shape::Circle { center: v(nan, 0.0), radius: 1.0 },
-            Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: nan, end: 1.0 },
-            Shape::Arc { center: v(0.0, 0.0), radius: 1.0, start: 0.0, end: nan },
-            Shape::Arc { center: v(0.0, 0.0), radius: nan, start: 0.0, end: 1.0 },
-            Shape::Polyline { points: crate::curve::corners(&[v(0.0, 0.0), v(nan, 0.0)]), closed: false },
-            Shape::Text { at: v(0.0, 0.0), text: "t".into(), height: nan },
-            Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: 1.0, height: nan },
-            Shape::Plant { at: v(0.0, 0.0), species: "s".into(), spread: nan, height: 1.0 },
-            Shape::LandscapeArea { boundary: crate::curve::corners(&[v(nan, 0.0)]), name: "n".into() },
-            Shape::Hardscape { boundary: crate::curve::corners(&[v(0.0, nan)]), material: "m".into(), thickness: None, elevation: None },
+            Shape::Line {
+                a: v(nan, 0.0),
+                b: v(0.0, 0.0),
+            },
+            Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(0.0, f64::INFINITY),
+            },
+            Shape::Circle {
+                center: v(0.0, 0.0),
+                radius: nan,
+            },
+            Shape::Circle {
+                center: v(nan, 0.0),
+                radius: 1.0,
+            },
+            Shape::Arc {
+                center: v(0.0, 0.0),
+                radius: 1.0,
+                start: nan,
+                end: 1.0,
+            },
+            Shape::Arc {
+                center: v(0.0, 0.0),
+                radius: 1.0,
+                start: 0.0,
+                end: nan,
+            },
+            Shape::Arc {
+                center: v(0.0, 0.0),
+                radius: nan,
+                start: 0.0,
+                end: 1.0,
+            },
+            Shape::Polyline {
+                points: crate::curve::corners(&[v(0.0, 0.0), v(nan, 0.0)]),
+                closed: false,
+            },
+            Shape::Text {
+                at: v(0.0, 0.0),
+                text: "t".into(),
+                height: nan,
+            },
+            Shape::Plant {
+                at: v(0.0, 0.0),
+                species: "s".into(),
+                spread: 1.0,
+                height: nan,
+            },
+            Shape::Plant {
+                at: v(0.0, 0.0),
+                species: "s".into(),
+                spread: nan,
+                height: 1.0,
+            },
+            Shape::LandscapeArea {
+                boundary: crate::curve::corners(&[v(nan, 0.0)]),
+                name: "n".into(),
+            },
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&[v(0.0, nan)]),
+                material: "m".into(),
+                thickness: None,
+                elevation: None,
+            },
         ];
         for s in bad {
             assert!(!s.is_finite(), "{s:?}");
         }
-        assert!(Shape::Circle { center: v(1e308, -1e308), radius: 1e308 }.is_finite());
-        let mut o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        assert!(
+            Shape::Circle {
+                center: v(1e308, -1e308),
+                radius: 1e308
+            }
+            .is_finite()
+        );
+        let mut o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
         assert!(o.is_finite());
         o.attrs.line_weight = Some(nan);
         assert!(!o.is_finite());
@@ -1118,7 +1842,10 @@ mod tests {
     #[test]
     fn from_json_loads_a_saved_document_and_ids_stay_plain_numbers() {
         let mut doc = Document::default();
-        let o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        let o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
         doc.objects.insert(o.id, o);
         doc.validate().unwrap();
         let text = serde_json::to_string(&doc).unwrap();
@@ -1126,37 +1853,66 @@ mod tests {
         assert_eq!(v["objects"][0]["id"], 7);
         assert_eq!(v["objects"][0]["layer"], 1);
         assert_eq!(v["active_layer"], 1);
-        assert!(v["objects"][0].get("data").is_none(), "empty data and no parent are left out");
+        assert!(
+            v["objects"][0].get("data").is_none(),
+            "empty data and no parent are left out"
+        );
         assert_eq!(Document::from_json(&text).unwrap(), doc);
     }
 
     #[test]
     fn from_json_rejects_bad_input_with_a_clear_error() {
-        assert!(matches!(Document::from_json("{nope"), Err(LoadError::Parse(_))));
-        assert!(matches!(Document::from_json("[]"), Err(LoadError::Parse(m)) if m.contains("format_version")));
-        assert!(matches!(Document::from_json(r#"{"format_version":1}"#), Err(LoadError::Parse(_))));
+        assert!(matches!(
+            Document::from_json("{nope"),
+            Err(LoadError::Parse(_))
+        ));
+        assert!(
+            matches!(Document::from_json("[]"), Err(LoadError::Parse(m)) if m.contains("format_version"))
+        );
+        assert!(matches!(
+            Document::from_json(r#"{"format_version":1}"#),
+            Err(LoadError::Parse(_))
+        ));
 
         let mut v = doc_json();
         v["format_version"] = serde_json::json!(FORMAT_VERSION + 1);
         let e = Document::from_value(v.clone()).unwrap_err();
         assert_eq!(e, LoadError::Newer(FORMAT_VERSION + 1));
-        assert_eq!(e.to_string(), format!("file format {} is newer than this app", FORMAT_VERSION + 1));
+        assert_eq!(
+            e.to_string(),
+            format!("file format {} is newer than this app", FORMAT_VERSION + 1)
+        );
         // A newer file may have a different shape. It is refused before the shape is read.
-        assert_eq!(Document::from_json(r#"{"format_version":99,"layers":"???"}"#), Err(LoadError::Newer(99)));
-        assert_eq!(Document::from_json(r#"{"format_version":99999999999}"#), Err(LoadError::Newer(u32::MAX)));
+        assert_eq!(
+            Document::from_json(r#"{"format_version":99,"layers":"???"}"#),
+            Err(LoadError::Newer(99))
+        );
+        assert_eq!(
+            Document::from_json(r#"{"format_version":99999999999}"#),
+            Err(LoadError::Newer(u32::MAX))
+        );
 
         v["format_version"] = serde_json::json!(0);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("version 0")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("version 0"))
+        );
 
         let mut v = doc_json();
         v["objects"] = serde_json::json!([{"id": 5, "layer": 99, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("missing layer")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("missing layer"))
+        );
         let mut v = doc_json();
         v["active_layer"] = serde_json::json!(77);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(_))));
+        assert!(matches!(
+            Document::from_value(v),
+            Err(LoadError::Invalid(_))
+        ));
         let mut v = doc_json();
         v["layers"] = serde_json::json!([]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("no layers")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("no layers"))
+        );
     }
 
     #[test]
@@ -1164,27 +1920,42 @@ mod tests {
         let circle = |id: u64| serde_json::json!({"id": id, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}});
         let mut v = doc_json();
         v["objects"] = serde_json::json!([circle(5), circle(5)]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Parse(m)) if m.contains("duplicate id 5")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Parse(m)) if m.contains("duplicate id 5"))
+        );
         // An object may not reuse the ID of a layer.
         let mut v = doc_json();
         v["objects"] = serde_json::json!([circle(1)]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("duplicate id 1")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("duplicate id 1"))
+        );
 
         let mut v = doc_json();
         v["objects"] = serde_json::json!([{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "arc", "center": [0, 0], "radius": 1, "start": 1, "end": 1}}]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("object 5 has an invalid shape")));
+        assert!(
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("object 5 has an invalid shape"))
+        );
     }
 
     #[test]
     fn huge_ids_are_rejected_and_alloc_never_overflows() {
         let mut v = doc_json();
         v["next_id"] = serde_json::json!(u64::MAX);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(_))));
+        assert!(matches!(
+            Document::from_value(v),
+            Err(LoadError::Invalid(_))
+        ));
         let circle = |id: u64| serde_json::json!({"id": id, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}});
         let mut v = doc_json();
         v["objects"] = serde_json::json!([circle(u64::MAX)]);
-        assert!(matches!(Document::from_value(v), Err(LoadError::Invalid(_))));
-        let mut doc = Document { next_id: u64::MAX, ..Default::default() };
+        assert!(matches!(
+            Document::from_value(v),
+            Err(LoadError::Invalid(_))
+        ));
+        let mut doc = Document {
+            next_id: u64::MAX,
+            ..Default::default()
+        };
         assert_eq!(doc.alloc_id(), None);
     }
 
@@ -1217,20 +1988,51 @@ mod tests {
     fn data_parent_and_layer_kind_round_trip() {
         let mut doc = Document::default();
         doc.layers[0].kind = LayerKind::Sheet;
-        let mut o = obj(Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
-        o.data.insert("Pset_Wall".into(), serde_json::json!({"FireRating": "REI60", "Load": 2.5}));
+        let mut o = obj(Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1.0,
+        });
+        o.data.insert(
+            "Pset_Wall".into(),
+            serde_json::json!({"FireRating": "REI60", "Load": 2.5}),
+        );
         o.parent = Some(ObjectId(99));
         doc.objects.insert(o.id, o);
+        // The parent must be a group that exists.
+        assert!(doc.validate().unwrap_err().contains("does not exist"));
+        doc.objects.insert(
+            ObjectId(99),
+            Object::new(
+                ObjectId(99),
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::Group { name: "g".into() },
+            ),
+        );
         doc.validate().unwrap();
         let text = serde_json::to_string(&doc).unwrap();
-        assert!(text.contains(r#""kind":"sheet""#) && text.contains("Pset_Wall") && text.contains(r#""parent":99"#));
+        assert!(
+            text.contains(r#""kind":"sheet""#)
+                && text.contains("Pset_Wall")
+                && text.contains(r#""parent":99"#)
+        );
         assert_eq!(Document::from_json(&text).unwrap(), doc);
     }
 
     #[test]
     fn document_equality_includes_z_order() {
         let mut a = Document::default();
-        let mk = |id| Object::new(ObjectId(id), FIRST_LAYER, NONE_CLASS, Shape::Circle { center: v(0.0, 0.0), radius: 1.0 });
+        let mk = |id| {
+            Object::new(
+                ObjectId(id),
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::Circle {
+                    center: v(0.0, 0.0),
+                    radius: 1.0,
+                },
+            )
+        };
         a.objects.insert(ObjectId(10), mk(10));
         a.objects.insert(ObjectId(11), mk(11));
         let mut b = Document::default();
@@ -1254,11 +2056,20 @@ mod tests {
         assert_eq!(doc.object(ObjectId(2)).unwrap().shape.area(), Some(6.0));
         // Saving writes corners as plain points, so old readers' format is kept for old content.
         let text = serde_json::to_string(&doc).unwrap();
-        assert!(text.contains(r#""boundary":[[0.0,0.0],[4.0,0.0],[4.0,3.0]]"#), "{text}");
+        assert!(
+            text.contains(r#""boundary":[[0.0,0.0],[4.0,0.0],[4.0,3.0]]"#),
+            "{text}"
+        );
         // Curved vertices round-trip, and a negative radius is refused on load.
-        let curved = old.replace("[[0,0],[1,1]]", r#"[[0,0],{"p":[1,1],"kind":"arc","radius":5},[3,0]]"#);
+        let curved = old.replace(
+            "[[0,0],[1,1]]",
+            r#"[[0,0],{"p":[1,1],"kind":"arc","radius":5},[3,0]]"#,
+        );
         let doc = Document::from_json(&curved).unwrap();
-        assert_eq!(Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap(), doc);
+        assert_eq!(
+            Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap(),
+            doc
+        );
         let negative = curved.replace(r#""radius":5"#, r#""radius":-5"#);
         assert!(Document::from_json(&negative).is_err());
     }
@@ -1266,7 +2077,17 @@ mod tests {
     #[test]
     fn curved_bounds_and_area() {
         let arc = |x: f64, y: f64| Vertex::new(v(x, y), VertexKind::Arc { radius: 10.0 });
-        let rounded = Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into(), thickness: None, elevation: None };
+        let rounded = Shape::Hardscape {
+            boundary: vec![
+                arc(0.0, 0.0),
+                arc(100.0, 0.0),
+                arc(100.0, 100.0),
+                arc(0.0, 100.0),
+            ],
+            material: "m".into(),
+            thickness: None,
+            elevation: None,
+        };
         // The fillets cut the corners, so the box is still the square (the sides touch it).
         let (lo, hi) = rounded.bounds();
         assert_vec_close(lo, v(0.0, 0.0));
@@ -1300,7 +2121,12 @@ mod tests {
             rpz_factor: None,
             rpz_cap: None,
         };
-        let tag = Shape::PlantTag { at: v(0.0, 100.0), anchor: v(-50.0, 0.0), style: ResourceId(3), height: 400.0 };
+        let tag = Shape::PlantTag {
+            at: v(0.0, 100.0),
+            anchor: v(-50.0, 0.0),
+            style: ResourceId(3),
+            height: 400.0,
+        };
         assert_eq!((tree.kind(), tag.kind()), ("existing_tree", "plant_tag"));
         // The root protection zone (6000 mm) is larger than the canopy radius (4000 mm).
         assert_eq!(tree.bounds(), (v(-5990.0, -5990.0), v(6010.0, 6010.0)));
@@ -1312,7 +2138,9 @@ mod tests {
         assert_eq!(moved.bounds().0, v(-5989.0, -5988.0));
         let mut moved = tag.clone();
         moved.translate(v(1.0, 2.0));
-        assert!(matches!(moved, Shape::PlantTag { at, anchor, .. } if at == v(1.0, 102.0) && anchor == v(-49.0, 2.0)));
+        assert!(
+            matches!(moved, Shape::PlantTag { at, anchor, .. } if at == v(1.0, 102.0) && anchor == v(-49.0, 2.0))
+        );
         assert_eq!(tree.area(), None);
         let odd = |dbh: f64, factor: Option<f64>| Shape::ExistingTree {
             at: v(0.0, 0.0),
@@ -1328,17 +2156,44 @@ mod tests {
         assert!(!odd(f64::NAN, None).is_finite());
         assert!(!odd(1.0, Some(f64::INFINITY)).is_finite());
         assert!(!odd(1.0, Some(2.0 * MAX_COORD)).is_in_range());
-        assert!(!Shape::PlantTag { at: v(0.0, 0.0), anchor: v(f64::NAN, 0.0), style: ResourceId(1), height: 1.0 }.is_finite());
-        assert!(!Shape::PlantTag { at: v(0.0, 0.0), anchor: v(2.0 * MAX_COORD, 0.0), style: ResourceId(1), height: 1.0 }.is_in_range());
+        assert!(
+            !Shape::PlantTag {
+                at: v(0.0, 0.0),
+                anchor: v(f64::NAN, 0.0),
+                style: ResourceId(1),
+                height: 1.0
+            }
+            .is_finite()
+        );
+        assert!(
+            !Shape::PlantTag {
+                at: v(0.0, 0.0),
+                anchor: v(2.0 * MAX_COORD, 0.0),
+                style: ResourceId(1),
+                height: 1.0
+            }
+            .is_in_range()
+        );
         // JSON: short names, defaults for the optional fields.
         let j = serde_json::json!({"kind": "existing_tree", "at": [1, 2], "dbh": 300, "spread": 5000, "height": 9000});
         let back: Shape = serde_json::from_value(j).unwrap();
-        assert!(matches!(back, Shape::ExistingTree { condition: TreeCondition::Fair, action: TreeAction::Retain, rpz_factor: None, .. }));
+        assert!(matches!(
+            back,
+            Shape::ExistingTree {
+                condition: TreeCondition::Fair,
+                action: TreeAction::Retain,
+                rpz_factor: None,
+                ..
+            }
+        ));
         let j = serde_json::to_value(&tree).unwrap();
         assert_eq!(j["action"], "relocate");
         assert_eq!(serde_json::from_value::<Shape>(j).unwrap(), tree);
-        let j = serde_json::json!({"kind": "plant_tag", "at": [0, 0], "anchor": [1, 1], "style": 4});
-        assert!(matches!(serde_json::from_value::<Shape>(j).unwrap(), Shape::PlantTag { height, .. } if height == DEFAULT_TAG_HEIGHT));
+        let j =
+            serde_json::json!({"kind": "plant_tag", "at": [0, 0], "anchor": [1, 1], "style": 4});
+        assert!(
+            matches!(serde_json::from_value::<Shape>(j).unwrap(), Shape::PlantTag { height, .. } if height == DEFAULT_TAG_HEIGHT)
+        );
     }
 
     #[test]
@@ -1356,11 +2211,27 @@ mod tests {
         let doc = Document::from_value(old).unwrap();
         assert!(doc.resources.is_empty());
         let e = crate::plants::link::effective(&doc, doc.object(ObjectId(5)).unwrap()).unwrap();
-        assert_eq!((e.style_id, e.style.botanical_name.as_str(), e.style.spread, e.style.height), (None, "Quercus robur", 6000.0, 12000.0));
+        assert_eq!(
+            (
+                e.style_id,
+                e.style.botanical_name.as_str(),
+                e.style.spread,
+                e.style.height
+            ),
+            (None, "Quercus robur", 6000.0, 12000.0)
+        );
         let s = crate::plants::schedule::schedule(&doc);
-        assert_eq!((s.rows[0].name.as_str(), s.rows[0].count), ("Quercus robur", 1));
+        assert_eq!(
+            (s.rows[0].name.as_str(), s.rows[0].count),
+            ("Quercus robur", 1)
+        );
         // Saving a document without resources writes no `resources` key, so old apps still read it.
-        assert!(serde_json::to_value(&doc).unwrap().get("resources").is_none());
+        assert!(
+            serde_json::to_value(&doc)
+                .unwrap()
+                .get("resources")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1368,15 +2239,34 @@ mod tests {
         use crate::command::{Command, Editor};
         use crate::resource::ResourceBody;
         let mut ed = Editor::default();
-        let id = ed.execute(&Command::AddResource { name: "Oak".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0];
-        ed.execute(&Command::AddPlants { style: Some(ResourceId(id)), overrides: Default::default(), positions: vec![v(0.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
+        let id = ed
+            .execute(&Command::AddResource {
+                name: "Oak".into(),
+                body: ResourceBody::plant_style(Default::default()),
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::AddPlants {
+            style: Some(ResourceId(id)),
+            overrides: Default::default(),
+            positions: vec![v(0.0, 0.0)],
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
         let text = serde_json::to_string(ed.doc()).unwrap();
         let back = Document::from_json(&text).unwrap();
         assert_eq!(&back, ed.doc());
         // The ID of a resource is unique among all IDs, and the counter moves past it.
         let mut j: Value = serde_json::from_str(&text).unwrap();
         j["resources"][0]["id"] = serde_json::json!(1);
-        assert!(Document::from_value(j.clone()).unwrap_err().to_string().contains("duplicate id"));
+        assert!(
+            Document::from_value(j.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate id")
+        );
         j["resources"][0]["id"] = serde_json::json!(40);
         j["next_id"] = serde_json::json!(0);
         let mut loaded = Document::from_value(j).unwrap();
@@ -1384,6 +2274,9 @@ mod tests {
         // A bad style stops the load.
         let mut j: Value = serde_json::from_str(&text).unwrap();
         j["resources"][0]["body"]["spread"] = serde_json::json!(-1.0);
-        assert!(matches!(Document::from_value(j), Err(LoadError::Invalid(_))));
+        assert!(matches!(
+            Document::from_value(j),
+            Err(LoadError::Invalid(_))
+        ));
     }
 }

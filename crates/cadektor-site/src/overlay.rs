@@ -50,11 +50,17 @@ fn key(p: DVec2) -> (u64, u64) {
 
 impl Overlay {
     pub fn new() -> Self {
-        Overlay { cdt: ConstrainedDelaunayTriangulation::new(), seen: HashMap::new() }
+        Overlay {
+            cdt: ConstrainedDelaunayTriangulation::new(),
+            seen: HashMap::new(),
+        }
     }
 
     /// The overlay of the given triangles of `tin`.
-    pub fn of_triangles(tin: &Tin, triangles: impl Iterator<Item = usize>) -> Result<Self, SiteError> {
+    pub fn of_triangles(
+        tin: &Tin,
+        triangles: impl Iterator<Item = usize>,
+    ) -> Result<Self, SiteError> {
         let mut o = Overlay::new();
         let mut edges: HashSet<(usize, usize)> = HashSet::new();
         for t in triangles {
@@ -62,7 +68,11 @@ impl Overlay {
             let mut h = [None; 3];
             for k in 0..3 {
                 let v = tri[k];
-                h[k] = Some(o.point(tin.vertices[v as usize].truncate(), tin.vertices[v as usize].z, v)?);
+                h[k] = Some(o.point(
+                    tin.vertices[v as usize].truncate(),
+                    tin.vertices[v as usize].z,
+                    v,
+                )?);
             }
             let h = h.map(Option::unwrap);
             for k in 0..3 {
@@ -83,7 +93,14 @@ impl Overlay {
         if let Some(h) = self.seen.get(&key(p)) {
             return Ok(*h);
         }
-        let h = self.cdt.insert(OV { pos: Point2::new(p.x, p.y), z, orig }).map_err(|_| SiteError::NotFinite)?;
+        let h = self
+            .cdt
+            .insert(OV {
+                pos: Point2::new(p.x, p.y),
+                z,
+                orig,
+            })
+            .map_err(|_| SiteError::NotFinite)?;
         self.seen.insert(key(p), h);
         Ok(h)
     }
@@ -99,27 +116,47 @@ impl Overlay {
 
     /// Adds a closed ring. Where it crosses a kept segment, a point is added with the height `z`
     /// gives. Returns the points along the ring, in order, with their heights.
-    pub fn ring(&mut self, ring: &[DVec2], z: &dyn Fn(DVec2) -> f64) -> Result<Vec<(DVec2, f64)>, SiteError> {
+    pub fn ring(
+        &mut self,
+        ring: &[DVec2],
+        z: &dyn Fn(DVec2) -> f64,
+    ) -> Result<Vec<(DVec2, f64)>, SiteError> {
         let n = ring.len();
-        let handles = ring.iter().map(|p| self.point(*p, z(*p), NONE)).collect::<Result<Vec<_>, _>>()?;
+        let handles = ring
+            .iter()
+            .map(|p| self.point(*p, z(*p), NONE))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut chain: Vec<(DVec2, f64)> = Vec::new();
         for i in 0..n {
             let (a, b) = (handles[i], handles[(i + 1) % n]);
             if a == b {
                 continue;
             }
-            let edges = self.cdt.add_constraint_and_split(a, b, |p| OV { pos: p, z: z(DVec2::new(p.x, p.y)), orig: NONE });
+            let edges = self.cdt.add_constraint_and_split(a, b, |p| OV {
+                pos: p,
+                z: z(DVec2::new(p.x, p.y)),
+                orig: NONE,
+            });
             self.push_chain(&edges, &mut chain);
         }
         Ok(chain)
     }
 
     /// Adds a segment like `ring` does and returns its points.
-    pub fn segment(&mut self, a: DVec2, b: DVec2, z: &dyn Fn(DVec2) -> f64) -> Result<Vec<(DVec2, f64)>, SiteError> {
+    pub fn segment(
+        &mut self,
+        a: DVec2,
+        b: DVec2,
+        z: &dyn Fn(DVec2) -> f64,
+    ) -> Result<Vec<(DVec2, f64)>, SiteError> {
         let (ha, hb) = (self.point(a, z(a), NONE)?, self.point(b, z(b), NONE)?);
         let mut chain = Vec::new();
         if ha != hb {
-            let edges = self.cdt.add_constraint_and_split(ha, hb, |p| OV { pos: p, z: z(DVec2::new(p.x, p.y)), orig: NONE });
+            let edges = self.cdt.add_constraint_and_split(ha, hb, |p| OV {
+                pos: p,
+                z: z(DVec2::new(p.x, p.y)),
+                orig: NONE,
+            });
             self.push_chain(&edges, &mut chain);
         }
         Ok(chain)
@@ -130,7 +167,10 @@ impl Overlay {
             let e = self.cdt.directed_edge(*e);
             let (f, t) = (e.from(), e.to());
             let (pf, pt) = (f.position(), t.position());
-            if chain.last().is_none_or(|(p, _)| *p != DVec2::new(pf.x, pf.y)) {
+            if chain
+                .last()
+                .is_none_or(|(p, _)| *p != DVec2::new(pf.x, pf.y))
+            {
                 chain.push((DVec2::new(pf.x, pf.y), f.data().z));
             }
             chain.push((DVec2::new(pt.x, pt.y), t.data().z));
@@ -144,7 +184,11 @@ impl Overlay {
             .map(|f| {
                 f.vertices().map(|v| {
                     let d = v.data();
-                    Corner { xy: DVec2::new(d.pos.x, d.pos.y), z: d.z, orig: d.orig }
+                    Corner {
+                        xy: DVec2::new(d.pos.x, d.pos.y),
+                        z: d.z,
+                        orig: d.orig,
+                    }
                 })
             })
             .collect()
@@ -162,14 +206,23 @@ pub(crate) struct Out<'a> {
 
 impl<'a> Out<'a> {
     pub fn new(existing: &'a Tin) -> Self {
-        Out { existing, vertices: existing.vertices.clone(), map: HashMap::new(), triangles: Vec::new() }
+        Out {
+            existing,
+            vertices: existing.vertices.clone(),
+            map: HashMap::new(),
+            triangles: Vec::new(),
+        }
     }
 
     pub fn vertex(&mut self, xy: DVec2, z: f64, orig: u32) -> u32 {
         if orig != NONE && self.existing.vertices[orig as usize].z.to_bits() == z.to_bits() {
             return orig;
         }
-        let k = [(xy.x + 0.0).to_bits(), (xy.y + 0.0).to_bits(), (z + 0.0).to_bits()];
+        let k = [
+            (xy.x + 0.0).to_bits(),
+            (xy.y + 0.0).to_bits(),
+            (z + 0.0).to_bits(),
+        ];
         let vertices = &mut self.vertices;
         *self.map.entry(k).or_insert_with(|| {
             vertices.push(xy.extend(z));

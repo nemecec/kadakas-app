@@ -14,6 +14,8 @@ use crate::resource::{ResourceBody, ResourceId, Resources};
 
 mod area_ops;
 mod drawing_ops;
+mod graphic_ops;
+mod group_ops;
 mod plant_ops;
 mod record_ops;
 mod table_ops;
@@ -21,6 +23,7 @@ mod table_ops;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
+    // Groups, copies and symbols are at the end of the list.
     /// Add an object. Missing layer or class means the active one.
     AddObject {
         shape: Shape,
@@ -31,9 +34,14 @@ pub enum Command {
         #[serde(default)]
         attrs: Attributes,
     },
-    DeleteObjects { ids: Vec<ObjectId> },
+    DeleteObjects {
+        ids: Vec<ObjectId>,
+    },
     /// Move objects. An ID that appears twice is moved once.
-    MoveObjects { ids: Vec<ObjectId>, delta: DVec2 },
+    MoveObjects {
+        ids: Vec<ObjectId>,
+        delta: DVec2,
+    },
     /// Change properties of one object. Missing fields stay unchanged.
     ModifyObject {
         id: ObjectId,
@@ -89,7 +97,9 @@ pub enum Command {
         scale: Option<f64>,
     },
     /// Delete an empty layer.
-    DeleteLayer { id: LayerId },
+    DeleteLayer {
+        id: LayerId,
+    },
     AddClass {
         name: String,
         #[serde(default)]
@@ -111,9 +121,14 @@ pub enum Command {
         class: Option<ClassId>,
     },
     /// Set or clear the georeference of the document.
-    SetGeoreference { georef: Option<crate::georef::Georeference> },
+    SetGeoreference {
+        georef: Option<crate::georef::Georeference>,
+    },
     /// Add a resource, for example a plant style. Returns its ID in `created`.
-    AddResource { name: String, body: ResourceBody },
+    AddResource {
+        name: String,
+        body: ResourceBody,
+    },
     /// Change the name or content of a resource. Plants that use a plant style follow the change.
     ModifyResource {
         id: ResourceId,
@@ -165,9 +180,16 @@ pub enum Command {
         values: serde_json::Map<String, Value>,
     },
     /// Remove a record and its values from objects.
-    DetachRecord { ids: Vec<ObjectId>, record: ResourceId },
+    DetachRecord {
+        ids: Vec<ObjectId>,
+        record: ResourceId,
+    },
     /// Change field values of a record that is attached. Other fields stay unchanged.
-    SetRecordFields { ids: Vec<ObjectId>, record: ResourceId, values: serde_json::Map<String, Value> },
+    SetRecordFields {
+        ids: Vec<ObjectId>,
+        record: ResourceId,
+        values: serde_json::Map<String, Value>,
+    },
     /// Add a hardscape: a slab with a `boundary`, or a path when `patch.center` gives the center line.
     /// The patch sets the style, width, slope and so on (see `hardscape::HardscapePatch`).
     AddHardscape {
@@ -197,9 +219,15 @@ pub enum Command {
         attrs: Attributes,
     },
     /// Change hardscape settings of one or more hardscapes. Missing fields stay unchanged.
-    SetHardscape { ids: Vec<ObjectId>, patch: crate::hardscape::HardscapePatch },
+    SetHardscape {
+        ids: Vec<ObjectId>,
+        patch: crate::hardscape::HardscapePatch,
+    },
     /// Change the style, holes or options of landscape areas.
-    SetLandscapeArea { ids: Vec<ObjectId>, patch: crate::landscape::LandscapePatch },
+    SetLandscapeArea {
+        ids: Vec<ObjectId>,
+        patch: crate::landscape::LandscapePatch,
+    },
     /// Add a sheet layer with its page settings, as one step. Returns the layer ID in `created`.
     AddSheet {
         name: String,
@@ -241,13 +269,21 @@ pub enum Command {
         revision: Option<String>,
     },
     /// Set the stable project GUID (22 characters of the IFC base64 alphabet). IFC export sets it once.
-    SetProjectGuid { guid: String },
+    SetProjectGuid {
+        guid: String,
+    },
     /// Store a saved view. A view with the same name is replaced.
-    SaveView { view: Box<crate::sheets::SavedView> },
-    DeleteView { name: String },
+    SaveView {
+        view: Box<crate::sheets::SavedView>,
+    },
+    DeleteView {
+        name: String,
+    },
     /// Apply a saved view: layer and class visibility and the active layer and class.
     /// The camera part (zoom, pan, 3D view) is for the host to apply.
-    RestoreView { name: String },
+    RestoreView {
+        name: String,
+    },
     /// Place a worksheet in the drawing as a table. `at` is the top left corner and `size` the
     /// frame in mm (paper mm on a sheet layer). The table is drawn from the calculated worksheet.
     AddWorksheetTable {
@@ -273,8 +309,76 @@ pub enum Command {
         #[serde(default)]
         size: Option<DVec2>,
     },
+    /// Make a group of objects. They must be on one layer and in the same group (or in none).
+    /// A click on a group selects it as a whole. Returns the ID of the group in `created`.
+    Group {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Add an object as a member of a group (on the layer of the group). Use it when you draw inside a group
+    /// you have entered. Returns the ID of the object in `created`.
+    AddObjectIn {
+        parent: ObjectId,
+        shape: Shape,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Move objects into a group (`parent`) or out of all groups (no parent). The objects must be on the
+    /// layer of the group. A group that loses its last member goes.
+    SetParent {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        parent: Option<ObjectId>,
+    },
+    /// Dissolve groups by one level: the members stay (in the group above, if any) and the group object goes.
+    Ungroup {
+        ids: Vec<ObjectId>,
+    },
+    /// Turn objects about a point. A group turns as one unit. Angles are radians, counterclockwise.
+    /// Hardscapes, landscape areas and site models cannot be turned.
+    RotateObjects {
+        ids: Vec<ObjectId>,
+        center: DVec2,
+        angle: f64,
+    },
+    /// Copy objects and move the copies by `delta`. A group is copied with its members. Returns the
+    /// IDs of the copies of `ids` in `created`, then the IDs of copied members.
+    CopyObjects {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        delta: DVec2,
+    },
+    /// Make a symbol definition from objects (groups count as their members). The insertion point is
+    /// in the drawing (default: the center of the objects). With `replace` the objects are replaced by one instance.
+    /// Returns the ID of the definition and then, with `replace`, the ID of the instance in `created`.
+    CreateSymbol {
+        name: String,
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        insertion: Option<DVec2>,
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Replace symbol instances by groups of plain objects.
+    ConvertSymbolToGroup {
+        ids: Vec<ObjectId>,
+    },
+    /// Edit the definition of a symbol in place: its 2D components become a group at the instance
+    /// (the instance is hidden meanwhile). Returns the ID of the group in `created`.
+    EditSymbol {
+        id: ObjectId,
+    },
+    /// End editing in place: the objects of the edit group become the 2D components of the definition.
+    ExitSymbolEdit {
+        group: ObjectId,
+    },
     /// Several commands as one undo step. Stops at the first error.
-    Batch { commands: Vec<Command> },
+    Batch {
+        commands: Vec<Command>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -342,8 +446,14 @@ impl Meta {
     }
 
     fn is_finite(&self) -> bool {
-        self.drawing.saved_views.iter().all(crate::sheets::SavedView::is_finite)
-            && self.layers.iter().all(|l| l.elevation.is_finite() && l.scale.is_finite())
+        self.drawing
+            .saved_views
+            .iter()
+            .all(crate::sheets::SavedView::is_finite)
+            && self
+                .layers
+                .iter()
+                .all(|l| l.elevation.is_finite() && l.scale.is_finite())
             && self.classes.iter().all(|c| c.attrs.is_finite())
     }
 }
@@ -367,7 +477,10 @@ pub struct Patch {
 
 impl Patch {
     fn is_empty(&self) -> bool {
-        self.removed.is_empty() && self.added.is_empty() && self.modified.is_empty() && self.meta.is_none()
+        self.removed.is_empty()
+            && self.added.is_empty()
+            && self.modified.is_empty()
+            && self.meta.is_none()
     }
 
     fn apply(&self, doc: &mut Document, forward: bool) {
@@ -473,7 +586,13 @@ struct Tx<'a> {
 
 impl<'a> Tx<'a> {
     fn new(doc: &'a mut Document) -> Self {
-        Tx { doc, before: IndexMap::new(), added: Vec::new(), added_set: HashSet::new(), removed: Vec::new() }
+        Tx {
+            doc,
+            before: IndexMap::new(),
+            added: Vec::new(),
+            added_set: HashSet::new(),
+            removed: Vec::new(),
+        }
     }
 
     /// Call before changing an object that may be older than this command.
@@ -500,16 +619,62 @@ impl<'a> Tx<'a> {
     }
 
     fn alloc(&mut self) -> Result<u64, CommandError> {
-        self.doc.alloc_id().ok_or_else(|| CommandError::Invalid("ids are exhausted".into()))
+        self.doc
+            .alloc_id()
+            .ok_or_else(|| CommandError::Invalid("ids are exhausted".into()))
     }
 
     fn check_class(&self, id: ClassId) -> Result<(), CommandError> {
-        self.doc.class(id).map(|_| ()).ok_or(CommandError::NoClass(id))
+        self.doc
+            .class(id)
+            .map(|_| ())
+            .ok_or(CommandError::NoClass(id))
+    }
+
+    /// Removes objects that exist and are editable. Objects made by this same command just disappear. Older ones are recorded.
+    fn remove_objects(&mut self, ids: Vec<ObjectId>) {
+        let new: HashSet<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.added_set.contains(id))
+            .collect();
+        let old: Vec<ObjectId> = ids.iter().copied().filter(|id| !new.contains(id)).collect();
+        let mut current: Vec<(usize, ObjectId)> = old
+            .iter()
+            .map(|&id| (self.doc.objects.get_index_of(&id).expect("checked"), id))
+            .collect();
+        current.sort_unstable();
+        let before_idx = indices_before(
+            &self.removed.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            &current.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        );
+        for &(_, id) in &current {
+            self.touch(id);
+        }
+        self.removed.extend(
+            before_idx
+                .into_iter()
+                .zip(current.iter().map(|(_, id)| *id)),
+        );
+        self.removed.sort_unstable();
+        self.added.retain(|id| !new.contains(id));
+        self.added_set.retain(|id| !new.contains(id));
+        if ids.len() == 1 {
+            self.doc.objects.shift_remove(&ids[0]);
+        } else if !ids.is_empty() {
+            let gone: HashSet<ObjectId> = ids.into_iter().collect();
+            self.doc.objects.retain(|id, _| !gone.contains(id));
+        }
     }
 
     fn run(&mut self, cmd: &Command, out: &mut Outcome) -> Result<(), CommandError> {
         match cmd {
-            Command::AddObject { shape, layer, class, attrs } => {
+            Command::AddObject {
+                shape,
+                layer,
+                class,
+                attrs,
+            } => {
                 let layer = layer.unwrap_or(self.doc.active_layer);
                 let class = class.unwrap_or(self.doc.active_class);
                 self.check_layer(layer)?;
@@ -518,6 +683,7 @@ impl<'a> Tx<'a> {
                 self.check_shape_refs(shape)?;
                 self.check_sheet_rules(layer, shape, None)?;
                 validate_attrs(attrs)?;
+                self.check_attr_refs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
                 self.added_set.insert(id);
@@ -532,29 +698,13 @@ impl<'a> Tx<'a> {
                 for &id in &ids {
                     self.editable(id)?;
                 }
-                // Objects made by this same command just disappear. Older ones are recorded.
-                let new: HashSet<ObjectId> = ids.iter().copied().filter(|id| self.added_set.contains(id)).collect();
-                let old: Vec<ObjectId> = ids.iter().copied().filter(|id| !new.contains(id)).collect();
-                let mut current: Vec<(usize, ObjectId)> =
-                    old.iter().map(|&id| (self.doc.objects.get_index_of(&id).expect("checked"), id)).collect();
-                current.sort_unstable();
-                let before_idx = indices_before(
-                    &self.removed.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
-                    &current.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
-                );
-                for &(_, id) in &current {
-                    self.touch(id);
+                // A group goes with its members, and a group that loses its last member goes too.
+                let ids = self.with_group_members(&ids);
+                for &id in &ids {
+                    self.editable(id)?;
                 }
-                self.removed.extend(before_idx.into_iter().zip(current.iter().map(|(_, id)| *id)));
-                self.removed.sort_unstable();
-                self.added.retain(|id| !new.contains(id));
-                self.added_set.retain(|id| !new.contains(id));
-                if ids.len() == 1 {
-                    self.doc.objects.shift_remove(&ids[0]);
-                } else if !ids.is_empty() {
-                    let gone: HashSet<ObjectId> = ids.into_iter().collect();
-                    self.doc.objects.retain(|id, _| !gone.contains(id));
-                }
+                self.release_edited(&ids);
+                self.remove_objects(ids);
             }
             Command::MoveObjects { ids, delta } => {
                 if !delta.is_finite() {
@@ -564,14 +714,27 @@ impl<'a> Tx<'a> {
                 for &id in &ids {
                     self.editable(id)?;
                 }
+                // A group moves with its members.
+                let ids = if ids.iter().any(|i| self.doc.is_group(*i)) {
+                    self.doc.leaves(&ids)
+                } else {
+                    ids
+                };
                 for id in ids {
+                    self.editable(id)?;
                     self.touch(id);
                     let o = self.doc.object_mut(id).expect("checked");
                     o.shape.translate(*delta);
                     crate::hardscape::translate_object_data(o, *delta);
                 }
             }
-            Command::ModifyObject { id, shape, layer, class, attrs } => {
+            Command::ModifyObject {
+                id,
+                shape,
+                layer,
+                class,
+                attrs,
+            } => {
                 self.editable(*id)?;
                 if let Some(l) = layer {
                     self.check_layer(*l)?;
@@ -589,15 +752,42 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
+                    self.check_attr_refs(a)?;
                 }
                 {
                     let o = self.doc.object(*id).expect("checked");
-                    self.check_sheet_rules(layer.unwrap_or(o.layer), shape.as_ref().unwrap_or(&o.shape), Some(*id))?;
+                    // A member stays on the layer of its group, and a group with members on the layer of its members.
+                    if layer.is_some_and(|l| l != o.layer)
+                        && (o.parent.is_some() || self.doc.is_group(o.id))
+                    {
+                        return Err(CommandError::Invalid(
+                            "an object in a group or a group keeps its layer. Ungroup it first"
+                                .into(),
+                        ));
+                    }
+                    if shape.as_ref().is_some_and(|s| {
+                        matches!(s, Shape::Group { .. }) != matches!(o.shape, Shape::Group { .. })
+                    }) {
+                        return Err(CommandError::Invalid("a group cannot become another kind of object, and an object cannot become a group".into()));
+                    }
+                    self.check_sheet_rules(
+                        layer.unwrap_or(o.layer),
+                        shape.as_ref().unwrap_or(&o.shape),
+                        Some(*id),
+                    )?;
                 }
                 self.touch(*id);
                 // A linked plant keeps its style when its shape is edited (see `plants::link`).
-                let linked_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| crate::plants::link::link(o).is_some()).cloned();
-                let area_before = shape.as_ref().and_then(|_| self.doc.object(*id)).filter(|o| matches!(o.shape, Shape::Hardscape { .. })).cloned();
+                let linked_before = shape
+                    .as_ref()
+                    .and_then(|_| self.doc.object(*id))
+                    .filter(|o| crate::plants::link::link(o).is_some())
+                    .cloned();
+                let area_before = shape
+                    .as_ref()
+                    .and_then(|_| self.doc.object(*id))
+                    .filter(|o| matches!(o.shape, Shape::Hardscape { .. }))
+                    .cloned();
                 let o = self.doc.object_mut(*id).expect("checked");
                 if let Some(s) = shape {
                     o.shape = s.clone();
@@ -624,16 +814,28 @@ impl<'a> Tx<'a> {
             }
             Command::SetVertex { id, index, kind, p } => {
                 self.editable(*id)?;
-                let len = self.doc.object(*id).and_then(|o| o.shape.vertices()).map(Vec::len);
+                let len = self
+                    .doc
+                    .object(*id)
+                    .and_then(|o| o.shape.vertices())
+                    .map(Vec::len);
                 match len {
                     None => return Err(CommandError::Invalid("object has no vertices".into())),
                     Some(len) if *index >= len => {
-                        return Err(CommandError::Invalid(format!("vertex index {index} is out of range (0..{len})")))
+                        return Err(CommandError::Invalid(format!(
+                            "vertex index {index} is out of range (0..{len})"
+                        )));
                     }
                     Some(_) => {}
                 }
                 self.guard_path(*id, None)?;
-                let mut v = self.doc.object(*id).expect("checked").shape.vertices().expect("checked")[*index];
+                let mut v = self
+                    .doc
+                    .object(*id)
+                    .expect("checked")
+                    .shape
+                    .vertices()
+                    .expect("checked")[*index];
                 if let Some(k) = kind {
                     v.kind = *k;
                 }
@@ -647,14 +849,31 @@ impl<'a> Tx<'a> {
                     self.check_holes(*id, &moved)?;
                 }
                 self.touch(*id);
-                self.doc.object_mut(*id).expect("checked").shape.vertices_mut().expect("checked")[*index] = v;
+                self.doc
+                    .object_mut(*id)
+                    .expect("checked")
+                    .shape
+                    .vertices_mut()
+                    .expect("checked")[*index] = v;
             }
             Command::SetData { id, set, remove } => {
-                if let Some(k) = set.keys().chain(remove.iter()).find(|k| self.is_record_key(k)) {
-                    return Err(CommandError::Invalid(format!("the data key '{k}' is a record. Use the record commands")));
+                if let Some(k) = set
+                    .keys()
+                    .chain(remove.iter())
+                    .find(|k| self.is_record_key(k))
+                {
+                    return Err(CommandError::Invalid(format!(
+                        "the data key '{k}' is a record. Use the record commands"
+                    )));
                 }
-                if let Some(k) = set.keys().chain(remove.iter()).find(|k| crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str()) || k.as_str() == crate::worksheet_table::KEY) {
-                    return Err(CommandError::Invalid(format!("the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)")));
+                if let Some(k) = set.keys().chain(remove.iter()).find(|k| {
+                    crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())
+                        || crate::symbols::RESERVED_KEYS.contains(&k.as_str())
+                        || k.as_str() == crate::worksheet_table::KEY
+                }) {
+                    return Err(CommandError::Invalid(format!(
+                        "the data key '{k}' is reserved. Use the style commands (plants, hardscapes, landscape areas)"
+                    )));
                 }
                 self.editable(*id)?;
                 self.touch(*id);
@@ -666,7 +885,12 @@ impl<'a> Tx<'a> {
                     o.data.remove(k);
                 }
             }
-            Command::AddLayer { name, elevation, scale, kind } => {
+            Command::AddLayer {
+                name,
+                elevation,
+                scale,
+                kind,
+            } => {
                 validate_layer_numbers(Some(*elevation), *scale)?;
                 let id = LayerId(self.alloc()?);
                 self.doc.layers.push(Layer {
@@ -676,14 +900,30 @@ impl<'a> Tx<'a> {
                     visible: true,
                     locked: false,
                     elevation: *elevation,
-                    scale: scale.unwrap_or(if *kind == Some(LayerKind::Sheet) { 1.0 } else { 100.0 }),
+                    scale: scale.unwrap_or(if *kind == Some(LayerKind::Sheet) {
+                        1.0
+                    } else {
+                        100.0
+                    }),
                 });
                 self.on_layer_added(id);
                 out.created.push(id.0);
             }
-            Command::ModifyLayer { id, name, visible, locked, elevation, scale } => {
+            Command::ModifyLayer {
+                id,
+                name,
+                visible,
+                locked,
+                elevation,
+                scale,
+            } => {
                 validate_layer_numbers(*elevation, *scale)?;
-                let l = self.doc.layers.iter_mut().find(|l| l.id == *id).ok_or(CommandError::NoLayer(*id))?;
+                let l = self
+                    .doc
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == *id)
+                    .ok_or(CommandError::NoLayer(*id))?;
                 if let Some(v) = name {
                     l.name = v.clone();
                 }
@@ -716,15 +956,32 @@ impl<'a> Tx<'a> {
             }
             Command::AddClass { name, attrs } => {
                 validate_attrs(attrs)?;
+                self.check_attr_refs(attrs)?;
                 let id = ClassId(self.alloc()?);
-                self.doc.classes.push(Class { id, name: name.clone(), visible: true, attrs: attrs.clone() });
+                self.doc.classes.push(Class {
+                    id,
+                    name: name.clone(),
+                    visible: true,
+                    attrs: attrs.clone(),
+                });
                 out.created.push(id.0);
             }
-            Command::ModifyClass { id, name, visible, attrs } => {
+            Command::ModifyClass {
+                id,
+                name,
+                visible,
+                attrs,
+            } => {
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
+                    self.check_attr_refs(a)?;
                 }
-                let c = self.doc.classes.iter_mut().find(|c| c.id == *id).ok_or(CommandError::NoClass(*id))?;
+                let c = self
+                    .doc
+                    .classes
+                    .iter_mut()
+                    .find(|c| c.id == *id)
+                    .ok_or(CommandError::NoClass(*id))?;
                 if let Some(v) = name {
                     c.name = v.clone();
                 }
@@ -746,7 +1003,10 @@ impl<'a> Tx<'a> {
                 }
             }
             Command::SetGeoreference { georef } => {
-                if georef.as_ref().is_some_and(|g| !g.is_finite() || g.origin.abs().max_element() > MAX_COORD) {
+                if georef
+                    .as_ref()
+                    .is_some_and(|g| !g.is_finite() || g.origin.abs().max_element() > MAX_COORD)
+                {
                     return Err(CommandError::Invalid(NOT_FINITE.into()));
                 }
                 self.doc.georef = georef.clone();
@@ -756,9 +1016,26 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
-            Command::AttachRecord { .. } | Command::DetachRecord { .. } | Command::SetRecordFields { .. } => self.run_record(cmd)?,
-            Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => self.run_table(cmd, out)?,
-            Command::AddHardscape { .. } | Command::AddLandscapeArea { .. } | Command::SetHardscape { .. } | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
+            Command::Group { .. }
+            | Command::Ungroup { .. }
+            | Command::AddObjectIn { .. }
+            | Command::SetParent { .. }
+            | Command::RotateObjects { .. }
+            | Command::CopyObjects { .. }
+            | Command::CreateSymbol { .. }
+            | Command::ConvertSymbolToGroup { .. }
+            | Command::EditSymbol { .. }
+            | Command::ExitSymbolEdit { .. } => self.run_group(cmd, out)?,
+            Command::AttachRecord { .. }
+            | Command::DetachRecord { .. }
+            | Command::SetRecordFields { .. } => self.run_record(cmd)?,
+            Command::AddWorksheetTable { .. } | Command::SetWorksheetTable { .. } => {
+                self.run_table(cmd, out)?
+            }
+            Command::AddHardscape { .. }
+            | Command::AddLandscapeArea { .. }
+            | Command::SetHardscape { .. }
+            | Command::SetLandscapeArea { .. } => self.run_area(cmd, out)?,
             Command::AddSheet { .. }
             | Command::SetSheet { .. }
             | Command::SetProject { .. }
@@ -779,7 +1056,11 @@ impl<'a> Tx<'a> {
     /// still have finite numbers, so the document can always be saved and
     /// reopened.
     fn check_result(&self) -> Result<(), CommandError> {
-        let mut touched = self.added.iter().chain(self.before.keys()).filter_map(|id| self.doc.object(*id));
+        let mut touched = self
+            .added
+            .iter()
+            .chain(self.before.keys())
+            .filter_map(|id| self.doc.object(*id));
         if touched.clone().any(|o| !o.is_finite()) {
             Err(CommandError::Invalid(NOT_FINITE.into()))
         } else if touched.any(|o| !o.shape.is_in_range()) {
@@ -791,7 +1072,11 @@ impl<'a> Tx<'a> {
 
     fn finish(self, meta_before: Meta) -> Patch {
         let doc = &*self.doc;
-        let removed = self.removed.iter().map(|(i, id)| (*i, self.before[id].clone())).collect();
+        let removed = self
+            .removed
+            .iter()
+            .map(|(i, id)| (*i, self.before[id].clone()))
+            .collect();
         let added = self
             .added
             .iter()
@@ -801,11 +1086,20 @@ impl<'a> Tx<'a> {
         let modified = self
             .before
             .iter()
-            .filter_map(|(id, b)| doc.object(*id).filter(|a| *a != b).map(|a| (b.clone(), a.clone())))
+            .filter_map(|(id, b)| {
+                doc.object(*id)
+                    .filter(|a| *a != b)
+                    .map(|a| (b.clone(), a.clone()))
+            })
             .collect();
         let meta_after = Meta::of(doc);
         let meta = (meta_before != meta_after).then_some((meta_before, meta_after));
-        Patch { removed, added, modified, meta }
+        Patch {
+            removed,
+            added,
+            modified,
+            meta,
+        }
     }
 }
 
@@ -813,7 +1107,11 @@ const NOT_FINITE: &str = "numbers must be finite";
 const OUT_OF_RANGE: &str = "numbers must not be larger than 1e9 mm";
 
 fn validate_attrs(attrs: &Attributes) -> Result<(), CommandError> {
-    if attrs.is_finite() { Ok(()) } else { Err(CommandError::Invalid(NOT_FINITE.into())) }
+    if attrs.is_finite() {
+        Ok(())
+    } else {
+        Err(CommandError::Invalid(NOT_FINITE.into()))
+    }
 }
 
 fn validate_layer_numbers(elevation: Option<f64>, scale: Option<f64>) -> Result<(), CommandError> {
@@ -834,7 +1132,9 @@ fn validate_vertex(v: &Vertex) -> Result<(), CommandError> {
         return Err(CommandError::Invalid(NOT_FINITE.into()));
     }
     if matches!(v.kind, VertexKind::Arc { radius } if radius < 0.0) {
-        return Err(CommandError::Invalid("vertex radius must be zero or more".into()));
+        return Err(CommandError::Invalid(
+            "vertex radius must be zero or more".into(),
+        ));
     }
     Ok(())
 }
@@ -853,17 +1153,31 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
     }
-    if matches!(shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) && shape.vertices().is_some_and(|v| v.len() > crate::hardscape::data::MAX_VERTICES) {
+    if matches!(shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. })
+        && shape
+            .vertices()
+            .is_some_and(|v| v.len() > crate::hardscape::data::MAX_VERTICES)
+    {
         return bad("a boundary has at most 50000 points");
     }
     if !shape.has_valid_thickness() {
         return bad("thickness must be positive");
     }
     match shape {
-        Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => bad("radius must be positive"),
-        Shape::Arc { start, end, .. } if arc_sweep(*start, *end) == 0.0 => bad("arc sweep must not be zero"),
+        Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => {
+            bad("radius must be positive")
+        }
+        Shape::Arc { start, end, .. } if arc_sweep(*start, *end) == 0.0 => {
+            bad("arc sweep must not be zero")
+        }
         Shape::Plant { spread, .. } if *spread <= 0.0 => bad("spread must be positive"),
-        Shape::ExistingTree { dbh, spread, height, rpz_factor, .. } => {
+        Shape::ExistingTree {
+            dbh,
+            spread,
+            height,
+            rpz_factor,
+            ..
+        } => {
             if *dbh <= 0.0 || *spread <= 0.0 || *height <= 0.0 {
                 bad("trunk diameter, spread and height must be positive")
             } else if rpz_factor.is_some_and(|f| f < 0.0) {
@@ -873,15 +1187,30 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
             }
         }
         Shape::PlantTag { height, .. } if *height <= 0.0 => bad("tag text height must be positive"),
+        Shape::Symbol { scale, scale_y, .. } if *scale == 0.0 || *scale_y == Some(0.0) => {
+            bad("the scale of a symbol must not be zero")
+        }
         Shape::Text { height, .. } if *height <= 0.0 => bad("text height must be positive"),
-        Shape::Polyline { points, .. } if points.len() < 2 => bad("polyline needs 2 or more points"),
-        Shape::Polyline3d { points, .. } if points.len() < 2 => bad("polyline3d needs 2 or more points"),
-        Shape::SiteModel { settings, lines, .. } => match settings.problem() {
+        Shape::Polyline { points, .. } if points.len() < 2 => {
+            bad("polyline needs 2 or more points")
+        }
+        Shape::Polyline3d { points, .. } if points.len() < 2 => {
+            bad("polyline3d needs 2 or more points")
+        }
+        Shape::SiteModel {
+            settings, lines, ..
+        } => match settings.problem() {
             Some(m) => bad(m),
-            None if lines.iter().any(|l| l.points.len() < 2) => bad("a site model line needs 2 or more points"),
+            None if lines.iter().any(|l| l.points.len() < 2) => {
+                bad("a site model line needs 2 or more points")
+            }
             None => Ok(()),
         },
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } if boundary.len() < 3 => {
+        Shape::LandscapeArea { boundary, .. }
+        | Shape::Hardscape { boundary, .. }
+        | Shape::SiteModifier { boundary, .. }
+            if boundary.len() < 3 =>
+        {
             bad("boundary needs 3 or more points")
         }
         _ => Ok(()),
@@ -912,7 +1241,12 @@ fn next_revision() -> u64 {
 
 impl Editor {
     pub fn new(doc: Document) -> Self {
-        Editor { doc, undo: Vec::new(), redo: Vec::new(), revision: next_revision() }
+        Editor {
+            doc,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: next_revision(),
+        }
     }
 
     /// The document. It changes only through `execute`, `undo` and `redo`.
@@ -954,19 +1288,25 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.undo.pop().map(|p| {
-            p.apply(&mut self.doc, false);
-            self.redo.push(p);
-            self.revision = next_revision();
-        }).is_some()
+        self.undo
+            .pop()
+            .map(|p| {
+                p.apply(&mut self.doc, false);
+                self.redo.push(p);
+                self.revision = next_revision();
+            })
+            .is_some()
     }
 
     pub fn redo(&mut self) -> bool {
-        self.redo.pop().map(|p| {
-            p.apply(&mut self.doc, true);
-            self.undo.push(p);
-            self.revision = next_revision();
-        }).is_some()
+        self.redo
+            .pop()
+            .map(|p| {
+                p.apply(&mut self.doc, true);
+                self.undo.push(p);
+                self.revision = next_revision();
+            })
+            .is_some()
     }
 
     pub fn can_undo(&self) -> bool {
@@ -984,7 +1324,10 @@ mod tests {
 
     fn line(x: f64) -> Command {
         Command::AddObject {
-            shape: Shape::Line { a: DVec2::new(x, 0.0), b: DVec2::new(x, 10.0) },
+            shape: Shape::Line {
+                a: DVec2::new(x, 0.0),
+                b: DVec2::new(x, 10.0),
+            },
             layer: None,
             class: None,
             attrs: Attributes::default(),
@@ -994,18 +1337,33 @@ mod tests {
     #[test]
     fn set_georeference_undoes_and_rejects_bad_numbers() {
         use crate::georef::Georeference;
-        let g = Georeference { crs: "EPSG:3067".into(), origin: DVec2::new(1.0, 2.0), rotation: 0.0, user_origin: DVec2::ZERO };
+        let g = Georeference {
+            crs: "EPSG:3067".into(),
+            origin: DVec2::new(1.0, 2.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
         let mut ed = Editor::default();
-        ed.execute(&Command::SetGeoreference { georef: Some(g.clone()) }).unwrap();
+        ed.execute(&Command::SetGeoreference {
+            georef: Some(g.clone()),
+        })
+        .unwrap();
         assert_eq!(ed.doc().georef, Some(g.clone()));
         let json = serde_json::to_string(ed.doc()).unwrap();
         assert_eq!(Document::from_json(&json).unwrap().georef, Some(g.clone()));
         assert!(ed.undo());
         assert_eq!(ed.doc().georef, None);
         assert!(ed.redo());
-        let bad = Georeference { rotation: f64::NAN, ..g };
-        assert!(ed.execute(&Command::SetGeoreference { georef: Some(bad) }).is_err());
-        ed.execute(&Command::SetGeoreference { georef: None }).unwrap();
+        let bad = Georeference {
+            rotation: f64::NAN,
+            ..g
+        };
+        assert!(
+            ed.execute(&Command::SetGeoreference { georef: Some(bad) })
+                .is_err()
+        );
+        ed.execute(&Command::SetGeoreference { georef: None })
+            .unwrap();
         assert_eq!(ed.doc().georef, None);
     }
 
@@ -1013,17 +1371,30 @@ mod tests {
     fn exhausted_ids_return_an_error_instead_of_panicking() {
         let mut ed = Editor::default();
         ed.doc.set_next_id(u64::MAX);
-        assert!(matches!(ed.execute(&line(1.0)), Err(CommandError::Invalid(m)) if m.contains("exhausted")));
-        assert!(ed.execute(&Command::AddClass { name: "c".into(), attrs: Attributes::default() }).is_err());
+        assert!(
+            matches!(ed.execute(&line(1.0)), Err(CommandError::Invalid(m)) if m.contains("exhausted"))
+        );
+        assert!(
+            ed.execute(&Command::AddClass {
+                name: "c".into(),
+                attrs: Attributes::default()
+            })
+            .is_err()
+        );
         assert!(ed.doc.objects.is_empty());
     }
 
     #[test]
     fn undo_redo_restores_order() {
         let mut ed = Editor::default();
-        let ids: Vec<ObjectId> = (0..4).map(|i| ObjectId(ed.execute(&line(i as f64)).unwrap().created[0])).collect();
+        let ids: Vec<ObjectId> = (0..4)
+            .map(|i| ObjectId(ed.execute(&line(i as f64)).unwrap().created[0]))
+            .collect();
         let full = ed.doc.clone();
-        ed.execute(&Command::DeleteObjects { ids: vec![ids[1], ids[2]] }).unwrap();
+        ed.execute(&Command::DeleteObjects {
+            ids: vec![ids[1], ids[2]],
+        })
+        .unwrap();
         assert_eq!(ed.doc.objects.len(), 2);
         ed.undo();
         assert_eq!(ed.doc, full);
@@ -1035,7 +1406,14 @@ mod tests {
     fn failed_batch_rolls_back() {
         let mut ed = Editor::default();
         let before = ed.doc.objects.clone();
-        let err = ed.execute(&Command::Batch { commands: vec![line(0.0), Command::DeleteObjects { ids: vec![ObjectId(999)] }] });
+        let err = ed.execute(&Command::Batch {
+            commands: vec![
+                line(0.0),
+                Command::DeleteObjects {
+                    ids: vec![ObjectId(999)],
+                },
+            ],
+        });
         assert_eq!(err, Err(CommandError::NoObject(ObjectId(999))));
         assert_eq!(ed.doc.objects, before);
         assert!(!ed.can_undo());
@@ -1045,17 +1423,39 @@ mod tests {
     fn locked_layer_rejects_edits() {
         let mut ed = Editor::default();
         let id = ObjectId(ed.execute(&line(0.0)).unwrap().created[0]);
-        ed.execute(&Command::ModifyLayer { id: LayerId(1), name: None, visible: None, locked: Some(true), elevation: None, scale: None })
-            .unwrap();
-        let r = ed.execute(&Command::MoveObjects { ids: vec![id], delta: DVec2::X });
+        ed.execute(&Command::ModifyLayer {
+            id: LayerId(1),
+            name: None,
+            visible: None,
+            locked: Some(true),
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
+        let r = ed.execute(&Command::MoveObjects {
+            ids: vec![id],
+            delta: DVec2::X,
+        });
         assert_eq!(r, Err(CommandError::LayerLocked(LayerId(1))));
     }
 
     #[test]
     fn layer_changes_undo() {
         let mut ed = Editor::default();
-        let lid = ed.execute(&Command::AddLayer { name: "Site".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0];
-        ed.execute(&Command::SetActive { layer: Some(LayerId(lid)), class: None }).unwrap();
+        let lid = ed
+            .execute(&Command::AddLayer {
+                name: "Site".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(LayerId(lid)),
+            class: None,
+        })
+        .unwrap();
         ed.undo();
         assert_eq!(ed.doc.active_layer, FIRST_LAYER);
         ed.undo();
@@ -1064,27 +1464,60 @@ mod tests {
 
     fn add_to(ed: &mut Editor, shape: Shape) -> ObjectId {
         ObjectId(
-            ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() })
-                .unwrap()
-                .created[0],
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
         )
     }
 
     fn circle() -> Shape {
-        Shape::Circle { center: DVec2::ZERO, radius: 5.0 }
+        Shape::Circle {
+            center: DVec2::ZERO,
+            radius: 5.0,
+        }
     }
 
     fn lock_layer(ed: &mut Editor, id: LayerId, locked: bool) {
-        ed.execute(&Command::ModifyLayer { id, name: None, visible: None, locked: Some(locked), elevation: None, scale: None })
-            .unwrap();
+        ed.execute(&Command::ModifyLayer {
+            id,
+            name: None,
+            visible: None,
+            locked: Some(locked),
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
     }
 
     #[test]
     fn add_object_uses_active_layer_and_class_by_default() {
         let mut ed = Editor::default();
-        let lid = ed.execute(&Command::AddLayer { name: "Site".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0];
-        let cid = ed.execute(&Command::AddClass { name: "Trees".into(), attrs: Attributes::default() }).unwrap().created[0];
-        ed.execute(&Command::SetActive { layer: Some(LayerId(lid)), class: Some(ClassId(cid)) }).unwrap();
+        let lid = ed
+            .execute(&Command::AddLayer {
+                name: "Site".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        let cid = ed
+            .execute(&Command::AddClass {
+                name: "Trees".into(),
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(LayerId(lid)),
+            class: Some(ClassId(cid)),
+        })
+        .unwrap();
 
         let id = add_to(&mut ed, circle());
         let o = ed.doc.object(id).unwrap();
@@ -1092,7 +1525,12 @@ mod tests {
 
         // Explicit layer and class win over the active ones.
         let out = ed
-            .execute(&Command::AddObject { shape: circle(), layer: Some(FIRST_LAYER), class: Some(NONE_CLASS), attrs: Attributes::default() })
+            .execute(&Command::AddObject {
+                shape: circle(),
+                layer: Some(FIRST_LAYER),
+                class: Some(NONE_CLASS),
+                attrs: Attributes::default(),
+            })
             .unwrap();
         let o = ed.doc.object(ObjectId(out.created[0])).unwrap();
         assert_eq!((o.layer, o.class), (FIRST_LAYER, NONE_CLASS));
@@ -1101,49 +1539,154 @@ mod tests {
     #[test]
     fn add_object_rejects_missing_or_locked_layer_and_class() {
         let mut ed = Editor::default();
-        let add = |layer, class| Command::AddObject { shape: circle(), layer, class, attrs: Attributes::default() };
-        assert_eq!(ed.execute(&add(Some(LayerId(99)), None)), Err(CommandError::NoLayer(LayerId(99))));
-        assert_eq!(ed.execute(&add(None, Some(ClassId(99)))), Err(CommandError::NoClass(ClassId(99))));
+        let add = |layer, class| Command::AddObject {
+            shape: circle(),
+            layer,
+            class,
+            attrs: Attributes::default(),
+        };
+        assert_eq!(
+            ed.execute(&add(Some(LayerId(99)), None)),
+            Err(CommandError::NoLayer(LayerId(99)))
+        );
+        assert_eq!(
+            ed.execute(&add(None, Some(ClassId(99)))),
+            Err(CommandError::NoClass(ClassId(99)))
+        );
         lock_layer(&mut ed, LayerId(1), true);
-        assert_eq!(ed.execute(&add(None, None)), Err(CommandError::LayerLocked(LayerId(1))));
+        assert_eq!(
+            ed.execute(&add(None, None)),
+            Err(CommandError::LayerLocked(LayerId(1)))
+        );
         assert!(ed.doc.objects.is_empty());
     }
 
     #[test]
     fn invalid_shapes_are_rejected_with_a_reason() {
         let cases = [
-            (Shape::Circle { center: DVec2::ZERO, radius: 0.0 }, "radius must be positive"),
-            (Shape::Arc { center: DVec2::ZERO, radius: -1.0, start: 0.0, end: 1.0 }, "radius must be positive"),
-            (Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 0.0, height: 1.0 }, "spread must be positive"),
-            (Shape::Text { at: DVec2::ZERO, text: "x".into(), height: -2.0 }, "text height must be positive"),
-            (Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO]), closed: false }, "polyline needs 2 or more points"),
-            (Shape::Polyline3d { points: vec![glam::DVec3::ZERO], closed: false }, "polyline3d needs 2 or more points"),
             (
-                Shape::LandscapeArea { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), name: "a".into() },
+                Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 0.0,
+                },
+                "radius must be positive",
+            ),
+            (
+                Shape::Arc {
+                    center: DVec2::ZERO,
+                    radius: -1.0,
+                    start: 0.0,
+                    end: 1.0,
+                },
+                "radius must be positive",
+            ),
+            (
+                Shape::Plant {
+                    at: DVec2::ZERO,
+                    species: "x".into(),
+                    spread: 0.0,
+                    height: 1.0,
+                },
+                "spread must be positive",
+            ),
+            (
+                Shape::Text {
+                    at: DVec2::ZERO,
+                    text: "x".into(),
+                    height: -2.0,
+                },
+                "text height must be positive",
+            ),
+            (
+                Shape::Polyline {
+                    points: crate::curve::corners(&[DVec2::ZERO]),
+                    closed: false,
+                },
+                "polyline needs 2 or more points",
+            ),
+            (
+                Shape::Polyline3d {
+                    points: vec![glam::DVec3::ZERO],
+                    closed: false,
+                },
+                "polyline3d needs 2 or more points",
+            ),
+            (
+                Shape::LandscapeArea {
+                    boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]),
+                    name: "a".into(),
+                },
                 "boundary needs 3 or more points",
             ),
             (
-                Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), material: "m".into(), thickness: None, elevation: None },
+                Shape::Hardscape {
+                    boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X]),
+                    material: "m".into(),
+                    thickness: None,
+                    elevation: None,
+                },
                 "boundary needs 3 or more points",
             ),
         ];
         for (shape, msg) in cases {
             let mut ed = Editor::default();
-            let r = ed.execute(&Command::AddObject { shape: shape.clone(), layer: None, class: None, attrs: Attributes::default() });
-            assert_eq!(r, Err(CommandError::Invalid(msg.into())), "{}", shape.kind());
+            let r = ed.execute(&Command::AddObject {
+                shape: shape.clone(),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            });
+            assert_eq!(
+                r,
+                Err(CommandError::Invalid(msg.into())),
+                "{}",
+                shape.kind()
+            );
             assert!(ed.doc.objects.is_empty());
             assert!(!ed.can_undo());
         }
 
         // The smallest valid shapes are accepted.
         let mut ed = Editor::default();
-        add_to(&mut ed, Shape::Polyline { points: crate::curve::corners(&[DVec2::ZERO, DVec2::X]), closed: false });
-        add_to(&mut ed, Shape::Hardscape { boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]), material: "m".into(), thickness: None, elevation: None });
-        add_to(&mut ed, Shape::Locus3d { p: glam::DVec3::new(1.0, 2.0, 3.0) });
-        add_to(&mut ed, Shape::Polyline3d { points: vec![glam::DVec3::ZERO, glam::DVec3::ONE], closed: false });
+        add_to(
+            &mut ed,
+            Shape::Polyline {
+                points: crate::curve::corners(&[DVec2::ZERO, DVec2::X]),
+                closed: false,
+            },
+        );
+        add_to(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]),
+                material: "m".into(),
+                thickness: None,
+                elevation: None,
+            },
+        );
+        add_to(
+            &mut ed,
+            Shape::Locus3d {
+                p: glam::DVec3::new(1.0, 2.0, 3.0),
+            },
+        );
+        add_to(
+            &mut ed,
+            Shape::Polyline3d {
+                points: vec![glam::DVec3::ZERO, glam::DVec3::ONE],
+                closed: false,
+            },
+        );
         assert_eq!(ed.doc.objects.len(), 4);
-        let far = Shape::Locus3d { p: glam::DVec3::new(0.0, 0.0, 1e10) };
-        let r = ed.execute(&Command::AddObject { shape: far, layer: None, class: None, attrs: Attributes::default() });
+        let far = Shape::Locus3d {
+            p: glam::DVec3::new(0.0, 0.0, 1e10),
+        };
+        let r = ed.execute(&Command::AddObject {
+            shape: far,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        });
         assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
     }
 
@@ -1153,12 +1696,18 @@ mod tests {
         let id = add_to(&mut ed, circle());
         let r = ed.execute(&Command::ModifyObject {
             id,
-            shape: Some(Shape::Circle { center: DVec2::ZERO, radius: -1.0 }),
+            shape: Some(Shape::Circle {
+                center: DVec2::ZERO,
+                radius: -1.0,
+            }),
             layer: None,
             class: None,
             attrs: None,
         });
-        assert_eq!(r, Err(CommandError::Invalid("radius must be positive".into())));
+        assert_eq!(
+            r,
+            Err(CommandError::Invalid("radius must be positive".into()))
+        );
         assert_eq!(ed.doc.object(id).unwrap().shape, circle());
     }
 
@@ -1167,30 +1716,64 @@ mod tests {
         let mut ed = Editor::default();
         let a = add_to(&mut ed, circle());
         let b = add_to(&mut ed, circle());
-        assert_eq!(ed.execute(&Command::DeleteObjects { ids: vec![ObjectId(999)] }), Err(CommandError::NoObject(ObjectId(999))));
+        assert_eq!(
+            ed.execute(&Command::DeleteObjects {
+                ids: vec![ObjectId(999)]
+            }),
+            Err(CommandError::NoObject(ObjectId(999)))
+        );
         assert_eq!(ed.doc.objects.len(), 2);
 
-        ed.execute(&Command::DeleteObjects { ids: vec![a] }).unwrap();
+        ed.execute(&Command::DeleteObjects { ids: vec![a] })
+            .unwrap();
         assert!(ed.doc.object(a).is_none());
         assert!(ed.doc.object(b).is_some());
 
         lock_layer(&mut ed, LayerId(1), true);
-        assert_eq!(ed.execute(&Command::DeleteObjects { ids: vec![b] }), Err(CommandError::LayerLocked(LayerId(1))));
+        assert_eq!(
+            ed.execute(&Command::DeleteObjects { ids: vec![b] }),
+            Err(CommandError::LayerLocked(LayerId(1)))
+        );
         assert!(ed.doc.object(b).is_some());
     }
 
     #[test]
     fn move_objects_translates_and_rolls_back_on_error() {
         let mut ed = Editor::default();
-        let a = add_to(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-        let b = add_to(&mut ed, Shape::Line { a: DVec2::Y, b: DVec2::ONE });
+        let a = add_to(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        let b = add_to(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::Y,
+                b: DVec2::ONE,
+            },
+        );
 
-        ed.execute(&Command::MoveObjects { ids: vec![a, b], delta: DVec2::new(10.0, -1.0) }).unwrap();
-        assert_eq!(ed.doc.object(a).unwrap().shape, Shape::Line { a: DVec2::new(10.0, -1.0), b: DVec2::new(11.0, -1.0) });
+        ed.execute(&Command::MoveObjects {
+            ids: vec![a, b],
+            delta: DVec2::new(10.0, -1.0),
+        })
+        .unwrap();
+        assert_eq!(
+            ed.doc.object(a).unwrap().shape,
+            Shape::Line {
+                a: DVec2::new(10.0, -1.0),
+                b: DVec2::new(11.0, -1.0)
+            }
+        );
 
         // The second id is missing, so the first move must be undone too.
         let before = ed.doc.clone();
-        let r = ed.execute(&Command::MoveObjects { ids: vec![a, ObjectId(999)], delta: DVec2::X });
+        let r = ed.execute(&Command::MoveObjects {
+            ids: vec![a, ObjectId(999)],
+            delta: DVec2::X,
+        });
         assert_eq!(r, Err(CommandError::NoObject(ObjectId(999))));
         assert_eq!(ed.doc, before);
     }
@@ -1198,20 +1781,54 @@ mod tests {
     #[test]
     fn modify_object_changes_only_given_fields() {
         let mut ed = Editor::default();
-        let lid = LayerId(ed.execute(&Command::AddLayer { name: "B".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0]);
-        let cid = ClassId(ed.execute(&Command::AddClass { name: "C".into(), attrs: Attributes::default() }).unwrap().created[0]);
+        let lid = LayerId(
+            ed.execute(&Command::AddLayer {
+                name: "B".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0],
+        );
+        let cid = ClassId(
+            ed.execute(&Command::AddClass {
+                name: "C".into(),
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
         let id = add_to(&mut ed, circle());
         let original = ed.doc.object(id).unwrap().clone();
 
         // Only the attributes change.
-        let attrs = Attributes { pen: Some(Color([1, 2, 3, 255])), fill: None, line_weight: Some(0.7) };
-        ed.execute(&Command::ModifyObject { id, shape: None, layer: None, class: None, attrs: Some(attrs.clone()) }).unwrap();
+        let attrs = Attributes {
+            pen: Some(Color([1, 2, 3, 255])),
+            fill: None,
+            line_weight: Some(0.7),
+            ..Default::default()
+        };
+        ed.execute(&Command::ModifyObject {
+            id,
+            shape: None,
+            layer: None,
+            class: None,
+            attrs: Some(attrs.clone()),
+        })
+        .unwrap();
         let o = ed.doc.object(id).unwrap();
         assert_eq!(o.attrs, attrs);
-        assert_eq!((o.layer, o.class, &o.shape), (original.layer, original.class, &original.shape));
+        assert_eq!(
+            (o.layer, o.class, &o.shape),
+            (original.layer, original.class, &original.shape)
+        );
 
         // Layer, class and shape change together.
-        let new_shape = Shape::Rect { min: DVec2::ZERO, max: DVec2::ONE };
+        let new_shape = Shape::Rect {
+            min: DVec2::ZERO,
+            max: DVec2::ONE,
+        };
         ed.execute(&Command::ModifyObject {
             id,
             shape: Some(new_shape.clone()),
@@ -1230,36 +1847,101 @@ mod tests {
     fn modify_object_errors_leave_object_unchanged() {
         let mut ed = Editor::default();
         let id = add_to(&mut ed, circle());
-        let modify = |layer, class| Command::ModifyObject { id, shape: None, layer, class, attrs: None };
-        assert_eq!(ed.execute(&modify(Some(LayerId(99)), None)), Err(CommandError::NoLayer(LayerId(99))));
-        assert_eq!(ed.execute(&modify(None, Some(ClassId(99)))), Err(CommandError::NoClass(ClassId(99))));
+        let modify = |layer, class| Command::ModifyObject {
+            id,
+            shape: None,
+            layer,
+            class,
+            attrs: None,
+        };
         assert_eq!(
-            ed.execute(&Command::ModifyObject { id: ObjectId(999), shape: None, layer: None, class: None, attrs: None }),
+            ed.execute(&modify(Some(LayerId(99)), None)),
+            Err(CommandError::NoLayer(LayerId(99)))
+        );
+        assert_eq!(
+            ed.execute(&modify(None, Some(ClassId(99)))),
+            Err(CommandError::NoClass(ClassId(99)))
+        );
+        assert_eq!(
+            ed.execute(&Command::ModifyObject {
+                id: ObjectId(999),
+                shape: None,
+                layer: None,
+                class: None,
+                attrs: None
+            }),
             Err(CommandError::NoObject(ObjectId(999)))
         );
 
         // Moving an object into a locked layer is refused.
-        let lid = LayerId(ed.execute(&Command::AddLayer { name: "Locked".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0]);
+        let lid = LayerId(
+            ed.execute(&Command::AddLayer {
+                name: "Locked".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0],
+        );
         lock_layer(&mut ed, lid, true);
-        assert_eq!(ed.execute(&modify(Some(lid), None)), Err(CommandError::LayerLocked(lid)));
+        assert_eq!(
+            ed.execute(&modify(Some(lid), None)),
+            Err(CommandError::LayerLocked(lid))
+        );
         assert_eq!(ed.doc.object(id).unwrap().layer, FIRST_LAYER);
 
         // An object on a locked layer cannot be modified at all.
         lock_layer(&mut ed, lid, false);
-        ed.execute(&Command::SetActive { layer: Some(lid), class: None }).unwrap();
+        ed.execute(&Command::SetActive {
+            layer: Some(lid),
+            class: None,
+        })
+        .unwrap();
         let id2 = add_to(&mut ed, circle());
         lock_layer(&mut ed, lid, true);
-        let r = ed.execute(&Command::ModifyObject { id: id2, shape: None, layer: None, class: None, attrs: None });
+        let r = ed.execute(&Command::ModifyObject {
+            id: id2,
+            shape: None,
+            layer: None,
+            class: None,
+            attrs: None,
+        });
         assert_eq!(r, Err(CommandError::LayerLocked(lid)));
     }
 
     #[test]
     fn add_layer_defaults_and_custom_scale() {
         let mut ed = Editor::default();
-        let a = ed.execute(&Command::AddLayer { name: "Ground".into(), elevation: -150.0, scale: None, kind: None }).unwrap().created[0];
-        let b = ed.execute(&Command::AddLayer { name: "Detail".into(), elevation: 0.0, scale: Some(20.0), kind: None }).unwrap().created[0];
+        let a = ed
+            .execute(&Command::AddLayer {
+                name: "Ground".into(),
+                elevation: -150.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        let b = ed
+            .execute(&Command::AddLayer {
+                name: "Detail".into(),
+                elevation: 0.0,
+                scale: Some(20.0),
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
         let la = ed.doc.layer(LayerId(a)).unwrap();
-        assert_eq!((la.name.as_str(), la.elevation, la.scale, la.visible, la.locked), ("Ground", -150.0, 100.0, true, false));
+        assert_eq!(
+            (
+                la.name.as_str(),
+                la.elevation,
+                la.scale,
+                la.visible,
+                la.locked
+            ),
+            ("Ground", -150.0, 100.0, true, false)
+        );
         assert_eq!(ed.doc.layer(LayerId(b)).unwrap().scale, 20.0);
         assert_ne!(a, b, "ids are unique");
     }
@@ -1277,31 +1959,74 @@ mod tests {
         })
         .unwrap();
         let l = ed.doc.layer(FIRST_LAYER).unwrap();
-        assert_eq!((l.name.as_str(), l.visible, l.locked, l.elevation, l.scale), ("Renamed", false, true, 3.0, 50.0));
+        assert_eq!(
+            (l.name.as_str(), l.visible, l.locked, l.elevation, l.scale),
+            ("Renamed", false, true, 3.0, 50.0)
+        );
 
-        let r = ed.execute(&Command::ModifyLayer { id: LayerId(1), name: None, visible: None, locked: None, elevation: None, scale: Some(0.0) });
-        assert_eq!(r, Err(CommandError::Invalid("scale must be positive".into())));
+        let r = ed.execute(&Command::ModifyLayer {
+            id: LayerId(1),
+            name: None,
+            visible: None,
+            locked: None,
+            elevation: None,
+            scale: Some(0.0),
+        });
+        assert_eq!(
+            r,
+            Err(CommandError::Invalid("scale must be positive".into()))
+        );
         assert_eq!(ed.doc.layer(FIRST_LAYER).unwrap().scale, 50.0);
 
-        let r = ed.execute(&Command::ModifyLayer { id: LayerId(99), name: None, visible: None, locked: None, elevation: None, scale: None });
+        let r = ed.execute(&Command::ModifyLayer {
+            id: LayerId(99),
+            name: None,
+            visible: None,
+            locked: None,
+            elevation: None,
+            scale: None,
+        });
         assert_eq!(r, Err(CommandError::NoLayer(LayerId(99))));
     }
 
     #[test]
     fn delete_layer_rules() {
         let mut ed = Editor::default();
-        assert_eq!(ed.execute(&Command::DeleteLayer { id: LayerId(99) }), Err(CommandError::NoLayer(LayerId(99))));
-        assert_eq!(ed.execute(&Command::DeleteLayer { id: LayerId(1) }), Err(CommandError::LastLayer));
+        assert_eq!(
+            ed.execute(&Command::DeleteLayer { id: LayerId(99) }),
+            Err(CommandError::NoLayer(LayerId(99)))
+        );
+        assert_eq!(
+            ed.execute(&Command::DeleteLayer { id: LayerId(1) }),
+            Err(CommandError::LastLayer)
+        );
 
-        let lid = LayerId(ed.execute(&Command::AddLayer { name: "B".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0]);
-        ed.execute(&Command::SetActive { layer: Some(lid), class: None }).unwrap();
+        let lid = LayerId(
+            ed.execute(&Command::AddLayer {
+                name: "B".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::SetActive {
+            layer: Some(lid),
+            class: None,
+        })
+        .unwrap();
         add_to(&mut ed, circle());
-        assert_eq!(ed.execute(&Command::DeleteLayer { id: lid }), Err(CommandError::LayerNotEmpty(lid)));
+        assert_eq!(
+            ed.execute(&Command::DeleteLayer { id: lid }),
+            Err(CommandError::LayerNotEmpty(lid))
+        );
         assert_eq!(ed.doc.layers.len(), 2);
 
         // Empty the active layer, then delete it: the active layer falls back to the first one.
         let id = ed.doc.objects[0].id;
-        ed.execute(&Command::DeleteObjects { ids: vec![id] }).unwrap();
+        ed.execute(&Command::DeleteObjects { ids: vec![id] })
+            .unwrap();
         ed.execute(&Command::DeleteLayer { id: lid }).unwrap();
         assert_eq!(ed.doc.layers.len(), 1);
         assert_eq!(ed.doc.active_layer, FIRST_LAYER);
@@ -1315,21 +2040,56 @@ mod tests {
     #[test]
     fn add_class_and_modify_class() {
         let mut ed = Editor::default();
-        let attrs = Attributes { pen: Some(Color([9, 9, 9, 255])), fill: None, line_weight: Some(1.0) };
-        let cid = ClassId(ed.execute(&Command::AddClass { name: "Paths".into(), attrs: attrs.clone() }).unwrap().created[0]);
+        let attrs = Attributes {
+            pen: Some(Color([9, 9, 9, 255])),
+            fill: None,
+            line_weight: Some(1.0),
+            ..Default::default()
+        };
+        let cid = ClassId(
+            ed.execute(&Command::AddClass {
+                name: "Paths".into(),
+                attrs: attrs.clone(),
+            })
+            .unwrap()
+            .created[0],
+        );
         let c = ed.doc.class(cid).unwrap();
-        assert_eq!((c.name.as_str(), c.visible, &c.attrs), ("Paths", true, &attrs));
+        assert_eq!(
+            (c.name.as_str(), c.visible, &c.attrs),
+            ("Paths", true, &attrs)
+        );
 
-        ed.execute(&Command::ModifyClass { id: cid, name: Some("Walks".into()), visible: Some(false), attrs: None }).unwrap();
+        ed.execute(&Command::ModifyClass {
+            id: cid,
+            name: Some("Walks".into()),
+            visible: Some(false),
+            attrs: None,
+        })
+        .unwrap();
         let c = ed.doc.class(cid).unwrap();
-        assert_eq!((c.name.as_str(), c.visible, &c.attrs), ("Walks", false, &attrs));
+        assert_eq!(
+            (c.name.as_str(), c.visible, &c.attrs),
+            ("Walks", false, &attrs)
+        );
 
         let new_attrs = Attributes::default();
-        ed.execute(&Command::ModifyClass { id: cid, name: None, visible: None, attrs: Some(new_attrs.clone()) }).unwrap();
+        ed.execute(&Command::ModifyClass {
+            id: cid,
+            name: None,
+            visible: None,
+            attrs: Some(new_attrs.clone()),
+        })
+        .unwrap();
         assert_eq!(ed.doc.class(cid).unwrap().attrs, new_attrs);
 
         assert_eq!(
-            ed.execute(&Command::ModifyClass { id: ClassId(99), name: None, visible: None, attrs: None }),
+            ed.execute(&Command::ModifyClass {
+                id: ClassId(99),
+                name: None,
+                visible: None,
+                attrs: None
+            }),
             Err(CommandError::NoClass(ClassId(99)))
         );
         ed.undo();
@@ -1339,18 +2099,46 @@ mod tests {
     #[test]
     fn set_active_changes_and_validates() {
         let mut ed = Editor::default();
-        let cid = ClassId(ed.execute(&Command::AddClass { name: "C".into(), attrs: Attributes::default() }).unwrap().created[0]);
-        ed.execute(&Command::SetActive { layer: None, class: Some(cid) }).unwrap();
+        let cid = ClassId(
+            ed.execute(&Command::AddClass {
+                name: "C".into(),
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::SetActive {
+            layer: None,
+            class: Some(cid),
+        })
+        .unwrap();
         assert_eq!(ed.doc.active_class, cid);
         assert_eq!(ed.doc.active_layer, FIRST_LAYER);
 
-        assert_eq!(ed.execute(&Command::SetActive { layer: Some(LayerId(99)), class: None }), Err(CommandError::NoLayer(LayerId(99))));
-        assert_eq!(ed.execute(&Command::SetActive { layer: None, class: Some(ClassId(99)) }), Err(CommandError::NoClass(ClassId(99))));
+        assert_eq!(
+            ed.execute(&Command::SetActive {
+                layer: Some(LayerId(99)),
+                class: None
+            }),
+            Err(CommandError::NoLayer(LayerId(99)))
+        );
+        assert_eq!(
+            ed.execute(&Command::SetActive {
+                layer: None,
+                class: Some(ClassId(99))
+            }),
+            Err(CommandError::NoClass(ClassId(99)))
+        );
         assert_eq!(ed.doc.active_class, cid, "failed SetActive changes nothing");
 
         // A no-op command is not recorded in history.
         let mut fresh = Editor::default();
-        fresh.execute(&Command::SetActive { layer: None, class: None }).unwrap();
+        fresh
+            .execute(&Command::SetActive {
+                layer: None,
+                class: None,
+            })
+            .unwrap();
         assert!(!fresh.can_undo());
 
         ed.undo();
@@ -1363,9 +2151,24 @@ mod tests {
         let out = ed
             .execute(&Command::Batch {
                 commands: vec![
-                    Command::AddLayer { name: "A".into(), elevation: 0.0, scale: None, kind: None },
-                    Command::AddLayer { name: "B".into(), elevation: 0.0, scale: None, kind: None },
-                    Command::AddObject { shape: circle(), layer: None, class: None, attrs: Attributes::default() },
+                    Command::AddLayer {
+                        name: "A".into(),
+                        elevation: 0.0,
+                        scale: None,
+                        kind: None,
+                    },
+                    Command::AddLayer {
+                        name: "B".into(),
+                        elevation: 0.0,
+                        scale: None,
+                        kind: None,
+                    },
+                    Command::AddObject {
+                        shape: circle(),
+                        layer: None,
+                        class: None,
+                        attrs: Attributes::default(),
+                    },
                 ],
             })
             .unwrap();
@@ -1390,7 +2193,12 @@ mod tests {
         assert!(ed.can_redo());
 
         // A failed command does not touch the redo stack.
-        assert!(ed.execute(&Command::DeleteObjects { ids: vec![ObjectId(999)] }).is_err());
+        assert!(
+            ed.execute(&Command::DeleteObjects {
+                ids: vec![ObjectId(999)]
+            })
+            .is_err()
+        );
         assert!(ed.can_redo());
 
         // A successful command clears it.
@@ -1402,9 +2210,24 @@ mod tests {
     #[test]
     fn undo_and_redo_restore_layers_classes_and_active_state() {
         let mut ed = Editor::default();
-        let lid = ed.execute(&Command::AddLayer { name: "L".into(), elevation: 2.0, scale: Some(10.0), kind: None }).unwrap().created[0];
-        ed.execute(&Command::ModifyLayer { id: LayerId(lid), name: Some("M".into()), visible: None, locked: None, elevation: None, scale: None })
-            .unwrap();
+        let lid = ed
+            .execute(&Command::AddLayer {
+                name: "L".into(),
+                elevation: 2.0,
+                scale: Some(10.0),
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::ModifyLayer {
+            id: LayerId(lid),
+            name: Some("M".into()),
+            visible: None,
+            locked: None,
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
         let after = ed.doc.clone();
 
         ed.undo();
@@ -1423,8 +2246,18 @@ mod tests {
         let mut ed = Editor::default();
         let id = add_to(&mut ed, circle());
         let original = ed.doc.object(id).unwrap().clone();
-        let new_shape = Shape::Circle { center: DVec2::new(1.0, 1.0), radius: 2.0 };
-        ed.execute(&Command::ModifyObject { id, shape: Some(new_shape.clone()), layer: None, class: None, attrs: None }).unwrap();
+        let new_shape = Shape::Circle {
+            center: DVec2::new(1.0, 1.0),
+            radius: 2.0,
+        };
+        ed.execute(&Command::ModifyObject {
+            id,
+            shape: Some(new_shape.clone()),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .unwrap();
 
         ed.undo();
         assert_eq!(ed.doc.object(id), Some(&original));
@@ -1434,28 +2267,72 @@ mod tests {
 
     #[test]
     fn command_error_messages() {
-        assert_eq!(CommandError::NoObject(ObjectId(3)).to_string(), "object 3 does not exist");
-        assert_eq!(CommandError::NoLayer(LayerId(4)).to_string(), "layer 4 does not exist");
-        assert_eq!(CommandError::NoClass(ClassId(5)).to_string(), "class 5 does not exist");
-        assert_eq!(CommandError::LayerLocked(LayerId(6)).to_string(), "layer 6 is locked");
-        assert_eq!(CommandError::LayerNotEmpty(LayerId(7)).to_string(), "layer 7 is not empty");
-        assert_eq!(CommandError::LastLayer.to_string(), "a document must keep at least one layer");
-        assert_eq!(CommandError::Invalid("bad".into()).to_string(), "invalid value: bad");
+        assert_eq!(
+            CommandError::NoObject(ObjectId(3)).to_string(),
+            "object 3 does not exist"
+        );
+        assert_eq!(
+            CommandError::NoLayer(LayerId(4)).to_string(),
+            "layer 4 does not exist"
+        );
+        assert_eq!(
+            CommandError::NoClass(ClassId(5)).to_string(),
+            "class 5 does not exist"
+        );
+        assert_eq!(
+            CommandError::LayerLocked(LayerId(6)).to_string(),
+            "layer 6 is locked"
+        );
+        assert_eq!(
+            CommandError::LayerNotEmpty(LayerId(7)).to_string(),
+            "layer 7 is not empty"
+        );
+        assert_eq!(
+            CommandError::LastLayer.to_string(),
+            "a document must keep at least one layer"
+        );
+        assert_eq!(
+            CommandError::Invalid("bad".into()).to_string(),
+            "invalid value: bad"
+        );
     }
 
     #[test]
     fn command_json_uses_op_tag() {
-        let c: Command = serde_json::from_str(r#"{"op":"move_objects","ids":[2],"delta":[1.5,-2]}"#).unwrap();
-        assert_eq!(c, Command::MoveObjects { ids: vec![ObjectId(2)], delta: DVec2::new(1.5, -2.0) });
+        let c: Command =
+            serde_json::from_str(r#"{"op":"move_objects","ids":[2],"delta":[1.5,-2]}"#).unwrap();
+        assert_eq!(
+            c,
+            Command::MoveObjects {
+                ids: vec![ObjectId(2)],
+                delta: DVec2::new(1.5, -2.0)
+            }
+        );
         let c: Command = serde_json::from_str(r#"{"op":"add_layer","name":"X"}"#).unwrap();
-        assert_eq!(c, Command::AddLayer { name: "X".into(), elevation: 0.0, scale: None, kind: None });
+        assert_eq!(
+            c,
+            Command::AddLayer {
+                name: "X".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None
+            }
+        );
     }
 
     #[test]
     fn add_layer_rejects_non_positive_scale() {
         let mut ed = Editor::default();
-        let r = ed.execute(&Command::AddLayer { name: "Bad".into(), elevation: 0.0, scale: Some(-5.0), kind: None });
-        assert_eq!(r, Err(CommandError::Invalid("scale must be positive".into())));
+        let r = ed.execute(&Command::AddLayer {
+            name: "Bad".into(),
+            elevation: 0.0,
+            scale: Some(-5.0),
+            kind: None,
+        });
+        assert_eq!(
+            r,
+            Err(CommandError::Invalid("scale must be positive".into()))
+        );
         assert_eq!(ed.doc.layers.len(), 1);
     }
 
@@ -1466,12 +2343,25 @@ mod tests {
     }
 
     fn add_many(ed: &mut Editor, n: usize) -> Vec<ObjectId> {
-        (0..n).map(|i| add_to(ed, Shape::Line { a: DVec2::new(i as f64, 0.0), b: DVec2::new(i as f64, 1.0) })).collect()
+        (0..n)
+            .map(|i| {
+                add_to(
+                    ed,
+                    Shape::Line {
+                        a: DVec2::new(i as f64, 0.0),
+                        b: DVec2::new(i as f64, 1.0),
+                    },
+                )
+            })
+            .collect()
     }
 
     #[test]
     fn typed_ids_are_plain_numbers_in_json_and_not_truncated() {
-        assert_eq!(serde_json::to_value(ObjectId(7)).unwrap(), serde_json::json!(7));
+        assert_eq!(
+            serde_json::to_value(ObjectId(7)).unwrap(),
+            serde_json::json!(7)
+        );
         assert_eq!(serde_json::from_str::<LayerId>("3").unwrap(), LayerId(3));
         assert_eq!(ObjectId(9).to_string(), "9");
         assert_eq!(u64::from(ClassId(4)), 4);
@@ -1479,11 +2369,28 @@ mod tests {
         // An ID above u32::MAX must survive for layers and classes too.
         let mut doc = Document::default();
         let big = u32::MAX as u64 + 10;
-        doc.objects.insert(ObjectId(big), Object::new(ObjectId(big), FIRST_LAYER, NONE_CLASS, circle()));
+        doc.objects.insert(
+            ObjectId(big),
+            Object::new(ObjectId(big), FIRST_LAYER, NONE_CLASS, circle()),
+        );
         doc.validate().unwrap();
         let mut ed = Editor::new(doc);
-        let lid = ed.execute(&Command::AddLayer { name: "L".into(), elevation: 0.0, scale: None, kind: None }).unwrap().created[0];
-        let cid = ed.execute(&Command::AddClass { name: "C".into(), attrs: Attributes::default() }).unwrap().created[0];
+        let lid = ed
+            .execute(&Command::AddLayer {
+                name: "L".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        let cid = ed
+            .execute(&Command::AddClass {
+                name: "C".into(),
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0];
         assert!(lid > big && cid > lid);
         assert!(ed.doc.layer(LayerId(lid)).is_some());
         assert!(ed.doc.class(ClassId(cid)).is_some());
@@ -1517,10 +2424,19 @@ mod tests {
         let full = ids_of(&ed);
         let batch = Command::Batch {
             commands: vec![
-                Command::DeleteObjects { ids: vec![ids[3], ids[9], ids[0]] },
+                Command::DeleteObjects {
+                    ids: vec![ids[3], ids[9], ids[0]],
+                },
                 line(100.0),
-                Command::DeleteObjects { ids: vec![ids[4], ids[11], ids[1], ids[2], ids[5], ids[6], ids[7], ids[8], ids[10]] },
-                Command::MoveObjects { ids: vec![], delta: DVec2::X },
+                Command::DeleteObjects {
+                    ids: vec![
+                        ids[4], ids[11], ids[1], ids[2], ids[5], ids[6], ids[7], ids[8], ids[10],
+                    ],
+                },
+                Command::MoveObjects {
+                    ids: vec![],
+                    delta: DVec2::X,
+                },
                 line(101.0),
             ],
         };
@@ -1537,7 +2453,14 @@ mod tests {
     fn object_added_and_deleted_in_one_batch_leaves_no_history() {
         let mut ed = Editor::default();
         // The next ID is 2, so the batch deletes the object it just made.
-        let r = ed.execute(&Command::Batch { commands: vec![line(0.0), Command::DeleteObjects { ids: vec![ObjectId(2)] }] });
+        let r = ed.execute(&Command::Batch {
+            commands: vec![
+                line(0.0),
+                Command::DeleteObjects {
+                    ids: vec![ObjectId(2)],
+                },
+            ],
+        });
         assert!(r.is_ok());
         assert!(ed.doc.objects.is_empty());
         assert!(!ed.can_undo());
@@ -1551,8 +2474,15 @@ mod tests {
         ed.execute(&Command::Batch {
             commands: vec![
                 line(0.0),
-                Command::MoveObjects { ids: vec![ObjectId(3), keep], delta: DVec2::X },
-                Command::SetData { id: ObjectId(3), set: BTreeMap::from([("k".into(), Value::from(1))]), remove: vec![] },
+                Command::MoveObjects {
+                    ids: vec![ObjectId(3), keep],
+                    delta: DVec2::X,
+                },
+                Command::SetData {
+                    id: ObjectId(3),
+                    set: BTreeMap::from([("k".into(), Value::from(1))]),
+                    remove: vec![],
+                },
             ],
         })
         .unwrap();
@@ -1566,15 +2496,40 @@ mod tests {
     #[test]
     fn duplicate_ids_are_applied_once() {
         let mut ed = Editor::default();
-        let a = add_to(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-        ed.execute(&Command::MoveObjects { ids: vec![a, a, a], delta: DVec2::new(5.0, 0.0) }).unwrap();
-        assert_eq!(ed.doc.object(a).unwrap().shape, Shape::Line { a: DVec2::new(5.0, 0.0), b: DVec2::new(6.0, 0.0) });
+        let a = add_to(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        ed.execute(&Command::MoveObjects {
+            ids: vec![a, a, a],
+            delta: DVec2::new(5.0, 0.0),
+        })
+        .unwrap();
+        assert_eq!(
+            ed.doc.object(a).unwrap().shape,
+            Shape::Line {
+                a: DVec2::new(5.0, 0.0),
+                b: DVec2::new(6.0, 0.0)
+            }
+        );
         ed.undo();
-        assert_eq!(ed.doc.object(a).unwrap().shape, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
+        assert_eq!(
+            ed.doc.object(a).unwrap().shape,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X
+            }
+        );
 
         let b = add_to(&mut ed, circle());
         let before = ids_of(&ed);
-        ed.execute(&Command::DeleteObjects { ids: vec![b, a, b, a] }).unwrap();
+        ed.execute(&Command::DeleteObjects {
+            ids: vec![b, a, b, a],
+        })
+        .unwrap();
         assert!(ed.doc.objects.is_empty());
         ed.undo();
         assert_eq!(ids_of(&ed), before);
@@ -1583,27 +2538,116 @@ mod tests {
     #[test]
     fn non_finite_numbers_are_rejected_and_the_document_stays_saveable() {
         let mut ed = Editor::default();
-        let a = add_to(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
-        let add = |shape| Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() };
+        let a = add_to(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        let add = |shape| Command::AddObject {
+            shape,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        };
         let invalid = Err(CommandError::Invalid("numbers must be finite".into()));
         for shape in [
-            Shape::Line { a: DVec2::new(f64::NAN, 0.0), b: DVec2::X },
-            Shape::Circle { center: DVec2::ZERO, radius: f64::INFINITY },
-            Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: f64::NAN, height: 1.0 },
-            Shape::Text { at: DVec2::ZERO, text: "x".into(), height: f64::NAN },
+            Shape::Line {
+                a: DVec2::new(f64::NAN, 0.0),
+                b: DVec2::X,
+            },
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: f64::INFINITY,
+            },
+            Shape::Plant {
+                at: DVec2::ZERO,
+                species: "x".into(),
+                spread: f64::NAN,
+                height: 1.0,
+            },
+            Shape::Text {
+                at: DVec2::ZERO,
+                text: "x".into(),
+                height: f64::NAN,
+            },
         ] {
             assert_eq!(ed.execute(&add(shape)), invalid);
         }
-        assert_eq!(ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::new(f64::NAN, 0.0) }), invalid);
-        let bad_attrs = Attributes { line_weight: Some(f64::NAN), ..Attributes::default() };
-        assert_eq!(ed.execute(&Command::AddObject { shape: circle(), layer: None, class: None, attrs: bad_attrs.clone() }), invalid);
-        assert_eq!(ed.execute(&Command::AddClass { name: "x".into(), attrs: bad_attrs.clone() }), invalid);
-        assert_eq!(ed.execute(&Command::ModifyClass { id: NONE_CLASS, name: None, visible: None, attrs: Some(bad_attrs.clone()) }), invalid);
-        assert_eq!(ed.execute(&Command::ModifyObject { id: a, shape: None, layer: None, class: None, attrs: Some(bad_attrs) }), invalid);
-        assert_eq!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: f64::NAN, scale: None, kind: None }), invalid);
-        assert_eq!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: 0.0, scale: Some(f64::INFINITY), kind: None }), invalid);
         assert_eq!(
-            ed.execute(&Command::ModifyLayer { id: FIRST_LAYER, name: None, visible: None, locked: None, elevation: Some(f64::NAN), scale: None }),
+            ed.execute(&Command::MoveObjects {
+                ids: vec![a],
+                delta: DVec2::new(f64::NAN, 0.0)
+            }),
+            invalid
+        );
+        let bad_attrs = Attributes {
+            line_weight: Some(f64::NAN),
+            ..Attributes::default()
+        };
+        assert_eq!(
+            ed.execute(&Command::AddObject {
+                shape: circle(),
+                layer: None,
+                class: None,
+                attrs: bad_attrs.clone()
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::AddClass {
+                name: "x".into(),
+                attrs: bad_attrs.clone()
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::ModifyClass {
+                id: NONE_CLASS,
+                name: None,
+                visible: None,
+                attrs: Some(bad_attrs.clone())
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::ModifyObject {
+                id: a,
+                shape: None,
+                layer: None,
+                class: None,
+                attrs: Some(bad_attrs)
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::AddLayer {
+                name: "x".into(),
+                elevation: f64::NAN,
+                scale: None,
+                kind: None
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::AddLayer {
+                name: "x".into(),
+                elevation: 0.0,
+                scale: Some(f64::INFINITY),
+                kind: None
+            }),
+            invalid
+        );
+        assert_eq!(
+            ed.execute(&Command::ModifyLayer {
+                id: FIRST_LAYER,
+                name: None,
+                visible: None,
+                locked: None,
+                elevation: Some(f64::NAN),
+                scale: None
+            }),
             invalid
         );
         assert_eq!(ed.doc.layers.len(), 1);
@@ -1615,12 +2659,24 @@ mod tests {
     #[test]
     fn moving_out_of_range_is_rejected_and_rolled_back() {
         let mut ed = Editor::default();
-        let a = add_to(&mut ed, Shape::Line { a: DVec2::splat(MAX_COORD), b: DVec2::splat(-MAX_COORD) });
+        let a = add_to(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::splat(MAX_COORD),
+                b: DVec2::splat(-MAX_COORD),
+            },
+        );
         let before = ed.doc.clone();
-        let r = ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::splat(1.0) });
+        let r = ed.execute(&Command::MoveObjects {
+            ids: vec![a],
+            delta: DVec2::splat(1.0),
+        });
         assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
         assert_eq!(ed.doc, before);
-        let r = ed.execute(&Command::MoveObjects { ids: vec![a], delta: DVec2::splat(f64::MAX) });
+        let r = ed.execute(&Command::MoveObjects {
+            ids: vec![a],
+            delta: DVec2::splat(f64::MAX),
+        });
         assert_eq!(r, Err(CommandError::Invalid(OUT_OF_RANGE.into())));
         assert_eq!(ed.doc, before);
         // Values at the limit are fine, and the file reopens.
@@ -1631,11 +2687,47 @@ mod tests {
     #[test]
     fn numbers_beyond_the_limit_and_bad_thickness_are_refused() {
         let mut ed = Editor::default();
-        let add = |ed: &mut Editor, shape| ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() });
+        let add = |ed: &mut Editor, shape| {
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+        };
         let range = Err(CommandError::Invalid(OUT_OF_RANGE.into()));
-        assert_eq!(add(&mut ed, Shape::Circle { center: DVec2::new(1.1e9, 0.0), radius: 1.0 }), range);
-        assert_eq!(add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 1e39 }), range);
-        assert_eq!(add(&mut ed, Shape::Plant { at: DVec2::ZERO, species: "p".into(), spread: 1.0, height: 1e10 }), range);
+        assert_eq!(
+            add(
+                &mut ed,
+                Shape::Circle {
+                    center: DVec2::new(1.1e9, 0.0),
+                    radius: 1.0
+                }
+            ),
+            range
+        );
+        assert_eq!(
+            add(
+                &mut ed,
+                Shape::Circle {
+                    center: DVec2::ZERO,
+                    radius: 1e39
+                }
+            ),
+            range
+        );
+        assert_eq!(
+            add(
+                &mut ed,
+                Shape::Plant {
+                    at: DVec2::ZERO,
+                    species: "p".into(),
+                    spread: 1.0,
+                    height: 1e10
+                }
+            ),
+            range
+        );
         let slab = |thickness, elevation| Shape::Hardscape {
             boundary: crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]),
             material: "m".into(),
@@ -1645,13 +2737,32 @@ mod tests {
         assert_eq!(add(&mut ed, slab(Some(1e39), None)), range);
         assert_eq!(add(&mut ed, slab(None, Some(-1e10))), range);
         for t in [0.0, -5.0] {
-            assert_eq!(add(&mut ed, slab(Some(t), None)), Err(CommandError::Invalid("thickness must be positive".into())));
+            assert_eq!(
+                add(&mut ed, slab(Some(t), None)),
+                Err(CommandError::Invalid("thickness must be positive".into()))
+            );
         }
         assert!(add(&mut ed, slab(Some(MAX_COORD), Some(MAX_COORD))).is_ok());
         assert!(add(&mut ed, slab(None, None)).is_ok());
         // Layers: the elevation is limited too.
-        assert!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: 1e10, scale: None, kind: None }).is_err());
-        assert!(ed.execute(&Command::AddLayer { name: "x".into(), elevation: -1e9, scale: None, kind: None }).is_ok());
+        assert!(
+            ed.execute(&Command::AddLayer {
+                name: "x".into(),
+                elevation: 1e10,
+                scale: None,
+                kind: None
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::AddLayer {
+                name: "x".into(),
+                elevation: -1e9,
+                scale: None,
+                kind: None
+            })
+            .is_ok()
+        );
         // A loaded document is checked the same way.
         let mut doc = ed.doc.clone();
         if let Some(o) = doc.objects.values_mut().next() {
@@ -1667,12 +2778,20 @@ mod tests {
     fn arc_with_zero_sweep_is_rejected_and_full_circle_is_accepted() {
         let mut ed = Editor::default();
         let arc = |start, end| Command::AddObject {
-            shape: Shape::Arc { center: DVec2::ZERO, radius: 1.0, start, end },
+            shape: Shape::Arc {
+                center: DVec2::ZERO,
+                radius: 1.0,
+                start,
+                end,
+            },
             layer: None,
             class: None,
             attrs: Attributes::default(),
         };
-        assert_eq!(ed.execute(&arc(1.0, 1.0)), Err(CommandError::Invalid("arc sweep must not be zero".into())));
+        assert_eq!(
+            ed.execute(&arc(1.0, 1.0)),
+            Err(CommandError::Invalid("arc sweep must not be zero".into()))
+        );
         ed.execute(&arc(0.0, std::f64::consts::TAU)).unwrap();
         ed.execute(&arc(0.0, -std::f64::consts::TAU)).unwrap();
         assert_eq!(ed.doc.objects.len(), 2);
@@ -1682,12 +2801,33 @@ mod tests {
     fn set_data_merges_removes_and_undoes() {
         let mut ed = Editor::default();
         let id = add_to(&mut ed, circle());
-        let set = |pairs: &[(&str, Value)]| pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect::<BTreeMap<_, _>>();
-        ed.execute(&Command::SetData { id, set: set(&[("a", Value::from(1)), ("b", Value::from("x"))]), remove: vec![] }).unwrap();
-        ed.execute(&Command::SetData { id, set: set(&[("a", Value::from(2))]), remove: vec!["b".into(), "nope".into()] }).unwrap();
-        assert_eq!(ed.doc.object(id).unwrap().data, set(&[("a", Value::from(2))]));
+        let set = |pairs: &[(&str, Value)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        ed.execute(&Command::SetData {
+            id,
+            set: set(&[("a", Value::from(1)), ("b", Value::from("x"))]),
+            remove: vec![],
+        })
+        .unwrap();
+        ed.execute(&Command::SetData {
+            id,
+            set: set(&[("a", Value::from(2))]),
+            remove: vec!["b".into(), "nope".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            ed.doc.object(id).unwrap().data,
+            set(&[("a", Value::from(2))])
+        );
         ed.undo();
-        assert_eq!(ed.doc.object(id).unwrap().data, set(&[("a", Value::from(1)), ("b", Value::from("x"))]));
+        assert_eq!(
+            ed.doc.object(id).unwrap().data,
+            set(&[("a", Value::from(1)), ("b", Value::from("x"))])
+        );
         ed.undo();
         assert!(ed.doc.object(id).unwrap().data.is_empty());
         ed.redo();
@@ -1695,26 +2835,49 @@ mod tests {
 
         // A no-op is not recorded. Missing objects and locked layers are refused.
         let steps = ed.undo.len();
-        ed.execute(&Command::SetData { id, set: BTreeMap::new(), remove: vec!["zzz".into()] }).unwrap();
+        ed.execute(&Command::SetData {
+            id,
+            set: BTreeMap::new(),
+            remove: vec!["zzz".into()],
+        })
+        .unwrap();
         assert_eq!(ed.undo.len(), steps);
         assert_eq!(
-            ed.execute(&Command::SetData { id: ObjectId(999), set: BTreeMap::new(), remove: vec![] }),
+            ed.execute(&Command::SetData {
+                id: ObjectId(999),
+                set: BTreeMap::new(),
+                remove: vec![]
+            }),
             Err(CommandError::NoObject(ObjectId(999)))
         );
         lock_layer(&mut ed, FIRST_LAYER, true);
         assert_eq!(
-            ed.execute(&Command::SetData { id, set: set(&[("a", Value::from(3))]), remove: vec![] }),
+            ed.execute(&Command::SetData {
+                id,
+                set: set(&[("a", Value::from(3))]),
+                remove: vec![]
+            }),
             Err(CommandError::LayerLocked(FIRST_LAYER))
         );
 
-        let c: Command = serde_json::from_str(r#"{"op":"set_data","id":2,"set":{"k":[1]},"remove":["z"]}"#).unwrap();
+        let c: Command =
+            serde_json::from_str(r#"{"op":"set_data","id":2,"set":{"k":[1]},"remove":["z"]}"#)
+                .unwrap();
         assert!(matches!(c, Command::SetData { .. }));
     }
 
     #[test]
     fn add_layer_can_make_a_sheet_layer() {
         let mut ed = Editor::default();
-        let id = ed.execute(&Command::AddLayer { name: "Sheet".into(), elevation: 0.0, scale: None, kind: Some(LayerKind::Sheet) }).unwrap().created[0];
+        let id = ed
+            .execute(&Command::AddLayer {
+                name: "Sheet".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: Some(LayerKind::Sheet),
+            })
+            .unwrap()
+            .created[0];
         assert_eq!(ed.doc.layer(LayerId(id)).unwrap().kind, LayerKind::Sheet);
         assert_eq!(ed.doc.layer(FIRST_LAYER).unwrap().kind, LayerKind::Design);
         let json = serde_json::to_string(&ed.doc).unwrap();
@@ -1723,7 +2886,17 @@ mod tests {
 
     fn rounded_square() -> Shape {
         let arc = |x: f64, y: f64| Vertex::new(DVec2::new(x, y), VertexKind::Arc { radius: 10.0 });
-        Shape::Hardscape { boundary: vec![arc(0.0, 0.0), arc(100.0, 0.0), arc(100.0, 100.0), arc(0.0, 100.0)], material: "m".into(), thickness: None, elevation: None }
+        Shape::Hardscape {
+            boundary: vec![
+                arc(0.0, 0.0),
+                arc(100.0, 0.0),
+                arc(100.0, 100.0),
+                arc(0.0, 100.0),
+            ],
+            material: "m".into(),
+            thickness: None,
+            elevation: None,
+        }
     }
 
     #[test]
@@ -1732,15 +2905,36 @@ mod tests {
         let id = add_to(&mut ed, rounded_square());
         let before = ed.doc.clone();
         let set = |index, kind, p| Command::SetVertex { id, index, kind, p };
-        ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None)).unwrap();
-        ed.execute(&set(2, None, Some(DVec2::new(120.0, 110.0)))).unwrap();
-        ed.execute(&set(3, Some(VertexKind::Bezier), Some(DVec2::new(-5.0, 99.0)))).unwrap();
+        ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None))
+            .unwrap();
+        ed.execute(&set(2, None, Some(DVec2::new(120.0, 110.0))))
+            .unwrap();
+        ed.execute(&set(
+            3,
+            Some(VertexKind::Bezier),
+            Some(DVec2::new(-5.0, 99.0)),
+        ))
+        .unwrap();
         let vs = ed.doc.object(id).unwrap().shape.vertices().unwrap().clone();
-        assert_eq!(vs[1], Vertex::new(DVec2::new(100.0, 0.0), VertexKind::Arc { radius: 25.0 }));
-        assert_eq!(vs[2], Vertex::new(DVec2::new(120.0, 110.0), VertexKind::Arc { radius: 10.0 }));
-        assert_eq!(vs[3], Vertex::new(DVec2::new(-5.0, 99.0), VertexKind::Bezier));
+        assert_eq!(
+            vs[1],
+            Vertex::new(DVec2::new(100.0, 0.0), VertexKind::Arc { radius: 25.0 })
+        );
+        assert_eq!(
+            vs[2],
+            Vertex::new(DVec2::new(120.0, 110.0), VertexKind::Arc { radius: 10.0 })
+        );
+        assert_eq!(
+            vs[3],
+            Vertex::new(DVec2::new(-5.0, 99.0), VertexKind::Bezier)
+        );
         // Repeating a change is a no-op and is not recorded.
-        assert_eq!(ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None)).unwrap().created, Vec::<u64>::new());
+        assert_eq!(
+            ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None))
+                .unwrap()
+                .created,
+            Vec::<u64>::new()
+        );
         for _ in 0..3 {
             assert!(ed.undo());
         }
@@ -1755,31 +2949,77 @@ mod tests {
         let before = ed.doc.clone();
         let invalid = |m: &str| Err(CommandError::Invalid(m.into()));
         let set = |id, index, kind, p| Command::SetVertex { id, index, kind, p };
-        assert_eq!(ed.execute(&set(id, 4, None, None)), invalid("vertex index 4 is out of range (0..4)"));
-        assert_eq!(ed.execute(&set(circle_id, 0, None, None)), invalid("object has no vertices"));
-        assert_eq!(ed.execute(&set(ObjectId(999), 0, None, None)), Err(CommandError::NoObject(ObjectId(999))));
+        assert_eq!(
+            ed.execute(&set(id, 4, None, None)),
+            invalid("vertex index 4 is out of range (0..4)")
+        );
+        assert_eq!(
+            ed.execute(&set(circle_id, 0, None, None)),
+            invalid("object has no vertices")
+        );
+        assert_eq!(
+            ed.execute(&set(ObjectId(999), 0, None, None)),
+            Err(CommandError::NoObject(ObjectId(999)))
+        );
         for radius in [-1.0, f64::NAN, f64::INFINITY] {
             let kind = Some(VertexKind::Arc { radius });
-            assert!(matches!(ed.execute(&set(id, 0, kind, None)), Err(CommandError::Invalid(_))), "{radius}");
+            assert!(
+                matches!(
+                    ed.execute(&set(id, 0, kind, None)),
+                    Err(CommandError::Invalid(_))
+                ),
+                "{radius}"
+            );
         }
-        assert_eq!(ed.execute(&set(id, 0, None, Some(DVec2::new(f64::NAN, 0.0)))), invalid(NOT_FINITE));
+        assert_eq!(
+            ed.execute(&set(id, 0, None, Some(DVec2::new(f64::NAN, 0.0)))),
+            invalid(NOT_FINITE)
+        );
         assert_eq!(ed.doc, before);
         // The same rules hold when a whole shape is added or modified.
         let bad = Shape::Polyline {
-            points: vec![Vertex::corner(DVec2::ZERO), Vertex::new(DVec2::X, VertexKind::Arc { radius: -2.0 })],
+            points: vec![
+                Vertex::corner(DVec2::ZERO),
+                Vertex::new(DVec2::X, VertexKind::Arc { radius: -2.0 }),
+            ],
             closed: false,
         };
         assert_eq!(
-            ed.execute(&Command::AddObject { shape: bad, layer: None, class: None, attrs: Attributes::default() }),
+            ed.execute(&Command::AddObject {
+                shape: bad,
+                layer: None,
+                class: None,
+                attrs: Attributes::default()
+            }),
             invalid("vertex radius must be zero or more")
         );
     }
 
     #[test]
     fn set_vertex_json_form() {
-        let c: Command = serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":1,"kind":{"kind":"arc","radius":30}}"#).unwrap();
-        assert_eq!(c, Command::SetVertex { id: ObjectId(2), index: 1, kind: Some(VertexKind::Arc { radius: 30.0 }), p: None });
-        let c: Command = serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":0,"p":[1,2]}"#).unwrap();
-        assert_eq!(c, Command::SetVertex { id: ObjectId(2), index: 0, kind: None, p: Some(DVec2::new(1.0, 2.0)) });
+        let c: Command = serde_json::from_str(
+            r#"{"op":"set_vertex","id":2,"index":1,"kind":{"kind":"arc","radius":30}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            c,
+            Command::SetVertex {
+                id: ObjectId(2),
+                index: 1,
+                kind: Some(VertexKind::Arc { radius: 30.0 }),
+                p: None
+            }
+        );
+        let c: Command =
+            serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":0,"p":[1,2]}"#).unwrap();
+        assert_eq!(
+            c,
+            Command::SetVertex {
+                id: ObjectId(2),
+                index: 0,
+                kind: None,
+                p: Some(DVec2::new(1.0, 2.0))
+            }
+        );
     }
 }

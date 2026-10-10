@@ -11,18 +11,44 @@ pub struct TemplateInfo {
 }
 
 pub const TEMPLATES: &[TemplateInfo] = &[
-    TemplateInfo { id: "plant_list", title: "Plant list", description: "One row per plant style with botanical name, size, count and cost, and totals." },
-    TemplateInfo { id: "hardscape_quantities", title: "Hardscape quantities", description: "Count, area and volume per material, and totals." },
-    TemplateInfo { id: "area_schedule", title: "Area schedule", description: "Landscape areas and hardscapes with area and perimeter, in groups with subtotals." },
-    TemplateInfo { id: "tree_survey", title: "Existing tree survey", description: "Existing trees with trunk diameter, spread, height, condition, action and root protection radius." },
+    TemplateInfo {
+        id: "plant_list",
+        title: "Plant list",
+        description: "One row per plant style with botanical name, size, count and cost, and totals.",
+    },
+    TemplateInfo {
+        id: "hardscape_quantities",
+        title: "Hardscape quantities",
+        description: "Count, area and volume per material, and totals.",
+    },
+    TemplateInfo {
+        id: "area_schedule",
+        title: "Area schedule",
+        description: "Landscape areas and hardscapes with area and perimeter, in groups with subtotals.",
+    },
+    TemplateInfo {
+        id: "tree_survey",
+        title: "Existing tree survey",
+        description: "Existing trees with trunk diameter, spread, height, condition, action and root protection radius.",
+    },
 ];
 
 fn col(header: &str, expr: &str) -> ColumnDef {
-    ColumnDef { header: header.into(), expr: expr.into(), ..ColumnDef::default() }
+    ColumnDef {
+        header: header.into(),
+        expr: expr.into(),
+        ..ColumnDef::default()
+    }
 }
 
 fn sum(header: &str, expr: &str, decimals: Option<u8>, unit: &str) -> ColumnDef {
-    ColumnDef { header: header.into(), expr: expr.into(), summary: Some(Summary::Sum), decimals, unit: unit.into() }
+    ColumnDef {
+        header: header.into(),
+        expr: expr.into(),
+        summary: Some(Summary::Sum),
+        decimals,
+        unit: unit.into(),
+    }
 }
 
 fn dec(mut c: ColumnDef, decimals: u8, unit: &str) -> ColumnDef {
@@ -57,7 +83,13 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
         "hardscape_quantities" => DatabaseDef {
             name: "Hardscape quantities".into(),
             criteria: "Kind = \"hardscape\"".into(),
-            columns: vec![col("Material", "Material"), sum("Count", "Count", None, ""), sum("Area", "Area", Some(2), "m2"), dec(col("Thickness", "Thickness"), 0, "mm"), sum("Volume", "Volume", Some(2), "m3")],
+            columns: vec![
+                col("Material", "Material"),
+                sum("Count", "Count", None, ""),
+                sum("Area", "Area", Some(2), "m2"),
+                dec(col("Thickness", "Thickness"), 0, "mm"),
+                sum("Volume", "Volume", Some(2), "m3"),
+            ],
             group_by: Some(0),
             group_mode: GroupMode::Summary,
             ..DatabaseDef::default()
@@ -65,8 +97,17 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
         "area_schedule" => DatabaseDef {
             name: "Area schedule".into(),
             criteria: "Kind = \"landscape_area\" OR Kind = \"hardscape\"".into(),
-            columns: vec![col("Kind", "Kind"), col("Name", "Style"), col("Layer", "Layer"), sum("Area", "Area", Some(2), "m2"), dec(col("Perimeter", "Perimeter"), 2, "m")],
-            sort: vec![SortKey { column: 1, descending: false }],
+            columns: vec![
+                col("Kind", "Kind"),
+                col("Name", "Style"),
+                col("Layer", "Layer"),
+                sum("Area", "Area", Some(2), "m2"),
+                dec(col("Perimeter", "Perimeter"), 2, "m"),
+            ],
+            sort: vec![SortKey {
+                column: 1,
+                descending: false,
+            }],
             group_by: Some(0),
             group_mode: GroupMode::Detail,
             ..DatabaseDef::default()
@@ -84,7 +125,10 @@ pub fn template(id: &str) -> Option<WorksheetDef> {
                 col("Action", "Action"),
                 dec(col("Root protection radius", "RPZ / 1000"), 1, "m"),
             ],
-            sort: vec![SortKey { column: 0, descending: false }],
+            sort: vec![SortKey {
+                column: 0,
+                descending: false,
+            }],
             ..DatabaseDef::default()
         },
         _ => return None,
@@ -107,19 +151,103 @@ mod tests {
     use cadektor_core::resource::ResourceBody;
 
     fn add(ed: &mut Editor, shape: Shape) {
-        ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        ed.execute(&Command::AddObject {
+            shape,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
     }
 
     fn scene() -> Editor {
         let mut ed = Editor::default();
-        let sq = |s: f64| corners(&[DVec2::ZERO, DVec2::new(s, 0.0), DVec2::new(s, s), DVec2::new(0.0, s)]);
-        add(&mut ed, Shape::Hardscape { boundary: sq(2000.0), material: "Granite".into(), thickness: Some(100.0), elevation: None });
-        add(&mut ed, Shape::Hardscape { boundary: sq(1000.0), material: "Granite".into(), thickness: Some(100.0), elevation: None });
-        add(&mut ed, Shape::LandscapeArea { boundary: sq(3000.0), name: "Lawn".into() });
-        add(&mut ed, Shape::ExistingTree { at: DVec2::ZERO, species: "Oak".into(), dbh: 600.0, spread: 9000.0, height: 18000.0, condition: Default::default(), action: Default::default(), rpz_factor: None, rpz_cap: None });
-        add(&mut ed, Shape::ExistingTree { at: DVec2::new(10.0, 0.0), species: "Ash".into(), dbh: 300.0, spread: 5000.0, height: 9000.0, condition: Default::default(), action: Default::default(), rpz_factor: None, rpz_cap: None });
-        let sid = ed.execute(&Command::AddResource { name: "Maple".into(), body: ResourceBody::plant_style(PlantStyle { botanical_name: "Acer".into(), id_code: "AC".into(), price: 50.0, ..PlantStyle::default() }) }).unwrap().created[0];
-        ed.execute(&Command::AddPlants { style: Some(cadektor_core::resource::ResourceId(sid)), overrides: Default::default(), positions: vec![DVec2::ZERO, DVec2::new(5000.0, 0.0), DVec2::new(9000.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
+        let sq = |s: f64| {
+            corners(&[
+                DVec2::ZERO,
+                DVec2::new(s, 0.0),
+                DVec2::new(s, s),
+                DVec2::new(0.0, s),
+            ])
+        };
+        add(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: sq(2000.0),
+                material: "Granite".into(),
+                thickness: Some(100.0),
+                elevation: None,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: sq(1000.0),
+                material: "Granite".into(),
+                thickness: Some(100.0),
+                elevation: None,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::LandscapeArea {
+                boundary: sq(3000.0),
+                name: "Lawn".into(),
+            },
+        );
+        add(
+            &mut ed,
+            Shape::ExistingTree {
+                at: DVec2::ZERO,
+                species: "Oak".into(),
+                dbh: 600.0,
+                spread: 9000.0,
+                height: 18000.0,
+                condition: Default::default(),
+                action: Default::default(),
+                rpz_factor: None,
+                rpz_cap: None,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::ExistingTree {
+                at: DVec2::new(10.0, 0.0),
+                species: "Ash".into(),
+                dbh: 300.0,
+                spread: 5000.0,
+                height: 9000.0,
+                condition: Default::default(),
+                action: Default::default(),
+                rpz_factor: None,
+                rpz_cap: None,
+            },
+        );
+        let sid = ed
+            .execute(&Command::AddResource {
+                name: "Maple".into(),
+                body: ResourceBody::plant_style(PlantStyle {
+                    botanical_name: "Acer".into(),
+                    id_code: "AC".into(),
+                    price: 50.0,
+                    ..PlantStyle::default()
+                }),
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::AddPlants {
+            style: Some(cadektor_core::resource::ResourceId(sid)),
+            overrides: Default::default(),
+            positions: vec![
+                DVec2::ZERO,
+                DVec2::new(5000.0, 0.0),
+                DVec2::new(9000.0, 0.0),
+            ],
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
         ed
     }
 
@@ -160,15 +288,56 @@ mod tests {
         let mut ed = scene();
         let maple = ed.doc().resources.find_plant_style("Maple").unwrap();
         let sedge = cadektor_core::resource::ResourceId(
-            ed.execute(&Command::AddResource { name: "Sedge".into(), body: ResourceBody::plant_style(PlantStyle { botanical_name: "Carex".into(), id_code: "CX".into(), price: 4.0, spread: 500.0, ..PlantStyle::default() }) }).unwrap().created[0],
+            ed.execute(&Command::AddResource {
+                name: "Sedge".into(),
+                body: ResourceBody::plant_style(PlantStyle {
+                    botanical_name: "Carex".into(),
+                    id_code: "CX".into(),
+                    price: 4.0,
+                    spread: 500.0,
+                    ..PlantStyle::default()
+                }),
+            })
+            .unwrap()
+            .created[0],
         );
-        let mix = LandscapeAreaStyle { mix: vec![MixEntry { plant: sedge, percent: 70.0, ..Default::default() }, MixEntry { plant: maple, percent: 30.0, min_count: 2, ..Default::default() }], ..Default::default() };
-        let style = cadektor_core::resource::ResourceId(ed.execute(&Command::AddResource { name: "Meadow".into(), body: ResourceBody::LandscapeAreaStyle(Box::new(mix)) }).unwrap().created[0]);
-        let b = corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0), DVec2::new(5000.0, 4000.0), DVec2::new(0.0, 4000.0)]);
+        let mix = LandscapeAreaStyle {
+            mix: vec![
+                MixEntry {
+                    plant: sedge,
+                    percent: 70.0,
+                    ..Default::default()
+                },
+                MixEntry {
+                    plant: maple,
+                    percent: 30.0,
+                    min_count: 2,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let style = cadektor_core::resource::ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Meadow".into(),
+                body: ResourceBody::LandscapeAreaStyle(Box::new(mix)),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let b = corners(&[
+            DVec2::ZERO,
+            DVec2::new(5000.0, 0.0),
+            DVec2::new(5000.0, 4000.0),
+            DVec2::new(0.0, 4000.0),
+        ]);
         ed.execute(&Command::AddLandscapeArea {
             boundary: b,
             name: "Meadow".into(),
-            patch: Box::new(LandscapePatch { style: Some(style), ..Default::default() }),
+            patch: Box::new(LandscapePatch {
+                style: Some(style),
+                ..Default::default()
+            }),
             layer: None,
             class: None,
             attrs: Attributes::default(),
@@ -184,14 +353,19 @@ mod tests {
             let row = i as u32 + 2;
             assert_eq!(c.display(row, 1), r.name);
             assert_eq!(c.value(row, 7), Value::Number(r.count as f64), "{}", r.name);
-            assert!((match c.value(row, 9) {
-                Value::Number(n) => n,
-                other => panic!("{other:?}"),
-            } - r.total_price)
-                .abs()
-                < 1e-9);
+            assert!(
+                (match c.value(row, 9) {
+                    Value::Number(n) => n,
+                    other => panic!("{other:?}"),
+                } - r.total_price)
+                    .abs()
+                    < 1e-9
+            );
         }
-        assert_eq!(c.value(rows + 2, 7), Value::Number(report.total_count as f64));
+        assert_eq!(
+            c.value(rows + 2, 7),
+            Value::Number(report.total_count as f64)
+        );
         assert_eq!(c.value(rows + 2, 9), Value::Number(report.total_price));
         // The columns of the list can be used with criteria.
         let mut w = WorksheetDef::default();
@@ -207,7 +381,10 @@ mod tests {
     fn hardscape_quantities() {
         let ed = scene();
         let c = compute(&template("hardscape_quantities").unwrap(), ed.doc());
-        assert_eq!(c.grid()[1], ["Granite", "2", "5.00 m2", "100 mm", "0.50 m3"]);
+        assert_eq!(
+            c.grid()[1],
+            ["Granite", "2", "5.00 m2", "100 mm", "0.50 m3"]
+        );
         assert_eq!(c.display(3, 3), "5.00 m2");
         assert_eq!(c.value(3, 5), Value::Number(0.5));
     }
@@ -217,7 +394,18 @@ mod tests {
         let ed = scene();
         let c = compute(&template("area_schedule").unwrap(), ed.doc());
         let first_col: Vec<String> = (1..=c.rows).map(|r| c.display(r, 1)).collect();
-        assert_eq!(first_col, ["Kind", "hardscape", "hardscape", "hardscape total", "landscape_area", "landscape_area total", "Total"]);
+        assert_eq!(
+            first_col,
+            [
+                "Kind",
+                "hardscape",
+                "hardscape",
+                "hardscape total",
+                "landscape_area",
+                "landscape_area total",
+                "Total"
+            ]
+        );
         assert_eq!(c.value(c.rows, 4), Value::Number(14.0));
         assert_eq!(c.display(5, 5), "12.00 m");
     }
@@ -227,7 +415,12 @@ mod tests {
         let ed = scene();
         let c = compute(&template("tree_survey").unwrap(), ed.doc());
         assert_eq!(c.rows, 3);
-        assert_eq!(c.grid()[1][1..], ["Oak", "600 mm", "9.0 m", "18.0 m", "fair", "retain", "7.2 m"]);
+        assert_eq!(
+            c.grid()[1][1..],
+            [
+                "Oak", "600 mm", "9.0 m", "18.0 m", "fair", "retain", "7.2 m"
+            ]
+        );
         assert_eq!(c.grid()[2][1], "Ash");
     }
 }

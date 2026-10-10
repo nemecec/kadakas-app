@@ -24,9 +24,9 @@ use glam::{DVec2, DVec3, Vec3};
 use indexmap::IndexMap;
 
 use crate::curve;
+use crate::model::{Color, Document, Layer, LayerKind, Object, ObjectId, Shape, arc_sweep};
 use crate::plants::link;
 use crate::plants::style::PlantForm;
-use crate::model::{Color, Document, Layer, LayerKind, Object, ObjectId, Shape, arc_sweep};
 
 /// Thickness of a hardscape slab when the shape does not say.
 pub const DEFAULT_SLAB_THICKNESS: f64 = 150.0;
@@ -57,7 +57,11 @@ impl Mesh {
     /// The three corners of triangle `t`.
     pub fn triangle(&self, t: usize) -> [Vec3; 3] {
         let i = &self.indices[t * 3..t * 3 + 3];
-        [self.positions[i[0] as usize], self.positions[i[1] as usize], self.positions[i[2] as usize]]
+        [
+            self.positions[i[0] as usize],
+            self.positions[i[1] as usize],
+            self.positions[i[2] as usize],
+        ]
     }
 
     fn vertex(&mut self, p: Vec3, n: Vec3, c: [u8; 4]) -> u32 {
@@ -187,7 +191,11 @@ pub struct SceneSink<'a> {
 impl SceneSink<'_> {
     fn local(&self, p: DVec3) -> Vec3 {
         let o = self.scene.origin;
-        Vec3::new((p.x - o.x) as f32, (p.y - o.y) as f32, (self.z0 + p.z - o.z) as f32)
+        Vec3::new(
+            (p.x - o.x) as f32,
+            (p.y - o.y) as f32,
+            (self.z0 + p.z - o.z) as f32,
+        )
     }
 
     /// Adds a triangle mesh with one color. Indices are three per triangle. Normals are smooth.
@@ -213,7 +221,12 @@ impl SceneSink<'_> {
             self.scene.mesh.vertex(*p, n.normalize_or_zero(), color);
         }
         for [a, b, c] in tris {
-            self.scene.mesh.tri(base + a as u32, base + b as u32, base + c as u32, self.object);
+            self.scene.mesh.tri(
+                base + a as u32,
+                base + b as u32,
+                base + c as u32,
+                self.object,
+            );
         }
     }
 
@@ -247,7 +260,12 @@ impl MeshCache {
     }
 
     /// Like `get`, with an extension that draws site models.
-    pub fn get_with(&mut self, revision: u64, doc: &Document, ext: Option<SceneExt<'_>>) -> Arc<Scene> {
+    pub fn get_with(
+        &mut self,
+        revision: u64,
+        doc: &Document,
+        ext: Option<SceneExt<'_>>,
+    ) -> Arc<Scene> {
         if self.revision != Some(revision) || self.scene.is_none() {
             self.scene = Some(Arc::new(build_with(doc, scene_origin(doc), ext)));
             self.revision = Some(revision);
@@ -301,7 +319,9 @@ pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
         }
     }
     let o = pts[0];
-    let area2: f64 = (0..pts.len()).map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % pts.len()] - o)).sum();
+    let area2: f64 = (0..pts.len())
+        .map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % pts.len()] - o))
+        .sum();
     if area2 < 0.0 {
         pts.reverse();
     }
@@ -309,7 +329,9 @@ pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
 }
 
 fn in_triangle(p: DVec2, a: DVec2, b: DVec2, c: DVec2) -> bool {
-    (b - a).perp_dot(p - a) >= 0.0 && (c - b).perp_dot(p - b) >= 0.0 && (a - c).perp_dot(p - c) >= 0.0
+    (b - a).perp_dot(p - a) >= 0.0
+        && (c - b).perp_dot(p - b) >= 0.0
+        && (a - c).perp_dot(p - c) >= 0.0
 }
 
 /// Ear clipping. Returns triangles as index triples into `pts`, all counterclockwise
@@ -322,8 +344,14 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
         return Vec::new();
     }
     let o = pts[0];
-    let area2: f64 = (0..n).map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % n] - o)).sum();
-    let mut idx: Vec<usize> = if area2 >= 0.0 { (0..n).collect() } else { (0..n).rev().collect() };
+    let area2: f64 = (0..n)
+        .map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % n] - o))
+        .sum();
+    let mut idx: Vec<usize> = if area2 >= 0.0 {
+        (0..n).collect()
+    } else {
+        (0..n).rev().collect()
+    };
     let mut out = Vec::with_capacity(n - 2);
     let (mut i, mut misses) = (0usize, 0usize);
     while idx.len() > 3 {
@@ -333,7 +361,9 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
         let (pa, pb, pc) = (pts[a], pts[b], pts[c]);
         let (u, v) = (pb - pa, pc - pb);
         let cross = u.perp_dot(v);
-        let flat = cross.abs() <= 1e-12 * u.length() * v.length() || u.length_squared() == 0.0 || v.length_squared() == 0.0;
+        let flat = cross.abs() <= 1e-12 * u.length() * v.length()
+            || u.length_squared() == 0.0
+            || v.length_squared() == 0.0;
         if flat {
             // No area: the corner only repeats or continues an edge. Drop it.
             idx.remove(i);
@@ -342,7 +372,13 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
         }
         let is_ear = cross > 0.0
             && !idx.iter().any(|&k| {
-                k != a && k != b && k != c && pts[k] != pa && pts[k] != pb && pts[k] != pc && in_triangle(pts[k], pa, pb, pc)
+                k != a
+                    && k != b
+                    && k != c
+                    && pts[k] != pa
+                    && pts[k] != pb
+                    && pts[k] != pc
+                    && in_triangle(pts[k], pa, pb, pc)
             });
         if is_ear {
             out.push([a, b, c]);
@@ -382,7 +418,12 @@ fn rgba(c: Color) -> [u8; 4] {
 }
 
 fn shade(c: [u8; 4], f: f32) -> [u8; 4] {
-    [(c[0] as f32 * f) as u8, (c[1] as f32 * f) as u8, (c[2] as f32 * f) as u8, c[3]]
+    [
+        (c[0] as f32 * f) as u8,
+        (c[1] as f32 * f) as u8,
+        (c[2] as f32 * f) as u8,
+        c[3],
+    ]
 }
 
 const EDGE_DEFAULT: [u8; 4] = [45, 48, 56, 255];
@@ -395,7 +436,11 @@ const TRUNK: [u8; 4] = [112, 82, 56, 255];
 fn circle_segments(radius: f64) -> usize {
     let r = radius.abs().max(1e-6);
     let step = 2.0 * (1.0 - (FLATTEN_TOLERANCE / r).min(1.0)).acos();
-    if step <= 0.0 { 12 } else { ((std::f64::consts::TAU / step).ceil() as usize).clamp(12, 256) }
+    if step <= 0.0 {
+        12
+    } else {
+        ((std::f64::consts::TAU / step).ceil() as usize).clamp(12, 256)
+    }
 }
 
 fn arc_points(center: DVec2, radius: f64, start: f64, end: f64) -> Vec<DVec2> {
@@ -405,7 +450,11 @@ fn arc_points(center: DVec2, radius: f64, start: f64, end: f64) -> Vec<DVec2> {
     let n = ((per_circle as f64 * sweep / std::f64::consts::TAU).ceil() as usize).max(2);
     (0..=n)
         .map(|k| {
-            let a = if k == n && !full { start + sweep } else { start + sweep * k as f64 / n as f64 };
+            let a = if k == n && !full {
+                start + sweep
+            } else {
+                start + sweep * k as f64 / n as f64
+            };
             center + DVec2::from_angle(a) * radius
         })
         .collect()
@@ -413,7 +462,9 @@ fn arc_points(center: DVec2, radius: f64, start: f64, end: f64) -> Vec<DVec2> {
 
 fn circle_points(center: DVec2, radius: f64) -> Vec<DVec2> {
     let n = circle_segments(radius);
-    (0..n).map(|k| center + DVec2::from_angle(std::f64::consts::TAU * k as f64 / n as f64) * radius).collect()
+    (0..n)
+        .map(|k| center + DVec2::from_angle(std::f64::consts::TAU * k as f64 / n as f64) * radius)
+        .collect()
 }
 
 /// Unit sphere template: positions equal normals.
@@ -470,7 +521,12 @@ impl UnitSphere {
                 }
             }
         }
-        UnitSphere { verts, tris, segments, rings }
+        UnitSphere {
+            verts,
+            tris,
+            segments,
+            rings,
+        }
     }
 }
 
@@ -494,45 +550,122 @@ impl Builder<'_> {
         let z = z_of(layer);
         let id = obj.id;
         match &obj.shape {
-            Shape::Line { a, b } => self.scene.lines.push(v3(o, *a, z), v3(o, *b, z), pen.unwrap_or([0, 0, 0, 255]), id),
-            Shape::Arc { center, radius, start, end } => {
-                let pts: Vec<Vec3> = arc_points(*center, *radius, *start, *end).into_iter().map(|p| v3(o, p, z)).collect();
-                self.scene.lines.polyline(&pts, false, pen.unwrap_or([0, 0, 0, 255]), id);
+            Shape::Line { a, b } => self.scene.lines.push(
+                v3(o, *a, z),
+                v3(o, *b, z),
+                pen.unwrap_or([0, 0, 0, 255]),
+                id,
+            ),
+            Shape::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => {
+                let pts: Vec<Vec3> = arc_points(*center, *radius, *start, *end)
+                    .into_iter()
+                    .map(|p| v3(o, p, z))
+                    .collect();
+                self.scene
+                    .lines
+                    .polyline(&pts, false, pen.unwrap_or([0, 0, 0, 255]), id);
             }
-            Shape::Polyline { points, closed: false } => {
-                let pts: Vec<Vec3> = curve::flatten(points, false, FLATTEN_TOLERANCE).into_iter().map(|p| v3(o, p, z)).collect();
-                self.scene.lines.polyline(&pts, false, pen.unwrap_or([0, 0, 0, 255]), id);
+            Shape::Polyline {
+                points,
+                closed: false,
+            } => {
+                let pts: Vec<Vec3> = curve::flatten(points, false, FLATTEN_TOLERANCE)
+                    .into_iter()
+                    .map(|p| v3(o, p, z))
+                    .collect();
+                self.scene
+                    .lines
+                    .polyline(&pts, false, pen.unwrap_or([0, 0, 0, 255]), id);
             }
-            Shape::Polyline { points, closed: true } => {
-                self.flat_face(&curve::flatten(points, true, FLATTEN_TOLERANCE), z, fill.unwrap_or(FACE_DEFAULT), edge, id)
-            }
+            Shape::Polyline {
+                points,
+                closed: true,
+            } => self.flat_face(
+                &curve::flatten(points, true, FLATTEN_TOLERANCE),
+                z,
+                fill.unwrap_or(FACE_DEFAULT),
+                edge,
+                id,
+            ),
             Shape::Rect { min, max } => {
                 let (lo, hi) = (min.min(*max), min.max(*max));
                 let ring = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
                 self.flat_face(&ring, z, fill.unwrap_or(FACE_DEFAULT), edge, id);
             }
-            Shape::Circle { center, radius } => {
-                self.flat_face(&circle_points(*center, *radius), z, fill.unwrap_or(FACE_DEFAULT), edge, id)
-            }
+            Shape::Circle { center, radius } => self.flat_face(
+                &circle_points(*center, *radius),
+                z,
+                fill.unwrap_or(FACE_DEFAULT),
+                edge,
+                id,
+            ),
             Shape::LandscapeArea { .. } | Shape::Hardscape { .. } if self.styled_solid(obj, z) => {}
-            Shape::LandscapeArea { boundary, .. } => {
-                self.flat_face(&curve::flatten(boundary, true, FLATTEN_TOLERANCE), z, fill.unwrap_or(AREA_DEFAULT), edge, id)
-            }
-            Shape::Hardscape { boundary, thickness, elevation, .. } => {
-                let thickness = thickness.filter(|t| t.is_finite() && *t > 0.0).unwrap_or(DEFAULT_SLAB_THICKNESS);
+            Shape::LandscapeArea { boundary, .. } => self.flat_face(
+                &curve::flatten(boundary, true, FLATTEN_TOLERANCE),
+                z,
+                fill.unwrap_or(AREA_DEFAULT),
+                edge,
+                id,
+            ),
+            Shape::Hardscape {
+                boundary,
+                thickness,
+                elevation,
+                ..
+            } => {
+                let thickness = thickness
+                    .filter(|t| t.is_finite() && *t > 0.0)
+                    .unwrap_or(DEFAULT_SLAB_THICKNESS);
                 let top = z + elevation.filter(|e| e.is_finite()).unwrap_or(0.0);
                 let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
-                self.slab(&ring, top, thickness, fill.unwrap_or(HARDSCAPE_DEFAULT), edge, id);
+                self.slab(
+                    &ring,
+                    top,
+                    thickness,
+                    fill.unwrap_or(HARDSCAPE_DEFAULT),
+                    edge,
+                    id,
+                );
             }
-            Shape::Plant { at, spread, height, species } => {
+            Shape::Plant {
+                at,
+                spread,
+                height,
+                species,
+            } => {
                 // A plant with a style takes its form and colors from the effective style.
                 let look = link::look(self.doc, obj);
-                let color = fill.or(look.fill.map(rgba)).unwrap_or_else(|| species_color(species));
-                let edge = if pen.is_none() { look.pen.map(rgba).unwrap_or(edge) } else { edge };
-                let build = PlantBuild { at: *at, spread: *spread, height: *height, form: look.form, color, trunk_radius: None };
+                let color = fill
+                    .or(look.fill.map(rgba))
+                    .unwrap_or_else(|| species_color(species));
+                let edge = if pen.is_none() {
+                    look.pen.map(rgba).unwrap_or(edge)
+                } else {
+                    edge
+                };
+                let build = PlantBuild {
+                    at: *at,
+                    spread: *spread,
+                    height: *height,
+                    form: look.form,
+                    color,
+                    trunk_radius: None,
+                };
                 self.plant(&build, z, edge, id);
             }
-            Shape::ExistingTree { at, species, dbh, spread, height, .. } => {
+            Shape::ExistingTree {
+                at,
+                species,
+                dbh,
+                spread,
+                height,
+                ..
+            } => {
                 let build = PlantBuild {
                     at: *at,
                     spread: *spread,
@@ -547,25 +680,63 @@ impl Builder<'_> {
             Shape::Locus3d { p } => {
                 let h = crate::model::LOCUS_MARKER_HALF;
                 let c = pen.unwrap_or([0, 0, 0, 255]);
-                let at = |d: DVec3| Vec3::new((p.x + d.x - o.x) as f32, (p.y + d.y - o.y) as f32, (z + p.z + d.z - o.z) as f32);
+                let at = |d: DVec3| {
+                    Vec3::new(
+                        (p.x + d.x - o.x) as f32,
+                        (p.y + d.y - o.y) as f32,
+                        (z + p.z + d.z - o.z) as f32,
+                    )
+                };
                 for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
                     self.scene.lines.push(at(-axis * h), at(axis * h), c, id);
                 }
             }
             Shape::Polyline3d { points, closed } => {
-                let pts: Vec<Vec3> = points.iter().map(|p| v3(o, p.truncate(), z + p.z)).collect();
-                self.scene.lines.polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
+                let pts: Vec<Vec3> = points
+                    .iter()
+                    .map(|p| v3(o, p.truncate(), z + p.z))
+                    .collect();
+                self.scene
+                    .lines
+                    .polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            // A group draws through its members.
+            Shape::Group { .. } => {}
+            Shape::Symbol { .. } => {
+                // The 3D components if there are some. Otherwise the 2D components, flat at the layer.
+                let solids = crate::symbols::instance_solids(self.doc, obj);
+                if solids.is_empty() {
+                    for part in crate::symbols::instance_objects(self.doc, obj) {
+                        self.add_object(&part, layer);
+                    }
+                }
+                for (ring, base, height, color) in solids {
+                    self.slab(
+                        &ring,
+                        z + base + height,
+                        height,
+                        color.map(rgba).or(fill).unwrap_or(HARDSCAPE_DEFAULT),
+                        edge,
+                        id,
+                    );
+                }
+            }
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 if let Some(ext) = self.ext {
-                    let mut sink = SceneSink { scene: &mut self.scene, object: id, z0: z };
+                    let mut sink = SceneSink {
+                        scene: &mut self.scene,
+                        object: id,
+                        z0: z,
+                    };
                     ext(self.doc, obj, &mut sink);
                 } else if let Shape::SiteModifier { boundary, .. } = &obj.shape {
                     let ring = curve::flatten(boundary, true, FLATTEN_TOLERANCE);
                     let pts: Vec<Vec3> = ring.into_iter().map(|p| v3(o, p, z)).collect();
-                    self.scene.lines.polyline(&pts, true, pen.unwrap_or([0, 0, 0, 255]), id);
+                    self.scene
+                        .lines
+                        .polyline(&pts, true, pen.unwrap_or([0, 0, 0, 255]), id);
                 }
             }
         }
@@ -576,10 +747,16 @@ impl Builder<'_> {
     /// Returns false if the object has no such settings. The caller then draws it as a plain shape.
     fn styled_solid(&mut self, obj: &Object, z: f64) -> bool {
         let hardscape = matches!(obj.shape, Shape::Hardscape { .. });
-        if !(crate::hardscape::wants_drape(obj) || (hardscape && crate::hardscape::data(obj).is_some())) {
+        if !(crate::hardscape::wants_drape(obj)
+            || (hardscape && crate::hardscape::data(obj).is_some()))
+        {
             return false;
         }
-        let mut sink = SceneSink { scene: &mut self.scene, object: obj.id, z0: z };
+        let mut sink = SceneSink {
+            scene: &mut self.scene,
+            object: obj.id,
+            z0: z,
+        };
         match self.ext {
             Some(ext) if crate::hardscape::wants_drape(obj) => ext(self.doc, obj, &mut sink),
             _ if hardscape => crate::hardscape::emit_object(self.doc, obj, None, &mut sink),
@@ -606,7 +783,15 @@ impl Builder<'_> {
         self.scene.lines.polyline(&pts, true, edge, id);
     }
 
-    fn slab(&mut self, ring: &[DVec2], top: f64, thickness: f64, color: [u8; 4], edge: [u8; 4], id: ObjectId) {
+    fn slab(
+        &mut self,
+        ring: &[DVec2],
+        top: f64,
+        thickness: f64,
+        color: [u8; 4],
+        edge: [u8; 4],
+        id: ObjectId,
+    ) {
         let o = self.origin;
         let ring = clean_ring(ring);
         if ring.len() < 3 {
@@ -626,8 +811,18 @@ impl Builder<'_> {
             mesh.vertex(v3(o, *p, bottom), Vec3::NEG_Z, shade(color, 0.7));
         }
         for [a, b, c] in &tris {
-            mesh.tri(top_base + *a as u32, top_base + *b as u32, top_base + *c as u32, id);
-            mesh.tri(bot_base + *a as u32, bot_base + *c as u32, bot_base + *b as u32, id);
+            mesh.tri(
+                top_base + *a as u32,
+                top_base + *b as u32,
+                top_base + *c as u32,
+                id,
+            );
+            mesh.tri(
+                bot_base + *a as u32,
+                bot_base + *c as u32,
+                bot_base + *b as u32,
+                id,
+            );
         }
         // Side walls: the ring is counterclockwise, so the outside is on the right of each edge.
         let side = shade(color, 0.82);
@@ -651,7 +846,9 @@ impl Builder<'_> {
             let (a, b, c) = (ring[(i + n - 1) % n], ring[i], ring[(i + 1) % n]);
             let (u, v) = ((b - a).normalize_or_zero(), (c - b).normalize_or_zero());
             if u.dot(v) < 0.94 {
-                self.scene.lines.push(v3(o, b, bottom), v3(o, b, top), edge, id);
+                self.scene
+                    .lines
+                    .push(v3(o, b, bottom), v3(o, b, top), edge, id);
             }
         }
     }
@@ -659,7 +856,14 @@ impl Builder<'_> {
     /// A plant: a trunk and a canopy whose outline depends on the form (see `PlantForm`).
     /// The canopy is the unit sphere, moved vertex by vertex into the form.
     fn plant(&mut self, p: &PlantBuild, z: f64, edge: [u8; 4], id: ObjectId) {
-        let PlantBuild { at, spread, height, form, color, trunk_radius } = *p;
+        let PlantBuild {
+            at,
+            spread,
+            height,
+            form,
+            color,
+            trunk_radius,
+        } = *p;
         if !(spread > 0.0 && height > 0.0) {
             return;
         }
@@ -680,7 +884,9 @@ impl Builder<'_> {
         let mesh = &mut self.scene.mesh;
         if trunk_frac > 0.0 {
             // Trunk: a prism from the ground into the canopy.
-            let trunk_r = trunk_radius.unwrap_or((spread * 0.04).clamp(15.0, 300.0)).min(r * 0.5);
+            let trunk_r = trunk_radius
+                .unwrap_or((spread * 0.04).clamp(15.0, 300.0))
+                .min(r * 0.5);
             let trunk_top = z + height * trunk_frac;
             let base = mesh.positions.len() as u32;
             for s in 0..TRUNK_SIDES {
@@ -692,7 +898,12 @@ impl Builder<'_> {
             }
             for s in 0..TRUNK_SIDES {
                 let s2 = (s + 1) % TRUNK_SIDES;
-                let (b0, t0, b1, t1) = (base + 2 * s as u32, base + 2 * s as u32 + 1, base + 2 * s2 as u32, base + 2 * s2 as u32 + 1);
+                let (b0, t0, b1, t1) = (
+                    base + 2 * s as u32,
+                    base + 2 * s as u32 + 1,
+                    base + 2 * s2 as u32,
+                    base + 2 * s2 as u32 + 1,
+                );
                 mesh.tri(b0, b1, t1, id);
                 mesh.tri(b0, t1, t0, id);
             }
@@ -706,14 +917,23 @@ impl Builder<'_> {
                     // t runs from 0 at the base to 1 at the tip. The radius shrinks with t.
                     let t = (p.z + 1.0) / 2.0;
                     let dir = Vec3::new(p.x, p.y, 0.0).normalize_or_zero();
-                    let pos = center + dir * radii.x * (1.0 - t) + Vec3::new(0.0, 0.0, p.z * radii.z);
-                    (pos, Vec3::new(dir.x * radii.z, dir.y * radii.z, radii.x).normalize_or_zero())
+                    let pos =
+                        center + dir * radii.x * (1.0 - t) + Vec3::new(0.0, 0.0, p.z * radii.z);
+                    (
+                        pos,
+                        Vec3::new(dir.x * radii.z, dir.y * radii.z, radii.x).normalize_or_zero(),
+                    )
                 }
                 PlantForm::ShrubMound => {
                     // The lower half is squashed flat onto the ground.
                     let up = p.z.max(0.0);
-                    let n = (Vec3::new(p.x, p.y, up) / Vec3::new(radii.x, radii.y, radii.z * 2.0)).normalize_or_zero();
-                    (center + Vec3::new(p.x * radii.x, p.y * radii.y, (up * 2.0 - 1.0) * radii.z), n)
+                    let n = (Vec3::new(p.x, p.y, up) / Vec3::new(radii.x, radii.y, radii.z * 2.0))
+                        .normalize_or_zero();
+                    (
+                        center
+                            + Vec3::new(p.x * radii.x, p.y * radii.y, (up * 2.0 - 1.0) * radii.z),
+                        n,
+                    )
                 }
                 _ => (center + p * radii, (p / radii).normalize_or_zero()),
             }
@@ -728,8 +948,14 @@ impl Builder<'_> {
         }
         // Edges: the canopy at its widest.
         let (segments, rings) = (self.sphere.segments, self.sphere.rings);
-        let ring_index = if form == PlantForm::Conical { 1 } else { rings / 2 };
-        let ring: Vec<Vec3> = (0..segments).map(|s| place(self.sphere.verts[ring_index * segments + s]).0).collect();
+        let ring_index = if form == PlantForm::Conical {
+            1
+        } else {
+            rings / 2
+        };
+        let ring: Vec<Vec3> = (0..segments)
+            .map(|s| place(self.sphere.verts[ring_index * segments + s]).0)
+            .collect();
         self.scene.lines.polyline(&ring, true, edge, id);
     }
 }
@@ -748,14 +974,25 @@ struct PlantBuild {
 
 /// A canopy color from the species name, so that species look different.
 fn species_color(species: &str) -> [u8; 4] {
-    let h = species.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-    [(52 + h % 40) as u8, (118 + (h >> 4) % 50) as u8, (48 + (h >> 9) % 30) as u8, 255]
+    let h = species
+        .bytes()
+        .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+    [
+        (52 + h % 40) as u8,
+        (118 + (h >> 4) % 50) as u8,
+        (48 + (h >> 9) % 30) as u8,
+        255,
+    ]
 }
 
 /// The visible design-layer objects with their layers. Objects with numbers that the document
 /// does not accept (not finite, or beyond `MAX_COORD`) are left out.
 fn visible_objects(doc: &Document) -> impl Iterator<Item = (&Object, &Layer)> {
-    doc.objects.values().filter(|o| doc.is_visible(o) && o.shape.is_in_range()).filter_map(|o| doc.layer(o.layer).map(|l| (o, l))).filter(|(_, l)| l.kind == LayerKind::Design)
+    doc.objects
+        .values()
+        .filter(|o| doc.is_visible(o) && o.shape.is_in_range())
+        .filter_map(|o| doc.layer(o.layer).map(|l| (o, l)))
+        .filter(|(_, l)| l.kind == LayerKind::Design)
 }
 
 /// The scene origin for a document: the middle of the plan, with Z zero.
@@ -769,7 +1006,11 @@ fn scene_origin(doc: &Document) -> DVec3 {
             hi = hi.max(b);
         }
     }
-    if lo.x <= hi.x && lo.y <= hi.y { ((lo + hi) / 2.0).extend(0.0) } else { DVec3::ZERO }
+    if lo.x <= hi.x && lo.y <= hi.y {
+        ((lo + hi) / 2.0).extend(0.0)
+    } else {
+        DVec3::ZERO
+    }
 }
 
 /// Builds the 3D scene of the visible objects, around the middle of the drawing.
@@ -786,20 +1027,47 @@ pub fn build_at(doc: &Document, origin: DVec3) -> Scene {
 /// 3D geometry.
 pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> Scene {
     // Many plants get a coarser canopy, to keep the scene small.
-    let plants = doc.objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. })).count();
-    let detail = if plants > COARSE_PLANT_COUNT { SPHERE_COARSE } else { SPHERE_DETAIL };
-    let mut b = Builder { ext, doc, origin, scene: Scene { origin, ..Scene::default() }, sphere: UnitSphere::new(detail) };
+    let plants = doc
+        .objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
+        .count();
+    let detail = if plants > COARSE_PLANT_COUNT {
+        SPHERE_COARSE
+    } else {
+        SPHERE_DETAIL
+    };
+    let mut b = Builder {
+        ext,
+        doc,
+        origin,
+        scene: Scene {
+            origin,
+            ..Scene::default()
+        },
+        sphere: UnitSphere::new(detail),
+    };
     b.scene.ranges.reserve(doc.objects.len());
     for (obj, layer) in visible_objects(doc) {
         let (t0, s0) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
         b.add_object(obj, layer);
         if let (Some(ext), true) = (b.ext, crate::site::carries_extra(obj)) {
-            let mut sink = SceneSink { scene: &mut b.scene, object: obj.id, z0: z_of(layer) };
+            let mut sink = SceneSink {
+                scene: &mut b.scene,
+                object: obj.id,
+                z0: z_of(layer),
+            };
             ext(doc, obj, &mut sink);
         }
         let (t1, s1) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
         if t1 > t0 || s1 > s0 {
-            b.scene.ranges.insert(obj.id, ObjectRange { tris: t0..t1, segs: s0..s1 });
+            b.scene.ranges.insert(
+                obj.id,
+                ObjectRange {
+                    tris: t0..t1,
+                    segs: s0..s1,
+                },
+            );
         }
     }
     let mut acc = BoundsAcc::default();
@@ -813,16 +1081,28 @@ pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> S
 mod tests {
     use super::*;
     use crate::command::{Command, Editor};
-    use std::collections::HashMap;
     use crate::model::{Attributes, FIRST_LAYER, NONE_CLASS, Vertex};
+    use std::collections::HashMap;
 
     fn add(ed: &mut Editor, shape: Shape) -> ObjectId {
-        let out = ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let out = ed
+            .execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         ObjectId(out.created[0])
     }
 
     fn hardscape(pts: &[DVec2], thickness: Option<f64>, elevation: Option<f64>) -> Shape {
-        Shape::Hardscape { boundary: curve::corners(pts), material: "m".into(), thickness, elevation }
+        Shape::Hardscape {
+            boundary: curve::corners(pts),
+            material: "m".into(),
+            thickness,
+            elevation,
+        }
     }
 
     /// The box of an object in world coordinates.
@@ -832,11 +1112,18 @@ mod tests {
     }
 
     fn rect_pts(w: f64, h: f64) -> Vec<DVec2> {
-        vec![DVec2::ZERO, DVec2::new(w, 0.0), DVec2::new(w, h), DVec2::new(0.0, h)]
+        vec![
+            DVec2::ZERO,
+            DVec2::new(w, 0.0),
+            DVec2::new(w, h),
+            DVec2::new(0.0, h),
+        ]
     }
 
     fn tri_area_sum(pts: &[DVec2], tris: &[[usize; 3]]) -> f64 {
-        tris.iter().map(|[a, b, c]| (pts[*b] - pts[*a]).perp_dot(pts[*c] - pts[*a]) / 2.0).sum()
+        tris.iter()
+            .map(|[a, b, c]| (pts[*b] - pts[*a]).perp_dot(pts[*c] - pts[*a]) / 2.0)
+            .sum()
     }
 
     /// Signed volume of a closed triangle mesh (divergence theorem).
@@ -871,7 +1158,10 @@ mod tests {
         let rev: Vec<DVec2> = l.iter().rev().copied().collect();
         let t = triangulate(&rev);
         assert_eq!(t.len(), 4);
-        assert!((tri_area_sum(&rev, &t) - 20.0).abs() < 1e-9, "all triangles face up");
+        assert!(
+            (tri_area_sum(&rev, &t) - 20.0).abs() < 1e-9,
+            "all triangles face up"
+        );
 
         // A comb-like polygon with many reflex corners.
         let comb = vec![
@@ -910,20 +1200,39 @@ mod tests {
         // No area at all.
         let line = vec![DVec2::ZERO, DVec2::X, DVec2::new(2.0, 0.0)];
         assert!(triangulate(&line).is_empty());
-        let spike = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 4.0), DVec2::new(2.0, 0.0), DVec2::new(0.0, 4.0)];
+        let spike = vec![
+            DVec2::ZERO,
+            DVec2::new(4.0, 0.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(0.0, 4.0),
+        ];
         assert!(!triangulate(&spike).is_empty());
     }
 
     #[test]
     fn triangulate_survives_a_self_crossing_polygon() {
-        let bow = vec![DVec2::new(0.0, 0.0), DVec2::new(4.0, 4.0), DVec2::new(4.0, 0.0), DVec2::new(0.0, 4.0), DVec2::new(2.0, -1.0)];
+        let bow = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(4.0, 0.0),
+            DVec2::new(0.0, 4.0),
+            DVec2::new(2.0, -1.0),
+        ];
         let t = triangulate(&bow);
         assert!(t.len() <= 3);
     }
 
     #[test]
     fn clean_ring_fixes_orientation_and_removes_dupes() {
-        let ring = clean_ring(&[DVec2::new(0.0, 0.0), DVec2::new(0.0, 1.0), DVec2::new(0.0, 2.0), DVec2::new(2.0, 2.0), DVec2::new(2.0, 0.0), DVec2::new(0.0, 0.0)]);
+        let ring = clean_ring(&[
+            DVec2::new(0.0, 0.0),
+            DVec2::new(0.0, 1.0),
+            DVec2::new(0.0, 2.0),
+            DVec2::new(2.0, 2.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(0.0, 0.0),
+        ]);
         assert_eq!(ring.len(), 4);
         assert!(crate::geom::polygon_area(&ring) > 0.0);
         let area2: f64 = (0..4).map(|i| ring[i].perp_dot(ring[(i + 1) % 4])).sum();
@@ -946,9 +1255,19 @@ mod tests {
         add(&mut ed, hardscape(&l, None, None));
         let scene = build(ed.doc());
         let area = 20.0e6;
-        assert!((volume(&scene.mesh) - area * 150.0).abs() / (area * 150.0) < 1e-4, "volume {}", volume(&scene.mesh));
+        assert!(
+            (volume(&scene.mesh) - area * 150.0).abs() / (area * 150.0) < 1e-4,
+            "volume {}",
+            volume(&scene.mesh)
+        );
         // Every undirected edge is shared by exactly two triangles, once in each direction.
-        let key = |p: Vec3| ((p.x * 8.0).round() as i64, (p.y * 8.0).round() as i64, (p.z * 8.0).round() as i64);
+        let key = |p: Vec3| {
+            (
+                (p.x * 8.0).round() as i64,
+                (p.y * 8.0).round() as i64,
+                (p.z * 8.0).round() as i64,
+            )
+        };
         let mut edges: HashMap<_, i32> = HashMap::new();
         for t in 0..scene.mesh.triangle_count() {
             let tri = scene.mesh.triangle(t).map(key);
@@ -958,14 +1277,24 @@ mod tests {
         }
         for ((a, b), n) in &edges {
             assert_eq!(*n, 1, "directed edge used twice");
-            assert_eq!(edges.get(&(*b, *a)), Some(&1), "edge has no opposite partner");
+            assert_eq!(
+                edges.get(&(*b, *a)),
+                Some(&1),
+                "edge has no opposite partner"
+            );
         }
     }
 
     #[test]
     fn slab_uses_thickness_elevation_and_layer_elevation() {
         let mut ed = Editor::default();
-        ed.execute(&Command::AddLayer { name: "Upper".into(), elevation: 1000.0, scale: None, kind: None }).unwrap();
+        ed.execute(&Command::AddLayer {
+            name: "Upper".into(),
+            elevation: 1000.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap();
         let layer = ed.doc().layers.last().unwrap().id;
         let out = ed
             .execute(&Command::AddObject {
@@ -1002,14 +1331,31 @@ mod tests {
     fn all_normals_are_unit_length_and_slab_faces_point_outward() {
         let mut ed = Editor::default();
         add(&mut ed, hardscape(&rect_pts(1000.0, 500.0), None, None));
-        add(&mut ed, Shape::Plant { at: DVec2::new(3000.0, 0.0), species: "Oak".into(), spread: 4000.0, height: 8000.0 });
-        add(&mut ed, Shape::Circle { center: DVec2::new(0.0, 5000.0), radius: 700.0 });
+        add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::new(3000.0, 0.0),
+                species: "Oak".into(),
+                spread: 4000.0,
+                height: 8000.0,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::new(0.0, 5000.0),
+                radius: 700.0,
+            },
+        );
         let scene = build(ed.doc());
         for n in &scene.mesh.normals {
             assert!((n.length() - 1.0).abs() < 1e-4, "normal {n:?}");
         }
         // Slab triangles: geometric normal agrees with the vertex normal.
-        let slab = scene.objects().find(|id| scene.mesh.tri_object.iter().filter(|o| *o == id).count() == 12).unwrap();
+        let slab = scene
+            .objects()
+            .find(|id| scene.mesh.tri_object.iter().filter(|o| *o == id).count() == 12)
+            .unwrap();
         for t in 0..scene.mesh.triangle_count() {
             if scene.mesh.tri_object[t] != slab {
                 continue;
@@ -1024,16 +1370,40 @@ mod tests {
     #[test]
     fn plant_bounds_are_spread_and_height() {
         let mut ed = Editor::default();
-        let id = add(&mut ed, Shape::Plant { at: DVec2::new(1000.0, -2000.0), species: "Acer".into(), spread: 4000.0, height: 8000.0 });
+        let id = add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::new(1000.0, -2000.0),
+                species: "Acer".into(),
+                spread: 4000.0,
+                height: 8000.0,
+            },
+        );
         let scene = build(ed.doc());
         let (lo, hi) = world_bounds(&scene, id);
-        assert!((lo.x - -1000.0).abs() < 1e-2 && (hi.x - 3000.0).abs() < 1e-2, "{lo:?} {hi:?}");
-        assert!((lo.y - -4000.0).abs() < 1e-2 && (hi.y - 0.0).abs() < 1e-2, "{lo:?} {hi:?}");
+        assert!(
+            (lo.x - -1000.0).abs() < 1e-2 && (hi.x - 3000.0).abs() < 1e-2,
+            "{lo:?} {hi:?}"
+        );
+        assert!(
+            (lo.y - -4000.0).abs() < 1e-2 && (hi.y - 0.0).abs() < 1e-2,
+            "{lo:?} {hi:?}"
+        );
         assert!((lo.z - 0.0).abs() < 1e-3 && (hi.z - 8000.0).abs() < 1e-2);
         assert!(scene.mesh.triangle_count() > 50);
         // Degenerate plants have no geometry.
         let mut doc = Document::default();
-        let obj = Object::new(ObjectId(50), FIRST_LAYER, NONE_CLASS, Shape::Plant { at: DVec2::ZERO, species: "x".into(), spread: 0.0, height: 8000.0 });
+        let obj = Object::new(
+            ObjectId(50),
+            FIRST_LAYER,
+            NONE_CLASS,
+            Shape::Plant {
+                at: DVec2::ZERO,
+                species: "x".into(),
+                spread: 0.0,
+                height: 8000.0,
+            },
+        );
         doc.objects.insert(obj.id, obj);
         assert!(build(&doc).is_empty());
     }
@@ -1041,15 +1411,43 @@ mod tests {
     #[test]
     fn locus3d_and_polyline3d_use_their_z() {
         let mut ed = Editor::default();
-        let l = add(&mut ed, Shape::Locus3d { p: DVec3::new(10.0, 20.0, 5.0) });
-        let open = add(&mut ed, Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 7.0), DVec3::new(1.0, 1.0, 3.0)], closed: false });
-        let closed = add(&mut ed, Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 7.0), DVec3::new(1.0, 1.0, 3.0)], closed: true });
+        let l = add(
+            &mut ed,
+            Shape::Locus3d {
+                p: DVec3::new(10.0, 20.0, 5.0),
+            },
+        );
+        let open = add(
+            &mut ed,
+            Shape::Polyline3d {
+                points: vec![
+                    DVec3::new(0.0, 0.0, 1.0),
+                    DVec3::new(1.0, 0.0, 7.0),
+                    DVec3::new(1.0, 1.0, 3.0),
+                ],
+                closed: false,
+            },
+        );
+        let closed = add(
+            &mut ed,
+            Shape::Polyline3d {
+                points: vec![
+                    DVec3::new(0.0, 0.0, 1.0),
+                    DVec3::new(1.0, 0.0, 7.0),
+                    DVec3::new(1.0, 1.0, 3.0),
+                ],
+                closed: true,
+            },
+        );
         let scene = build(ed.doc());
         let segs = |id: ObjectId| scene.lines.objects.iter().filter(|o| **o == id).count();
         assert_eq!((segs(l), segs(open), segs(closed)), (3, 2, 3));
         assert_eq!(scene.mesh.triangle_count(), 0);
         let (lo, hi) = world_bounds(&scene, l);
-        assert!((lo.z - (5.0 - crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3 && (hi.z - (5.0 + crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3);
+        assert!(
+            (lo.z - (5.0 - crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3
+                && (hi.z - (5.0 + crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3
+        );
         assert!((lo.x - (10.0 - crate::model::LOCUS_MARKER_HALF)).abs() < 1e-3);
         let (lo, hi) = world_bounds(&scene, open);
         assert_eq!((lo.z, hi.z), (1.0, 7.0));
@@ -1058,20 +1456,77 @@ mod tests {
     #[test]
     fn flat_faces_and_lines() {
         let mut ed = Editor::default();
-        let r = add(&mut ed, Shape::Rect { min: DVec2::new(10.0, 10.0), max: DVec2::ZERO });
-        let c = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 500.0 });
-        let a = add(&mut ed, Shape::LandscapeArea { boundary: curve::corners(&rect_pts(100.0, 100.0)), name: "n".into() });
+        let r = add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::new(10.0, 10.0),
+                max: DVec2::ZERO,
+            },
+        );
+        let c = add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 500.0,
+            },
+        );
+        let a = add(
+            &mut ed,
+            Shape::LandscapeArea {
+                boundary: curve::corners(&rect_pts(100.0, 100.0)),
+                name: "n".into(),
+            },
+        );
         let rounded = vec![
-            Vertex::new(DVec2::new(0.0, 0.0), curve::VertexKind::Arc { radius: 30.0 }),
-            Vertex::new(DVec2::new(100.0, 0.0), curve::VertexKind::Arc { radius: 30.0 }),
+            Vertex::new(
+                DVec2::new(0.0, 0.0),
+                curve::VertexKind::Arc { radius: 30.0 },
+            ),
+            Vertex::new(
+                DVec2::new(100.0, 0.0),
+                curve::VertexKind::Arc { radius: 30.0 },
+            ),
             Vertex::corner(DVec2::new(100.0, 100.0)),
             Vertex::corner(DVec2::new(0.0, 100.0)),
         ];
-        let p = add(&mut ed, Shape::Polyline { points: rounded.clone(), closed: true });
-        let l = add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::new(5.0, 5.0) });
-        let arc = add(&mut ed, Shape::Arc { center: DVec2::ZERO, radius: 100.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 });
-        let open = add(&mut ed, Shape::Polyline { points: curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::ONE]), closed: false });
-        add(&mut ed, Shape::Text { at: DVec2::ZERO, text: "t".into(), height: 5.0 });
+        let p = add(
+            &mut ed,
+            Shape::Polyline {
+                points: rounded.clone(),
+                closed: true,
+            },
+        );
+        let l = add(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::new(5.0, 5.0),
+            },
+        );
+        let arc = add(
+            &mut ed,
+            Shape::Arc {
+                center: DVec2::ZERO,
+                radius: 100.0,
+                start: 0.0,
+                end: std::f64::consts::FRAC_PI_2,
+            },
+        );
+        let open = add(
+            &mut ed,
+            Shape::Polyline {
+                points: curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::ONE]),
+                closed: false,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::Text {
+                at: DVec2::ZERO,
+                text: "t".into(),
+                height: 5.0,
+            },
+        );
         let scene = build(ed.doc());
         assert_eq!(scene.objects().count(), 7, "text has no 3D form");
         let tris = |id: ObjectId| scene.mesh.tri_object.iter().filter(|o| **o == id).count();
@@ -1094,7 +1549,10 @@ mod tests {
                 ((b - a).cross(c - a).z / 2.0) as f64
             })
             .sum();
-        assert!((area - std::f64::consts::PI * 500.0 * 500.0).abs() / (std::f64::consts::PI * 250000.0) < 0.01);
+        assert!(
+            (area - std::f64::consts::PI * 500.0 * 500.0).abs() / (std::f64::consts::PI * 250000.0)
+                < 0.01
+        );
         let _ = rounded;
     }
 
@@ -1112,16 +1570,53 @@ mod tests {
     #[test]
     fn hidden_layers_classes_and_sheets_are_skipped() {
         let mut ed = Editor::default();
-        let a = add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(10.0) });
+        let a = add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::splat(10.0),
+            },
+        );
         assert!(!build(ed.doc()).is_empty());
-        ed.execute(&Command::AddClass { name: "Hide".into(), attrs: Attributes::default() }).unwrap();
+        ed.execute(&Command::AddClass {
+            name: "Hide".into(),
+            attrs: Attributes::default(),
+        })
+        .unwrap();
         let class = ed.doc().classes.last().unwrap().id;
-        ed.execute(&Command::ModifyObject { id: a, shape: None, layer: None, class: Some(class), attrs: None }).unwrap();
-        ed.execute(&Command::ModifyClass { id: class, name: None, visible: Some(false), attrs: None }).unwrap();
+        ed.execute(&Command::ModifyObject {
+            id: a,
+            shape: None,
+            layer: None,
+            class: Some(class),
+            attrs: None,
+        })
+        .unwrap();
+        ed.execute(&Command::ModifyClass {
+            id: class,
+            name: None,
+            visible: Some(false),
+            attrs: None,
+        })
+        .unwrap();
         assert!(build(ed.doc()).is_empty(), "class hidden");
-        ed.execute(&Command::ModifyClass { id: class, name: None, visible: Some(true), attrs: None }).unwrap();
+        ed.execute(&Command::ModifyClass {
+            id: class,
+            name: None,
+            visible: Some(true),
+            attrs: None,
+        })
+        .unwrap();
         assert!(!build(ed.doc()).is_empty());
-        ed.execute(&Command::ModifyLayer { id: FIRST_LAYER, name: None, visible: Some(false), locked: None, elevation: None, scale: None }).unwrap();
+        ed.execute(&Command::ModifyLayer {
+            id: FIRST_LAYER,
+            name: None,
+            visible: Some(false),
+            locked: None,
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
         assert!(build(ed.doc()).is_empty(), "layer hidden");
         let mut doc = ed.doc().clone();
         doc.layers[0].visible = true;
@@ -1134,10 +1629,18 @@ mod tests {
         let mut ed = Editor::default();
         let out = ed
             .execute(&Command::AddObject {
-                shape: Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(10.0) },
+                shape: Shape::Rect {
+                    min: DVec2::ZERO,
+                    max: DVec2::splat(10.0),
+                },
                 layer: None,
                 class: None,
-                attrs: Attributes { pen: Some(Color([1, 2, 3, 255])), fill: Some(Color([10, 20, 30, 255])), line_weight: None },
+                attrs: Attributes {
+                    pen: Some(Color([1, 2, 3, 255])),
+                    fill: Some(Color([10, 20, 30, 255])),
+                    line_weight: None,
+                    ..Default::default()
+                },
             })
             .unwrap();
         let scene = build(ed.doc());
@@ -1158,7 +1661,13 @@ mod tests {
         assert!(Arc::ptr_eq(&s1, &s2));
         assert_eq!(cache.builds, 1, "no change, no rebuild");
 
-        add(&mut ed, Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(10.0) });
+        add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::splat(10.0),
+            },
+        );
         assert!(!cache.get(ed.revision(), ed.doc()).is_empty());
         assert_eq!(cache.builds, 2);
         cache.get(ed.revision(), ed.doc());
@@ -1166,7 +1675,12 @@ mod tests {
 
         // A failed command does not change the document or the revision.
         let before = ed.revision();
-        assert!(ed.execute(&Command::DeleteObjects { ids: vec![ObjectId(999)] }).is_err());
+        assert!(
+            ed.execute(&Command::DeleteObjects {
+                ids: vec![ObjectId(999)]
+            })
+            .is_err()
+        );
         assert_eq!(ed.revision(), before);
         cache.get(ed.revision(), ed.doc());
         assert_eq!(cache.builds, 2);
@@ -1196,11 +1710,25 @@ mod tests {
         // A site far from the world origin: single-precision coordinates would give a 0.5 m grid.
         let (x0, y0) = (6_500_000.0, 5_900_000.0);
         let mut ed = Editor::default();
-        let id = add(&mut ed, Shape::Rect { min: DVec2::new(x0, y0), max: DVec2::new(x0 + 1234.5, y0 + 678.25) });
+        let id = add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::new(x0, y0),
+                max: DVec2::new(x0 + 1234.5, y0 + 678.25),
+            },
+        );
         let scene = build(ed.doc());
-        assert!((scene.origin.x - (x0 + 617.25)).abs() < 1e-6 && (scene.origin.y - (y0 + 339.125)).abs() < 1e-6, "{:?}", scene.origin);
+        assert!(
+            (scene.origin.x - (x0 + 617.25)).abs() < 1e-6
+                && (scene.origin.y - (y0 + 339.125)).abs() < 1e-6,
+            "{:?}",
+            scene.origin
+        );
         let (lo, hi) = scene.object_bounds(id).unwrap();
-        assert!(((hi.x - lo.x) - 1234.5).abs() < 1e-3 && ((hi.y - lo.y) - 678.25).abs() < 1e-3, "{lo:?} {hi:?}");
+        assert!(
+            ((hi.x - lo.x) - 1234.5).abs() < 1e-3 && ((hi.y - lo.y) - 678.25).abs() < 1e-3,
+            "{lo:?} {hi:?}"
+        );
         let (wlo, _) = world_bounds(&scene, id);
         assert!((wlo.x - x0).abs() < 1e-3 && (wlo.y - y0).abs() < 1e-3);
         // build_at puts the origin where it is asked to.
@@ -1211,7 +1739,17 @@ mod tests {
     #[test]
     fn objects_are_listed_in_document_order() {
         let mut ed = Editor::default();
-        let ids: Vec<ObjectId> = (0..30).map(|i| add(&mut ed, Shape::Circle { center: DVec2::new(i as f64 * 100.0, 0.0), radius: 10.0 })).collect();
+        let ids: Vec<ObjectId> = (0..30)
+            .map(|i| {
+                add(
+                    &mut ed,
+                    Shape::Circle {
+                        center: DVec2::new(i as f64 * 100.0, 0.0),
+                        radius: 10.0,
+                    },
+                )
+            })
+            .collect();
         let scene = build(ed.doc());
         assert_eq!(scene.objects().collect::<Vec<_>>(), ids);
     }
@@ -1219,9 +1757,22 @@ mod tests {
     #[test]
     fn non_finite_numbers_in_a_document_do_not_reach_the_bounds() {
         let mut doc = Document::default();
-        for (i, shape) in [Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(10.0) }, Shape::Rect { min: DVec2::splat(f64::NAN), max: DVec2::splat(1e39) }, Shape::Circle { center: DVec2::ZERO, radius: f64::INFINITY }]
-            .into_iter()
-            .enumerate()
+        for (i, shape) in [
+            Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::splat(10.0),
+            },
+            Shape::Rect {
+                min: DVec2::splat(f64::NAN),
+                max: DVec2::splat(1e39),
+            },
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: f64::INFINITY,
+            },
+        ]
+        .into_iter()
+        .enumerate()
         {
             let o = Object::new(ObjectId(10 + i as u64), FIRST_LAYER, NONE_CLASS, shape);
             doc.objects.insert(o.id, o);
@@ -1243,10 +1794,29 @@ mod tests {
         use crate::plants::style::PlantStyle;
         use crate::resource::{ResourceBody, ResourceId};
         let mut ed = Editor::default();
-        let style = PlantStyle { form, spread, height, ..PlantStyle::default() };
-        let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        let style = PlantStyle {
+            form,
+            spread,
+            height,
+            ..PlantStyle::default()
+        };
+        let sid = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "S".into(),
+                body: ResourceBody::plant_style(style),
+            })
+            .unwrap()
+            .created[0],
+        );
         let out = ed
-            .execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::new(1000.0, 2000.0)], layer: None, class: None, variation: None })
+            .execute(&Command::AddPlants {
+                style: Some(sid),
+                overrides: Default::default(),
+                positions: vec![DVec2::new(1000.0, 2000.0)],
+                layer: None,
+                class: None,
+                variation: None,
+            })
             .unwrap();
         (ed, ObjectId(out.created[0]))
     }
@@ -1259,11 +1829,21 @@ mod tests {
             let (lo, hi) = world_bounds(&scene, id);
             assert!((hi.z - 6000.0).abs() < 1.0, "{form:?} top {}", hi.z);
             assert!(lo.z.abs() < 1.0, "{form:?} bottom {}", lo.z);
-            assert!(hi.x - lo.x <= 3000.0 + 1.0 && hi.x - lo.x > 2500.0, "{form:?} width {}", hi.x - lo.x);
-            assert!(((lo.x + hi.x) / 2.0 - 1000.0).abs() < 1.0 && ((lo.y + hi.y) / 2.0 - 2000.0).abs() < 1.0);
+            assert!(
+                hi.x - lo.x <= 3000.0 + 1.0 && hi.x - lo.x > 2500.0,
+                "{form:?} width {}",
+                hi.x - lo.x
+            );
+            assert!(
+                ((lo.x + hi.x) / 2.0 - 1000.0).abs() < 1.0
+                    && ((lo.y + hi.y) / 2.0 - 2000.0).abs() < 1.0
+            );
             assert!(scene.mesh.triangle_count() > 10);
             for n in &scene.mesh.normals {
-                assert!((n.length() - 1.0).abs() < 1e-3 || n.length() == 0.0, "{form:?} normal {n:?}");
+                assert!(
+                    (n.length() - 1.0).abs() < 1e-3 || n.length() == 0.0,
+                    "{form:?} normal {n:?}"
+                );
             }
             assert!(scene.lines.segment_count() > 0);
         }
@@ -1271,13 +1851,27 @@ mod tests {
 
     #[test]
     fn plant_forms_differ_in_shape() {
-        let positions = |f| build(styled_plant(f, 3000.0, 6000.0).0.doc()).mesh.positions.clone();
+        let positions = |f| {
+            build(styled_plant(f, 3000.0, 6000.0).0.doc())
+                .mesh
+                .positions
+                .clone()
+        };
         let tree = positions(PlantForm::Tree);
-        for f in [PlantForm::Columnar, PlantForm::Conical, PlantForm::Spreading, PlantForm::ShrubMound] {
+        for f in [
+            PlantForm::Columnar,
+            PlantForm::Conical,
+            PlantForm::Spreading,
+            PlantForm::ShrubMound,
+        ] {
             assert_ne!(positions(f), tree, "{f:?}");
         }
         // A mound has no trunk, so it has fewer triangles than a tree.
-        let tris = |f| build(styled_plant(f, 3000.0, 600.0).0.doc()).mesh.triangle_count();
+        let tris = |f| {
+            build(styled_plant(f, 3000.0, 600.0).0.doc())
+                .mesh
+                .triangle_count()
+        };
         assert!(tris(PlantForm::ShrubMound) < tris(PlantForm::Tree));
     }
 
@@ -1287,15 +1881,46 @@ mod tests {
         use crate::plants::style::PlantStyle;
         use crate::resource::{ResourceBody, ResourceId};
         let mut ed = Editor::default();
-        let style = PlantStyle { fill: Some(Color([200, 10, 20, 255])), ..PlantStyle::default() };
-        let sid = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
-        ed.execute(&Command::AddPlants { style: Some(sid), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None, variation: None }).unwrap();
+        let style = PlantStyle {
+            fill: Some(Color([200, 10, 20, 255])),
+            ..PlantStyle::default()
+        };
+        let sid = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "S".into(),
+                body: ResourceBody::plant_style(style),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::AddPlants {
+            style: Some(sid),
+            overrides: Default::default(),
+            positions: vec![DVec2::ZERO],
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
         let scene = build(ed.doc());
         assert!(scene.mesh.colors.contains(&[200, 10, 20, 255]));
         let id = *ed.doc().objects.keys().next().unwrap();
-        ed.execute(&Command::ModifyObject { id, shape: None, layer: None, class: None, attrs: Some(Attributes { fill: Some(Color([1, 2, 3, 255])), ..Default::default() }) }).unwrap();
+        ed.execute(&Command::ModifyObject {
+            id,
+            shape: None,
+            layer: None,
+            class: None,
+            attrs: Some(Attributes {
+                fill: Some(Color([1, 2, 3, 255])),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
         let scene = build(ed.doc());
-        assert!(scene.mesh.colors.contains(&[1, 2, 3, 255]) && !scene.mesh.colors.contains(&[200, 10, 20, 255]));
+        assert!(
+            scene.mesh.colors.contains(&[1, 2, 3, 255])
+                && !scene.mesh.colors.contains(&[200, 10, 20, 255])
+        );
     }
 
     #[test]
@@ -1323,7 +1948,12 @@ mod tests {
         let (lo, hi) = world_bounds(&scene, ObjectId(out.created[0]));
         assert!((hi.z - 14000.0).abs() < 1.0 && (hi.x - lo.x - 8000.0).abs() < 1.0);
         // The trunk vertices are 300 mm from the axis.
-        let on_trunk = scene.mesh.positions.iter().filter(|p| (p.x as f64).hypot(p.y as f64).round() == 300.0).count();
+        let on_trunk = scene
+            .mesh
+            .positions
+            .iter()
+            .filter(|p| (p.x as f64).hypot(p.y as f64).round() == 300.0)
+            .count();
         assert!(on_trunk >= 16, "{on_trunk}");
     }
 
@@ -1332,12 +1962,23 @@ mod tests {
         let make = |n: usize| {
             let (mut ed, _) = styled_plant(PlantForm::Tree, 3000.0, 6000.0);
             let positions = (0..n).map(|i| DVec2::new(i as f64 * 4000.0, 0.0)).collect();
-            ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions, layer: None, class: None, variation: None }).unwrap();
+            ed.execute(&Command::AddPlants {
+                style: None,
+                overrides: Default::default(),
+                positions,
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
             build(ed.doc()).mesh.triangle_count() as f64 / (n + 1) as f64
         };
         let few = make(10);
         let many = make(COARSE_PLANT_COUNT + 10);
-        assert!(many < few * 0.6, "triangles per plant: {few} for few, {many} for many");
+        assert!(
+            many < few * 0.6,
+            "triangles per plant: {few} for few, {many} for many"
+        );
         // The coarse canopy is still a closed shape of the right size.
         let sphere = UnitSphere::new(SPHERE_COARSE);
         assert_eq!(sphere.verts.len(), 8 * 5);
@@ -1349,9 +1990,27 @@ mod tests {
         let mut ed = Editor::default();
         let sid = {
             use crate::resource::ResourceBody;
-            crate::resource::ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0])
+            crate::resource::ResourceId(
+                ed.execute(&Command::AddResource {
+                    name: "S".into(),
+                    body: ResourceBody::plant_style(Default::default()),
+                })
+                .unwrap()
+                .created[0],
+            )
         };
-        ed.execute(&Command::AddObject { shape: Shape::PlantTag { at: DVec2::ZERO, anchor: DVec2::new(5.0, 5.0), style: sid, height: 400.0 }, layer: None, class: None, attrs: crate::model::Attributes::default() }).unwrap();
+        ed.execute(&Command::AddObject {
+            shape: Shape::PlantTag {
+                at: DVec2::ZERO,
+                anchor: DVec2::new(5.0, 5.0),
+                style: sid,
+                height: 400.0,
+            },
+            layer: None,
+            class: None,
+            attrs: crate::model::Attributes::default(),
+        })
+        .unwrap();
         assert!(build(ed.doc()).mesh.triangle_count() == 0);
     }
 }

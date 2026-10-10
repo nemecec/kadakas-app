@@ -18,21 +18,37 @@ fn points(max: usize) -> impl Strategy<Value = Vec<DVec3>> {
 }
 
 fn build(points: Vec<DVec3>) -> Option<Tin> {
-    Tin::build(&SourceData { points, lines: vec![] }).ok()
+    Tin::build(&SourceData {
+        points,
+        lines: vec![],
+    })
+    .ok()
 }
 
 fn flat(n: i32, step: f64, from: f64, z: f64) -> SourceData {
     let mut points = Vec::new();
     for i in 0..n {
         for j in 0..n {
-            points.push(DVec3::new(from + i as f64 * step, from + j as f64 * step, z));
+            points.push(DVec3::new(
+                from + i as f64 * step,
+                from + j as f64 * step,
+                z,
+            ));
         }
     }
-    SourceData { points, lines: vec![] }
+    SourceData {
+        points,
+        lines: vec![],
+    }
 }
 
 fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<DVec2> {
-    vec![DVec2::new(x0, y0), DVec2::new(x1, y0), DVec2::new(x1, y1), DVec2::new(x0, y1)]
+    vec![
+        DVec2::new(x0, y0),
+        DVec2::new(x1, y0),
+        DVec2::new(x1, y1),
+        DVec2::new(x0, y1),
+    ]
 }
 
 proptest! {

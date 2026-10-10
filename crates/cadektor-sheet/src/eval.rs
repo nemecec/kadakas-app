@@ -33,8 +33,14 @@ pub const FUNCTIONS: &[(&str, &str)] = &[
     ("COUNT", "COUNT(values...): how many numbers"),
     ("COUNTA", "COUNTA(values...): how many values are not empty"),
     ("IF", "IF(test, then, else): chooses a value"),
-    ("IFERROR", "IFERROR(value, other): other if value is an error"),
-    ("ROUND", "ROUND(number, digits): rounds to a number of decimals"),
+    (
+        "IFERROR",
+        "IFERROR(value, other): other if value is an error",
+    ),
+    (
+        "ROUND",
+        "ROUND(number, digits): rounds to a number of decimals",
+    ),
     ("ABS", "ABS(number): the size of a number"),
     ("CONCAT", "CONCAT(values...): joins text"),
     ("AND", "AND(tests...): true if all are true"),
@@ -43,8 +49,14 @@ pub const FUNCTIONS: &[(&str, &str)] = &[
     ("LEN", "LEN(text): the number of characters"),
     ("UPPER", "UPPER(text): upper case"),
     ("LOWER", "LOWER(text): lower case"),
-    ("FIELD", "FIELD(record, field): a record field of the object (database rows only)"),
-    ("HASRECORD", "HASRECORD(record): true if the object has the record (database rows only)"),
+    (
+        "FIELD",
+        "FIELD(record, field): a record field of the object (database rows only)",
+    ),
+    (
+        "HASRECORD",
+        "HASRECORD(record): true if the object has the record (database rows only)",
+    ),
 ];
 
 fn err(e: ErrorKind) -> Value {
@@ -165,7 +177,11 @@ fn numbers(vals: &[Value]) -> Result<Vec<f64>, ErrorKind> {
 }
 
 fn arity(args: &[Expr], min: usize, max: usize) -> Result<(), Value> {
-    if args.len() < min || args.len() > max { Err(err(ErrorKind::Value)) } else { Ok(()) }
+    if args.len() < min || args.len() > max {
+        Err(err(ErrorKind::Value))
+    } else {
+        Ok(())
+    }
 }
 
 fn call(name: &str, args: &[Expr], env: &dyn Env) -> Value {
@@ -203,8 +219,18 @@ fn call(name: &str, args: &[Expr], env: &dyn Env) -> Value {
                 "COUNT" => Value::Number(nums.len() as f64),
                 "AVERAGE" if nums.is_empty() => err(ErrorKind::Div0),
                 "AVERAGE" => Value::num(nums.iter().sum::<f64>() / nums.len() as f64),
-                "MIN" => Value::num(nums.iter().copied().fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.min(x)))).unwrap_or(0.0)),
-                _ => Value::num(nums.iter().copied().fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x)))).unwrap_or(0.0)),
+                "MIN" => Value::num(
+                    nums.iter()
+                        .copied()
+                        .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.min(x))))
+                        .unwrap_or(0.0),
+                ),
+                _ => Value::num(
+                    nums.iter()
+                        .copied()
+                        .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))))
+                        .unwrap_or(0.0),
+                ),
             }
         }
         "ROUND" => {
@@ -320,7 +346,10 @@ mod tests {
 
     impl Env for TestEnv {
         fn cell(&self, at: CellRef) -> Value {
-            self.cells.get(&(at.row, at.col)).cloned().unwrap_or_default()
+            self.cells
+                .get(&(at.row, at.col))
+                .cloned()
+                .unwrap_or_default()
         }
         fn range(&self, from: CellRef, to: CellRef) -> Vec<Value> {
             let mut out = vec![];
@@ -548,7 +577,11 @@ mod tests {
     fn every_listed_function_exists() {
         for (name, _) in FUNCTIONS {
             let v = ev(&format!("{name}(1, 2, 3, 4)"));
-            assert_ne!(v, Value::Error(ErrorKind::Name), "{name} is listed but not known");
+            assert_ne!(
+                v,
+                Value::Error(ErrorKind::Name),
+                "{name} is listed but not known"
+            );
         }
     }
 

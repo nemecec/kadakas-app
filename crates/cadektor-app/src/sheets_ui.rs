@@ -9,8 +9,8 @@ use cadektor_api::Session;
 use cadektor_core::command::Command;
 use cadektor_core::model::{LayerId, LayerKind};
 use cadektor_core::sheets::{Orientation, PaperSize, SavedView};
-use cadektor_print::display::{PSeg, Prim};
 use cadektor_print::Page;
+use cadektor_print::display::{PSeg, Prim};
 use egui::epaint::PathStroke;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, TextureHandle, Ui};
 use glam::DVec2;
@@ -36,7 +36,9 @@ pub struct SheetUi {
 /// The active layer if it is a sheet layer.
 pub fn active_sheet(session: &Session) -> Option<LayerId> {
     let doc = session.editor.doc();
-    doc.layer(doc.active_layer).filter(|l| l.kind == LayerKind::Sheet).map(|l| l.id)
+    doc.layer(doc.active_layer)
+        .filter(|l| l.kind == LayerKind::Sheet)
+        .map(|l| l.id)
 }
 
 fn col(c: [u8; 4]) -> Color32 {
@@ -53,14 +55,21 @@ impl SheetUi {
     /// as its bounding box here. The PDF, SVG and PNG have the exact shape.
     pub fn paint(&self, painter: &Painter, view: &View, page: &Page) {
         let sheet = Rect::from_two_pos(view.to_screen(DVec2::ZERO), view.to_screen(page.size));
-        painter.rect_filled(sheet.translate(egui::vec2(4.0, 4.0)), 0.0, Color32::from_black_alpha(50));
+        painter.rect_filled(
+            sheet.translate(egui::vec2(4.0, 4.0)),
+            0.0,
+            Color32::from_black_alpha(50),
+        );
         painter.rect_filled(sheet, 0.0, Color32::WHITE);
         let mut stack: Vec<Painter> = Vec::new();
         for prim in &page.prims {
             let p = stack.last().unwrap_or(painter);
             match prim {
                 Prim::PushClip(poly) => {
-                    let (lo, hi) = poly.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(a, b), q| (a.min(*q), b.max(*q)));
+                    let (lo, hi) = poly.iter().fold(
+                        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                        |(a, b), q| (a.min(*q), b.max(*q)),
+                    );
                     let r = Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi));
                     stack.push(p.with_clip_rect(p.clip_rect().intersect(r)));
                 }
@@ -91,10 +100,20 @@ impl SheetUi {
                                 if path.closed {
                                     pts.push(sp[0]);
                                 }
-                                p.extend(egui::Shape::dashed_line(&pts, Stroke::new(w, col(s)), (d * view.zoom) as f32, (g * view.zoom) as f32));
+                                p.extend(egui::Shape::dashed_line(
+                                    &pts,
+                                    Stroke::new(w, col(s)),
+                                    (d * view.zoom) as f32,
+                                    (g * view.zoom) as f32,
+                                ));
                             }
                             None => {
-                                p.add(egui::epaint::PathShape { points: sp, closed: path.closed, fill: Color32::TRANSPARENT, stroke: PathStroke::new(w, col(s)) });
+                                p.add(egui::epaint::PathShape {
+                                    points: sp,
+                                    closed: path.closed,
+                                    fill: Color32::TRANSPARENT,
+                                    stroke: PathStroke::new(w, col(s)),
+                                });
                             }
                         }
                     }
@@ -102,8 +121,18 @@ impl SheetUi {
                 Prim::Text(t) => {
                     let size = (t.height * view.zoom) as f32;
                     if size >= 3.0 {
-                        let align = if t.align == cadektor_print::display::Align::Center { Align2::CENTER_BOTTOM } else { Align2::LEFT_BOTTOM };
-                        p.text(view.to_screen(t.at), align, &t.text, FontId::proportional(size.min(400.0)), col(t.color));
+                        let align = if t.align == cadektor_print::display::Align::Center {
+                            Align2::CENTER_BOTTOM
+                        } else {
+                            Align2::LEFT_BOTTOM
+                        };
+                        p.text(
+                            view.to_screen(t.at),
+                            align,
+                            &t.text,
+                            FontId::proportional(size.min(400.0)),
+                            col(t.color),
+                        );
                     }
                 }
                 Prim::Image(img) => {
@@ -113,11 +142,21 @@ impl SheetUi {
                         textures.clear();
                     }
                     let tex = textures.entry(key).or_insert_with(|| {
-                        let image = egui::ColorImage::from_rgb([img.width as usize, img.height as usize], &img.rgb);
-                        painter.ctx().load_texture("viewport", image, egui::TextureOptions::LINEAR)
+                        let image = egui::ColorImage::from_rgb(
+                            [img.width as usize, img.height as usize],
+                            &img.rgb,
+                        );
+                        painter
+                            .ctx()
+                            .load_texture("viewport", image, egui::TextureOptions::LINEAR)
                     });
                     let r = Rect::from_two_pos(view.to_screen(img.min), view.to_screen(img.max));
-                    p.image(tex.id(), r, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    p.image(
+                        tex.id(),
+                        r,
+                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
                 }
             }
         }
@@ -139,15 +178,30 @@ const PAPERS: [(&str, PaperSize); 11] = [
 ];
 
 /// The Sheet Layers and Saved Views sections of the Navigation palette.
-pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi, status: &mut String) {
+pub fn navigation_sections(
+    ui: &mut Ui,
+    session: &mut Session,
+    sui: &mut SheetUi,
+    status: &mut String,
+) {
     let mut cmds: Vec<Command> = Vec::new();
     let doc = session.editor.doc();
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.strong("Sheet Layers");
-        if ui.small_button("+").on_hover_text("Add Sheet Layer").clicked() {
+        if ui
+            .small_button("+")
+            .on_hover_text("Add Sheet Layer")
+            .clicked()
+        {
             let n = doc.sheet_layers().count() + 1;
-            cmds.push(Command::AddSheet { name: format!("Sheet {n}"), paper: None, orientation: None, number: None, title: None });
+            cmds.push(Command::AddSheet {
+                name: format!("Sheet {n}"),
+                paper: None,
+                orientation: None,
+                number: None,
+                title: None,
+            });
         }
     });
     for l in doc.sheet_layers() {
@@ -155,22 +209,43 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
         ui.horizontal(|ui| {
             let mut vis = l.visible;
             if ui.checkbox(&mut vis, "").on_hover_text("Visible").changed() {
-                cmds.push(Command::ModifyLayer { id: l.id, name: None, visible: Some(vis), locked: None, elevation: None, scale: None });
+                cmds.push(Command::ModifyLayer {
+                    id: l.id,
+                    name: None,
+                    visible: Some(vis),
+                    locked: None,
+                    elevation: None,
+                    scale: None,
+                });
             }
             if let Some((_, buf)) = sui.renaming.as_mut().filter(|r| r.0 == l.id) {
                 let r = ui.text_edit_singleline(buf);
                 r.request_focus();
                 if r.lost_focus() {
                     if !buf.is_empty() {
-                        cmds.push(Command::ModifyLayer { id: l.id, name: Some(buf.clone()), visible: None, locked: None, elevation: None, scale: None });
+                        cmds.push(Command::ModifyLayer {
+                            id: l.id,
+                            name: Some(buf.clone()),
+                            visible: None,
+                            locked: None,
+                            elevation: None,
+                            scale: None,
+                        });
                     }
                     sui.renaming = None;
                 }
             } else {
-                let label = if sheet.number.is_empty() { l.name.clone() } else { format!("{}  {}", sheet.number, l.name) };
+                let label = if sheet.number.is_empty() {
+                    l.name.clone()
+                } else {
+                    format!("{}  {}", sheet.number, l.name)
+                };
                 let r = ui.selectable_label(l.id == doc.active_layer, label);
                 if r.clicked() {
-                    cmds.push(Command::SetActive { layer: Some(l.id), class: None });
+                    cmds.push(Command::SetActive {
+                        layer: Some(l.id),
+                        class: None,
+                    });
                 }
                 if r.double_clicked() {
                     sui.renaming = Some((l.id, l.name.clone()));
@@ -189,7 +264,12 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
         });
         if l.id == doc.active_layer {
             // Page settings of the active sheet layer.
-            let (mut number, mut title, mut paper, mut orientation) = (sheet.number.clone(), sheet.title.clone(), sheet.paper, sheet.orientation);
+            let (mut number, mut title, mut paper, mut orientation) = (
+                sheet.number.clone(),
+                sheet.title.clone(),
+                sheet.paper,
+                sheet.orientation,
+            );
             egui::Grid::new("sheet_page").num_columns(2).show(ui, |ui| {
                 ui.label("Number");
                 let n = ui.text_edit_singleline(&mut number);
@@ -199,7 +279,12 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
                 ui.end_row();
                 ui.label("Paper");
                 egui::ComboBox::from_id_salt("sheet_paper")
-                    .selected_text(PAPERS.iter().find(|(_, p)| *p == paper).map_or("Custom", |(n, _)| *n))
+                    .selected_text(
+                        PAPERS
+                            .iter()
+                            .find(|(_, p)| *p == paper)
+                            .map_or("Custom", |(n, _)| *n),
+                    )
                     .show_ui(ui, |ui| {
                         for (name, p) in PAPERS {
                             ui.selectable_value(&mut paper, p, name);
@@ -213,14 +298,32 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
                 });
                 ui.end_row();
                 if n.lost_focus() && number != sheet.number {
-                    cmds.push(Command::SetSheet { layer: l.id, paper: None, orientation: None, number: Some(number.clone()), title: None });
+                    cmds.push(Command::SetSheet {
+                        layer: l.id,
+                        paper: None,
+                        orientation: None,
+                        number: Some(number.clone()),
+                        title: None,
+                    });
                 }
                 if t.lost_focus() && title != sheet.title {
-                    cmds.push(Command::SetSheet { layer: l.id, paper: None, orientation: None, number: None, title: Some(title.clone()) });
+                    cmds.push(Command::SetSheet {
+                        layer: l.id,
+                        paper: None,
+                        orientation: None,
+                        number: None,
+                        title: Some(title.clone()),
+                    });
                 }
             });
             if paper != sheet.paper || orientation != sheet.orientation {
-                cmds.push(Command::SetSheet { layer: l.id, paper: Some(paper), orientation: Some(orientation), number: None, title: None });
+                cmds.push(Command::SetSheet {
+                    layer: l.id,
+                    paper: Some(paper),
+                    orientation: Some(orientation),
+                    number: None,
+                    title: None,
+                });
             }
         }
     }
@@ -228,9 +331,13 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
     ui.add_space(8.0);
     ui.strong("Saved Views");
     for v in &doc.drawing.saved_views {
-        let r = ui.selectable_label(false, &v.name).on_hover_text("Click to restore");
+        let r = ui
+            .selectable_label(false, &v.name)
+            .on_hover_text("Click to restore");
         if r.clicked() {
-            cmds.push(Command::RestoreView { name: v.name.clone() });
+            cmds.push(Command::RestoreView {
+                name: v.name.clone(),
+            });
         }
         r.context_menu(|ui| {
             if ui.button("Update from current view").clicked() {
@@ -238,14 +345,21 @@ pub fn navigation_sections(ui: &mut Ui, session: &mut Session, sui: &mut SheetUi
                 ui.close();
             }
             if ui.button("Delete").clicked() {
-                cmds.push(Command::DeleteView { name: v.name.clone() });
+                cmds.push(Command::DeleteView {
+                    name: v.name.clone(),
+                });
                 ui.close();
             }
         });
     }
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut sui.new_view).hint_text("View name").desired_width(120.0));
-        let add = ui.button("Save view").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut sui.new_view)
+                .hint_text("View name")
+                .desired_width(120.0),
+        );
+        let add = ui.button("Save view").clicked()
+            || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add && !sui.new_view.trim().is_empty() {
             sui.save_request = Some(sui.new_view.trim().to_string());
             sui.new_view.clear();

@@ -79,7 +79,10 @@ pub fn style_of(doc: &Document, obj: &Object) -> Option<(ResourceId, LandscapeAr
 }
 
 pub(crate) fn set_data(obj: &mut Object, d: &LandscapeData) {
-    obj.data.insert(KEY.into(), serde_json::to_value(d).expect("settings are JSON"));
+    obj.data.insert(
+        KEY.into(),
+        serde_json::to_value(d).expect("settings are JSON"),
+    );
 }
 
 /// Moves the holes with the object.
@@ -108,15 +111,21 @@ pub struct LandscapePatch {
 
 fn inside_or_on(ring: &[DVec2], p: DVec2) -> bool {
     let n = ring.len();
-    geom::point_in_polygon(p, ring) || (0..n).any(|i| geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
+    geom::point_in_polygon(p, ring)
+        || (0..n).any(|i| geom::dist_to_segment(p, ring[i], ring[(i + 1) % n]) < 1e-6)
 }
 
 /// Applies a patch to a landscape area object. The style must exist (the caller checks).
 /// Nothing changes on error.
 pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), String> {
-    let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return Err(format!("object {} is not a landscape area", obj.id)) };
+    let Shape::LandscapeArea { boundary, .. } = &obj.shape else {
+        return Err(format!("object {} is not a landscape area", obj.id));
+    };
     if obj.data.get(KEY).is_some_and(|v| !matches!(v, Value::Null)) && data(obj).is_none() {
-        return Err(format!("object {} has landscape area data that cannot be read", obj.id));
+        return Err(format!(
+            "object {} has landscape area data that cannot be read",
+            obj.id
+        ));
     }
     if patch.unstyle && patch.style.is_some() {
         return Err("give a style or unstyle, not both".into());
@@ -143,10 +152,16 @@ pub fn apply_patch(obj: &mut Object, patch: &LandscapePatch) -> Result<(), Strin
             if hole.len() < 3 {
                 return Err(format!("hole {} needs 3 or more points", i + 1));
             }
-            if hole.iter().any(|v| !v.is_finite() || v.p.abs().max_element() > MAX_COORD) {
+            if hole
+                .iter()
+                .any(|v| !v.is_finite() || v.p.abs().max_element() > MAX_COORD)
+            {
                 return Err("numbers must be finite".into());
             }
-            if !curve::flatten(hole, true, TOLERANCE).iter().all(|p| inside_or_on(&ring, *p)) {
+            if !curve::flatten(hole, true, TOLERANCE)
+                .iter()
+                .all(|p| inside_or_on(&ring, *p))
+            {
                 return Err(format!("hole {} is not inside the area", i + 1));
             }
         }
@@ -167,13 +182,19 @@ pub fn holes_fit(boundary: &[Vertex], holes: &[Vec<Vertex>]) -> bool {
         return true;
     }
     let ring = curve::flatten(boundary, true, TOLERANCE);
-    holes.iter().all(|h| curve::flatten(h, true, TOLERANCE).iter().all(|p| inside_or_on(&ring, *p)))
+    holes.iter().all(|h| {
+        curve::flatten(h, true, TOLERANCE)
+            .iter()
+            .all(|p| inside_or_on(&ring, *p))
+    })
 }
 
 fn ccw(ring: &[DVec2]) -> Vec<[f64; 2]> {
     let mut pts: Vec<[f64; 2]> = ring.iter().map(|p| [p.x, p.y]).collect();
     let o = ring.first().copied().unwrap_or_default();
-    let twice: f64 = (0..ring.len()).map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o)).sum();
+    let twice: f64 = (0..ring.len())
+        .map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o))
+        .sum();
     if twice < 0.0 {
         pts.reverse();
     }
@@ -181,8 +202,17 @@ fn ccw(ring: &[DVec2]) -> Vec<[f64; 2]> {
 }
 
 fn shape_area(shape: &[Vec<[f64; 2]>]) -> f64 {
-    let a = |r: &Vec<[f64; 2]>| -> f64 { (0..r.len()).map(|i| r[i][0] * r[(i + 1) % r.len()][1] - r[(i + 1) % r.len()][0] * r[i][1]).sum::<f64>() / 2.0 };
-    shape.iter().enumerate().map(|(i, r)| if i == 0 { a(r).abs() } else { -a(r).abs() }).sum()
+    let a = |r: &Vec<[f64; 2]>| -> f64 {
+        (0..r.len())
+            .map(|i| r[i][0] * r[(i + 1) % r.len()][1] - r[(i + 1) % r.len()][0] * r[i][1])
+            .sum::<f64>()
+            / 2.0
+    };
+    shape
+        .iter()
+        .enumerate()
+        .map(|(i, r)| if i == 0 { a(r).abs() } else { -a(r).abs() })
+        .sum()
 }
 
 /// Area in model units squared that the holes take from the boundary: the area of the union of
@@ -194,14 +224,32 @@ pub fn holes_area(boundary: &[Vertex], holes: &[Vec<Vertex>]) -> f64 {
     }
     // The common case: holes inside the boundary that do not touch each other.
     let boxes: Vec<(DVec2, DVec2)> = holes.iter().map(|h| curve::bounds(h, true)).collect();
-    let apart = (0..boxes.len()).all(|i| (i + 1..boxes.len()).all(|j| boxes[i].1.x < boxes[j].0.x || boxes[j].1.x < boxes[i].0.x || boxes[i].1.y < boxes[j].0.y || boxes[j].1.y < boxes[i].0.y));
+    let apart = (0..boxes.len()).all(|i| {
+        (i + 1..boxes.len()).all(|j| {
+            boxes[i].1.x < boxes[j].0.x
+                || boxes[j].1.x < boxes[i].0.x
+                || boxes[i].1.y < boxes[j].0.y
+                || boxes[j].1.y < boxes[i].0.y
+        })
+    });
     if apart && holes_fit(boundary, holes) {
         return holes.iter().map(|h| curve::area(h)).sum();
     }
-    let rings: Vec<Vec<[f64; 2]>> = holes.iter().map(|h| ccw(&curve::flatten(h, true, TOLERANCE))).collect();
-    let union = rings.overlay(&Vec::<Vec<[f64; 2]>>::new(), OverlayRule::Union, FillRule::NonZero);
+    let rings: Vec<Vec<[f64; 2]>> = holes
+        .iter()
+        .map(|h| ccw(&curve::flatten(h, true, TOLERANCE)))
+        .collect();
+    let union = rings.overlay(
+        &Vec::<Vec<[f64; 2]>>::new(),
+        OverlayRule::Union,
+        FillRule::NonZero,
+    );
     let pieces: Vec<Vec<[f64; 2]>> = union.into_iter().flatten().collect();
-    let cut = pieces.overlay(&vec![ccw(&curve::flatten(boundary, true, TOLERANCE))], OverlayRule::Intersect, FillRule::NonZero);
+    let cut = pieces.overlay(
+        &vec![ccw(&curve::flatten(boundary, true, TOLERANCE))],
+        OverlayRule::Intersect,
+        FillRule::NonZero,
+    );
     cut.iter().map(|s| shape_area(s)).sum()
 }
 
@@ -238,7 +286,9 @@ pub struct AreaQuantities {
 
 /// Quantities of the plants of an area. Plants of the mix whose style no longer exists are skipped.
 pub fn quantities(doc: &Document, obj: &Object) -> Option<AreaQuantities> {
-    let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return None };
+    let Shape::LandscapeArea { boundary, .. } = &obj.shape else {
+        return None;
+    };
     let gross = curve::area(boundary) / 1e6;
     let d = data(obj).unwrap_or_default();
     let holes = holes_area(boundary, &d.holes) / 1e6;
@@ -246,12 +296,22 @@ pub fn quantities(doc: &Document, obj: &Object) -> Option<AreaQuantities> {
     let mut rows = Vec::new();
     if let Some((_, s)) = style_of(doc, obj) {
         for e in &s.mix {
-            let Some(p) = doc.resources.plant_style(e.plant) else { continue };
-            let name = doc.resources.get(e.plant).map(|r| r.name.clone()).unwrap_or_default();
+            let Some(p) = doc.resources.plant_style(e.plant) else {
+                continue;
+            };
+            let name = doc
+                .resources
+                .get(e.plant)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
             let density = e.density_per_m2(p.spread);
             let covered = net * e.percent / 100.0;
             let count = ((covered * density).round().min(1.0e9) as usize).max(e.min_count as usize);
-            let total_price = if p.quantity == QuantityType::Area { p.price * covered } else { p.price * count as f64 };
+            let total_price = if p.quantity == QuantityType::Area {
+                p.price * covered
+            } else {
+                p.price * count as f64
+            };
             rows.push(PlantQty {
                 plant: e.plant,
                 name,
@@ -269,17 +329,28 @@ pub fn quantities(doc: &Document, obj: &Object) -> Option<AreaQuantities> {
             });
         }
     }
-    Some(AreaQuantities { gross_area_m2: gross, holes_area_m2: holes.min(gross), net_area_m2: net, rows })
+    Some(AreaQuantities {
+        gross_area_m2: gross,
+        holes_area_m2: holes.min(gross),
+        net_area_m2: net,
+        rows,
+    })
 }
 
 /// The area of the draped surface over the whole outline (holes included), in m2.
 pub fn draped_area_m2(obj: &Object, terrain: Terrain<'_>) -> Option<f64> {
-    let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return None };
+    let Shape::LandscapeArea { boundary, .. } = &obj.shape else {
+        return None;
+    };
     let ring = curve::flatten(boundary, true, TOLERANCE);
     let z = |p: DVec2| terrain(p).unwrap_or(0.0);
     let (points, indices) = surface::top_surface(&ring, &z, Some(DRAPE_STEP));
     let plan = surface::plan_mesh_area(&points, &indices);
-    let ratio = if plan > 0.0 { surface::mesh_area(&points, &indices) / plan } else { 1.0 };
+    let ratio = if plan > 0.0 {
+        surface::mesh_area(&points, &indices) / plan
+    } else {
+        1.0
+    };
     Some(curve::area(boundary) / 1e6 * ratio)
 }
 
@@ -316,14 +387,23 @@ pub struct Placed {
 /// evenly spread, inside the area and outside the holes. The same document gives the same
 /// positions. When the area has more plants, every plant style gets its share of the symbols.
 pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
-    let Some(q) = quantities(doc, obj) else { return Vec::new() };
-    let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return Vec::new() };
+    let Some(q) = quantities(doc, obj) else {
+        return Vec::new();
+    };
+    let Shape::LandscapeArea { boundary, .. } = &obj.shape else {
+        return Vec::new();
+    };
     let total: usize = q.rows.iter().map(|r| r.count).sum();
     if total == 0 || q.net_area_m2 <= 0.0 {
         return Vec::new();
     }
     let ring = curve::flatten(boundary, true, TOLERANCE);
-    let holes: Vec<Vec<DVec2>> = data(obj).unwrap_or_default().holes.iter().map(|h| curve::flatten(h, true, TOLERANCE)).collect();
+    let holes: Vec<Vec<DVec2>> = data(obj)
+        .unwrap_or_default()
+        .holes
+        .iter()
+        .map(|h| curve::flatten(h, true, TOLERANCE))
+        .collect();
     let want = total.min(MAX_SCATTER);
     let mut cell = (q.net_area_m2 * 1e6 / want as f64).sqrt();
     let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
@@ -333,7 +413,12 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
     }
     let mut rng = Rng(obj.id.0.wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0xA5A5);
     // A thin shape in a big box: a coarser grid keeps the work small and thins the symbols evenly.
-    let grid = |cell: f64| (((hi.x - lo.x) / cell).ceil() as usize + 1, ((hi.y - lo.y) / cell).ceil() as usize + 1);
+    let grid = |cell: f64| {
+        (
+            ((hi.x - lo.x) / cell).ceil() as usize + 1,
+            ((hi.y - lo.y) / cell).ceil() as usize + 1,
+        )
+    };
     while grid(cell).0.saturating_mul(grid(cell).1) > SCATTER_CELLS {
         cell *= 1.5;
     }
@@ -343,7 +428,9 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
         for j in 0..ny {
             let jitter = DVec2::new(rng.signed(), rng.signed()) * 0.35 * cell;
             let p = lo + DVec2::new(i as f64 + 0.5, j as f64 + 0.5) * cell + jitter;
-            if geom::point_in_polygon(p, &ring) && !holes.iter().any(|h| geom::point_in_polygon(p, h)) {
+            if geom::point_in_polygon(p, &ring)
+                && !holes.iter().any(|h| geom::point_in_polygon(p, h))
+            {
                 candidates.push(p);
             }
         }
@@ -370,8 +457,12 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
     let mut next = 0;
     for r in &q.rows {
         // Every plant of the mix that has plants gets at least one symbol.
-        let take = (((r.count as f64 * scale).round() as usize).max(usize::from(r.count > 0))).min(candidates.len() - next);
-        out.extend(candidates[next..next + take].iter().map(|p| Placed { plant: r.plant, at: *p }));
+        let take = (((r.count as f64 * scale).round() as usize).max(usize::from(r.count > 0)))
+            .min(candidates.len() - next);
+        out.extend(candidates[next..next + take].iter().map(|p| Placed {
+            plant: r.plant,
+            at: *p,
+        }));
         next += take;
     }
     out
@@ -395,7 +486,8 @@ fn path_d(points: &[DVec2], closed: bool) -> String {
 /// True if the area draws its plants: the setting of the area, else the setting of the style.
 pub fn shows_plants(doc: &Document, obj: &Object) -> bool {
     let Some(d) = data(obj) else { return false };
-    d.show_plants.unwrap_or_else(|| style_of(doc, obj).is_some_and(|(_, s)| s.show_plants))
+    d.show_plants
+        .unwrap_or_else(|| style_of(doc, obj).is_some_and(|(_, s)| s.show_plants))
 }
 
 /// Extra SVG elements of a landscape area, drawn after its outline: the holes and the plants.
@@ -421,19 +513,38 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
     if placed.is_empty() {
         return out;
     }
-    let _ = writeln!(out, r#"<g data-part="plants" data-of="{}" data-count="{}">"#, obj.id, placed.len());
+    let _ = writeln!(
+        out,
+        r#"<g data-part="plants" data-of="{}" data-count="{}">"#,
+        obj.id,
+        placed.len()
+    );
     let detailed = placed.len() <= DETAILED_SYMBOLS;
     for p in &placed {
-        let Some(s) = doc.resources.plant_style(p.plant) else { continue };
+        let Some(s) = doc.resources.plant_style(p.plant) else {
+            continue;
+        };
         let fill = css(s.fill, "rgba(90,150,80,1)");
         let pen = css(s.pen, stroke);
         let sw = 0.1 * scale;
         let r = s.spread / 2.0;
         if detailed && s.graphic != PlantGraphic::Circle {
-            let d = graphic::paths(s.graphic, p.at, r).iter().map(|g| path_d(&g.points, g.closed)).collect::<Vec<_>>().join(" ");
-            let _ = writeln!(out, r#"<path d="{d}" fill="{fill}" fill-opacity="0.35" stroke="{pen}" stroke-width="{sw}" data-plant="{}"/>"#, p.plant);
+            let d = graphic::paths(s.graphic, p.at, r)
+                .iter()
+                .map(|g| path_d(&g.points, g.closed))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(
+                out,
+                r#"<path d="{d}" fill="{fill}" fill-opacity="0.35" stroke="{pen}" stroke-width="{sw}" data-plant="{}"/>"#,
+                p.plant
+            );
         } else {
-            let _ = writeln!(out, r#"<circle cx="{}" cy="{}" r="{r}" fill="{fill}" fill-opacity="0.35" stroke="{pen}" stroke-width="{sw}" data-plant="{}"/>"#, p.at.x, -p.at.y, p.plant);
+            let _ = writeln!(
+                out,
+                r#"<circle cx="{}" cy="{}" r="{r}" fill="{fill}" fill-opacity="0.35" stroke="{pen}" stroke-width="{sw}" data-plant="{}"/>"#,
+                p.at.x, -p.at.y, p.plant
+            );
         }
         if let Some(zone) = s.protection_radius() {
             let _ = writeln!(
@@ -451,10 +562,20 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
 }
 
 /// Adds the draped face of a landscape area to a sink. `terrain` is the ground.
-pub fn emit_object(doc: &Document, obj: &Object, terrain: Option<Terrain<'_>>, sink: &mut SceneSink<'_>) {
-    let Shape::LandscapeArea { boundary, .. } = &obj.shape else { return };
+pub fn emit_object(
+    doc: &Document,
+    obj: &Object,
+    terrain: Option<Terrain<'_>>,
+    sink: &mut SceneSink<'_>,
+) {
+    let Shape::LandscapeArea { boundary, .. } = &obj.shape else {
+        return;
+    };
     let attrs = crate::hardscape::styled_attrs(doc, obj, doc.resolved_attrs(obj));
-    let color = attrs.fill.filter(|c| c.0[3] > 0).map_or(DEFAULT_COLOR, |c| c.0);
+    let color = attrs
+        .fill
+        .filter(|c| c.0[3] > 0)
+        .map_or(DEFAULT_COLOR, |c| c.0);
     let edge = attrs.pen.filter(|c| c.0[3] > 0).map_or(EDGE_COLOR, |c| c.0);
     let ring = curve::flatten(boundary, true, 2.0);
     let z = |p: DVec2| terrain.and_then(|t| t(p)).map_or(0.0, |g| g + LIFT);
@@ -464,7 +585,9 @@ pub fn emit_object(doc: &Document, obj: &Object, terrain: Option<Terrain<'_>>, s
     let mut outline: Vec<DVec3> = Vec::new();
     for i in 0..n {
         let (p, q) = (ring[i], ring[(i + 1) % n]);
-        let parts = terrain.map_or(1, |_| ((p.distance(q) / DRAPE_STEP).ceil() as usize).clamp(1, 400));
+        let parts = terrain.map_or(1, |_| {
+            ((p.distance(q) / DRAPE_STEP).ceil() as usize).clamp(1, 400)
+        });
         for k in 0..parts {
             let a = p.lerp(q, k as f64 / parts as f64);
             outline.push(a.extend(z(a)));
@@ -503,22 +626,33 @@ pub fn surface_area_on(obj: &Object, ground: &dyn crate::hardscape::TerrainSourc
     let at = |p: DVec2| ground.elevation(obj, p);
     let first = obj.shape.vertices().and_then(|v| v.first()).map(|v| v.p);
     let has_ground = first.is_some_and(|p| ground.covered(obj, p));
-    if data(obj).is_some_and(|d| d.drape) && has_ground { draped_area_m2(obj, &at) } else { None }
+    if data(obj).is_some_and(|d| d.drape) && has_ground {
+        draped_area_m2(obj, &at)
+    } else {
+        None
+    }
 }
 
 /// The report of all landscape areas, in document order.
 pub fn report(doc: &Document, ground: &dyn crate::hardscape::TerrainSource) -> AreaReport {
     let mut rows = Vec::new();
     for obj in doc.objects.values() {
-        let Shape::LandscapeArea { name, .. } = &obj.shape else { continue };
-        let Some(q) = quantities(doc, obj) else { continue };
+        let Shape::LandscapeArea { name, .. } = &obj.shape else {
+            continue;
+        };
+        let Some(q) = quantities(doc, obj) else {
+            continue;
+        };
         let style = style_of(doc, obj);
         let surface_area_m2 = surface_area_on(obj, ground);
         rows.push(AreaRow {
             id: obj.id,
             name: name.clone(),
             style: style.as_ref().map(|(id, _)| *id),
-            style_name: style.as_ref().and_then(|(id, _)| doc.resources.get(*id)).map(|r| r.name.clone()),
+            style_name: style
+                .as_ref()
+                .and_then(|(id, _)| doc.resources.get(*id))
+                .map(|r| r.name.clone()),
             fields: style.map(|(_, s)| s.fields).unwrap_or_default(),
             holes: data(obj).map_or(0, |d| d.holes.len()),
             surface_area_m2,
@@ -528,8 +662,16 @@ pub fn report(doc: &Document, ground: &dyn crate::hardscape::TerrainSource) -> A
     AreaReport {
         total_gross_area_m2: rows.iter().map(|r| r.quantities.gross_area_m2).sum(),
         total_net_area_m2: rows.iter().map(|r| r.quantities.net_area_m2).sum(),
-        total_count: rows.iter().flat_map(|r| &r.quantities.rows).map(|p| p.count).sum(),
-        total_price: rows.iter().flat_map(|r| &r.quantities.rows).map(|p| p.total_price).sum(),
+        total_count: rows
+            .iter()
+            .flat_map(|r| &r.quantities.rows)
+            .map(|p| p.count)
+            .sum(),
+        total_price: rows
+            .iter()
+            .flat_map(|r| &r.quantities.rows)
+            .map(|p| p.total_price)
+            .sum(),
         rows,
     }
 }

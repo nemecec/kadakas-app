@@ -5,10 +5,10 @@
 //! The classes are computed per triangle and kept by the content of the site model, so a change
 //! of anything else in the drawing does not compute them again.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,13 @@ pub struct AnalysisSpec {
 
 impl Default for AnalysisSpec {
     fn default() -> Self {
-        AnalysisSpec { mode: Mode::Off, surface: Follow::Proposed, breaks: Vec::new(), colors: Vec::new(), opacity: 0.8 }
+        AnalysisSpec {
+            mode: Mode::Off,
+            surface: Follow::Proposed,
+            breaks: Vec::new(),
+            colors: Vec::new(),
+            opacity: 0.8,
+        }
     }
 }
 
@@ -67,11 +73,17 @@ impl AnalysisSpec {
         if self.breaks.len() > MAX_BREAKS {
             return Err(format!("at most {MAX_BREAKS} limits"));
         }
-        if self.breaks.iter().any(|b| !b.is_finite()) || self.breaks.windows(2).any(|w| w[0] >= w[1]) {
+        if self.breaks.iter().any(|b| !b.is_finite())
+            || self.breaks.windows(2).any(|w| w[0] >= w[1])
+        {
             return Err("breaks must be finite numbers in ascending order".into());
         }
         if !self.colors.is_empty() && self.colors.len() != self.breaks.len() + 1 {
-            return Err(format!("give {} colors for {} breaks (one more than breaks), or none", self.breaks.len() + 1, self.breaks.len()));
+            return Err(format!(
+                "give {} colors for {} breaks (one more than breaks), or none",
+                self.breaks.len() + 1,
+                self.breaks.len()
+            ));
         }
         if !(self.opacity.is_finite() && (0.0..=1.0).contains(&self.opacity)) {
             return Err("opacity must be from 0 to 1".into());
@@ -90,10 +102,20 @@ pub fn spec_of(obj: &Object) -> Option<AnalysisSpec> {
 
 /// A ramp of `n` colors from green through yellow to red (low to high).
 pub fn ramp(n: usize) -> Vec<[u8; 4]> {
-    const STOPS: [[f64; 3]; 5] = [[46.0, 139.0, 87.0], [170.0, 205.0, 80.0], [250.0, 225.0, 90.0], [240.0, 140.0, 50.0], [190.0, 50.0, 40.0]];
+    const STOPS: [[f64; 3]; 5] = [
+        [46.0, 139.0, 87.0],
+        [170.0, 205.0, 80.0],
+        [250.0, 225.0, 90.0],
+        [240.0, 140.0, 50.0],
+        [190.0, 50.0, 40.0],
+    ];
     (0..n)
         .map(|i| {
-            let t = if n > 1 { i as f64 / (n - 1) as f64 } else { 0.0 } * (STOPS.len() - 1) as f64;
+            let t = if n > 1 {
+                i as f64 / (n - 1) as f64
+            } else {
+                0.0
+            } * (STOPS.len() - 1) as f64;
             let k = (t.floor() as usize).min(STOPS.len() - 2);
             let f = t - k as f64;
             let c = |j: usize| (STOPS[k][j] + (STOPS[k + 1][j] - STOPS[k][j]) * f).round() as u8;
@@ -161,7 +183,11 @@ pub fn resolve_breaks(spec: &AnalysisSpec, tin: &Tin) -> Vec<f64> {
         Mode::Slope => SLOPE_BREAKS.to_vec(),
         Mode::Elevation => {
             let (lo, hi) = tin.z_range();
-            if hi - lo < 1e-9 { Vec::new() } else { (1..7).map(|i| lo + (hi - lo) * i as f64 / 7.0).collect() }
+            if hi - lo < 1e-9 {
+                Vec::new()
+            } else {
+                (1..7).map(|i| lo + (hi - lo) * i as f64 / 7.0).collect()
+            }
         }
     }
 }
@@ -169,11 +195,24 @@ pub fn resolve_breaks(spec: &AnalysisSpec, tin: &Tin) -> Vec<f64> {
 /// Classes every triangle of a surface. `colors` is one per band (or empty for the ramp).
 pub fn analyze(tin: &Tin, mode: Mode, breaks: &[f64], colors: &[[u8; 4]]) -> AnalysisResult {
     let n = breaks.len() + 1;
-    let colors: Vec<[u8; 4]> = if colors.len() == n { colors.to_vec() } else { ramp(n) };
+    let colors: Vec<[u8; 4]> = if colors.len() == n {
+        colors.to_vec()
+    } else {
+        ramp(n)
+    };
     let mut bands: Vec<Band> = (0..n)
         .map(|i| {
             let (from, to) = (i.checked_sub(1).map(|j| breaks[j]), breaks.get(i).copied());
-            Band { index: i, from, to, color: colors[i], label: label(mode, from, to), triangles: 0, area_xy: 0.0, area_surface: 0.0 }
+            Band {
+                index: i,
+                from,
+                to,
+                color: colors[i],
+                label: label(mode, from, to),
+                triangles: 0,
+                area_xy: 0.0,
+                area_surface: 0.0,
+            }
         })
         .collect();
     let mut tri_band = Vec::with_capacity(tin.triangles.len());
@@ -190,7 +229,14 @@ pub fn analyze(tin: &Tin, mode: Mode, breaks: &[f64], colors: &[[u8; 4]]) -> Ana
         bands[i].area_surface += cross.length() / 2.0;
         tri_band.push(i as u16);
     }
-    AnalysisResult { mode, surface: Follow::Proposed, breaks: breaks.to_vec(), opacity: 0.8, tri_band, bands }
+    AnalysisResult {
+        mode,
+        surface: Follow::Proposed,
+        breaks: breaks.to_vec(),
+        opacity: 0.8,
+        tri_band,
+        bands,
+    }
 }
 
 thread_local! {
@@ -240,7 +286,12 @@ pub fn for_site(site: &SiteResult, spec: &AnalysisSpec) -> Option<Arc<AnalysisRe
 
 /// The triangles of band `i` as indices for a mesh.
 pub fn band_indices(tin: &Tin, a: &AnalysisResult, i: usize) -> Vec<u32> {
-    tin.triangles.iter().zip(&a.tri_band).filter(|(_, b)| **b as usize == i).flat_map(|(t, _)| *t).collect()
+    tin.triangles
+        .iter()
+        .zip(&a.tri_band)
+        .filter(|(_, b)| **b as usize == i)
+        .flat_map(|(t, _)| *t)
+        .collect()
 }
 
 /// The css color of a band.
@@ -256,7 +307,11 @@ pub fn svg(site_id: ObjectId, tin: &Tin, a: &AnalysisResult) -> String {
         for (t, bi) in tin.triangles.iter().zip(&a.tri_band) {
             if *bi as usize == band.index {
                 let p = t.map(|i| tin.vertices[i as usize]);
-                let _ = write!(d, "M {} {} L {} {} L {} {} Z ", p[0].x, -p[0].y, p[1].x, -p[1].y, p[2].x, -p[2].y);
+                let _ = write!(
+                    d,
+                    "M {} {} L {} {} L {} {} Z ",
+                    p[0].x, -p[0].y, p[1].x, -p[1].y, p[2].x, -p[2].y
+                );
             }
         }
         let _ = writeln!(
@@ -290,12 +345,26 @@ pub fn legend_of(obj: &Object) -> Option<LegendData> {
 }
 
 /// SVG of a legend inside the rectangle `lo` to `hi`: a title row and a row per band.
-pub fn legend_svg(id: ObjectId, lo: glam::DVec2, hi: glam::DVec2, d: &LegendData, a: &AnalysisResult) -> String {
+pub fn legend_svg(
+    id: ObjectId,
+    lo: glam::DVec2,
+    hi: glam::DVec2,
+    d: &LegendData,
+    a: &AnalysisResult,
+) -> String {
     let mut out = String::new();
     let rows = a.bands.len() + 1;
     let row = (hi.y - lo.y) / rows as f64;
     let text = row * 0.55;
-    let title = if d.title.is_empty() { if a.mode == Mode::Slope { "Slope".to_string() } else { "Elevation".to_string() } } else { d.title.clone() };
+    let title = if d.title.is_empty() {
+        if a.mode == Mode::Slope {
+            "Slope".to_string()
+        } else {
+            "Elevation".to_string()
+        }
+    } else {
+        d.title.clone()
+    };
     let _ = writeln!(
         out,
         r#"<text x="{}" y="{}" font-size="{text}" font-family="sans-serif" font-weight="bold" fill="black" data-kind="legend-title" data-legend="{id}">{}</text>"#,
@@ -361,15 +430,25 @@ mod tests {
         assert_eq!(r.bands[6].label, "50 % and above");
         assert!((r.bands[3].area_xy - tin.area_xy()).abs() < 1e-3);
         // The sloped area is larger by the length of the slope.
-        assert!((r.bands[3].area_surface / r.bands[3].area_xy - (1.0f64 + 0.01).sqrt()).abs() < 1e-9);
+        assert!(
+            (r.bands[3].area_surface / r.bands[3].area_xy - (1.0f64 + 0.01).sqrt()).abs() < 1e-9
+        );
     }
 
     #[test]
     fn elevation_bands_use_the_height_of_the_triangle() {
         let tin = tin_of(|x, _| x);
         let breaks = [1000.0, 3000.0];
-        let r = analyze(&tin, Mode::Elevation, &breaks, &[[1, 1, 1, 255], [2, 2, 2, 255], [3, 3, 3, 255]]);
-        assert_eq!(r.bands.iter().map(|b| b.triangles).sum::<usize>(), tin.triangles.len());
+        let r = analyze(
+            &tin,
+            Mode::Elevation,
+            &breaks,
+            &[[1, 1, 1, 255], [2, 2, 2, 255], [3, 3, 3, 255]],
+        );
+        assert_eq!(
+            r.bands.iter().map(|b| b.triangles).sum::<usize>(),
+            tin.triangles.len()
+        );
         assert!(r.bands.iter().all(|b| b.triangles > 0));
         assert_eq!(r.bands[1].color, [2, 2, 2, 255]);
         assert_eq!(r.bands[0].label, "below 1.00 m");
@@ -422,7 +501,12 @@ mod tests {
     #[test]
     fn settings_are_checked() {
         assert!(AnalysisSpec::default().validate().is_ok());
-        let ok = AnalysisSpec { mode: Mode::Slope, breaks: vec![1.0, 2.0], colors: vec![[0, 0, 0, 255]; 3], ..AnalysisSpec::default() };
+        let ok = AnalysisSpec {
+            mode: Mode::Slope,
+            breaks: vec![1.0, 2.0],
+            colors: vec![[0, 0, 0, 255]; 3],
+            ..AnalysisSpec::default()
+        };
         assert!(ok.validate().is_ok());
         let bad = |f: &dyn Fn(&mut AnalysisSpec)| {
             let mut s = ok.clone();
@@ -436,7 +520,10 @@ mod tests {
         assert!(bad(&|s| s.colors = vec![[0; 4]]));
         assert!(bad(&|s| s.opacity = 2.0));
         assert!(bad(&|s| s.opacity = f64::NAN));
-        let off = AnalysisSpec { breaks: vec![1.0], ..AnalysisSpec::default() };
+        let off = AnalysisSpec {
+            breaks: vec![1.0],
+            ..AnalysisSpec::default()
+        };
         assert!(off.validate().is_ok());
     }
 
@@ -446,7 +533,11 @@ mod tests {
         let id = add(&mut ed, grid_site(6, 1000.0, |x, y| x / 5.0 + y / 20.0));
         let site = SiteResult::compute(ed.doc(), id).unwrap();
         assert!(for_site(&site, &AnalysisSpec::default()).is_none());
-        let spec = AnalysisSpec { mode: Mode::Elevation, surface: Follow::Existing, ..AnalysisSpec::default() };
+        let spec = AnalysisSpec {
+            mode: Mode::Elevation,
+            surface: Follow::Existing,
+            ..AnalysisSpec::default()
+        };
         let before = computed();
         let a = for_site(&site, &spec).unwrap();
         assert_eq!(a.bands.len(), 7, "seven default hypsometric bands");
@@ -454,7 +545,14 @@ mod tests {
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(computed(), before + 1);
         // Other settings are other entries.
-        let c = for_site(&site, &AnalysisSpec { mode: Mode::Slope, ..spec.clone() }).unwrap();
+        let c = for_site(
+            &site,
+            &AnalysisSpec {
+                mode: Mode::Slope,
+                ..spec.clone()
+            },
+        )
+        .unwrap();
         assert_eq!(c.bands.len(), 7);
         assert_eq!(c.breaks, SLOPE_BREAKS);
         assert_eq!(c.surface, Follow::Existing);
@@ -465,10 +563,23 @@ mod tests {
         let fs = SiteResult::compute(ed2.doc(), flat).unwrap();
         assert_eq!(for_site(&fs, &spec).unwrap().bands.len(), 1);
         assert!(resolve_breaks(&AnalysisSpec::default(), &fs.existing).is_empty());
-        assert_eq!(resolve_breaks(&AnalysisSpec { breaks: vec![3.0], ..AnalysisSpec::default() }, &fs.existing), vec![3.0]);
+        assert_eq!(
+            resolve_breaks(
+                &AnalysisSpec {
+                    breaks: vec![3.0],
+                    ..AnalysisSpec::default()
+                },
+                &fs.existing
+            ),
+            vec![3.0]
+        );
         // The cache empties when it is full.
         for i in 0..(CACHE_SIZE + 3) {
-            let s = AnalysisSpec { mode: Mode::Slope, breaks: vec![i as f64 + 0.5], ..spec.clone() };
+            let s = AnalysisSpec {
+                mode: Mode::Slope,
+                breaks: vec![i as f64 + 0.5],
+                ..spec.clone()
+            };
             assert!(for_site(&site, &s).is_some());
         }
     }
@@ -476,10 +587,24 @@ mod tests {
     #[test]
     fn settings_come_from_the_site_object() {
         let mut ed = Editor::default();
-        let id = add_with(&mut ed, grid_site(3, 1000.0, |x, _| x), KEY, json!({"mode": "slope", "breaks": [5.0], "surface": "existing"}));
+        let id = add_with(
+            &mut ed,
+            grid_site(3, 1000.0, |x, _| x),
+            KEY,
+            json!({"mode": "slope", "breaks": [5.0], "surface": "existing"}),
+        );
         let spec = spec_of(ed.doc().object(id).unwrap()).unwrap();
-        assert_eq!((spec.mode, spec.surface, spec.breaks.clone()), (Mode::Slope, Follow::Existing, vec![5.0]));
-        let c = add(&mut ed, Shape::Circle { center: glam::DVec2::ZERO, radius: 1.0 });
+        assert_eq!(
+            (spec.mode, spec.surface, spec.breaks.clone()),
+            (Mode::Slope, Follow::Existing, vec![5.0])
+        );
+        let c = add(
+            &mut ed,
+            Shape::Circle {
+                center: glam::DVec2::ZERO,
+                radius: 1.0,
+            },
+        );
         assert!(spec_of(ed.doc().object(c).unwrap()).is_none());
         assert!(legend_of(ed.doc().object(c).unwrap()).is_none());
     }
@@ -489,14 +614,47 @@ mod tests {
         let tin = tin_of(|x, _| x / 10.0);
         let r = analyze(&tin, Mode::Slope, &SLOPE_BREAKS, &[]);
         let s = svg(ObjectId(3), &tin, &r);
-        assert_eq!(s.matches("data-kind=\"analysis\"").count(), 1, "only bands with triangles are drawn");
+        assert_eq!(
+            s.matches("data-kind=\"analysis\"").count(),
+            1,
+            "only bands with triangles are drawn"
+        );
         assert!(s.contains("fill-opacity=\"0.8\"") && s.contains("data-band=\"3\""));
-        let legend = legend_svg(ObjectId(9), glam::DVec2::ZERO, glam::DVec2::new(3000.0, 8000.0), &LegendData { show_areas: true, ..LegendData::default() }, &r);
+        let legend = legend_svg(
+            ObjectId(9),
+            glam::DVec2::ZERO,
+            glam::DVec2::new(3000.0, 8000.0),
+            &LegendData {
+                show_areas: true,
+                ..LegendData::default()
+            },
+            &r,
+        );
         assert_eq!(legend.matches("legend-swatch").count(), 7);
-        assert!(legend.contains(">Slope<") && legend.contains("m2)") && legend.contains("below 2 %"));
-        let titled = legend_svg(ObjectId(9), glam::DVec2::ZERO, glam::DVec2::new(3000.0, 8000.0), &LegendData { title: "Slope <10%".into(), ..LegendData::default() }, &r);
+        assert!(
+            legend.contains(">Slope<") && legend.contains("m2)") && legend.contains("below 2 %")
+        );
+        let titled = legend_svg(
+            ObjectId(9),
+            glam::DVec2::ZERO,
+            glam::DVec2::new(3000.0, 8000.0),
+            &LegendData {
+                title: "Slope <10%".into(),
+                ..LegendData::default()
+            },
+            &r,
+        );
         assert!(titled.contains("Slope &lt;10%") && !titled.contains("m2)"));
         let elev = analyze(&tin, Mode::Elevation, &[1.0], &[]);
-        assert!(legend_svg(ObjectId(9), glam::DVec2::ZERO, glam::DVec2::ONE, &LegendData::default(), &elev).contains(">Elevation<"));
+        assert!(
+            legend_svg(
+                ObjectId(9),
+                glam::DVec2::ZERO,
+                glam::DVec2::ONE,
+                &LegendData::default(),
+                &elev
+            )
+            .contains(">Elevation<")
+        );
     }
 }

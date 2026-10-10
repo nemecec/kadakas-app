@@ -92,8 +92,8 @@ Non-goals
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
 | DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
 | DOC-14 | Phases (existing, new, demolished). | P1 | planned |
-| DOC-15 | Symbols and symbol definitions. | P1 | planned |
-| DOC-16 | Resource library files (shared styles and symbols). | P1 | planned |
+| DOC-15 | Symbols and symbol definitions: a resource with 2D components and optional 3D components (hybrid), an insertion point, and instances (`Shape::Symbol`) with position, rotation, symmetric or asymmetric scale and a class. Editing the definition changes all instances at once. Convert to group, Edit 2D components in place (`edit_symbol`, `exit_symbol_edit`), nested symbols (loops are refused). Plug-in object symbols (red and blue) are out of scope. | P1 | done |
+| DOC-16 | Resource libraries: import resources of any type from another `.cdk.json` file by type and name, with what they need (a tile brings its symbol, which brings its hatch), classes of symbol components by name, rename on a name clash (or reuse, or replace), one undo step. Classes and design layers can be imported by name. A per-user library folder (`CADEKTOR_LIBRARY_DIR`, default `~/.config/cadektor/library`), favorites, export of a library file. File access follows the path policy. | P1 | done |
 | DOC-17 | Project sharing, file merge. | P2 | planned |
 | DOC-18 | Document health check. | P2 | planned |
 
@@ -115,9 +115,11 @@ Non-goals
 | DRF-17 | `set_vertex` command: change the kind, radius or position of one vertex, undoable. | P1 | done |
 | DRF-18 | Vertex mode buttons in the tool bar for Polyline, Landscape Area and Hardscape: Corner, Bézier, Cubic, Tangent arc, Point on arc, Arc. The Arc radius is a default that stays until changed. | P1 | done |
 | DRF-19 | Object Info vertex list: index, X, Y, kind and radius, all editable. Selected paths show vertex markers. | P1 | done |
-| DRF-10 | Fill, pen, line type, hatch attributes. | P1 | planned |
+| DRF-10 | Fill, pen, line type, hatch attributes. Attributes `fill_pattern` (a hatch or tile) and `line_type` on objects and classes. Hatches (line families with angle, spacing, offset, dash, color and weight, in paper or model units), tiles (a symbol repeated on a grid with row shift and angle) and line types (dashes, gaps, symbols along the line) are clipped to the shape (holes included) in the canvas, SVG, PDF and PNG sheet output, and written to DXF as plain LINE entities. Textures exist as a resource type only. | P1 | done |
 | DRF-11 | Dimensions (linear, angular, radial, area). | P1 | planned |
-| DRF-12 | Groups and select-similar. | P1 | planned |
+| DRF-12 | Groups: group and ungroup (one level), nested groups, enter and exit a group (edit context), move, rotate and copy a group as a unit, delete with members, all undoable. A click selects the top group, and inside a group it selects the members. Select-similar is planned. Rotating hardscapes, landscape areas and site models is not built yet. | P1 | done |
+| DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
+| DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
 | DRF-13 | Compose, clip, add/subtract surfaces. | P1 | planned |
 | DRF-14 | Pan, zoom, zoom to fit, view history. | P0 | planned |
 
@@ -145,7 +147,7 @@ Non-goals
 | UI-02 | Tool palettes grouped as tool sets. | P0 | planned |
 | UI-03 | Object Info palette (Shape, Data, Render tabs). | P0 | planned |
 | UI-04 | Navigation palette (classes, layers, sheets, viewports, views). | P0 | planned |
-| UI-05 | Resource Manager palette (plant styles; other resource types follow). | P1 | done |
+| UI-05 | Resource Manager palette (plant styles; all other resource types in the section "Resources (all types)", see DRF-20). | P1 | done |
 | UI-06 | Quick search for commands. | P1 | planned |
 | UI-07 | Dockable, saveable layouts. | P1 | planned |
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
@@ -387,6 +389,9 @@ Non-goals
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
 | API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
+| API-30 | `group.*` (create, ungroup, enter, exit, context, members, move, rotate, copy) and `selection.click`. | P1 | done |
+| API-31 | `symbol.*` (list, get, create, from_objects, place, set, convert_to_group, edit, edit_end). | P1 | done |
+| API-32 | `resource.*` (list, get, create, update, rename, duplicate, delete, purge_unused, thumbnail, list_file, import_from_file, export_to_file), `pattern.segments`, `library.*` (list, favorites). `describe.resources` has examples. | P1 | done |
 
 ### 4.18 Scripting
 

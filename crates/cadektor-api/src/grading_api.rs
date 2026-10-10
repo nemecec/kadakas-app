@@ -8,40 +8,96 @@
 use std::collections::BTreeMap;
 
 use glam::DVec2;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value, json};
 
 use cadektor_core::command::Command;
 use cadektor_core::curve::Vertex;
-use cadektor_core::model::{Attributes, ClassId, Color, Document, LayerId, LayerKind, Object, ObjectId, Shape};
+use cadektor_core::model::{
+    Attributes, ClassId, Color, Document, LayerId, LayerKind, Object, ObjectId, Shape,
+};
 use cadektor_core::resource::ResourceId;
-use cadektor_site::grading::{self, analysis, grade, section, spot, wall};
 use cadektor_site::SiteResult;
+use cadektor_site::grading::{self, analysis, grade, section, spot, wall};
 
 use crate::{RpcError, Session};
 
-pub const WALL_STYLE_CREATE: (&str, &str) = ("wall_style.create", "Create a wall style (a resource). params: {name, thickness? (mm, default 300; with components it is their total), material?, components? ([{name, material, thickness}], across the thickness), coping? ({height, overhang? (past each face), material?} or null), color? ([r,g,b,a])}. Returns {id}.");
-pub const WALL_STYLE_LIST: (&str, &str) = ("wall_style.list", "Wall styles with the number of walls that use each. Returns {styles: [{id, name, used_by, ...fields}]}.");
-pub const WALL_STYLE_UPDATE: (&str, &str) = ("wall_style.update", "Change a wall style. params: {id (ID or name), name? (renames), ...fields as in create}. Walls that use the style follow.");
-pub const WALL_STYLE_DELETE: (&str, &str) = ("wall_style.delete", "Delete a wall style. params: {id (ID or name), reassign?}. Fails if walls use it, unless reassign names another wall style.");
-pub const WALL_ADD: (&str, &str) = ("wall.add", "Add a landscape wall: a path (curves allowed) with a thickness and a top that follows a rule. params: {path: [vertices], closed?, thickness? (mm, default 300), top? ({mode: fixed, elevation} | {mode: terrain, offset} (the ground plus an offset; default offset 900) | {mode: slope, start, end} (heights at both ends)), bottom? (existing | proposed: the ground that the bottom and a terrain top follow), embed? (mm below the ground), style? (ID or name; its thickness and coping win), site? (site model ID; default the first on the layer), site_modifier? (the wall is a vertical break in the proposed surface; needs a fixed or slope top and follows the existing ground), layer?, class?}. The 3D solid stands between the ground and the top. Returns {id, quantities}.");
-pub const WALL_SET: (&str, &str) = ("wall.set", "Change walls. params: {id | ids, path? (replaces the center line; one wall only), ...settings as in wall.add}. Returns {ids}.");
-pub const WALL_REPORT: (&str, &str) = ("wall.report", "Wall quantities. params: {ids?} (default all walls). Returns {rows: [{id, style, length_m, thickness_mm, face_area_m2 (one face), both_faces_m2, volume_m3, coping_volume_m3, min_height_mm, max_height_mm, avg_height_mm, top_start_mm, top_end_mm, bottom_start_mm, bottom_end_mm, outside_model (stations without ground)}], totals}. Stations lie at every corner and at most 500 mm apart; the height between two stations is linear.");
+pub const WALL_STYLE_CREATE: (&str, &str) = (
+    "wall_style.create",
+    "Create a wall style (a resource). params: {name, thickness? (mm, default 300; with components it is their total), material?, components? ([{name, material, thickness}], across the thickness), coping? ({height, overhang? (past each face), material?} or null), color? ([r,g,b,a])}. Returns {id}.",
+);
+pub const WALL_STYLE_LIST: (&str, &str) = (
+    "wall_style.list",
+    "Wall styles with the number of walls that use each. Returns {styles: [{id, name, used_by, ...fields}]}.",
+);
+pub const WALL_STYLE_UPDATE: (&str, &str) = (
+    "wall_style.update",
+    "Change a wall style. params: {id (ID or name), name? (renames), ...fields as in create}. Walls that use the style follow.",
+);
+pub const WALL_STYLE_DELETE: (&str, &str) = (
+    "wall_style.delete",
+    "Delete a wall style. params: {id (ID or name), reassign?}. Fails if walls use it, unless reassign names another wall style.",
+);
+pub const WALL_ADD: (&str, &str) = (
+    "wall.add",
+    "Add a landscape wall: a path (curves allowed) with a thickness and a top that follows a rule. params: {path: [vertices], closed?, thickness? (mm, default 300), top? ({mode: fixed, elevation} | {mode: terrain, offset} (the ground plus an offset; default offset 900) | {mode: slope, start, end} (heights at both ends)), bottom? (existing | proposed: the ground that the bottom and a terrain top follow), embed? (mm below the ground), style? (ID or name; its thickness and coping win), site? (site model ID; default the first on the layer), site_modifier? (the wall is a vertical break in the proposed surface; needs a fixed or slope top and follows the existing ground), layer?, class?}. The 3D solid stands between the ground and the top. Returns {id, quantities}.",
+);
+pub const WALL_SET: (&str, &str) = (
+    "wall.set",
+    "Change walls. params: {id | ids, path? (replaces the center line; one wall only), ...settings as in wall.add}. Returns {ids}.",
+);
+pub const WALL_REPORT: (&str, &str) = (
+    "wall.report",
+    "Wall quantities. params: {ids?} (default all walls). Returns {rows: [{id, style, length_m, thickness_mm, face_area_m2 (one face), both_faces_m2, volume_m3, coping_volume_m3, min_height_mm, max_height_mm, avg_height_mm, top_start_mm, top_end_mm, bottom_start_mm, bottom_end_mm, outside_model (stations without ground)}], totals}. Stations lie at every corner and at most 500 mm apart; the height between two stations is linear.",
+);
 #[cfg(test)]
 mod tests;
 
-pub const GRADE_ADD: (&str, &str) = ("grade.add", "Add a grade object: a line from a to b with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. params: {a: [x, y], b: [x, y], elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.");
-pub const GRADE_SET: (&str, &str) = ("grade.set", "Change a grade object. params: {id, a?, b?, ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.");
-pub const GRADE_GET: (&str, &str) = ("grade.get", "The solved grade. params: {id}. Returns {id, length_mm, elevation_a, elevation_b, rise_mm, percent, ratio (run per unit of rise or null on level ground), angle_deg, falls, label}.");
-pub const SITE_ANALYSIS: (&str, &str) = ("site.analysis", "Slope or elevation analysis of a site model. params: {id, mode? (off | slope | elevation), surface? (existing | proposed), breaks? (class limits, ascending: slope in percent, elevation in mm; N limits make N+1 bands; [] for the defaults), colors? ([[r,g,b,a]], one per band), opacity? (0 to 1, the 2D tint), legend? ({rect: [[x0, y0], [x1, y1]], title?, show_areas?}: adds a legend object on the layer of the site model)}. With no setting it only reads. The 2D plan and the 3D view show the colors. Returns {id, mode, surface, breaks, opacity, bands: [{index, from, to, label, color, triangles, area_m2, surface_area_m2, percent}], legend?}. Default slope limits: 2, 5, 10, 15, 25, 50 percent. Default elevation limits: 7 equal steps over the height range.");
-pub const SPOT_ADD: (&str, &str) = ("spot.add", "Add a spot elevation or a stake: a point that reads the ground height from the site model whenever it is drawn. params: {at: [x, y], site?, show? (existing | proposed | both), kind? (spot | stake), prefix?, name? (stake name), decimals? (0 to 4, default 2), label_height? (mm on paper, default 2.5), layer?, class?}. A stake also shows northing and easting from the georeference. Returns {id, reading}.");
-pub const SPOT_SET: (&str, &str) = ("spot.set", "Change a spot elevation. params: {id, at?, ...settings as in spot.add}. Returns {id, reading}.");
-pub const SPOT_GET: (&str, &str) = ("spot.get", "Read a spot elevation, or any point. params: {id} or {at: [x, y], site?}. Returns {existing, proposed, modified, label, northing_m, easting_m, georeferenced}. Heights are in mm and null outside the site model.");
-pub const SECTION_ADD: (&str, &str) = ("section.add", "Add a section line. params: {a: [x, y], b: [x, y], name? (default A), exaggeration? (vertical, default 2), step? (mm between samples when the line leaves the model), band? (mm: plants this near the line show), walls?, hardscapes?, plants? (true/false), site?, layer?, class?}. Returns {id}.");
-pub const SECTION_SET: (&str, &str) = ("section.set", "Change a section line. params: {id, a?, b?, ...settings as in section.add}. Returns {id}.");
-pub const SECTION_PROFILE: (&str, &str) = ("section.profile", "The profile of a section: the existing and proposed ground and the objects cut. params: {id}. Returns {length_mm, modified, existing: [[[s, z]...]] (runs of distance and elevation in mm; a point at every triangle edge, so it equals the site model there), proposed, walls: [{id, s, width, top, bottom}], hardscapes: [{id, s0, s1, top0, top1, thickness}], plants: [{id, s, offset, spread, height, base}], z_min, z_max}.");
-pub const SECTION_PLACE: (&str, &str) = ("section.place", "Draw the profile as shapes on a layer, with the vertical exaggeration. Shapes placed before for the same section are replaced. params: {id, at: [x, y] (where the start of the section goes), layer? (default the layer of the section; may be a sheet layer), scale? (drawing scale denominator, for example 100; the drawing is divided by it. Default: 1 on a design layer, the scale of the section layer on a sheet layer)}. One undo step. Returns {ids, bounds: [[x0, y0], [x1, y1]]}. The shapes have data site_section_profile = {section, role}.");
+pub const GRADE_ADD: (&str, &str) = (
+    "grade.add",
+    "Add a grade object: a line from a to b with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. params: {a: [x, y], b: [x, y], elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.",
+);
+pub const GRADE_SET: (&str, &str) = (
+    "grade.set",
+    "Change a grade object. params: {id, a?, b?, ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.",
+);
+pub const GRADE_GET: (&str, &str) = (
+    "grade.get",
+    "The solved grade. params: {id}. Returns {id, length_mm, elevation_a, elevation_b, rise_mm, percent, ratio (run per unit of rise or null on level ground), angle_deg, falls, label}.",
+);
+pub const SITE_ANALYSIS: (&str, &str) = (
+    "site.analysis",
+    "Slope or elevation analysis of a site model. params: {id, mode? (off | slope | elevation), surface? (existing | proposed), breaks? (class limits, ascending: slope in percent, elevation in mm; N limits make N+1 bands; [] for the defaults), colors? ([[r,g,b,a]], one per band), opacity? (0 to 1, the 2D tint), legend? ({rect: [[x0, y0], [x1, y1]], title?, show_areas?}: adds a legend object on the layer of the site model)}. With no setting it only reads. The 2D plan and the 3D view show the colors. Returns {id, mode, surface, breaks, opacity, bands: [{index, from, to, label, color, triangles, area_m2, surface_area_m2, percent}], legend?}. Default slope limits: 2, 5, 10, 15, 25, 50 percent. Default elevation limits: 7 equal steps over the height range.",
+);
+pub const SPOT_ADD: (&str, &str) = (
+    "spot.add",
+    "Add a spot elevation or a stake: a point that reads the ground height from the site model whenever it is drawn. params: {at: [x, y], site?, show? (existing | proposed | both), kind? (spot | stake), prefix?, name? (stake name), decimals? (0 to 4, default 2), label_height? (mm on paper, default 2.5), layer?, class?}. A stake also shows northing and easting from the georeference. Returns {id, reading}.",
+);
+pub const SPOT_SET: (&str, &str) = (
+    "spot.set",
+    "Change a spot elevation. params: {id, at?, ...settings as in spot.add}. Returns {id, reading}.",
+);
+pub const SPOT_GET: (&str, &str) = (
+    "spot.get",
+    "Read a spot elevation, or any point. params: {id} or {at: [x, y], site?}. Returns {existing, proposed, modified, label, northing_m, easting_m, georeferenced}. Heights are in mm and null outside the site model.",
+);
+pub const SECTION_ADD: (&str, &str) = (
+    "section.add",
+    "Add a section line. params: {a: [x, y], b: [x, y], name? (default A), exaggeration? (vertical, default 2), step? (mm between samples when the line leaves the model), band? (mm: plants this near the line show), walls?, hardscapes?, plants? (true/false), site?, layer?, class?}. Returns {id}.",
+);
+pub const SECTION_SET: (&str, &str) = (
+    "section.set",
+    "Change a section line. params: {id, a?, b?, ...settings as in section.add}. Returns {id}.",
+);
+pub const SECTION_PROFILE: (&str, &str) = (
+    "section.profile",
+    "The profile of a section: the existing and proposed ground and the objects cut. params: {id}. Returns {length_mm, modified, existing: [[[s, z]...]] (runs of distance and elevation in mm; a point at every triangle edge, so it equals the site model there), proposed, walls: [{id, s, width, top, bottom}], hardscapes: [{id, s0, s1, top0, top1, thickness}], plants: [{id, s, offset, spread, height, base}], z_min, z_max}.",
+);
+pub const SECTION_PLACE: (&str, &str) = (
+    "section.place",
+    "Draw the profile as shapes on a layer, with the vertical exaggeration. Shapes placed before for the same section are replaced. params: {id, at: [x, y] (where the start of the section goes), layer? (default the layer of the section; may be a sheet layer), scale? (drawing scale denominator, for example 100; the drawing is divided by it. Default: 1 on a design layer, the scale of the section layer on a sheet layer)}. One undo step. Returns {ids, bounds: [[x0, y0], [x1, y1]]}. The shapes have data site_section_profile = {section, role}.",
+);
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
@@ -107,7 +163,9 @@ fn map_of(p: Value) -> Result<Map<String, Value>, RpcError> {
 
 /// Removes `key` from the parameters and reads it as a point.
 fn take_point(m: &mut Map<String, Value>, key: &str) -> Result<Option<DVec2>, RpcError> {
-    let Some(v) = m.remove(key) else { return Ok(None) };
+    let Some(v) = m.remove(key) else {
+        return Ok(None);
+    };
     let p: DVec2 = serde_json::from_value(v).map_err(|_| bad(format!("'{key}' must be [x, y]")))?;
     if !p.is_finite() || p.abs().max_element() > cadektor_core::model::MAX_COORD {
         return Err(bad(format!("'{key}' must be finite numbers")));
@@ -120,27 +178,50 @@ fn need_point(m: &mut Map<String, Value>, key: &str) -> Result<DVec2, RpcError> 
 }
 
 fn take_id(m: &mut Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
-    let v = m.remove(key).ok_or_else(|| bad(format!("missing '{key}'")))?;
+    let v = m
+        .remove(key)
+        .ok_or_else(|| bad(format!("missing '{key}'")))?;
     serde_json::from_value(v).map_err(|_| bad(format!("'{key}' must be an object ID")))
 }
 
 fn take_where(m: &mut Map<String, Value>) -> Result<(Option<LayerId>, Option<ClassId>), RpcError> {
-    let layer = m.remove("layer").map(serde_json::from_value).transpose().map_err(|_| bad("'layer' must be a layer ID"))?;
-    let class = m.remove("class").map(serde_json::from_value).transpose().map_err(|_| bad("'class' must be a class ID"))?;
+    let layer = m
+        .remove("layer")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| bad("'layer' must be a layer ID"))?;
+    let class = m
+        .remove("class")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| bad("'class' must be a class ID"))?;
     Ok((layer, class))
 }
 
 fn names<T: Serialize + Default>() -> Vec<String> {
-    serde_json::to_value(T::default()).expect("settings are JSON").as_object().expect("an object").keys().cloned().collect()
+    serde_json::to_value(T::default())
+        .expect("settings are JSON")
+        .as_object()
+        .expect("an object")
+        .keys()
+        .cloned()
+        .collect()
 }
 
 /// The settings after applying the fields of `patch`. Unknown fields are refused.
-fn patched<T: Serialize + DeserializeOwned + Default>(base: &T, patch: &Map<String, Value>, label: &str) -> Result<T, RpcError> {
+fn patched<T: Serialize + DeserializeOwned + Default>(
+    base: &T,
+    patch: &Map<String, Value>,
+    label: &str,
+) -> Result<T, RpcError> {
     let keys = names::<T>();
     let mut v = serde_json::to_value(base).expect("settings are JSON");
     for (k, x) in patch {
         if !keys.contains(k) {
-            return Err(bad(format!("unknown {label} field '{k}'. Fields: {}", keys.join(", "))));
+            return Err(bad(format!(
+                "unknown {label} field '{k}'. Fields: {}",
+                keys.join(", ")
+            )));
         }
         v[k] = x.clone();
     }
@@ -150,10 +231,16 @@ fn patched<T: Serialize + DeserializeOwned + Default>(base: &T, patch: &Map<Stri
 fn wall_style_id(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
     let found = match v {
         Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(s) => doc.resources.iter().find(|r| r.name == *s && wall::style_of(doc, r.id).is_some()).map(|r| r.id),
+        Value::String(s) => doc
+            .resources
+            .iter()
+            .find(|r| r.name == *s && wall::style_of(doc, r.id).is_some())
+            .map(|r| r.id),
         _ => None,
     };
-    found.filter(|id| wall::style_of(doc, *id).is_some()).ok_or_else(|| bad(format!("no wall style {v}")))
+    found
+        .filter(|id| wall::style_of(doc, *id).is_some())
+        .ok_or_else(|| bad(format!("no wall style {v}")))
 }
 
 /// Replaces a style name in the patch with its ID.
@@ -165,12 +252,16 @@ fn resolve_style(doc: &Document, m: &mut Map<String, Value>) -> Result<(), RpcEr
 }
 
 fn used_by(doc: &Document, id: ResourceId) -> usize {
-    doc.objects.values().filter(|o| wall::data(o).is_some_and(|d| d.style == Some(id))).count()
+    doc.objects
+        .values()
+        .filter(|o| wall::data(o).is_some_and(|d| d.style == Some(id)))
+        .count()
 }
 
 fn style_row(doc: &Document, id: ResourceId) -> Value {
     let r = doc.resources.get(id).expect("checked");
-    let mut v = serde_json::to_value(wall::style_of(doc, id).expect("checked")).expect("style is JSON");
+    let mut v =
+        serde_json::to_value(wall::style_of(doc, id).expect("checked")).expect("style is JSON");
     v["id"] = json!(id);
     v["name"] = json!(r.name);
     v["used_by"] = json!(used_by(doc, id));
@@ -190,7 +281,12 @@ impl Session {
             "wall_style.create" => self.wall_style_create(m),
             "wall_style.list" => {
                 let doc = self.editor.doc();
-                let rows: Vec<Value> = doc.resources.iter().filter(|r| wall::style_of(doc, r.id).is_some()).map(|r| style_row(doc, r.id)).collect();
+                let rows: Vec<Value> = doc
+                    .resources
+                    .iter()
+                    .filter(|r| wall::style_of(doc, r.id).is_some())
+                    .map(|r| style_row(doc, r.id))
+                    .collect();
                 Ok(json!({ "styles": rows }))
             }
             "wall_style.update" => self.wall_style_update(m),
@@ -209,48 +305,113 @@ impl Session {
             "section.set" => self.section_set(m),
             "section.profile" => self.section_profile(m),
             "section.place" => self.section_place(m),
-            _ => Err(RpcError { code: -32601, message: format!("unknown method: {method}") }),
+            _ => Err(RpcError {
+                code: -32601,
+                message: format!("unknown method: {method}"),
+            }),
         }
     }
 
     /// Adds a shape and its settings as one undo step.
-    fn add_object_with(&mut self, shape: Shape, layer: Option<LayerId>, class: Option<ClassId>, key: &str, data: Value) -> Result<ObjectId, RpcError> {
+    fn add_object_with(
+        &mut self,
+        shape: Shape,
+        layer: Option<LayerId>,
+        class: Option<ClassId>,
+        key: &str,
+        data: Value,
+    ) -> Result<ObjectId, RpcError> {
         let id = ObjectId(self.editor.doc().next_id());
-        let add = Command::AddObject { shape, layer, class, attrs: Attributes::default() };
-        let set = Command::SetData { id, set: BTreeMap::from([(key.to_string(), data)]), remove: vec![] };
-        let out = self.editor.execute(&Command::Batch { commands: vec![add, set] }).map_err(app)?;
+        let add = Command::AddObject {
+            shape,
+            layer,
+            class,
+            attrs: Attributes::default(),
+        };
+        let set = Command::SetData {
+            id,
+            set: BTreeMap::from([(key.to_string(), data)]),
+            remove: vec![],
+        };
+        let out = self
+            .editor
+            .execute(&Command::Batch {
+                commands: vec![add, set],
+            })
+            .map_err(app)?;
         debug_assert_eq!(out.created.first(), Some(&id.0));
         self.prune_selection();
         Ok(id)
     }
 
     /// Changes the shape and the settings of an object as one undo step.
-    fn change_object(&mut self, id: ObjectId, shape: Option<Shape>, key: &str, data: Value) -> Result<(), RpcError> {
+    fn change_object(
+        &mut self,
+        id: ObjectId,
+        shape: Option<Shape>,
+        key: &str,
+        data: Value,
+    ) -> Result<(), RpcError> {
         let mut commands = Vec::new();
         if let Some(shape) = shape {
-            commands.push(Command::ModifyObject { id, shape: Some(shape), layer: None, class: None, attrs: None });
+            commands.push(Command::ModifyObject {
+                id,
+                shape: Some(shape),
+                layer: None,
+                class: None,
+                attrs: None,
+            });
         }
-        commands.push(Command::SetData { id, set: BTreeMap::from([(key.to_string(), data)]), remove: vec![] });
-        self.editor.execute(&Command::Batch { commands }).map_err(app)?;
+        commands.push(Command::SetData {
+            id,
+            set: BTreeMap::from([(key.to_string(), data)]),
+            remove: vec![],
+        });
+        self.editor
+            .execute(&Command::Batch { commands })
+            .map_err(app)?;
         Ok(())
     }
 
     fn object(&self, id: ObjectId) -> Result<&Object, RpcError> {
-        self.editor.doc().object(id).ok_or_else(|| app(format!("object {id} does not exist")))
+        self.editor
+            .doc()
+            .object(id)
+            .ok_or_else(|| app(format!("object {id} does not exist")))
     }
 
     /// The site model that serves an object.
-    fn site_for(&self, obj: &Object, named: Option<ObjectId>) -> Option<std::sync::Arc<SiteResult>> {
-        grading::host(self.editor.doc(), &self.site_cache, self.editor.revision(), obj, named)
+    fn site_for(
+        &self,
+        obj: &Object,
+        named: Option<ObjectId>,
+    ) -> Option<std::sync::Arc<SiteResult>> {
+        grading::host(
+            self.editor.doc(),
+            &self.site_cache,
+            self.editor.revision(),
+            obj,
+            named,
+        )
     }
 
     // ---- wall styles ----
 
     fn wall_style_create(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
-        let name = m.remove("name").and_then(|v| v.as_str().map(str::to_string)).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("give a name"))?;
+        let name = m
+            .remove("name")
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|n| !n.trim().is_empty())
+            .ok_or_else(|| bad("give a name"))?;
         let style: wall::WallStyle = patched(&wall::WallStyle::default(), &m, "wall style")?;
         style.validate().map_err(bad)?;
-        let out = self.editor.execute(&Command::AddResource { name, body: style.to_body() }).map_err(app)?;
+        let out = self
+            .editor
+            .execute(&Command::AddResource {
+                name,
+                body: style.to_body(),
+            })
+            .map_err(app)?;
         Ok(json!({ "id": out.created[0] }))
     }
 
@@ -258,29 +419,63 @@ impl Session {
         let doc = self.editor.doc();
         let id = wall_style_id(doc, m.get("id").ok_or_else(|| bad("missing 'id'"))?)?;
         m.remove("id");
-        let name = m.remove("name").map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad("'name' must be text"))).transpose()?;
+        let name = m
+            .remove("name")
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| bad("'name' must be text"))
+            })
+            .transpose()?;
         let style = patched(&wall::style_of(doc, id).expect("checked"), &m, "wall style")?;
         style.validate().map_err(bad)?;
-        self.editor.execute(&Command::ModifyResource { id, name, body: Some(style.to_body()) }).map_err(app)?;
+        self.editor
+            .execute(&Command::ModifyResource {
+                id,
+                name,
+                body: Some(style.to_body()),
+            })
+            .map_err(app)?;
         Ok(json!({ "id": id }))
     }
 
     fn wall_style_delete(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let doc = self.editor.doc();
         let id = wall_style_id(doc, m.get("id").ok_or_else(|| bad("missing 'id'"))?)?;
-        let reassign = m.remove("reassign").filter(|v| !v.is_null()).map(|v| wall_style_id(doc, &v)).transpose()?;
-        let users: Vec<ObjectId> = doc.objects.values().filter(|o| wall::data(o).is_some_and(|d| d.style == Some(id))).map(|o| o.id).collect();
+        let reassign = m
+            .remove("reassign")
+            .filter(|v| !v.is_null())
+            .map(|v| wall_style_id(doc, &v))
+            .transpose()?;
+        let users: Vec<ObjectId> = doc
+            .objects
+            .values()
+            .filter(|o| wall::data(o).is_some_and(|d| d.style == Some(id)))
+            .map(|o| o.id)
+            .collect();
         if !users.is_empty() && reassign.is_none() {
-            return Err(app(format!("{} wall(s) use this style. Give 'reassign' with another wall style", users.len())));
+            return Err(app(format!(
+                "{} wall(s) use this style. Give 'reassign' with another wall style",
+                users.len()
+            )));
         }
         let mut commands = Vec::new();
         for u in users {
             let mut d = wall::data(doc.object(u).expect("listed")).expect("listed");
             d.style = reassign;
-            commands.push(Command::SetData { id: u, set: BTreeMap::from([(wall::KEY.to_string(), serde_json::to_value(d).expect("JSON"))]), remove: vec![] });
+            commands.push(Command::SetData {
+                id: u,
+                set: BTreeMap::from([(
+                    wall::KEY.to_string(),
+                    serde_json::to_value(d).expect("JSON"),
+                )]),
+                remove: vec![],
+            });
         }
         commands.push(Command::DeleteResource { id, reassign: None });
-        self.editor.execute(&Command::Batch { commands }).map_err(app)?;
+        self.editor
+            .execute(&Command::Batch { commands })
+            .map_err(app)?;
         Ok(json!({ "deleted": id }))
     }
 
@@ -319,18 +514,43 @@ impl Session {
 
     fn wall_add(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let (layer, class) = take_where(&mut m)?;
-        let path: Vec<Vertex> = serde_json::from_value(m.remove("path").ok_or_else(|| bad("missing 'path': [vertices]"))?).map_err(|e| bad(format!("bad path: {e}")))?;
-        let closed = m.remove("closed").map(|v| v.as_bool().ok_or_else(|| bad("'closed' must be true or false"))).transpose()?.unwrap_or(false);
+        let path: Vec<Vertex> = serde_json::from_value(
+            m.remove("path")
+                .ok_or_else(|| bad("missing 'path': [vertices]"))?,
+        )
+        .map_err(|e| bad(format!("bad path: {e}")))?;
+        let closed = m
+            .remove("closed")
+            .map(|v| {
+                v.as_bool()
+                    .ok_or_else(|| bad("'closed' must be true or false"))
+            })
+            .transpose()?
+            .unwrap_or(false);
         resolve_style(self.editor.doc(), &mut m)?;
         let data: wall::WallData = patched(&wall::WallData::default(), &m, "wall")?;
         data.validate().map_err(bad)?;
-        let id = self.add_object_with(Shape::Polyline { points: path, closed }, layer, class, wall::KEY, serde_json::to_value(&data).expect("JSON"))?;
+        let id = self.add_object_with(
+            Shape::Polyline {
+                points: path,
+                closed,
+            },
+            layer,
+            class,
+            wall::KEY,
+            serde_json::to_value(&data).expect("JSON"),
+        )?;
         Ok(json!({ "id": id, "quantities": self.wall_row(id) }))
     }
 
     fn wall_set(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let ids = ids_of(&mut m)?;
-        let path = m.remove("path").map(|v| serde_json::from_value::<Vec<Vertex>>(v).map_err(|e| bad(format!("bad path: {e}")))).transpose()?;
+        let path = m
+            .remove("path")
+            .map(|v| {
+                serde_json::from_value::<Vec<Vertex>>(v).map_err(|e| bad(format!("bad path: {e}")))
+            })
+            .transpose()?;
         if path.is_some() && ids.len() != 1 {
             return Err(bad("path changes one wall at a time"));
         }
@@ -338,27 +558,59 @@ impl Session {
         let mut commands = Vec::new();
         for id in &ids {
             let obj = self.object(*id)?;
-            let current = wall::data(obj).ok_or_else(|| app(format!("object {id} is not a wall")))?;
+            let current =
+                wall::data(obj).ok_or_else(|| app(format!("object {id} is not a wall")))?;
             let data: wall::WallData = patched(&current, &m, "wall")?;
             data.validate().map_err(bad)?;
             if let Some(path) = &path {
-                let Shape::Polyline { closed, .. } = obj.shape else { unreachable!("walls are polylines") };
-                commands.push(Command::ModifyObject { id: *id, shape: Some(Shape::Polyline { points: path.clone(), closed }), layer: None, class: None, attrs: None });
+                let Shape::Polyline { closed, .. } = obj.shape else {
+                    unreachable!("walls are polylines")
+                };
+                commands.push(Command::ModifyObject {
+                    id: *id,
+                    shape: Some(Shape::Polyline {
+                        points: path.clone(),
+                        closed,
+                    }),
+                    layer: None,
+                    class: None,
+                    attrs: None,
+                });
             }
-            commands.push(Command::SetData { id: *id, set: BTreeMap::from([(wall::KEY.to_string(), serde_json::to_value(&data).expect("JSON"))]), remove: vec![] });
+            commands.push(Command::SetData {
+                id: *id,
+                set: BTreeMap::from([(
+                    wall::KEY.to_string(),
+                    serde_json::to_value(&data).expect("JSON"),
+                )]),
+                remove: vec![],
+            });
         }
-        self.editor.execute(&Command::Batch { commands }).map_err(app)?;
+        self.editor
+            .execute(&Command::Batch { commands })
+            .map_err(app)?;
         Ok(json!({ "ids": ids }))
     }
 
     fn wall_report(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let ids: Vec<ObjectId> = match m.remove("ids") {
-            Some(v) => serde_json::from_value(v).map_err(|_| bad("'ids' must be a list of object IDs"))?,
-            None => self.editor.doc().objects.values().filter(|o| wall::data(o).is_some()).map(|o| o.id).collect(),
+            Some(v) => {
+                serde_json::from_value(v).map_err(|_| bad("'ids' must be a list of object IDs"))?
+            }
+            None => self
+                .editor
+                .doc()
+                .objects
+                .values()
+                .filter(|o| wall::data(o).is_some())
+                .map(|o| o.id)
+                .collect(),
         };
         let mut rows = Vec::new();
         for id in ids {
-            self.object(id).and_then(|o| wall::data(o).ok_or_else(|| app(format!("object {id} is not a wall"))))?;
+            self.object(id).and_then(|o| {
+                wall::data(o).ok_or_else(|| app(format!("object {id} is not a wall")))
+            })?;
             rows.extend(self.wall_row(id));
         }
         let sum = |k: &str| r(rows.iter().filter_map(|x| x[k].as_f64()).sum());
@@ -371,11 +623,22 @@ impl Session {
     fn grade_json(&self, id: ObjectId) -> Result<Value, RpcError> {
         let doc = self.editor.doc();
         let obj = self.object(id)?;
-        let Shape::Line { a, b } = &obj.shape else { return Err(app(format!("object {id} is not a grade object"))) };
-        let d = grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
-        let site = d.snap.and_then(|_| grading::host(doc, &self.site_cache, self.editor.revision(), obj, d.site));
+        let Shape::Line { a, b } = &obj.shape else {
+            return Err(app(format!("object {id} is not a grade object")));
+        };
+        let d =
+            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
+        let site = d.snap.and_then(|_| {
+            grading::host(doc, &self.site_cache, self.editor.revision(), obj, d.site)
+        });
         let ground = site.as_ref().map(|s| grading::ground_of(s));
-        let g = grade::solve(*a, *b, &d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)?;
+        let g = grade::solve(
+            *a,
+            *b,
+            &d,
+            ground.as_ref().map(|g| g as grading::Ground<'_>),
+        )
+        .map_err(app)?;
         Ok(json!({
             "id": id,
             "length_mm": g.length,
@@ -395,7 +658,13 @@ impl Session {
         let (a, b) = (need_point(&mut m, "a")?, need_point(&mut m, "b")?);
         let data: grade::GradeData = patched(&grade::GradeData::default(), &m, "grade")?;
         data.validate().map_err(bad)?;
-        let id = self.add_object_with(Shape::Line { a, b }, layer, class, grade::KEY, serde_json::to_value(&data).expect("JSON"))?;
+        let id = self.add_object_with(
+            Shape::Line { a, b },
+            layer,
+            class,
+            grade::KEY,
+            serde_json::to_value(&data).expect("JSON"),
+        )?;
         match self.grade_json(id) {
             Ok(g) => Ok(json!({ "id": id, "grade": g })),
             Err(e) => {
@@ -410,12 +679,23 @@ impl Session {
         let id = take_id(&mut m, "id")?;
         let (a, b) = (take_point(&mut m, "a")?, take_point(&mut m, "b")?);
         let obj = self.object(id)?;
-        let Shape::Line { a: old_a, b: old_b } = obj.shape else { return Err(app(format!("object {id} is not a grade object"))) };
-        let current = grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
+        let Shape::Line { a: old_a, b: old_b } = obj.shape else {
+            return Err(app(format!("object {id} is not a grade object")));
+        };
+        let current =
+            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
         let data: grade::GradeData = patched(&current, &m, "grade")?;
         data.validate().map_err(bad)?;
-        let shape = (a.is_some() || b.is_some()).then(|| Shape::Line { a: a.unwrap_or(old_a), b: b.unwrap_or(old_b) });
-        self.change_object(id, shape, grade::KEY, serde_json::to_value(&data).expect("JSON"))?;
+        let shape = (a.is_some() || b.is_some()).then(|| Shape::Line {
+            a: a.unwrap_or(old_a),
+            b: b.unwrap_or(old_b),
+        });
+        self.change_object(
+            id,
+            shape,
+            grade::KEY,
+            serde_json::to_value(&data).expect("JSON"),
+        )?;
         match self.grade_json(id) {
             Ok(g) => Ok(json!({ "id": id, "grade": g })),
             Err(e) => {
@@ -451,17 +731,42 @@ impl Session {
         spec.validate().map_err(bad)?;
         let layer = obj.layer;
         if !m.is_empty() {
-            self.change_object(id, None, analysis::KEY, serde_json::to_value(&spec).expect("JSON"))?;
+            self.change_object(
+                id,
+                None,
+                analysis::KEY,
+                serde_json::to_value(&spec).expect("JSON"),
+            )?;
         }
         let mut legend_id = None;
         if let Some(l) = legend {
             let mut l = map_of(l)?;
-            let rect: [DVec2; 2] = serde_json::from_value(l.remove("rect").ok_or_else(|| bad("legend needs rect: [[x0, y0], [x1, y1]]"))?).map_err(|_| bad("legend rect must be [[x0, y0], [x1, y1]]"))?;
+            let rect: [DVec2; 2] = serde_json::from_value(
+                l.remove("rect")
+                    .ok_or_else(|| bad("legend needs rect: [[x0, y0], [x1, y1]]"))?,
+            )
+            .map_err(|_| bad("legend rect must be [[x0, y0], [x1, y1]]"))?;
             if rect.iter().any(|p| !p.is_finite()) || rect[0] == rect[1] {
                 return Err(bad("legend rect needs two different points"));
             }
-            let data: analysis::LegendData = patched(&analysis::LegendData { site: Some(id), ..Default::default() }, &l, "legend")?;
-            legend_id = Some(self.add_object_with(Shape::Rect { min: rect[0].min(rect[1]), max: rect[0].max(rect[1]) }, Some(layer), None, analysis::LEGEND_KEY, serde_json::to_value(&data).expect("JSON"))?);
+            let data: analysis::LegendData = patched(
+                &analysis::LegendData {
+                    site: Some(id),
+                    ..Default::default()
+                },
+                &l,
+                "legend",
+            )?;
+            legend_id = Some(self.add_object_with(
+                Shape::Rect {
+                    min: rect[0].min(rect[1]),
+                    max: rect[0].max(rect[1]),
+                },
+                Some(layer),
+                None,
+                analysis::LEGEND_KEY,
+                serde_json::to_value(&data).expect("JSON"),
+            )?);
         }
         let doc = self.editor.doc();
         let obj = doc.object(id).expect("checked");
@@ -470,7 +775,8 @@ impl Session {
             out["legend"] = json!(l);
         }
         if spec.mode != analysis::Mode::Off {
-            let site = grading::host(doc, &self.site_cache, self.editor.revision(), obj, Some(id)).ok_or_else(|| app("the site model has no surface yet"))?;
+            let site = grading::host(doc, &self.site_cache, self.editor.revision(), obj, Some(id))
+                .ok_or_else(|| app("the site model has no surface yet"))?;
             if let Some(a) = analysis::for_site(&site, &spec) {
                 let total: f64 = a.bands.iter().map(|b| b.area_xy).sum();
                 out["breaks"] = json!(a.breaks);
@@ -508,8 +814,20 @@ impl Session {
         d.validate().map_err(bad)?;
         // The marker is 1 mm on paper.
         let doc = self.editor.doc();
-        let scale = layer.or(Some(doc.active_layer)).and_then(|l| doc.layer(l)).map_or(100.0, |l| l.scale);
-        let id = self.add_object_with(Shape::Circle { center: at, radius: spot::MARKER_PAPER_RADIUS * scale }, layer, class, spot::KEY, serde_json::to_value(&d).expect("JSON"))?;
+        let scale = layer
+            .or(Some(doc.active_layer))
+            .and_then(|l| doc.layer(l))
+            .map_or(100.0, |l| l.scale);
+        let id = self.add_object_with(
+            Shape::Circle {
+                center: at,
+                radius: spot::MARKER_PAPER_RADIUS * scale,
+            },
+            layer,
+            class,
+            spot::KEY,
+            serde_json::to_value(&d).expect("JSON"),
+        )?;
         let obj = self.object(id)?;
         Ok(json!({ "id": id, "reading": self.reading_json(obj, &d, at) }))
     }
@@ -518,12 +836,20 @@ impl Session {
         let id = take_id(&mut m, "id")?;
         let at = take_point(&mut m, "at")?;
         let obj = self.object(id)?;
-        let Shape::Circle { center, radius } = obj.shape else { return Err(app(format!("object {id} is not a spot elevation"))) };
-        let current = spot::data(obj).ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
+        let Shape::Circle { center, radius } = obj.shape else {
+            return Err(app(format!("object {id} is not a spot elevation")));
+        };
+        let current =
+            spot::data(obj).ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
         let d: spot::SpotData = patched(&current, &m, "spot")?;
         d.validate().map_err(bad)?;
         let shape = at.map(|c| Shape::Circle { center: c, radius });
-        self.change_object(id, shape, spot::KEY, serde_json::to_value(&d).expect("JSON"))?;
+        self.change_object(
+            id,
+            shape,
+            spot::KEY,
+            serde_json::to_value(&d).expect("JSON"),
+        )?;
         let obj = self.object(id)?;
         Ok(json!({ "id": id, "reading": self.reading_json(obj, &d, at.unwrap_or(center)) }))
     }
@@ -532,17 +858,35 @@ impl Session {
         if m.contains_key("id") {
             let id = take_id(&mut m, "id")?;
             let obj = self.object(id)?;
-            let Shape::Circle { center, .. } = obj.shape else { return Err(app(format!("object {id} is not a spot elevation"))) };
-            let d = spot::data(obj).ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
+            let Shape::Circle { center, .. } = obj.shape else {
+                return Err(app(format!("object {id} is not a spot elevation")));
+            };
+            let d = spot::data(obj)
+                .ok_or_else(|| app(format!("object {id} is not a spot elevation")))?;
             return Ok(self.reading_json(obj, &d, center));
         }
         let at = need_point(&mut m, "at")?;
-        let site = m.remove("site").map(serde_json::from_value::<ObjectId>).transpose().map_err(|_| bad("'site' must be an object ID"))?;
+        let site = m
+            .remove("site")
+            .map(serde_json::from_value::<ObjectId>)
+            .transpose()
+            .map_err(|_| bad("'site' must be an object ID"))?;
         let doc = self.editor.doc();
-        let host = site.or_else(|| doc.objects.values().find(|o| matches!(o.shape, Shape::SiteModel { .. })).map(|o| o.id)).ok_or_else(|| app("the document has no site model"))?;
+        let host = site
+            .or_else(|| {
+                doc.objects
+                    .values()
+                    .find(|o| matches!(o.shape, Shape::SiteModel { .. }))
+                    .map(|o| o.id)
+            })
+            .ok_or_else(|| app("the document has no site model"))?;
         let host_obj = self.object(host)?;
-        self.site_for(host_obj, Some(host)).ok_or_else(|| app(format!("object {host} is not a site model with a surface")))?;
-        let d = spot::SpotData { site: Some(host), ..Default::default() };
+        self.site_for(host_obj, Some(host))
+            .ok_or_else(|| app(format!("object {host} is not a site model with a surface")))?;
+        let d = spot::SpotData {
+            site: Some(host),
+            ..Default::default()
+        };
         Ok(self.reading_json(host_obj, &d, at))
     }
 
@@ -556,7 +900,13 @@ impl Session {
         }
         let d: section::SectionData = patched(&section::SectionData::default(), &m, "section")?;
         d.validate().map_err(bad)?;
-        let id = self.add_object_with(Shape::Line { a, b }, layer, class, section::KEY, serde_json::to_value(&d).expect("JSON"))?;
+        let id = self.add_object_with(
+            Shape::Line { a, b },
+            layer,
+            class,
+            section::KEY,
+            serde_json::to_value(&d).expect("JSON"),
+        )?;
         Ok(json!({ "id": id }))
     }
 
@@ -564,8 +914,11 @@ impl Session {
         let id = take_id(&mut m, "id")?;
         let (a, b) = (take_point(&mut m, "a")?, take_point(&mut m, "b")?);
         let obj = self.object(id)?;
-        let Shape::Line { a: old_a, b: old_b } = obj.shape else { return Err(app(format!("object {id} is not a section line"))) };
-        let current = section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
+        let Shape::Line { a: old_a, b: old_b } = obj.shape else {
+            return Err(app(format!("object {id} is not a section line")));
+        };
+        let current =
+            section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
         let d: section::SectionData = patched(&current, &m, "section")?;
         d.validate().map_err(bad)?;
         let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
@@ -573,22 +926,38 @@ impl Session {
             return Err(bad("the section line needs two different points"));
         }
         let shape = (a.is_some() || b.is_some()).then_some(Shape::Line { a: na, b: nb });
-        self.change_object(id, shape, section::KEY, serde_json::to_value(&d).expect("JSON"))?;
+        self.change_object(
+            id,
+            shape,
+            section::KEY,
+            serde_json::to_value(&d).expect("JSON"),
+        )?;
         Ok(json!({ "id": id }))
     }
 
-    fn section_profile_of(&self, id: ObjectId) -> Result<(section::SectionData, section::Profile), RpcError> {
+    fn section_profile_of(
+        &self,
+        id: ObjectId,
+    ) -> Result<(section::SectionData, section::Profile), RpcError> {
         let obj = self.object(id)?;
-        let d = section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
-        let site = self.site_for(obj, d.site).ok_or_else(|| app("there is no site model for the section on its layer"))?;
-        let p = section::profile(self.editor.doc(), obj, &site).ok_or_else(|| app("the section line has no length"))?;
+        let d =
+            section::data(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
+        let site = self
+            .site_for(obj, d.site)
+            .ok_or_else(|| app("there is no site model for the section on its layer"))?;
+        let p = section::profile(self.editor.doc(), obj, &site)
+            .ok_or_else(|| app("the section line has no length"))?;
         Ok((d, p))
     }
 
     fn section_profile(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let id = take_id(&mut m, "id")?;
         let (_, p) = self.section_profile_of(id)?;
-        let runs = |runs: &[Vec<(f64, f64)>]| runs.iter().map(|r| r.iter().map(|(s, z)| [*s, *z]).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let runs = |runs: &[Vec<(f64, f64)>]| {
+            runs.iter()
+                .map(|r| r.iter().map(|(s, z)| [*s, *z]).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
         Ok(json!({
             "id": id,
             "length_mm": p.length,
@@ -606,23 +975,45 @@ impl Session {
     fn section_place(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let id = take_id(&mut m, "id")?;
         let at = need_point(&mut m, "at")?;
-        let layer_param: Option<LayerId> = m.remove("layer").map(serde_json::from_value).transpose().map_err(|_| bad("'layer' must be a layer ID"))?;
-        let scale_param = m.remove("scale").map(|v| v.as_f64().filter(|s| s.is_finite() && *s > 0.0).ok_or_else(|| bad("'scale' must be a positive number"))).transpose()?;
+        let layer_param: Option<LayerId> = m
+            .remove("layer")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| bad("'layer' must be a layer ID"))?;
+        let scale_param = m
+            .remove("scale")
+            .map(|v| {
+                v.as_f64()
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .ok_or_else(|| bad("'scale' must be a positive number"))
+            })
+            .transpose()?;
         let (d, p) = self.section_profile_of(id)?;
         let doc = self.editor.doc();
         let section_layer = self.object(id)?.layer;
         let target = layer_param.unwrap_or(section_layer);
-        let layer = doc.layer(target).ok_or_else(|| app(format!("layer {target} does not exist")))?;
+        let layer = doc
+            .layer(target)
+            .ok_or_else(|| app(format!("layer {target} does not exist")))?;
         let section_scale = doc.layer(section_layer).map_or(100.0, |l| l.scale);
         let sheet = layer.kind == LayerKind::Sheet;
         let scale = scale_param.unwrap_or(if sheet { section_scale } else { 1.0 });
         // Text is 2.5 mm on paper. A sheet layer counts in paper mm. A design layer counts in model mm.
         let text = 2.5 * if sheet { 1.0 } else { layer.scale } * scale;
-        let items: Vec<section::Item> = section::drawing(&p, &d, at * scale, text).into_iter().map(|i| i.scaled(1.0 / scale)).collect();
+        let items: Vec<section::Item> = section::drawing(&p, &d, at * scale, text)
+            .into_iter()
+            .map(|i| i.scaled(1.0 / scale))
+            .collect();
         let stale: Vec<ObjectId> = doc
             .objects
             .values()
-            .filter(|o| o.data.get(section::PROFILE_KEY).and_then(|v| v.get("section")).and_then(Value::as_u64) == Some(id.0))
+            .filter(|o| {
+                o.data
+                    .get(section::PROFILE_KEY)
+                    .and_then(|v| v.get("section"))
+                    .and_then(Value::as_u64)
+                    == Some(id.0)
+            })
             .map(|o| o.id)
             .collect();
         let mut commands = Vec::new();
@@ -633,17 +1024,33 @@ impl Session {
         let mut ids = Vec::new();
         let mut bounds = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for (k, item) in items.iter().enumerate() {
-            let attrs = Attributes { pen: Some(Color(item.pen)), fill: item.fill.map(Color), line_weight: Some(item.weight) };
+            let attrs = Attributes {
+                pen: Some(Color(item.pen)),
+                fill: item.fill.map(Color),
+                line_weight: Some(item.weight),
+                ..Default::default()
+            };
             let (lo, hi) = item.shape.bounds();
             bounds = (bounds.0.min(lo), bounds.1.max(hi));
-            commands.push(Command::AddObject { shape: item.shape.clone(), layer: Some(target), class: None, attrs });
+            commands.push(Command::AddObject {
+                shape: item.shape.clone(),
+                layer: Some(target),
+                class: None,
+                attrs,
+            });
             ids.push(ObjectId(first + k as u64));
         }
         for (obj_id, item) in ids.iter().zip(&items) {
             let tag = json!({ "section": id, "role": item.role });
-            commands.push(Command::SetData { id: *obj_id, set: BTreeMap::from([(section::PROFILE_KEY.to_string(), tag)]), remove: vec![] });
+            commands.push(Command::SetData {
+                id: *obj_id,
+                set: BTreeMap::from([(section::PROFILE_KEY.to_string(), tag)]),
+                remove: vec![],
+            });
         }
-        self.editor.execute(&Command::Batch { commands }).map_err(app)?;
+        self.editor
+            .execute(&Command::Batch { commands })
+            .map_err(app)?;
         self.prune_selection();
         Ok(json!({ "ids": ids, "bounds": [[bounds.0.x, bounds.0.y], [bounds.1.x, bounds.1.y]] }))
     }
@@ -651,8 +1058,12 @@ impl Session {
 
 fn ids_of(m: &mut Map<String, Value>) -> Result<Vec<ObjectId>, RpcError> {
     let ids = match (m.remove("id"), m.remove("ids")) {
-        (Some(v), None) => vec![serde_json::from_value(v).map_err(|_| bad("'id' must be an object ID"))?],
-        (None, Some(v)) => serde_json::from_value(v).map_err(|_| bad("'ids' must be a list of object IDs"))?,
+        (Some(v), None) => {
+            vec![serde_json::from_value(v).map_err(|_| bad("'id' must be an object ID"))?]
+        }
+        (None, Some(v)) => {
+            serde_json::from_value(v).map_err(|_| bad("'ids' must be a list of object IDs"))?
+        }
         _ => return Err(bad("give 'id' or 'ids'")),
     };
     if ids.is_empty() {

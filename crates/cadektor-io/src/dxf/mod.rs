@@ -6,7 +6,10 @@ pub mod parse;
 
 use cadektor_core::model::{Color, Document};
 
-use crate::{Context, ExportOptions, ExportResult, Exporter, Format, ImportOptions, ImportResult, Importer, IoError, Source};
+use crate::{
+    Context, ExportOptions, ExportResult, Exporter, Format, ImportOptions, ImportResult, Importer,
+    IoError, Source,
+};
 
 pub struct DxfFormat;
 
@@ -15,7 +18,12 @@ impl Importer for DxfFormat {
         Format::Dxf
     }
 
-    fn import(&self, src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    fn import(
+        &self,
+        src: &Source,
+        ctx: &Context,
+        opts: &ImportOptions,
+    ) -> Result<ImportResult, IoError> {
         import::import(src, ctx, opts)
     }
 }
@@ -50,7 +58,18 @@ pub fn aci_rgb(index: u8) -> Option<[u8; 3]> {
         10..=249 => {
             let n = (index - 10) as usize;
             let hue = (n / 10) as f64 * 15.0;
-            let (sat, val) = [(1.0, 1.0), (0.5, 1.0), (1.0, 0.65), (0.5, 0.65), (1.0, 0.5), (0.5, 0.5), (1.0, 0.3), (0.5, 0.3), (1.0, 0.15), (0.5, 0.15)][n % 10];
+            let (sat, val) = [
+                (1.0, 1.0),
+                (0.5, 1.0),
+                (1.0, 0.65),
+                (0.5, 0.65),
+                (1.0, 0.5),
+                (0.5, 0.5),
+                (1.0, 0.3),
+                (0.5, 0.3),
+                (1.0, 0.15),
+                (0.5, 0.15),
+            ][n % 10];
             Some(hsv(hue, sat, val))
         }
         250..=255 => {
@@ -78,7 +97,9 @@ fn hsv(h: f64, s: f64, v: f64) -> [u8; 3] {
 /// The ACI index whose color is nearest to `rgb`.
 pub fn nearest_aci(rgb: [u8; 3]) -> u8 {
     let dist = |a: [u8; 3]| -> i32 { (0..3).map(|i| (a[i] as i32 - rgb[i] as i32).pow(2)).sum() };
-    (1..=255u8).min_by_key(|i| dist(aci_rgb(*i).expect("1..=255 have colors"))).expect("range is not empty")
+    (1..=255u8)
+        .min_by_key(|i| dist(aci_rgb(*i).expect("1..=255 have colors")))
+        .expect("range is not empty")
 }
 
 /// A color from a true-color value (`0xRRGGBB`).

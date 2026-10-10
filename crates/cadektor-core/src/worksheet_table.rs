@@ -30,11 +30,14 @@ pub fn data(obj: &Object) -> Option<TableData> {
     if !matches!(obj.shape, Shape::Rect { .. }) {
         return None;
     }
-    serde_json::from_value(obj.data.get(KEY)?.clone()).ok().filter(|d: &TableData| d.text_height.is_finite() && d.text_height > 0.0)
+    serde_json::from_value(obj.data.get(KEY)?.clone())
+        .ok()
+        .filter(|d: &TableData| d.text_height.is_finite() && d.text_height > 0.0)
 }
 
 pub fn set_data(obj: &mut Object, d: &TableData) {
-    obj.data.insert(KEY.into(), serde_json::to_value(d).unwrap_or_default());
+    obj.data
+        .insert(KEY.into(), serde_json::to_value(d).unwrap_or_default());
 }
 
 /// Checks the data against the document: the worksheet exists, the text height is usable.
@@ -51,7 +54,11 @@ pub fn validate(doc: &Document, d: &TableData) -> Result<(), String> {
 
 /// The table objects that show this worksheet.
 pub fn users_of(doc: &Document, worksheet: ResourceId) -> Vec<ObjectId> {
-    doc.objects.values().filter(|o| data(o).is_some_and(|d| d.worksheet == worksheet)).map(|o| o.id).collect()
+    doc.objects
+        .values()
+        .filter(|o| data(o).is_some_and(|d| d.worksheet == worksheet))
+        .map(|o| o.id)
+        .collect()
 }
 
 #[cfg(test)]
@@ -64,33 +71,139 @@ mod tests {
     #[test]
     fn data_needs_a_rectangle_and_valid_numbers() {
         let mut ed = Editor::default();
-        let id = ObjectId(ed.execute(&Command::AddObject { shape: Shape::Rect { min: DVec2::ZERO, max: DVec2::ONE }, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0]);
+        let id = ObjectId(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Rect {
+                    min: DVec2::ZERO,
+                    max: DVec2::ONE,
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        );
         let mut o = ed.doc().object(id).unwrap().clone();
         assert!(data(&o).is_none());
-        set_data(&mut o, &TableData { worksheet: ResourceId(5), text_height: 3.0 });
-        assert_eq!(data(&o), Some(TableData { worksheet: ResourceId(5), text_height: 3.0 }));
-        set_data(&mut o, &TableData { worksheet: ResourceId(5), text_height: -1.0 });
+        set_data(
+            &mut o,
+            &TableData {
+                worksheet: ResourceId(5),
+                text_height: 3.0,
+            },
+        );
+        assert_eq!(
+            data(&o),
+            Some(TableData {
+                worksheet: ResourceId(5),
+                text_height: 3.0
+            })
+        );
+        set_data(
+            &mut o,
+            &TableData {
+                worksheet: ResourceId(5),
+                text_height: -1.0,
+            },
+        );
         assert!(data(&o).is_none());
-        set_data(&mut o, &TableData { worksheet: ResourceId(5), text_height: 3.0 });
-        o.shape = Shape::Circle { center: DVec2::ZERO, radius: 1.0 };
+        set_data(
+            &mut o,
+            &TableData {
+                worksheet: ResourceId(5),
+                text_height: 3.0,
+            },
+        );
+        o.shape = Shape::Circle {
+            center: DVec2::ZERO,
+            radius: 1.0,
+        };
         assert!(data(&o).is_none(), "only a rectangle is a table");
         o.data.insert(KEY.into(), serde_json::json!("junk"));
-        o.shape = Shape::Rect { min: DVec2::ZERO, max: DVec2::ONE };
+        o.shape = Shape::Rect {
+            min: DVec2::ZERO,
+            max: DVec2::ONE,
+        };
         assert!(data(&o).is_none());
     }
 
     #[test]
     fn validate_checks_the_worksheet() {
         let mut ed = Editor::default();
-        let ws = ResourceId(ed.execute(&Command::AddResource { name: "S".into(), body: ResourceBody::Worksheet(serde_json::json!({})) }).unwrap().created[0]);
-        let st = ResourceId(ed.execute(&Command::AddResource { name: "P".into(), body: ResourceBody::plant_style(Default::default()) }).unwrap().created[0]);
-        let ok = TableData { worksheet: ws, text_height: 2.0 };
+        let ws = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "S".into(),
+                body: ResourceBody::Worksheet(serde_json::json!({})),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let st = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "P".into(),
+                body: ResourceBody::plant_style(Default::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let ok = TableData {
+            worksheet: ws,
+            text_height: 2.0,
+        };
         assert!(validate(ed.doc(), &ok).is_ok());
-        assert!(validate(ed.doc(), &TableData { worksheet: st, ..ok }).unwrap_err().contains("not a worksheet"));
-        assert!(validate(ed.doc(), &TableData { worksheet: ResourceId(999), ..ok }).unwrap_err().contains("does not exist"));
-        assert!(validate(ed.doc(), &TableData { text_height: 0.0, ..ok }).is_err());
-        assert!(validate(ed.doc(), &TableData { text_height: f64::NAN, ..ok }).is_err());
-        assert!(validate(ed.doc(), &TableData { text_height: 1e9, ..ok }).is_err());
+        assert!(
+            validate(
+                ed.doc(),
+                &TableData {
+                    worksheet: st,
+                    ..ok
+                }
+            )
+            .unwrap_err()
+            .contains("not a worksheet")
+        );
+        assert!(
+            validate(
+                ed.doc(),
+                &TableData {
+                    worksheet: ResourceId(999),
+                    ..ok
+                }
+            )
+            .unwrap_err()
+            .contains("does not exist")
+        );
+        assert!(
+            validate(
+                ed.doc(),
+                &TableData {
+                    text_height: 0.0,
+                    ..ok
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                ed.doc(),
+                &TableData {
+                    text_height: f64::NAN,
+                    ..ok
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                ed.doc(),
+                &TableData {
+                    text_height: 1e9,
+                    ..ok
+                }
+            )
+            .is_err()
+        );
         assert!(users_of(ed.doc(), ws).is_empty());
     }
 }

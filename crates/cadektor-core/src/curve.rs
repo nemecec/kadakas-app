@@ -45,7 +45,9 @@ pub enum VertexKind {
     #[default]
     Corner,
     /// A fillet arc. Radius 0 means a corner.
-    Arc { radius: f64 },
+    Arc {
+        radius: f64,
+    },
     PointOnArc,
     Bezier,
     Cubic,
@@ -104,16 +106,25 @@ impl Serialize for Vertex {
 impl<'de> Deserialize<'de> for Vertex {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Ok(match ReprIn::deserialize(d)? {
-            ReprIn::Plain(p) => Vertex { p, kind: VertexKind::Corner },
+            ReprIn::Plain(p) => Vertex {
+                p,
+                kind: VertexKind::Corner,
+            },
             ReprIn::Full { p, kind } => Vertex { p, kind },
-            ReprIn::Bare(BareVertex { p }) => Vertex { p, kind: VertexKind::Corner },
+            ReprIn::Bare(BareVertex { p }) => Vertex {
+                p,
+                kind: VertexKind::Corner,
+            },
         })
     }
 }
 
 impl Vertex {
     pub fn corner(p: DVec2) -> Self {
-        Vertex { p, kind: VertexKind::Corner }
+        Vertex {
+            p,
+            kind: VertexKind::Corner,
+        }
     }
 
     pub fn new(p: DVec2, kind: VertexKind) -> Self {
@@ -122,7 +133,8 @@ impl Vertex {
 
     /// True if the position is finite and any radius is finite.
     pub fn is_finite(&self) -> bool {
-        self.p.is_finite() && !matches!(self.kind, VertexKind::Arc { radius } if !radius.is_finite())
+        self.p.is_finite()
+            && !matches!(self.kind, VertexKind::Arc { radius } if !radius.is_finite())
     }
 
     /// True if this vertex never bends the curve: a corner, or an arc of radius 0 or less.
@@ -153,23 +165,48 @@ pub fn all_straight(vertices: &[Vertex]) -> bool {
 /// One exact piece of a path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Seg {
-    Line { from: DVec2, to: DVec2 },
+    Line {
+        from: DVec2,
+        to: DVec2,
+    },
     /// Circular arc. `sweep` is in radians: positive is counterclockwise.
-    Arc { from: DVec2, to: DVec2, center: DVec2, radius: f64, start: f64, sweep: f64 },
-    Quad { from: DVec2, c: DVec2, to: DVec2 },
-    Cubic { from: DVec2, c1: DVec2, c2: DVec2, to: DVec2 },
+    Arc {
+        from: DVec2,
+        to: DVec2,
+        center: DVec2,
+        radius: f64,
+        start: f64,
+        sweep: f64,
+    },
+    Quad {
+        from: DVec2,
+        c: DVec2,
+        to: DVec2,
+    },
+    Cubic {
+        from: DVec2,
+        c1: DVec2,
+        c2: DVec2,
+        to: DVec2,
+    },
 }
 
 impl Seg {
     pub fn from(&self) -> DVec2 {
         match *self {
-            Seg::Line { from, .. } | Seg::Arc { from, .. } | Seg::Quad { from, .. } | Seg::Cubic { from, .. } => from,
+            Seg::Line { from, .. }
+            | Seg::Arc { from, .. }
+            | Seg::Quad { from, .. }
+            | Seg::Cubic { from, .. } => from,
         }
     }
 
     pub fn to(&self) -> DVec2 {
         match *self {
-            Seg::Line { to, .. } | Seg::Arc { to, .. } | Seg::Quad { to, .. } | Seg::Cubic { to, .. } => to,
+            Seg::Line { to, .. }
+            | Seg::Arc { to, .. }
+            | Seg::Quad { to, .. }
+            | Seg::Cubic { to, .. } => to,
         }
     }
 
@@ -184,7 +221,10 @@ impl Seg {
             Seg::Quad { c, to, .. } => to - c,
             Seg::Cubic { from, c1, c2, to } => {
                 // Control points can sit on the end point, so look at the next ones back.
-                [to - c2, to - c1, to - from].into_iter().find(|d| d.length_squared() > 0.0).unwrap_or(DVec2::ZERO)
+                [to - c2, to - c1, to - from]
+                    .into_iter()
+                    .find(|d| d.length_squared() > 0.0)
+                    .unwrap_or(DVec2::ZERO)
             }
         }
     }
@@ -201,7 +241,11 @@ pub struct Path {
 impl Path {
     /// Direction of travel at the end of the last segment.
     pub fn end_direction(&self) -> Option<DVec2> {
-        self.segs.iter().rev().map(Seg::end_direction).find(|d| d.length_squared() > 0.0)
+        self.segs
+            .iter()
+            .rev()
+            .map(Seg::end_direction)
+            .find(|d| d.length_squared() > 0.0)
     }
 
     /// The path as an SVG `d` attribute. The Y axis is flipped, because SVG
@@ -212,19 +256,26 @@ impl Path {
         let mut d = format!("M {}", pt(self.start));
         for (i, seg) in self.segs.iter().enumerate() {
             // Z draws the closing line, so a last line back to the start is not needed.
-            if self.closed && i + 1 == self.segs.len() && matches!(seg, Seg::Line { to, .. } if *to == self.start) {
+            if self.closed
+                && i + 1 == self.segs.len()
+                && matches!(seg, Seg::Line { to, .. } if *to == self.start)
+            {
                 continue;
             }
             match *seg {
                 Seg::Line { to, .. } => d += &format!(" L {}", pt(to)),
-                Seg::Arc { to, radius, sweep, .. } => {
+                Seg::Arc {
+                    to, radius, sweep, ..
+                } => {
                     // Y is flipped, so a counterclockwise arc has sweep-flag 0.
                     let large = (sweep.abs() > PI) as u8;
                     let flag = (sweep < 0.0) as u8;
                     d += &format!(" A {radius} {radius} 0 {large} {flag} {}", pt(to));
                 }
                 Seg::Quad { c, to, .. } => d += &format!(" Q {} {}", pt(c), pt(to)),
-                Seg::Cubic { c1, c2, to, .. } => d += &format!(" C {} {} {}", pt(c1), pt(c2), pt(to)),
+                Seg::Cubic { c1, c2, to, .. } => {
+                    d += &format!(" C {} {} {}", pt(c1), pt(c2), pt(to))
+                }
             }
         }
         if self.closed {
@@ -238,7 +289,14 @@ impl Path {
 #[derive(Clone, Copy, Debug)]
 enum Eff {
     Corner,
-    Fillet { t1: DVec2, t2: DVec2, center: DVec2, radius: f64, start: f64, sweep: f64 },
+    Fillet {
+        t1: DVec2,
+        t2: DVec2,
+        center: DVec2,
+        radius: f64,
+        start: f64,
+        sweep: f64,
+    },
     Through,
     Quad,
     Cubic,
@@ -265,8 +323,19 @@ fn circumcenter(a: DVec2, m: DVec2, b: DVec2) -> Option<DVec2> {
 fn arc_seg(center: DVec2, from: DVec2, to: DVec2, ccw: bool) -> Seg {
     let a0 = (from - center).to_angle();
     let a1 = (to - center).to_angle();
-    let sweep = if ccw { (a1 - a0).rem_euclid(TAU) } else { -((a0 - a1).rem_euclid(TAU)) };
-    Seg::Arc { from, to, center, radius: (from - center).length(), start: a0, sweep }
+    let sweep = if ccw {
+        (a1 - a0).rem_euclid(TAU)
+    } else {
+        -((a0 - a1).rem_euclid(TAU))
+    };
+    Seg::Arc {
+        from,
+        to,
+        center,
+        radius: (from - center).length(),
+        start: a0,
+        sweep,
+    }
 }
 
 /// The angle at `p` between the directions to `pp` and `np`.
@@ -295,7 +364,13 @@ fn corner_angle(pp: DVec2, p: DVec2, np: DVec2) -> Option<CornerAngle> {
     // (1 - cos) / sin is exact for a right angle and stays finite, because sin > 1e-6 here.
     let half_tan = (1.0 - cos) / sin;
     let half_sin = ((1.0 - cos) / 2.0).max(0.0).sqrt();
-    (half_tan.is_finite() && half_sin > 0.0).then_some(CornerAngle { u, w, theta, half_tan, half_sin })
+    (half_tan.is_finite() && half_sin > 0.0).then_some(CornerAngle {
+        u,
+        w,
+        theta,
+        half_tan,
+        half_sin,
+    })
 }
 
 /// Decides how every vertex acts. Fillet geometry is found here, with the radius clamped.
@@ -305,7 +380,12 @@ fn classify(v: &[Vertex], closed: bool) -> Vec<Eff> {
     let has_nb = |i: usize| ring || (i > 0 && i + 1 < n);
     let prev = |i: usize| (i + n - 1) % n;
     let next = |i: usize| (i + 1) % n;
-    let curved = |j: usize| matches!(v[j].kind, VertexKind::PointOnArc | VertexKind::Bezier | VertexKind::Cubic);
+    let curved = |j: usize| {
+        matches!(
+            v[j].kind,
+            VertexKind::PointOnArc | VertexKind::Bezier | VertexKind::Cubic
+        )
+    };
     let ctrl = |j: usize| matches!(v[j].kind, VertexKind::Bezier | VertexKind::Cubic);
 
     // First pass: which vertices keep their kind.
@@ -318,13 +398,24 @@ fn classify(v: &[Vertex], closed: bool) -> Vec<Eff> {
             match v[i].kind {
                 VertexKind::Bezier => Eff::Quad,
                 VertexKind::Cubic => Eff::Cubic,
-                VertexKind::PointOnArc if !ctrl(prev(i)) && !ctrl(next(i)) && circumcenter(pp, p, np).is_some() => {
+                VertexKind::PointOnArc
+                    if !ctrl(prev(i)) && !ctrl(next(i)) && circumcenter(pp, p, np).is_some() =>
+                {
                     Eff::Through
                 }
-                VertexKind::Arc { radius } if radius > 0.0 && !curved(prev(i)) && !curved(next(i)) => {
+                VertexKind::Arc { radius }
+                    if radius > 0.0 && !curved(prev(i)) && !curved(next(i)) =>
+                {
                     if corner_angle(pp, p, np).is_some() {
                         // A marker: the real values are found in the second pass.
-                        Eff::Fillet { t1: p, t2: p, center: p, radius, start: 0.0, sweep: 0.0 }
+                        Eff::Fillet {
+                            t1: p,
+                            t2: p,
+                            center: p,
+                            radius,
+                            start: 0.0,
+                            sweep: 0.0,
+                        }
                     } else {
                         Eff::Corner
                     }
@@ -361,7 +452,9 @@ fn classify(v: &[Vertex], closed: bool) -> Vec<Eff> {
     for i in 0..n {
         let Eff::Fillet { .. } = eff[i] else { continue };
         let (pp, p, np) = (v[prev(i)].p, v[i].p, v[next(i)].p);
-        let Some(g) = corner_angle(pp, p, np) else { continue };
+        let Some(g) = corner_angle(pp, p, np) else {
+            continue;
+        };
         let d = want[i] * scale[i];
         let r = d * g.half_tan;
         let center = p + (g.u + g.w).normalize() * (r / g.half_sin);
@@ -369,9 +462,19 @@ fn classify(v: &[Vertex], closed: bool) -> Vec<Eff> {
         // Walking prev -> p -> next, a left turn means a counterclockwise arc.
         let ccw = (-g.u).perp_dot(g.w) > 0.0;
         let sweep = if ccw { PI - g.theta } else { g.theta - PI };
-        let ok = [d, r, center.x, center.y, t1.x, t1.y, t2.x, t2.y, sweep].iter().all(|x| x.is_finite()) && d > 0.0;
+        let ok = [d, r, center.x, center.y, t1.x, t1.y, t2.x, t2.y, sweep]
+            .iter()
+            .all(|x| x.is_finite())
+            && d > 0.0;
         eff[i] = if ok {
-            Eff::Fillet { t1, t2, center, radius: r, start: (t1 - center).to_angle(), sweep }
+            Eff::Fillet {
+                t1,
+                t2,
+                center,
+                radius: r,
+                start: (t1 - center).to_angle(),
+                sweep,
+            }
         } else {
             Eff::Corner
         };
@@ -389,9 +492,22 @@ fn catmull_rom_piece(p0: DVec2, p1: DVec2, p2: DVec2, p3: DVec2) -> Seg {
     let (d1s, d2s, d3s) = (d1 * d1, d2 * d2, d3 * d3);
     let den1 = 3.0 * d1 * (d1 + d2);
     let den2 = 3.0 * d3 * (d3 + d2);
-    let c1 = if den1 > 0.0 { (p2 * d1s - p0 * d2s + p1 * (2.0 * d1s + 3.0 * d1 * d2 + d2s)) / den1 } else { p1 + third };
-    let c2 = if den2 > 0.0 { (p1 * d3s - p3 * d2s + p2 * (2.0 * d3s + 3.0 * d3 * d2 + d2s)) / den2 } else { p2 - third };
-    Seg::Cubic { from: p1, c1, c2, to: p2 }
+    let c1 = if den1 > 0.0 {
+        (p2 * d1s - p0 * d2s + p1 * (2.0 * d1s + 3.0 * d1 * d2 + d2s)) / den1
+    } else {
+        p1 + third
+    };
+    let c2 = if den2 > 0.0 {
+        (p1 * d3s - p3 * d2s + p2 * (2.0 * d3s + 3.0 * d3 * d2 + d2s)) / den2
+    } else {
+        p2 - third
+    };
+    Seg::Cubic {
+        from: p1,
+        c1,
+        c2,
+        to: p2,
+    }
 }
 
 /// Segments for a run of control points between two on-curve points.
@@ -404,14 +520,26 @@ fn run_segs(out: &mut Vec<Seg>, a: DVec2, ctrls: &[DVec2], b: DVec2, cubic: bool
         pts.push(b);
         let m = pts.len();
         for i in 0..m - 1 {
-            let p0 = if i == 0 { 2.0 * pts[0] - pts[1] } else { pts[i - 1] };
-            let p3 = if i + 2 >= m { 2.0 * pts[m - 1] - pts[m - 2] } else { pts[i + 2] };
+            let p0 = if i == 0 {
+                2.0 * pts[0] - pts[1]
+            } else {
+                pts[i - 1]
+            };
+            let p3 = if i + 2 >= m {
+                2.0 * pts[m - 1] - pts[m - 2]
+            } else {
+                pts[i + 2]
+            };
             out.push(catmull_rom_piece(p0, pts[i], pts[i + 1], p3));
         }
     } else {
         let mut from = a;
         for (i, &c) in ctrls.iter().enumerate() {
-            let to = if i + 1 == ctrls.len() { b } else { (c + ctrls[i + 1]) / 2.0 };
+            let to = if i + 1 == ctrls.len() {
+                b
+            } else {
+                (c + ctrls[i + 1]) / 2.0
+            };
             out.push(Seg::Quad { from, c, to });
             from = to;
         }
@@ -424,11 +552,27 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
     // Fewer than three points cannot enclose anything.
     let closed = closed && n >= 3;
     if n == 0 {
-        return Path { start: DVec2::ZERO, segs: vec![], closed };
+        return Path {
+            start: DVec2::ZERO,
+            segs: vec![],
+            closed,
+        };
     }
     let eff = classify(v, closed);
-    let entry = |i: usize| if let Eff::Fillet { t1, .. } = eff[i] { t1 } else { v[i].p };
-    let exit = |i: usize| if let Eff::Fillet { t2, .. } = eff[i] { t2 } else { v[i].p };
+    let entry = |i: usize| {
+        if let Eff::Fillet { t1, .. } = eff[i] {
+            t1
+        } else {
+            v[i].p
+        }
+    };
+    let exit = |i: usize| {
+        if let Eff::Fillet { t2, .. } = eff[i] {
+            t2
+        } else {
+            v[i].p
+        }
+    };
     let ring = closed;
     let anchors: Vec<usize> = (0..n).filter(|&i| !is_control(&eff[i])).collect();
     let mut segs: Vec<Seg> = Vec::new();
@@ -440,7 +584,12 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
         let start;
         if cubic {
             for i in 0..n {
-                segs.push(catmull_rom_piece(pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n], pts[(i + 2) % n]));
+                segs.push(catmull_rom_piece(
+                    pts[(i + n - 1) % n],
+                    pts[i],
+                    pts[(i + 1) % n],
+                    pts[(i + 2) % n],
+                ));
             }
             start = pts[0];
         } else {
@@ -448,7 +597,11 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
             let mut from = start;
             for i in 0..n {
                 let to = (pts[i] + pts[(i + 1) % n]) / 2.0;
-                segs.push(Seg::Quad { from, c: pts[i], to });
+                segs.push(Seg::Quad {
+                    from,
+                    c: pts[i],
+                    to,
+                });
                 from = to;
             }
         }
@@ -457,17 +610,28 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
             Some(Seg::Cubic { to, .. }) | Some(Seg::Quad { to, .. }) => *to = start,
             _ => {}
         }
-        return Path { start, segs, closed };
+        return Path {
+            start,
+            segs,
+            closed,
+        };
     }
 
     // Joins the exit of anchor `ia` to the entry of anchor `ib`.
     let connect = |segs: &mut Vec<Seg>, ia: usize, ib: usize| {
         let (pa, pb) = (exit(ia), entry(ib));
-        let steps = if ia == ib { n - 1 } else { (ib + n - ia) % n - 1 };
+        let steps = if ia == ib {
+            n - 1
+        } else {
+            (ib + n - ia) % n - 1
+        };
         if steps == 0 {
             let through = |m: usize| {
-                let c = circumcenter(v[(m + n - 1) % n].p, v[m].p, v[(m + 1) % n].p).expect("checked");
-                let ccw = (v[m].p - v[(m + n - 1) % n].p).perp_dot(v[(m + 1) % n].p - v[(m + n - 1) % n].p) > 0.0;
+                let c =
+                    circumcenter(v[(m + n - 1) % n].p, v[m].p, v[(m + 1) % n].p).expect("checked");
+                let ccw = (v[m].p - v[(m + n - 1) % n].p)
+                    .perp_dot(v[(m + 1) % n].p - v[(m + n - 1) % n].p)
+                    > 0.0;
                 (c, ccw)
             };
             if matches!(eff[ia], Eff::Through) {
@@ -487,8 +651,23 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
         }
     };
     let fillet_arc = |segs: &mut Vec<Seg>, i: usize| {
-        if let Eff::Fillet { t1, t2, center, radius, start, sweep } = eff[i] {
-            segs.push(Seg::Arc { from: t1, to: t2, center, radius, start, sweep });
+        if let Eff::Fillet {
+            t1,
+            t2,
+            center,
+            radius,
+            start,
+            sweep,
+        } = eff[i]
+        {
+            segs.push(Seg::Arc {
+                from: t1,
+                to: t2,
+                center,
+                radius,
+                start,
+                sweep,
+            });
         }
     };
 
@@ -508,11 +687,19 @@ pub fn path(v: &[Vertex], closed: bool) -> Path {
             fillet_arc(&mut segs, w[1]);
         }
     }
-    Path { start, segs, closed }
+    Path {
+        start,
+        segs,
+        closed,
+    }
 }
 
 fn arc_pieces(radius: f64, sweep: f64, tol: f64) -> usize {
-    let step = if tol >= radius { FRAC_PI_2 } else { (2.0 * (1.0 - tol / radius).acos()).min(FRAC_PI_2) };
+    let step = if tol >= radius {
+        FRAC_PI_2
+    } else {
+        (2.0 * (1.0 - tol / radius).acos()).min(FRAC_PI_2)
+    };
     ((sweep.abs() / step).ceil() as usize).clamp(1, MAX_PIECES)
 }
 
@@ -524,7 +711,14 @@ fn curve_pieces(second_diff: f64, factor: f64, tol: f64) -> usize {
 fn flatten_seg(out: &mut Vec<DVec2>, seg: &Seg, tol: f64) {
     match *seg {
         Seg::Line { to, .. } => out.push(to),
-        Seg::Arc { to, center, radius, start, sweep, .. } => {
+        Seg::Arc {
+            to,
+            center,
+            radius,
+            start,
+            sweep,
+            ..
+        } => {
             let k = arc_pieces(radius, sweep, tol);
             for i in 1..k {
                 out.push(center + DVec2::from_angle(start + sweep * i as f64 / k as f64) * radius);
@@ -541,12 +735,19 @@ fn flatten_seg(out: &mut Vec<DVec2>, seg: &Seg, tol: f64) {
             out.push(to);
         }
         Seg::Cubic { from, c1, c2, to } => {
-            let m = (from - 2.0 * c1 + c2).length().max((c1 - 2.0 * c2 + to).length());
+            let m = (from - 2.0 * c1 + c2)
+                .length()
+                .max((c1 - 2.0 * c2 + to).length());
             let k = curve_pieces(m, 0.75, tol);
             for i in 1..k {
                 let t = i as f64 / k as f64;
                 let s = 1.0 - t;
-                out.push(from * (s * s * s) + c1 * (3.0 * s * s * t) + c2 * (3.0 * s * t * t) + to * (t * t * t));
+                out.push(
+                    from * (s * s * s)
+                        + c1 * (3.0 * s * s * t)
+                        + c2 * (3.0 * s * t * t)
+                        + to * (t * t * t),
+                );
             }
             out.push(to);
         }
@@ -557,7 +758,11 @@ fn flatten_seg(out: &mut Vec<DVec2>, seg: &Seg, tol: f64) {
 /// between two neighbors. The ends of every segment are exact. A closed
 /// path does not repeat its first point at the end.
 pub fn flatten_path(path: &Path, tolerance: f64) -> Vec<DVec2> {
-    let tol = if tolerance.is_finite() && tolerance > 0.0 { tolerance } else { DEFAULT_TOLERANCE };
+    let tol = if tolerance.is_finite() && tolerance > 0.0 {
+        tolerance
+    } else {
+        DEFAULT_TOLERANCE
+    };
     let mut out = vec![path.start];
     for seg in &path.segs {
         flatten_seg(&mut out, seg, tol);
@@ -612,7 +817,13 @@ pub fn path_bounds(path: &Path) -> (DVec2, DVec2) {
         grow(&mut b, seg.to());
         match *seg {
             Seg::Line { .. } => {}
-            Seg::Arc { center, radius, start, sweep, .. } => {
+            Seg::Arc {
+                center,
+                radius,
+                start,
+                sweep,
+                ..
+            } => {
                 for k in 0..4 {
                     let angle = k as f64 * FRAC_PI_2;
                     let inside = if sweep >= 0.0 {
@@ -637,10 +848,20 @@ pub fn path_bounds(path: &Path) -> (DVec2, DVec2) {
             }
             Seg::Cubic { from, c1, c2, to } => {
                 for axis in 0..2 {
-                    let (d0, d1, d2) = (c1[axis] - from[axis], c2[axis] - c1[axis], to[axis] - c2[axis]);
+                    let (d0, d1, d2) = (
+                        c1[axis] - from[axis],
+                        c2[axis] - c1[axis],
+                        to[axis] - c2[axis],
+                    );
                     for t in roots_in_unit(d0 - 2.0 * d1 + d2, 2.0 * (d1 - d0), d0) {
                         let s = 1.0 - t;
-                        grow(&mut b, from * (s * s * s) + c1 * (3.0 * s * s * t) + c2 * (3.0 * s * t * t) + to * (t * t * t));
+                        grow(
+                            &mut b,
+                            from * (s * s * s)
+                                + c1 * (3.0 * s * s * t)
+                                + c2 * (3.0 * s * t * t)
+                                + to * (t * t * t),
+                        );
                     }
                 }
             }
@@ -652,9 +873,10 @@ pub fn path_bounds(path: &Path) -> (DVec2, DVec2) {
 /// Exact bounding box of the curve of the vertices.
 pub fn bounds(vertices: &[Vertex], closed: bool) -> (DVec2, DVec2) {
     if all_straight(vertices) {
-        return vertices.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), v| {
-            (lo.min(v.p), hi.max(v.p))
-        });
+        return vertices.iter().fold(
+            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(v.p), hi.max(v.p)),
+        );
     }
     path_bounds(&path(vertices, closed))
 }
@@ -676,9 +898,16 @@ pub fn path_area(path: &Path) -> f64 {
     for seg in &path.segs {
         twice += match *seg {
             Seg::Line { from, to } => from.perp_dot(to),
-            Seg::Arc { center, radius, start, sweep, .. } => {
+            Seg::Arc {
+                center,
+                radius,
+                start,
+                sweep,
+                ..
+            } => {
                 let (t0, t1) = (start, start + sweep);
-                radius * radius * sweep + radius * center.x * (t1.sin() - t0.sin()) - radius * center.y * (t1.cos() - t0.cos())
+                radius * radius * sweep + radius * center.x * (t1.sin() - t0.sin())
+                    - radius * center.y * (t1.cos() - t0.cos())
             }
             Seg::Quad { from, c, to } => NODES
                 .iter()
@@ -693,8 +922,13 @@ pub fn path_area(path: &Path) -> f64 {
                 .iter()
                 .map(|&(t, w)| {
                     let s = 1.0 - t;
-                    let p = from * (s * s * s) + c1 * (3.0 * s * s * t) + c2 * (3.0 * s * t * t) + to * (t * t * t);
-                    let d = (c1 - from) * (3.0 * s * s) + (c2 - c1) * (6.0 * s * t) + (to - c2) * (3.0 * t * t);
+                    let p = from * (s * s * s)
+                        + c1 * (3.0 * s * s * t)
+                        + c2 * (3.0 * s * t * t)
+                        + to * (t * t * t);
+                    let d = (c1 - from) * (3.0 * s * s)
+                        + (c2 - c1) * (6.0 * s * t)
+                        + (to - c2) * (3.0 * t * t);
                     w * p.perp_dot(d)
                 })
                 .sum(),
@@ -732,7 +966,11 @@ pub fn tangent_arc_vertices(existing: &[Vertex], end: DVec2) -> Option<[Vertex; 
     let ccw = s > 0.0;
     let a0 = (from - center).to_angle();
     let a1 = (end - center).to_angle();
-    let phi = if ccw { (a1 - a0).rem_euclid(TAU) } else { (a0 - a1).rem_euclid(TAU) };
+    let phi = if ccw {
+        (a1 - a0).rem_euclid(TAU)
+    } else {
+        (a0 - a1).rem_euclid(TAU)
+    };
     let mid_angle = if ccw { a0 + phi / 2.0 } else { a0 - phi / 2.0 };
     let m = center + DVec2::from_angle(mid_angle) * r;
     Some([Vertex::new(m, VertexKind::PointOnArc), Vertex::corner(end)])
@@ -747,7 +985,10 @@ mod tests {
     }
 
     fn square(s: f64, kind: VertexKind) -> Vec<Vertex> {
-        [v(0.0, 0.0), v(s, 0.0), v(s, s), v(0.0, s)].iter().map(|p| Vertex::new(*p, kind)).collect()
+        [v(0.0, 0.0), v(s, 0.0), v(s, s), v(0.0, s)]
+            .iter()
+            .map(|p| Vertex::new(*p, kind))
+            .collect()
     }
 
     #[test]
@@ -756,7 +997,10 @@ mod tests {
             let verts = square(s, VertexKind::Arc { radius: r });
             let expected = s * s - (4.0 - PI) * r * r;
             let got = area(&verts);
-            assert!((got - expected).abs() <= 1e-9 * expected, "{got} vs {expected}");
+            assert!(
+                (got - expected).abs() <= 1e-9 * expected,
+                "{got} vs {expected}"
+            );
         }
     }
 
@@ -777,7 +1021,13 @@ mod tests {
         let radii: Vec<f64> = p
             .segs
             .iter()
-            .filter_map(|s| if let Seg::Arc { radius, .. } = s { Some(*radius) } else { None })
+            .filter_map(|s| {
+                if let Seg::Arc { radius, .. } = s {
+                    Some(*radius)
+                } else {
+                    None
+                }
+            })
             .collect();
         assert_eq!(radii.len(), 4);
         for r in radii {
@@ -797,7 +1047,12 @@ mod tests {
         ];
         let p = path(&verts, false);
         // The tangent length is 10 (the whole short side), so the radius is 10.
-        let Seg::Arc { radius, from, to, .. } = p.segs[0] else { panic!("{p:?}") };
+        let Seg::Arc {
+            radius, from, to, ..
+        } = p.segs[0]
+        else {
+            panic!("{p:?}")
+        };
         assert!((radius - 10.0).abs() < 1e-9);
         assert!(from.distance(v(0.0, 0.0)) < 1e-9 && to.distance(v(10.0, 10.0)) < 1e-9);
     }
@@ -866,7 +1121,8 @@ mod tests {
                 for seg in &p.segs {
                     if let Seg::Arc { center, radius, .. } = seg {
                         let mid = (w[0] + w[1]) / 2.0;
-                        let on_arc = (w[0].distance(*center) - radius).abs() < 1e-9 && (w[1].distance(*center) - radius).abs() < 1e-9;
+                        let on_arc = (w[0].distance(*center) - radius).abs() < 1e-9
+                            && (w[1].distance(*center) - radius).abs() < 1e-9;
                         if on_arc {
                             assert!(radius - mid.distance(*center) <= tol + 1e-9, "tol {tol}");
                         }
@@ -877,8 +1133,14 @@ mod tests {
         // A smaller tolerance never gives fewer points.
         assert!(flatten_path(&p, 0.001).len() > flatten_path(&p, 1.0).len());
         // Bad tolerances fall back to the default.
-        assert_eq!(flatten_path(&p, 0.0).len(), flatten_path(&p, DEFAULT_TOLERANCE).len());
-        assert_eq!(flatten_path(&p, f64::NAN).len(), flatten_path(&p, DEFAULT_TOLERANCE).len());
+        assert_eq!(
+            flatten_path(&p, 0.0).len(),
+            flatten_path(&p, DEFAULT_TOLERANCE).len()
+        );
+        assert_eq!(
+            flatten_path(&p, f64::NAN).len(),
+            flatten_path(&p, DEFAULT_TOLERANCE).len()
+        );
     }
 
     #[test]
@@ -966,7 +1228,12 @@ mod tests {
         // Mixed kinds in a loop count as Bezier.
         let mut mixed = square(10.0, VertexKind::Cubic);
         mixed[0].kind = VertexKind::Bezier;
-        assert!(path(&mixed, true).segs.iter().all(|s| matches!(s, Seg::Quad { .. })));
+        assert!(
+            path(&mixed, true)
+                .segs
+                .iter()
+                .all(|s| matches!(s, Seg::Quad { .. }))
+        );
     }
 
     #[test]
@@ -995,7 +1262,10 @@ mod tests {
     fn serde_is_compatible_with_plain_points() {
         let old: Vec<Vertex> = serde_json::from_str("[[0,0],[1.5,2]]").unwrap();
         assert_eq!(old, corners(&[v(0.0, 0.0), v(1.5, 2.0)]));
-        assert_eq!(serde_json::to_string(&old).unwrap(), "[[0.0,0.0],[1.5,2.0]]");
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            "[[0.0,0.0],[1.5,2.0]]"
+        );
         let kinds = [
             VertexKind::Arc { radius: 12.5 },
             VertexKind::PointOnArc,
@@ -1009,7 +1279,10 @@ mod tests {
             assert_eq!(serde_json::from_str::<Vertex>(&text).unwrap(), x, "{text}");
         }
         let arc: Vertex = serde_json::from_str(r#"{"p":[1,2],"kind":"arc","radius":50}"#).unwrap();
-        assert_eq!(arc, Vertex::new(v(1.0, 2.0), VertexKind::Arc { radius: 50.0 }));
+        assert_eq!(
+            arc,
+            Vertex::new(v(1.0, 2.0), VertexKind::Arc { radius: 50.0 })
+        );
         assert!(serde_json::from_str::<Vertex>(r#"{"p":[1,2],"kind":"wavy"}"#).is_err());
         assert!(serde_json::from_str::<Vertex>(r#""x""#).is_err());
     }
@@ -1023,7 +1296,13 @@ mod tests {
         assert!(!Vertex::new(DVec2::ZERO, VertexKind::Bezier).is_straight());
         assert!(path(&[], true).segs.is_empty());
         assert!(path(&[Vertex::corner(v(1.0, 1.0))], false).segs.is_empty());
-        assert_eq!(path_area(&path(&[Vertex::corner(DVec2::ZERO), Vertex::corner(DVec2::X)], false)), 0.0);
+        assert_eq!(
+            path_area(&path(
+                &[Vertex::corner(DVec2::ZERO), Vertex::corner(DVec2::X)],
+                false
+            )),
+            0.0
+        );
     }
 
     #[test]
@@ -1037,7 +1316,10 @@ mod tests {
         let d = p.end_direction().unwrap();
         assert!(d.normalize().distance(v(0.0, 1.0)) < 1e-9);
         let svg = p.svg_d();
-        assert!(svg.starts_with("M 0 0 L 8 0 A 2 2 0 0 0 10 -2 L 10 -10"), "{svg}");
+        assert!(
+            svg.starts_with("M 0 0 L 8 0 A 2 2 0 0 0 10 -2 L 10 -10"),
+            "{svg}"
+        );
         let verts = vec![
             Vertex::corner(v(0.0, 0.0)),
             Vertex::new(v(10.0, 0.0), VertexKind::Arc { radius: 2.0 }),
@@ -1047,7 +1329,14 @@ mod tests {
         assert!(path(&verts, true).svg_d().contains("A 2 2 0 0 1"));
         assert!(path(&verts, true).svg_d().ends_with(" Z"));
         // End directions of curves.
-        let q = path(&[Vertex::corner(v(0.0, 0.0)), Vertex::new(v(0.0, 5.0), VertexKind::Bezier), Vertex::corner(v(5.0, 5.0))], false);
+        let q = path(
+            &[
+                Vertex::corner(v(0.0, 0.0)),
+                Vertex::new(v(0.0, 5.0), VertexKind::Bezier),
+                Vertex::corner(v(5.0, 5.0)),
+            ],
+            false,
+        );
         assert!(q.end_direction().unwrap().normalize().distance(v(1.0, 0.0)) < 1e-9);
         assert!(q.svg_d().contains(" Q "));
         let c = path(
@@ -1060,7 +1349,11 @@ mod tests {
             false,
         );
         assert!(c.end_direction().is_some());
-        assert!(path(&[Vertex::corner(DVec2::ZERO)], false).end_direction().is_none());
+        assert!(
+            path(&[Vertex::corner(DVec2::ZERO)], false)
+                .end_direction()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1072,7 +1365,9 @@ mod tests {
         let p = path(&all, false);
         // A circle of radius 10 centered at (10, 10): tangent to the line at (10, 0).
         for s in &p.segs[1..] {
-            let Seg::Arc { center, radius, .. } = s else { panic!("{s:?}") };
+            let Seg::Arc { center, radius, .. } = s else {
+                panic!("{s:?}")
+            };
             assert!(center.distance(v(10.0, 10.0)) < 1e-9 && (radius - 10.0).abs() < 1e-9);
         }
         assert_eq!(p.segs.last().unwrap().to(), v(20.0, 10.0));
@@ -1111,7 +1406,10 @@ mod tests {
         for y in [1e-3, 1e-2, 1.0] {
             let mut w = verts.clone();
             w[1].p.y = y;
-            assert!(area(&w).is_finite() && !path(&w, true).svg_d().contains("NaN"), "{y}");
+            assert!(
+                area(&w).is_finite() && !path(&w, true).svg_d().contains("NaN"),
+                "{y}"
+            );
         }
     }
 
@@ -1126,17 +1424,32 @@ mod tests {
             ]
         };
         let radii = |verts: &[Vertex]| -> Vec<f64> {
-            let mut r: Vec<f64> =
-                path(verts, true).segs.iter().filter_map(|s| if let Seg::Arc { radius, .. } = s { Some(*radius) } else { None }).collect();
+            let mut r: Vec<f64> = path(verts, true)
+                .segs
+                .iter()
+                .filter_map(|s| {
+                    if let Seg::Arc { radius, .. } = s {
+                        Some(*radius)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             r.sort_by(f64::total_cmp);
             r
         };
         // 90 + 5 fit on 100: both keep their radius.
         let r = radii(&rect(90.0, 5.0));
-        assert!((r[1] - 90.0).abs() < 1e-9 && (r[0] - 5.0).abs() < 1e-9, "{r:?}");
+        assert!(
+            (r[1] - 90.0).abs() < 1e-9 && (r[0] - 5.0).abs() < 1e-9,
+            "{r:?}"
+        );
         // 90 + 30 do not fit: both are scaled by 100/120.
         let r = radii(&rect(90.0, 30.0));
-        assert!((r[1] - 75.0).abs() < 1e-9 && (r[0] - 25.0).abs() < 1e-9, "{r:?}");
+        assert!(
+            (r[1] - 75.0).abs() < 1e-9 && (r[0] - 25.0).abs() < 1e-9,
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -1146,12 +1459,23 @@ mod tests {
         assert!(lo.distance(v(0.0, 0.0)) < 1e-9 && hi.distance(v(100.0, 100.0)) < 1e-9);
         // Point on arc: the top of the circle is not a vertex.
         let b = bounds(
-            &[Vertex::corner(v(-10.0, 5.0)), Vertex::new(v(0.0, 15.0), VertexKind::PointOnArc), Vertex::corner(v(10.0, 5.0))],
+            &[
+                Vertex::corner(v(-10.0, 5.0)),
+                Vertex::new(v(0.0, 15.0), VertexKind::PointOnArc),
+                Vertex::corner(v(10.0, 5.0)),
+            ],
             false,
         );
         assert!((b.1.y - 15.0).abs() < 1e-9 || b.1.y > 15.0 - 1e-9);
         // The arc with the clockwise sweep through the top is bounded by the circle.
-        let quad = bounds(&[Vertex::corner(v(0.0, 0.0)), Vertex::new(v(5.0, 10.0), VertexKind::Bezier), Vertex::corner(v(10.0, 0.0))], false);
+        let quad = bounds(
+            &[
+                Vertex::corner(v(0.0, 0.0)),
+                Vertex::new(v(5.0, 10.0), VertexKind::Bezier),
+                Vertex::corner(v(10.0, 0.0)),
+            ],
+            false,
+        );
         assert!((quad.1.y - 5.0).abs() < 1e-12 && quad.0.y == 0.0);
         // A cubic bump stays within its exact extremes.
         let verts = [
@@ -1163,12 +1487,26 @@ mod tests {
         let b = bounds(&verts, false);
         let flat = flatten(&verts, false, 1e-4);
         let top = flat.iter().map(|q| q.y).fold(f64::MIN, f64::max);
-        assert!(b.1.y >= top - 1e-12 && b.1.y - top < 1e-3, "{} {top}", b.1.y);
+        assert!(
+            b.1.y >= top - 1e-12 && b.1.y - top < 1e-3,
+            "{} {top}",
+            b.1.y
+        );
         // Empty and straight inputs.
         assert_eq!(bounds(&[], false).0, DVec2::splat(f64::INFINITY));
-        assert_eq!(bounds(&corners(&[v(1.0, 2.0), v(3.0, -1.0)]), false), (v(1.0, -1.0), v(3.0, 2.0)));
+        assert_eq!(
+            bounds(&corners(&[v(1.0, 2.0), v(3.0, -1.0)]), false),
+            (v(1.0, -1.0), v(3.0, 2.0))
+        );
         // A counterclockwise arc that crosses the right extreme.
-        let ccw = bounds(&[Vertex::corner(v(0.0, -10.0)), Vertex::new(v(10.0, 0.0), VertexKind::PointOnArc), Vertex::corner(v(0.0, 10.0))], false);
+        let ccw = bounds(
+            &[
+                Vertex::corner(v(0.0, -10.0)),
+                Vertex::new(v(10.0, 0.0), VertexKind::PointOnArc),
+                Vertex::corner(v(0.0, 10.0)),
+            ],
+            false,
+        );
         assert!((ccw.1.x - 10.0).abs() < 1e-9);
     }
 

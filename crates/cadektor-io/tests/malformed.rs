@@ -2,7 +2,7 @@
 
 use cadektor_core::command::Editor;
 use cadektor_core::model::Document;
-use cadektor_io::{crs::Crs, importer, Context, Format, ImportOptions, Source};
+use cadektor_io::{Context, Format, ImportOptions, Source, crs::Crs, importer};
 use proptest::prelude::*;
 
 const DXF: &[u8] = include_bytes!("fixtures/site.dxf");
@@ -14,7 +14,13 @@ fn shapefile() -> Vec<u8> {
     shp[..4].copy_from_slice(&9994i32.to_be_bytes());
     shp[28..32].copy_from_slice(&1000i32.to_le_bytes());
     shp[32..36].copy_from_slice(&5i32.to_le_bytes());
-    let ring = [(0.0f64, 0.0f64), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0)];
+    let ring = [
+        (0.0f64, 0.0f64),
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 0.0),
+        (0.0, 0.0),
+    ];
     let mut s = 5i32.to_le_bytes().to_vec();
     s.extend([0u8; 32]);
     s.extend(1i32.to_le_bytes());
@@ -31,12 +37,22 @@ fn shapefile() -> Vec<u8> {
 }
 
 fn try_import(format: Format, data: Vec<u8>) {
-    let src = Source { name: "fuzz".into(), data, extra: Default::default() };
+    let src = Source {
+        name: "fuzz".into(),
+        data,
+        extra: Default::default(),
+    };
     let doc = Document::default();
     if let Ok(r) = importer(format).import(&src, &Context::of(&doc), &ImportOptions::default()) {
         let mut ed = Editor::new(doc);
-        ed.execute(&r.command).expect("a successful import must run");
-        assert!(ed.doc().objects.values().all(|o| o.is_finite() && o.shape.is_in_range()));
+        ed.execute(&r.command)
+            .expect("a successful import must run");
+        assert!(
+            ed.doc()
+                .objects
+                .values()
+                .all(|o| o.is_finite() && o.shape.is_in_range())
+        );
         if ed.can_undo() {
             assert!(ed.undo());
         }
@@ -100,9 +116,23 @@ proptest! {
 
 #[test]
 fn valid_fixtures_import() {
-    for (f, d) in [(Format::Dxf, DXF.to_vec()), (Format::GeoJson, GEOJSON.to_vec()), (Format::Shapefile, shapefile())] {
-        let src = Source { name: "x".into(), data: d, extra: Default::default() };
-        let r = importer(f).import(&src, &Context::of(&Document::default()), &ImportOptions::default()).unwrap();
+    for (f, d) in [
+        (Format::Dxf, DXF.to_vec()),
+        (Format::GeoJson, GEOJSON.to_vec()),
+        (Format::Shapefile, shapefile()),
+    ] {
+        let src = Source {
+            name: "x".into(),
+            data: d,
+            extra: Default::default(),
+        };
+        let r = importer(f)
+            .import(
+                &src,
+                &Context::of(&Document::default()),
+                &ImportOptions::default(),
+            )
+            .unwrap();
         assert!(r.report.total() > 0);
     }
 }

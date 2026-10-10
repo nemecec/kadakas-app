@@ -33,7 +33,13 @@ pub fn source_data(shape: &Shape) -> Option<SourceData> {
     match shape {
         Shape::SiteModel { points, lines, .. } => Some(SourceData {
             points: points.clone(),
-            lines: lines.iter().map(|l| SourceLine { points: l.points.clone(), closed: l.closed }).collect(),
+            lines: lines
+                .iter()
+                .map(|l| SourceLine {
+                    points: l.points.clone(),
+                    closed: l.closed,
+                })
+                .collect(),
         }),
         _ => None,
     }
@@ -42,12 +48,23 @@ pub fn source_data(shape: &Shape) -> Option<SourceData> {
 /// A modifier shape as plain geometry.
 pub fn modifier_of(shape: &Shape) -> Option<Modifier> {
     match shape {
-        Shape::SiteModifier { modifier: ModifierKind::Pad { elevation, slope }, boundary } => Some(Modifier::Pad {
+        Shape::SiteModifier {
+            modifier: ModifierKind::Pad { elevation, slope },
+            boundary,
+        } => Some(Modifier::Pad {
             boundary: boundary_points(boundary),
             elevation: *elevation,
-            slope: slope.map(|s| PadSlope { direction: s.direction, percent: s.percent }),
+            slope: slope.map(|s| PadSlope {
+                direction: s.direction,
+                percent: s.percent,
+            }),
         }),
-        Shape::SiteModifier { modifier: ModifierKind::GradeLimit, boundary } => Some(Modifier::GradeLimit { boundary: boundary_points(boundary) }),
+        Shape::SiteModifier {
+            modifier: ModifierKind::GradeLimit,
+            boundary,
+        } => Some(Modifier::GradeLimit {
+            boundary: boundary_points(boundary),
+        }),
         _ => None,
     }
 }
@@ -55,7 +72,9 @@ pub fn modifier_of(shape: &Shape) -> Option<Modifier> {
 /// The modifiers that act on a site model: visible modifiers (and hardscapes that act as pads) on the same layer whose box touches
 /// the box of the site model. Returns their IDs in document order.
 pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)> {
-    let Some(obj) = doc.object(site) else { return Vec::new() };
+    let Some(obj) = doc.object(site) else {
+        return Vec::new();
+    };
     let (lo, hi) = obj.shape.bounds();
     doc.objects
         .values()
@@ -64,7 +83,11 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
             let (a, b) = o.shape.bounds();
             let touches = a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y;
             let mods: Vec<Modifier> = if touches {
-                modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o)).into_iter().chain(crate::grading::wall::pads_of(doc, o)).collect()
+                modifier_of(&o.shape)
+                    .or_else(|| crate::terrain::pad_of(doc, o))
+                    .into_iter()
+                    .chain(crate::grading::wall::pads_of(doc, o))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -75,7 +98,12 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
 
 /// The contour settings of a site model.
 pub fn contour_spec(s: &SiteSettings) -> ContourSpec {
-    ContourSpec { minor_interval: s.minor_interval, major_interval: s.major_interval, datum: s.datum, smooth: s.smooth_contours }
+    ContourSpec {
+        minor_interval: s.minor_interval,
+        major_interval: s.major_interval,
+        datum: s.datum,
+        smooth: s.smooth_contours,
+    }
 }
 
 /// A site model with its derived surfaces.
@@ -101,7 +129,9 @@ impl SiteResult {
     pub fn compute(doc: &Document, id: ObjectId) -> Result<SiteResult, SiteError> {
         let obj = doc.object(id).ok_or(SiteError::NoObject(id))?;
         let src = source_data(&obj.shape).ok_or(SiteError::NotASiteModel(id))?;
-        let Shape::SiteModel { settings, .. } = &obj.shape else { unreachable!("checked by source_data") };
+        let Shape::SiteModel { settings, .. } = &obj.shape else {
+            unreachable!("checked by source_data")
+        };
         let mut existing = Tin::build(&src)?;
         if !settings.crop.is_empty() {
             existing = crop(&existing, &settings.crop)?;
@@ -159,14 +189,19 @@ impl SiteResult {
             Surface::Proposed => &self.proposed_contours,
         };
         let tin = self.surface(which);
-        cell.get_or_init(|| contours(tin, &contour_spec(&self.settings))).as_deref().map_err(|e| e.clone())
+        cell.get_or_init(|| contours(tin, &contour_spec(&self.settings)))
+            .as_deref()
+            .map_err(|e| e.clone())
     }
 
     /// Cut and fill of the proposed surface against the existing one.
     pub fn cut_fill(&self) -> CutFill {
         *self.volumes.get_or_init(|| match &self.proposed {
             Some(p) => cut_fill(&self.existing, p),
-            None => CutFill { area: self.existing.area_xy(), ..CutFill::default() },
+            None => CutFill {
+                area: self.existing.area_xy(),
+                ..CutFill::default()
+            },
         })
     }
 }
@@ -179,7 +214,11 @@ pub fn elevation_at(site: &SiteResult, xy: DVec2) -> Option<f64> {
 /// Puts a polyline on the proposed surface of a site model, with extra points where it crosses
 /// triangle edges. Curved vertices are flattened first. A closed line does not repeat its first
 /// point. Fails with `SiteError::Outside` if a point is off the model.
-pub fn drape_polyline(site: &SiteResult, vertices: &[Vertex], closed: bool) -> Result<Vec<DVec3>, SiteError> {
+pub fn drape_polyline(
+    site: &SiteResult,
+    vertices: &[Vertex],
+    closed: bool,
+) -> Result<Vec<DVec3>, SiteError> {
     let flat = curve::flatten(vertices, closed, 2.0);
     drape(site.surface(Surface::Proposed), &flat, closed)
 }
@@ -188,9 +227,20 @@ pub fn drape_polyline(site: &SiteResult, vertices: &[Vertex], closed: bool) -> R
 /// Two documents with the same hashes give the same surfaces. `None` if `id` is not a site model.
 pub fn fingerprints(doc: &Document, id: ObjectId) -> Option<(u64, u64)> {
     let obj = doc.object(id)?;
-    let Shape::SiteModel { points, lines, settings } = &obj.shape else { return None };
+    let Shape::SiteModel {
+        points,
+        lines,
+        settings,
+    } = &obj.shape
+    else {
+        return None;
+    };
     let mut h = DefaultHasher::new();
-    let v3 = |h: &mut DefaultHasher, p: &DVec3| [p.x, p.y, p.z].iter().for_each(|f| (f + 0.0).to_bits().hash(h));
+    let v3 = |h: &mut DefaultHasher, p: &DVec3| {
+        [p.x, p.y, p.z]
+            .iter()
+            .for_each(|f| (f + 0.0).to_bits().hash(h))
+    };
     points.iter().for_each(|p| v3(&mut h, p));
     for l in lines {
         l.closed.hash(&mut h);
@@ -230,7 +280,12 @@ impl SiteCache {
     /// The result for site model `id` in `doc`, which must be the document of `revision`.
     /// A site model with `auto_update` off keeps its old result when the geometry changes,
     /// until `update` is called. Use `is_stale` to ask.
-    pub fn get(&self, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
+    pub fn get(
+        &self,
+        revision: u64,
+        doc: &Document,
+        id: ObjectId,
+    ) -> Result<Arc<SiteResult>, SiteError> {
         let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = c.sites.get_mut(&id) {
             if e.revision == revision {
@@ -247,15 +302,31 @@ impl SiteCache {
         Self::build(&mut c, revision, doc, id)
     }
 
-    fn build(c: &mut CacheInner, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
+    fn build(
+        c: &mut CacheInner,
+        revision: u64,
+        doc: &Document,
+        id: ObjectId,
+    ) -> Result<Arc<SiteResult>, SiteError> {
         let s = Arc::new(SiteResult::compute(doc, id)?);
-        c.sites.insert(id, Entry { result: s.clone(), revision });
+        c.sites.insert(
+            id,
+            Entry {
+                result: s.clone(),
+                revision,
+            },
+        );
         c.builds += 1;
         Ok(s)
     }
 
     /// Rebuilds site model `id` now ("Update Site Model").
-    pub fn update(&self, revision: u64, doc: &Document, id: ObjectId) -> Result<Arc<SiteResult>, SiteError> {
+    pub fn update(
+        &self,
+        revision: u64,
+        doc: &Document,
+        id: ObjectId,
+    ) -> Result<Arc<SiteResult>, SiteError> {
         let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Self::build(&mut c, revision, doc, id)
     }
@@ -265,7 +336,9 @@ impl SiteCache {
     pub fn is_stale(&self, doc: &Document, id: ObjectId) -> bool {
         let c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match (c.sites.get(&id), fingerprints(doc, id)) {
-            (Some(e), Some((geometry, _))) => !auto_update(doc, id) && e.result.geometry_hash != geometry,
+            (Some(e), Some((geometry, _))) => {
+                !auto_update(doc, id) && e.result.geometry_hash != geometry
+            }
             _ => false,
         }
     }
@@ -287,7 +360,14 @@ pub(crate) mod tests {
     use cadektor_core::model::Attributes;
 
     pub fn add(ed: &mut Editor, shape: Shape) -> ObjectId {
-        let out = ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let out = ed
+            .execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         ObjectId(out.created[0])
     }
 
@@ -299,11 +379,20 @@ pub(crate) mod tests {
                 points.push(DVec3::new(x, y, f(x, y)));
             }
         }
-        Shape::SiteModel { points, lines: vec![], settings: SiteSettings::default() }
+        Shape::SiteModel {
+            points,
+            lines: vec![],
+            settings: SiteSettings::default(),
+        }
     }
 
     fn sq(lo: f64, hi: f64) -> Vec<Vertex> {
-        curve::corners(&[DVec2::new(lo, lo), DVec2::new(hi, lo), DVec2::new(hi, hi), DVec2::new(lo, hi)])
+        curve::corners(&[
+            DVec2::new(lo, lo),
+            DVec2::new(hi, lo),
+            DVec2::new(hi, hi),
+            DVec2::new(lo, hi),
+        ])
     }
 
     #[test]
@@ -314,12 +403,20 @@ pub(crate) mod tests {
         assert!(r.proposed.is_none() && r.modifiers.is_empty());
         assert!((r.elevation_at(DVec2::new(2500.0, 100.0)).unwrap() - 250.0).abs() < 1e-9);
         assert_eq!(r.elevation_at(DVec2::new(-5.0, 0.0)), None);
-        assert!(r.slope_at(Surface::Existing, DVec2::new(10.0, 10.0)).unwrap().slope > 0.099);
+        assert!(
+            r.slope_at(Surface::Existing, DVec2::new(10.0, 10.0))
+                .unwrap()
+                .slope
+                > 0.099
+        );
         let c = r.cut_fill();
         assert_eq!((c.cut, c.fill), (0.0, 0.0));
         assert!((c.area - 16e6).abs() < 1e-3);
         // Contours of the proposed surface are those of the existing one.
-        assert_eq!(r.contours(Surface::Proposed).unwrap().len(), r.contours(Surface::Existing).unwrap().len());
+        assert_eq!(
+            r.contours(Surface::Proposed).unwrap().len(),
+            r.contours(Surface::Existing).unwrap().len()
+        );
         assert_eq!(elevation_at(&r, DVec2::new(0.0, 0.0)), Some(0.0));
     }
 
@@ -327,29 +424,71 @@ pub(crate) mod tests {
     fn modifiers_on_the_layer_change_the_proposed_surface() {
         let mut ed = Editor::default();
         let id = add(&mut ed, grid_site(9, 1000.0, |_, _| 0.0));
-        let pad = add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 500.0, slope: None }, boundary: sq(2000.0, 4000.0) });
+        let pad = add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 500.0,
+                    slope: None,
+                },
+                boundary: sq(2000.0, 4000.0),
+            },
+        );
         let r = SiteResult::compute(ed.doc(), id).unwrap();
         assert_eq!(r.modifiers, vec![pad]);
         assert!((r.elevation_at(DVec2::new(3000.0, 3000.0)).unwrap() - 500.0).abs() < 1e-9);
-        assert!((r.surface(Surface::Existing).elevation_at(DVec2::new(3000.0, 3000.0)).unwrap()).abs() < 1e-9);
+        assert!(
+            (r.surface(Surface::Existing)
+                .elevation_at(DVec2::new(3000.0, 3000.0))
+                .unwrap())
+            .abs()
+                < 1e-9
+        );
         let c = r.cut_fill();
-        assert!(c.fill > 2000.0 * 2000.0 * 500.0 * 0.99 && c.cut.abs() < 1e-6, "{c:?}");
+        assert!(
+            c.fill > 2000.0 * 2000.0 * 500.0 * 0.99 && c.cut.abs() < 1e-6,
+            "{c:?}"
+        );
         assert_eq!(r.cut_fill(), c);
         let _ = r.contours(Surface::Proposed).unwrap();
         assert!(r.contours(Surface::Proposed).is_ok());
         // A modifier on another layer, or far away, does nothing.
-        ed.execute(&Command::AddLayer { name: "Other".into(), elevation: 0.0, scale: None, kind: None }).unwrap();
+        ed.execute(&Command::AddLayer {
+            name: "Other".into(),
+            elevation: 0.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap();
         let other = ed.doc().layers.last().unwrap().id;
         ed.execute(&Command::AddObject {
-            shape: Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 9.0, slope: None }, boundary: sq(0.0, 1000.0) },
+            shape: Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 9.0,
+                    slope: None,
+                },
+                boundary: sq(0.0, 1000.0),
+            },
             layer: Some(other),
             class: None,
             attrs: Attributes::default(),
         })
         .unwrap();
-        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::GradeLimit, boundary: sq(1e6, 1e6 + 10.0) });
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::GradeLimit,
+                boundary: sq(1e6, 1e6 + 10.0),
+            },
+        );
         assert_eq!(modifiers_for(ed.doc(), id).len(), 1);
-        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::GradeLimit, boundary: sq(0.0, 9000.0) });
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::GradeLimit,
+                boundary: sq(0.0, 9000.0),
+            },
+        );
         assert_eq!(modifiers_for(ed.doc(), id).len(), 2);
         assert!(modifiers_for(ed.doc(), ObjectId(9999)).is_empty());
     }
@@ -357,13 +496,47 @@ pub(crate) mod tests {
     #[test]
     fn errors_for_missing_and_wrong_objects() {
         let mut ed = Editor::default();
-        let circle = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
-        assert!(matches!(SiteResult::compute(ed.doc(), circle), Err(SiteError::NotASiteModel(_))));
-        assert!(matches!(SiteResult::compute(ed.doc(), ObjectId(77)), Err(SiteError::NoObject(_))));
-        let few = add(&mut ed, Shape::SiteModel { points: vec![DVec3::ZERO], lines: vec![], settings: SiteSettings::default() });
-        assert!(matches!(SiteResult::compute(ed.doc(), few), Err(SiteError::NoSurface)));
-        assert!(source_data(&Shape::Circle { center: DVec2::ZERO, radius: 1.0 }).is_none());
-        assert!(modifier_of(&Shape::Circle { center: DVec2::ZERO, radius: 1.0 }).is_none());
+        let circle = add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+        );
+        assert!(matches!(
+            SiteResult::compute(ed.doc(), circle),
+            Err(SiteError::NotASiteModel(_))
+        ));
+        assert!(matches!(
+            SiteResult::compute(ed.doc(), ObjectId(77)),
+            Err(SiteError::NoObject(_))
+        ));
+        let few = add(
+            &mut ed,
+            Shape::SiteModel {
+                points: vec![DVec3::ZERO],
+                lines: vec![],
+                settings: SiteSettings::default(),
+            },
+        );
+        assert!(matches!(
+            SiteResult::compute(ed.doc(), few),
+            Err(SiteError::NoSurface)
+        ));
+        assert!(
+            source_data(&Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0
+            })
+            .is_none()
+        );
+        assert!(
+            modifier_of(&Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -376,12 +549,27 @@ pub(crate) mod tests {
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(cache.builds(), 1);
         // An edit of something else does not rebuild the terrain.
-        add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
+        add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+        );
         let c = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(Arc::ptr_eq(&a, &c));
         assert_eq!(cache.builds(), 1);
         // An edit of a pad does.
-        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 9.0, slope: None }, boundary: sq(500.0, 1500.0) });
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 9.0,
+                    slope: None,
+                },
+                boundary: sq(500.0, 1500.0),
+            },
+        );
         let d = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(!Arc::ptr_eq(&a, &d));
         assert_eq!(cache.builds(), 2);
@@ -391,13 +579,36 @@ pub(crate) mod tests {
     #[test]
     fn site_without_auto_update_goes_stale_until_updated() {
         let mut ed = Editor::default();
-        let Shape::SiteModel { points, lines, mut settings } = grid_site(5, 1000.0, |_, _| 0.0) else { unreachable!() };
+        let Shape::SiteModel {
+            points,
+            lines,
+            mut settings,
+        } = grid_site(5, 1000.0, |_, _| 0.0)
+        else {
+            unreachable!()
+        };
         settings.auto_update = false;
-        let id = add(&mut ed, Shape::SiteModel { points, lines, settings });
+        let id = add(
+            &mut ed,
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            },
+        );
         let cache = SiteCache::default();
         let a = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(!cache.is_stale(ed.doc(), id));
-        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 50.0, slope: None }, boundary: sq(1000.0, 2000.0) });
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 50.0,
+                    slope: None,
+                },
+                boundary: sq(1000.0, 2000.0),
+            },
+        );
         assert!(cache.is_stale(ed.doc(), id));
         let b = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(Arc::ptr_eq(&a, &b) && b.proposed.is_none());
@@ -409,9 +620,30 @@ pub(crate) mod tests {
     #[test]
     fn crop_setting_cuts_the_site_model() {
         let mut ed = Editor::default();
-        let Shape::SiteModel { points, lines, mut settings } = grid_site(5, 1000.0, |_, _| 0.0) else { unreachable!() };
-        settings.crop = vec![DVec2::new(0.0, 0.0), DVec2::new(4000.0, 0.0), DVec2::new(4000.0, 1000.0), DVec2::new(1000.0, 1000.0), DVec2::new(1000.0, 4000.0), DVec2::new(0.0, 4000.0)];
-        let id = add(&mut ed, Shape::SiteModel { points, lines, settings });
+        let Shape::SiteModel {
+            points,
+            lines,
+            mut settings,
+        } = grid_site(5, 1000.0, |_, _| 0.0)
+        else {
+            unreachable!()
+        };
+        settings.crop = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4000.0, 0.0),
+            DVec2::new(4000.0, 1000.0),
+            DVec2::new(1000.0, 1000.0),
+            DVec2::new(1000.0, 4000.0),
+            DVec2::new(0.0, 4000.0),
+        ];
+        let id = add(
+            &mut ed,
+            Shape::SiteModel {
+                points,
+                lines,
+                settings,
+            },
+        );
         let r = SiteResult::compute(ed.doc(), id).unwrap();
         assert!((r.existing.area_xy() - 7e6).abs() < 1e-3);
         assert!(r.elevation_at(DVec2::new(3000.0, 3000.0)).is_none());
@@ -425,6 +657,9 @@ pub(crate) mod tests {
         let line = drape_polyline(&r, &sq(500.0, 3500.0), true).unwrap();
         assert!(line.len() >= 4);
         assert!(line.iter().all(|p| (p.z - p.x).abs() < 1e-9));
-        assert!(matches!(drape_polyline(&r, &sq(500.0, 9000.0), true), Err(SiteError::Outside(_))));
+        assert!(matches!(
+            drape_polyline(&r, &sq(500.0, 9000.0), true),
+            Err(SiteError::Outside(_))
+        ));
     }
 }

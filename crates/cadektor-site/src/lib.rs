@@ -7,8 +7,8 @@
 //! models through the extension hooks of core.
 
 pub mod contour;
-pub mod draw;
 pub mod drape;
+pub mod draw;
 pub mod grading;
 pub mod grid;
 pub mod model;
@@ -33,7 +33,9 @@ use cadektor_core::model::ObjectId;
 pub enum SiteError {
     #[error("site model numbers must be finite")]
     NotFinite,
-    #[error("the source data does not make a surface: give at least 3 points that are not on one line")]
+    #[error(
+        "the source data does not make a surface: give at least 3 points that are not on one line"
+    )]
     NoSurface,
     #[error("a triangle refers to a vertex that does not exist")]
     BadTriangle,

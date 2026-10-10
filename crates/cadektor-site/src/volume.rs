@@ -76,7 +76,11 @@ pub fn split_integral(d: [f64; 3], area: f64) -> (f64, f64) {
     let dl = d[lone];
     let frac = (dl / (dl - o1)) * (dl / (dl - o2));
     let part = area * frac * dl.abs() / 3.0;
-    if dl > 0.0 { (part, part - total) } else { (part + total, part) }
+    if dl > 0.0 {
+        (part, part - total)
+    } else {
+        (part + total, part)
+    }
 }
 
 /// Cut and fill of `proposed` against `existing`, over the area where both exist.
@@ -89,7 +93,9 @@ pub fn cut_fill(existing: &Tin, proposed: &Tin) -> CutFill {
 pub fn cut_fill_in(existing: &Tin, proposed: &Tin, region: Option<&[DVec2]>) -> CutFill {
     let mut region: Option<Vec<DVec2>> = region.map(<[DVec2]>::to_vec);
     if let Some(r) = region.as_mut() {
-        let twice: f64 = (0..r.len()).map(|i| r[i].perp_dot(r[(i + 1) % r.len()])).sum();
+        let twice: f64 = (0..r.len())
+            .map(|i| r[i].perp_dot(r[(i + 1) % r.len()]))
+            .sum();
         if twice < 0.0 {
             r.reverse();
         }
@@ -121,7 +127,10 @@ pub fn cut_fill_in(existing: &Tin, proposed: &Tin, region: Option<&[DVec2]>) -> 
             if poly.len() < 3 {
                 continue;
             }
-            let d: Vec<f64> = poly.iter().map(|p| plane_z(&pt, *p) - plane_z(&et, *p)).collect();
+            let d: Vec<f64> = poly
+                .iter()
+                .map(|p| plane_z(&pt, *p) - plane_z(&et, *p))
+                .collect();
             for k in 1..poly.len() - 1 {
                 let area = (poly[k] - poly[0]).perp_dot(poly[k + 1] - poly[0]) / 2.0;
                 if area <= 0.0 {
@@ -150,7 +159,11 @@ mod tests {
                 pts.push(DVec3::new(x, y, f(x, y)));
             }
         }
-        Tin::build(&SourceData { points: pts, lines: vec![] }).unwrap()
+        Tin::build(&SourceData {
+            points: pts,
+            lines: vec![],
+        })
+        .unwrap()
     }
 
     #[test]
@@ -202,7 +215,11 @@ mod tests {
         for (x, y) in [(50.0, 0.0), (150.0, 0.0), (150.0, 100.0), (50.0, 100.0)] {
             pts.push(DVec3::new(x, y, 1.0));
         }
-        let proposed = Tin::build(&SourceData { points: pts, lines: vec![] }).unwrap();
+        let proposed = Tin::build(&SourceData {
+            points: pts,
+            lines: vec![],
+        })
+        .unwrap();
         let r = cut_fill(&existing, &proposed);
         assert!((r.area - 5000.0).abs() < 1e-6);
         assert!((r.fill - 5000.0).abs() < 1e-6);

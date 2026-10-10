@@ -39,12 +39,20 @@ impl CellRef {
         let s = s.trim();
         let letters = s.bytes().take_while(u8::is_ascii_alphabetic).count();
         let (l, d) = s.split_at(letters);
-        if l.is_empty() || l.len() > 3 || d.is_empty() || d.len() > 6 || !d.bytes().all(|b| b.is_ascii_digit()) {
+        if l.is_empty()
+            || l.len() > 3
+            || d.is_empty()
+            || d.len() > 6
+            || !d.bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
-        let col = l.bytes().fold(0u32, |acc, b| acc * 26 + u32::from(b.to_ascii_uppercase() - b'A') + 1);
+        let col = l.bytes().fold(0u32, |acc, b| {
+            acc * 26 + u32::from(b.to_ascii_uppercase() - b'A') + 1
+        });
         let row: u32 = d.parse().ok()?;
-        ((1..=MAX_COL).contains(&col) && (1..=MAX_ROW).contains(&row)).then_some(CellRef { row, col })
+        ((1..=MAX_COL).contains(&col) && (1..=MAX_ROW).contains(&row))
+            .then_some(CellRef { row, col })
     }
 
     /// The column letters for a column number, for example 28 gives `AB`.
@@ -187,14 +195,20 @@ fn ident_part(c: char) -> bool {
 fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
     let chars: Vec<char> = src.chars().collect();
     if chars.len() > MAX_LEN {
-        return Err(ParseError { message: format!("the formula is longer than {MAX_LEN} characters"), at: MAX_LEN });
+        return Err(ParseError {
+            message: format!("the formula is longer than {MAX_LEN} characters"),
+            at: MAX_LEN,
+        });
     }
     let mut out: Vec<(Tok, usize)> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         let start = i;
-        let err = |m: &str, at: usize| ParseError { message: m.to_string(), at };
+        let err = |m: &str, at: usize| ParseError {
+            message: m.to_string(),
+            at,
+        };
         if c.is_whitespace() {
             i += 1;
             continue;
@@ -220,10 +234,21 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
                     }
                 }
             }
-            if c == '"' { Tok::Str(s) } else { Tok::Quoted(s) }
-        } else if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit) && !matches!(out.last(), Some((Tok::Ident(_) | Tok::Quoted(_), _)))) {
+            if c == '"' {
+                Tok::Str(s)
+            } else {
+                Tok::Quoted(s)
+            }
+        } else if c.is_ascii_digit()
+            || (c == '.'
+                && chars.get(i + 1).is_some_and(char::is_ascii_digit)
+                && !matches!(out.last(), Some((Tok::Ident(_) | Tok::Quoted(_), _))))
+        {
             let mut j = i;
-            while chars.get(j).is_some_and(|d| d.is_ascii_digit() || *d == '.') {
+            while chars
+                .get(j)
+                .is_some_and(|d| d.is_ascii_digit() || *d == '.')
+            {
                 j += 1;
             }
             if matches!(chars.get(j), Some('e' | 'E')) {
@@ -244,10 +269,13 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
                 Ok(n) if n.is_finite() => Tok::Num(n),
                 _ => return Err(err("this number cannot be read", start)),
             }
-        } else if ident_start(c) || (c == '$' && chars.get(i + 1).is_some_and(|d| ident_start(*d))) {
+        } else if ident_start(c) || (c == '$' && chars.get(i + 1).is_some_and(|d| ident_start(*d)))
+        {
             let mut j = i;
             // A '$' marks an absolute reference such as $A$1. It is read and dropped.
-            while chars.get(j).is_some_and(|d| ident_part(*d) || (*d == '$' && chars.get(j + 1).is_some_and(|n| ident_part(*n)))) {
+            while chars.get(j).is_some_and(|d| {
+                ident_part(*d) || (*d == '$' && chars.get(j + 1).is_some_and(|n| ident_part(*n)))
+            }) {
                 j += 1;
             }
             let s: String = chars[i..j].iter().filter(|d| **d != '$').collect();
@@ -317,18 +345,26 @@ impl Parser {
     }
 
     fn err<T>(&self, m: impl Into<String>) -> Result<T, ParseError> {
-        Err(ParseError { message: m.into(), at: self.at() })
+        Err(ParseError {
+            message: m.into(),
+            at: self.at(),
+        })
     }
 
     fn enter(&mut self) -> Result<(), ParseError> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH { self.err("the formula is nested too deeply") } else { Ok(()) }
+        if self.depth > MAX_DEPTH {
+            self.err("the formula is nested too deeply")
+        } else {
+            Ok(())
+        }
     }
 
     /// True if the next token is the word `kw`. Before an operand `NOT (` is a call, so the
     /// check can skip that case. After an operand `AND (` and `OR (` are operators.
     fn is_keyword(&self, kw: &str, call_ok: bool) -> bool {
-        matches!(self.peek(), Some(Tok::Ident(s)) if s.eq_ignore_ascii_case(kw)) && !(call_ok && matches!(self.toks.get(self.pos + 1), Some((Tok::LParen, _))))
+        matches!(self.peek(), Some(Tok::Ident(s)) if s.eq_ignore_ascii_case(kw))
+            && !(call_ok && matches!(self.toks.get(self.pos + 1), Some((Tok::LParen, _))))
     }
 
     fn or(&mut self) -> Result<Expr, ParseError> {
@@ -472,7 +508,9 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
-        let Some(tok) = self.peek().cloned() else { return self.err("the formula ends too early") };
+        let Some(tok) = self.peek().cloned() else {
+            return self.err("the formula ends too early");
+        };
         match tok {
             Tok::Num(n) => {
                 self.pos += 1;
@@ -510,7 +548,16 @@ impl Parser {
                                     && let Some(b) = CellRef::parse(second)
                                 {
                                     self.pos += 2;
-                                    return Ok(Expr::Range(CellRef { row: a.row.min(b.row), col: a.col.min(b.col) }, CellRef { row: a.row.max(b.row), col: a.col.max(b.col) }));
+                                    return Ok(Expr::Range(
+                                        CellRef {
+                                            row: a.row.min(b.row),
+                                            col: a.col.min(b.col),
+                                        },
+                                        CellRef {
+                                            row: a.row.max(b.row),
+                                            col: a.col.max(b.col),
+                                        },
+                                    ));
                                 }
                                 return self.err("a range needs a cell after ':'");
                             }
@@ -582,15 +629,28 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
     let toks = lex(src)?;
     let end = src.chars().count();
     if toks.is_empty() {
-        return Err(ParseError { message: "the formula is empty".into(), at: 0 });
+        return Err(ParseError {
+            message: "the formula is empty".into(),
+            at: 0,
+        });
     }
-    let mut p = Parser { toks, pos: 0, depth: 0, end };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        depth: 0,
+        end,
+    };
     let e = p.or()?;
     if p.pos < p.toks.len() {
         return p.err("unexpected text after the end of the formula");
     }
     if e.depth() > MAX_TREE_DEPTH {
-        return Err(ParseError { message: format!("the formula has more than {MAX_TREE_DEPTH} levels. Use SUM or CONCAT for long lists"), at: 0 });
+        return Err(ParseError {
+            message: format!(
+                "the formula has more than {MAX_TREE_DEPTH} levels. Use SUM or CONCAT for long lists"
+            ),
+            at: 0,
+        });
     }
     Ok(e)
 }
@@ -664,7 +724,11 @@ impl fmt::Display for Expr {
             Expr::Cell(c) => write!(f, "{c}"),
             Expr::Range(a, b) => write!(f, "{a}:{b}"),
             Expr::Name(n) => {
-                if plain_ident(n) && CellRef::parse(n).is_none() && !["true", "false", "and", "or", "not"].contains(&n.to_ascii_lowercase().as_str()) {
+                if plain_ident(n)
+                    && CellRef::parse(n).is_none()
+                    && !["true", "false", "and", "or", "not"]
+                        .contains(&n.to_ascii_lowercase().as_str())
+                {
                     f.write_str(n)
                 } else {
                     // A name that is not a plain word cannot be written as a name. This only
@@ -683,7 +747,11 @@ impl fmt::Display for Expr {
             }
             Expr::Unary(UnOp::Not, e) => write!(f, "NOT({e})"),
             Expr::Unary(UnOp::Percent, e) => {
-                if e.prec() >= 9 { write!(f, "{e}%") } else { write!(f, "({e})%") }
+                if e.prec() >= 9 {
+                    write!(f, "{e}%")
+                } else {
+                    write!(f, "({e})%")
+                }
             }
             Expr::Unary(UnOp::Neg, e) => {
                 if e.prec() >= 9 || matches!(**e, Expr::Unary(UnOp::Neg, _)) {
@@ -696,9 +764,17 @@ impl fmt::Display for Expr {
                 let p = op.prec();
                 let right_assoc = *op == BinOp::Pow;
                 let (lp, rp) = if right_assoc { (p + 1, p) } else { (p, p + 1) };
-                if l.prec() < lp { write!(f, "({l})")? } else { write!(f, "{l}")? }
+                if l.prec() < lp {
+                    write!(f, "({l})")?
+                } else {
+                    write!(f, "{l}")?
+                }
                 write!(f, " {} ", op.symbol())?;
-                if r.prec() < rp { write!(f, "({r})") } else { write!(f, "{r}") }
+                if r.prec() < rp {
+                    write!(f, "({r})")
+                } else {
+                    write!(f, "{r}")
+                }
             }
             Expr::Call(name, args) => {
                 write!(f, "{name}(")?;
@@ -746,7 +822,10 @@ mod tests {
         assert_eq!(CellRef::col_name(0), "");
         assert_eq!(CellRef { row: 7, col: 28 }.to_string(), "AB7");
         for col in 1..=MAX_COL {
-            assert_eq!(CellRef::parse(&format!("{}1", CellRef::col_name(col))).map(|c| c.col), Some(col));
+            assert_eq!(
+                CellRef::parse(&format!("{}1", CellRef::col_name(col))).map(|c| c.col),
+                Some(col)
+            );
         }
     }
 
@@ -764,7 +843,10 @@ mod tests {
         assert_eq!(show("--1"), "--1");
         assert_eq!(show("+5"), "5");
         assert_eq!(show("a1 & \"x\" & 2"), "A1 & \"x\" & 2");
-        assert_eq!(show("1<2 and 3>=2 or not 1=1"), "1 < 2 AND 3 >= 2 OR NOT(1 = 1)");
+        assert_eq!(
+            show("1<2 and 3>=2 or not 1=1"),
+            "1 < 2 AND 3 >= 2 OR NOT(1 = 1)"
+        );
         assert_eq!(show("1!=2"), "1 <> 2");
         assert_eq!(show("1<>2"), "1 <> 2");
         assert_eq!(show("not(1)"), "NOT(1)");
@@ -790,11 +872,20 @@ mod tests {
     #[test]
     fn names_paths_and_strings() {
         assert_eq!(p("Area"), Expr::Name("Area".into()));
-        assert_eq!(p("Soil.Depth"), Expr::Path(vec!["Soil".into(), "Depth".into()]));
-        assert_eq!(p("'My record'.'My field'"), Expr::Path(vec!["My record".into(), "My field".into()]));
+        assert_eq!(
+            p("Soil.Depth"),
+            Expr::Path(vec!["Soil".into(), "Depth".into()])
+        );
+        assert_eq!(
+            p("'My record'.'My field'"),
+            Expr::Path(vec!["My record".into(), "My field".into()])
+        );
         assert_eq!(p("'Plant'"), Expr::Str("Plant".into()));
         assert_eq!(p("A1.x"), Expr::Path(vec!["A1".into(), "x".into()]));
-        assert_eq!(p("Plant.custom.water"), Expr::Path(vec!["Plant".into(), "custom".into(), "water".into()]));
+        assert_eq!(
+            p("Plant.custom.water"),
+            Expr::Path(vec!["Plant".into(), "custom".into(), "water".into()])
+        );
         assert_eq!(p("\"a \"\"b\"\"\""), Expr::Str("a \"b\"".into()));
         assert_eq!(p("'it''s'"), Expr::Str("it's".into()));
         assert_eq!(show("'it''s'"), "\"it's\"");
@@ -827,7 +918,12 @@ mod tests {
         assert!(parse("1.2.3").is_err());
         assert!(parse("a1:").unwrap_err().message.contains("range"));
         assert!(parse("a1:5").is_err());
-        assert!(parse("x.").unwrap_err().message.contains("name is expected"));
+        assert!(
+            parse("x.")
+                .unwrap_err()
+                .message
+                .contains("name is expected")
+        );
         assert!(parse("x.1").is_err());
         assert!(parse(")").unwrap_err().message.contains("')'"));
         assert!(parse(",").is_err());
@@ -840,15 +936,53 @@ mod tests {
         assert!(parse("%").is_err());
         assert!(parse("1 + and").unwrap_err().message.contains("reserved"));
         assert!(parse("or").is_err());
-        assert!(parse(&"1".repeat(MAX_LEN + 1)).unwrap_err().message.contains("longer"));
-        assert!(parse(&format!("{}1{}", "(".repeat(100), ")".repeat(100))).unwrap_err().message.contains("nested"));
-        assert!(parse(&format!("{}1", "-".repeat(100))).unwrap_err().message.contains("nested"));
-        assert!(parse(&format!("{}1", "+".repeat(100))).unwrap_err().message.contains("nested"));
-        assert!(parse(&format!("{}1", "not ".repeat(100))).unwrap_err().message.contains("nested"));
-        assert!(parse(&format!("{}1", "1^".repeat(100))).unwrap_err().message.contains("nested"));
-        assert!(parse(&format!("{}1{}", "f(".repeat(100), ")".repeat(100))).unwrap_err().message.contains("nested"));
+        assert!(
+            parse(&"1".repeat(MAX_LEN + 1))
+                .unwrap_err()
+                .message
+                .contains("longer")
+        );
+        assert!(
+            parse(&format!("{}1{}", "(".repeat(100), ")".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
+        assert!(
+            parse(&format!("{}1", "-".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
+        assert!(
+            parse(&format!("{}1", "+".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
+        assert!(
+            parse(&format!("{}1", "not ".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
+        assert!(
+            parse(&format!("{}1", "1^".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
+        assert!(
+            parse(&format!("{}1{}", "f(".repeat(100), ")".repeat(100)))
+                .unwrap_err()
+                .message
+                .contains("nested")
+        );
         assert!(parse(&format!("{}1{}", "(".repeat(60), ")".repeat(60))).is_ok());
-        assert_eq!(parse("1 +").unwrap_err().to_string(), "the formula ends too early (at character 4)");
+        assert_eq!(
+            parse("1 +").unwrap_err().to_string(),
+            "the formula ends too early (at character 4)"
+        );
     }
 
     #[test]
@@ -861,7 +995,10 @@ mod tests {
         assert!(parse(&chain(2000, "*")).is_err());
         assert!(parse(&chain(1300, " and ")).is_err());
         assert!(parse(&chain(2000, "=")).is_err());
-        assert!(parse(&format!("SUM({})", chain(2000, ","))).is_ok(), "a long list of arguments is flat");
+        assert!(
+            parse(&format!("SUM({})", chain(2000, ","))).is_ok(),
+            "a long list of arguments is flat"
+        );
         assert!(parse(&format!("1{}", "%".repeat(2000))).is_err());
         assert_eq!(p("1+1+1").depth(), 3);
         assert_eq!(p("1").depth(), 1);
@@ -873,7 +1010,10 @@ mod tests {
         let (mut cells, mut ranges) = (vec![], vec![]);
         e.references(&mut cells, &mut ranges);
         assert_eq!(cells.len(), 4);
-        assert_eq!(ranges, vec![(CellRef { row: 2, col: 2 }, CellRef { row: 3, col: 3 })]);
+        assert_eq!(
+            ranges,
+            vec![(CellRef { row: 2, col: 2 }, CellRef { row: 3, col: 3 })]
+        );
         let e = p("-NOT(A1) & \"x\" & Area & Soil.Depth & 1 & TRUE");
         let (mut cells, mut ranges) = (vec![], vec![]);
         e.references(&mut cells, &mut ranges);
@@ -888,8 +1028,15 @@ mod tests {
             "[a-z ]{0,5}".prop_map(Expr::Str),
             any::<bool>().prop_map(Expr::Bool),
             (1u32..50, 1u32..50).prop_map(|(row, col)| Expr::Cell(CellRef { row, col })),
-            (1u32..20, 1u32..20, 0u32..5, 0u32..5).prop_map(|(row, col, dr, dc)| Expr::Range(CellRef { row, col }, CellRef { row: row + dr, col: col + dc })),
-            prop::sample::select(vec!["Area", "Layer", "Kind", "Count", "Id"]).prop_map(|s| Expr::Name(s.to_string())),
+            (1u32..20, 1u32..20, 0u32..5, 0u32..5).prop_map(|(row, col, dr, dc)| Expr::Range(
+                CellRef { row, col },
+                CellRef {
+                    row: row + dr,
+                    col: col + dc
+                }
+            )),
+            prop::sample::select(vec!["Area", "Layer", "Kind", "Count", "Id"])
+                .prop_map(|s| Expr::Name(s.to_string())),
             prop::collection::vec("[A-Za-z ]{1,6}", 2..4).prop_map(Expr::Path),
         ];
         leaf.prop_recursive(4, 40, 4, |inner| {
@@ -910,11 +1057,25 @@ mod tests {
                 BinOp::Pow,
             ]);
             prop_oneof![
-                (ops, inner.clone(), inner.clone()).prop_map(|(op, l, r)| Expr::Binary(op, Box::new(l), Box::new(r))),
-                inner.clone().prop_map(|e| Expr::Unary(UnOp::Neg, Box::new(e))),
-                inner.clone().prop_map(|e| Expr::Unary(UnOp::Not, Box::new(e))),
-                inner.clone().prop_map(|e| Expr::Unary(UnOp::Percent, Box::new(e))),
-                (prop::sample::select(vec!["SUM", "IF", "ROUND", "MAX", "CONCAT", "F"]), prop::collection::vec(inner, 0..4)).prop_map(|(n, a)| Expr::Call(n.to_string(), a)),
+                (ops, inner.clone(), inner.clone()).prop_map(|(op, l, r)| Expr::Binary(
+                    op,
+                    Box::new(l),
+                    Box::new(r)
+                )),
+                inner
+                    .clone()
+                    .prop_map(|e| Expr::Unary(UnOp::Neg, Box::new(e))),
+                inner
+                    .clone()
+                    .prop_map(|e| Expr::Unary(UnOp::Not, Box::new(e))),
+                inner
+                    .clone()
+                    .prop_map(|e| Expr::Unary(UnOp::Percent, Box::new(e))),
+                (
+                    prop::sample::select(vec!["SUM", "IF", "ROUND", "MAX", "CONCAT", "F"]),
+                    prop::collection::vec(inner, 0..4)
+                )
+                    .prop_map(|(n, a)| Expr::Call(n.to_string(), a)),
             ]
         })
     }

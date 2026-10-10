@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 /// The path for a sibling of `path`: same folder, `prefix` + file name + `suffix`.
 fn sibling(path: &Path, prefix: &str, suffix: &str) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     path.with_file_name(format!("{prefix}{name}{suffix}"))
 }
 
@@ -17,7 +20,12 @@ fn sibling(path: &Path, prefix: &str, suffix: &str) -> PathBuf {
 /// renames it over `path`. A crash never leaves a half-written file.
 /// With `keep_backup`, the previous file is first copied to `<path>.bak`.
 /// With `private`, the file is readable by the owner only (Unix).
-fn write_replacing(path: &Path, bytes: &[u8], keep_backup: bool, private: bool) -> std::io::Result<()> {
+fn write_replacing(
+    path: &Path,
+    bytes: &[u8],
+    keep_backup: bool,
+    private: bool,
+) -> std::io::Result<()> {
     // Write to the real target, so a symlink stays a symlink.
     let resolved = std::fs::canonicalize(path).ok();
     let path = resolved.as_deref().unwrap_or(path);
@@ -101,7 +109,8 @@ pub fn write_agent_info(path: &Path, info: &AgentInfo) -> std::io::Result<()> {
 }
 
 pub fn read_agent_info(path: &Path) -> Result<AgentInfo, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -122,13 +131,19 @@ mod tests {
         let f = dir.join("a.cdk.json");
         write_atomic(&f, b"one").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"one");
-        assert!(!dir.join("a.cdk.json.bak").exists(), "no backup for a new file");
+        assert!(
+            !dir.join("a.cdk.json.bak").exists(),
+            "no backup for a new file"
+        );
         write_atomic(&f, b"two").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"two");
         assert_eq!(std::fs::read(dir.join("a.cdk.json.bak")).unwrap(), b"one");
         write_atomic(&f, b"three").unwrap();
         assert_eq!(std::fs::read(dir.join("a.cdk.json.bak")).unwrap(), b"two");
-        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
         assert_eq!(names.len(), 2, "{names:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -142,11 +157,19 @@ mod tests {
         std::fs::write(&real, "old").unwrap();
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
         write_atomic(&real, b"new").unwrap();
-        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(
+            std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         let link = dir.join("link.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         write_atomic(&link, b"via link").unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(std::fs::read(&real).unwrap(), b"via link");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -158,7 +181,10 @@ mod tests {
         let target = dir.join("t");
         std::fs::create_dir(&target).unwrap();
         assert!(write_atomic(&target, b"x").is_err());
-        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names.len(), 1, "{names:?}");
         // A missing folder is an error too.
         assert!(write_atomic(&dir.join("missing").join("f"), b"x").is_err());
@@ -168,21 +194,44 @@ mod tests {
     #[test]
     fn agent_info_path_per_platform() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| OsString::from(*v))
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| OsString::from(*v))
+            }
         };
         let tail = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
         assert_eq!(
-            tail(agent_info_path_for("linux", env(&[("XDG_RUNTIME_DIR", "/run/user/1"), ("HOME", "/h")]))).as_deref(),
+            tail(agent_info_path_for(
+                "linux",
+                env(&[("XDG_RUNTIME_DIR", "/run/user/1"), ("HOME", "/h")])
+            ))
+            .as_deref(),
             Some("/run/user/1/cadektor/agent.json")
         );
-        assert_eq!(tail(agent_info_path_for("linux", env(&[("HOME", "/h")]))).as_deref(), Some("/h/.local/state/cadektor/agent.json"));
+        assert_eq!(
+            tail(agent_info_path_for("linux", env(&[("HOME", "/h")]))).as_deref(),
+            Some("/h/.local/state/cadektor/agent.json")
+        );
         assert_eq!(
             tail(agent_info_path_for("macos", env(&[("HOME", "/Users/me")]))).as_deref(),
             Some("/Users/me/Library/Application Support/cadektor/agent.json")
         );
-        assert!(tail(agent_info_path_for("macos", env(&[("XDG_RUNTIME_DIR", ""), ("HOME", "/h")]))).unwrap().contains("Library"));
+        assert!(
+            tail(agent_info_path_for(
+                "macos",
+                env(&[("XDG_RUNTIME_DIR", ""), ("HOME", "/h")])
+            ))
+            .unwrap()
+            .contains("Library")
+        );
         assert_eq!(
-            tail(agent_info_path_for("windows", env(&[("LOCALAPPDATA", "C:/Users/me/AppData/Local")]))).as_deref(),
+            tail(agent_info_path_for(
+                "windows",
+                env(&[("LOCALAPPDATA", "C:/Users/me/AppData/Local")])
+            ))
+            .as_deref(),
             Some("C:/Users/me/AppData/Local/cadektor/agent.json")
         );
         assert_eq!(agent_info_path_for("linux", env(&[])), None);
@@ -194,21 +243,44 @@ mod tests {
     fn agent_info_round_trips_and_is_private() {
         let dir = temp_dir("info");
         let f = dir.join("sub").join("agent.json");
-        let info = AgentInfo { port: 4242, token: "ab".repeat(32) };
+        let info = AgentInfo {
+            port: 4242,
+            token: "ab".repeat(32),
+        };
         write_agent_info(&f, &info).unwrap();
         assert_eq!(read_agent_info(&f).unwrap(), info);
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), format!(r#"{{"port":4242,"token":"{}"}}"#, info.token));
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            format!(r#"{{"port":4242,"token":"{}"}}"#, info.token)
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
-            assert_eq!(std::fs::metadata(f.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(
+                std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(f.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
         }
         // Writing again replaces the file.
-        let info2 = AgentInfo { port: 1, token: "cd".repeat(32) };
+        let info2 = AgentInfo {
+            port: 1,
+            token: "cd".repeat(32),
+        };
         write_agent_info(&f, &info2).unwrap();
         assert_eq!(read_agent_info(&f).unwrap(), info2);
-        assert!(read_agent_info(&dir.join("none")).unwrap_err().contains("cannot read"));
+        assert!(
+            read_agent_info(&dir.join("none"))
+                .unwrap_err()
+                .contains("cannot read")
+        );
         std::fs::write(dir.join("bad"), "{").unwrap();
         assert!(read_agent_info(&dir.join("bad")).is_err());
         let _ = std::fs::remove_dir_all(dir);

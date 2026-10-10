@@ -63,19 +63,31 @@ pub fn read<T: DeserializeOwned>(obj: &Object, key: &str) -> Option<T> {
 
 /// The site model that serves an object: the one it names, or the first visible site model on its
 /// layer whose surface can be built.
-pub fn host(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, named: Option<ObjectId>) -> Option<Arc<SiteResult>> {
+pub fn host(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    obj: &Object,
+    named: Option<ObjectId>,
+) -> Option<Arc<SiteResult>> {
     if let Some(id) = named {
         return cache.get(revision, doc, id).ok();
     }
     doc.objects
         .values()
-        .filter(|o| o.layer == obj.layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o))
+        .filter(|o| {
+            o.layer == obj.layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o)
+        })
         .find_map(|o| cache.get(revision, doc, o.id).ok())
 }
 
 /// Checks that a number is finite.
 pub fn finite(name: &str, v: f64) -> Result<f64, String> {
-    if v.is_finite() { Ok(v) } else { Err(format!("{name} must be a finite number")) }
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(format!("{name} must be a finite number"))
+    }
 }
 
 /// Meters text for an elevation or length in mm, with `decimals` places.
@@ -85,7 +97,10 @@ pub fn meters(mm: f64, decimals: usize) -> String {
 
 /// Escapes text for SVG.
 pub(crate) fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -97,19 +112,34 @@ pub(crate) mod testutil {
     use std::collections::BTreeMap;
 
     pub fn add(ed: &mut Editor, shape: Shape) -> ObjectId {
-        let out = ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let out = ed
+            .execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         ObjectId(out.created[0])
     }
 
     /// Adds a shape with data under one key.
     pub fn add_with(ed: &mut Editor, shape: Shape, key: &str, data: serde_json::Value) -> ObjectId {
         let id = add(ed, shape);
-        ed.execute(&Command::SetData { id, set: BTreeMap::from([(key.to_string(), data)]), remove: vec![] }).unwrap();
+        ed.execute(&Command::SetData {
+            id,
+            set: BTreeMap::from([(key.to_string(), data)]),
+            remove: vec![],
+        })
+        .unwrap();
         id
     }
 
     pub fn path(pts: &[(f64, f64)]) -> Shape {
-        Shape::Polyline { points: curve::corners(&pts.iter().map(|p| DVec2::new(p.0, p.1)).collect::<Vec<_>>()), closed: false }
+        Shape::Polyline {
+            points: curve::corners(&pts.iter().map(|p| DVec2::new(p.0, p.1)).collect::<Vec<_>>()),
+            closed: false,
+        }
     }
 
     /// A 10 by 10 m site of 1 m steps with the elevation `f(x, y)`.
@@ -126,8 +156,14 @@ mod tests {
 
     #[test]
     fn follow_and_small_helpers() {
-        assert_eq!((Follow::Existing.name(), Follow::Proposed.name()), ("existing", "proposed"));
-        assert_eq!((Follow::Existing.surface(), Follow::Proposed.surface()), (Surface::Existing, Surface::Proposed));
+        assert_eq!(
+            (Follow::Existing.name(), Follow::Proposed.name()),
+            ("existing", "proposed")
+        );
+        assert_eq!(
+            (Follow::Existing.surface(), Follow::Proposed.surface()),
+            (Surface::Existing, Surface::Proposed)
+        );
         assert!(finite("x", 1.0).is_ok() && finite("x", f64::NAN).unwrap_err().contains('x'));
         assert_eq!(meters(1234.0, 1), "1.2");
         assert_eq!(esc("<a & \"b\">"), "&lt;a &amp; &quot;b&quot;&gt;");
@@ -136,7 +172,13 @@ mod tests {
     #[test]
     fn the_host_is_named_or_found_on_the_layer() {
         let mut ed = Editor::default();
-        let circle = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
+        let circle = add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 1.0,
+            },
+        );
         let cache = SiteCache::default();
         let obj = ed.doc().object(circle).unwrap();
         assert!(host(ed.doc(), &cache, ed.revision(), obj, None).is_none());
@@ -144,10 +186,18 @@ mod tests {
         let obj = ed.doc().object(circle).unwrap();
         let found = host(ed.doc(), &cache, ed.revision(), obj, None).unwrap();
         assert_eq!(found.id, s);
-        assert_eq!(host(ed.doc(), &cache, ed.revision(), obj, Some(s)).unwrap().id, s);
+        assert_eq!(
+            host(ed.doc(), &cache, ed.revision(), obj, Some(s))
+                .unwrap()
+                .id,
+            s
+        );
         assert!(host(ed.doc(), &cache, ed.revision(), obj, Some(circle)).is_none());
         let g = ground_of(&found);
-        assert_eq!(g(DVec2::new(5000.0, 5000.0), Follow::Proposed), Some(5000.0));
+        assert_eq!(
+            g(DVec2::new(5000.0, 5000.0), Follow::Proposed),
+            Some(5000.0)
+        );
         assert_eq!(g(DVec2::new(-5.0, 0.0), Follow::Existing), None);
         assert!(read::<wall::WallData>(ed.doc().object(circle).unwrap(), "nothing").is_none());
     }

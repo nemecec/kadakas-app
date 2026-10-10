@@ -2,22 +2,25 @@
 
 use cadektor_api::Session;
 use cadektor_core::command::Command;
-use cadektor_core::model::{Document, ObjectId};
+use cadektor_core::model::{Document, ObjectId, Shape};
 use cadektor_render::{RenderMode, StandardView};
 use egui::{Key, Sense};
 use glam::DVec2;
 use serde_json::Value;
 
 use crate::canvas;
+use crate::canvas3d;
 use crate::databar::{self, DataEntry};
 use crate::file_io;
+use crate::gpu3d::Gpu3d;
 use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
 use crate::plant_ui::{self, PlantUi};
+use crate::resource_ui::{self, ResourceUi};
 use crate::snap::{self, SnapConfig, SnapResult};
-use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
-use crate::canvas3d;
-use crate::gpu3d::Gpu3d;
+use crate::tools::{
+    Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
+};
 use crate::view::{View, grid_step};
 use crate::view3d::{self, View3d};
 
@@ -48,6 +51,7 @@ pub struct CadektorApp {
     info: InfoEdit,
     nav: NavState,
     plant_ui: PlantUi,
+    resource_ui: ResourceUi,
     keys: Keymap,
     entry: DataEntry,
     /// Cursor before Data bar values are applied.
@@ -66,7 +70,11 @@ pub struct CadektorApp {
 
 impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(cc: &eframe::CreationContext<'_>, agent_port: Option<u16>, allow_dirs: Vec<std::path::PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        agent_port: Option<u16>,
+        allow_dirs: Vec<std::path::PathBuf>,
+    ) -> Self {
         let mut app = Self::blank();
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
@@ -83,15 +91,24 @@ impl CadektorApp {
         let key_note = match warnings.as_slice() {
             [] => String::new(),
             [one] => one.clone(),
-            [first, rest @ ..] => format!("{first} (+{} more keymap warnings, see stderr)", rest.len()),
+            [first, rest @ ..] => {
+                format!("{first} (+{} more keymap warnings, see stderr)", rest.len())
+            }
         };
         app.status = key_note.clone();
         if let Some(port) = agent_port {
             let ctx = cc.egui_ctx.clone();
             let info_path = cadektor_core::fsio::agent_info_path();
-            match crate::agent::start(port, std::sync::Arc::new(move || ctx.request_repaint()), info_path) {
+            match crate::agent::start(
+                port,
+                std::sync::Arc::new(move || ctx.request_repaint()),
+                info_path,
+            ) {
                 Ok(server) => {
-                    app.status = format!("Agent server listening on {} (token in the agent runtime file) {key_note}", server.addr);
+                    app.status = format!(
+                        "Agent server listening on {} (token in the agent runtime file) {key_note}",
+                        server.addr
+                    );
                     app.agent = Some(server);
                 }
                 Err(e) => app.status = format!("Agent server failed on port {port}: {e}"),
@@ -119,6 +136,7 @@ impl CadektorApp {
             info: InfoEdit::default(),
             nav: NavState::default(),
             plant_ui: PlantUi::default(),
+            resource_ui: ResourceUi::default(),
             keys: Keymap::defaults(),
             entry: DataEntry::default(),
             live_cursor: DVec2::ZERO,
@@ -184,6 +202,116 @@ impl CadektorApp {
         }
     }
 
+    /// Group the selection and select the group.
+    fn group_selection(&mut self) {
+        if self.session.selection.is_empty() {
+            return;
+        }
+        let ids = self.session.selection.clone();
+        match self
+            .session
+            .editor
+            .execute(&Command::Group { ids, name: None })
+        {
+            Ok(out) => {
+                self.session.selection = out.created.into_iter().map(ObjectId).collect();
+                self.status = "Grouped".into();
+            }
+            Err(e) => self.status = format!("Error: {e}"),
+        }
+    }
+
+    fn ungroup_selection(&mut self) {
+        let groups: Vec<ObjectId> = self
+            .session
+            .selection
+            .iter()
+            .copied()
+            .filter(|i| self.session.editor.doc().is_group(*i))
+            .collect();
+        if groups.is_empty() {
+            self.status = "Select a group to ungroup".into();
+            return;
+        }
+        let members: Vec<ObjectId> = groups
+            .iter()
+            .flat_map(|g| self.session.editor.doc().children(*g))
+            .collect();
+        match self
+            .session
+            .editor
+            .execute(&Command::Ungroup { ids: groups })
+        {
+            Ok(_) => {
+                self.session.selection = members;
+                self.status = "Ungrouped".into();
+            }
+            Err(e) => self.status = format!("Error: {e}"),
+        }
+    }
+
+    /// Edit group: enter the selected group so that clicks select its members. A selected symbol
+    /// instance is edited in place instead.
+    fn enter_group(&mut self) {
+        let doc = self.session.editor.doc();
+        let Some(&id) = self
+            .session
+            .selection
+            .first()
+            .filter(|_| self.session.selection.len() == 1)
+        else {
+            self.status = "Select one group or symbol to edit".into();
+            return;
+        };
+        if doc.is_group(id) {
+            self.session.context.push(id);
+            self.session.selection.clear();
+            self.status = "Editing group. Exit with the Exit group key".into();
+        } else if matches!(doc.object(id).map(|o| &o.shape), Some(Shape::Symbol { .. })) {
+            match self.session.editor.execute(&Command::EditSymbol { id }) {
+                Ok(out) => {
+                    self.session.context.push(ObjectId(out.created[0]));
+                    self.session.selection.clear();
+                    self.status =
+                        "Editing the symbol. Exit to apply the changes to all instances".into();
+                }
+                Err(e) => self.status = format!("Error: {e}"),
+            }
+        } else {
+            self.status = "Select one group or symbol to edit".into();
+        }
+    }
+
+    /// Exit group. Leaving the edit group of a symbol applies the changes to the definition.
+    fn exit_group(&mut self) {
+        let Some(g) = self.session.edit_context() else {
+            self.status = "You are not in a group".into();
+            return;
+        };
+        let editing = self
+            .session
+            .editor
+            .doc()
+            .object(g)
+            .is_some_and(|o| o.data.contains_key(cadektor_core::symbols::EDIT_GROUP_KEY));
+        if editing {
+            if let Err(e) = self
+                .session
+                .editor
+                .execute(&Command::ExitSymbolEdit { group: g })
+            {
+                self.status = format!("Error: {e}");
+                return;
+            }
+            self.session.context.pop();
+            self.session.selection.clear();
+            self.status = "Symbol updated".into();
+        } else {
+            self.session.context.pop();
+            self.session.selection = vec![g];
+        }
+    }
+
     fn create_site_model(&mut self) {
         self.status = match crate::site_ui::create_site_model(&mut self.session) {
             Ok(id) => format!("Created site model {id}"),
@@ -197,7 +325,12 @@ impl CadektorApp {
 
     fn select_all(&mut self) {
         let doc = &self.session.editor.doc();
-        self.session.selection = doc.objects.values().filter(|o| doc.is_pickable(o)).map(|o| o.id).collect();
+        self.session.selection = doc
+            .objects
+            .values()
+            .filter(|o| doc.is_pickable(o))
+            .map(|o| o.id)
+            .collect();
     }
 
     fn apply_menu(&mut self, ctx: &egui::Context, action: MenuAction) {
@@ -233,13 +366,22 @@ impl CadektorApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn set_title(&self, ctx: &egui::Context) {
-        let name = self.path.as_ref().and_then(|p| p.file_name()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} - Cadektor")));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Cadektor", &["json"]).pick_file() else { return };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Cadektor", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
         match file_io::read_document(&path) {
             Ok(doc) => {
                 self.status = format!("Opened {}", path.display());
@@ -255,7 +397,11 @@ impl CadektorApp {
         let path = match (&self.path, as_new) {
             (Some(p), false) => p.clone(),
             _ => {
-                let Some(p) = rfd::FileDialog::new().add_filter("Cadektor", &["json"]).set_file_name("drawing.cdk.json").save_file() else {
+                let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Cadektor", &["json"])
+                    .set_file_name("drawing.cdk.json")
+                    .save_file()
+                else {
                     return;
                 };
                 file_io::with_extension(&p)
@@ -273,7 +419,13 @@ impl CadektorApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn export_svg(&mut self) {
-        let Some(p) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).set_file_name("drawing.svg").save_file() else { return };
+        let Some(p) = rfd::FileDialog::new()
+            .add_filter("SVG", &["svg"])
+            .set_file_name("drawing.svg")
+            .save_file()
+        else {
+            return;
+        };
         self.status = match file_io::write_svg(&p, self.session.editor.doc()) {
             Ok(()) => format!("Exported {}", p.display()),
             Err(e) => e,
@@ -287,7 +439,13 @@ impl CadektorApp {
             self.status = "Add a sheet layer first (Navigation > Sheet Layers > +)".into();
             return;
         }
-        let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name("drawing.pdf").save_file() else { return };
+        let Some(p) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name("drawing.pdf")
+            .save_file()
+        else {
+            return;
+        };
         self.status = match self.session.export_file_trusted(serde_json::json!({"path": p.display().to_string(), "format": "pdf", "overwrite": true})) {
             Ok(r) => format!("Exported {} sheet(s) to {}", r["pages"], p.display()),
             Err(e) => format!("Error: {}", e.message),
@@ -299,7 +457,9 @@ impl CadektorApp {
         if let Some(name) = self.nav.sheets.save_request.take() {
             let center = rect.map_or(DVec2::ZERO, |r| self.view.to_model(r.center()));
             let view = crate::sheets_ui::capture(&self.session, &name, self.view.zoom, center);
-            self.exec(&Command::SaveView { view: Box::new(view) });
+            self.exec(&Command::SaveView {
+                view: Box::new(view),
+            });
         }
         if let Some(v) = self.session.take_applied_view() {
             if let (Some(zoom), Some(pan)) = (v.zoom, v.pan)
@@ -307,7 +467,10 @@ impl CadektorApp {
             {
                 self.view.zoom = zoom.clamp(crate::view::MIN_ZOOM, crate::view::MAX_ZOOM);
                 let c = r.center();
-                self.view.origin = DVec2::new(c.x as f64 - pan.x * self.view.zoom, c.y as f64 + pan.y * self.view.zoom);
+                self.view.origin = DVec2::new(
+                    c.x as f64 - pan.x * self.view.zoom,
+                    c.y as f64 + pan.y * self.view.zoom,
+                );
             }
             self.status = format!("Restored view '{}'", v.name);
         }
@@ -319,7 +482,10 @@ impl CadektorApp {
         }
         let step = grid_step(self.view.zoom, 12.0);
         let ids = self.session.selection.clone();
-        self.exec(&Command::MoveObjects { ids, delta: dir * step });
+        self.exec(&Command::MoveObjects {
+            ids,
+            delta: dir * step,
+        });
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
@@ -347,6 +513,10 @@ impl CadektorApp {
             Action::Delete if self.machine.is_busy() => self.machine.pop_point(),
             Action::Delete if self.machine.tool() == Tool::Select => self.delete_selection(),
             Action::SelectAll => self.select_all(),
+            Action::Group => self.group_selection(),
+            Action::Ungroup => self.ungroup_selection(),
+            Action::EnterGroup => self.enter_group(),
+            Action::ExitGroup => self.exit_group(),
             Action::Cancel => {
                 if self.machine.is_busy() {
                     self.machine.cancel();
@@ -370,7 +540,9 @@ impl CadektorApp {
                 if self.plan() {
                     self.set_standard_view(StandardView::RightIsometric);
                 }
-                self.status = "Flyover: drag to orbit, Shift-drag or middle-drag to pan, wheel to zoom".into();
+                self.status =
+                    "Flyover: drag to orbit, Shift-drag or middle-drag to pan, wheel to zoom"
+                        .into();
             }
             Action::ViewProjection => {
                 self.session.view.projection = self.session.view.projection.toggled();
@@ -384,8 +556,18 @@ impl CadektorApp {
             Action::PanRight => self.pending_pan.x -= PAN_STEP_PX,
             Action::PanUp => self.pending_pan.y += PAN_STEP_PX,
             Action::PanDown => self.pending_pan.y -= PAN_STEP_PX,
-            Action::Delete | Action::PanHold | Action::SnapSuspend | Action::DataBarFocus | Action::DataBarPrev => {}
-            a if !a.implemented() => self.status = format!("{} ({}) is planned, not built yet", a.label(), self.keys.hint(a)),
+            Action::Delete
+            | Action::PanHold
+            | Action::SnapSuspend
+            | Action::DataBarFocus
+            | Action::DataBarPrev => {}
+            a if !a.implemented() => {
+                self.status = format!(
+                    "{} ({}) is planned, not built yet",
+                    a.label(),
+                    self.keys.hint(a)
+                )
+            }
             _ => {}
         }
     }
@@ -394,7 +576,10 @@ impl CadektorApp {
     fn data_bar_key(&mut self, ctx: &egui::Context, action: Action, typing: bool) {
         if self.entry.active {
             self.entry.cycle(action == Action::DataBarPrev);
-        } else if !typing && action == Action::DataBarFocus && databar::supported(self.machine.tool()) {
+        } else if !typing
+            && action == Action::DataBarFocus
+            && databar::supported(self.machine.tool())
+        {
             self.entry.activate();
         } else {
             return;
@@ -413,13 +598,21 @@ impl CadektorApp {
             i.events
                 .iter()
                 .filter_map(|e| match e {
-                    egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers } => Some((*key, *physical_key, *modifiers, *repeat)),
+                    egui::Event::Key {
+                        key,
+                        physical_key,
+                        pressed: true,
+                        repeat,
+                        modifiers,
+                    } => Some((*key, *physical_key, *modifiers, *repeat)),
                     _ => None,
                 })
                 .collect()
         });
         for (key, physical, mods, repeat) in events {
-            let Some((action, chord)) = self.keys.action_for_event(key, physical, mods) else { continue };
+            let Some((action, chord)) = self.keys.action_for_event(key, physical, mods) else {
+                continue;
+            };
             if repeat && !action.repeats() {
                 continue;
             }
@@ -440,7 +633,12 @@ impl CadektorApp {
     /// It stays after the point is placed.
     fn apply_typed_radius(&mut self) {
         let anchored = self.machine.anchor().is_some();
-        if let Some(r) = databar::typed_arc_radius(self.machine.tool(), anchored, self.arc_fields(), &self.entry.values()) {
+        if let Some(r) = databar::typed_arc_radius(
+            self.machine.tool(),
+            anchored,
+            self.arc_fields(),
+            &self.entry.values(),
+        ) {
             self.settings.arc_radius = r;
         }
     }
@@ -459,13 +657,22 @@ impl CadektorApp {
             self.settings.vertex_mode = self.settings.vertex_mode.next();
             self.status = format!("Vertex mode: {}", self.settings.vertex_mode.label());
         } else {
-            self.status = format!("The {} tool has only one group of mode buttons", tool.name());
+            self.status = format!(
+                "The {} tool has only one group of mode buttons",
+                tool.name()
+            );
         }
     }
 
     /// Enter in a Data bar field: click at the typed point, as if the user had clicked there.
     fn commit_entry(&mut self, ctx: &egui::Context) {
-        let target = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values(), self.arc_fields());
+        let target = databar::target_point(
+            self.machine.tool(),
+            self.machine.anchor(),
+            self.live_cursor,
+            &self.entry.values(),
+            self.arc_fields(),
+        );
         let Some(p) = target else { return };
         self.apply_typed_radius();
         let was_anchored = self.machine.anchor().is_some();
@@ -484,7 +691,13 @@ impl CadektorApp {
 
     fn send(&mut self, input: Input) {
         let effects = {
-            let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
+            let cx = Ctx {
+                doc: self.session.editor.doc(),
+                selection: &self.session.selection,
+                settings: &self.settings,
+                tol: self.tol(),
+                context: self.session.edit_context(),
+            };
             self.machine.handle(input, &cx)
         };
         for e in effects {
@@ -492,8 +705,16 @@ impl CadektorApp {
                 Effect::SetSelection(s) => self.session.selection = s,
                 Effect::Notice(m) => self.status = m,
                 Effect::Exec(cmd) => {
-                    let is_add = matches!(cmd, Command::AddObject { .. } | Command::AddHardscape { .. } | Command::AddLandscapeArea { .. });
-                    if let Some(out) = panels::run_command(&mut self.session, &cmd, &mut self.status)
+                    let cmd = self.session.in_context(cmd);
+                    let is_add = matches!(
+                        cmd,
+                        Command::AddObject { .. }
+                            | Command::AddObjectIn { .. }
+                            | Command::AddHardscape { .. }
+                            | Command::AddLandscapeArea { .. }
+                    );
+                    if let Some(out) =
+                        panels::run_command(&mut self.session, &cmd, &mut self.status)
                         && is_add
                         && !out.created.is_empty()
                     {
@@ -505,7 +726,9 @@ impl CadektorApp {
     }
 
     fn fit_view(&mut self, rect: egui::Rect) {
-        if let Some(page) = crate::sheets_ui::active_sheet(&self.session).and_then(|l| self.session.editor.doc().sheet(l)) {
+        if let Some(page) = crate::sheets_ui::active_sheet(&self.session)
+            .and_then(|l| self.session.editor.doc().sheet(l))
+        {
             self.view.fit(DVec2::ZERO, page.size_mm(), rect);
             return;
         }
@@ -513,7 +736,6 @@ impl CadektorApp {
             .unwrap_or((DVec2::new(-1000.0, -1000.0), DVec2::new(19000.0, 14000.0)));
         self.view.fit(lo, hi, rect);
     }
-
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -530,30 +752,35 @@ impl CadektorApp {
             self.needs_fit = false;
         }
         let typing = ui.ctx().egui_wants_keyboard_input() || self.entry.active;
-        let (latest, hover, mods, space, suspend, scroll, pinch, pressed, released) = ui.input(|i| {
-            (
-                i.pointer.latest_pos(),
-                i.pointer.hover_pos(),
-                i.modifiers,
-                !typing && self.keys.held(Action::PanHold, i),
-                !typing && self.keys.held(Action::SnapSuspend, i),
-                i.smooth_scroll_delta.y,
-                i.zoom_delta(),
-                i.pointer.primary_pressed(),
-                i.pointer.primary_released(),
-            )
-        });
+        let (latest, hover, mods, space, suspend, scroll, pinch, pressed, released) =
+            ui.input(|i| {
+                (
+                    i.pointer.latest_pos(),
+                    i.pointer.hover_pos(),
+                    i.modifiers,
+                    !typing && self.keys.held(Action::PanHold, i),
+                    !typing && self.keys.held(Action::SnapSuspend, i),
+                    i.smooth_scroll_delta.y,
+                    i.zoom_delta(),
+                    i.pointer.primary_pressed(),
+                    i.pointer.primary_released(),
+                )
+            });
 
         // Pan and zoom from keys.
         if self.pending_zoom != 1.0 {
-            self.view.zoom_at(rect.center(), std::mem::replace(&mut self.pending_zoom, 1.0));
+            self.view.zoom_at(
+                rect.center(),
+                std::mem::replace(&mut self.pending_zoom, 1.0),
+            );
         }
         if self.pending_pan != egui::Vec2::ZERO {
             self.view.pan(std::mem::take(&mut self.pending_pan));
         }
 
         // Pan and zoom.
-        let panning = resp.dragged_by(egui::PointerButton::Middle) || (space && resp.dragged_by(egui::PointerButton::Primary));
+        let panning = resp.dragged_by(egui::PointerButton::Middle)
+            || (space && resp.dragged_by(egui::PointerButton::Primary));
         if panning {
             self.view.pan(resp.drag_delta());
         }
@@ -572,13 +799,25 @@ impl CadektorApp {
                 None
             } else {
                 let pts = snap::snap_points(self.session.editor.doc(), &busy_ids);
-                snap::snap(raw, self.tol(), grid_step(self.view.zoom, 12.0), self.snap_cfg, &pts)
+                snap::snap(
+                    raw,
+                    self.tol(),
+                    grid_step(self.view.zoom, 12.0),
+                    self.snap_cfg,
+                    &pts,
+                )
             };
             self.cursor = self.snap_hit.map_or(raw, |s| s.point);
             self.live_cursor = self.cursor;
             // Typed Data bar values override the mouse.
             if self.entry.any_typed()
-                && let Some(p) = databar::target_point(self.machine.tool(), self.machine.anchor(), self.live_cursor, &self.entry.values(), self.arc_fields())
+                && let Some(p) = databar::target_point(
+                    self.machine.tool(),
+                    self.machine.anchor(),
+                    self.live_cursor,
+                    &self.entry.values(),
+                    self.arc_fields(),
+                )
             {
                 self.cursor = p;
             }
@@ -591,7 +830,10 @@ impl CadektorApp {
         // Tool events.
         if !panning && !space {
             if pressed && resp.hovered() {
-                self.send(Input::Press { p: self.cursor, shift: mods.shift });
+                self.send(Input::Press {
+                    p: self.cursor,
+                    shift: mods.shift,
+                });
             } else if hover.is_some() || self.machine.is_busy() {
                 self.send(Input::Move(self.cursor));
             }
@@ -606,8 +848,18 @@ impl CadektorApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
 
-        let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: self.tol() };
-        let preview = if resp.hovered() || self.machine.is_busy() { self.machine.preview(self.cursor, &cx) } else { crate::tools::Preview::None };
+        let cx = Ctx {
+            doc: self.session.editor.doc(),
+            selection: &self.session.selection,
+            settings: &self.settings,
+            tol: self.tol(),
+            context: self.session.edit_context(),
+        };
+        let preview = if resp.hovered() || self.machine.is_busy() {
+            self.machine.preview(self.cursor, &cx)
+        } else {
+            crate::tools::Preview::None
+        };
         let frame = canvas::Frame {
             doc: self.session.editor.doc(),
             selection: &self.session.selection,
@@ -633,8 +885,14 @@ impl eframe::App for CadektorApp {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
-            self.session.doc_dir = self.path.as_ref().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
-            agent.poll(&mut |line| file_io::agent_line(&mut self.session, &mut self.path, line, &mut fx));
+            self.session.doc_dir = self
+                .path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(std::path::Path::to_path_buf);
+            agent.poll(&mut |line| {
+                file_io::agent_line(&mut self.session, &mut self.path, line, &mut fx)
+            });
             if fx.replaced {
                 self.machine.cancel();
                 self.needs_fit = true;
@@ -646,28 +904,54 @@ impl eframe::App for CadektorApp {
         if std::mem::take(&mut self.title_dirty) {
             self.set_title(&ctx);
         }
-        self.entry.sync(self.machine.tool(), self.machine.anchor().is_some(), self.arc_fields());
+        self.entry.sync(
+            self.machine.tool(),
+            self.machine.anchor().is_some(),
+            self.arc_fields(),
+        );
         self.handle_keys(&ctx);
         // The camera follows the chosen view, whoever chose it: a key, the view bar or an agent.
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
 
-        let (can_undo, can_redo) = (self.session.editor.can_undo(), self.session.editor.can_redo());
+        let (can_undo, can_redo) = (
+            self.session.editor.can_undo(),
+            self.session.editor.can_redo(),
+        );
         let mut actions = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
-            let can_site = !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection).is_empty();
-            let can_update = !crate::site_ui::selected_site_models(self.session.editor.doc(), &self.session.selection).is_empty();
-            actions = panels::menu_bar(ui, &self.keys, can_undo, can_redo, &mut self.snap_cfg, &mut self.show_grid, can_site, can_update);
+            let can_site =
+                !crate::site_ui::source_ids(self.session.editor.doc(), &self.session.selection)
+                    .is_empty();
+            let can_update = !crate::site_ui::selected_site_models(
+                self.session.editor.doc(),
+                &self.session.selection,
+            )
+            .is_empty();
+            actions = panels::menu_bar(
+                ui,
+                &self.keys,
+                can_undo,
+                can_redo,
+                &mut self.snap_cfg,
+                &mut self.show_grid,
+                can_site,
+                can_update,
+            );
         });
         for a in actions {
             self.apply_menu(&ctx, a);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.io_ui.show(&ctx, &mut self.session, &mut self.status) == crate::io_dialog::IoEvent::Imported {
+        if self.io_ui.show(&ctx, &mut self.session, &mut self.status)
+            == crate::io_dialog::IoEvent::Imported
+        {
             self.needs_fit = true;
         }
         let before = self.session.view.view;
-        egui::Panel::top("viewbar").show(ui, |ui| panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready));
+        egui::Panel::top("viewbar").show(ui, |ui| {
+            panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready)
+        });
         if self.session.view.view != before {
             self.set_standard_view(self.session.view.view);
         }
@@ -688,31 +972,69 @@ impl eframe::App for CadektorApp {
                         ));
                     } else {
                         let v = self.session.view;
-                        ui.label(format!("{} objects, {} selected, {}, {}", d.objects.len(), self.session.selection.len(), v.view.label(), v.projection.id()));
+                        ui.label(format!(
+                            "{} objects, {} selected, {}, {}",
+                            d.objects.len(),
+                            self.session.selection.len(),
+                            v.view.label(),
+                            v.projection.id()
+                        ));
                     }
                 });
             });
         });
         let mut commit = false;
         egui::Panel::bottom("databar").show(ui, |ui| {
-            commit = panels::data_bar(ui, &self.machine, &mut self.settings, &mut self.entry, self.live_cursor, self.snap_hit, self.snap_cfg);
+            commit = panels::data_bar(
+                ui,
+                &self.machine,
+                &mut self.settings,
+                &mut self.entry,
+                self.live_cursor,
+                self.snap_hit,
+                self.snap_cfg,
+            );
         });
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings, self.session.editor.doc()));
-        egui::Panel::right("palettes").default_size(280.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
-                ui.add_space(12.0);
-                panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
-                ui.add_space(12.0);
-                plant_ui::resource_manager(ui, &mut self.session, &mut self.plant_ui, &mut self.status);
-                crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
-                ui.add_space(12.0);
-                plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
+        egui::Panel::left("tools")
+            .resizable(false)
+            .exact_size(170.0)
+            .show(ui, |ui| {
+                panels::tool_panel(
+                    ui,
+                    &mut self.machine,
+                    &self.keys,
+                    &mut self.settings,
+                    self.session.editor.doc(),
+                )
             });
-        });
+        egui::Panel::right("palettes")
+            .default_size(280.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
+                    ui.add_space(12.0);
+                    panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
+                    ui.add_space(12.0);
+                    plant_ui::resource_manager(
+                        ui,
+                        &mut self.session,
+                        &mut self.plant_ui,
+                        &mut self.status,
+                    );
+                    crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
+                    resource_ui::section(
+                        ui,
+                        &mut self.session,
+                        &mut self.resource_ui,
+                        &mut self.status,
+                    );
+                    ui.add_space(12.0);
+                    plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
+                });
+            });
         crate::data_ui::windows(&ctx, &mut self.session, &mut self.status);
         let rect = self.canvas_rect;
         self.sync_saved_views(rect);
@@ -743,19 +1065,40 @@ mod tests {
 
     /// A key press followed by its release, so the next press is not seen as a repeat.
     fn key(k: Key, mods: egui::Modifiers) -> Vec<egui::Event> {
-        let ev = |pressed| egui::Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers: mods };
+        let ev = |pressed| egui::Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed,
+            repeat: false,
+            modifiers: mods,
+        };
         vec![ev(true), ev(false)]
     }
 
     /// Runs one frame of the key handling and the Data bar, like `ui` does.
     fn frame(app: &mut CadektorApp, ctx: &egui::Context, events: Vec<egui::Event>) {
-        let input = egui::RawInput { events, ..Default::default() };
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
         let _ = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            app.entry.sync(app.machine.tool(), app.machine.anchor().is_some(), app.arc_fields());
+            app.entry.sync(
+                app.machine.tool(),
+                app.machine.anchor().is_some(),
+                app.arc_fields(),
+            );
             app.handle_keys(&ctx);
             egui::Panel::bottom("databar").show(ui, |ui| {
-                panels::data_bar(ui, &app.machine, &mut app.settings, &mut app.entry, app.live_cursor, None, app.snap_cfg);
+                panels::data_bar(
+                    ui,
+                    &app.machine,
+                    &mut app.settings,
+                    &mut app.entry,
+                    app.live_cursor,
+                    None,
+                    app.snap_cfg,
+                );
             });
         });
     }
@@ -766,7 +1109,10 @@ mod tests {
         let mut app = CadektorApp::blank();
         let none = egui::Modifiers::NONE;
         app.machine.set_tool(Tool::Line);
-        app.send(Input::Press { p: DVec2::ZERO, shift: false });
+        app.send(Input::Press {
+            p: DVec2::ZERO,
+            shift: false,
+        });
         assert!(app.machine.is_busy());
         frame(&mut app, &ctx, vec![]);
         // Tab moves into the fields.
@@ -787,7 +1133,10 @@ mod tests {
         // Esc leaves the fields and keeps the drawing.
         frame(&mut app, &ctx, key(Key::Escape, none));
         frame(&mut app, &ctx, vec![]);
-        assert!(app.machine.is_busy(), "Esc in a Data bar field must not cancel the drawing");
+        assert!(
+            app.machine.is_busy(),
+            "Esc in a Data bar field must not cancel the drawing"
+        );
         assert!(!app.entry.active);
         // A second Esc, now on the canvas, cancels.
         frame(&mut app, &ctx, key(Key::Escape, none));
@@ -807,8 +1156,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = CadektorApp::blank();
         app.machine.set_tool(Tool::Polyline);
-        app.send(Input::Press { p: DVec2::ZERO, shift: false });
-        app.send(Input::Press { p: DVec2::X, shift: false });
+        app.send(Input::Press {
+            p: DVec2::ZERO,
+            shift: false,
+        });
+        app.send(Input::Press {
+            p: DVec2::X,
+            shift: false,
+        });
         frame(&mut app, &ctx, key(Key::Backspace, egui::Modifiers::NONE));
         assert_eq!(app.machine.anchor(), Some(DVec2::ZERO));
         frame(&mut app, &ctx, key(Key::Backspace, egui::Modifiers::NONE));
@@ -832,7 +1187,14 @@ mod tests {
         }
         assert_eq!(
             seen,
-            [VertexMode::Bezier, VertexMode::Cubic, VertexMode::TangentArc, VertexMode::PointOnArc, VertexMode::Arc, VertexMode::Corner]
+            [
+                VertexMode::Bezier,
+                VertexMode::Cubic,
+                VertexMode::TangentArc,
+                VertexMode::PointOnArc,
+                VertexMode::Arc,
+                VertexMode::Corner
+            ]
         );
         assert_eq!(app.status, "Vertex mode: Corner");
         // The other groups have no buttons for these tools. They do not change the mode.
@@ -891,16 +1253,28 @@ mod tests {
         frame(&mut app, &ctx, vec![]);
         assert!(!app.entry.any_typed());
         assert_eq!(app.settings.arc_radius, 50.0);
-        app.send(Input::Press { p: DVec2::new(200.0, 300.0), shift: false });
+        app.send(Input::Press {
+            p: DVec2::new(200.0, 300.0),
+            shift: false,
+        });
         app.send(Input::Enter);
         let o = app.session.editor.doc().objects.values().next().unwrap();
         let vs = o.shape.vertices().unwrap();
-        assert_eq!(vs[1].kind, cadektor_core::model::VertexKind::Arc { radius: 50.0 });
+        assert_eq!(
+            vs[1].kind,
+            cadektor_core::model::VertexKind::Arc { radius: 50.0 }
+        );
     }
 
     /// A key press the way a real keyboard reports it: the logical key can differ from the physical one.
     fn real_key(logical: Key, physical: Key, mods: egui::Modifiers) -> Vec<egui::Event> {
-        let ev = |pressed| egui::Event::Key { key: logical, physical_key: Some(physical), pressed, repeat: false, modifiers: mods };
+        let ev = |pressed| egui::Event::Key {
+            key: logical,
+            physical_key: Some(physical),
+            pressed,
+            repeat: false,
+            modifiers: mods,
+        };
         vec![ev(true), ev(false)]
     }
 
@@ -908,7 +1282,11 @@ mod tests {
     fn standard_view_keys_switch_between_plan_and_3d() {
         let ctx = egui::Context::default();
         let mut app = CadektorApp::blank();
-        let m = egui::Modifiers { alt: true, shift: true, ..Default::default() };
+        let m = egui::Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
         assert_eq!(app.session.view.view, StandardView::Plan);
         assert!(app.plan());
         // Vectorworks numbering. The logical key is what a US keyboard types with Shift held;
@@ -938,7 +1316,10 @@ mod tests {
         assert_eq!(app.session.view.projection, Projection::Perspective);
         frame(&mut app, &ctx, key(Key::J, m));
         assert_eq!(app.session.view.projection, Projection::Orthographic);
-        let cs = egui::Modifiers { shift: true, ..egui::Modifiers::COMMAND };
+        let cs = egui::Modifiers {
+            shift: true,
+            ..egui::Modifiers::COMMAND
+        };
         frame(&mut app, &ctx, key(Key::W, cs));
         assert_eq!(app.session.view.mode, RenderMode::Wireframe);
         frame(&mut app, &ctx, key(Key::G, cs));
@@ -971,7 +1352,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = CadektorApp::blank();
         app.machine.set_tool(Tool::Line);
-        app.send(Input::Press { p: DVec2::ZERO, shift: false });
+        app.send(Input::Press {
+            p: DVec2::ZERO,
+            shift: false,
+        });
         frame(&mut app, &ctx, key(Key::Tab, egui::Modifiers::NONE));
         frame(&mut app, &ctx, vec![]);
         assert!(app.entry.active);
@@ -990,14 +1374,21 @@ mod tests {
     #[test]
     fn agent_view_set_moves_the_camera() {
         let mut app = CadektorApp::blank();
-        app.session.handle("view.set", serde_json::json!({"view": "back", "projection": "perspective"})).unwrap();
+        app.session
+            .handle(
+                "view.set",
+                serde_json::json!({"view": "back", "projection": "perspective"}),
+            )
+            .unwrap();
         let forced = app.session.take_view_changed();
         assert!(forced);
         app.view3d.sync(app.session.view, forced);
         assert!(!app.plan());
         assert!((app.view3d.camera.eye_dir() - glam::Vec3::Y).length() < 1e-5);
         assert_eq!(app.view3d.camera.projection, Projection::Perspective);
-        app.session.handle("view.set", serde_json::json!({"view": "plan"})).unwrap();
+        app.session
+            .handle("view.set", serde_json::json!({"view": "plan"}))
+            .unwrap();
         assert!(app.session.take_view_changed());
         assert!(app.plan());
     }

@@ -219,11 +219,25 @@ impl WorksheetDef {
     }
 
     /// Sets, formats or clears one cell. An empty input without a format removes the cell.
-    pub fn set_cell(&mut self, address: &str, input: &str, format: Option<CellFormat>) -> Result<(), String> {
-        let at = CellRef::parse(address).ok_or_else(|| format!("'{address}' is not a cell address. Use A1 to {}{}", CellRef::col_name(formula::MAX_COL), formula::MAX_ROW))?;
+    pub fn set_cell(
+        &mut self,
+        address: &str,
+        input: &str,
+        format: Option<CellFormat>,
+    ) -> Result<(), String> {
+        let at = CellRef::parse(address).ok_or_else(|| {
+            format!(
+                "'{address}' is not a cell address. Use A1 to {}{}",
+                CellRef::col_name(formula::MAX_COL),
+                formula::MAX_ROW
+            )
+        })?;
         let key = at.to_string();
         let old = self.cells.get(&key).cloned().unwrap_or_default();
-        let new = CellDef { input: input.to_string(), format: format.unwrap_or(old.format) };
+        let new = CellDef {
+            input: input.to_string(),
+            format: format.unwrap_or(old.format),
+        };
         if new.input.trim().is_empty() && new.format.is_default() {
             self.cells.remove(&key);
         } else {
@@ -243,7 +257,9 @@ impl WorksheetDef {
                 return Err(format!("the cell address '{key}' must be written as {at}"));
             }
             if cell.format.decimals.is_some_and(|d| d > MAX_DECIMALS) {
-                return Err(format!("cell {key}: decimals must be at most {MAX_DECIMALS}"));
+                return Err(format!(
+                    "cell {key}: decimals must be at most {MAX_DECIMALS}"
+                ));
             }
             if let Content::Formula(f) = interpret(&cell.input) {
                 formula::parse(&f).map_err(|e| format!("cell {key}: {e}"))?;
@@ -253,7 +269,9 @@ impl WorksheetDef {
             }
         }
         if self.databases.len() > MAX_DATABASES {
-            return Err(format!("a worksheet has at most {MAX_DATABASES} database blocks"));
+            return Err(format!(
+                "a worksheet has at most {MAX_DATABASES} database blocks"
+            ));
         }
         for (i, db) in self.databases.iter().enumerate() {
             let at = |m: String| format!("database {}: {m}", i + 1);
@@ -267,9 +285,13 @@ impl WorksheetDef {
                 return Err(at(format!("give 1 to {MAX_COLUMNS} columns")));
             }
             for (j, c) in db.columns.iter().enumerate() {
-                formula::parse(&c.expr).map_err(|e| at(format!("column {} ({}): {e}", j + 1, c.header)))?;
+                formula::parse(&c.expr)
+                    .map_err(|e| at(format!("column {} ({}): {e}", j + 1, c.header)))?;
                 if c.decimals.is_some_and(|d| d > MAX_DECIMALS) {
-                    return Err(at(format!("column {}: decimals must be at most {MAX_DECIMALS}", j + 1)));
+                    return Err(at(format!(
+                        "column {}: decimals must be at most {MAX_DECIMALS}",
+                        j + 1
+                    )));
                 }
             }
             if let Some(k) = db.sort.iter().find(|k| k.column >= db.columns.len()) {
@@ -299,7 +321,10 @@ mod tests {
         assert_eq!(interpret("'123"), Content::Const(Value::Text("123".into())));
         assert_eq!(interpret("true"), Content::Const(Value::Bool(true)));
         assert_eq!(interpret("FALSE"), Content::Const(Value::Bool(false)));
-        assert_eq!(interpret("Oak tree"), Content::Const(Value::Text("Oak tree".into())));
+        assert_eq!(
+            interpret("Oak tree"),
+            Content::Const(Value::Text("Oak tree".into()))
+        );
         assert_eq!(interpret("inf"), Content::Const(Value::Text("inf".into())));
         assert_eq!(interpret("NaN"), Content::Const(Value::Text("NaN".into())));
     }
@@ -309,14 +334,30 @@ mod tests {
         let mut w = WorksheetDef::default();
         w.set_cell("b2", "5", None).unwrap();
         assert!(w.cells.contains_key("B2"));
-        w.set_cell("B2", "=A1", Some(CellFormat { decimals: Some(2), unit: "m".into() })).unwrap();
+        w.set_cell(
+            "B2",
+            "=A1",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: "m".into(),
+            }),
+        )
+        .unwrap();
         assert_eq!(w.cells["B2"].format.decimals, Some(2));
         // Changing the input keeps the format.
         w.set_cell("B2", "7", None).unwrap();
         assert_eq!(w.cells["B2"].format.unit, "m");
         w.set_cell("B2", "", Some(CellFormat::default())).unwrap();
         assert!(w.cells.is_empty());
-        w.set_cell("C1", "", Some(CellFormat { decimals: Some(1), unit: String::new() })).unwrap();
+        w.set_cell(
+            "C1",
+            "",
+            Some(CellFormat {
+                decimals: Some(1),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
         assert_eq!(w.cells.len(), 1, "an empty cell with a format stays");
         let e = w.set_cell("1A", "x", None).unwrap_err();
         assert!(e.contains("not a cell address"), "{e}");
@@ -325,26 +366,59 @@ mod tests {
     #[test]
     fn json_round_trip_and_shape() {
         let mut w = WorksheetDef::default();
-        w.set_cell("A1", "=SUM(B1:B3)", Some(CellFormat { decimals: Some(2), unit: String::new() })).unwrap();
+        w.set_cell(
+            "A1",
+            "=SUM(B1:B3)",
+            Some(CellFormat {
+                decimals: Some(2),
+                unit: String::new(),
+            }),
+        )
+        .unwrap();
         w.databases.push(DatabaseDef {
             name: "Plants".into(),
             criteria: "Kind = \"plant\"".into(),
-            columns: vec![ColumnDef { header: "Style".into(), expr: "Style".into(), ..ColumnDef::default() }, ColumnDef { header: "N".into(), expr: "Count".into(), summary: Some(Summary::Sum), ..ColumnDef::default() }],
-            sort: vec![SortKey { column: 0, descending: true }],
+            columns: vec![
+                ColumnDef {
+                    header: "Style".into(),
+                    expr: "Style".into(),
+                    ..ColumnDef::default()
+                },
+                ColumnDef {
+                    header: "N".into(),
+                    expr: "Count".into(),
+                    summary: Some(Summary::Sum),
+                    ..ColumnDef::default()
+                },
+            ],
+            sort: vec![SortKey {
+                column: 0,
+                descending: true,
+            }],
             group_by: Some(0),
             group_mode: GroupMode::Summary,
             ..DatabaseDef::default()
         });
         let v = w.to_value();
         assert_eq!(v["type"], "worksheet");
-        assert_eq!(v["cells"]["A1"], json!({"input": "=SUM(B1:B3)", "decimals": 2}));
+        assert_eq!(
+            v["cells"]["A1"],
+            json!({"input": "=SUM(B1:B3)", "decimals": 2})
+        );
         assert_eq!(v["databases"][0]["columns"][1]["summary"], "sum");
         assert_eq!(WorksheetDef::from_value(&v).unwrap(), w);
         // Defaults for missing fields.
-        let min = WorksheetDef::from_value(&json!({"type": "worksheet", "databases": [{"columns": [{"expr": "Area"}]}]})).unwrap();
+        let min = WorksheetDef::from_value(
+            &json!({"type": "worksheet", "databases": [{"columns": [{"expr": "Area"}]}]}),
+        )
+        .unwrap();
         let db = &min.databases[0];
         assert!(db.header && db.total && db.anchor == "A1" && db.group_mode == GroupMode::Detail);
-        assert!(WorksheetDef::from_value(&json!({"cells": 5})).unwrap_err().contains("not valid"));
+        assert!(
+            WorksheetDef::from_value(&json!({"cells": 5}))
+                .unwrap_err()
+                .contains("not valid")
+        );
         assert_eq!(Summary::Average.id(), "average");
         for s in [Summary::Sum, Summary::Min, Summary::Max, Summary::Count] {
             assert!(!s.id().is_empty());
@@ -352,7 +426,14 @@ mod tests {
     }
 
     fn db() -> DatabaseDef {
-        DatabaseDef { columns: vec![ColumnDef { header: "A".into(), expr: "Area".into(), ..ColumnDef::default() }], ..DatabaseDef::default() }
+        DatabaseDef {
+            columns: vec![ColumnDef {
+                header: "A".into(),
+                expr: "Area".into(),
+                ..ColumnDef::default()
+            }],
+            ..DatabaseDef::default()
+        }
     }
 
     #[test]
@@ -368,19 +449,38 @@ mod tests {
         w.cells.insert("zz".into(), CellDef::default());
         assert!(w.validate().unwrap_err().contains("not a cell address"));
         w.cells.clear();
-        w.cells.insert("A1".into(), CellDef { input: "x".into(), format: CellFormat { decimals: Some(11), unit: String::new() } });
+        w.cells.insert(
+            "A1".into(),
+            CellDef {
+                input: "x".into(),
+                format: CellFormat {
+                    decimals: Some(11),
+                    unit: String::new(),
+                },
+            },
+        );
         assert!(w.validate().unwrap_err().contains("decimals"));
-        w.cells.insert("A1".into(), CellDef { input: "x".repeat(5000), format: CellFormat::default() });
+        w.cells.insert(
+            "A1".into(),
+            CellDef {
+                input: "x".repeat(5000),
+                format: CellFormat::default(),
+            },
+        );
         assert!(w.validate().unwrap_err().contains("too long"));
         w.cells.clear();
         for c in 1..20 {
             for r in 1..1100 {
-                w.cells.insert(format!("{}{r}", CellRef::col_name(c)), CellDef::default());
+                w.cells
+                    .insert(format!("{}{r}", CellRef::col_name(c)), CellDef::default());
             }
         }
         assert!(w.validate().unwrap_err().contains("at most"));
 
-        let mut w = WorksheetDef { databases: vec![db()], ..Default::default() };
+        let mut w = WorksheetDef {
+            databases: vec![db()],
+            ..Default::default()
+        };
         assert!(w.validate().is_ok());
         w.databases[0].anchor = "?".into();
         assert!(w.validate().unwrap_err().contains("database 1"));
@@ -397,7 +497,10 @@ mod tests {
         w.databases[0].columns[0].decimals = Some(12);
         assert!(w.validate().unwrap_err().contains("decimals"));
         w.databases[0] = db();
-        w.databases[0].sort = vec![SortKey { column: 3, descending: false }];
+        w.databases[0].sort = vec![SortKey {
+            column: 3,
+            descending: false,
+        }];
         assert!(w.validate().unwrap_err().contains("sort column"));
         w.databases[0] = db();
         w.databases[0].group_by = Some(1);

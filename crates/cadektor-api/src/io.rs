@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use cadektor_io::{ExportOptions, Format, ImportOptions, IoError};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{params, RpcError, Session};
+use crate::{RpcError, Session, params};
 
 #[derive(Deserialize)]
 struct FileParams {
@@ -29,9 +29,11 @@ fn rpc(e: IoError) -> RpcError {
 fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
     match name {
         None => Ok(None),
-        Some(n) => Format::from_name(n)
-            .map(Some)
-            .ok_or_else(|| RpcError::invalid_params(format!("unknown format '{n}'. Use dxf, shp or geojson (export also: ifc)"))),
+        Some(n) => Format::from_name(n).map(Some).ok_or_else(|| {
+            RpcError::invalid_params(format!(
+                "unknown format '{n}'. Use dxf, shp or geojson (export also: ifc)"
+            ))
+        }),
     }
 }
 
@@ -86,12 +88,20 @@ fn extensions(f: Format) -> &'static [&'static str] {
 impl Session {
     /// The path that a file request may use. In a restricted session the file must be in an allowed folder and have
     /// the extension of its format.
-    fn file_path(&self, path: PathBuf, format: Option<Format>, write: bool) -> Result<PathBuf, RpcError> {
+    fn file_path(
+        &self,
+        path: PathBuf,
+        format: Option<Format>,
+        write: bool,
+    ) -> Result<PathBuf, RpcError> {
         if !self.paths.is_restricted() {
             return Ok(path);
         }
-        let format = format.or_else(|| Format::from_path(&path)).ok_or_else(|| RpcError::invalid_params("unknown file type: give a format (dxf, shp or geojson)"))?;
-        self.check_path(&path, write, extensions(format)).map_err(RpcError::app)
+        let format = format.or_else(|| Format::from_path(&path)).ok_or_else(|| {
+            RpcError::invalid_params("unknown file type: give a format (dxf, shp or geojson)")
+        })?;
+        self.check_path(&path, write, extensions(format))
+            .map_err(RpcError::app)
     }
 
     pub(crate) fn import_file(&mut self, p: Value) -> Result<Value, RpcError> {
@@ -113,12 +123,24 @@ impl Session {
     }
 
     fn import_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
-        let FileParams { path, format, options, .. } = params(p)?;
+        let FileParams {
+            path,
+            format,
+            options,
+            ..
+        } = params(p)?;
         let opts = ImportOptions::from_json(&options).map_err(rpc)?;
         let format = format_of(format.as_deref())?;
-        let path = if checked { self.file_path(path, format, false)? } else { path };
-        let result = cadektor_io::import_file(&path, format, &opts, self.editor.doc()).map_err(rpc)?;
-        self.editor.execute(&result.command).map_err(RpcError::app)?;
+        let path = if checked {
+            self.file_path(path, format, false)?
+        } else {
+            path
+        };
+        let result =
+            cadektor_io::import_file(&path, format, &opts, self.editor.doc()).map_err(rpc)?;
+        self.editor
+            .execute(&result.command)
+            .map_err(RpcError::app)?;
         self.prune_selection();
         Ok(json!({
             "imported": result.report.total(),
@@ -129,20 +151,36 @@ impl Session {
     }
 
     fn export_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
-        let FileParams { path, format, options, overwrite } = params(p)?;
+        let FileParams {
+            path,
+            format,
+            options,
+            overwrite,
+        } = params(p)?;
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.export_ifc_file(path, &options, overwrite, checked);
         }
-        if let Some(f) = format.as_deref().filter(|f| crate::sheets_api::is_sheet_format(f)) {
+        if let Some(f) = format
+            .as_deref()
+            .filter(|f| crate::sheets_api::is_sheet_format(f))
+        {
             return self.export_sheet_file(f, path, &options, overwrite, checked);
         }
         let opts = ExportOptions::from_json(&options).map_err(rpc)?;
         let format = format_of(format.as_deref())?;
-        let path = if checked { self.file_path(path, format, true)? } else { path };
+        let path = if checked {
+            self.file_path(path, format, true)?
+        } else {
+            path
+        };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(RpcError::app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+            return Err(RpcError::app(format!(
+                "{} exists: pass \"overwrite\": true to replace it",
+                path.display()
+            )));
         }
-        let report = cadektor_io::export_file(&path, format, &opts, self.editor.doc()).map_err(rpc)?;
+        let report =
+            cadektor_io::export_file(&path, format, &opts, self.editor.doc()).map_err(rpc)?;
         Ok(json!({ "path": path, "exported": report.total(), "report": report }))
     }
 }

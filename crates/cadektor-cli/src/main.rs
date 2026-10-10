@@ -15,11 +15,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use cadektor_api::{Session, METHODS};
+use cadektor_api::{METHODS, Session};
 use cadektor_core::fsio::{self, AgentInfo};
 use cadektor_core::model::Document;
 use clap::{Parser, Subcommand};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Parser)]
 #[command(name = "cadektor", version, about = "Cadektor CAD, headless")]
@@ -112,7 +112,11 @@ impl Backend {
         }
         let mut session = Session::default();
         // Requests come from agents: they may only use the allowed folders.
-        let dirs = if remote.allow_dir.is_empty() { vec![PathBuf::from(".")] } else { remote.allow_dir };
+        let dirs = if remote.allow_dir.is_empty() {
+            vec![PathBuf::from(".")]
+        } else {
+            remote.allow_dir
+        };
         session.paths = cadektor_api::PathPolicy::restricted(dirs);
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
@@ -137,17 +141,25 @@ impl Backend {
 }
 
 /// Decides where to connect and which token to send.
-fn resolve_remote(connect: &str, token: Option<&str>, info: Option<AgentInfo>) -> Result<(String, String), String> {
+fn resolve_remote(
+    connect: &str,
+    token: Option<&str>,
+    info: Option<AgentInfo>,
+) -> Result<(String, String), String> {
     if connect.is_empty() {
         let info = info.ok_or("no running Cadektor app found: start the app with --agent-port, or give --connect HOST:PORT --token TOKEN")?;
-        return Ok((format!("127.0.0.1:{}", info.port), token.map_or(info.token, str::to_string)));
+        return Ok((
+            format!("127.0.0.1:{}", info.port),
+            token.map_or(info.token, str::to_string),
+        ));
     }
     // The runtime file's token is only for the app that file describes.
-    let from_file = info.filter(|i| connect == format!("127.0.0.1:{}", i.port)).map(|i| i.token);
-    let token = token
-        .map(str::to_string)
-        .or(from_file)
-        .ok_or("--connect HOST:PORT needs --token (the app writes its token to its runtime file)")?;
+    let from_file = info
+        .filter(|i| connect == format!("127.0.0.1:{}", i.port))
+        .map(|i| i.token);
+    let token = token.map(str::to_string).or(from_file).ok_or(
+        "--connect HOST:PORT needs --token (the app writes its token to its runtime file)",
+    )?;
     Ok((connect.to_string(), token))
 }
 
@@ -159,7 +171,9 @@ fn connect_remote(addr: &str, token: &str) -> Result<BufReader<TcpStream>, Strin
     let reply = remote_call(&mut conn, &auth).and_then(|l| serde_json::from_str::<Value>(&l).ok());
     match reply {
         Some(r) if r.get("error").is_none() && r.get("result").is_some() => Ok(conn),
-        _ => Err(format!("{addr} refused the token (is it the right app and token?)")),
+        _ => Err(format!(
+            "{addr} refused the token (is it the right app and token?)"
+        )),
     }
 }
 
@@ -182,7 +196,10 @@ fn load(path: &PathBuf) -> Result<Document, String> {
 
 /// The folder of a document file.
 fn doc_dir_of(file: &std::path::Path) -> Option<PathBuf> {
-    let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let dir = file
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
     std::fs::canonicalize(dir).ok()
 }
 
@@ -196,24 +213,37 @@ fn file_method(s: &mut Session, req: &Value) -> String {
             .check_path(&p, true, &["json"])
             .map_err(|e| (1, e))
             .and_then(|p| {
-                let t = serde_json::to_string_pretty(&s.editor.doc()).map_err(|e| (1, e.to_string()))?;
+                let t = serde_json::to_string_pretty(&s.editor.doc())
+                    .map_err(|e| (1, e.to_string()))?;
                 fsio::write_atomic(&p, t.as_bytes()).map_err(|e| (1, e.to_string()))?;
                 s.doc_dir = doc_dir_of(&p);
                 Ok(())
             }),
-        (_, Some(p)) => s.check_path(&p, false, &["json"]).map_err(|e| (1, e)).and_then(|p| load(&p).map_err(|e| (1, e)).and_then(|d| {
-            s.doc_dir = doc_dir_of(&p);
-            let line = json!({"id": 0, "method": "document.load", "params": {"document": d}}).to_string();
-            let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
-            match r.get("error") {
-                Some(e) => Err((1, e["message"].as_str().unwrap_or("load failed").to_string())),
-                None => Ok(()),
-            }
-        })),
+        (_, Some(p)) => s
+            .check_path(&p, false, &["json"])
+            .map_err(|e| (1, e))
+            .and_then(|p| {
+                load(&p).map_err(|e| (1, e)).and_then(|d| {
+                    s.doc_dir = doc_dir_of(&p);
+                    let line =
+                        json!({"id": 0, "method": "document.load", "params": {"document": d}})
+                            .to_string();
+                    let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
+                    match r.get("error") {
+                        Some(e) => Err((
+                            1,
+                            e["message"].as_str().unwrap_or("load failed").to_string(),
+                        )),
+                        None => Ok(()),
+                    }
+                })
+            }),
     };
     match result {
         Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),
-        Err((code, message)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
+        Err((code, message)) => {
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+        }
     }
     .to_string()
 }
@@ -228,12 +258,20 @@ fn serve(mut backend: Backend) {
         let req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}}));
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})
+                );
                 continue;
             }
         };
         let Some(method) = req["method"].as_str() else {
-            let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": req["id"], "error": {"code": -32600, "message": "missing method"}}));
+            let _ = writeln!(
+                out,
+                "{}",
+                json!({"jsonrpc": "2.0", "id": req["id"], "error": {"code": -32600, "message": "missing method"}})
+            );
             continue;
         };
         let resp = backend.call(req["id"].clone(), method, req["params"].clone());
@@ -254,7 +292,11 @@ const MCP_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26"];
 
 /// The version to answer `initialize` with: the client's if we speak it, else our latest.
 fn mcp_version(requested: Option<&str>) -> &'static str {
-    MCP_VERSIONS.iter().copied().find(|v| Some(*v) == requested).unwrap_or(MCP_VERSIONS[0])
+    MCP_VERSIONS
+        .iter()
+        .copied()
+        .find(|v| Some(*v) == requested)
+        .unwrap_or(MCP_VERSIONS[0])
 }
 
 fn mcp_tools() -> Value {
@@ -290,12 +332,18 @@ fn mcp(mut backend: Backend) {
         let req = match serde_json::from_str::<Value>(&line) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}}));
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}})
+                );
                 let _ = out.flush();
                 continue;
             }
         };
-        let Some(id) = req.get("id").cloned() else { continue }; // notifications need no reply
+        let Some(id) = req.get("id").cloned() else {
+            continue;
+        }; // notifications need no reply
         let result = match req["method"].as_str().unwrap_or("") {
             "initialize" => Ok(json!({
                 "protocolVersion": mcp_version(req["params"]["protocolVersion"].as_str()),
@@ -314,7 +362,9 @@ fn mcp(mut backend: Backend) {
                     .chain(["file.save", "file.open"])
                     .find(|m| tool_name(m) == name);
                 match method {
-                    None => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
+                    None => {
+                        Err(json!({"code": -32602, "message": format!("unknown tool: {name}")}))
+                    }
                     Some(m) => {
                         let r = backend.call(json!(1), m, args);
                         let (text, is_error) = match r.get("error") {
@@ -337,9 +387,17 @@ fn mcp(mut backend: Backend) {
 }
 
 /// Calls `import.file` or `export.file` on a session and returns the result.
-fn io_call(session: &mut Session, method: &str, path: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<Value, String> {
+fn io_call(
+    session: &mut Session,
+    method: &str,
+    path: &std::path::Path,
+    format: Option<String>,
+    options: Option<String>,
+) -> Result<Value, String> {
     let options = match options {
-        Some(t) => serde_json::from_str::<Value>(&t).map_err(|e| format!("--options is not JSON: {e}"))?,
+        Some(t) => {
+            serde_json::from_str::<Value>(&t).map_err(|e| format!("--options is not JSON: {e}"))?
+        }
         None => Value::Null,
     };
     let mut params = json!({"path": path, "options": options});
@@ -354,21 +412,38 @@ fn save(doc: &Document, path: &std::path::Path) -> Result<(), String> {
     fsio::write_atomic(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn import_command(file: &std::path::Path, output: &std::path::Path, base: Option<PathBuf>, format: Option<String>, options: Option<String>) -> Result<(), String> {
+fn import_command(
+    file: &std::path::Path,
+    output: &std::path::Path,
+    base: Option<PathBuf>,
+    format: Option<String>,
+    options: Option<String>,
+) -> Result<(), String> {
     let mut session = Session::default();
     if let Some(base) = base {
         session.editor = cadektor_core::command::Editor::new(load(&base)?);
     }
     let result = io_call(&mut session, "import.file", file, format, options)?;
     save(session.editor.doc(), output)?;
-    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result["report"]).unwrap_or_default()
+    );
     Ok(())
 }
 
-fn export_command(file: &std::path::Path, output: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<(), String> {
+fn export_command(
+    file: &std::path::Path,
+    output: &std::path::Path,
+    format: Option<String>,
+    options: Option<String>,
+) -> Result<(), String> {
     let mut session = Session::with_document(load(&file.to_path_buf())?);
     let result = io_call(&mut session, "export.file", output, format, options)?;
-    println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result["report"]).unwrap_or_default()
+    );
     Ok(())
 }
 
@@ -377,10 +452,26 @@ fn main() {
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
         Cmd::Mcp { file, remote } => Backend::new(file, remote).map(mcp),
-        Cmd::Import { file, output, into, format, options } => import_command(&file, &output, into, format, options),
-        Cmd::Export { file, output, format, options } => export_command(&file, &output, format, options),
-        Cmd::Render { file, output, width } => load(&file).and_then(|doc| {
-            fsio::write_atomic(&output, cadektor_core::svg::render(&doc, width).as_bytes()).map_err(|e| e.to_string())
+        Cmd::Import {
+            file,
+            output,
+            into,
+            format,
+            options,
+        } => import_command(&file, &output, into, format, options),
+        Cmd::Export {
+            file,
+            output,
+            format,
+            options,
+        } => export_command(&file, &output, format, options),
+        Cmd::Render {
+            file,
+            output,
+            width,
+        } => load(&file).and_then(|doc| {
+            fsio::write_atomic(&output, cadektor_core::svg::render(&doc, width).as_bytes())
+                .map_err(|e| e.to_string())
         }),
     };
     if let Err(e) = result {
@@ -395,37 +486,80 @@ mod tests {
     use std::net::TcpListener;
 
     fn info() -> Option<AgentInfo> {
-        Some(AgentInfo { port: 4000, token: "file-token".into() })
+        Some(AgentInfo {
+            port: 4000,
+            token: "file-token".into(),
+        })
     }
 
     #[test]
     fn connect_without_address_uses_the_runtime_file() {
-        assert_eq!(resolve_remote("", None, info()), Ok(("127.0.0.1:4000".into(), "file-token".into())));
-        assert_eq!(resolve_remote("", Some("mine"), info()), Ok(("127.0.0.1:4000".into(), "mine".into())));
-        assert!(resolve_remote("", None, None).unwrap_err().contains("no running Cadektor app"));
+        assert_eq!(
+            resolve_remote("", None, info()),
+            Ok(("127.0.0.1:4000".into(), "file-token".into()))
+        );
+        assert_eq!(
+            resolve_remote("", Some("mine"), info()),
+            Ok(("127.0.0.1:4000".into(), "mine".into()))
+        );
+        assert!(
+            resolve_remote("", None, None)
+                .unwrap_err()
+                .contains("no running Cadektor app")
+        );
     }
 
     #[test]
     fn connect_with_address_needs_a_token_from_the_flag_or_the_file() {
-        assert_eq!(resolve_remote("10.0.0.5:9", Some("t"), None), Ok(("10.0.0.5:9".into(), "t".into())));
-        assert!(resolve_remote("10.0.0.5:9", None, info()).unwrap_err().contains("--token"));
-        assert!(resolve_remote("127.0.0.1:4001", None, info()).unwrap_err().contains("--token"));
-        assert_eq!(resolve_remote("127.0.0.1:4000", None, info()), Ok(("127.0.0.1:4000".into(), "file-token".into())));
-        assert_eq!(resolve_remote("10.0.0.5:9", Some("t"), info()).unwrap().1, "t");
-        assert!(resolve_remote("10.0.0.5:9", None, None).unwrap_err().contains("--token"));
+        assert_eq!(
+            resolve_remote("10.0.0.5:9", Some("t"), None),
+            Ok(("10.0.0.5:9".into(), "t".into()))
+        );
+        assert!(
+            resolve_remote("10.0.0.5:9", None, info())
+                .unwrap_err()
+                .contains("--token")
+        );
+        assert!(
+            resolve_remote("127.0.0.1:4001", None, info())
+                .unwrap_err()
+                .contains("--token")
+        );
+        assert_eq!(
+            resolve_remote("127.0.0.1:4000", None, info()),
+            Ok(("127.0.0.1:4000".into(), "file-token".into()))
+        );
+        assert_eq!(
+            resolve_remote("10.0.0.5:9", Some("t"), info()).unwrap().1,
+            "t"
+        );
+        assert!(
+            resolve_remote("10.0.0.5:9", None, None)
+                .unwrap_err()
+                .contains("--token")
+        );
     }
 
     #[test]
     fn render_png_tool_result_is_an_image() {
         let ok = json!({"result": {"png_base64": "AAAA", "width": 2, "view": "top"}});
         let c = tool_content("render.png", &ok, ok["result"].to_string());
-        assert_eq!(c[0], json!({"type": "image", "data": "AAAA", "mimeType": "image/png"}));
+        assert_eq!(
+            c[0],
+            json!({"type": "image", "data": "AAAA", "mimeType": "image/png"})
+        );
         let meta: Value = serde_json::from_str(c[1]["text"].as_str().unwrap()).unwrap();
         assert_eq!(meta, json!({"width": 2, "view": "top"}));
         // Errors and other methods stay text.
         let err = json!({"error": {"message": "bad"}});
-        assert_eq!(tool_content("render.png", &err, "bad".into()), json!([{"type": "text", "text": "bad"}]));
-        assert_eq!(tool_content("view.list", &ok, "x".into()), json!([{"type": "text", "text": "x"}]));
+        assert_eq!(
+            tool_content("render.png", &err, "bad".into()),
+            json!([{"type": "text", "text": "bad"}])
+        );
+        assert_eq!(
+            tool_content("view.list", &ok, "x".into()),
+            json!([{"type": "text", "text": "x"}])
+        );
     }
 
     #[test]
@@ -467,10 +601,22 @@ mod tests {
     #[test]
     fn connect_remote_reports_refusal_and_unreachable_apps() {
         let (addr, h) = fake_app(false);
-        assert!(connect_remote(&addr, "bad").unwrap_err().contains("refused"));
+        assert!(
+            connect_remote(&addr, "bad")
+                .unwrap_err()
+                .contains("refused")
+        );
         h.join().unwrap();
-        let free = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
-        assert!(connect_remote(&free, "t").unwrap_err().contains("cannot connect"));
+        let free = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .to_string();
+        assert!(
+            connect_remote(&free, "t")
+                .unwrap_err()
+                .contains("cannot connect")
+        );
     }
 
     #[test]
@@ -485,12 +631,23 @@ mod tests {
         assert_eq!(loaded.objects.len(), 1);
         assert!(loaded.georef.is_some());
         // Import a second time into the saved document.
-        import_command(&src, &doc, Some(doc.clone()), Some("geojson".into()), Some(r#"{"layer": "GIS"}"#.into())).unwrap();
+        import_command(
+            &src,
+            &doc,
+            Some(doc.clone()),
+            Some("geojson".into()),
+            Some(r#"{"layer": "GIS"}"#.into()),
+        )
+        .unwrap();
         assert_eq!(load(&doc).unwrap().objects.len(), 2);
         let out = dir.join("out.dxf");
         export_command(&doc, &out, None, Some(r#"{"unit": "m"}"#.into())).unwrap();
         assert!(std::fs::read_to_string(&out).unwrap().contains("ENTITIES"));
-        assert!(import_command(&src, &doc, None, None, Some("{nope".into())).unwrap_err().contains("--options"));
+        assert!(
+            import_command(&src, &doc, None, None, Some("{nope".into()))
+                .unwrap_err()
+                .contains("--options")
+        );
         assert!(import_command(&dir.join("missing.dxf"), &doc, None, None, None).is_err());
         assert!(export_command(&dir.join("missing.json"), &out, None, None).is_err());
         let _ = std::fs::remove_dir_all(dir);

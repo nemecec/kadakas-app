@@ -27,7 +27,11 @@ use crate::tin::Tin;
 pub enum Modifier {
     /// A flat or sloped area. `elevation` is the height at the average of the boundary points.
     /// A slope falls in `direction` (radians from +X) by `percent`.
-    Pad { boundary: Vec<DVec2>, elevation: f64, slope: Option<PadSlope> },
+    Pad {
+        boundary: Vec<DVec2>,
+        elevation: f64,
+        slope: Option<PadSlope>,
+    },
     /// The reach of the modifications.
     GradeLimit { boundary: Vec<DVec2> },
 }
@@ -56,7 +60,11 @@ pub fn on_edge(poly: &[DVec2], p: DVec2) -> bool {
         let (a, b) = (poly[i], poly[(i + 1) % n]);
         let ab = b - a;
         let len2 = ab.length_squared();
-        let t = if len2 == 0.0 { 0.0 } else { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) };
+        let t = if len2 == 0.0 {
+            0.0
+        } else {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        };
         p.distance_squared(a + ab * t) <= 1e-18 * (1.0 + p.length_squared())
     })
 }
@@ -95,7 +103,10 @@ impl Pad<'_> {
     fn z(&self, p: DVec2) -> f64 {
         match self.slope {
             None => self.elevation,
-            Some(s) => self.elevation - s.percent / 100.0 * DVec2::from_angle(s.direction).dot(p - self.mid),
+            Some(s) => {
+                self.elevation
+                    - s.percent / 100.0 * DVec2::from_angle(s.direction).dot(p - self.mid)
+            }
         }
     }
 }
@@ -121,7 +132,11 @@ pub fn proposed_surface(existing: &Tin, modifiers: &[Modifier]) -> Result<Tin, S
     let pads: Vec<Pad> = modifiers
         .iter()
         .filter_map(|m| match m {
-            Modifier::Pad { boundary, elevation, slope } if boundary.len() >= 3 => Some(Pad {
+            Modifier::Pad {
+                boundary,
+                elevation,
+                slope,
+            } if boundary.len() >= 3 => Some(Pad {
                 boundary,
                 elevation: *elevation,
                 slope: *slope,
@@ -140,10 +155,14 @@ pub fn proposed_surface(existing: &Tin, modifiers: &[Modifier]) -> Result<Tin, S
             Modifier::GradeLimit { boundary } if boundary.len() >= 3 => Some(boundary.as_slice()),
             _ => None,
         })
-        .filter(|l| pads.iter().any(|k| k.boundary.iter().all(|p| inside_or_on(l, *p))))
+        .filter(|l| {
+            pads.iter()
+                .any(|k| k.boundary.iter().all(|p| inside_or_on(l, *p)))
+        })
         .collect();
 
-    let (lo, hi) = bounds_of(pads.iter().map(|k| k.boundary).chain(zones.iter().copied())).expect("there is a pad");
+    let (lo, hi) = bounds_of(pads.iter().map(|k| k.boundary).chain(zones.iter().copied()))
+        .expect("there is a pad");
     let mut affected = vec![false; existing.triangles.len()];
     let candidates = existing.triangles_in_box(lo, hi);
     for t in &candidates {
@@ -201,13 +220,23 @@ fn slope_regions(
     // The limit rings, with the points where they cross the existing edges. A point that lies
     // deep inside another slope region is not on the edge of the work, so it is left out.
     for (i, chain) in chains.iter().enumerate() {
-        let others = || zones.iter().enumerate().filter(move |(j, _)| *j != i).map(|(_, l)| *l);
+        let others = || {
+            zones
+                .iter()
+                .enumerate()
+                .filter(move |(j, _)| *j != i)
+                .map(|(_, l)| *l)
+        };
         let free = |p: DVec2| !others().any(|l| strictly_inside(l, p));
         let mut prev: Option<(DVec2, bool)> = None;
         let mut prev_h = None;
         for (p, _) in chain {
             let ok = free(*p);
-            let h = if ok { Some(b.point(*p, z(*p), NONE)?) } else { None };
+            let h = if ok {
+                Some(b.point(*p, z(*p), NONE)?)
+            } else {
+                None
+            };
             if let (Some((_, true)), Some(ph), Some(h)) = (prev, prev_h, h) {
                 b.edge(ph, h);
             }
@@ -223,8 +252,14 @@ fn slope_regions(
     let limit_points: Vec<DVec2> = zones.iter().flat_map(|l| l.iter().copied()).collect();
     for (i, k) in pads.iter().enumerate() {
         for v in k.boundary {
-            let on_top = pads.iter().skip(i + 1).all(|o| !strictly_inside(o.boundary, *v));
-            let nearest = limit_points.iter().copied().min_by(|p, q| p.distance_squared(*v).total_cmp(&q.distance_squared(*v)));
+            let on_top = pads
+                .iter()
+                .skip(i + 1)
+                .all(|o| !strictly_inside(o.boundary, *v));
+            let nearest = limit_points
+                .iter()
+                .copied()
+                .min_by(|p, q| p.distance_squared(*v).total_cmp(&q.distance_squared(*v)));
             if let (true, Some(w)) = (on_top, nearest) {
                 let (hv, hw) = (b.point(*v, z(*v), NONE)?, b.point(w, z(w), NONE)?);
                 b.edge(hv, hw);
@@ -234,20 +269,25 @@ fn slope_regions(
     // The edge of the existing surface inside the work stays the edge of the new surface.
     for (u, v) in existing.boundary_edges() {
         let (pu, pv) = (existing.vertices[u as usize], existing.vertices[v as usize]);
-        let (blo, bhi) = (pu.truncate().min(pv.truncate()), pu.truncate().max(pv.truncate()));
+        let (blo, bhi) = (
+            pu.truncate().min(pv.truncate()),
+            pu.truncate().max(pv.truncate()),
+        );
         if blo.x <= hi.x && bhi.x >= lo.x && blo.y <= hi.y && bhi.y >= lo.y {
             b.segment(pu.truncate(), pv.truncate(), &ground_z)?;
         }
     }
     for f in b.faces() {
         let c = (f[0].xy + f[1].xy + f[2].xy) / 3.0;
-        if existing.locate(c).is_some() && zones.iter().any(|l| inside_or_on(l, c)) && top_pad(pads, c).is_none() {
+        if existing.locate(c).is_some()
+            && zones.iter().any(|l| inside_or_on(l, c))
+            && top_pad(pads, c).is_none()
+        {
             out.triangle(&f, |_, z| z);
         }
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 #[path = "modifier_tests.rs"]
