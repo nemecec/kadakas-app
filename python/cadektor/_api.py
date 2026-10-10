@@ -1071,6 +1071,36 @@ class Api:
         JSON-RPC method ``script.list``."""
         return self._call("script.list", params or None)
 
+    def section_viewport_line_add(self, **params: Any) -> Any:
+        """Add a section line: a vertical cut plane along the line from a to b. params: {a: [x, y], b: [x, y], name? (default "A"), look? (left | right: the side of the line, going from a to b, that the view looks to; default left), mode? (cut | elevation; an elevation cuts nothing and shows the model seen from the line), depth? (far clip in mm; nothing farther than this beyond the line is drawn; default no limit), beyond? (draw the objects beyond the cut; default true), layer?, class?}. The line is a plain line object on a design layer with its settings in data.section_line. Returns {id}.
+
+        JSON-RPC method ``section_viewport.line_add``."""
+        return self._call("section_viewport.line_add", params or None)
+
+    def section_viewport_line_set(self, **params: Any) -> Any:
+        """Change a section line. params: {id, a?, b?, name?, look?, mode?, depth? (null removes the limit), beyond?}. Viewports that show the line follow. Returns {id}.
+
+        JSON-RPC method ``section_viewport.line_set``."""
+        return self._call("section_viewport.line_set", params or None)
+
+    def section_viewport_create(self, **params: Any) -> Any:
+        """Add a viewport on a sheet layer that shows a section line: the cut faces of the 3D objects the line crosses, filled with the fill and hatch of their class, the terrain as a profile line, plants as outlines, and the objects beyond as thin lines with hidden lines removed. params: {sheet, line (section line ID), layers? (design layers that the viewport shows; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator or "fit"; default fit), name?, show_frame?, cut_weight? (mm on paper, default 0.5), beyond_weight? (default 0.15)}. The viewport follows the model and the line. Its center is a point (distance along the line, height) in mm. Returns the viewport with its id.
+
+        JSON-RPC method ``section_viewport.create``."""
+        return self._call("section_viewport.create", params or None)
+
+    def section_viewport_update(self, **params: Any) -> Any:
+        """Change a section viewport. params: {id, and any of line, name, min, max, center ([distance along the line, height] in mm), scale (number or "fit"), layers, show_frame, cut_weight, beyond_weight, fit (true recomputes center and scale from the drawing)}. Returns the viewport.
+
+        JSON-RPC method ``section_viewport.update``."""
+        return self._call("section_viewport.update", params or None)
+
+    def section_viewport_get(self, **params: Any) -> Any:
+        """The drawing of a section. params: {id (a section viewport or a section line), geometry? (true adds all points; default false)}. Returns {line, length_mm, mode, look, cut_faces: [{object, area_m2, rings}], profiles: [{object, length_m, points}], silhouettes, edge_count, bounds, truncated}. Points are [distance along the line, height] in mm. The drawing is cached by document revision.
+
+        JSON-RPC method ``section_viewport.get``."""
+        return self._call("section_viewport.get", params or None)
+
     def group_create(self, **params: Any) -> Any:
         """Group objects as one undo step. params: {ids? (default: the selection), name?}. The objects must be on one layer and in the same group. Selects the group. Returns {id}.
 
@@ -1843,6 +1873,11 @@ METHOD_NAMES: tuple[str, ...] = (
     "script.status",
     "script.stop",
     "script.list",
+    "section_viewport.line_add",
+    "section_viewport.line_set",
+    "section_viewport.create",
+    "section_viewport.update",
+    "section_viewport.get",
     "group.create",
     "group.ungroup",
     "group.enter",

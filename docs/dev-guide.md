@@ -19,9 +19,10 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code | core, sheet |
 | `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, io |
 | `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
+| `cadektor-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core, render |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
 | `cadektor-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, gis, annot, irrigation, script (native only for io, ifc, gis and script) |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, gis, annot, irrigation, script, x3d (native only for io, ifc, gis, print, script and x3d) |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 
@@ -46,7 +47,7 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-app --target wasm32-unknown-unknown
+cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-x3d -p cadektor-app --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
