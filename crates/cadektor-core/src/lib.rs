@@ -4,6 +4,7 @@
 
 pub mod annot;
 pub mod cache;
+pub mod change;
 pub mod command;
 pub mod csv;
 pub mod curve;

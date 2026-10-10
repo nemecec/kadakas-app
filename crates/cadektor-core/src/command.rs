@@ -9,8 +9,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::change::{self, ChangeLog, ChangeSet, DocumentChanged, IdsByKind, Origin};
 use crate::model::*;
-use crate::resource::{ResourceBody, ResourceId, Resources};
+use crate::resource::{Resource, ResourceBody, ResourceId, Resources};
 use crate::uid::Uid;
 
 mod annot_ops;
@@ -539,6 +540,64 @@ pub struct Patch {
 }
 
 impl Patch {
+    /// What this patch changes, as a change set (forward) or what its undo changes (backward).
+    fn change_set(&self, forward: bool, revision: u64, op: &str, origin: Origin) -> ChangeSet {
+        let ids = |list: &[(usize, Object)]| list.iter().map(|(_, o)| o.id).collect::<Vec<_>>();
+        let modified: Vec<ObjectId> = self.modified.iter().map(|(b, _)| b.id).collect();
+        let (new, changed, gone) =
+            change::object_changes(&ids(&self.added), &ids(&self.removed), &modified, forward);
+        let mut added = IdsByKind {
+            objects: new,
+            ..Default::default()
+        };
+        let mut changed = IdsByKind {
+            objects: changed,
+            ..Default::default()
+        };
+        let mut removed = IdsByKind {
+            objects: gone,
+            ..Default::default()
+        };
+        let mut document = DocumentChanged::default();
+        if let Some((before, after)) = &self.meta {
+            let (old, new) = if forward {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            fn layers(m: &Meta) -> Vec<(LayerId, &Layer)> {
+                m.layers.iter().map(|l| (l.id, l)).collect()
+            }
+            fn classes(m: &Meta) -> Vec<(ClassId, &Class)> {
+                m.classes.iter().map(|l| (l.id, l)).collect()
+            }
+            fn resources(m: &Meta) -> Vec<(ResourceId, &Resource)> {
+                m.resources.iter().map(|l| (l.id, l)).collect()
+            }
+            let (a, c, r) = change::diff_by_id(&layers(old), &layers(new));
+            (added.layers, changed.layers, removed.layers) = (a, c, r);
+            let (a, c, r) = change::diff_by_id(&classes(old), &classes(new));
+            (added.classes, changed.classes, removed.classes) = (a, c, r);
+            let (a, c, r) = change::diff_by_id(&resources(old), &resources(new));
+            (added.resources, changed.resources, removed.resources) = (a, c, r);
+            document = DocumentChanged {
+                active_layer: old.active_layer != new.active_layer,
+                active_class: old.active_class != new.active_class,
+                georef: old.georef != new.georef,
+                drawing: old.drawing != new.drawing,
+            };
+        }
+        ChangeSet {
+            revision,
+            op: op.to_string(),
+            origin,
+            added,
+            changed,
+            removed,
+            document,
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.removed.is_empty()
             && self.added.is_empty()
@@ -1384,6 +1443,10 @@ pub struct Editor {
     undo: Vec<Patch>,
     redo: Vec<Patch>,
     revision: u64,
+    /// Who makes the changes now (see [`Editor::set_origin`]).
+    origin: Origin,
+    /// The latest change sets (see `crate::change`).
+    log: ChangeLog,
 }
 
 impl Default for Editor {
@@ -1419,6 +1482,8 @@ impl Editor {
             undo: Vec::new(),
             redo: Vec::new(),
             revision: next_revision(),
+            origin: Origin::User,
+            log: ChangeLog::default(),
         }
     }
 
@@ -1447,9 +1512,12 @@ impl Editor {
         match result {
             Ok(()) => {
                 if !patch.is_empty() {
+                    self.revision = next_revision();
+                    let op = change::op_name(cmd).unwrap_or_else(|| "command".into());
+                    self.log
+                        .push(patch.change_set(true, self.revision, &op, self.origin));
                     self.undo.push(patch);
                     self.redo.clear();
-                    self.revision = next_revision();
                 }
                 Ok(out)
             }
@@ -1461,25 +1529,49 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.undo
-            .pop()
-            .map(|p| {
-                p.apply(&mut self.doc, false);
-                self.redo.push(p);
-                self.revision = next_revision();
-            })
-            .is_some()
+        let Some(p) = self.undo.pop() else {
+            return false;
+        };
+        p.apply(&mut self.doc, false);
+        self.revision = next_revision();
+        self.log
+            .push(p.change_set(false, self.revision, "undo", self.origin));
+        self.redo.push(p);
+        true
     }
 
     pub fn redo(&mut self) -> bool {
-        self.redo
-            .pop()
-            .map(|p| {
-                p.apply(&mut self.doc, true);
-                self.undo.push(p);
-                self.revision = next_revision();
-            })
-            .is_some()
+        let Some(p) = self.redo.pop() else {
+            return false;
+        };
+        p.apply(&mut self.doc, true);
+        self.revision = next_revision();
+        self.log
+            .push(p.change_set(true, self.revision, "redo", self.origin));
+        self.undo.push(p);
+        true
+    }
+
+    /// Who makes the changes from now on. The change sets say it (see `crate::change`). A new
+    /// editor starts with `Origin::User`.
+    pub fn set_origin(&mut self, origin: Origin) {
+        self.origin = origin;
+    }
+
+    pub fn origin(&self) -> Origin {
+        self.origin
+    }
+
+    /// The latest change sets: one for every command, undo and redo since the editor was made
+    /// (older ones go when the log is full).
+    pub fn change_log(&self) -> &ChangeLog {
+        &self.log
+    }
+
+    /// The change sets with a revision above `revision`, oldest first, and whether older ones
+    /// that the caller needs were dropped.
+    pub fn changes_since(&self, revision: u64) -> change::ChangesSince<'_> {
+        self.log.since(revision)
     }
 
     /// Number of steps that `undo` can take back.
@@ -1490,16 +1582,14 @@ impl Editor {
     /// Takes back the last `steps` steps and forgets them: they cannot be redone. For a host that
     /// refuses a call after it ran (see `SessionLimits`).
     pub fn rollback(&mut self, steps: usize) {
-        let mut any = false;
         for _ in 0..steps {
             let Some(p) = self.undo.pop() else { break };
             p.apply(&mut self.doc, false);
-            any = true;
-        }
-        if any {
-            self.redo.clear();
             self.revision = next_revision();
+            self.log
+                .push(p.change_set(false, self.revision, "rollback", self.origin));
         }
+        self.redo.clear();
     }
 
     pub fn can_undo(&self) -> bool {

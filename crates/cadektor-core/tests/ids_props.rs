@@ -60,10 +60,10 @@ proptest! {
                     attrs: Attributes::default(),
                 },
             };
-            if let Ok(out) = ed.execute(&cmd) {
-                if matches!(cmd, Command::AddObject { .. }) {
-                    objects.push(ObjectId(out.created[0]));
-                }
+            if let Ok(out) = ed.execute(&cmd)
+                && matches!(cmd, Command::AddObject { .. })
+            {
+                objects.push(ObjectId(out.created[0]));
             }
         }
         let doc = ed.doc();
