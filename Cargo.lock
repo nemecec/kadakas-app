@@ -574,6 +574,7 @@ dependencies = [
  "base64 0.22.1",
  "cadektor-annot",
  "cadektor-core",
+ "cadektor-crs",
  "cadektor-gis",
  "cadektor-ifc",
  "cadektor-io",
@@ -651,10 +652,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadektor-crs"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "proj4rs",
+ "proptest",
+]
+
+[[package]]
 name = "cadektor-gis"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
+ "cadektor-crs",
  "cadektor-io",
  "image",
  "proptest",
@@ -671,6 +682,7 @@ name = "cadektor-ifc"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
+ "cadektor-crs",
  "cadektor-io",
  "cadektor-site",
  "cadektor-sys",
@@ -688,10 +700,10 @@ version = "0.1.0"
 dependencies = [
  "cadektor-annot",
  "cadektor-core",
+ "cadektor-crs",
  "cadektor-site",
  "cadektor-sys",
  "encoding_rs",
- "proj4rs",
  "proptest",
  "serde",
  "serde_json",

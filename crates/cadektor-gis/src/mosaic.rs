@@ -4,7 +4,7 @@
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
 use cadektor_core::underlay::{MAX_SIDE_PX, PngData, Underlay};
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 use serde::Serialize;
 
 use crate::cache::TileCache;

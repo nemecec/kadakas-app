@@ -2,7 +2,8 @@
 
 use cadektor_core::command::Editor;
 use cadektor_core::model::Document;
-use cadektor_io::{Context, Format, ImportOptions, Source, crs::Crs, importer};
+use cadektor_crs::Crs;
+use cadektor_io::{Context, Format, ImportOptions, Source, importer};
 use proptest::prelude::*;
 
 const DXF: &[u8] = include_bytes!("fixtures/site.dxf");

@@ -909,7 +909,7 @@ fn georef_place(doc: &Document) -> Result<(f64, f64, f64), RpcError> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let p = cadektor_io::crs::place_of(g).ok_or_else(|| app("cannot use the georeference"))?;
+        let p = cadektor_crs::place_of(g).ok_or_else(|| app("cannot use the georeference"))?;
         let (lat, lon) = p
             .lat_lon
             .ok_or_else(|| app("cannot convert the georeference to latitude and longitude"))?;

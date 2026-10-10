@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
 use cadektor_core::underlay::{MAX_SIDE_PX, PngData, Underlay};
-use cadektor_io::crs::{Crs, Transformer, utm_epsg};
+use cadektor_crs::{Crs, Transformer, utm_epsg};
 
 use crate::raster::{Affine, GeoRaster, Rgba, decode_image};
 use crate::tiles::Bbox;

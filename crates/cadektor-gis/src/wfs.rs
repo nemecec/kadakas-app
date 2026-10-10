@@ -8,7 +8,7 @@
 //! (latitude first), which differs between servers.
 
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 use cadektor_io::gis::GisData;
 use cadektor_io::{Context, ImportOptions, ImportResult};
 use serde::{Deserialize, Serialize};

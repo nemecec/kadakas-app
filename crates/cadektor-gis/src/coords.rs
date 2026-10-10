@@ -2,7 +2,7 @@
 
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::{Crs, Transformer};
+use cadektor_crs::{Crs, Transformer};
 use serde::Serialize;
 
 /// A position on the map in the document CRS and in longitude and latitude.

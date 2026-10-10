@@ -5,7 +5,7 @@
 //! view needs. The tiles are put together and warped into the model frame like WMS tiles.
 
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::TileCache;

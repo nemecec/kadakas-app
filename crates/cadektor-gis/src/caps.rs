@@ -381,7 +381,7 @@ pub fn parse_wmts(xml: &str) -> Result<WmtsCaps> {
     let matrix_sets = children(contents, "TileMatrixSet")
         .map(|s| {
             let crs = child_text(s, "SupportedCRS").unwrap_or_default();
-            let code = cadektor_io::crs::Crs::parse(&crs).ok();
+            let code = cadektor_crs::Crs::parse(&crs).ok();
             let y_first = code
                 .as_ref()
                 .is_some_and(|c| northing_first(c.epsg(), c.is_geographic()));

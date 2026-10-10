@@ -7,7 +7,7 @@
 
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::{Crs, Transformer};
+use cadektor_crs::{Crs, Transformer};
 
 use crate::raster::{Affine, GeoRaster, Rgba, bilinear};
 use crate::tiles::Bbox;

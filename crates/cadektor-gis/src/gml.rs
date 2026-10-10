@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 use cadektor_io::gis::{Feature, GisData, Part, Pt};
 use roxmltree::Node;
 use serde_json::Value;

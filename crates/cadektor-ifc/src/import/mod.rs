@@ -386,7 +386,7 @@ impl<'a> Importer<'a> {
                 g.height
             ));
         }
-        let crs_ok = cadektor_io::crs::Crs::parse(&g.crs).is_ok();
+        let crs_ok = cadektor_crs::Crs::parse(&g.crs).is_ok();
         match &self.doc.georef {
             None => {
                 let mut geo = model::to_georef(&g);
@@ -1378,7 +1378,7 @@ fn center_ok(p: DVec2, limit: f64) -> bool {
 }
 
 fn same_crs(a: &str, b: &str) -> bool {
-    use cadektor_io::crs::Crs;
+    use cadektor_crs::Crs;
     if a.trim().eq_ignore_ascii_case(b.trim()) {
         return true;
     }

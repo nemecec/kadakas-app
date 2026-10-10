@@ -9,7 +9,6 @@
 //! entities with a reason in the report.
 
 pub mod builder;
-pub mod crs;
 pub mod dwg;
 pub mod dxf;
 mod encoding;

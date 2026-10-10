@@ -30,32 +30,7 @@ pub fn mercator_to_lonlat(x: f64, y: f64) -> DVec2 {
     DVec2::new(lon, lat)
 }
 
-/// EPSG codes of projected CRSs whose official axis order is northing, easting. (Geographic CRSs
-/// have latitude first, except CRS:84.) `proj4rs` has no axis information, so the table comes
-/// from the axis definitions of the EPSG registry for the grids that are known to be north first:
-/// Estonia (3301), Lithuania (3346), Latvia (3059), Poland (2176 to 2180), Sweden (3006 to 3016,
-/// 3021), the European LAEA and LCC grids (3034, 3035), and the German Gauss-Kruger zones
-/// (31466 to 31469). Most other grids (UTM, Web Mercator, ETRS-TM35FIN 3067, Swiss 2056 and
-/// 21781, Lambert-93, British and Dutch grids) are easting first and need no entry.
-const NORTHING_FIRST: [u32; 21] = [
-    3301, 3346, 3059, 2176, 2177, 2178, 2179, 2180, 3006, 3007, 3008, 3009, 3010, 3011, 3012, 3013,
-    3014, 3015, 3016, 3021, 3034,
-];
-
-/// More ranges that are north first.
-fn northing_first_range(code: u32) -> bool {
-    matches!(code, 3035 | 31466..=31469)
-}
-
-/// True if the official axis order of the CRS is y (north or latitude) first. WMS 1.3.0 and WFS 2.0
-/// use this order in bounding boxes and positions.
-pub fn northing_first(epsg: Option<u32>, geographic: bool) -> bool {
-    match epsg {
-        Some(c) if c == 4326 || c == 3857 => c == 4326,
-        Some(c) => geographic || NORTHING_FIRST.contains(&c) || northing_first_range(c),
-        None => false,
-    }
-}
+pub use cadektor_crs::northing_first;
 
 /// A box in some CRS, x then y.
 #[derive(Clone, Copy, Debug, PartialEq)]

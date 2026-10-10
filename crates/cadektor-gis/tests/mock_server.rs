@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
+use cadektor_crs::Crs;
 use cadektor_gis::cache::TileCache;
 use cadektor_gis::http::{Fetch, HttpClient, UrlPolicy};
 use cadektor_gis::job::Job;
@@ -13,7 +14,6 @@ use cadektor_gis::mosaic::ViewRequest;
 use cadektor_gis::wfs::{self, WfsSource};
 use cadektor_gis::wms::{self, WmsSource};
 use cadektor_gis::wmts::{self, WmtsSource};
-use cadektor_io::crs::Crs;
 use common::{Mock, Reply, png};
 
 fn client() -> HttpClient {

@@ -21,6 +21,7 @@ use cadektor_core::DVec2;
 use cadektor_core::command::Command;
 use cadektor_core::georef::Georeference;
 use cadektor_core::model::{Attributes, ClassId, Document, LayerId, ObjectId, Shape};
+use cadektor_crs::Crs;
 use cadektor_gis::GisError;
 use cadektor_gis::cache::{DEFAULT_LIMIT, TileCache};
 use cadektor_gis::http::{HttpClient, UrlPolicy};
@@ -30,7 +31,6 @@ use cadektor_gis::wfs::{self, WfsSource};
 use cadektor_gis::wms::{self, WmsSource};
 use cadektor_gis::wmts::{self, WmtsSource};
 use cadektor_io::ImportOptions;
-use cadektor_io::crs::Crs;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 

@@ -15,12 +15,12 @@ use cadektor_core::curve;
 use cadektor_core::model::{Document, Object, Shape, arc_sweep};
 use serde_json::{Map, Value, json};
 
-use crate::crs::{Crs, Transformer};
 use crate::gis::{self, Feature, GisData, Part, Pt};
 use crate::{
     Context, ExportOptions, ExportResult, Exporter, Format, ImportOptions, ImportResult, Importer,
     IoError, Report, Source,
 };
+use cadektor_crs::{Crs, Transformer};
 
 pub struct GeoJsonFormat;
 

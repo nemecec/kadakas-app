@@ -15,7 +15,7 @@ use cadektor_core::georef::Georeference;
 use cadektor_core::hardscape::{HardscapePatch, Mode};
 use cadektor_core::landscape::LandscapePatch;
 use cadektor_core::model::{Document, Object, Shape};
-use cadektor_io::crs::{Crs, Transformer};
+use cadektor_crs::{Crs, Transformer};
 use serde::Serialize;
 use std::collections::BTreeMap;
 

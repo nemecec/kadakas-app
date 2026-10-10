@@ -13,9 +13,9 @@ use cadektor_core::{DVec2, DVec3};
 use serde_json::Value;
 
 use crate::builder::Builder;
-use crate::crs::{Crs, Transformer, utm_epsg};
 use crate::options::OriginMode;
 use crate::{Context, ImportOptions, ImportResult, IoError};
+use cadektor_crs::{Crs, Transformer, utm_epsg};
 
 /// A drawing whose center is farther from (0, 0) than this (meters) gets an origin shift.
 const FAR_M: f64 = 1000.0;

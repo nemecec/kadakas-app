@@ -1,7 +1,7 @@
 //! Georeference to IFC: the map conversion, the projected CRS and the site latitude and longitude.
 
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 
 /// What the IFC file says about the position on the earth.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +36,7 @@ impl GeoInfo {
             Some(code) => (format!("EPSG:{code}"), None),
             None => ("Custom".to_string(), Some(text.to_string())),
         };
-        let place = cadektor_io::crs::place_of(g)?;
+        let place = cadektor_crs::place_of(g)?;
         let (lat_lon, true_north) = (place.lat_lon, place.true_north);
         Some(GeoInfo {
             true_north: [true_north.x, true_north.y],

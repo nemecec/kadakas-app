@@ -7,7 +7,7 @@
 
 use cadektor_core::DVec2;
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::Crs;
+use cadektor_crs::Crs;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::TileCache;
