@@ -26,6 +26,87 @@ mod retaining_ops;
 mod table_ops;
 mod transform_ops;
 
+/// How `Command::Arrange` moves objects in the stacking order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Arrange {
+    /// Above all other objects.
+    Front,
+    /// Below all other objects.
+    Back,
+    /// One step up, past the nearest object of the same layer that is not moved.
+    Forward,
+    /// One step down.
+    Backward,
+}
+
+/// The order of all objects after an arrange: the moved objects keep their order among
+/// themselves.
+fn arranged(
+    order: &[ObjectId],
+    layers: &dyn Fn(ObjectId) -> LayerId,
+    moved: &HashSet<ObjectId>,
+    how: Arrange,
+) -> Vec<ObjectId> {
+    let mut rest: Vec<ObjectId> = order
+        .iter()
+        .copied()
+        .filter(|i| !moved.contains(i))
+        .collect();
+    let mine: Vec<ObjectId> = order
+        .iter()
+        .copied()
+        .filter(|i| moved.contains(i))
+        .collect();
+    match how {
+        Arrange::Front => {
+            rest.extend(mine);
+            rest
+        }
+        Arrange::Back => {
+            let mut out = mine;
+            out.extend(rest);
+            out
+        }
+        Arrange::Forward | Arrange::Backward => {
+            // Walk the objects in the direction of the move. A moved object swaps with the
+            // nearest object of its layer that is not moved.
+            let mut out: Vec<ObjectId> = order.to_vec();
+            let n = out.len();
+            let idx: Vec<usize> = if how == Arrange::Forward {
+                (0..n).rev().collect()
+            } else {
+                (0..n).collect()
+            };
+            for i in idx {
+                if !moved.contains(&out[i]) {
+                    continue;
+                }
+                let layer = layers(out[i]);
+                let step = |j: usize| {
+                    if how == Arrange::Forward {
+                        j.checked_add(1).filter(|j| *j < n)
+                    } else {
+                        j.checked_sub(1)
+                    }
+                };
+                let mut j = step(i);
+                while let Some(k) = j {
+                    if layers(out[k]) == layer && !moved.contains(&out[k]) {
+                        out.swap(i, k);
+                        break;
+                    }
+                    if layers(out[k]) == layer {
+                        break;
+                    }
+                    j = step(k);
+                }
+            }
+            out
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
@@ -107,6 +188,18 @@ pub enum Command {
     /// Delete an empty layer.
     DeleteLayer {
         id: LayerId,
+    },
+    /// Move objects in the stacking order (z-order): to the front or the back of all objects, or
+    /// one step forward or backward past the nearest object on the same layer that is not moved.
+    Arrange {
+        ids: Vec<ObjectId>,
+        how: Arrange,
+    },
+    /// Move a layer to a place in the list of layers (0 is the first). A number past the end
+    /// puts it last.
+    MoveLayer {
+        id: LayerId,
+        index: usize,
     },
     AddClass {
         name: String,
@@ -1217,6 +1310,57 @@ impl<'a> Tx<'a> {
             Command::TransformObjects { .. }
             | Command::ArrayObjects { .. }
             | Command::AddObjectLike { .. } => self.run_transform(cmd, out)?,
+            Command::Arrange { ids, how } => {
+                let ids = unique(ids);
+                if ids.is_empty() {
+                    return Err(CommandError::Invalid("give at least one object".into()));
+                }
+                for &id in &ids {
+                    self.editable(id)?;
+                }
+                let moved: HashSet<ObjectId> = ids.iter().copied().collect();
+                let order: Vec<ObjectId> = self.doc.objects.keys().copied().collect();
+                let doc = &*self.doc;
+                let layer_of = |i: ObjectId| doc.object(i).map_or(FIRST_LAYER, |o| o.layer);
+                let target = arranged(&order, &layer_of, &moved, *how);
+                if target != order {
+                    // The moved objects leave and come back at their new places. That is how
+                    // the patch records a change of the stacking order.
+                    let mut objs: Vec<(ObjectId, Object)> = Vec::new();
+                    for &id in &order {
+                        if moved.contains(&id) {
+                            objs.push((id, self.doc.object(id).expect("checked").clone()));
+                        }
+                    }
+                    self.remove_objects(ids.clone());
+                    let mut place: Vec<(usize, ObjectId)> = target
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, i)| moved.contains(i))
+                        .map(|(k, i)| (k, *i))
+                        .collect();
+                    place.sort_unstable();
+                    let mut by_id: std::collections::HashMap<ObjectId, Object> =
+                        objs.into_iter().collect();
+                    for (k, id) in place {
+                        let o = by_id.remove(&id).expect("moved");
+                        self.doc.objects.shift_insert(k, id, o);
+                        self.added.push(id);
+                        self.added_set.insert(id);
+                    }
+                }
+            }
+            Command::MoveLayer { id, index } => {
+                let from = self
+                    .doc
+                    .layers
+                    .iter()
+                    .position(|l| l.id == *id)
+                    .ok_or(CommandError::NoLayer(*id))?;
+                let l = self.doc.layers.remove(from);
+                let to = (*index).min(self.doc.layers.len());
+                self.doc.layers.insert(to, l);
+            }
             Command::SetVisibility {
                 layers,
                 classes,
@@ -3472,5 +3616,132 @@ mod remote_tests {
         assert_eq!(cs.removed.objects, vec![ObjectId(id)]);
         assert_eq!(Origin::parse("remote"), Some(Origin::Remote));
         assert_eq!(Origin::Remote.name(), "remote");
+    }
+}
+
+#[cfg(test)]
+mod arrange_tests {
+    use super::*;
+
+    fn rect(ed: &mut Editor, layer: Option<LayerId>) -> ObjectId {
+        let cmd: Command = serde_json::from_value(serde_json::json!({
+            "op": "add_object", "layer": layer,
+            "shape": {"kind": "rect", "min": [0, 0], "max": [5, 5]}
+        }))
+        .unwrap();
+        ObjectId(ed.execute(&cmd).unwrap().created[0])
+    }
+
+    fn order(ed: &Editor) -> Vec<ObjectId> {
+        ed.doc().objects.keys().copied().collect()
+    }
+
+    fn arrange(ed: &mut Editor, ids: &[ObjectId], how: Arrange) {
+        ed.execute(&Command::Arrange {
+            ids: ids.to_vec(),
+            how,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn arrange_moves_in_the_stacking_order_and_undoes() {
+        let mut ed = Editor::with_sequential_ids();
+        let ids: Vec<ObjectId> = (0..5).map(|_| rect(&mut ed, None)).collect();
+        let start = order(&ed);
+        arrange(&mut ed, &[ids[1]], Arrange::Front);
+        assert_eq!(order(&ed), vec![ids[0], ids[2], ids[3], ids[4], ids[1]]);
+        arrange(&mut ed, &[ids[3], ids[4]], Arrange::Back);
+        assert_eq!(order(&ed), vec![ids[3], ids[4], ids[0], ids[2], ids[1]]);
+        arrange(&mut ed, &[ids[3]], Arrange::Forward);
+        assert_eq!(order(&ed), vec![ids[4], ids[3], ids[0], ids[2], ids[1]]);
+        arrange(&mut ed, &[ids[2]], Arrange::Backward);
+        assert_eq!(order(&ed), vec![ids[4], ids[3], ids[2], ids[0], ids[1]]);
+        // The moved object is in the change set as changed, not added or removed.
+        let rev = ed.revision();
+        arrange(&mut ed, &[ids[0]], Arrange::Front);
+        let cs = ed
+            .changes_since(rev)
+            .changes
+            .last()
+            .cloned()
+            .cloned()
+            .unwrap();
+        assert_eq!(cs.changed.objects, vec![ids[0]]);
+        assert!(cs.added.objects.is_empty() && cs.removed.objects.is_empty());
+        // Undo and redo bring the order back, step by step.
+        for _ in 0..5 {
+            assert!(ed.undo());
+        }
+        assert_eq!(order(&ed), start);
+        for _ in 0..5 {
+            assert!(ed.redo());
+        }
+        assert_eq!(order(&ed), vec![ids[4], ids[3], ids[2], ids[1], ids[0]]);
+        // An arrange that changes nothing makes no step.
+        let depth = ed.undo_depth();
+        arrange(&mut ed, &[ids[0]], Arrange::Front);
+        assert_eq!(ed.undo_depth(), depth);
+        assert!(matches!(
+            ed.execute(&Command::Arrange {
+                ids: vec![],
+                how: Arrange::Front
+            }),
+            Err(CommandError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn forward_and_backward_pass_only_objects_of_the_same_layer() {
+        let mut ed = Editor::with_sequential_ids();
+        ed.execute(&Command::AddLayer {
+            name: "B".into(),
+            elevation: 0.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap();
+        let other = ed.doc().layers[1].id;
+        let a = rect(&mut ed, None);
+        let x = rect(&mut ed, Some(other));
+        let b = rect(&mut ed, None);
+        arrange(&mut ed, &[a], Arrange::Forward);
+        assert_eq!(order(&ed), vec![x, b, a]);
+        arrange(&mut ed, &[a], Arrange::Forward);
+        assert_eq!(order(&ed), vec![x, b, a], "already on top of its layer");
+        arrange(&mut ed, &[a], Arrange::Backward);
+        assert_eq!(order(&ed), vec![x, a, b]);
+    }
+
+    #[test]
+    fn layers_move_and_undo() {
+        let mut ed = Editor::with_sequential_ids();
+        for n in ["B", "C"] {
+            ed.execute(&Command::AddLayer {
+                name: n.into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap();
+        }
+        let names = |ed: &Editor| -> Vec<String> {
+            ed.doc().layers.iter().map(|l| l.name.clone()).collect()
+        };
+        let c = ed.doc().layers[2].id;
+        ed.execute(&Command::MoveLayer { id: c, index: 0 }).unwrap();
+        assert_eq!(names(&ed), vec!["C", "Layer 1", "B"]);
+        ed.execute(&Command::MoveLayer { id: c, index: 99 })
+            .unwrap();
+        assert_eq!(names(&ed), vec!["Layer 1", "B", "C"]);
+        assert!(ed.undo());
+        assert_eq!(names(&ed), vec!["C", "Layer 1", "B"]);
+        assert!(matches!(
+            ed.execute(&Command::MoveLayer {
+                id: LayerId::from_num(99),
+                index: 0
+            }),
+            Err(CommandError::NoLayer(_))
+        ));
     }
 }

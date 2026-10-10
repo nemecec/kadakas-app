@@ -1426,6 +1426,8 @@ fn command_examples() -> Value {
         {"op": "set_vertex", "id": "00000000-0000-0000-0000-000000000002", "index": 1, "kind": {"kind": "arc", "radius": 250}},
         {"op": "move_objects", "ids": ["00000000-0000-0000-0000-000000000002"], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},
+        {"op": "arrange", "ids": ["00000000-0000-0000-0000-000000000002"], "how": "front"},
+        {"op": "move_layer", "id": "00000000-0000-0000-0000-000000000001", "index": 0},
         {"op": "batch", "commands": [{"op": "delete_objects", "ids": ["00000000-0000-0000-0000-000000000002"]}]},
         {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
         {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}},
