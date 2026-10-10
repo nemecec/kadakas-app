@@ -43,7 +43,9 @@ fn convex() -> impl Strategy<Value = Shape> {
     (point(), 20.0f64..300.0, 3usize..9, 0.0f64..6.0).prop_map(|(c, r, n, rot)| Shape::Polyline {
         points: corners(
             &(0..n)
-                .map(|i| c + DVec2::from_angle(rot + std::f64::consts::TAU * i as f64 / n as f64) * r)
+                .map(|i| {
+                    c + DVec2::from_angle(rot + std::f64::consts::TAU * i as f64 / n as f64) * r
+                })
                 .collect::<Vec<_>>(),
         ),
         closed: true,
@@ -98,8 +100,14 @@ fn same_shape(a: &Shape, b: &Shape) -> bool {
             a0.distance(*b0) < 1e-6 && a1.distance(*b1) < 1e-6
         }
         (
-            Shape::Circle { center: c0, radius: r0 },
-            Shape::Circle { center: c1, radius: r1 },
+            Shape::Circle {
+                center: c0,
+                radius: r0,
+            },
+            Shape::Circle {
+                center: c1,
+                radius: r1,
+            },
         ) => c0.distance(*c1) < 1e-6 && close(*r0, *r1, 1e-9),
         (Shape::Polyline { points: p0, .. }, Shape::Polyline { points: p1, .. }) => {
             p0.len() == p1.len() && p0.iter().zip(p1).all(|(a, b)| a.p.distance(b.p) < 1e-6)

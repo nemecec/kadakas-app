@@ -50,7 +50,10 @@ pub fn signed_area(chain: &Chain) -> f64 {
         pts.extend_from_slice(&f[..f.len() - 1]);
     }
     let n = pts.len();
-    (0..n).map(|i| pts[i].perp_dot(pts[(i + 1) % n])).sum::<f64>() / 2.0
+    (0..n)
+        .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))
+        .sum::<f64>()
+        / 2.0
 }
 
 fn set_end(p: &Piece, x: DVec2) -> Piece {
@@ -201,7 +204,10 @@ pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, S
         }
         Shape::Rect { min, max } => {
             let g = grow(side, "rect")?;
-            let (lo, hi) = (min.min(*max) - DVec2::splat(g), min.max(*max) + DVec2::splat(g));
+            let (lo, hi) = (
+                min.min(*max) - DVec2::splat(g),
+                min.max(*max) + DVec2::splat(g),
+            );
             if lo.x >= hi.x || lo.y >= hi.y {
                 return Err("the offset is larger than the rectangle".into());
             }
@@ -215,7 +221,9 @@ pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, S
                 Side::Right => false,
                 Side::Outside | Side::Inside => {
                     if !chain.closed {
-                        return Err("outside and inside need a closed shape. Use left or right".into());
+                        return Err(
+                            "outside and inside need a closed shape. Use left or right".into()
+                        );
                     }
                     // The left of a counterclockwise shape is its inside.
                     let ccw = signed_area(&chain) > 0.0;
@@ -233,7 +241,14 @@ pub fn offset_through(shape: &Shape, through: DVec2) -> Result<(f64, Side), Stri
     match shape {
         Shape::Circle { center, radius } => {
             let d = through.distance(*center) - radius;
-            Ok((d.abs(), if d >= 0.0 { Side::Outside } else { Side::Inside }))
+            Ok((
+                d.abs(),
+                if d >= 0.0 {
+                    Side::Outside
+                } else {
+                    Side::Inside
+                },
+            ))
         }
         Shape::Rect { min, max } => {
             let (lo, hi) = (min.min(*max), min.max(*max));
@@ -242,7 +257,11 @@ pub fn offset_through(shape: &Shape, through: DVec2) -> Result<(f64, Side), Stri
             // Rectangle offsets keep the shape of the rectangle: the distance is the largest
             // step outwards, or inwards.
             let outside = q.x > 0.0 || q.y > 0.0;
-            let d = if outside { q.max_element() } else { -q.max_element() };
+            let d = if outside {
+                q.max_element()
+            } else {
+                -q.max_element()
+            };
             Ok((d, if outside { Side::Outside } else { Side::Inside }))
         }
         _ => {
@@ -269,7 +288,10 @@ pub fn polygon_area(points: &[DVec2]) -> f64 {
 /// Flattened corners of a closed shape (used to measure the area of offsets).
 pub fn outline_points(shape: &Shape) -> Option<Vec<DVec2>> {
     match shape {
-        Shape::Polyline { points, closed: true } => Some(curve::flatten(points, true, 0.001)),
+        Shape::Polyline {
+            points,
+            closed: true,
+        } => Some(curve::flatten(points, true, 0.001)),
         Shape::Rect { min, max } => Some(vec![
             *min,
             DVec2::new(max.x, min.y),
@@ -351,14 +373,20 @@ mod tests {
 
     #[test]
     fn a_polygon_offsets_to_a_miter() {
-        let sq = poly(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)], true);
+        let sq = poly(
+            &[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            true,
+        );
         let out = offset_shape(&sq, 1.0, Side::Outside).unwrap();
         let a = polygon_area(&outline_points(&out).unwrap());
         assert!((a - 144.0).abs() < 1e-9, "{a}");
         let inn = offset_shape(&sq, 1.0, Side::Inside).unwrap();
         assert!((polygon_area(&outline_points(&inn).unwrap()) - 64.0).abs() < 1e-9);
         // The same square in the other direction gives the same outside.
-        let cw = poly(&[v(0.0, 10.0), v(10.0, 10.0), v(10.0, 0.0), v(0.0, 0.0)], true);
+        let cw = poly(
+            &[v(0.0, 10.0), v(10.0, 10.0), v(10.0, 0.0), v(0.0, 0.0)],
+            true,
+        );
         let out = offset_shape(&cw, 1.0, Side::Outside).unwrap();
         assert!((polygon_area(&outline_points(&out).unwrap()) - 144.0).abs() < 1e-9);
         // Too much inside: the shape vanishes.
@@ -418,26 +446,54 @@ mod tests {
             center: v(0.0, 0.0),
             radius: 5.0,
         };
-        assert_eq!(offset_through(&c, v(8.0, 0.0)).unwrap(), (3.0, Side::Outside));
+        assert_eq!(
+            offset_through(&c, v(8.0, 0.0)).unwrap(),
+            (3.0, Side::Outside)
+        );
         let l = Shape::Line {
             a: v(0.0, 0.0),
             b: v(10.0, 0.0),
         };
-        assert_eq!(offset_through(&l, v(4.0, -3.0)).unwrap(), (3.0, Side::Right));
+        assert_eq!(
+            offset_through(&l, v(4.0, -3.0)).unwrap(),
+            (3.0, Side::Right)
+        );
         assert_eq!(offset_through(&l, v(4.0, 3.0)).unwrap(), (3.0, Side::Left));
         let r = Shape::Rect {
             min: v(0.0, 0.0),
             max: v(10.0, 10.0),
         };
-        assert_eq!(offset_through(&r, v(13.0, 5.0)).unwrap(), (3.0, Side::Outside));
-        assert_eq!(offset_through(&r, v(2.0, 5.0)).unwrap(), (2.0, Side::Inside));
-        assert!(offset_through(&Shape::Text { at: v(0.0, 0.0), text: "x".into(), height: 1.0 }, v(1.0, 1.0)).is_err());
+        assert_eq!(
+            offset_through(&r, v(13.0, 5.0)).unwrap(),
+            (3.0, Side::Outside)
+        );
+        assert_eq!(
+            offset_through(&r, v(2.0, 5.0)).unwrap(),
+            (2.0, Side::Inside)
+        );
+        assert!(
+            offset_through(
+                &Shape::Text {
+                    at: v(0.0, 0.0),
+                    text: "x".into(),
+                    height: 1.0
+                },
+                v(1.0, 1.0)
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn side_names() {
         assert_eq!(Side::from_name("inside"), Some(Side::Inside));
         assert_eq!(Side::from_name("up"), None);
-        assert_eq!(outline_points(&Shape::Circle { center: v(0.0, 0.0), radius: 1.0 }), None);
+        assert_eq!(
+            outline_points(&Shape::Circle {
+                center: v(0.0, 0.0),
+                radius: 1.0
+            }),
+            None
+        );
     }
 }

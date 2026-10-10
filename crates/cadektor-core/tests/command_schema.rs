@@ -23,7 +23,8 @@ fn the_command_schema_matches_the_saved_copy() {
         std::fs::write(golden_path(), &now).unwrap();
         return;
     }
-    let saved = std::fs::read_to_string(golden_path()).expect("tests/command_schema.json is missing: run with UPDATE_SCHEMA=1");
+    let saved = std::fs::read_to_string(golden_path())
+        .expect("tests/command_schema.json is missing: run with UPDATE_SCHEMA=1");
     assert!(
         saved == now,
         "the command schema changed. If this is on purpose, run: UPDATE_SCHEMA=1 cargo test -p cadektor-core --test command_schema"
@@ -42,13 +43,23 @@ fn the_schema_describes_known_commands() {
     };
     // A command has its required fields.
     let mv = find("move_objects");
-    let required: Vec<&str> = mv["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let required: Vec<&str> = mv["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert!(required.contains(&"ids") && required.contains(&"delta") && required.contains(&"op"));
     // A point is a pair of numbers.
     assert_eq!(mv["properties"]["delta"]["type"], "array");
     assert_eq!(mv["properties"]["delta"]["maxItems"], 2);
     // Optional fields are not required.
     let add = find("add_object");
-    let required: Vec<&str> = add["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let required: Vec<&str> = add["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert_eq!(required, ["op", "shape"]);
 }

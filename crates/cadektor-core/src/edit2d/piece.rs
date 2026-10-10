@@ -21,9 +21,17 @@ pub const T_EPS: f64 = 1e-9;
 /// A piece of a curve: a line segment or a circular arc.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Piece {
-    Line { a: DVec2, b: DVec2 },
+    Line {
+        a: DVec2,
+        b: DVec2,
+    },
     /// `sweep` is signed: positive is counterclockwise. Its size is above 0 and at most a turn.
-    Arc { c: DVec2, r: f64, start: f64, sweep: f64 },
+    Arc {
+        c: DVec2,
+        r: f64,
+        start: f64,
+        sweep: f64,
+    },
 }
 
 fn at_angle(c: DVec2, r: f64, a: f64) -> DVec2 {
@@ -130,7 +138,9 @@ impl Piece {
                 let l2 = d.length_squared();
                 if l2 == 0.0 { 0.0 } else { (p - a).dot(d) / l2 }
             }
-            Piece::Arc { c, start, sweep, .. } => {
+            Piece::Arc {
+                c, start, sweep, ..
+            } => {
                 let w = sweep.abs();
                 let th = (p - c).to_angle();
                 let u = ((th - start) * sweep.signum()).rem_euclid(TAU);
@@ -200,7 +210,11 @@ impl Piece {
 
 /// How many chords cover an arc so that no chord is further than `tol` from the curve.
 pub fn arc_steps(r: f64, sweep: f64, tol: f64) -> usize {
-    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.01 };
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol
+    } else {
+        0.01
+    };
     let step = if tol >= r {
         PI
     } else {
@@ -469,7 +483,10 @@ impl Chain {
             && let Piece::Arc { c, r, sweep, .. } = this.pieces[0]
             && (sweep.abs() - TAU).abs() < 1e-9
         {
-            return Shape::Circle { center: c, radius: r };
+            return Shape::Circle {
+                center: c,
+                radius: r,
+            };
         }
         if !this.closed && this.pieces.len() == 1 {
             match this.pieces[0] {
@@ -534,8 +551,15 @@ impl Chain {
     pub fn merged(&self) -> Chain {
         let mut out: Vec<Piece> = Vec::with_capacity(self.pieces.len());
         for p in &self.pieces {
-            if let (Some(Piece::Arc { c, r, start, sweep }), Piece::Arc { c: c2, r: r2, sweep: s2, .. }) =
-                (out.last().copied(), *p)
+            if let (
+                Some(Piece::Arc { c, r, start, sweep }),
+                Piece::Arc {
+                    c: c2,
+                    r: r2,
+                    sweep: s2,
+                    ..
+                },
+            ) = (out.last().copied(), *p)
             {
                 let tol = 1e-9 * (1.0 + r);
                 if c.distance(c2) <= tol
@@ -564,7 +588,16 @@ impl Chain {
         if chain.closed && chain.pieces.len() > 1 {
             let last = *chain.pieces.last().expect("not empty");
             let first = chain.pieces[0];
-            if let (Piece::Arc { c, r, start, sweep }, Piece::Arc { c: c2, r: r2, sweep: s2, .. }) = (last, first) {
+            if let (
+                Piece::Arc { c, r, start, sweep },
+                Piece::Arc {
+                    c: c2,
+                    r: r2,
+                    sweep: s2,
+                    ..
+                },
+            ) = (last, first)
+            {
                 let tol = 1e-9 * (1.0 + r);
                 if c.distance(c2) <= tol
                     && (r - r2).abs() <= tol
@@ -689,7 +722,10 @@ mod tests {
     #[test]
     fn offsets_of_lines_and_arcs() {
         let l = Piece::line(v(0.0, 0.0), v(10.0, 0.0));
-        assert_eq!(l.offset(2.0).unwrap(), Piece::line(v(0.0, 2.0), v(10.0, 2.0)));
+        assert_eq!(
+            l.offset(2.0).unwrap(),
+            Piece::line(v(0.0, 2.0), v(10.0, 2.0))
+        );
         let a = Piece::Arc {
             c: v(0.0, 0.0),
             r: 5.0,
@@ -722,7 +758,13 @@ mod tests {
         })
         .unwrap();
         assert!((circle.length() - TAU * 2.0).abs() < 1e-9);
-        assert!(Chain::from_shape(&Shape::Line { a: v(1.0, 1.0), b: v(1.0, 1.0) }).is_none());
+        assert!(
+            Chain::from_shape(&Shape::Line {
+                a: v(1.0, 1.0),
+                b: v(1.0, 1.0)
+            })
+            .is_none()
+        );
         // A rounded polyline has arcs.
         let poly = Shape::Polyline {
             points: vec![

@@ -1,166 +1,96 @@
-//! Snapping math: object vertices and centers first, then the grid.
+//! Snapping in the app: the pure math is in `cadektor_core::snapping`. This module builds the
+//! geometry that the pointer can snap to (the irrigation objects add their own points) and draws
+//! the marks, cue labels and guides.
 
-use cadektor_core::model::{Document, ObjectId, Shape};
+use cadektor_core::model::{Document, ObjectId};
+use cadektor_core::snapping::{self, Context, Geometry, Guide, Kind, Reach, Settings, Smart};
 use glam::DVec2;
 
+/// What an irrigation object offers to snap to. `Vertex` is an end or corner, `Center` a center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapKind {
-    Grid,
     Vertex,
     Center,
 }
 
-impl SnapKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            SnapKind::Grid => "Grid",
-            SnapKind::Vertex => "Vertex",
-            SnapKind::Center => "Center",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SnapResult {
-    pub point: DVec2,
-    pub kind: SnapKind,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SnapConfig {
-    pub grid: bool,
-    pub objects: bool,
-}
-
-impl Default for SnapConfig {
-    fn default() -> Self {
-        SnapConfig {
-            grid: true,
-            objects: true,
-        }
-    }
-}
-
 pub type SnapPoint = (DVec2, SnapKind);
 
-fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
-    [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)]
+/// A snap for the pointer, with what the canvas draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SnapResult {
+    pub point: DVec2,
+    pub kind: Kind,
+    /// The text of the cue label.
+    pub cue: String,
+    pub guides: Vec<Guide>,
 }
 
-pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
-    use SnapKind::*;
-    match shape {
-        Shape::Line { a, b } => out.extend([(*a, Vertex), (*b, Vertex)]),
-        Shape::Rect { min, max } => out.extend([
-            (*min, Vertex),
-            (DVec2::new(max.x, min.y), Vertex),
-            (*max, Vertex),
-            (DVec2::new(min.x, max.y), Vertex),
-            ((*min + *max) / 2.0, Center),
-        ]),
-        Shape::Circle { center, radius } => {
-            out.push((*center, Center));
-            for d in [DVec2::X, DVec2::Y, -DVec2::X, -DVec2::Y] {
-                out.push((*center + d * *radius, Vertex));
+impl From<snapping::Snap> for SnapResult {
+    fn from(s: snapping::Snap) -> SnapResult {
+        SnapResult {
+            point: s.point,
+            kind: s.kind,
+            cue: s.cue,
+            guides: s.guides,
+        }
+    }
+}
+
+/// The geometry near the pointer: objects of the document and irrigation objects.
+pub fn geometry(
+    doc: &Document,
+    exclude: &[ObjectId],
+    settings: &Settings,
+    near: Option<(DVec2, f64)>,
+) -> Geometry {
+    let reach = Reach::from(settings);
+    let mut g = Geometry::from_doc(doc, exclude, reach, near);
+    for o in doc.objects.values() {
+        let cadektor_core::model::Shape::Irrigation(i) = &o.shape else {
+            continue;
+        };
+        if exclude.contains(&o.id) || !reach.allows(doc, o) {
+            continue;
+        }
+        let mut pts: Vec<SnapPoint> = Vec::new();
+        crate::irrigation_ui::snap_points(i, &mut pts);
+        for (p, k) in pts {
+            let near_enough = near.is_none_or(|(c, r)| p.distance(c) <= r);
+            if near_enough {
+                g.add_point(
+                    p,
+                    match k {
+                        SnapKind::Vertex => Kind::Endpoint,
+                        SnapKind::Center => Kind::Center,
+                    },
+                );
             }
         }
-        Shape::Arc {
-            center,
-            radius,
-            start,
-            end,
-        } => out.extend([
-            (*center, Center),
-            (*center + DVec2::from_angle(*start) * *radius, Vertex),
-            (*center + DVec2::from_angle(*end) * *radius, Vertex),
-        ]),
-        Shape::Polyline { points, .. }
-        | Shape::LandscapeArea {
-            boundary: points, ..
-        }
-        | Shape::SiteModifier {
-            boundary: points, ..
-        }
-        | Shape::Hardscape {
-            boundary: points, ..
-        } => out.extend(points.iter().map(|v| (v.p, Vertex))),
-        Shape::Massing(m) => out.extend(m.footprint.iter().map(|v| (v.p, Vertex))),
-        Shape::Mesh3d(m) => {
-            let (lo, hi) = m.bounds3();
-            out.extend(
-                rect_corners(lo.truncate(), hi.truncate())
-                    .into_iter()
-                    .map(|p| (p, Vertex)),
-            )
-        }
-        Shape::Underlay(u) => {
-            out.extend(rect_corners(u.min, u.max).into_iter().map(|p| (p, Vertex)))
-        }
-        Shape::SiteModel { points, lines, .. } => out.extend(
-            points
-                .iter()
-                .chain(lines.iter().flat_map(|l| &l.points))
-                .take(5000)
-                .map(|p| (p.truncate(), Vertex)),
-        ),
-        Shape::Locus3d { p } => out.push((p.truncate(), Vertex)),
-        Shape::Polyline3d { points, .. } => {
-            out.extend(points.iter().map(|p| (p.truncate(), Vertex)))
-        }
-        Shape::Text { at, .. } => out.push((*at, Vertex)),
-        Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => out.push((*at, Center)),
-        Shape::PlantTag { at, anchor, .. } => out.extend([(*at, Vertex), (*anchor, Vertex)]),
-        Shape::Viewport(vp) => out.extend(
-            rect_corners(vp.min, vp.max)
-                .into_iter()
-                .map(|p| (p, Vertex)),
-        ),
-        Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Annotation(_) => {}
-        Shape::Symbol { at, .. } => out.push((*at, Center)),
-        Shape::Irrigation(i) => crate::irrigation_ui::snap_points(i, out),
     }
+    g
 }
 
-/// Snap candidates of all visible objects, except those in `exclude`.
-pub fn snap_points(doc: &Document, exclude: &[ObjectId]) -> Vec<SnapPoint> {
-    let mut out = Vec::new();
-    for o in doc
-        .objects
-        .values()
-        .filter(|o| doc.is_pickable(o) && !exclude.contains(&o.id))
-    {
-        shape_snap_points(&o.shape, &mut out);
-    }
-    out
-}
-
-pub fn snap_to_grid(p: DVec2, step: f64) -> DVec2 {
-    (p / step).round() * step
-}
-
-/// Snaps `cursor`. An object point within `tol` wins over the grid.
-/// The grid always applies when it is on.
-pub fn snap(
+/// Where the pointer snaps to.
+#[allow(clippy::too_many_arguments)]
+pub fn snap_cursor(
+    doc: &Document,
     cursor: DVec2,
     tol: f64,
     grid_step: f64,
-    cfg: SnapConfig,
-    pts: &[SnapPoint],
+    settings: &Settings,
+    smart: &Smart,
+    anchor: Option<DVec2>,
+    prior_direction: Option<f64>,
+    exclude: &[ObjectId],
 ) -> Option<SnapResult> {
-    if cfg.objects {
-        let best = pts
-            .iter()
-            .map(|(p, k)| (p.distance(cursor), *p, *k))
-            .filter(|(d, _, _)| *d <= tol)
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, point, kind)) = best {
-            return Some(SnapResult { point, kind });
-        }
-    }
-    cfg.grid.then(|| SnapResult {
-        point: snap_to_grid(cursor, grid_step),
-        kind: SnapKind::Grid,
-    })
+    let geom = geometry(doc, exclude, settings, Some((cursor, tol * 4.0)));
+    let ctx = Context {
+        tol,
+        grid_step,
+        anchor,
+        prior_direction,
+    };
+    snapping::snap(cursor, &ctx, settings, &geom, smart).map(SnapResult::from)
 }
 
 #[cfg(test)]
@@ -168,7 +98,7 @@ mod tests {
     use super::*;
     use cadektor_api::Session;
     use cadektor_core::command::Command;
-    use cadektor_core::model::Attributes;
+    use cadektor_core::model::{Attributes, Shape};
 
     fn add(s: &mut Session, shape: Shape) -> ObjectId {
         ObjectId(
@@ -182,61 +112,6 @@ mod tests {
                 .unwrap()
                 .created[0],
         )
-    }
-
-    #[test]
-    fn grid_rounding() {
-        assert_eq!(
-            snap_to_grid(DVec2::new(124.0, -76.0), 50.0),
-            DVec2::new(100.0, -100.0)
-        );
-    }
-
-    #[test]
-    fn vertex_beats_grid() {
-        let pts = vec![(DVec2::new(103.0, 98.0), SnapKind::Vertex)];
-        let r = snap(
-            DVec2::new(100.0, 100.0),
-            10.0,
-            50.0,
-            SnapConfig::default(),
-            &pts,
-        )
-        .unwrap();
-        assert_eq!(r.kind, SnapKind::Vertex);
-        assert_eq!(r.point, DVec2::new(103.0, 98.0));
-    }
-
-    #[test]
-    fn far_vertex_falls_back_to_grid_or_none() {
-        let pts = vec![(DVec2::new(500.0, 500.0), SnapKind::Vertex)];
-        let r = snap(
-            DVec2::new(101.0, 99.0),
-            10.0,
-            50.0,
-            SnapConfig::default(),
-            &pts,
-        )
-        .unwrap();
-        assert_eq!(
-            (r.kind, r.point),
-            (SnapKind::Grid, DVec2::new(100.0, 100.0))
-        );
-        let off = SnapConfig {
-            grid: false,
-            objects: true,
-        };
-        assert!(snap(DVec2::new(101.0, 99.0), 10.0, 50.0, off, &pts).is_none());
-    }
-
-    #[test]
-    fn nearest_wins() {
-        let pts = vec![
-            (DVec2::new(0.0, 8.0), SnapKind::Vertex),
-            (DVec2::new(0.0, 3.0), SnapKind::Center),
-        ];
-        let r = snap(DVec2::ZERO, 10.0, 50.0, SnapConfig::default(), &pts).unwrap();
-        assert_eq!(r.kind, SnapKind::Center);
     }
 
     #[test]
@@ -258,46 +133,101 @@ mod tests {
                 height: 10.0,
             },
         );
-        let all = snap_points(s.editor.doc(), &[]);
-        assert_eq!(all.len(), 6);
-        assert!(all.contains(&(DVec2::new(50.0, 25.0), SnapKind::Center)));
-        assert_eq!(snap_points(s.editor.doc(), &[a]).len(), 1);
+        let st = Settings::default();
+        let g = geometry(s.editor.doc(), &[], &st, None);
+        // Rectangle: 4 corners, 4 midpoints, the center. Plant: its position.
+        assert_eq!(g.points.len(), 10);
+        assert!(
+            g.points
+                .iter()
+                .any(|p| p.p == DVec2::new(50.0, 25.0) && p.kind == Kind::Center)
+        );
+        assert_eq!(geometry(s.editor.doc(), &[a], &st, None).points.len(), 1);
+        // Only near the pointer.
+        let near = geometry(
+            s.editor.doc(),
+            &[],
+            &st,
+            Some((DVec2::new(1000.0, 1000.0), 10.0)),
+        );
+        assert!(near.points.is_empty());
     }
 
     #[test]
-    fn trees_and_tags_have_snap_points() {
-        use cadektor_core::plants::tree::{TreeAction, TreeCondition};
-        let mut out = Vec::new();
-        shape_snap_points(
-            &Shape::ExistingTree {
-                at: DVec2::new(1.0, 2.0),
-                species: String::new(),
-                dbh: 300.0,
-                spread: 4000.0,
-                height: 9000.0,
-                condition: TreeCondition::Good,
-                action: TreeAction::Retain,
-                rpz_factor: None,
-                rpz_cap: None,
+    fn snapping_uses_the_settings_and_the_smart_points() {
+        let mut s = Session::default();
+        add(
+            &mut s,
+            Shape::Line {
+                a: DVec2::new(0.0, 0.0),
+                b: DVec2::new(100.0, 0.0),
             },
-            &mut out,
         );
-        shape_snap_points(
-            &Shape::PlantTag {
-                at: DVec2::new(5.0, 5.0),
-                anchor: DVec2::new(6.0, 6.0),
-                style: cadektor_core::resource::ResourceId(1),
-                height: 400.0,
-            },
-            &mut out,
-        );
+        let st = Settings::default();
+        let r = snap_cursor(
+            s.editor.doc(),
+            DVec2::new(2.0, 3.0),
+            10.0,
+            50.0,
+            &st,
+            &Smart::default(),
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(
-            out.iter().map(|p| p.0).collect::<Vec<_>>(),
-            vec![
-                DVec2::new(1.0, 2.0),
-                DVec2::new(5.0, 5.0),
-                DVec2::new(6.0, 6.0)
-            ]
+            (r.kind, r.point, r.cue.as_str()),
+            (Kind::Endpoint, DVec2::ZERO, "Endpoint")
         );
+        let mut smart = Smart::default();
+        smart.acquire_point(DVec2::new(300.0, 400.0));
+        let r = snap_cursor(
+            s.editor.doc(),
+            DVec2::new(303.0, 402.0),
+            10.0,
+            50.0,
+            &Settings {
+                set: snapping::SnapSet {
+                    grid: false,
+                    ..Default::default()
+                },
+                ..st
+            },
+            &smart,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(r.kind, Kind::SmartPoint);
+        assert_eq!(r.point, DVec2::new(300.0, 400.0));
+    }
+
+    #[test]
+    fn irrigation_objects_are_snap_points() {
+        use cadektor_core::irrigation::{IrrigationShape, LineType};
+        let mut s = Session::default();
+        add(
+            &mut s,
+            Shape::Irrigation(Box::new(IrrigationShape::Line {
+                points: vec![DVec2::new(0.0, 0.0), DVec2::new(1000.0, 0.0)],
+                line_type: LineType::Lateral,
+                size: "32".into(),
+                material: "PE".into(),
+                emitter_spacing: None,
+                emitter_flow: None,
+            })),
+        );
+        let g = geometry(s.editor.doc(), &[], &Settings::default(), None);
+        assert_eq!(g.points.len(), 2);
+        assert!(g.points.iter().all(|p| p.kind == Kind::Endpoint));
+        let near = geometry(
+            s.editor.doc(),
+            &[],
+            &Settings::default(),
+            Some((DVec2::new(1000.0, 3.0), 10.0)),
+        );
+        assert_eq!(near.points.len(), 1);
     }
 }

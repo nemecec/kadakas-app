@@ -63,7 +63,8 @@ impl Transform {
                 if !a.is_finite() || !b.is_finite() {
                     return Err("numbers must be finite".into());
                 }
-                Xf::mirror(*a, *b).ok_or_else(|| "the mirror line needs two different points".to_string())?
+                Xf::mirror(*a, *b)
+                    .ok_or_else(|| "the mirror line needs two different points".to_string())?
             }
             Transform::Move { delta } => {
                 if !delta.is_finite() {
@@ -219,10 +220,38 @@ mod tests {
             sy: None,
         };
         assert!(zero.xf().unwrap_err().contains("zero"));
-        assert!(Transform::Rotate { center: DVec2::ZERO, angle: f64::NAN }.xf().is_err());
-        assert!(Transform::Move { delta: DVec2::new(f64::INFINITY, 0.0) }.xf().is_err());
-        assert!(Transform::Scale { center: DVec2::ZERO, sx: 1.0, sy: Some(f64::NAN) }.xf().is_err());
-        assert!(Transform::Mirror { a: DVec2::NAN, b: DVec2::X }.xf().is_err());
+        assert!(
+            Transform::Rotate {
+                center: DVec2::ZERO,
+                angle: f64::NAN
+            }
+            .xf()
+            .is_err()
+        );
+        assert!(
+            Transform::Move {
+                delta: DVec2::new(f64::INFINITY, 0.0)
+            }
+            .xf()
+            .is_err()
+        );
+        assert!(
+            Transform::Scale {
+                center: DVec2::ZERO,
+                sx: 1.0,
+                sy: Some(f64::NAN)
+            }
+            .xf()
+            .is_err()
+        );
+        assert!(
+            Transform::Mirror {
+                a: DVec2::NAN,
+                b: DVec2::X
+            }
+            .xf()
+            .is_err()
+        );
     }
 
     #[test]
@@ -243,7 +272,12 @@ mod tests {
         let c: ArrayParams =
             serde_json::from_value(json!({"shape": "circular", "count": 3, "center": [0, 0]}))
                 .unwrap();
-        let Layout::Circular { angle, rotate_objects, .. } = c.to_spec().unwrap().layout else {
+        let Layout::Circular {
+            angle,
+            rotate_objects,
+            ..
+        } = c.to_spec().unwrap().layout
+        else {
             panic!()
         };
         assert!((angle - std::f64::consts::TAU / 4.0).abs() < 1e-12);
@@ -267,7 +301,9 @@ mod tests {
         let rect: ArrayParams = serde_json::from_value(json!({"shape": "rectangular", "columns": 2, "rows": 2, "column_spacing": 5, "row_spacing": 5, "resize": 1.5, "rotate": 0.1})).unwrap();
         let s = rect.to_spec().unwrap();
         assert_eq!((s.resize, s.rotate), (1.5, Some(0.1)));
-        let big: ArrayParams = serde_json::from_value(json!({"shape": "linear", "count": 0, "offset": [1, 0]})).unwrap();
+        let big: ArrayParams =
+            serde_json::from_value(json!({"shape": "linear", "count": 0, "offset": [1, 0]}))
+                .unwrap();
         assert!(big.to_spec().is_err());
     }
 }

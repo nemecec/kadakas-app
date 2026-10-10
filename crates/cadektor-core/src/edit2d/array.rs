@@ -214,7 +214,12 @@ mod tests {
             row_step: 0.0,
             angle: FRAC_PI_2,
         });
-        assert!(placements(&turned, v(0.0, 0.0)).unwrap()[1].t.distance(v(0.0, 10.0)) < 1e-9);
+        assert!(
+            placements(&turned, v(0.0, 0.0)).unwrap()[1]
+                .t
+                .distance(v(0.0, 10.0))
+                < 1e-9
+        );
     }
 
     #[test]

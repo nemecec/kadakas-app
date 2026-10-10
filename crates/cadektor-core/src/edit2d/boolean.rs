@@ -47,7 +47,9 @@ pub fn ring_area2(r: &[DVec2]) -> f64 {
         return 0.0;
     }
     let o = r[0];
-    (0..n).map(|i| (r[i] - o).perp_dot(r[(i + 1) % n] - o)).sum()
+    (0..n)
+        .map(|i| (r[i] - o).perp_dot(r[(i + 1) % n] - o))
+        .sum()
 }
 
 /// The area of a polygon: the outer ring minus the holes.
@@ -82,7 +84,8 @@ pub fn ring_of(shape: &Shape) -> Option<Ring> {
             // area of the circle. The corners and the middles of the chords are both within the
             // tolerance of the circle.
             let kf = k as f64;
-            let r = radius * (std::f64::consts::TAU / (kf * (std::f64::consts::TAU / kf).sin())).sqrt();
+            let r =
+                radius * (std::f64::consts::TAU / (kf * (std::f64::consts::TAU / kf).sin())).sqrt();
             (0..k)
                 .map(|i| *center + DVec2::from_angle(std::f64::consts::TAU * i as f64 / kf) * r)
                 .collect()
@@ -140,7 +143,11 @@ pub fn intersect(rings: &[Ring]) -> Vec<Poly> {
     let mut acc: Vec<Poly> = vec![vec![ccw(first.clone())]];
     for r in rest {
         let subj = flat(&acc);
-        acc = polys(subj.overlay(&contours(std::slice::from_ref(r)), OverlayRule::Intersect, FillRule::NonZero));
+        acc = polys(subj.overlay(
+            &contours(std::slice::from_ref(r)),
+            OverlayRule::Intersect,
+            FillRule::NonZero,
+        ));
         if acc.is_empty() {
             break;
         }
@@ -224,7 +231,8 @@ pub fn cut_by_line(poly: &Poly, a: DVec2, b: DVec2) -> Result<(Vec<Poly>, Vec<Po
         to_contour(&ccw(ring))
     };
     let subj: Vec<Contour> = poly.iter().map(to_contour).collect();
-    let run = |s: f64| polys(subj.overlay(&vec![side(s)], OverlayRule::Intersect, FillRule::NonZero));
+    let run =
+        |s: f64| polys(subj.overlay(&vec![side(s)], OverlayRule::Intersect, FillRule::NonZero));
     // The holes of a polygon have the opposite direction: the overlay handles that with the
     // non-zero rule only if the outer ring is counterclockwise.
     Ok((run(1.0), run(-1.0)))
@@ -272,7 +280,7 @@ mod tests {
     fn union_subtract_intersect_areas() {
         let (a, b) = (sq(0.0, 0.0, 10.0), sq(5.0, 5.0, 10.0));
         assert!((area(&union(&[a.clone(), b.clone()])) - 175.0).abs() < 1e-9);
-        assert!((area(&subtract(&a, &[b.clone()])) - 75.0).abs() < 1e-9);
+        assert!((area(&subtract(&a, std::slice::from_ref(&b))) - 75.0).abs() < 1e-9);
         assert!((area(&intersect(&[a.clone(), b.clone()])) - 25.0).abs() < 1e-9);
         // Apart: two polygons.
         let far = sq(50.0, 0.0, 1.0);
@@ -292,7 +300,10 @@ mod tests {
         // The bridged ring has the same area.
         let ring = poly_ring(&r[0]);
         assert!((ring_area2(&ring).abs() / 2.0 - 84.0).abs() < 1e-6);
-        assert!(matches!(poly_shape(&r[0]), Shape::Polyline { closed: true, .. }));
+        assert!(matches!(
+            poly_shape(&r[0]),
+            Shape::Polyline { closed: true, .. }
+        ));
     }
 
     #[test]
@@ -310,7 +321,11 @@ mod tests {
         // The union of the three squares: 175 plus the part of c outside the others (4*4 - 2*4... computed).
         let all = union(&[sq(0.0, 0.0, 10.0), sq(5.0, 5.0, 10.0), sq(8.0, 0.0, 4.0)]);
         assert!((total - area(&all)).abs() < 1e-9);
-        assert!(regions.iter().any(|r| r.members.len() == 3 || r.members.len() == 2));
+        assert!(
+            regions
+                .iter()
+                .any(|r| r.members.len() == 3 || r.members.len() == 2)
+        );
     }
 
     #[test]
@@ -345,9 +360,24 @@ mod tests {
         let exact = std::f64::consts::PI * 100.0 * 100.0;
         // The polygon has the area of the circle, and its corners are within the tolerance.
         assert!((a - exact).abs() < 1e-6 * exact);
-        assert!(c.iter().all(|p| (p.length() - 100.0).abs() <= BOOL_TOLERANCE));
-        assert!(ring_of(&Shape::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) }).is_none());
-        assert!(ring_of(&Shape::Rect { min: v(0.0, 0.0), max: v(0.0, 5.0) }).is_none());
+        assert!(
+            c.iter()
+                .all(|p| (p.length() - 100.0).abs() <= BOOL_TOLERANCE)
+        );
+        assert!(
+            ring_of(&Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(1.0, 1.0)
+            })
+            .is_none()
+        );
+        assert!(
+            ring_of(&Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(0.0, 5.0)
+            })
+            .is_none()
+        );
         // An open polyline counts as closed.
         let p = Shape::Polyline {
             points: curve::corners(&[v(0.0, 0.0), v(4.0, 0.0), v(4.0, 4.0)]),

@@ -142,28 +142,40 @@ schema_impl!(ResourceBody, "ResourceBody", |_g| json_schema!({
 schema_impl!(crate::sheets::SavedView, "SavedView", |_g| opaque(
     "A saved view: name, layer visibility, active layer and camera."
 ));
-schema_impl!(crate::sheets::PaperSize, "PaperSize", |_g| string_enum::<crate::sheets::PaperSize>());
-schema_impl!(crate::sheets::Orientation, "Orientation", |_g| string_enum::<crate::sheets::Orientation>());
-schema_impl!(crate::plants::placement::Variation, "Variation", |_g| opaque(
-    "Random variation of placed plants: seed and ranges."
-));
-schema_impl!(crate::present::SlotTarget, "SlotTarget", |_g| tagged_object::<crate::present::SlotTarget>(
-    "kind",
-    "A place that takes a material: a class, an object, or a hatch."
-));
+schema_impl!(crate::sheets::PaperSize, "PaperSize", |_g| string_enum::<
+    crate::sheets::PaperSize,
+>());
+schema_impl!(
+    crate::sheets::Orientation,
+    "Orientation",
+    |_g| string_enum::<crate::sheets::Orientation>()
+);
+schema_impl!(crate::plants::placement::Variation, "Variation", |_g| {
+    opaque("Random variation of placed plants: seed and ranges.")
+});
+schema_impl!(
+    crate::present::SlotTarget,
+    "SlotTarget",
+    |_g| tagged_object::<crate::present::SlotTarget>(
+        "kind",
+        "A place that takes a material: a class, an object, or a hatch."
+    )
+);
 schema_impl!(crate::present::SunSettings, "SunSettings", |_g| opaque(
     "The sun: latitude, longitude, date and time."
 ));
 schema_impl!(crate::georef::Georeference, "Georeference", |_g| opaque(
     "Where the drawing sits on the earth: CRS and origin."
 ));
-schema_impl!(crate::landscape::LandscapePatch, "LandscapePatch", |_g| opaque(
-    "Landscape area settings to change. Missing fields stay."
-));
-schema_impl!(crate::hardscape::HardscapePatch, "HardscapePatch", |_g| opaque(
-    "Hardscape settings to change. Missing fields stay."
-));
-schema_impl!(crate::visibility::VisMode, "VisMode", |_g| string_enum::<crate::visibility::VisMode>());
+schema_impl!(crate::landscape::LandscapePatch, "LandscapePatch", |_g| {
+    opaque("Landscape area settings to change. Missing fields stay.")
+});
+schema_impl!(crate::hardscape::HardscapePatch, "HardscapePatch", |_g| {
+    opaque("Hardscape settings to change. Missing fields stay.")
+});
+schema_impl!(crate::visibility::VisMode, "VisMode", |_g| string_enum::<
+    crate::visibility::VisMode,
+>());
 
 /// The JSON Schema (draft 2020-12) of a command, as JSON. Stable: the keys are sorted, so the same
 /// code always gives the same text.
@@ -200,7 +212,15 @@ mod tests {
     #[test]
     fn variants_are_read_from_serde() {
         let kinds = variant_names::<Shape>(Some("kind"));
-        for k in ["line", "rect", "circle", "arc", "polyline", "hardscape", "irrigation"] {
+        for k in [
+            "line",
+            "rect",
+            "circle",
+            "arc",
+            "polyline",
+            "hardscape",
+            "irrigation",
+        ] {
             assert!(kinds.contains(&k.to_string()), "{k} in {kinds:?}");
         }
         assert_eq!(variant_names::<LayerKind>(None), vec!["design", "sheet"]);

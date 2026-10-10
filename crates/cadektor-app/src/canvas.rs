@@ -22,6 +22,33 @@ pub fn color32(c: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
+thread_local! {
+    /// The canvas is drawn in the dark theme: nearly black pens are drawn light.
+    static DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The object that is drawn now is on a grey layer or class.
+    static GREY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets the theme of the canvas for the drawing code of this thread.
+pub fn set_dark(dark: bool) {
+    DARK.with(|d| d.set(dark));
+}
+
+fn set_grey(grey: bool) {
+    GREY.with(|g| g.set(grey));
+}
+
+/// The color to draw for a color of the document: the theme and the grey mode applied.
+pub fn draw_color(c: Color) -> Color32 {
+    let dark = DARK.with(std::cell::Cell::get);
+    let rgba = if GREY.with(std::cell::Cell::get) {
+        crate::theme::grey_color(c.0, dark)
+    } else {
+        crate::theme::canvas_color(c.0, dark)
+    };
+    Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3])
+}
+
 #[derive(Clone, Copy)]
 pub struct Style {
     pub pen: Color32,
@@ -32,8 +59,8 @@ pub struct Style {
 fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
     let a = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
-    let pen = color32(a.pen.unwrap_or(Color::BLACK));
-    let mut fill = a.fill.map_or(Color32::TRANSPARENT, color32);
+    let pen = draw_color(a.pen.unwrap_or(Color::BLACK));
+    let mut fill = a.fill.map_or(Color32::TRANSPARENT, draw_color);
     let tinted = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
     // Planting and paving get a default tint when the class has no fill.
     if fill.a() == 0 {
@@ -283,7 +310,7 @@ fn draw_object_deep(
     if let Some(d) = decor {
         let s = |p: DVec2| view.to_screen(p + offset);
         for seg in &d.fill {
-            let pen = seg.color.map_or(st.pen, color32);
+            let pen = seg.color.map_or(st.pen, draw_color);
             let w = seg.weight.map_or(st.width, |w| {
                 (w * scale * view.zoom).clamp(1.0, 24.0) as f32
             });
@@ -350,7 +377,7 @@ fn draw_shape_or_object(
             if o.attrs.pen.is_none()
                 && let Some(c) = look.pen
             {
-                st.pen = color32(c);
+                st.pen = draw_color(c);
             }
             let parts = look
                 .symbol
@@ -419,11 +446,12 @@ fn draw_vertex_markers(painter: &Painter, view: &View, vertices: &[Vertex]) {
     }
 }
 
-fn draw_grid(painter: &Painter, view: &View, rect: Rect) {
+fn draw_grid(painter: &Painter, view: &View, rect: Rect, dark: bool) {
+    let colors = crate::theme::canvas_colors(dark);
     let step = grid_step(view.zoom, 12.0);
     let (lo, hi) = view.visible_model(rect);
-    let minor = Stroke::new(1.0, Color32::from_gray(228));
-    let major = Stroke::new(1.0, Color32::from_gray(205));
+    let minor = Stroke::new(1.0, Color32::from_gray(colors.grid_minor));
+    let major = Stroke::new(1.0, Color32::from_gray(colors.grid_major));
     let mut x = (lo.x / step).floor() * step;
     while x <= hi.x {
         let is_major = ((x / step).round() as i64) % 10 == 0;
@@ -443,12 +471,18 @@ fn draw_grid(painter: &Painter, view: &View, rect: Rect) {
     painter.vline(
         o.x,
         rect.y_range(),
-        Stroke::new(1.0, Color32::from_rgb(220, 120, 120)),
+        Stroke::new(
+            1.0,
+            Color32::from_rgb(colors.axis_x[0], colors.axis_x[1], colors.axis_x[2]),
+        ),
     );
     painter.hline(
         rect.x_range(),
         o.y,
-        Stroke::new(1.0, Color32::from_rgb(120, 170, 120)),
+        Stroke::new(
+            1.0,
+            Color32::from_rgb(colors.axis_y[0], colors.axis_y[1], colors.axis_y[2]),
+        ),
     );
 }
 
@@ -456,7 +490,13 @@ pub struct Frame<'a> {
     pub doc: &'a Document,
     pub selection: &'a [ObjectId],
     pub preview: &'a Preview,
-    pub snap: Option<SnapResult>,
+    pub snap: Option<&'a SnapResult>,
+    /// Show the cue label of the snap at the pointer.
+    pub cues: bool,
+    /// The canvas uses the dark theme.
+    pub dark: bool,
+    /// The smart points and edges you acquired.
+    pub smart: &'a cadektor_core::snapping::Smart,
     pub show_grid: bool,
     /// Cache of site model results and the document revision, to draw contours.
     pub site: Option<(&'a cadektor_site::SiteCache, u64)>,
@@ -466,8 +506,11 @@ pub struct Frame<'a> {
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let painter = painter.with_clip_rect(rect);
+    let colors = crate::theme::canvas_colors(f.dark);
+    set_dark(f.dark);
+    set_grey(false);
     if let Some((sheets, page)) = f.sheet {
-        painter.rect_filled(rect, 0.0, Color32::from_gray(205));
+        painter.rect_filled(rect, 0.0, Color32::from_gray(colors.desk));
         sheets.paint(&painter, view, page);
         for o in f
             .doc
@@ -486,9 +529,13 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         draw_preview(&painter, view, f);
         return;
     }
-    painter.rect_filled(rect, 0.0, Color32::WHITE);
+    painter.rect_filled(
+        rect,
+        0.0,
+        Color32::from_rgb(colors.paper[0], colors.paper[1], colors.paper[2]),
+    );
     if f.show_grid {
-        draw_grid(&painter, view, rect);
+        draw_grid(&painter, view, rect, f.dark);
     }
     crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
@@ -501,6 +548,8 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         .filter(is_under)
         .chain(visible().filter(|o| !is_under(o)))
     {
+        let grey = f.doc.is_grey(o);
+        set_grey(grey);
         let st = object_style(f.doc, o, view.zoom);
         let direct = f.selection.contains(&o.id);
         let via_group = !direct
@@ -519,7 +568,15 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         } else {
             st
         };
-        draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
+        {
+            // A grey object is drawn in grey and faint.
+            let mut p = painter.clone();
+            if grey {
+                p.multiply_opacity(0.6);
+            }
+            draw_object(&p, view, f.doc, &counts, o, st, DVec2::ZERO);
+        }
+        set_grey(false);
         #[cfg(not(target_arch = "wasm32"))]
         crate::script_ui::draw_badge(&painter, view, f.doc, o);
         if let Some(t) = cadektor_core::worksheet_table::data(o) {
@@ -562,26 +619,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         }
     }
     draw_preview(&painter, view, f);
+    crate::snap_ui::draw_smart(&painter, view, f.smart, f.dark);
     if let Some(s) = f.snap {
-        let c = view.to_screen(s.point);
-        let stroke = Stroke::new(1.5, Color32::from_rgb(220, 40, 40));
-        match s.kind {
-            crate::snap::SnapKind::Grid => {
-                painter.line_segment([c - egui::vec2(4.0, 0.0), c + egui::vec2(4.0, 0.0)], stroke);
-                painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
-            }
-            crate::snap::SnapKind::Vertex => {
-                painter.rect_stroke(
-                    Rect::from_center_size(c, egui::vec2(9.0, 9.0)),
-                    0.0,
-                    stroke,
-                    egui::StrokeKind::Middle,
-                );
-            }
-            crate::snap::SnapKind::Center => {
-                painter.circle_stroke(c, 5.0, stroke);
-            }
-        }
+        crate::snap_ui::draw_snap(&painter, view, s, f.cues, f.dark, rect);
     }
 }
 
@@ -686,5 +726,101 @@ mod tests {
             Color32::from_rgb(255, 0, 0)
         );
         assert_eq!(color32(Color::NONE).a(), 0);
+    }
+
+    #[test]
+    fn the_dark_theme_and_grey_mode_change_the_drawn_colors() {
+        set_dark(false);
+        set_grey(false);
+        assert_eq!(draw_color(Color([0, 0, 0, 255])), Color32::BLACK);
+        set_dark(true);
+        assert_eq!(
+            draw_color(Color([0, 0, 0, 255])),
+            Color32::from_rgb(230, 230, 230)
+        );
+        assert_eq!(
+            draw_color(Color([200, 30, 30, 255])),
+            Color32::from_rgb(200, 30, 30)
+        );
+        set_grey(true);
+        let g = draw_color(Color([200, 30, 30, 255]));
+        assert!(g.r() == g.g() && g.g() == g.b() && g.a() < 255);
+        set_grey(false);
+        set_dark(false);
+    }
+
+    #[test]
+    fn a_frame_paints_grey_objects_snaps_and_smart_marks_in_both_themes() {
+        use cadektor_core::command::{Command, Editor};
+        use cadektor_core::model::{Attributes, FIRST_LAYER};
+        use cadektor_core::snapping::{Kind, Smart};
+        use cadektor_core::visibility::VisMode;
+        let mut ed = Editor::default();
+        ed.execute(&Command::AddObject {
+            shape: Shape::Circle {
+                center: DVec2::new(100.0, 100.0),
+                radius: 50.0,
+            },
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        ed.execute(&Command::SetVisibility {
+            layers: vec![FIRST_LAYER],
+            classes: vec![],
+            mode: VisMode::Grey,
+        })
+        .unwrap();
+        let mut smart = Smart::default();
+        smart.acquire_point(DVec2::new(10.0, 10.0));
+        let snap = SnapResult {
+            point: DVec2::new(100.0, 100.0),
+            kind: Kind::Center,
+            cue: "Center".into(),
+            guides: vec![],
+        };
+        let ctx = egui::Context::default();
+        for dark in [false, true] {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                let rect = ui.max_rect();
+                let view = View::default();
+                let preview = Preview::Lasso {
+                    points: vec![DVec2::ZERO, DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0)],
+                    crossing: dark,
+                };
+                let frame = Frame {
+                    doc: ed.doc(),
+                    selection: &[],
+                    preview: &preview,
+                    snap: Some(&snap),
+                    cues: true,
+                    dark,
+                    smart: &smart,
+                    show_grid: true,
+                    site: None,
+                    sheet: None,
+                };
+                paint(&ui.painter_at(rect), rect, &view, &frame);
+            });
+        }
+        // Every frame sets the theme itself, so a light frame after a dark one is light.
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let rect = ui.max_rect();
+            let frame = Frame {
+                doc: ed.doc(),
+                selection: &[],
+                preview: &Preview::None,
+                snap: None,
+                cues: false,
+                dark: false,
+                smart: &smart,
+                show_grid: false,
+                site: None,
+                sheet: None,
+            };
+            paint(&ui.painter_at(rect), rect, &View::default(), &frame);
+        });
+        assert_eq!(draw_color(Color::BLACK), Color32::BLACK);
     }
 }

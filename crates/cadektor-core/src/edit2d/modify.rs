@@ -125,7 +125,9 @@ pub fn extend(target: &Chain, pick: DVec2, boundaries: &[&Chain]) -> Result<Chai
                 // How far beyond the end of the last piece, as a parameter step.
                 let t = match last {
                     Piece::Line { .. } => last.param_of(x),
-                    Piece::Arc { start, sweep, c, .. } => {
+                    Piece::Arc {
+                        start, sweep, c, ..
+                    } => {
                         let end = start + sweep;
                         let u = (((x - c).to_angle() - end) * sweep.signum()).rem_euclid(PI * 2.0);
                         1.0 + u / sweep.abs()
@@ -238,7 +240,13 @@ fn nearest_on_curve(p: &Piece, q: DVec2) -> Option<DVec2> {
 
 /// The fillet of radius `r` between two pieces. The picks choose the corner and the side. The
 /// pieces are taken as infinite lines and full circles, so a short piece is extended.
-pub fn fillet_joint(p1: &Piece, pick1: DVec2, p2: &Piece, pick2: DVec2, r: f64) -> Result<Joint, String> {
+pub fn fillet_joint(
+    p1: &Piece,
+    pick1: DVec2,
+    p2: &Piece,
+    pick2: DVec2,
+    r: f64,
+) -> Result<Joint, String> {
     if !r.is_finite() || r <= 0.0 {
         return Err("the radius must be above zero".into());
     }
@@ -266,7 +274,8 @@ pub fn fillet_joint(p1: &Piece, pick1: DVec2, p2: &Piece, pick2: DVec2, r: f64) 
                     continue;
                 };
                 // The center must be on the side of each piece where the click on the other is.
-                let ok = side_of(p1, cc) == side_of(p1, pick2) && side_of(p2, cc) == side_of(p2, pick1);
+                let ok =
+                    side_of(p1, cc) == side_of(p1, pick2) && side_of(p2, cc) == side_of(p2, pick1);
                 let score = t1.distance(pick1) + t2.distance(pick2);
                 let rank = if ok { 0.0 } else { 1.0 };
                 if best.is_none_or(|(br, bs, ..)| (rank, score) < (br, bs)) {
@@ -276,7 +285,10 @@ pub fn fillet_joint(p1: &Piece, pick1: DVec2, p2: &Piece, pick2: DVec2, r: f64) 
         }
     }
     let Some((_, _, c, a, b)) = best else {
-        return Err("a fillet cannot join parallel or concentric objects, or the radius is too large".into());
+        return Err(
+            "a fillet cannot join parallel or concentric objects, or the radius is too large"
+                .into(),
+        );
     };
     let (a1, a2) = ((a - c).to_angle(), (b - c).to_angle());
     let mut d = (a2 - a1).rem_euclid(PI * 2.0);
@@ -385,9 +397,15 @@ pub fn keep_side(p: &Piece, t: f64, pick: DVec2) -> Result<Kept, String> {
 /// Like `keep_side`, with the side given: the end of the piece or its start.
 pub fn keep_part(p: &Piece, t: f64, keeps_end: bool) -> Result<Kept, String> {
     let (piece, rest) = if keeps_end {
-        (p.sub(t, 1.0f64.max(t + 1e-12)), (t > 0.0).then(|| p.sub(0.0, t)))
+        (
+            p.sub(t, 1.0f64.max(t + 1e-12)),
+            (t > 0.0).then(|| p.sub(0.0, t)),
+        )
     } else {
-        (p.sub(0.0f64.min(t - 1e-12), t), (t < 1.0).then(|| p.sub(t, 1.0)))
+        (
+            p.sub(0.0f64.min(t - 1e-12), t),
+            (t < 1.0).then(|| p.sub(t, 1.0)),
+        )
     };
     let too_short = !(piece.length() > 1e-9 * p.length() && piece.length().is_finite())
         || matches!(piece, Piece::Arc { sweep, .. } if sweep.abs() > PI * 2.0 + 1e-9);
@@ -579,7 +597,10 @@ mod tests {
 
     #[test]
     fn trim_a_closed_shape_opens_it() {
-        let sq = poly(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)], true);
+        let sq = poly(
+            &[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            true,
+        );
         let cut = line(v(5.0, -5.0), v(5.0, 15.0));
         // The click is on the left half: that half goes, the right half stays (5 + 10 + 5).
         let out = trim(&sq, v(2.0, 0.0), &[&cut]).unwrap();
@@ -599,7 +620,10 @@ mod tests {
         assert_eq!(out.len(), 1);
         // The upper half is gone, half a circle stays.
         assert!((out[0].length() - PI * 5.0).abs() < 1e-9);
-        assert!(out[0].start().distance(v(-5.0, 0.0)) < 1e-9 || out[0].start().distance(v(5.0, 0.0)) < 1e-9);
+        assert!(
+            out[0].start().distance(v(-5.0, 0.0)) < 1e-9
+                || out[0].start().distance(v(5.0, 0.0)) < 1e-9
+        );
     }
 
     #[test]
@@ -611,8 +635,18 @@ mod tests {
         // Clicking near the start extends the start, which points away from the boundary.
         assert!(extend(&t, v(0.2, 0.0), &[&b]).is_err());
         let b2 = line(v(-3.0, -5.0), v(-3.0, 5.0));
-        assert_eq!(extend(&t, v(0.2, 0.0), &[&b2]).unwrap().start(), v(-3.0, 0.0));
-        assert!(extend(&poly(&[v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0)], true), v(0.0, 0.0), &[&b]).is_err());
+        assert_eq!(
+            extend(&t, v(0.2, 0.0), &[&b2]).unwrap().start(),
+            v(-3.0, 0.0)
+        );
+        assert!(
+            extend(
+                &poly(&[v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0)], true),
+                v(0.0, 0.0),
+                &[&b]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -643,7 +677,10 @@ mod tests {
         assert!((out[0].length() + out[1].length() - 10.0).abs() < 1e-12);
         assert!(split(&l, &[v(-1.0, 0.0)]).is_err());
         assert_eq!(split(&l, &[v(2.0, 0.0), v(8.0, 0.0)]).unwrap().len(), 3);
-        let sq = poly(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)], true);
+        let sq = poly(
+            &[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            true,
+        );
         let one = split(&sq, &[v(5.0, 0.0)]).unwrap();
         assert_eq!(one.len(), 1);
         assert!((one[0].length() - 40.0).abs() < 1e-9);
@@ -657,7 +694,15 @@ mod tests {
     fn fillet_two_lines_trims_both() {
         let a = line(v(0.0, 0.0), v(10.0, 0.0));
         let b = line(v(0.0, 0.0), v(0.0, 10.0));
-        let j = join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Fillet(2.0), JoinMode::Trim).unwrap();
+        let j = join_objects(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            JoinKind::Fillet(2.0),
+            JoinMode::Trim,
+        )
+        .unwrap();
         // The fillet center is (2, 2) with tangent points (2, 0) and (0, 2).
         assert!(j.joint.from().distance(v(2.0, 0.0)) < 1e-9);
         assert!(j.joint.to().distance(v(0.0, 2.0)) < 1e-9);
@@ -677,22 +722,66 @@ mod tests {
         // The lines stop before the corner. The fillet extends them.
         let a = line(v(5.0, 0.0), v(10.0, 0.0));
         let b = line(v(0.0, 5.0), v(0.0, 10.0));
-        let j = join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Fillet(2.0), JoinMode::Split).unwrap();
+        let j = join_objects(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            JoinKind::Fillet(2.0),
+            JoinMode::Split,
+        )
+        .unwrap();
         assert!(j.a.start().distance(v(2.0, 0.0)) < 1e-9);
         assert!(j.rest.is_empty(), "nothing was cut off");
         // Long lines, split mode: the corner pieces stay as separate objects.
         let a = line(v(-4.0, 0.0), v(10.0, 0.0));
         let b = line(v(0.0, -4.0), v(0.0, 10.0));
-        let j = join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Fillet(2.0), JoinMode::Split).unwrap();
+        let j = join_objects(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            JoinKind::Fillet(2.0),
+            JoinMode::Split,
+        )
+        .unwrap();
         assert_eq!(j.rest.len(), 2);
         assert!((j.rest[0].length() - 6.0).abs() < 1e-9);
         // Standard mode changes nothing.
-        let s = join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Fillet(2.0), JoinMode::Standard).unwrap();
+        let s = join_objects(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            JoinKind::Fillet(2.0),
+            JoinMode::Standard,
+        )
+        .unwrap();
         assert_eq!(s.a, a);
         // The end segments only, and no parallel lines.
         let p = line(v(0.0, 5.0), v(10.0, 5.0));
-        assert!(join_objects(&a, v(8.0, 0.0), &p, v(8.0, 5.0), JoinKind::Fillet(1.0), JoinMode::Trim).is_err());
-        assert!(join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Fillet(0.0), JoinMode::Trim).is_err());
+        assert!(
+            join_objects(
+                &a,
+                v(8.0, 0.0),
+                &p,
+                v(8.0, 5.0),
+                JoinKind::Fillet(1.0),
+                JoinMode::Trim
+            )
+            .is_err()
+        );
+        assert!(
+            join_objects(
+                &a,
+                v(8.0, 0.0),
+                &b,
+                v(0.0, 8.0),
+                JoinKind::Fillet(0.0),
+                JoinMode::Trim
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -708,12 +797,18 @@ mod tests {
         assert_eq!(r, 2.0);
         // The fillet is tangent to the line and to the circle.
         assert!((fc.y - 2.0).abs() < 1e-9);
-        assert!((fc.distance(v(0.0, 8.0)) - 7.0).abs() < 1e-9 || (fc.distance(v(0.0, 8.0)) - 3.0).abs() < 1e-9);
+        assert!(
+            (fc.distance(v(0.0, 8.0)) - 7.0).abs() < 1e-9
+                || (fc.distance(v(0.0, 8.0)) - 3.0).abs() < 1e-9
+        );
     }
 
     #[test]
     fn round_corners_of_a_polyline_and_a_rectangle() {
-        let sq = poly(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)], true);
+        let sq = poly(
+            &[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            true,
+        );
         let all: Vec<usize> = (0..4).collect();
         let r = round_corners(&sq, &all, JoinKind::Fillet(2.0)).unwrap();
         assert!(r.closed);
@@ -722,7 +817,12 @@ mod tests {
         let area = chain_area(&r);
         assert!((area - (100.0 - (4.0 - PI) * 4.0)).abs() < 1e-6, "{area}");
         // Chamfer: the area loses four triangles.
-        let ch = round_corners(&sq, &all, JoinKind::Chamfer(ChamferSize::Distances(2.0, 2.0))).unwrap();
+        let ch = round_corners(
+            &sq,
+            &all,
+            JoinKind::Chamfer(ChamferSize::Distances(2.0, 2.0)),
+        )
+        .unwrap();
         assert!((chain_area(&ch) - (100.0 - 4.0 * 2.0)).abs() < 1e-9);
         // One corner of an open polyline.
         let pl = poly(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0)], false);
@@ -742,37 +842,100 @@ mod tests {
             pts.extend_from_slice(&f[..f.len() - 1]);
         }
         let n = pts.len();
-        (0..n).map(|i| pts[i].perp_dot(pts[(i + 1) % n])).sum::<f64>().abs() / 2.0
+        (0..n)
+            .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))
+            .sum::<f64>()
+            .abs()
+            / 2.0
     }
 
     #[test]
     fn chamfer_sizes() {
         let a = Piece::line(v(0.0, 0.0), v(10.0, 0.0));
         let b = Piece::line(v(0.0, 0.0), v(0.0, 10.0));
-        let j = chamfer_joint(&a, v(8.0, 0.0), &b, v(0.0, 8.0), ChamferSize::Distances(2.0, 3.0)).unwrap();
+        let j = chamfer_joint(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            ChamferSize::Distances(2.0, 3.0),
+        )
+        .unwrap();
         assert!(j.piece.from().distance(v(2.0, 0.0)) < 1e-9);
         assert!(j.piece.to().distance(v(0.0, 3.0)) < 1e-9);
         // Equal distances from a given chamfer length.
-        let j = chamfer_joint(&a, v(8.0, 0.0), &b, v(0.0, 8.0), ChamferSize::Length(2f64.sqrt() * 2.0)).unwrap();
+        let j = chamfer_joint(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            ChamferSize::Length(2f64.sqrt() * 2.0),
+        )
+        .unwrap();
         assert!(j.piece.from().distance(v(2.0, 0.0)) < 1e-9);
         // Distance and angle: 45 degrees on a right angle gives equal distances.
-        let j = chamfer_joint(&a, v(8.0, 0.0), &b, v(0.0, 8.0), ChamferSize::DistanceAngle(2.0, PI / 4.0)).unwrap();
+        let j = chamfer_joint(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            ChamferSize::DistanceAngle(2.0, PI / 4.0),
+        )
+        .unwrap();
         assert!(j.piece.to().distance(v(0.0, 2.0)) < 1e-9);
         let par = Piece::line(v(0.0, 3.0), v(10.0, 3.0));
-        assert!(chamfer_joint(&a, v(8.0, 0.0), &par, v(8.0, 3.0), ChamferSize::Length(1.0)).is_err());
-        assert!(chamfer_joint(&a, v(8.0, 0.0), &b, v(0.0, 8.0), ChamferSize::Distances(-1.0, 1.0)).is_err());
-        assert!(chamfer_joint(&a, v(8.0, 0.0), &b, v(0.0, 8.0), ChamferSize::DistanceAngle(1.0, 4.0)).is_err());
+        assert!(
+            chamfer_joint(&a, v(8.0, 0.0), &par, v(8.0, 3.0), ChamferSize::Length(1.0)).is_err()
+        );
+        assert!(
+            chamfer_joint(
+                &a,
+                v(8.0, 0.0),
+                &b,
+                v(0.0, 8.0),
+                ChamferSize::Distances(-1.0, 1.0)
+            )
+            .is_err()
+        );
+        assert!(
+            chamfer_joint(
+                &a,
+                v(8.0, 0.0),
+                &b,
+                v(0.0, 8.0),
+                ChamferSize::DistanceAngle(1.0, 4.0)
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn chamfer_two_objects_trims_them() {
         let a = line(v(0.0, 0.0), v(10.0, 0.0));
         let b = line(v(0.0, 0.0), v(0.0, 10.0));
-        let j = join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Chamfer(ChamferSize::Distances(3.0, 3.0)), JoinMode::Trim).unwrap();
+        let j = join_objects(
+            &a,
+            v(8.0, 0.0),
+            &b,
+            v(0.0, 8.0),
+            JoinKind::Chamfer(ChamferSize::Distances(3.0, 3.0)),
+            JoinMode::Trim,
+        )
+        .unwrap();
         assert!(j.a.start().distance(v(3.0, 0.0)) < 1e-9);
         assert!(j.b.start().distance(v(0.0, 3.0)) < 1e-9);
         // A chamfer longer than the lines.
-        assert!(join_objects(&a, v(8.0, 0.0), &b, v(0.0, 8.0), JoinKind::Chamfer(ChamferSize::Distances(30.0, 3.0)), JoinMode::Trim).is_err());
+        assert!(
+            join_objects(
+                &a,
+                v(8.0, 0.0),
+                &b,
+                v(0.0, 8.0),
+                JoinKind::Chamfer(ChamferSize::Distances(30.0, 3.0)),
+                JoinMode::Trim
+            )
+            .is_err()
+        );
     }
 
     #[test]

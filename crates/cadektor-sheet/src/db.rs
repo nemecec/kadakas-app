@@ -1014,4 +1014,52 @@ mod tests {
         assert_eq!(out.matched, 5000);
         assert!(t.elapsed().as_secs() < 5);
     }
+
+    #[test]
+    fn query_finds_objects_by_criteria() {
+        let mut ed = Editor::default();
+        let a = add(
+            &mut ed,
+            Shape::Polyline {
+                points: square(1000.0),
+                closed: true,
+            },
+        );
+        let b = add(
+            &mut ed,
+            Shape::Polyline {
+                points: square(5000.0),
+                closed: true,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 10.0,
+            },
+        );
+        let q = |crit: &str, cols: &[&str]| {
+            let cols: Vec<String> = cols.iter().map(|c| c.to_string()).collect();
+            query_objects(ed.doc(), crit, &cols, &NoTerrain)
+        };
+        assert_eq!(q("", &[]).unwrap().ids.len(), 3);
+        assert_eq!(q("   ", &[]).unwrap().ids.len(), 3);
+        let r = q("Kind = \"polyline\" AND Area > 10", &["Kind", "Area"]).unwrap();
+        assert_eq!(r.ids, vec![b]);
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0][0], Value::Text("polyline".into()));
+        let r = q("Kind = \"polyline\"", &[]).unwrap();
+        assert_eq!(r.ids, vec![a, b]);
+        assert!(r.rows.iter().all(Vec::is_empty));
+        // An error in the criteria for an object leaves it out and counts it.
+        let r = q("NoSuchProperty > 1", &[]).unwrap();
+        assert_eq!((r.ids.len(), r.errors), (0, 3));
+        // A name that is not a property in the columns gives an error value, not a failure.
+        let r = q("Kind = \"circle\"", &["NoSuchProperty"]).unwrap();
+        assert!(r.rows[0][0].is_error());
+        // Bad text.
+        assert!(q("Kind =", &[]).unwrap_err().starts_with("criteria:"));
+        assert!(q("", &["((("]).unwrap_err().starts_with("column '((('"));
+    }
 }

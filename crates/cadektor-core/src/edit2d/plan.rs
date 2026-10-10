@@ -76,7 +76,11 @@ fn replace_with(src: &Object, chains: &[Chain]) -> Vec<Command> {
 }
 
 /// Objects on the layer of `target` that cut or bound it: the listed ones, or all that can be picked.
-fn other_chains(doc: &Document, target: &Object, ids: Option<&[ObjectId]>) -> Result<Vec<Chain>, String> {
+fn other_chains(
+    doc: &Document,
+    target: &Object,
+    ids: Option<&[ObjectId]>,
+) -> Result<Vec<Chain>, String> {
     let mut out = Vec::new();
     match ids {
         Some(ids) => {
@@ -104,7 +108,12 @@ fn other_chains(doc: &Document, target: &Object, ids: Option<&[ObjectId]>) -> Re
 
 /// Removes the part of `target` at `pick` that lies between crossings with `cutters` (or with all
 /// other objects of the layer).
-pub fn trim(doc: &Document, target: ObjectId, pick: DVec2, cutters: Option<&[ObjectId]>) -> Result<Command, String> {
+pub fn trim(
+    doc: &Document,
+    target: ObjectId,
+    pick: DVec2,
+    cutters: Option<&[ObjectId]>,
+) -> Result<Command, String> {
     let t = object(doc, target)?;
     let chain = chain_of(t)?;
     let others = other_chains(doc, t, cutters)?;
@@ -114,7 +123,12 @@ pub fn trim(doc: &Document, target: ObjectId, pick: DVec2, cutters: Option<&[Obj
 }
 
 /// Extends the end of `target` that is nearer to `pick` to the nearest boundary.
-pub fn extend(doc: &Document, target: ObjectId, pick: DVec2, boundaries: Option<&[ObjectId]>) -> Result<Command, String> {
+pub fn extend(
+    doc: &Document,
+    target: ObjectId,
+    pick: DVec2,
+    boundaries: Option<&[ObjectId]>,
+) -> Result<Command, String> {
     let t = object(doc, target)?;
     let chain = chain_of(t)?;
     let others = other_chains(doc, t, boundaries)?;
@@ -133,10 +147,19 @@ pub fn split(doc: &Document, target: ObjectId, at: &[DVec2]) -> Result<Command, 
 
 /// Cuts closed shapes along an infinite line. Each piece is a new closed polyline. The original
 /// object is replaced by the first piece. The pieces together have the area of the original.
-pub fn split_by_line(doc: &Document, target: ObjectId, a: DVec2, b: DVec2) -> Result<Command, String> {
+pub fn split_by_line(
+    doc: &Document,
+    target: ObjectId,
+    a: DVec2,
+    b: DVec2,
+) -> Result<Command, String> {
     let t = object(doc, target)?;
     let ring = boolean::ring_of(&t.shape).ok_or_else(|| {
-        format!("object {} is a {}. Cutting by a line works on rectangles, circles and polylines", t.id, t.shape.kind())
+        format!(
+            "object {} is a {}. Cutting by a line works on rectangles, circles and polylines",
+            t.id,
+            t.shape.kind()
+        )
     })?;
     let (left, right) = boolean::cut_by_line(&vec![ring], a, b)?;
     let polys: Vec<Poly> = left.into_iter().chain(right).collect();
@@ -165,9 +188,7 @@ fn corner_index(chain: &Chain, i: usize, j: usize) -> Option<usize> {
         Some(i)
     } else if i == j + 1 {
         Some(j)
-    } else if chain.closed && i == 0 && j == n - 1 {
-        Some(n - 1)
-    } else if chain.closed && j == 0 && i == n - 1 {
+    } else if chain.closed && ((i == 0 && j == n - 1) || (j == 0 && i == n - 1)) {
         Some(n - 1)
     } else {
         None
@@ -178,20 +199,35 @@ fn corner_index(chain: &Chain, i: usize, j: usize) -> Option<usize> {
 /// object twice, the two segments must be neighbors: the corner of the shape is rounded or cut,
 /// and the joint becomes a part of the shape. With two objects, they are cut (modes trim and split)
 /// and the joint is a new object.
-pub fn join(doc: &Document, a: ObjectId, pick_a: DVec2, b: ObjectId, pick_b: DVec2, corner: Corner) -> Result<Command, String> {
+pub fn join(
+    doc: &Document,
+    a: ObjectId,
+    pick_a: DVec2,
+    b: ObjectId,
+    pick_b: DVec2,
+    corner: Corner,
+) -> Result<Command, String> {
     let oa = object(doc, a)?;
     let ca = chain_of(oa)?;
     if a == b {
         let (i, ..) = ca.closest(pick_a);
         let (j, ..) = ca.closest(pick_b);
-        let k = corner_index(&ca, i, j).ok_or_else(|| "click two neighboring segments of the shape".to_string())?;
+        let k = corner_index(&ca, i, j)
+            .ok_or_else(|| "click two neighboring segments of the shape".to_string())?;
         if corner.mode == JoinMode::Standard {
             let (p1, p2) = (ca.pieces[k], ca.pieces[(k + 1) % ca.pieces.len()]);
             let j = match corner.kind {
-                JoinKind::Fillet(r) => modify::fillet_joint(&p1, p1.point(0.5), &p2, p2.point(0.5), r)?,
-                JoinKind::Chamfer(s) => modify::chamfer_joint(&p1, p1.point(0.5), &p2, p2.point(0.5), s)?,
+                JoinKind::Fillet(r) => {
+                    modify::fillet_joint(&p1, p1.point(0.5), &p2, p2.point(0.5), r)?
+                }
+                JoinKind::Chamfer(s) => {
+                    modify::chamfer_joint(&p1, p1.point(0.5), &p2, p2.point(0.5), s)?
+                }
             };
-            return Ok(batch(vec![add_like(oa, Chain::open(vec![j.piece]).to_shape())]));
+            return Ok(batch(vec![add_like(
+                oa,
+                Chain::open(vec![j.piece]).to_shape(),
+            )]));
         }
         let rounded = modify::round_corners(&ca, &[k], corner.kind)?;
         return Ok(batch(vec![modify_shape(a, rounded.to_shape())]));
@@ -211,7 +247,12 @@ pub fn join(doc: &Document, a: ObjectId, pick_a: DVec2, b: ObjectId, pick_b: DVe
 
 /// Rounds or cuts all corners of a shape (or the listed corners: corner `k` is between segment
 /// `k` and the next).
-pub fn round_all(doc: &Document, id: ObjectId, corners: Option<&[usize]>, kind: JoinKind) -> Result<Command, String> {
+pub fn round_all(
+    doc: &Document,
+    id: ObjectId,
+    corners: Option<&[usize]>,
+    kind: JoinKind,
+) -> Result<Command, String> {
     let o = object(doc, id)?;
     let chain = chain_of(o)?;
     let n = chain.pieces.len();
@@ -280,7 +321,13 @@ fn ring_for(o: &Object) -> Result<Ring, String> {
 /// `Subtract` (the others cut it). For the other operations the order of the objects in the
 /// drawing decides: the lowest one gives its attributes (`Add`, `Intersect`), the topmost one is
 /// the clipping shape of `Clip`. The cutting shapes are deleted unless `keep_tools`.
-pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<ObjectId>, keep_tools: bool) -> Result<Command, String> {
+pub fn surface(
+    doc: &Document,
+    op: SurfaceOp,
+    ids: &[ObjectId],
+    base: Option<ObjectId>,
+    keep_tools: bool,
+) -> Result<Command, String> {
     let mut seen = HashSet::new();
     let mut objs: Vec<&Object> = Vec::new();
     for &id in ids {
@@ -288,10 +335,10 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
             objs.push(object(doc, id)?);
         }
     }
-    if let Some(b) = base {
-        if !seen.contains(&b) {
-            objs.push(object(doc, b)?);
-        }
+    if let Some(b) = base
+        && !seen.contains(&b)
+    {
+        objs.push(object(doc, b)?);
     }
     if objs.len() < 2 {
         return Err("give at least two shapes".into());
@@ -304,19 +351,22 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
     let rings: Vec<Ring> = objs.iter().map(|o| ring_for(o)).collect::<Result<_, _>>()?;
     let mut cmds = Vec::new();
     // `target` keeps its id and takes the first result. Other results are new objects like it.
-    let finish = |target: &Object, polys: Vec<Poly>, delete: Vec<ObjectId>, cmds: &mut Vec<Command>| {
-        let shapes: Vec<Shape> = polys.iter().map(boolean::poly_shape).collect();
-        match shapes.split_first() {
-            None => cmds.push(Command::DeleteObjects { ids: vec![target.id] }),
-            Some((first, rest)) => {
-                cmds.push(modify_shape(target.id, first.clone()));
-                cmds.extend(rest.iter().map(|s| add_like(target, s.clone())));
+    let finish =
+        |target: &Object, polys: Vec<Poly>, delete: Vec<ObjectId>, cmds: &mut Vec<Command>| {
+            let shapes: Vec<Shape> = polys.iter().map(boolean::poly_shape).collect();
+            match shapes.split_first() {
+                None => cmds.push(Command::DeleteObjects {
+                    ids: vec![target.id],
+                }),
+                Some((first, rest)) => {
+                    cmds.push(modify_shape(target.id, first.clone()));
+                    cmds.extend(rest.iter().map(|s| add_like(target, s.clone())));
+                }
             }
-        }
-        if !delete.is_empty() {
-            cmds.push(Command::DeleteObjects { ids: delete });
-        }
-    };
+            if !delete.is_empty() {
+                cmds.push(Command::DeleteObjects { ids: delete });
+            }
+        };
     match op {
         SurfaceOp::Add | SurfaceOp::Intersect => {
             let polys = if op == SurfaceOp::Add {
@@ -327,15 +377,34 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
             if polys.is_empty() {
                 return Err("the shapes have no common area".into());
             }
-            let delete = if keep_tools { Vec::new() } else { objs[1..].iter().map(|o| o.id).collect() };
+            let delete = if keep_tools {
+                Vec::new()
+            } else {
+                objs[1..].iter().map(|o| o.id).collect()
+            };
             finish(objs[0], polys, delete, &mut cmds);
         }
         SurfaceOp::Subtract => {
             let base_id = base.ok_or_else(|| "give the base shape".to_string())?;
-            let at = objs.iter().position(|o| o.id == base_id).expect("added above");
-            let cutters: Vec<Ring> = rings.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, r)| r.clone()).collect();
+            let at = objs
+                .iter()
+                .position(|o| o.id == base_id)
+                .expect("added above");
+            let cutters: Vec<Ring> = rings
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != at)
+                .map(|(_, r)| r.clone())
+                .collect();
             let polys = boolean::subtract(&rings[at], &cutters);
-            let delete = if keep_tools { Vec::new() } else { objs.iter().filter(|o| o.id != base_id).map(|o| o.id).collect() };
+            let delete = if keep_tools {
+                Vec::new()
+            } else {
+                objs.iter()
+                    .filter(|o| o.id != base_id)
+                    .map(|o| o.id)
+                    .collect()
+            };
             finish(objs[at], polys, delete, &mut cmds);
         }
         SurfaceOp::Clip => {
@@ -345,7 +414,9 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
                 finish(objs[i], polys, Vec::new(), &mut cmds);
             }
             if !keep_tools {
-                cmds.push(Command::DeleteObjects { ids: vec![objs[top].id] });
+                cmds.push(Command::DeleteObjects {
+                    ids: vec![objs[top].id],
+                });
             }
         }
         SurfaceOp::Compose => {
@@ -359,7 +430,9 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
                 }
             }
             if !keep_tools {
-                cmds.push(Command::DeleteObjects { ids: objs.iter().map(|o| o.id).collect() });
+                cmds.push(Command::DeleteObjects {
+                    ids: objs.iter().map(|o| o.id).collect(),
+                });
             }
             cmds.extend(adds);
         }
@@ -368,7 +441,12 @@ pub fn surface(doc: &Document, op: SurfaceOp, ids: &[ObjectId], base: Option<Obj
 }
 
 /// The chamfer size from the three ways to give it: distances, distance and angle, or length.
-pub fn chamfer_size(d1: Option<f64>, d2: Option<f64>, angle: Option<f64>, length: Option<f64>) -> Result<ChamferSize, String> {
+pub fn chamfer_size(
+    d1: Option<f64>,
+    d2: Option<f64>,
+    angle: Option<f64>,
+    length: Option<f64>,
+) -> Result<ChamferSize, String> {
     match (d1, d2, angle, length) {
         (Some(a), Some(b), None, None) => Ok(ChamferSize::Distances(a, b)),
         (Some(a), None, None, None) => Ok(ChamferSize::Distances(a, a)),
@@ -460,7 +538,12 @@ mod tests {
         let r = rect(&mut ed, 0.0, 0.0, 10.0);
         let cmd = split_by_line(ed.doc(), r, v(3.0, -1.0), v(3.0, 11.0)).unwrap();
         ed.execute(&cmd).unwrap();
-        let area: f64 = ed.doc().objects.values().map(|o| o.shape.area().unwrap_or(0.0)).sum();
+        let area: f64 = ed
+            .doc()
+            .objects
+            .values()
+            .map(|o| o.shape.area().unwrap_or(0.0))
+            .sum();
         assert!((area - 100.0).abs() < 1e-9);
         assert_eq!(ed.doc().objects.len(), 2);
         assert!(split_by_line(ed.doc(), r, v(50.0, -1.0), v(50.0, 11.0)).is_err());
@@ -499,7 +582,12 @@ mod tests {
         let r = add(
             &mut ed,
             Shape::Polyline {
-                points: crate::curve::corners(&[v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)]),
+                points: crate::curve::corners(&[
+                    v(0.0, 0.0),
+                    v(10.0, 0.0),
+                    v(10.0, 10.0),
+                    v(0.0, 10.0),
+                ]),
                 closed: true,
             },
         );
@@ -510,10 +598,18 @@ mod tests {
         let cmd = join(ed.doc(), r, v(5.0, 0.0), r, v(10.0, 5.0), c).unwrap();
         ed.execute(&cmd).unwrap();
         let area = ed.doc().object(r).unwrap().shape.area().unwrap();
-        assert!((area - (100.0 - (4.0 - std::f64::consts::PI))).abs() < 1e-6, "{area}");
+        assert!(
+            (area - (100.0 - (4.0 - std::f64::consts::PI))).abs() < 1e-6,
+            "{area}"
+        );
         // Segments that are not neighbors.
         assert!(join(ed.doc(), r, v(5.0, 0.0), r, v(5.0, 10.0), c).is_err());
-        let all = round_all(ed.doc(), r, None, JoinKind::Chamfer(ChamferSize::Distances(1.0, 1.0)));
+        let all = round_all(
+            ed.doc(),
+            r,
+            None,
+            JoinKind::Chamfer(ChamferSize::Distances(1.0, 1.0)),
+        );
         assert!(all.is_ok() || all.is_err());
     }
 
@@ -547,7 +643,13 @@ mod tests {
         let mut ed = Editor::default();
         let a = rect(&mut ed, 0.0, 0.0, 10.0);
         let b = rect(&mut ed, 5.0, 5.0, 10.0);
-        let area = |ed: &Editor| -> f64 { ed.doc().objects.values().map(|o| o.shape.area().unwrap_or(0.0)).sum() };
+        let area = |ed: &Editor| -> f64 {
+            ed.doc()
+                .objects
+                .values()
+                .map(|o| o.shape.area().unwrap_or(0.0))
+                .sum()
+        };
         let cmd = surface(ed.doc(), SurfaceOp::Add, &[a, b], None, false).unwrap();
         ed.execute(&cmd).unwrap();
         assert_eq!(ed.doc().objects.len(), 1);
@@ -579,10 +681,22 @@ mod tests {
 
     #[test]
     fn chamfer_size_forms() {
-        assert_eq!(chamfer_size(Some(2.0), Some(3.0), None, None).unwrap(), ChamferSize::Distances(2.0, 3.0));
-        assert_eq!(chamfer_size(Some(2.0), None, None, None).unwrap(), ChamferSize::Distances(2.0, 2.0));
-        assert_eq!(chamfer_size(Some(2.0), None, Some(0.5), None).unwrap(), ChamferSize::DistanceAngle(2.0, 0.5));
-        assert_eq!(chamfer_size(None, None, None, Some(4.0)).unwrap(), ChamferSize::Length(4.0));
+        assert_eq!(
+            chamfer_size(Some(2.0), Some(3.0), None, None).unwrap(),
+            ChamferSize::Distances(2.0, 3.0)
+        );
+        assert_eq!(
+            chamfer_size(Some(2.0), None, None, None).unwrap(),
+            ChamferSize::Distances(2.0, 2.0)
+        );
+        assert_eq!(
+            chamfer_size(Some(2.0), None, Some(0.5), None).unwrap(),
+            ChamferSize::DistanceAngle(2.0, 0.5)
+        );
+        assert_eq!(
+            chamfer_size(None, None, None, Some(4.0)).unwrap(),
+            ChamferSize::Length(4.0)
+        );
         assert!(chamfer_size(None, None, None, None).is_err());
     }
 }

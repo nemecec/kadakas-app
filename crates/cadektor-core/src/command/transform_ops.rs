@@ -43,7 +43,11 @@ pub fn transform_object(o: &mut Object, xf: &Xf) -> Result<(), String> {
 impl Tx<'_> {
     /// Copies the objects (and the members of groups among them) and puts `xf` on the copies.
     /// Returns the IDs of the copies of `ids`.
-    fn copy_transformed(&mut self, ids: &[ObjectId], xf: &Xf) -> Result<Vec<ObjectId>, CommandError> {
+    fn copy_transformed(
+        &mut self,
+        ids: &[ObjectId],
+        xf: &Xf,
+    ) -> Result<Vec<ObjectId>, CommandError> {
         let all = self.doc.with_members(ids);
         let mut map: HashMap<ObjectId, ObjectId> = HashMap::new();
         for &old in &all {
@@ -128,10 +132,15 @@ impl Tx<'_> {
                         hi = hi.max(b);
                     }
                 }
-                let origin = if lo.is_finite() { (lo + hi) / 2.0 } else { glam::DVec2::ZERO };
+                let origin = if lo.is_finite() {
+                    (lo + hi) / 2.0
+                } else {
+                    glam::DVec2::ZERO
+                };
                 let mut xfs = placements(&spec, origin).map_err(invalid)?;
                 // The first place of a rectangular array is the original.
-                if array.retain && matches!(spec.layout, crate::edit2d::Layout::Rectangular { .. }) {
+                if array.retain && matches!(spec.layout, crate::edit2d::Layout::Rectangular { .. })
+                {
                     xfs.remove(0);
                 }
                 for xf in &xfs {
@@ -246,9 +255,38 @@ mod tests {
             Shape::Circle { center, .. } if center.distance(v(-10.0, 0.0)) < 1e-9
         ));
         // Errors: nothing, a non-uniform scale of a circle, zero factor.
-        assert!(ed.execute(&Command::TransformObjects { ids: vec![], transform: Transform::Move { delta: v(1.0, 0.0) }, copy: true }).is_err());
-        assert!(ed.execute(&Command::TransformObjects { ids: vec![c], transform: Transform::Scale { center: v(0.0, 0.0), sx: 2.0, sy: Some(3.0) }, copy: false }).is_err());
-        assert!(ed.execute(&Command::TransformObjects { ids: vec![c], transform: Transform::Scale { center: v(0.0, 0.0), sx: 0.0, sy: None }, copy: false }).is_err());
+        assert!(
+            ed.execute(&Command::TransformObjects {
+                ids: vec![],
+                transform: Transform::Move { delta: v(1.0, 0.0) },
+                copy: true
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::TransformObjects {
+                ids: vec![c],
+                transform: Transform::Scale {
+                    center: v(0.0, 0.0),
+                    sx: 2.0,
+                    sy: Some(3.0)
+                },
+                copy: false
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::TransformObjects {
+                ids: vec![c],
+                transform: Transform::Scale {
+                    center: v(0.0, 0.0),
+                    sx: 0.0,
+                    sy: None
+                },
+                copy: false
+            })
+            .is_err()
+        );
         assert_eq!(ed.doc().objects.len(), 2);
     }
 
@@ -265,7 +303,8 @@ mod tests {
             .unwrap();
         assert_eq!(out.created.len(), 3);
         assert_eq!(ed.doc().objects.len(), 4);
-        let Shape::Circle { center, .. } = ed.doc().object(ObjectId(out.created[2])).unwrap().shape else {
+        let Shape::Circle { center, .. } = ed.doc().object(ObjectId(out.created[2])).unwrap().shape
+        else {
             panic!()
         };
         assert_eq!(center, v(25.0, 0.0));
@@ -315,7 +354,9 @@ mod tests {
         let out = ed
             .execute(&Command::ArrayObjects {
                 ids: vec![p],
-                array: array(serde_json::json!({"shape": "circular", "count": 3, "center": [0, 0]})),
+                array: array(
+                    serde_json::json!({"shape": "circular", "count": 3, "center": [0, 0]}),
+                ),
             })
             .unwrap();
         assert_eq!(out.created.len(), 3);
@@ -326,13 +367,19 @@ mod tests {
             assert!((a - a0).abs() < 1e-9);
         }
         // Hardscapes cannot be turned, but they can be placed round a circle without turning.
-        let h = add(&mut ed, Shape::Hardscape {
-            boundary: crate::curve::corners(&[v(10.0, 0.0), v(12.0, 0.0), v(12.0, 2.0)]),
-            material: "x".into(),
-            thickness: None,
-            elevation: None,
+        let h = add(
+            &mut ed,
+            Shape::Hardscape {
+                boundary: crate::curve::corners(&[v(10.0, 0.0), v(12.0, 0.0), v(12.0, 2.0)]),
+                material: "x".into(),
+                thickness: None,
+                elevation: None,
+            },
+        );
+        let turn = ed.execute(&Command::ArrayObjects {
+            ids: vec![h],
+            array: array(serde_json::json!({"shape": "circular", "count": 2, "center": [0, 0]})),
         });
-        let turn = ed.execute(&Command::ArrayObjects { ids: vec![h], array: array(serde_json::json!({"shape": "circular", "count": 2, "center": [0, 0]})) });
         assert!(turn.is_err());
         let place = ed.execute(&Command::ArrayObjects { ids: vec![h], array: array(serde_json::json!({"shape": "circular", "count": 2, "center": [0, 0], "rotate_objects": false})) });
         assert!(place.is_ok(), "{place:?}");
@@ -343,7 +390,14 @@ mod tests {
         let mut ed = Editor::default();
         let a = circle(&mut ed);
         let b = circle(&mut ed);
-        let g = ObjectId(ed.execute(&Command::Group { ids: vec![a, b], name: None }).unwrap().created[0]);
+        let g = ObjectId(
+            ed.execute(&Command::Group {
+                ids: vec![a, b],
+                name: None,
+            })
+            .unwrap()
+            .created[0],
+        );
         let out = ed
             .execute(&Command::ArrayObjects {
                 ids: vec![g],
@@ -353,9 +407,27 @@ mod tests {
         assert_eq!(out.created.len(), 2);
         // Group + 2 members, three times.
         assert_eq!(ed.doc().objects.len(), 9);
-        assert!(ed.execute(&Command::ArrayObjects { ids: vec![], array: array(serde_json::json!({"shape": "linear", "count": 2, "offset": [0, 10]})) }).is_err());
-        assert!(ed.execute(&Command::ArrayObjects { ids: vec![g], array: array(serde_json::json!({"shape": "linear", "count": 0, "offset": [0, 10]})) }).is_err());
-        assert!(ed.execute(&Command::ArrayObjects { ids: vec![ObjectId(999)], array: array(serde_json::json!({"shape": "linear", "count": 1, "offset": [0, 10]})) }).is_err());
+        assert!(
+            ed.execute(&Command::ArrayObjects {
+                ids: vec![],
+                array: array(serde_json::json!({"shape": "linear", "count": 2, "offset": [0, 10]}))
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::ArrayObjects {
+                ids: vec![g],
+                array: array(serde_json::json!({"shape": "linear", "count": 0, "offset": [0, 10]}))
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::ArrayObjects {
+                ids: vec![ObjectId(999)],
+                array: array(serde_json::json!({"shape": "linear", "count": 1, "offset": [0, 10]}))
+            })
+            .is_err()
+        );
     }
 
     #[test]

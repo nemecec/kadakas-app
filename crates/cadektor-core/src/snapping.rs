@@ -464,7 +464,13 @@ impl Smart {
     }
 
     /// Takes the object point under the pointer, else (if `edges`) the edge under it.
-    pub fn acquire_at(&mut self, cursor: DVec2, geom: &Geometry, tol: f64, edges: bool) -> Option<Acquired> {
+    pub fn acquire_at(
+        &mut self,
+        cursor: DVec2,
+        geom: &Geometry,
+        tol: f64,
+        edges: bool,
+    ) -> Option<Acquired> {
         if let Some(pt) = geom
             .points
             .iter()
@@ -474,9 +480,7 @@ impl Smart {
             self.acquire_point(pt.p);
             return Some(Acquired::Point(pt.p));
         }
-        if edges
-            && let Some((piece, t, q)) = nearest_edge(geom, cursor, tol)
-        {
+        if edges && let Some((piece, t, q)) = nearest_edge(geom, cursor, tol) {
             let tan = piece.tangent(t);
             self.acquire_edge(q, q + tan);
             return Some(Acquired::Edge(q, q + tan));
@@ -543,7 +547,11 @@ fn nearest_edge(geom: &Geometry, cursor: DVec2, tol: f64) -> Option<(Piece, f64,
         .map(|(_, e, t, q)| (e, t, q))
 }
 
-fn nearest<T: Copy>(items: impl Iterator<Item = (DVec2, T)>, cursor: DVec2, tol: f64) -> Option<(DVec2, T)> {
+fn nearest<T: Copy>(
+    items: impl Iterator<Item = (DVec2, T)>,
+    cursor: DVec2,
+    tol: f64,
+) -> Option<(DVec2, T)> {
     items
         .filter(|(p, _)| p.distance(cursor) <= tol)
         .min_by(|a, b| a.0.distance(cursor).total_cmp(&b.0.distance(cursor)))
@@ -578,7 +586,13 @@ fn length_text(d: f64) -> String {
 }
 
 /// Snaps the pointer. `None` if no kind is on and near, and the grid is off.
-pub fn snap(cursor: DVec2, ctx: &Context, settings: &Settings, geom: &Geometry, smart: &Smart) -> Option<Snap> {
+pub fn snap(
+    cursor: DVec2,
+    ctx: &Context,
+    settings: &Settings,
+    geom: &Geometry,
+    smart: &Smart,
+) -> Option<Snap> {
     if !cursor.is_finite() {
         return None;
     }
@@ -657,21 +671,24 @@ pub fn snap(cursor: DVec2, ctx: &Context, settings: &Settings, geom: &Geometry, 
             }
         }
         if set.tangent {
-            let pts = near.iter().filter_map(|e| e.circle().map(|c| (*e, c))).flat_map(|(e, (c, r))| {
-                let d = a.distance(c);
-                let mut out = Vec::new();
-                if d > r {
-                    let base = (a - c).to_angle();
-                    let off = (r / d).acos();
-                    for s in [-1.0, 1.0] {
-                        let p = c + DVec2::from_angle(base + s * off) * r;
-                        if Piece::has_param(e.param_of(p)) {
-                            out.push((p, ()));
+            let pts = near
+                .iter()
+                .filter_map(|e| e.circle().map(|c| (*e, c)))
+                .flat_map(|(e, (c, r))| {
+                    let d = a.distance(c);
+                    let mut out = Vec::new();
+                    if d > r {
+                        let base = (a - c).to_angle();
+                        let off = (r / d).acos();
+                        for s in [-1.0, 1.0] {
+                            let p = c + DVec2::from_angle(base + s * off) * r;
+                            if Piece::has_param(e.param_of(p)) {
+                                out.push((p, ()));
+                            }
                         }
                     }
-                }
-                out
-            });
+                    out
+                });
             if let Some((p, ())) = nearest(pts, cursor, tol) {
                 return Some(Snap {
                     guides: vec![Guide {
@@ -776,8 +793,16 @@ pub fn snap(cursor: DVec2, ctx: &Context, settings: &Settings, geom: &Geometry, 
             guides: vec![guide(&l1, x, reach), guide(&l2, x, reach)],
             ..plain(x, kind)
         };
-        if let Some(a) = ctx.anchor.filter(|_| l1.kind == Kind::Angle || l2.kind == Kind::Angle) {
-            s.cue = format!("{} + {} {}", kind.label(), Kind::Angle.label(), angle_text((x - a).to_angle()));
+        if let Some(a) = ctx
+            .anchor
+            .filter(|_| l1.kind == Kind::Angle || l2.kind == Kind::Angle)
+        {
+            s.cue = format!(
+                "{} + {} {}",
+                kind.label(),
+                Kind::Angle.label(),
+                angle_text((x - a).to_angle())
+            );
         }
         return Some(s);
     }
@@ -900,10 +925,19 @@ mod tests {
 
     #[test]
     fn endpoints_midpoints_and_centers() {
-        let g = geom(&[line(v(0.0, 0.0), v(100.0, 0.0)), Shape::Circle { center: v(300.0, 0.0), radius: 40.0 }]);
+        let g = geom(&[
+            line(v(0.0, 0.0), v(100.0, 0.0)),
+            Shape::Circle {
+                center: v(300.0, 0.0),
+                radius: 40.0,
+            },
+        ]);
         let s = Settings::default();
         let k = |c: DVec2| snap(c, &ctx(None), &s, &g, &Smart::default()).unwrap();
-        assert_eq!((k(v(2.0, 1.0)).kind, k(v(2.0, 1.0)).point), (Kind::Endpoint, v(0.0, 0.0)));
+        assert_eq!(
+            (k(v(2.0, 1.0)).kind, k(v(2.0, 1.0)).point),
+            (Kind::Endpoint, v(0.0, 0.0))
+        );
         assert_eq!(k(v(51.0, 2.0)).kind, Kind::Midpoint);
         assert_eq!(k(v(301.0, 2.0)).kind, Kind::Center);
         assert_eq!(k(v(340.0, 3.0)).kind, Kind::Quadrant);
@@ -913,27 +947,66 @@ mod tests {
         // Midpoints off.
         let mut s2 = s;
         s2.set.midpoints = false;
-        assert_eq!(snap(v(51.0, 2.0), &ctx(None), &s2, &g, &Smart::default()).unwrap().kind, Kind::Grid);
+        assert_eq!(
+            snap(v(51.0, 2.0), &ctx(None), &s2, &g, &Smart::default())
+                .unwrap()
+                .kind,
+            Kind::Grid
+        );
         // Everything off.
-        assert!(snap(v(51.0, 2.0), &ctx(None), &only(SnapSet::OFF), &g, &Smart::default()).is_none());
+        assert!(
+            snap(
+                v(51.0, 2.0),
+                &ctx(None),
+                &only(SnapSet::OFF),
+                &g,
+                &Smart::default()
+            )
+            .is_none()
+        );
         assert!(snap(v(f64::NAN, 2.0), &ctx(None), &s, &g, &Smart::default()).is_none());
     }
 
     #[test]
     fn grid_only_rounds_to_the_step() {
-        let s = only(SnapSet { grid: true, ..SnapSet::OFF });
-        let r = snap(v(124.0, -76.0), &ctx(None), &s, &Geometry::default(), &Smart::default()).unwrap();
-        assert_eq!((r.point, r.kind, r.cue.as_str()), (v(100.0, -100.0), Kind::Grid, "Grid"));
+        let s = only(SnapSet {
+            grid: true,
+            ..SnapSet::OFF
+        });
+        let r = snap(
+            v(124.0, -76.0),
+            &ctx(None),
+            &s,
+            &Geometry::default(),
+            &Smart::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (r.point, r.kind, r.cue.as_str()),
+            (v(100.0, -100.0), Kind::Grid, "Grid")
+        );
     }
 
     #[test]
     fn intersections_of_lines_and_circles() {
-        let g = geom(&[line(v(0.0, 0.0), v(100.0, 100.0)), line(v(0.0, 100.0), v(100.0, 0.0))]);
-        let s = only(SnapSet { intersections: true, ..SnapSet::OFF });
+        let g = geom(&[
+            line(v(0.0, 0.0), v(100.0, 100.0)),
+            line(v(0.0, 100.0), v(100.0, 0.0)),
+        ]);
+        let s = only(SnapSet {
+            intersections: true,
+            ..SnapSet::OFF
+        });
         let r = snap(v(52.0, 48.0), &ctx(None), &s, &g, &Smart::default()).unwrap();
         assert_eq!(r.kind, Kind::Intersection);
         assert!(r.point.distance(v(50.0, 50.0)) < 1e-9);
-        let c = geom(&[Shape::Circle { center: v(0.0, 0.0), radius: 50.0 }, line(v(-100.0, 0.0), v(100.0, 0.0))]);
+        let c = geom(&[
+            Shape::Circle {
+                center: v(0.0, 0.0),
+                radius: 50.0,
+            },
+            line(v(-100.0, 0.0), v(100.0, 0.0)),
+        ]);
         let r = snap(v(48.0, 2.0), &ctx(None), &s, &c, &Smart::default()).unwrap();
         assert!(r.point.distance(v(50.0, 0.0)) < 1e-9);
     }
@@ -941,7 +1014,10 @@ mod tests {
     #[test]
     fn nearest_point_on_an_edge() {
         let g = geom(&[line(v(0.0, 0.0), v(100.0, 0.0))]);
-        let s = only(SnapSet { edges: true, ..SnapSet::OFF });
+        let s = only(SnapSet {
+            edges: true,
+            ..SnapSet::OFF
+        });
         let r = snap(v(33.0, 3.0), &ctx(None), &s, &g, &Smart::default()).unwrap();
         assert_eq!((r.kind, r.point), (Kind::Edge, v(33.0, 0.0)));
         assert!(snap(v(33.0, 30.0), &ctx(None), &s, &g, &Smart::default()).is_none());
@@ -950,13 +1026,29 @@ mod tests {
     #[test]
     fn perpendicular_and_tangent_from_the_anchor() {
         let g = geom(&[line(v(0.0, 0.0), v(100.0, 0.0))]);
-        let s = only(SnapSet { perpendicular: true, ..SnapSet::OFF });
-        let r = snap(v(41.0, 2.0), &ctx(Some(v(40.0, 80.0))), &s, &g, &Smart::default()).unwrap();
+        let s = only(SnapSet {
+            perpendicular: true,
+            ..SnapSet::OFF
+        });
+        let r = snap(
+            v(41.0, 2.0),
+            &ctx(Some(v(40.0, 80.0))),
+            &s,
+            &g,
+            &Smart::default(),
+        )
+        .unwrap();
         assert_eq!((r.kind, r.point), (Kind::Perpendicular, v(40.0, 0.0)));
         assert_eq!(r.guides.len(), 1);
         // Tangent to a circle from a point outside.
-        let c = geom(&[Shape::Circle { center: v(0.0, 0.0), radius: 30.0 }]);
-        let s = only(SnapSet { tangent: true, ..SnapSet::OFF });
+        let c = geom(&[Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 30.0,
+        }]);
+        let s = only(SnapSet {
+            tangent: true,
+            ..SnapSet::OFF
+        });
         let a = v(50.0, 0.0);
         let t = (30.0f64 / 50.0).acos();
         let p = DVec2::from_angle(t) * 30.0;
@@ -970,31 +1062,77 @@ mod tests {
     #[test]
     fn angle_and_distance_snap() {
         let a = v(0.0, 0.0);
-        let mut s = only(SnapSet { angle: true, distance: true, ..SnapSet::OFF });
+        let mut s = only(SnapSet {
+            angle: true,
+            distance: true,
+            ..SnapSet::OFF
+        });
         s.angle_step = std::f64::consts::FRAC_PI_4;
         s.distance_step = 100.0;
         // Close to 45 degrees at a length near 300.
         let cursor = DVec2::from_angle(0.78) * 301.0;
-        let r = snap(cursor, &ctx(Some(a)), &s, &Geometry::default(), &Smart::default()).unwrap();
+        let r = snap(
+            cursor,
+            &ctx(Some(a)),
+            &s,
+            &Geometry::default(),
+            &Smart::default(),
+        )
+        .unwrap();
         assert_eq!(r.kind, Kind::Angle);
-        assert!(r.point.distance(DVec2::from_angle(std::f64::consts::FRAC_PI_4) * 300.0) < 1e-9);
+        assert!(
+            r.point
+                .distance(DVec2::from_angle(std::f64::consts::FRAC_PI_4) * 300.0)
+                < 1e-9
+        );
         assert!(r.cue.contains("45°") && r.cue.contains("300"), "{}", r.cue);
         // Far from any angle line: nothing.
-        assert!(snap(DVec2::from_angle(0.39) * 250.0, &ctx(Some(a)), &s, &Geometry::default(), &Smart::default()).is_none());
+        assert!(
+            snap(
+                DVec2::from_angle(0.39) * 250.0,
+                &ctx(Some(a)),
+                &s,
+                &Geometry::default(),
+                &Smart::default()
+            )
+            .is_none()
+        );
         // Distance only: any direction, snapped length.
-        let d = only(SnapSet { distance: true, ..SnapSet::OFF });
+        let d = only(SnapSet {
+            distance: true,
+            ..SnapSet::OFF
+        });
         let mut d = d;
         d.distance_step = 100.0;
-        let r = snap(DVec2::from_angle(0.39) * 202.0, &ctx(Some(a)), &d, &Geometry::default(), &Smart::default()).unwrap();
+        let r = snap(
+            DVec2::from_angle(0.39) * 202.0,
+            &ctx(Some(a)),
+            &d,
+            &Geometry::default(),
+            &Smart::default(),
+        )
+        .unwrap();
         assert_eq!(r.kind, Kind::Distance);
         assert!((r.point.length() - 200.0).abs() < 1e-9);
         // Without an anchor there is nothing to measure from.
-        assert!(snap(v(5.0, 5.0), &ctx(None), &d, &Geometry::default(), &Smart::default()).is_none());
+        assert!(
+            snap(
+                v(5.0, 5.0),
+                &ctx(None),
+                &d,
+                &Geometry::default(),
+                &Smart::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn relative_angles_follow_the_prior_segment() {
-        let mut s = only(SnapSet { angle: true, ..SnapSet::OFF });
+        let mut s = only(SnapSet {
+            angle: true,
+            ..SnapSet::OFF
+        });
         s.angle_step = std::f64::consts::FRAC_PI_2;
         s.relative_angles = true;
         let mut c = ctx(Some(v(0.0, 0.0)));
@@ -1010,19 +1148,54 @@ mod tests {
         let mut smart = Smart::default();
         smart.acquire_point(v(100.0, 200.0));
         smart.acquire_point(v(400.0, 50.0));
-        let s = only(SnapSet { smart_points: true, ..SnapSet::OFF });
+        let s = only(SnapSet {
+            smart_points: true,
+            ..SnapSet::OFF
+        });
         // The crossing of the horizontal line of the first point with the vertical of the second.
-        let r = snap(v(402.0, 198.0), &ctx(None), &s, &Geometry::default(), &smart).unwrap();
+        let r = snap(
+            v(402.0, 198.0),
+            &ctx(None),
+            &s,
+            &Geometry::default(),
+            &smart,
+        )
+        .unwrap();
         assert_eq!((r.kind, r.point), (Kind::SmartPoint, v(400.0, 200.0)));
         assert_eq!(r.guides.len(), 2);
         // One line only.
-        let r = snap(v(250.0, 203.0), &ctx(None), &s, &Geometry::default(), &smart).unwrap();
+        let r = snap(
+            v(250.0, 203.0),
+            &ctx(None),
+            &s,
+            &Geometry::default(),
+            &smart,
+        )
+        .unwrap();
         assert_eq!(r.point, v(250.0, 200.0));
         assert_eq!(r.guides.len(), 1);
-        assert!(snap(v(250.0, 130.0), &ctx(None), &s, &Geometry::default(), &smart).is_none());
+        assert!(
+            snap(
+                v(250.0, 130.0),
+                &ctx(None),
+                &s,
+                &Geometry::default(),
+                &smart
+            )
+            .is_none()
+        );
         // Off: no snap.
         let off = only(SnapSet::OFF);
-        assert!(snap(v(250.0, 203.0), &ctx(None), &off, &Geometry::default(), &smart).is_none());
+        assert!(
+            snap(
+                v(250.0, 203.0),
+                &ctx(None),
+                &off,
+                &Geometry::default(),
+                &smart
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1050,11 +1223,16 @@ mod tests {
     fn acquiring_at_the_pointer() {
         let g = geom(&[line(v(0.0, 0.0), v(100.0, 0.0))]);
         let mut s = Smart::default();
-        assert_eq!(s.acquire_at(v(1.0, 1.0), &g, 5.0, true), Some(Acquired::Point(v(0.0, 0.0))));
+        assert_eq!(
+            s.acquire_at(v(1.0, 1.0), &g, 5.0, true),
+            Some(Acquired::Point(v(0.0, 0.0)))
+        );
         // On the edge, away from points: an edge, when edges are allowed.
         assert_eq!(s.acquire_at(v(30.0, 2.0), &g, 5.0, false), None);
         let got = s.acquire_at(v(30.0, 2.0), &g, 5.0, true).unwrap();
-        assert!(matches!(got, Acquired::Edge(a, b) if a == v(30.0, 0.0) && (b - a).y.abs() < 1e-12));
+        assert!(
+            matches!(got, Acquired::Edge(a, b) if a == v(30.0, 0.0) && (b - a).y.abs() < 1e-12)
+        );
         assert_eq!(s.edges.len(), 1);
     }
 
@@ -1062,9 +1240,19 @@ mod tests {
     fn smart_edges_extend_and_cross() {
         let mut smart = Smart::default();
         smart.acquire_edge(v(0.0, 0.0), v(100.0, 100.0));
-        let s = only(SnapSet { smart_edges: true, ..SnapSet::OFF });
+        let s = only(SnapSet {
+            smart_edges: true,
+            ..SnapSet::OFF
+        });
         // On the extension of the edge, far beyond its end.
-        let r = snap(v(300.0, 302.0), &ctx(None), &s, &Geometry::default(), &smart).unwrap();
+        let r = snap(
+            v(300.0, 302.0),
+            &ctx(None),
+            &s,
+            &Geometry::default(),
+            &smart,
+        )
+        .unwrap();
         assert_eq!(r.kind, Kind::SmartEdge);
         assert!(r.point.distance(v(301.0, 301.0)) < 1e-9);
     }
@@ -1073,10 +1261,21 @@ mod tests {
     fn smart_lines_meet_the_angle_ray() {
         let mut smart = Smart::default();
         smart.acquire_point(v(200.0, 0.0));
-        let mut s = only(SnapSet { smart_points: true, angle: true, ..SnapSet::OFF });
+        let mut s = only(SnapSet {
+            smart_points: true,
+            angle: true,
+            ..SnapSet::OFF
+        });
         s.angle_step = std::f64::consts::FRAC_PI_4;
         // From the anchor at the origin, the 45 degree ray meets the vertical line through (200, 0).
-        let r = snap(v(201.0, 199.0), &ctx(Some(v(0.0, 0.0))), &s, &Geometry::default(), &smart).unwrap();
+        let r = snap(
+            v(201.0, 199.0),
+            &ctx(Some(v(0.0, 0.0))),
+            &s,
+            &Geometry::default(),
+            &smart,
+        )
+        .unwrap();
         assert_eq!(r.kind, Kind::SmartPoint);
         assert!(r.point.distance(v(200.0, 200.0)) < 1e-9);
         assert!(r.cue.contains("Angle"), "{}", r.cue);
@@ -1088,9 +1287,14 @@ mod tests {
         use crate::model::{Attributes, LayerId};
         let mut ed = Editor::default();
         let l2 = LayerId(
-            ed.execute(&Command::AddLayer { name: "B".into(), elevation: 0.0, scale: None, kind: None })
-                .unwrap()
-                .created[0],
+            ed.execute(&Command::AddLayer {
+                name: "B".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0],
         );
         let add = |ed: &mut Editor, layer: LayerId| {
             ed.execute(&Command::AddObject {
@@ -1103,10 +1307,25 @@ mod tests {
             .created[0]
         };
         let (a, b) = (add(&mut ed, LayerId(1)), add(&mut ed, l2));
-        let points = |ed: &Editor, reach: Reach| Geometry::from_doc(ed.doc(), &[], reach, None).points.len();
+        let points =
+            |ed: &Editor, reach: Reach| Geometry::from_doc(ed.doc(), &[], reach, None).points.len();
         assert_eq!(points(&ed, Reach::default()), 6);
-        assert_eq!(points(&ed, Reach { other_layers: false, grey: false }), 3);
-        assert_eq!(Geometry::from_doc(ed.doc(), &[ObjectId(a)], Reach::default(), None).points.len(), 3);
+        assert_eq!(
+            points(
+                &ed,
+                Reach {
+                    other_layers: false,
+                    grey: false
+                }
+            ),
+            3
+        );
+        assert_eq!(
+            Geometry::from_doc(ed.doc(), &[ObjectId(a)], Reach::default(), None)
+                .points
+                .len(),
+            3
+        );
         let _ = b;
         // A grey layer: no snap unless the option says so.
         ed.execute(&Command::SetVisibility {
@@ -1116,22 +1335,80 @@ mod tests {
         })
         .unwrap();
         assert_eq!(points(&ed, Reach::default()), 3);
-        assert_eq!(points(&ed, Reach { other_layers: true, grey: true }), 6);
+        assert_eq!(
+            points(
+                &ed,
+                Reach {
+                    other_layers: true,
+                    grey: true
+                }
+            ),
+            6
+        );
         // Near filter: nothing near a far point.
-        assert!(Geometry::from_doc(ed.doc(), &[], Reach { other_layers: true, grey: true }, Some((v(1000.0, 1000.0), 10.0))).points.is_empty());
-        assert_eq!(Geometry::from_doc(ed.doc(), &[], Reach { other_layers: true, grey: true }, Some((v(5.0, 3.0), 10.0))).points.len(), 6);
+        assert!(
+            Geometry::from_doc(
+                ed.doc(),
+                &[],
+                Reach {
+                    other_layers: true,
+                    grey: true
+                },
+                Some((v(1000.0, 1000.0), 10.0))
+            )
+            .points
+            .is_empty()
+        );
+        assert_eq!(
+            Geometry::from_doc(
+                ed.doc(),
+                &[],
+                Reach {
+                    other_layers: true,
+                    grey: true
+                },
+                Some((v(5.0, 3.0), 10.0))
+            )
+            .points
+            .len(),
+            6
+        );
     }
 
     #[test]
     fn shapes_give_points_and_edges() {
         let g = geom(&[
-            Shape::Rect { min: v(0.0, 0.0), max: v(10.0, 10.0) },
-            Shape::Text { at: v(50.0, 50.0), text: "x".into(), height: 3.0 },
-            Shape::Plant { at: v(60.0, 60.0), species: "x".into(), spread: 2.0, height: 1.0 },
+            Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(10.0, 10.0),
+            },
+            Shape::Text {
+                at: v(50.0, 50.0),
+                text: "x".into(),
+                height: 3.0,
+            },
+            Shape::Plant {
+                at: v(60.0, 60.0),
+                species: "x".into(),
+                spread: 2.0,
+                height: 1.0,
+            },
         ]);
-        assert!(g.points.iter().any(|p| p.p == v(5.0, 5.0) && p.kind == Kind::Center));
-        assert!(g.points.iter().any(|p| p.p == v(5.0, 0.0) && p.kind == Kind::Midpoint));
-        assert!(g.points.iter().any(|p| p.p == v(60.0, 60.0) && p.kind == Kind::Center));
+        assert!(
+            g.points
+                .iter()
+                .any(|p| p.p == v(5.0, 5.0) && p.kind == Kind::Center)
+        );
+        assert!(
+            g.points
+                .iter()
+                .any(|p| p.p == v(5.0, 0.0) && p.kind == Kind::Midpoint)
+        );
+        assert!(
+            g.points
+                .iter()
+                .any(|p| p.p == v(60.0, 60.0) && p.kind == Kind::Center)
+        );
         assert_eq!(g.edges.len(), 4);
     }
 
@@ -1149,11 +1426,16 @@ mod tests {
         assert!(set.any());
         assert!(!SnapSet::OFF.any());
         assert!(Settings::default().problem().is_none());
-        let mut s = Settings::default();
-        s.angle_step = 0.0;
+        let s = Settings {
+            angle_step: 0.0,
+            ..Settings::default()
+        };
         assert!(s.problem().is_some());
-        s.angle_step = 0.5;
-        s.distance_step = -1.0;
+        let s = Settings {
+            angle_step: 0.5,
+            distance_step: -1.0,
+            ..Settings::default()
+        };
         assert!(s.problem().is_some());
         let j = serde_json::to_value(Settings::default()).unwrap();
         let back: Settings = serde_json::from_value(j).unwrap();
@@ -1161,7 +1443,21 @@ mod tests {
         // Missing fields get their defaults.
         let part: Settings = serde_json::from_str(r#"{"set": {"angle": true}}"#).unwrap();
         assert!(part.set.angle && part.set.grid);
-        for k in [Kind::Grid, Kind::Endpoint, Kind::Midpoint, Kind::Center, Kind::Quadrant, Kind::Intersection, Kind::Edge, Kind::Perpendicular, Kind::Tangent, Kind::Angle, Kind::Distance, Kind::SmartPoint, Kind::SmartEdge] {
+        for k in [
+            Kind::Grid,
+            Kind::Endpoint,
+            Kind::Midpoint,
+            Kind::Center,
+            Kind::Quadrant,
+            Kind::Intersection,
+            Kind::Edge,
+            Kind::Perpendicular,
+            Kind::Tangent,
+            Kind::Angle,
+            Kind::Distance,
+            Kind::SmartPoint,
+            Kind::SmartEdge,
+        ] {
             assert!(!k.label().is_empty());
         }
     }

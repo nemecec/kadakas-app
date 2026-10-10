@@ -1371,6 +1371,12 @@ class Api:
         JSON-RPC method ``site.contours``."""
         return self._call("site.contours", params or None)
 
+    def view_screenshot(self, **params: Any) -> Any:
+        """A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (cadektor app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.
+
+        JSON-RPC method ``view.screenshot``."""
+        return self._call("view.screenshot", params or None)
+
     def edit_rotate(self, **params: Any) -> Any:
         """Turn objects (a group as one unit). params: {ids? (default: the selection), center: [x, y], angle (radians, counterclockwise), copy? (turn copies, keep the originals)}. Returns {created: [ids of the copies]}. Hardscapes, landscape areas and site models cannot be turned.
 
@@ -1462,7 +1468,7 @@ class Api:
         return self._call("surface.compose", params or None)
 
     def objects_query(self, **params: Any) -> Any:
-        """Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = "plant" AND Area > 20, Class = "Trees", Layer = "Site", 'Soil'.'Depth' > 300, Style = "6\\" pot"; empty matches all), columns? ([expressions, e.g. "Area", "Style"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.
+        """Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = "plant" AND Area > 20, Class = "Trees", Layer = "Site", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. "Area", "Style"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.
 
         JSON-RPC method ``objects.query``."""
         return self._call("objects.query", params or None)
@@ -2055,6 +2061,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "site.drape",
     "site.refresh",
     "site.contours",
+    "view.screenshot",
     "edit.rotate",
     "edit.scale",
     "edit.mirror",

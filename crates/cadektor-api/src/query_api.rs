@@ -15,7 +15,7 @@ use crate::{RpcError, Session};
 
 pub const OBJECTS_QUERY: (&str, &str) = (
     "objects.query",
-    "Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = \"plant\" AND Area > 20, Class = \"Trees\", Layer = \"Site\", 'Soil'.'Depth' > 300, Style = \"6\\\" pot\"; empty matches all), columns? ([expressions, e.g. \"Area\", \"Style\"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.",
+    "Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = \"plant\" AND Area > 20, Class = \"Trees\", Layer = \"Site\", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. \"Area\", \"Style\"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.",
 );
 pub const SNAP_GET: (&str, &str) = (
     "snap.get",
@@ -219,7 +219,8 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             if p.select {
                 s.selection = ids.clone();
             }
-            let mut out = json!({"count": count, "ids": ids, "truncated": truncated, "skipped": q.errors});
+            let mut out =
+                json!({"count": count, "ids": ids, "truncated": truncated, "skipped": q.errors});
             if !p.columns.is_empty() {
                 out["rows"] = json!(rows);
             }
@@ -278,13 +279,17 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 anchor,
                 prior_direction: p.prior_direction,
             };
-            Ok(match snapping::snap(point, &ctx, &settings, &geom, &s.smart) {
-                Some(r) => json!({
-                    "snapped": true, "point": r.point, "kind": r.kind, "cue": r.cue,
-                    "guides": r.guides.iter().map(|g| json!({"a": g.a, "b": g.b, "kind": g.kind})).collect::<Vec<_>>(),
-                }),
-                None => json!({"snapped": false, "point": point, "kind": null, "cue": null, "guides": []}),
-            })
+            Ok(
+                match snapping::snap(point, &ctx, &settings, &geom, &s.smart) {
+                    Some(r) => json!({
+                        "snapped": true, "point": r.point, "kind": r.kind, "cue": r.cue,
+                        "guides": r.guides.iter().map(|g| json!({"a": g.a, "b": g.b, "kind": g.kind})).collect::<Vec<_>>(),
+                    }),
+                    None => {
+                        json!({"snapped": false, "point": point, "kind": null, "cue": null, "guides": []})
+                    }
+                },
+            )
         }
         "snap.smart" => {
             #[derive(Deserialize)]

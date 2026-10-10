@@ -94,10 +94,16 @@ pub fn hint(tool: Tool, step: usize) -> &'static str {
         (Tool::Scale, 1) => "Click the reference point.",
         (Tool::Scale, _) => "Click the new place of the reference point.",
         (Tool::Offset, 0) => "Click the object to offset.",
-        (Tool::Offset, _) => "Click the side of the copy. Set a distance in the Tool bar, or click the place it passes through.",
-        (Tool::Fillet, 0) => "Click the first object (or double-click a shape to round all corners).",
+        (Tool::Offset, _) => {
+            "Click the side of the copy. Set a distance in the Tool bar, or click the place it passes through."
+        }
+        (Tool::Fillet, 0) => {
+            "Click the first object (or double-click a shape to round all corners)."
+        }
         (Tool::Fillet, _) => "Click the second object, or a neighbor segment of the same shape.",
-        (Tool::Chamfer, 0) => "Click the first object (or double-click a shape to cut all corners).",
+        (Tool::Chamfer, 0) => {
+            "Click the first object (or double-click a shape to cut all corners)."
+        }
         (Tool::Chamfer, _) => "Click the second object, or a neighbor segment of the same shape.",
         (Tool::Trim, _) => "Click the part of an object to remove.",
         (Tool::Extend, _) => "Click the end of an object to extend to the next object.",
@@ -147,7 +153,10 @@ impl ToolMachine {
                     let ids = cx.selection.to_vec();
                     let pts = &st.pts;
                     let transform = match tool {
-                        Tool::Mirror => Transform::Mirror { a: pts[0], b: pts[1] },
+                        Tool::Mirror => Transform::Mirror {
+                            a: pts[0],
+                            b: pts[1],
+                        },
                         Tool::Rotate => {
                             let (u, v) = (pts[1] - pts[0], pts[2] - pts[0]);
                             if u.length_squared() == 0.0 || v.length_squared() == 0.0 {
@@ -191,7 +200,9 @@ impl ToolMachine {
                             let side = cx
                                 .doc
                                 .object(id)
-                                .and_then(|o| cadektor_core::edit2d::offset::offset_through(&o.shape, p).ok())
+                                .and_then(|o| {
+                                    cadektor_core::edit2d::offset::offset_through(&o.shape, p).ok()
+                                })
                                 .map_or(Side::Left, |(_, side)| side);
                             OffsetTo::Distance(s.offset_distance, side)
                         } else {
@@ -306,11 +317,6 @@ fn plan_effect(plan: Result<Command, String>) -> Vec<Effect> {
     }
 }
 
-/// True for the tools that work on the selection.
-pub fn needs_selection(tool: Tool) -> bool {
-    matches!(tool, Tool::Rotate | Tool::Mirror | Tool::Scale)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,14 +391,19 @@ mod tests {
     #[test]
     fn rotate_turns_the_selection_in_three_clicks() {
         let mut f = Fx::new(Tool::Rotate);
-        let c = f.add(Shape::Circle { center: v(100.0, 0.0), radius: 10.0 });
+        let c = f.add(Shape::Circle {
+            center: v(100.0, 0.0),
+            radius: 10.0,
+        });
         f.selection = vec![c];
         f.run(v(0.0, 0.0));
         assert_eq!(f.m.modify_step(), 1);
         f.run(v(50.0, 0.0));
         f.run(v(0.0, 50.0));
         assert!(!f.m.is_busy());
-        let Shape::Circle { center, .. } = f.ed.doc().object(c).unwrap().shape else { panic!() };
+        let Shape::Circle { center, .. } = f.ed.doc().object(c).unwrap().shape else {
+            panic!()
+        };
         assert!(center.distance(v(0.0, 100.0)) < 1e-9);
         // Copy mode keeps the original.
         f.settings.modify.copy = true;
@@ -406,29 +417,49 @@ mod tests {
     fn rotate_mirror_scale_need_a_selection() {
         for t in [Tool::Rotate, Tool::Mirror, Tool::Scale] {
             let mut f = Fx::new(t);
-            assert_eq!(f.run(v(1.0, 1.0)), vec!["Select the objects first".to_string()]);
+            assert_eq!(
+                f.run(v(1.0, 1.0)),
+                vec!["Select the objects first".to_string()]
+            );
             assert!(!f.m.is_busy());
-            assert!(needs_selection(t));
         }
     }
 
     #[test]
     fn mirror_and_scale() {
         let mut f = Fx::new(Tool::Mirror);
-        let r = f.add(Shape::Rect { min: v(10.0, 0.0), max: v(20.0, 5.0) });
+        let r = f.add(Shape::Rect {
+            min: v(10.0, 0.0),
+            max: v(20.0, 5.0),
+        });
         f.selection = vec![r];
         f.run(v(0.0, 0.0));
         assert_eq!(f.m.modify_readout(v(1.0, 1.0)), "");
         f.run(v(0.0, 100.0));
-        assert_eq!(f.ed.doc().object(r).unwrap().shape, Shape::Rect { min: v(-20.0, 0.0), max: v(-10.0, 5.0) });
+        assert_eq!(
+            f.ed.doc().object(r).unwrap().shape,
+            Shape::Rect {
+                min: v(-20.0, 0.0),
+                max: v(-10.0, 5.0)
+            }
+        );
         let mut f = Fx::new(Tool::Scale);
-        let c = f.add(Shape::Circle { center: v(10.0, 0.0), radius: 2.0 });
+        let c = f.add(Shape::Circle {
+            center: v(10.0, 0.0),
+            radius: 2.0,
+        });
         f.selection = vec![c];
         f.run(v(0.0, 0.0));
         f.run(v(10.0, 0.0));
         assert_eq!(f.m.modify_readout(v(30.0, 0.0)), "Scale 3.000");
         f.run(v(30.0, 0.0));
-        assert_eq!(f.ed.doc().object(c).unwrap().shape, Shape::Circle { center: v(30.0, 0.0), radius: 6.0 });
+        assert_eq!(
+            f.ed.doc().object(c).unwrap().shape,
+            Shape::Circle {
+                center: v(30.0, 0.0),
+                radius: 6.0
+            }
+        );
         // A point on the fixed point is refused.
         let mut f = Fx::new(Tool::Scale);
         f.selection = vec![c];
@@ -440,33 +471,48 @@ mod tests {
     #[test]
     fn offset_by_a_click_or_a_distance() {
         let mut f = Fx::new(Tool::Offset);
-        let l = f.add(Shape::Line { a: v(0.0, 0.0), b: v(100.0, 0.0) });
+        let l = f.add(Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(100.0, 0.0),
+        });
         assert!(f.run(v(500.0, 500.0)).len() == 1, "no object there");
         f.run(v(50.0, 0.0));
         assert_eq!(f.m.modify_step(), 1);
         f.run(v(50.0, 30.0));
         assert_eq!(f.ed.doc().objects.len(), 2);
         let _ = l;
-        let Shape::Line { a, .. } = f.ed.doc().objects.values().last().unwrap().shape else { panic!() };
+        let Shape::Line { a, .. } = f.ed.doc().objects.values().last().unwrap().shape else {
+            panic!()
+        };
         assert_eq!(a, v(0.0, 30.0));
         // A fixed distance, on the side of the click.
         f.settings.modify.offset_distance = 10.0;
         f.run(v(50.0, 0.0));
         f.run(v(50.0, -3.0));
-        let Shape::Line { a, .. } = f.ed.doc().objects.values().last().unwrap().shape else { panic!() };
+        let Shape::Line { a, .. } = f.ed.doc().objects.values().last().unwrap().shape else {
+            panic!()
+        };
         assert_eq!(a, v(0.0, -10.0));
     }
 
     #[test]
     fn fillet_chamfer_trim_extend_split() {
         let mut f = Fx::new(Tool::Fillet);
-        let a = f.add(Shape::Line { a: v(0.0, 0.0), b: v(1000.0, 0.0) });
-        f.add(Shape::Line { a: v(0.0, 0.0), b: v(0.0, 1000.0) });
+        let a = f.add(Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(1000.0, 0.0),
+        });
+        f.add(Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(0.0, 1000.0),
+        });
         f.settings.modify.radius = 100.0;
         f.run(v(800.0, 0.0));
         f.run(v(0.0, 800.0));
         assert_eq!(f.ed.doc().objects.len(), 3);
-        let Shape::Line { a: pa, .. } = f.ed.doc().object(a).unwrap().shape else { panic!() };
+        let Shape::Line { a: pa, .. } = f.ed.doc().object(a).unwrap().shape else {
+            panic!()
+        };
         assert!(pa.distance(v(100.0, 0.0)) < 1e-9);
         // Chamfer in standard mode leaves the lines.
         f.m.set_tool(Tool::Chamfer);
@@ -481,22 +527,49 @@ mod tests {
         assert_eq!(notes.len(), 1);
         // Trim and extend.
         let mut f = Fx::new(Tool::Trim);
-        let t = f.add(Shape::Line { a: v(0.0, 0.0), b: v(1000.0, 0.0) });
-        f.add(Shape::Line { a: v(300.0, -50.0), b: v(300.0, 50.0) });
+        let t = f.add(Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(1000.0, 0.0),
+        });
+        f.add(Shape::Line {
+            a: v(300.0, -50.0),
+            b: v(300.0, 50.0),
+        });
         f.run(v(600.0, 0.0));
-        assert_eq!(f.ed.doc().object(t).unwrap().shape, Shape::Line { a: v(0.0, 0.0), b: v(300.0, 0.0) });
+        assert_eq!(
+            f.ed.doc().object(t).unwrap().shape,
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(300.0, 0.0)
+            }
+        );
         f.m.set_tool(Tool::Extend);
-        f.add(Shape::Line { a: v(900.0, -50.0), b: v(900.0, 50.0) });
+        f.add(Shape::Line {
+            a: v(900.0, -50.0),
+            b: v(900.0, 50.0),
+        });
         f.run(v(290.0, 0.0));
-        assert_eq!(f.ed.doc().object(t).unwrap().shape, Shape::Line { a: v(0.0, 0.0), b: v(900.0, 0.0) });
+        assert_eq!(
+            f.ed.doc().object(t).unwrap().shape,
+            Shape::Line {
+                a: v(0.0, 0.0),
+                b: v(900.0, 0.0)
+            }
+        );
         f.m.set_tool(Tool::Split);
         f.run(v(500.0, 0.0));
         assert_eq!(f.ed.doc().objects.len(), 4);
         // Only the selected cutters count.
         let mut f = Fx::new(Tool::Trim);
         f.settings.modify.cut_to = CutTo::SelectedObjects;
-        let t = f.add(Shape::Line { a: v(0.0, 0.0), b: v(1000.0, 0.0) });
-        f.add(Shape::Line { a: v(300.0, -50.0), b: v(300.0, 50.0) });
+        let t = f.add(Shape::Line {
+            a: v(0.0, 0.0),
+            b: v(1000.0, 0.0),
+        });
+        f.add(Shape::Line {
+            a: v(300.0, -50.0),
+            b: v(300.0, 50.0),
+        });
         let notes = f.run(v(600.0, 0.0));
         assert_eq!(notes.len(), 1, "no selected cutter");
         let _ = t;
@@ -506,24 +579,48 @@ mod tests {
     fn double_click_rounds_every_corner() {
         let mut f = Fx::new(Tool::Fillet);
         let p = f.add(Shape::Polyline {
-            points: cadektor_core::curve::corners(&[v(0.0, 0.0), v(1000.0, 0.0), v(1000.0, 1000.0), v(0.0, 1000.0)]),
+            points: cadektor_core::curve::corners(&[
+                v(0.0, 0.0),
+                v(1000.0, 0.0),
+                v(1000.0, 1000.0),
+                v(0.0, 1000.0),
+            ]),
             closed: true,
         });
         f.settings.modify.radius = 100.0;
         f.run(v(500.0, 0.0));
-        let cx = Ctx { doc: f.ed.doc(), selection: &[], settings: &f.settings, tol: 5.0, context: None };
+        let cx = Ctx {
+            doc: f.ed.doc(),
+            selection: &[],
+            settings: &f.settings,
+            tol: 5.0,
+            context: None,
+        };
         let effects = f.m.handle(Input::DoubleClick, &cx);
         assert_eq!(effects.len(), 1);
         if let Effect::Exec(c) = &effects[0] {
             f.ed.execute(c).unwrap();
         }
         let area = f.ed.doc().object(p).unwrap().shape.area().unwrap();
-        assert!((area - (1_000_000.0 - (4.0 - std::f64::consts::PI) * 10_000.0)).abs() < 1.0, "{area}");
+        assert!(
+            (area - (1_000_000.0 - (4.0 - std::f64::consts::PI) * 10_000.0)).abs() < 1.0,
+            "{area}"
+        );
     }
 
     #[test]
     fn hints_previews_and_state() {
-        for t in [Tool::Rotate, Tool::Mirror, Tool::Scale, Tool::Offset, Tool::Fillet, Tool::Chamfer, Tool::Trim, Tool::Extend, Tool::Split] {
+        for t in [
+            Tool::Rotate,
+            Tool::Mirror,
+            Tool::Scale,
+            Tool::Offset,
+            Tool::Fillet,
+            Tool::Chamfer,
+            Tool::Trim,
+            Tool::Extend,
+            Tool::Split,
+        ] {
             assert!(is_modify(t));
             for step in 0..3 {
                 assert!(!hint(t, step).is_empty());
@@ -531,12 +628,17 @@ mod tests {
         }
         assert!(!is_modify(Tool::Line));
         let mut f = Fx::new(Tool::Rotate);
-        let c = f.add(Shape::Circle { center: v(1.0, 1.0), radius: 1.0 });
+        let c = f.add(Shape::Circle {
+            center: v(1.0, 1.0),
+            radius: 1.0,
+        });
         f.selection = vec![c];
         assert_eq!(f.m.modify_preview(v(1.0, 1.0)), Preview::None);
         f.run(v(0.0, 0.0));
         f.run(v(10.0, 0.0));
-        let Preview::Path { vertices, .. } = f.m.modify_preview(v(0.0, 10.0)) else { panic!() };
+        let Preview::Path { vertices, .. } = f.m.modify_preview(v(0.0, 10.0)) else {
+            panic!()
+        };
         assert_eq!(vertices.len(), 3);
         assert!(f.m.modify_readout(v(0.0, 10.0)).starts_with("Turn 90"));
         assert_eq!(ModifySettings::default().cut_to, CutTo::AllObjects);

@@ -166,7 +166,11 @@ struct Ids {
     copy: bool,
 }
 
-fn transform(s: &mut Session, m: &Map<String, Value>, make: impl Fn(&Map<String, Value>) -> Result<Transform, RpcError>) -> Result<Value, RpcError> {
+fn transform(
+    s: &mut Session,
+    m: &Map<String, Value>,
+    make: impl Fn(&Map<String, Value>) -> Result<Transform, RpcError>,
+) -> Result<Value, RpcError> {
     let Ids { ids, copy } = read(m)?;
     let ids = ids_or_selection(s, ids)?;
     let transform = make(m)?;
@@ -189,7 +193,9 @@ fn mode_of(m: &Map<String, Value>) -> Result<JoinMode, RpcError> {
         None | Some("trim") => Ok(JoinMode::Trim),
         Some("split") => Ok(JoinMode::Split),
         Some("standard") => Ok(JoinMode::Standard),
-        Some(o) => Err(bad(format!("unknown mode '{o}'. Use trim, split or standard"))),
+        Some(o) => Err(bad(format!(
+            "unknown mode '{o}'. Use trim, split or standard"
+        ))),
     }
 }
 
@@ -220,7 +226,10 @@ fn join(s: &mut Session, m: &Map<String, Value>, kind: JoinKind) -> Result<Value
         if mode == JoinMode::Standard {
             return Err(bad("mode standard needs two objects (a and b)"));
         }
-        return run_plan(s, plan::round_all(s.editor.doc(), id, list.as_deref(), kind));
+        return run_plan(
+            s,
+            plan::round_all(s.editor.doc(), id, list.as_deref(), kind),
+        );
     }
     let (Some(a), Some(b)) = (p.a, p.b) else {
         return Err(bad("give a and b (two objects), or id (one shape)"));
@@ -361,7 +370,9 @@ fn call(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, 
                 (Some(d), None) => {
                     let side = match p.side.as_deref() {
                         Some(n) => Side::from_name(n).ok_or_else(|| {
-                            bad(format!("unknown side '{n}'. Use left, right, outside or inside"))
+                            bad(format!(
+                                "unknown side '{n}'. Use left, right, outside or inside"
+                            ))
                         })?,
                         None => {
                             let closed = s.editor.doc().object(p.id).is_some_and(|o| {
@@ -398,7 +409,12 @@ fn call(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, 
             let p: TrimParams = read(m)?;
             run_plan(
                 s,
-                plan::trim(s.editor.doc(), p.id, finite(p.pick, "pick")?, p.cutters.as_deref()),
+                plan::trim(
+                    s.editor.doc(),
+                    p.id,
+                    finite(p.pick, "pick")?,
+                    p.cutters.as_deref(),
+                ),
             )
         }
         "edit.extend" => {
@@ -431,7 +447,9 @@ fn call(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, 
                         finite(l.b, "line.b")?,
                     ),
                 ),
-                _ => Err(bad("give at (points on the object) or line {a, b}, not both")),
+                _ => Err(bad(
+                    "give at (points on the object) or line {a, b}, not both",
+                )),
             }
         }
         "surface.add" | "surface.intersect" | "surface.compose" | "surface.clip" => {

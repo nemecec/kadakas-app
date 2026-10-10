@@ -16,10 +16,10 @@ mod irrigation_api;
 mod libfiles;
 mod massing_api;
 mod plants_api;
-mod query_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;
 mod present_api;
+mod query_api;
 mod sheets_api;
 mod symbols_api;
 
@@ -493,6 +493,10 @@ pub const METHODS: &[(&str, &str)] = &[
     (
         "site.contours",
         "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}.",
+    ),
+    (
+        "view.screenshot",
+        "A PNG picture of the live drawing area of the app window, as the user sees it (the plan or the 3D view with palettes left out). Only the app (cadektor app with --agent-port) answers; the headless server gives an error. params: {region? (drawing (default) | window: the whole window), max_width? (px, 64 to 4096; larger pictures are scaled down)}. Returns {png_base64, width, height, region, theme (light | dark), view (the current view id)}.",
     ),
     // Editing 2D geometry (see edit2d_api.rs).
     edit2d_api::EDIT_ROTATE,
@@ -1017,6 +1021,11 @@ impl Session {
                     out["render_style"] = present_api::style_summary(&used_style);
                 }
                 out
+            }
+            "view.screenshot" => {
+                return Err(RpcError::app(
+                    "view.screenshot needs the live window of the app. Start the app with --agent-port; the headless server has no window. Use render.png for a picture of the 3D model, or render.svg for the plan",
+                ));
             }
             "view.list" => json!({
                 "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),

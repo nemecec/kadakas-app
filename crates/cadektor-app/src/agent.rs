@@ -52,6 +52,14 @@ impl Default for Limits {
 /// The first line must be small: it only holds a token.
 const MAX_AUTH_LINE: usize = 4096;
 
+/// What a request handler does with a request.
+pub enum Reply {
+    /// Answer now (`None`: no answer, for a notification).
+    Now(Option<String>),
+    /// The handler keeps the sender and answers in a later frame.
+    Later,
+}
+
 pub struct Request {
     pub line: String,
     pub reply: Sender<Option<String>>,
@@ -94,16 +102,36 @@ impl AgentServer {
     /// Answers waiting requests for at most `FRAME_BUDGET`, with `handle`
     /// turning each request line into a response line.
     /// Returns how many it handled.
+    #[cfg(test)]
     pub fn poll(&self, handle: &mut dyn FnMut(&str) -> Option<String>) -> usize {
         self.poll_for(FRAME_BUDGET, handle)
     }
 
     /// Like `poll`, with an explicit time budget. When the budget runs out
     /// the UI is asked to repaint, so the rest is answered in the next frame.
+    #[cfg(test)]
     pub fn poll_for(
         &self,
         budget: Duration,
         handle: &mut dyn FnMut(&str) -> Option<String>,
+    ) -> usize {
+        self.poll_ext_for(budget, &mut |line, _| Reply::Now(handle(line)))
+    }
+
+    /// Like `poll`, for a handler that can answer later: it gets the sender of the reply and
+    /// returns `Reply::Later` to keep it. The client waits (up to `Limits::reply_timeout`) until
+    /// the handler sends the answer line, or `None` for no answer.
+    pub fn poll_ext(
+        &self,
+        handle: &mut dyn FnMut(&str, &Sender<Option<String>>) -> Reply,
+    ) -> usize {
+        self.poll_ext_for(FRAME_BUDGET, handle)
+    }
+
+    pub fn poll_ext_for(
+        &self,
+        budget: Duration,
+        handle: &mut dyn FnMut(&str, &Sender<Option<String>>) -> Reply,
     ) -> usize {
         let start = Instant::now();
         let mut n = 0;
@@ -118,7 +146,12 @@ impl AgentServer {
             if req.cancelled.load(Ordering::SeqCst) {
                 continue; // the client was told that this request was cancelled
             }
-            let _ = req.reply.send(handle(&req.line));
+            match handle(&req.line, &req.reply) {
+                Reply::Now(answer) => {
+                    let _ = req.reply.send(answer);
+                }
+                Reply::Later => {}
+            }
             n += 1;
             if start.elapsed() >= budget {
                 // Ask for another frame only if a request is really waiting. The wake of a client

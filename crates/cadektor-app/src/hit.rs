@@ -316,7 +316,11 @@ mod tests {
     use super::*;
 
     fn tri() -> Vec<DVec2> {
-        vec![DVec2::new(0.0, 0.0), DVec2::new(100.0, 0.0), DVec2::new(0.0, 100.0)]
+        vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(100.0, 0.0),
+            DVec2::new(0.0, 100.0),
+        ]
     }
 
     #[test]
@@ -335,7 +339,12 @@ mod tests {
         let (lo, hi) = b(-50.0, -50.0, 500.0, 500.0);
         assert!(box_in_polygon(lo, hi, &t, true) && !box_in_polygon(lo, hi, &t, false));
         // A box that the polygon crosses with no corner inside either way: a thin bar.
-        let bar = vec![DVec2::new(-10.0, 5.0), DVec2::new(200.0, 5.0), DVec2::new(200.0, 6.0), DVec2::new(-10.0, 6.0)];
+        let bar = vec![
+            DVec2::new(-10.0, 5.0),
+            DVec2::new(200.0, 5.0),
+            DVec2::new(200.0, 6.0),
+            DVec2::new(-10.0, 6.0),
+        ];
         let (lo, hi) = b(50.0, 0.0, 60.0, 100.0);
         assert!(box_in_polygon(lo, hi, &bar, true));
     }
@@ -357,14 +366,25 @@ mod tests {
                 .created[0],
             )
         };
-        let inside = add(Shape::Circle { center: DVec2::new(20.0, 20.0), radius: 5.0 });
-        let across = add(Shape::Line { a: DVec2::new(50.0, 40.0), b: DVec2::new(200.0, 40.0) });
-        let outside = add(Shape::Circle { center: DVec2::new(400.0, 400.0), radius: 5.0 });
+        let inside = add(Shape::Circle {
+            center: DVec2::new(20.0, 20.0),
+            radius: 5.0,
+        });
+        let across = add(Shape::Line {
+            a: DVec2::new(50.0, 40.0),
+            b: DVec2::new(200.0, 40.0),
+        });
+        let outside = add(Shape::Circle {
+            center: DVec2::new(400.0, 400.0),
+            radius: 5.0,
+        });
         let t = tri();
         let inner = lasso_select_in(ed.doc(), &t, false, None);
         assert_eq!(inner, vec![inside]);
         let touched = lasso_select_in(ed.doc(), &t, true, None);
-        assert!(touched.contains(&inside) && touched.contains(&across) && !touched.contains(&outside));
+        assert!(
+            touched.contains(&inside) && touched.contains(&across) && !touched.contains(&outside)
+        );
         assert!(lasso_select_in(ed.doc(), &t[..2], true, None).is_empty());
     }
 

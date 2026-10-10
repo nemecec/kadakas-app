@@ -143,14 +143,14 @@ fn map_vertices(v: &[Vertex], closed: bool, xf: &Xf) -> Result<Vec<Vertex>, Stri
             .collect());
     }
     if curve::all_straight(v) {
-        return Ok(v
-            .iter()
-            .map(|x| Vertex::corner(xf.apply(x.p)))
-            .collect());
+        return Ok(v.iter().map(|x| Vertex::corner(xf.apply(x.p))).collect());
     }
     // A fillet or spline does not survive a stretch. Use the corners of the flattened curve.
     let pts = curve::flatten(v, closed, FLATTEN_TOLERANCE);
-    Ok(pts.into_iter().map(|p| Vertex::corner(xf.apply(p))).collect())
+    Ok(pts
+        .into_iter()
+        .map(|p| Vertex::corner(xf.apply(p)))
+        .collect())
 }
 
 fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
@@ -166,9 +166,8 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
         return Err("numbers must be finite".into());
     }
     let sim = xf.similarity();
-    let need_sim = |what: &str| {
-        sim.ok_or_else(|| format!("a {what} needs the same scale in x and y"))
-    };
+    let need_sim =
+        |what: &str| sim.ok_or_else(|| format!("a {what} needs the same scale in x and y"));
     Ok(match shape {
         Shape::Line { a, b } => Shape::Line {
             a: xf.apply(*a),
@@ -358,7 +357,7 @@ mod tests {
         let back = r.then(Xf::rotate(v(1.0, 1.0), -0.7));
         assert!(back.apply(v(5.0, -2.0)).distance(v(5.0, -2.0)) < 1e-9);
         assert!(Xf::translate(v(1.0, 2.0)).is_translation());
-        assert!(!Xf::scale(v(0.0, 0.0), 2.0, 3.0).similarity().is_some());
+        assert!(Xf::scale(v(0.0, 0.0), 2.0, 3.0).similarity().is_none());
         assert_eq!(Xf::scale(v(0.0, 0.0), 2.0, 2.0).similarity(), Some(2.0));
     }
 
@@ -451,10 +450,7 @@ mod tests {
         };
         let m = map_shape(&sym, &Xf::mirror(v(0.0, 0.0), v(0.0, 1.0)).unwrap()).unwrap();
         let Shape::Symbol {
-            at,
-            scale,
-            scale_y,
-            ..
+            at, scale, scale_y, ..
         } = m
         else {
             panic!()

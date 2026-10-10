@@ -365,7 +365,10 @@ pub enum Preview {
         delta: DVec2,
     },
     /// A free-hand selection shape (the Lasso mode of the Selection tool).
-    Lasso { points: Vec<DVec2>, crossing: bool },
+    Lasso {
+        points: Vec<DVec2>,
+        crossing: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -446,6 +449,18 @@ impl ToolMachine {
             State::Modify(m) => m.pts.last().copied(),
             _ => None,
         }
+    }
+
+    /// The direction of the last segment you drew (radians), if two points are known.
+    pub fn prior_direction(&self) -> Option<f64> {
+        let pts: Vec<DVec2> = match &self.state {
+            State::Points(p) => p.clone(),
+            State::Path(h) => h.last()?.iter().map(|v| v.p).collect(),
+            State::Modify(m) => m.pts.clone(),
+            _ => return None,
+        };
+        let n = pts.len();
+        (n >= 2 && pts[n - 1] != pts[n - 2]).then(|| (pts[n - 1] - pts[n - 2]).to_angle())
     }
 
     /// Takes back the last clicked point. The operation ends when none is left.

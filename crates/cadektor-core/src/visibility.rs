@@ -158,9 +158,21 @@ mod tests {
         assert!(ed.doc().drawing.grey.classes.is_empty());
         assert!(ed.doc().drawing.is_empty(), "no grey: nothing is saved");
         for bad in [
-            Command::SetVisibility { layers: vec![], classes: vec![], mode: VisMode::Grey },
-            Command::SetVisibility { layers: vec![LayerId(99)], classes: vec![], mode: VisMode::Grey },
-            Command::SetVisibility { layers: vec![], classes: vec![ClassId(99)], mode: VisMode::Grey },
+            Command::SetVisibility {
+                layers: vec![],
+                classes: vec![],
+                mode: VisMode::Grey,
+            },
+            Command::SetVisibility {
+                layers: vec![LayerId(99)],
+                classes: vec![],
+                mode: VisMode::Grey,
+            },
+            Command::SetVisibility {
+                layers: vec![],
+                classes: vec![ClassId(99)],
+                mode: VisMode::Grey,
+            },
         ] {
             assert!(ed.execute(&bad).is_err());
         }

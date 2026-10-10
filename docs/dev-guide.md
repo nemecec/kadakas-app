@@ -15,7 +15,7 @@ The "Depends on" column lists the other Cadektor crates that a crate uses (`carg
 
 | Crate | Content | Depends on |
 |---|---|---|
-| `cadektor-core` | Document model, commands, undo, geometry, curves, mesh, file format and its versions | none of ours |
+| `cadektor-core` | Document model, commands, undo, geometry, curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | none of ours |
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
 | `cadektor-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core |
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code (pure, wasm-compatible) | core, sheet |
@@ -36,6 +36,7 @@ The "Depends on" column lists the other Cadektor crates that a crate uses (`carg
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
+- After you add or change a `Command`, renew its JSON Schema: `UPDATE_SCHEMA=1 cargo test -p cadektor-core --test command_schema`, and commit `crates/cadektor-core/tests/command_schema.json`. The schema comes from `schemars`; the types inside a command that other crates own (shapes, resource bodies, patches) are described in `crates/cadektor-core/src/schema.rs`.
 - After you add or change an API method, renew the Python package: `CADEKTOR_BIN=<your binary> python python/tools/codegen.py`. The test `python/tests/test_drift.py` fails when `python/cadektor/_api.py` and `describe` differ.
 
 ## Quality rules

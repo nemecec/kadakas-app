@@ -41,15 +41,28 @@ impl ViewHistory {
             return false;
         }
         if now - since >= SETTLE || self.entries.is_empty() {
-            self.entries.truncate(self.pos + usize::from(!self.entries.is_empty()));
-            self.entries.push(view);
-            if self.entries.len() > MAX_ENTRIES {
-                self.entries.remove(0);
-            }
-            self.pos = self.entries.len() - 1;
+            self.push(view);
             return false;
         }
         true
+    }
+
+    fn push(&mut self, view: Snapshot) {
+        self.entries
+            .truncate(self.pos + usize::from(!self.entries.is_empty()));
+        self.entries.push(view);
+        if self.entries.len() > MAX_ENTRIES {
+            self.entries.remove(0);
+        }
+        self.pos = self.entries.len() - 1;
+    }
+
+    /// Counts the current view at once, even if it has not rested yet. Call it before going
+    /// back, so that the view you leave can be reached again with Next View.
+    pub fn flush(&mut self, view: Snapshot) {
+        if self.entries.get(self.pos) != Some(&view) {
+            self.push(view);
+        }
     }
 
     /// The view before the current one, which then becomes the current view.
@@ -76,10 +89,12 @@ impl ViewHistory {
         self.pos + 1 < self.entries.len()
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -174,6 +189,20 @@ mod tests {
         assert!(h.is_empty() && !h.can_go_back());
         assert_eq!(h.previous(), None);
         assert_eq!(h.next(), None);
+    }
+
+    #[test]
+    fn flush_keeps_the_view_you_leave() {
+        let mut h = ViewHistory::default();
+        let mut t = 0.0;
+        rest(&mut h, &mut t, v(1.0));
+        // The user zooms and goes back before the new view has rested.
+        h.observe(t + 0.01, v(2.0));
+        h.flush(v(2.0));
+        assert_eq!(h.previous(), Some(v(1.0)));
+        assert_eq!(h.next(), Some(v(2.0)));
+        h.flush(v(2.0));
+        assert_eq!(h.len(), 2);
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod agent;
 mod annot_ui;
 mod app;
 mod area_ui;
+mod array_ui;
 mod autosave;
 #[cfg(not(target_arch = "wasm32"))]
 mod autosave_fs;
@@ -25,22 +26,28 @@ mod hit;
 mod io_dialog;
 mod irrigation_ui;
 mod keymap;
+mod layout;
 mod panels;
 mod plant_draw;
 mod plant_ui;
+mod prefs;
 mod present_ui;
+mod quick_search;
 mod resource_ui;
+mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_ui;
 mod sheets_ui;
 mod site_ui;
 mod snap;
+mod snap_ui;
 mod tess;
+mod theme;
 mod tools;
 mod vertex;
 mod view;
-mod view_history;
 mod view3d;
+mod view_history;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
