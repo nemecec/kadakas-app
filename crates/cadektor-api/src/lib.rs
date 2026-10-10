@@ -851,6 +851,7 @@ impl Session {
     /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
         let depth = self.editor.undo_depth();
+        let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
         let result = self.dispatch(method, p);
@@ -859,7 +860,8 @@ impl Session {
         #[cfg(target_arch = "wasm32")]
         let elapsed = None;
         let steps = self.editor.undo_depth().saturating_sub(depth);
-        self.enforce_limits(steps, elapsed, result)
+        let changed = self.editor.revision() != revision;
+        self.enforce_limits(steps, changed, elapsed, result)
     }
 
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
@@ -987,6 +989,7 @@ impl Session {
                     LoadError::Parse(_) => RpcError::invalid_params(e),
                     e => RpcError::app(e),
                 })?;
+                self.check_document_fits(&document)?;
                 self.replace_document(document);
                 json!({ "ok": true })
             }

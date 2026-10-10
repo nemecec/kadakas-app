@@ -91,9 +91,8 @@ pub fn random() -> String {
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
+    // The clock and the process ID do not exist in the browser: `uid::entropy` knows what to use.
+    let now = crate::uid::entropy();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut parts = [0u64; 2];
     for (i, p) in parts.iter_mut().enumerate() {

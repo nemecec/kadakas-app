@@ -109,6 +109,20 @@ pub struct CadektorApp {
     web_saved: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
+/// 64 random bits from the browser (`crypto.getRandomValues`, or `Math.random` without it).
+#[cfg(target_arch = "wasm32")]
+fn web_entropy() -> u64 {
+    let mut bytes = [0u8; 8];
+    let filled = web_sys::window()
+        .and_then(|w| w.crypto().ok())
+        .is_some_and(|c| c.get_random_values_with_u8_array(&mut bytes).is_ok());
+    if filled {
+        u64::from_le_bytes(bytes)
+    } else {
+        (js_sys::Math::random() * u64::MAX as f64) as u64
+    }
+}
+
 impl CadektorApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
@@ -185,6 +199,8 @@ impl CadektorApp {
     /// The start of the web build: no agent server, no files, no Python.
     #[cfg(target_arch = "wasm32")]
     pub fn new_web(cc: &eframe::CreationContext<'_>) -> Self {
+        // The browser has no clock or process in `std`: give the ID generator a time and random bits.
+        cadektor_core::uid::set_host_seed(js_sys::Date::now() as u64, web_entropy());
         let mut app = Self::blank();
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
@@ -256,9 +272,11 @@ impl CadektorApp {
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
-        let snap = self.session.snap;
-        self.session = Session::with_document(doc);
-        self.session.snap = snap;
+        // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
+        // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
+        self.session.replace_document(doc);
+        // The app handles this change itself: agents must not see it as a `document.load`.
+        self.session.take_replaced();
         self.view_history.clear();
         self.path = path;
         self.title_dirty = true;
@@ -2555,5 +2573,30 @@ mod tests {
             .unwrap();
         assert!(app.session.take_view_changed());
         assert!(app.plan());
+    }
+
+    #[test]
+    fn new_and_open_keep_the_policy_the_limits_and_the_event_subscription() {
+        let mut app = CadektorApp::blank();
+        app.session.paths =
+            cadektor_api::PathPolicy::restricted(vec![std::path::PathBuf::from("/allowed")]);
+        app.session.scripting.allow_agent_scripts = true;
+        let limits = cadektor_api::SessionLimits::strict();
+        app.session.set_limits(limits.clone());
+        app.session
+            .handle("events.subscribe", serde_json::json!({}))
+            .unwrap();
+        app.replace_document(Document::default(), None);
+        assert_eq!(app.session.limits(), &limits);
+        assert!(app.session.scripting.allow_agent_scripts);
+        assert!(app.session.paths.is_restricted());
+        assert!(app.session.is_subscribed(0));
+        assert!(
+            !app.session.take_replaced(),
+            "the app handles its own replace"
+        );
+        // The subscriber is told to read the document again.
+        let notes = app.session.take_notifications(0);
+        assert_eq!(notes[0]["method"], "events.reset");
     }
 }

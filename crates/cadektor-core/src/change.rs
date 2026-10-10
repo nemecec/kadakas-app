@@ -285,6 +285,20 @@ impl ChangeLog {
         }
     }
 
+    /// An empty log for an editor made at `revision`: a client that asks for changes before it
+    /// gets `truncated`, because it cannot follow them.
+    pub fn starting_at(revision: u64) -> Self {
+        ChangeLog {
+            dropped_upto: revision,
+            ..ChangeLog::default()
+        }
+    }
+
+    /// A rough size in bytes.
+    pub fn approx_bytes(&self) -> u64 {
+        self.ids as u64 * 16 + self.entries.len() as u64 * 200
+    }
+
     pub fn push(&mut self, change: ChangeSet) {
         self.ids += change.added.len() + change.changed.len() + change.removed.len();
         self.entries.push_back(change);

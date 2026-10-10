@@ -537,6 +537,32 @@ pub struct Patch {
     /// Objects that changed in place, as (before, after).
     modified: Vec<(Object, Object)>,
     meta: Option<(Meta, Meta)>,
+    /// A rough size in bytes, for the history limit (see [`Editor::set_history_limit`]).
+    bytes: u64,
+}
+
+/// Costs in the estimate of the size of a patch, in bytes.
+const OBJECT_BYTES: u64 = 320;
+const META_PART_BYTES: u64 = 200;
+
+fn object_bytes(o: &Object) -> u64 {
+    OBJECT_BYTES
+        + match &o.shape {
+            Shape::Underlay(u) => u.png.0.len() as u64,
+            _ => 0,
+        }
+}
+
+impl Meta {
+    /// A rough size in bytes.
+    fn approx_bytes(&self) -> u64 {
+        let resources: u64 = self
+            .resources
+            .iter()
+            .map(|r| serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64))
+            .sum();
+        (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES + resources + 512
+    }
 }
 
 impl Patch {
@@ -1285,18 +1311,18 @@ impl<'a> Tx<'a> {
 
     fn finish(self, meta_before: Meta) -> Patch {
         let doc = &*self.doc;
-        let removed = self
+        let removed: Vec<(usize, Object)> = self
             .removed
             .iter()
             .map(|(i, id)| (*i, self.before[id].clone()))
             .collect();
-        let added = self
+        let added: Vec<(usize, Object)> = self
             .added
             .iter()
             .filter_map(|id| doc.objects.get_full(id))
             .map(|(i, _, o)| (i, o.clone()))
             .collect();
-        let modified = self
+        let modified: Vec<(Object, Object)> = self
             .before
             .iter()
             .filter_map(|(id, b)| {
@@ -1307,11 +1333,22 @@ impl<'a> Tx<'a> {
             .collect();
         let meta_after = Meta::of(doc);
         let meta = (meta_before != meta_after).then_some((meta_before, meta_after));
+        let objects = |l: &[(usize, Object)]| l.iter().map(|(_, o)| object_bytes(o)).sum::<u64>();
+        let bytes = objects(&removed)
+            + objects(&added)
+            + modified
+                .iter()
+                .map(|(b, a): &(Object, Object)| object_bytes(b) + object_bytes(a))
+                .sum::<u64>()
+            + meta
+                .as_ref()
+                .map_or(0, |(b, a)| b.approx_bytes() + a.approx_bytes());
         Patch {
             removed,
             added,
             modified,
             meta,
+            bytes,
         }
     }
 }
@@ -1447,6 +1484,8 @@ pub struct Editor {
     origin: Origin,
     /// The latest change sets (see `crate::change`).
     log: ChangeLog,
+    /// Most bytes that the undo steps may hold (see [`Editor::set_history_limit`]).
+    history_limit: u64,
 }
 
 impl Default for Editor {
@@ -1477,13 +1516,16 @@ impl Editor {
     }
 
     pub fn new(doc: Document) -> Self {
+        let revision = next_revision();
         Editor {
             doc,
             undo: Vec::new(),
             redo: Vec::new(),
-            revision: next_revision(),
+            revision,
             origin: Origin::User,
-            log: ChangeLog::default(),
+            // A client that asks for changes before this editor existed gets `truncated`.
+            log: ChangeLog::starting_at(revision),
+            history_limit: u64::MAX,
         }
     }
 
@@ -1518,6 +1560,7 @@ impl Editor {
                         .push(patch.change_set(true, self.revision, &op, self.origin));
                     self.undo.push(patch);
                     self.redo.clear();
+                    self.trim_history();
                 }
                 Ok(out)
             }
@@ -1574,6 +1617,40 @@ impl Editor {
         self.log.since(revision)
     }
 
+    /// A rough size of the undo and redo steps in bytes.
+    pub fn history_bytes(&self) -> u64 {
+        self.undo.iter().chain(&self.redo).map(|p| p.bytes).sum()
+    }
+
+    /// A rough size of the change log in bytes.
+    pub fn log_bytes(&self) -> u64 {
+        self.log.approx_bytes()
+    }
+
+    /// Caps the undo steps by size: when the steps hold more bytes, the oldest ones are dropped
+    /// (the newest step always stays). `u64::MAX`: no cap.
+    pub fn set_history_limit(&mut self, bytes: u64) {
+        self.history_limit = bytes;
+        self.trim_history();
+    }
+
+    fn trim_history(&mut self) {
+        if self.history_limit == u64::MAX {
+            return;
+        }
+        let mut total = self.history_bytes();
+        let mut drop = 0;
+        while total > self.history_limit && drop + 1 < self.undo.len() {
+            total -= self.undo[drop].bytes;
+            drop += 1;
+        }
+        self.undo.drain(..drop);
+        // Redo steps count too: they go first when the size is over the cap.
+        while total > self.history_limit && !self.redo.is_empty() {
+            total -= self.redo.remove(0).bytes;
+        }
+    }
+
     /// Number of steps that `undo` can take back.
     pub fn undo_depth(&self) -> usize {
         self.undo.len()
@@ -1582,6 +1659,9 @@ impl Editor {
     /// Takes back the last `steps` steps and forgets them: they cannot be redone. For a host that
     /// refuses a call after it ran (see `SessionLimits`).
     pub fn rollback(&mut self, steps: usize) {
+        if steps == 0 || self.undo.is_empty() {
+            return;
+        }
         for _ in 0..steps {
             let Some(p) = self.undo.pop() else { break };
             p.apply(&mut self.doc, false);

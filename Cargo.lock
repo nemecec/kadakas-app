@@ -617,6 +617,7 @@ dependencies = [
  "egui_dock",
  "getrandom 0.4.3",
  "glam",
+ "js-sys",
  "pollster 1.0.1",
  "resvg",
  "rfd",

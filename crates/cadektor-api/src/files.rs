@@ -96,6 +96,7 @@ pub fn file_call(
         Ok(FileDone::Saved(p))
     } else {
         let doc = read_document(&p)?;
+        s.check_document_fits(&doc)?;
         s.replace_document(doc);
         s.take_replaced();
         s.doc_dir = dir_of(&p);

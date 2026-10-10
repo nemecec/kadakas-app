@@ -17,8 +17,11 @@ pub struct SessionLimits {
     /// Most objects in the document. A call that adds more is undone and fails with a limit error.
     pub max_objects: usize,
     /// Most estimated memory of the session, in bytes (see `Session::estimated_bytes`). A call
-    /// that grows the session beyond it is undone and fails with a limit error.
+    /// that changes the document and grows the session beyond it is undone and fails with a limit
+    /// error. A session that is over the limit without a change (a big cache) drops its caches.
     pub max_memory_bytes: u64,
+    /// Most bytes that the undo steps may hold. The oldest steps are dropped first.
+    pub max_history_bytes: u64,
     /// Time budget of one call. A call that takes longer fails with a limit error; if it changed
     /// the document, the change is undone. The check runs after the call, so it does not stop a
     /// long calculation: it keeps its result from the document. `None`: no budget. Native only.
@@ -44,6 +47,7 @@ impl Default for SessionLimits {
         SessionLimits {
             max_objects: usize::MAX,
             max_memory_bytes: u64::MAX,
+            max_history_bytes: u64::MAX,
             request_time: None,
             render_side: 2048,
             render_pixels: 4_000_000,
@@ -62,6 +66,7 @@ impl SessionLimits {
         SessionLimits {
             max_objects: 50_000,
             max_memory_bytes: 512 * 1024 * 1024,
+            max_history_bytes: 64 * 1024 * 1024,
             request_time: Some(Duration::from_secs(10)),
             render_pixels: 1_000_000,
             raster_pixels: 8_000_000,
@@ -92,7 +97,19 @@ impl SessionLimits {
 /// Costs in the estimate of the memory of a session, in bytes.
 const OBJECT_BYTES: u64 = 320;
 const RESOURCE_BYTES: u64 = 2048;
-const HISTORY_STEP_BYTES: u64 = 1024;
+
+/// A rough figure for a document: objects, resources and pictures.
+fn document_bytes(doc: &cadektor_core::model::Document) -> u64 {
+    let pictures: u64 = doc
+        .objects
+        .values()
+        .map(|o| match &o.shape {
+            cadektor_core::model::Shape::Underlay(u) => u.png.0.len() as u64,
+            _ => 0,
+        })
+        .sum();
+    doc.objects.len() as u64 * OBJECT_BYTES + doc.resources.len() as u64 * RESOURCE_BYTES + pictures
+}
 
 impl Session {
     /// The limits of this session.
@@ -100,8 +117,8 @@ impl Session {
         &self.limits
     }
 
-    /// Sets the limits and passes them on to the parts that enforce them (the page cache, the map
-    /// services and the scripts). The values stay when the document is replaced.
+    /// Sets the limits and passes them on to the parts that enforce them (the history, the page
+    /// cache, the map services and the scripts). The values stay when the document is replaced.
     pub fn set_limits(&mut self, limits: SessionLimits) {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -110,62 +127,100 @@ impl Session {
             self.gis.cache_limit = limits.gis_cache_bytes;
             self.scripting.limits.timeout = limits.script_timeout;
         }
+        self.editor.set_history_limit(limits.max_history_bytes);
         self.limits = limits;
     }
 
     /// A rough figure for the memory of the session in bytes: the document, its pictures, the
-    /// history and the cached scene.
+    /// undo and redo steps, the change log and the cached scene.
     pub fn estimated_bytes(&self) -> u64 {
-        let doc = self.editor.doc();
-        let pictures: u64 = doc
-            .objects
-            .values()
-            .map(|o| match &o.shape {
-                cadektor_core::model::Shape::Underlay(u) => u.png.0.len() as u64,
-                _ => 0,
-            })
-            .sum();
-        doc.objects.len() as u64 * OBJECT_BYTES
-            + doc.resources.len() as u64 * RESOURCE_BYTES
-            + pictures
-            + self.editor.undo_depth() as u64 * HISTORY_STEP_BYTES
+        document_bytes(self.editor.doc())
+            + self.editor.history_bytes()
+            + self.editor.log_bytes()
             + self.mesh_cache.approx_bytes()
     }
 
-    /// Checks the limits after a call. A call that changed the document and broke a limit is
-    /// undone (`steps` is the number of undo steps it added). A call that took too long, or broke
-    /// a limit, gives a limit error instead of its result.
+    /// Refuses a document that does not fit the limits. A host calls it before it replaces the
+    /// document (`document.load`, `file.open`), so the open document stays when the new one is
+    /// too big.
+    pub fn check_document_fits(
+        &self,
+        doc: &cadektor_core::model::Document,
+    ) -> Result<(), RpcError> {
+        if doc.objects.len() > self.limits.max_objects {
+            return Err(RpcError::limit(format!(
+                "the document has {} objects, the limit is {}",
+                doc.objects.len(),
+                self.limits.max_objects
+            )));
+        }
+        if document_bytes(doc) > self.limits.max_memory_bytes {
+            return Err(RpcError::limit(format!(
+                "the document needs more than {} bytes of memory",
+                self.limits.max_memory_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    /// Frees the caches that are built again when needed (scene, annotation, worksheet and site
+    /// results).
+    pub fn drop_caches(&mut self) {
+        self.mesh_cache = Default::default();
+        self.lod_scene = None;
+        self.annot_cache = Default::default();
+        self.worksheet_cache = Default::default();
+        self.site_cache = Default::default();
+    }
+
+    /// Checks the limits after a call. `steps` is the number of undo steps the call added, and
+    /// `changed` tells if the document changed.
+    ///
+    /// - A call that changed the document and broke the object or memory limit is undone and gives
+    ///   a limit error. The caches are dropped first, so a big scene does not cost the change.
+    /// - A session that is over the memory limit without a change (the caches grew) drops them
+    ///   and the call succeeds. Reads and saves never fail for the size of the session.
+    /// - A call that took longer than the time budget gives a limit error.
     pub(crate) fn enforce_limits(
         &mut self,
         steps: usize,
+        changed: bool,
         elapsed: Option<Duration>,
         result: Result<serde_json::Value, RpcError>,
     ) -> Result<serde_json::Value, RpcError> {
         let Ok(value) = result else {
             return result;
         };
-        let broken = if self.editor.doc().objects.len() > self.limits.max_objects {
-            Some(format!(
-                "the document may have at most {} objects",
-                self.limits.max_objects
-            ))
-        } else if self.limits.max_memory_bytes != u64::MAX
-            && self.estimated_bytes() > self.limits.max_memory_bytes
-        {
-            Some(format!(
-                "the session may use at most {} bytes of memory",
-                self.limits.max_memory_bytes
-            ))
-        } else {
-            match (self.limits.request_time, elapsed) {
-                (Some(budget), Some(took)) if took > budget => Some(format!(
-                    "the call took {:.1} s, the budget is {:.1} s",
-                    took.as_secs_f64(),
-                    budget.as_secs_f64()
-                )),
-                _ => None,
-            }
+        let over_memory = |s: &Session| {
+            s.limits.max_memory_bytes != u64::MAX && s.estimated_bytes() > s.limits.max_memory_bytes
         };
+        if over_memory(self) {
+            self.drop_caches();
+        }
+        let mut broken = None;
+        if changed && steps > 0 {
+            if self.editor.doc().objects.len() > self.limits.max_objects {
+                broken = Some(format!(
+                    "the document may have at most {} objects",
+                    self.limits.max_objects
+                ));
+            } else if over_memory(self) {
+                broken = Some(format!(
+                    "the session may use at most {} bytes of memory",
+                    self.limits.max_memory_bytes
+                ));
+            }
+        }
+        if broken.is_none()
+            && let (Some(budget), Some(took)) = (self.limits.request_time, elapsed)
+            && took > budget
+        {
+            broken = Some(format!(
+                "the call took {:.1} s, the budget is {:.1} s",
+                took.as_secs_f64(),
+                budget.as_secs_f64()
+            ));
+        }
         match broken {
             None => Ok(value),
             Some(message) => {
@@ -250,7 +305,7 @@ mod tests {
         let mut s = Session::default();
         let base = s.estimated_bytes();
         s.set_limits(SessionLimits {
-            max_memory_bytes: base + 10 * OBJECT_BYTES + HISTORY_STEP_BYTES,
+            max_memory_bytes: base + 20 * OBJECT_BYTES,
             ..SessionLimits::default()
         });
         add_circles(&mut s, 4).unwrap();
@@ -269,20 +324,102 @@ mod tests {
         });
         // Ask the check directly with a time over the budget.
         let e = s
-            .enforce_limits(0, Some(Duration::from_secs(6)), Ok(json!({})))
+            .enforce_limits(0, false, Some(Duration::from_secs(6)), Ok(json!({})))
             .unwrap_err();
         assert_eq!(e.kind, "limit");
         assert!(
-            s.enforce_limits(0, Some(Duration::from_secs(1)), Ok(json!({})))
+            s.enforce_limits(0, false, Some(Duration::from_secs(1)), Ok(json!({})))
                 .is_ok()
         );
         // Errors pass through unchanged.
         let err = RpcError::limit("x");
         assert!(
-            s.enforce_limits(0, None, Err(err))
+            s.enforce_limits(0, false, None, Err(err))
                 .unwrap_err()
                 .message
                 .contains('x')
         );
+    }
+
+    #[test]
+    fn a_session_over_the_limit_still_reads_and_saves() {
+        let mut s = Session::default();
+        add_circles(&mut s, 30).unwrap();
+        // The limits are set below what the document already needs.
+        s.set_limits(SessionLimits {
+            max_objects: 5,
+            max_memory_bytes: 1000,
+            ..SessionLimits::default()
+        });
+        assert!(s.handle("objects.list", json!({})).is_ok());
+        assert!(s.handle("document.get", json!({})).is_ok());
+        assert!(s.handle("document.summary", json!({})).is_ok());
+        assert_eq!(s.editor.doc().objects.len(), 30, "nothing is undone");
+        // A change is refused and undone.
+        assert!(add_circles(&mut s, 1).is_err());
+        assert_eq!(s.editor.doc().objects.len(), 30);
+    }
+
+    #[test]
+    fn a_big_cache_is_dropped_and_the_call_succeeds() {
+        let mut s = Session::default();
+        add_circles(&mut s, 3).unwrap();
+        s.handle("render.png", json!({"width": 64, "height": 64}))
+            .unwrap();
+        let base = s.estimated_bytes();
+        s.set_limits(SessionLimits {
+            max_memory_bytes: base - 1,
+            ..SessionLimits::default()
+        });
+        assert!(s.handle("selection.get", json!({})).is_ok());
+        assert_eq!(s.mesh_cache.approx_bytes(), 0);
+    }
+
+    #[test]
+    fn rollback_of_nothing_keeps_the_redo_steps() {
+        let mut s = Session::default();
+        add_circles(&mut s, 2).unwrap();
+        s.handle("undo", json!({})).unwrap();
+        assert!(s.editor.can_redo());
+        s.editor.rollback(0);
+        assert!(s.editor.can_redo());
+    }
+
+    #[test]
+    fn a_document_over_the_limit_is_refused_before_it_replaces_the_open_one() {
+        let mut big = Session::default();
+        add_circles(&mut big, 20).unwrap();
+        let doc = big.handle("document.get", json!({})).unwrap();
+        let mut s = Session::default();
+        add_circles(&mut s, 2).unwrap();
+        s.set_limits(SessionLimits {
+            max_objects: 10,
+            ..SessionLimits::default()
+        });
+        let e = s
+            .handle("document.load", json!({"document": doc}))
+            .unwrap_err();
+        assert_eq!(e.kind, "limit");
+        assert_eq!(s.editor.doc().objects.len(), 2, "the open document stays");
+    }
+
+    #[test]
+    fn the_history_counts_in_the_estimate_and_is_capped_in_bytes() {
+        let mut s = Session::default();
+        let empty = s.estimated_bytes();
+        add_circles(&mut s, 50).unwrap();
+        assert!(
+            s.estimated_bytes() >= empty + 50 * 2 * OBJECT_BYTES,
+            "objects and their undo step"
+        );
+        s.set_limits(SessionLimits {
+            max_history_bytes: 10 * OBJECT_BYTES,
+            ..SessionLimits::default()
+        });
+        for _ in 0..5 {
+            add_circles(&mut s, 3).unwrap();
+        }
+        assert!(s.editor.history_bytes() <= 10 * OBJECT_BYTES + 3 * OBJECT_BYTES);
+        assert!(s.editor.undo_depth() >= 1 && s.editor.undo_depth() < 6);
     }
 }

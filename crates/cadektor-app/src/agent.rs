@@ -37,6 +37,9 @@ pub struct Limits {
     pub auth_timeout: Duration,
     /// Time to wait for the UI thread to answer one request.
     pub reply_timeout: Duration,
+    /// Lines that wait to be written to one client. A client that does not read is closed when
+    /// this is full.
+    pub outbox_lines: usize,
 }
 
 impl Default for Limits {
@@ -46,6 +49,7 @@ impl Default for Limits {
             max_clients: 4,
             auth_timeout: Duration::from_secs(10),
             reply_timeout: Duration::from_secs(30),
+            outbox_lines: 4096,
         }
     }
 }
@@ -61,16 +65,13 @@ pub enum Reply {
     Later,
 }
 
-/// Lines that wait for the writer of one connection. A client that does not read is dropped when
-/// this is full, so a slow client cannot hold memory or the UI thread.
-const OUTBOX_LINES: usize = 4096;
-
 /// A request handler for [`AgentServer::poll_ext`]: the line, where to send the answer, and the
 /// connection that sent it.
 pub type Handler<'a> = dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply + 'a;
 
 /// The writers of the open connections, by connection ID.
-type Outboxes = Arc<Mutex<HashMap<u64, SyncSender<String>>>>;
+/// Each has a handle to the socket, to close it when the client does not read.
+type Outboxes = Arc<Mutex<HashMap<u64, (SyncSender<String>, TcpStream)>>>;
 
 pub struct Request {
     /// The connection that sent it (see [`AgentServer::push`]).
@@ -118,13 +119,16 @@ impl AgentServer {
     /// if the connection is gone or does not read fast enough: the caller forgets it then.
     pub fn push(&self, conn: u64, line: String) -> bool {
         let mut boxes = self.outboxes.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(tx) = boxes.get(&conn) else {
+        let Some((tx, stream)) = boxes.get(&conn) else {
             return false;
         };
         if tx.try_send(line).is_ok() {
             return true;
         }
-        boxes.remove(&conn); // the writer ends and closes the connection
+        // The client does not read: close the socket. Its reader ends, and the client sees the
+        // connection close, so it knows that it missed messages and can read the document again.
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        boxes.remove(&conn);
         false
     }
 
@@ -391,11 +395,14 @@ fn serve_client(
     reader.get_mut().deadline = None;
     let _ = reader.get_ref().stream.set_read_timeout(None);
     // One thread writes replies and pushed notifications, in the order they were queued.
-    let (outbox, lines) = mpsc::sync_channel::<String>(OUTBOX_LINES);
+    let (outbox, lines) = mpsc::sync_channel::<String>(limits.outbox_lines);
+    let Ok(handle) = out.try_clone() else {
+        return;
+    };
     outboxes
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(conn, outbox.clone());
+        .insert(conn, (outbox.clone(), handle));
     thread::spawn(move || {
         for line in lines {
             if !send(&mut out, &line) {
@@ -631,6 +638,7 @@ mod tests {
             max_clients: 4,
             auth_timeout: Duration::from_millis(300),
             reply_timeout: Duration::from_secs(5),
+            outbox_lines: 8,
         }
     }
 
@@ -782,6 +790,29 @@ mod tests {
         assert_eq!(note["params"]["op"], "add_layer");
         assert!(editor.join().unwrap()["result"]["created"].is_array());
         assert!(!server.push(9999, "x".into()), "an unknown connection");
+    }
+
+    #[test]
+    fn a_client_that_does_not_read_is_closed_when_its_outbox_is_full() {
+        let server = start_with(0, Arc::new(|| {}), None, small_limits()).unwrap();
+        let mut client = Client::connect(server.addr);
+        client.auth(&server.token).unwrap();
+        // Wait until the server has the connection, then push more than the outbox holds.
+        let mut closed = false;
+        let big = "x".repeat(256 * 1024);
+        for _ in 0..400 {
+            if !server.push(1, big.clone()) {
+                closed = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(closed, "push reports the closed connection");
+        assert!(
+            client.drains_to_close(),
+            "the client sees the connection end"
+        );
+        assert!(!server.push(1, "x".into()), "the connection is forgotten");
     }
 
     #[test]

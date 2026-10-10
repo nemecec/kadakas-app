@@ -92,3 +92,60 @@ def test_tcp_transport_waits_for_a_pushed_message():
     assert t.wait_notifications(3) == [note]
     t.close()
     server.close()
+
+
+def test_a_callback_may_call_the_api(doc):
+    """The callback runs after the request has released the transport lock."""
+    counts = []
+
+    def on_change(message):
+        counts.append(len(doc.call("objects.list")))
+
+    doc.events.subscribe(callback=on_change)
+    doc.add.circle([0, 0], 1)
+    doc.add.circle([5, 0], 1)
+    assert counts == [1, 2]
+
+
+def test_unsubscribe_removes_the_callback(doc):
+    seen = []
+    doc.events.subscribe(callback=seen.append)
+    doc.add.circle([0, 0], 1)
+    assert len(seen) == 1
+    doc.events.unsubscribe()
+    doc.events.subscribe()
+    doc.add.circle([3, 0], 1)
+    assert len(seen) == 1
+
+
+def test_waiting_does_not_block_other_threads():
+    import json
+    import socket
+    import threading
+    import time
+
+    from cadektor import _rpc
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def app() -> None:
+        conn, _ = server.accept()
+        f = conn.makefile("rw", encoding="utf-8", newline="\n")
+        for line in f:
+            req = json.loads(line)
+            f.write(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {"ok": True}}) + "\n")
+            f.flush()
+
+    threading.Thread(target=app, daemon=True).start()
+    t = _rpc.TcpTransport("127.0.0.1", server.getsockname()[1], "tok", timeout=5)
+    waiter = threading.Thread(target=lambda: t.wait_notifications(2.0), daemon=True)
+    waiter.start()
+    time.sleep(0.1)
+    started = time.monotonic()
+    assert t.request("ping") == {"ok": True}
+    assert time.monotonic() - started < 1.0, "a request waited for the whole wait"
+    waiter.join(5)
+    t.close()
+    server.close()

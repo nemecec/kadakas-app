@@ -229,9 +229,25 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Milliseconds since 1970 now. The browser build has no clock in `std`: there it is 0, and the
-/// host calls `IdGen::seed` with the real time.
-fn now_ms() -> u64 {
+/// The seed that a browser host gives, because `std` has no clock and no process there (see
+/// [`set_host_seed`]). Native builds do not use it.
+static HOST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static HOST_SALT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Counts the generators and GUIDs made, so that two of them never get the same entropy.
+static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// For the browser build: gives the time (`Date.now()`) and random bits (`crypto.getRandomValues`)
+/// that `std` cannot. Call it once, before the first document is made. On a native build it has
+/// no effect on new IDs.
+pub fn set_host_seed(ms: u64, salt: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    HOST_MS.store(ms, Relaxed);
+    HOST_SALT.store(salt, Relaxed);
+}
+
+/// Milliseconds since 1970 now. The browser build has no clock in `std`: it uses the time from
+/// [`set_host_seed`].
+pub(crate) fn now_ms() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::time::SystemTime::now()
@@ -240,17 +256,34 @@ fn now_ms() -> u64 {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        0
+        HOST_MS.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
+/// The entropy of the browser build: the host salt and the number of generators made. No clock
+/// and no process ID, which do not exist there. The same function runs natively in the tests.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn host_entropy(salt: u64, made: u64) -> u64 {
+    mix(salt ^ mix(made))
+}
+
 /// Random bits that differ between calls and between processes.
-fn entropy() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u64(now_ms());
-    h.write_u128(std::process::id() as u128);
-    h.finish()
+pub(crate) fn entropy() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let made = MADE.fetch_add(1, Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(now_ms());
+        h.write_u128(std::process::id() as u128);
+        h.write_u64(made);
+        h.finish()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        host_entropy(HOST_SALT.load(Relaxed), made)
+    }
 }
 
 impl Default for IdGen {
@@ -314,6 +347,25 @@ impl IdGen {
 
 #[cfg(test)]
 mod tests {
+    use super::host_entropy;
+
+    #[test]
+    fn the_browser_entropy_differs_per_generator_and_per_salt() {
+        // The path that wasm32 takes, run natively: no clock, no process ID.
+        let a: Vec<u64> = (0..100).map(|n| host_entropy(7, n)).collect();
+        let b: Vec<u64> = (0..100).map(|n| host_entropy(8, n)).collect();
+        let unique: std::collections::HashSet<_> = a.iter().chain(b.iter()).collect();
+        assert_eq!(unique.len(), 200);
+        super::set_host_seed(1_700_000_000_000, 99);
+        let (x, y) = (super::entropy(), super::entropy());
+        assert_ne!(x, y);
+        assert_ne!(
+            super::IdGen::default().take(),
+            super::IdGen::default().take()
+        );
+        assert_ne!(crate::guid::random(), crate::guid::random());
+    }
+
     use super::*;
 
     #[test]

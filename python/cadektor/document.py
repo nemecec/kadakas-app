@@ -333,6 +333,7 @@ class Events:
 
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
+        self._callbacks: list[Any] = []
 
     def subscribe(self, kinds: list[str] | None = None, callback: Any = None) -> int:
         """Start the events. ``kinds`` limits them to some of ``objects``, ``layers``, ``classes``,
@@ -343,11 +344,17 @@ class Events:
             if add is None:
                 raise NotImplementedError("this transport has no events")
             add(callback)
+            self._callbacks.append(callback)
         params = {"kinds": kinds} if kinds is not None else None
         return self._doc.call_raw("events.subscribe", params)["revision"]
 
     def unsubscribe(self) -> bool:
         """Stop the events. Returns false if there was no subscription."""
+        remove = getattr(self._doc._transport, "remove_listener", None)
+        while self._callbacks:
+            callback = self._callbacks.pop()
+            if remove is not None:
+                remove(callback)
         return self._doc.call_raw("events.unsubscribe")["done"]
 
     def take(self) -> list[JsonDict]:

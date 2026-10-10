@@ -196,3 +196,22 @@ fn handle_line_marks_the_agent_and_two_sessions_do_not_mix() {
     assert_eq!(from_a[0]["params"]["origin"], "agent");
     assert!(b.take_notifications(LOCAL).is_empty());
 }
+
+#[test]
+fn a_stale_client_is_told_to_read_again_after_the_document_was_replaced() {
+    let mut s = Session::with_sequential_ids();
+    add_rect(&mut s);
+    let old = ok(&mut s, "events.poll", json!({"since_revision": 0}))["revision"]
+        .as_u64()
+        .unwrap();
+    let doc = ok(&mut s, "document.get", json!({}));
+    ok(&mut s, "document.load", json!({"document": doc}));
+    let r = ok(&mut s, "events.poll", json!({"since_revision": old}));
+    assert_eq!(r["truncated"], true);
+    // A client that read the new revision can follow from there.
+    let now = r["revision"].as_u64().unwrap();
+    add_rect(&mut s);
+    let r = ok(&mut s, "events.poll", json!({"since_revision": now}));
+    assert_eq!(r["truncated"], false);
+    assert_eq!(r["changes"].as_array().unwrap().len(), 1);
+}

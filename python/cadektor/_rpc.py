@@ -52,6 +52,9 @@ def find_binary(binary: str | os.PathLike[str] | None = None) -> str:
     return str(found)
 
 
+WAIT_TURN = 0.05
+"""How long ``wait_notifications`` holds the lock at a time, in seconds."""
+
 NOTIFICATION_LIMIT = 10_000
 """How many notifications a transport keeps for a client that does not take them."""
 
@@ -66,10 +69,32 @@ class _LineRpc:
         # Messages without an id (``events.change``), oldest first. The newest ones stay.
         self._notes: deque[dict[str, Any]] = deque(maxlen=NOTIFICATION_LIMIT)
         self._listeners: list[Callable[[dict[str, Any]], None]] = []
+        # Notifications that no listener has seen yet. They are handed out after the lock is
+        # released, so a callback can call the API.
+        self._undelivered: list[dict[str, Any]] = []
 
     def add_listener(self, callback: Callable[[dict[str, Any]], None]) -> None:
-        """Call ``callback(message)`` for each notification, in the thread that reads it."""
+        """Call ``callback(message)`` for each notification, in the thread that reads it. The
+        callback runs after the request that read the message has finished, so it may call the API."""
         self._listeners.append(callback)
+
+    def remove_listener(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Stop calling ``callback``. Does nothing if it is not a listener."""
+        try:
+            self._listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _deliver(self) -> None:
+        """Calls the listeners for the new notifications. Never called with the lock held."""
+        while True:
+            with self._lock:
+                batch, self._undelivered = self._undelivered, []
+            if not batch:
+                return
+            for message in batch:
+                for callback in list(self._listeners):
+                    callback(message)
 
     def drain_notifications(self) -> list[dict[str, Any]]:
         """The notifications that arrived and were not taken yet, oldest first."""
@@ -81,18 +106,30 @@ class _LineRpc:
     def wait_notifications(self, timeout: float | None = None) -> list[dict[str, Any]]:
         """Like ``drain_notifications``, but waits up to ``timeout`` seconds for one if there is none.
         Only a transport that can read without a request waits (TCP). Others return at once."""
-        with self._lock:
-            if not self._notes:
-                self._wait_for_note(timeout)
+        # Wait in short turns, so that other threads can send requests in between.
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with self._lock:
+                if self._notes:
+                    break
+                left = None if deadline is None else deadline - time.monotonic()
+                if left is not None and left <= 0:
+                    break
+                turn = WAIT_TURN if left is None else min(WAIT_TURN, left)
+                if not self._wait_for_note(turn):
+                    break  # this transport cannot wait
+            time.sleep(0.002)  # let a waiting request take the lock
+        self._deliver()
         return self.drain_notifications()
 
-    def _wait_for_note(self, timeout: float | None) -> None:
-        """Reads until a notification is queued or the time is over. Called with the lock held."""
+    def _wait_for_note(self, timeout: float) -> bool:
+        """Reads for up to ``timeout`` seconds. Called with the lock held. False: not supported."""
+        return False
 
     def _note(self, message: dict[str, Any]) -> None:
         self._notes.append(message)
-        for callback in list(self._listeners):
-            callback(message)
+        if self._listeners:
+            self._undelivered.append(message)
 
     def _send_line(self, line: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -122,6 +159,7 @@ class _LineRpc:
             except RequestTimeout:
                 self._abandoned.add(req_id)
                 raise
+        self._deliver()
         if reply.get("id") != req_id:
             raise CadektorError(-32603, f"reply {reply.get('id')!r} does not match request {req_id}")
         if "error" in reply:
@@ -222,24 +260,22 @@ class TcpTransport(_LineRpc):
                 raise ConnectionFailed("the connection to the app is closed")
             self._buffer += chunk
 
-    def _wait_for_note(self, timeout: float | None) -> None:
+    def _wait_for_note(self, timeout: float) -> bool:
         old = self._sock.gettimeout()
-        deadline = None if timeout is None else time.monotonic() + timeout
         try:
-            while not self._notes:
-                left = None if deadline is None else max(deadline - time.monotonic(), 0.0)
-                if left == 0.0:
-                    return
-                self._sock.settimeout(left)
-                try:
-                    message = json.loads(self._read_line())
-                except RequestTimeout:
-                    return
-                if "method" in message and "id" not in message:
-                    self._note(message)
-                # A reply here is the late answer of a request that timed out: drop it.
+            self._sock.settimeout(max(timeout, 0.001))
+            try:
+                message = json.loads(self._read_line())
+            except RequestTimeout:
+                return True
+            if "method" in message and "id" not in message:
+                self._note(message)
+            else:
+                # The late answer of a request that timed out: forget it.
+                self._abandoned.discard(message.get("id"))
         finally:
             self._sock.settimeout(old)
+        return True
 
     def close(self) -> None:
         try:
