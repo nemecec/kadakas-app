@@ -1405,22 +1405,14 @@ impl KadakasApp {
     /// The T key: take the point or edge under the pointer as a smart point or smart edge.
     fn acquire_smart(&mut self) {
         let tol = self.tol();
-        let geom = snap::geometry(
+        self.status = snap::acquire_smart(
             self.session.editor.doc(),
-            &[],
+            self.live_cursor,
+            tol,
             &self.session.snap,
-            Some((self.live_cursor, tol * 4.0)),
-        );
-        let edges = self.session.snap.set.smart_edges;
-        self.status = match self
-            .session
-            .smart
-            .acquire_at(self.live_cursor, &geom, tol, edges)
-        {
-            Some(kadakas_core::snapping::Acquired::Point(_)) => "Smart point set".into(),
-            Some(kadakas_core::snapping::Acquired::Edge(..)) => "Smart edge set".into(),
-            None => "No object point under the pointer. Move onto a corner, end or center".into(),
-        };
+            &mut self.session.smart,
+        )
+        .into();
     }
 
     /// The commands that quick search offers.

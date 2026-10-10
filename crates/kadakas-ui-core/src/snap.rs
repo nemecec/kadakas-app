@@ -104,6 +104,23 @@ pub fn snap_cursor(
     snapping::snap(cursor, &ctx, settings, &geom, smart).map(SnapResult::from)
 }
 
+/// The T key: takes the point or edge under the pointer as a smart point or smart edge. Returns
+/// the text for the status line.
+pub fn acquire_smart(
+    doc: &Document,
+    cursor: DVec2,
+    tol: f64,
+    settings: &Settings,
+    smart: &mut Smart,
+) -> &'static str {
+    let geom = geometry(doc, &[], settings, Some((cursor, tol * 4.0)));
+    match smart.acquire_at(cursor, &geom, tol, settings.set.smart_edges) {
+        Some(snapping::Acquired::Point(_)) => "Smart point set",
+        Some(snapping::Acquired::Edge(..)) => "Smart edge set",
+        None => "No object point under the pointer. Move onto a corner, end or center",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +230,26 @@ mod tests {
         .unwrap();
         assert_eq!(r.kind, Kind::SmartPoint);
         assert_eq!(r.point, DVec2::new(300.0, 400.0));
+    }
+
+    #[test]
+    fn the_t_key_sets_a_smart_point_near_a_corner_and_nothing_elsewhere() {
+        let mut s = Session::default();
+        add(
+            &mut s,
+            Shape::Line {
+                a: DVec2::new(0.0, 0.0),
+                b: DVec2::new(100.0, 0.0),
+            },
+        );
+        let st = Settings::default();
+        let mut smart = Smart::default();
+        let doc = s.editor.doc();
+        let msg = acquire_smart(doc, DVec2::new(100.0, 2.0), 10.0, &st, &mut smart);
+        assert_eq!(msg, "Smart point set");
+        assert_eq!(smart.points, vec![DVec2::new(100.0, 0.0)]);
+        let msg = acquire_smart(doc, DVec2::new(5000.0, 5000.0), 10.0, &st, &mut smart);
+        assert!(msg.starts_with("No object point"));
     }
 
     #[test]
