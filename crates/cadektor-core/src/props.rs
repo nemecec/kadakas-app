@@ -265,6 +265,54 @@ fn landscape_area(
     Some((q.gross_area_m2, q.net_area_m2, ratio))
 }
 
+/// Properties of irrigation objects: `Model`, `Zone`, `Arc`, `Direction`, `Radius` (outlets),
+/// `LineType`, `Size`, `Material`, `Length` in m (lines), `StaticPressure` in kPa and
+/// `AvailableFlow` in l/min (POCs), `Kv`, `Controller`, `Station` (valves), `Stations`
+/// (controllers), `Name` and `X`, `Y`. A property that the object does not have is not applicable.
+/// `None` means a name that is not irrigation specific (`Kind`, `Layer`, ...).
+fn irrigation(i: &crate::irrigation::IrrigationShape, k: &str) -> Option<Prop> {
+    use crate::irrigation::IrrigationShape as I;
+    let opt_num = |x: Option<f64>| x.map_or(Prop::NotApplicable, num);
+    let opt_text = |x: &Option<String>| x.clone().map_or(Prop::NotApplicable, text);
+    Some(match (k, i) {
+        ("model", I::Outlet { model, .. }) => text(model.clone()),
+        ("zone", I::Outlet { zone, .. }) => opt_num(zone.map(f64::from)),
+        ("zone", I::Valve { zone, .. }) => num(f64::from(*zone)),
+        ("arc", I::Outlet { arc, .. }) => num(*arc),
+        ("direction", I::Outlet { direction, .. }) => num(*direction),
+        ("radius", I::Outlet { radius, .. }) => opt_num(*radius),
+        ("linetype", I::Line { line_type, .. }) => text(line_type.id()),
+        ("size", I::Line { size, .. }) => text(size.clone()),
+        ("material", I::Line { material, .. }) => text(material.clone()),
+        ("length", I::Line { .. }) => num(i.length() / 1000.0),
+        (
+            "staticpressure",
+            I::Poc {
+                static_pressure, ..
+            },
+        ) => num(*static_pressure),
+        ("availableflow", I::Poc { available_flow, .. }) => num(*available_flow),
+        ("kv", I::Valve { kv, .. }) => num(*kv),
+        ("controller", I::Valve { controller, .. }) => opt_text(controller),
+        ("station", I::Valve { station, .. }) => opt_num(station.map(f64::from)),
+        ("stations", I::Controller { stations, .. }) => num(f64::from(*stations)),
+        (
+            "name" | "style",
+            I::Poc { name, .. } | I::Valve { name, .. } | I::Controller { name, .. },
+        ) => text(name.clone()),
+        ("x", I::Line { .. }) | ("y", I::Line { .. }) => Prop::NotApplicable,
+        ("x", _) => num(i.anchor().x),
+        ("y", _) => num(i.anchor().y),
+        (
+            "model" | "zone" | "arc" | "direction" | "radius" | "linetype" | "size" | "material"
+            | "length" | "staticpressure" | "availableflow" | "kv" | "controller" | "station"
+            | "stations",
+            _,
+        ) => Prop::NotApplicable,
+        _ => return None,
+    })
+}
+
 fn builtin(
     doc: &Document,
     obj: &Object,
@@ -272,6 +320,11 @@ fn builtin(
     ground: &dyn crate::hardscape::TerrainSource,
 ) -> Prop {
     let shape = &obj.shape;
+    if let Shape::Irrigation(i) = shape
+        && let Some(p) = irrigation(i, &key(name))
+    {
+        return p;
+    }
     match key(name).as_str() {
         "id" => Prop::Value(Value::from(obj.id.0)),
         "kind" | "type" => text(shape.kind()),
@@ -979,5 +1032,91 @@ mod tests {
             ),
             Prop::Unknown
         )));
+    }
+
+    #[test]
+    fn irrigation_properties() {
+        use crate::irrigation::{IrrigationShape as I, LineType};
+        let mut ed = Editor::default();
+        let at = DVec2::new(10.0, 20.0);
+        let o = add(
+            &mut ed,
+            Shape::Irrigation(Box::new(I::Outlet {
+                at,
+                model: "Rotor-8".into(),
+                arc: 180.0,
+                direction: 90.0,
+                radius: Some(8000.0),
+                zone: Some(3),
+            })),
+        );
+        let l = add(
+            &mut ed,
+            Shape::Irrigation(Box::new(I::Line {
+                points: vec![DVec2::ZERO, DVec2::new(3000.0, 4000.0)],
+                line_type: LineType::Drip,
+                size: "16".into(),
+                material: "PE".into(),
+                emitter_spacing: None,
+                emitter_flow: None,
+            })),
+        );
+        let poc = add(
+            &mut ed,
+            Shape::Irrigation(Box::new(I::Poc {
+                at,
+                name: "Meter".into(),
+                static_pressure: 400.0,
+                available_flow: 90.0,
+                supply_loss: None,
+                meter_loss: None,
+            })),
+        );
+        let valve = add(
+            &mut ed,
+            Shape::Irrigation(Box::new(I::Valve {
+                at,
+                zone: 2,
+                name: "V".into(),
+                kv: 6.0,
+                controller: Some("A".into()),
+                station: None,
+            })),
+        );
+        let ctl = add(
+            &mut ed,
+            Shape::Irrigation(Box::new(I::Controller {
+                at,
+                name: "A".into(),
+                stations: 8,
+            })),
+        );
+        assert_eq!(p(&ed, o, &["kind"]), v(json!("irrigation_outlet")));
+        assert_eq!(p(&ed, o, &["Model"]), v(json!("Rotor-8")));
+        assert_eq!(p(&ed, o, &["zone"]), v(json!(3.0)));
+        assert_eq!(p(&ed, o, &["Arc"]), v(json!(180.0)));
+        assert_eq!(p(&ed, o, &["direction"]), v(json!(90.0)));
+        assert_eq!(p(&ed, o, &["radius"]), v(json!(8000.0)));
+        assert_eq!(p(&ed, o, &["x"]), v(json!(10.0)));
+        assert_eq!(p(&ed, o, &["y"]), v(json!(20.0)));
+        assert_eq!(p(&ed, o, &["Count"]), v(json!(1)));
+        assert_eq!(p(&ed, o, &["size"]), Prop::NotApplicable);
+        assert_eq!(p(&ed, o, &["name"]), Prop::NotApplicable);
+        assert_eq!(p(&ed, l, &["Line type"]), v(json!("drip")));
+        assert_eq!(p(&ed, l, &["size"]), v(json!("16")));
+        assert_eq!(p(&ed, l, &["material"]), v(json!("PE")));
+        assert_eq!(p(&ed, l, &["length"]), v(json!(5.0)));
+        assert_eq!(p(&ed, l, &["x"]), Prop::NotApplicable);
+        assert_eq!(p(&ed, l, &["model"]), Prop::NotApplicable);
+        assert_eq!(p(&ed, poc, &["StaticPressure"]), v(json!(400.0)));
+        assert_eq!(p(&ed, poc, &["availableflow"]), v(json!(90.0)));
+        assert_eq!(p(&ed, poc, &["name"]), v(json!("Meter")));
+        assert_eq!(p(&ed, valve, &["zone"]), v(json!(2.0)));
+        assert_eq!(p(&ed, valve, &["kv"]), v(json!(6.0)));
+        assert_eq!(p(&ed, valve, &["controller"]), v(json!("A")));
+        assert_eq!(p(&ed, valve, &["station"]), Prop::NotApplicable);
+        assert_eq!(p(&ed, ctl, &["stations"]), v(json!(8.0)));
+        assert_eq!(p(&ed, ctl, &["name"]), v(json!("A")));
+        assert_eq!(p(&ed, ctl, &["nonsense"]), Prop::Unknown);
     }
 }

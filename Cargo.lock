@@ -561,6 +561,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-ifc",
  "cadektor-io",
+ "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
  "cadektor-sheet",
@@ -579,6 +580,7 @@ dependencies = [
  "cadektor-annot",
  "cadektor-api",
  "cadektor-core",
+ "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
  "cadektor-sheet",
@@ -643,6 +645,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadektor-irrigation"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

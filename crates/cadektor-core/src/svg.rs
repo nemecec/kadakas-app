@@ -159,6 +159,10 @@ fn draw_object(
     let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
     let _ = match &o.shape {
         Shape::Group { .. } => Ok(()),
+        Shape::Irrigation(i) => {
+            s.push_str(&crate::irrigation::svg(o.id.0, i, scale));
+            Ok(())
+        }
         Shape::Symbol { .. } => {
             for v in crate::symbols::instance_objects(doc, o) {
                 draw_object(doc, &v, s, tag_counts, ext, depth + 1);

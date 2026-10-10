@@ -12,8 +12,10 @@ use glam::DVec2;
 use crate::hit;
 
 mod annot_tool;
+mod irrigation_tool;
 mod plant_tool;
 pub use annot_tool::{AnnotSettings, DimToolMode};
+pub use irrigation_tool::{IrrMode, IrrSettings};
 pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +31,8 @@ pub enum Tool {
     Hardscape,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
+    /// Irrigation: one tool with modes (outlet, line, POC, valve, controller).
+    Irrigation,
     /// Grading: landscape walls, grades, spot elevations, stakes and section lines (modes).
     Grading,
     /// Dimensions: one tool with modes (see `DimToolMode`).
@@ -80,6 +84,7 @@ impl Tool {
         Tool::ScaleBar,
         Tool::RevisionCloud,
     ];
+    pub const IRRIGATION: [Tool; 1] = [Tool::Irrigation];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -93,6 +98,7 @@ impl Tool {
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
             Tool::SiteModifier => "Site Modifiers",
+            Tool::Irrigation => "Irrigation",
             Tool::Grading => "Grading",
             Tool::Dimension => "Dimension",
             Tool::Callout => "Callout",
@@ -214,6 +220,8 @@ pub struct ToolSettings {
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area_ui::AreaToolSettings,
+    /// Mode and options of the Irrigation tool.
+    pub irrigation: IrrSettings,
     /// Mode and options of the Grading tool.
     pub grading: crate::grading_ui::GradingSettings,
     /// Style and options of the annotation tools.
@@ -238,6 +246,7 @@ impl Default for ToolSettings {
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
             areas: Default::default(),
+            irrigation: Default::default(),
             grading: Default::default(),
             annot: Default::default(),
         }
@@ -490,6 +499,7 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
+            Tool::Irrigation => self.handle_irrigation(input, cx),
             Tool::Grading => self.handle_grading(input, cx),
             Tool::Dimension
             | Tool::Callout
@@ -685,6 +695,7 @@ impl ToolMachine {
                     .map_or(Preview::None, Preview::Shape)
             }
             (_, Tool::Plant) => self.plant_preview(cursor, cx),
+            (_, Tool::Irrigation) => self.irrigation_preview(cursor, cx),
             (State::Points(pts), Tool::Grading) => {
                 let mut v: Vec<DVec2> = pts.clone();
                 v.push(cursor);
@@ -818,6 +829,9 @@ impl ToolMachine {
                 "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
             }
             (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Irrigation, _) => {
+                "Pick a mode (Outlet, Line, POC, Valve, Controller) in the Tool bar. Click to place. A line: Enter or double-click finishes. Esc cancels."
+            }
             (Tool::Plant, _) => {
                 "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
             }
