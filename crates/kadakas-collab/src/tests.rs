@@ -2471,3 +2471,29 @@ fn a_missing_picture_is_asked_for_again_after_a_new_sign_in() {
         "asked again on the new connection"
     );
 }
+
+#[test]
+fn a_hello_without_log_id_gets_a_snapshot_not_entries() {
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let hello = |last_seq, log_id: Option<&str>| ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq,
+        log_id: log_id.map(str::to_string),
+    };
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), None), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
+    s.close(conn);
+    // With the log's own name, the same state gets entries.
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), Some("log-1")), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Entries { .. }));
+    s.close(conn);
+    let conn = s.open();
+    let outs = s.receive(conn, hello(Some(0), Some("other")), 0);
+    assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
+}

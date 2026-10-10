@@ -393,7 +393,7 @@ impl Sequencer {
                 peers,
             },
         });
-        let same_log = log_id.as_ref().is_none_or(|l| *l == self.log_id);
+        let same_log = log_id.as_deref() == Some(self.log_id.as_str());
         let can_resume = same_log && last_seq.is_some_and(|n| n >= self.log_start && n <= self.seq);
         out.push(Out {
             conn,
