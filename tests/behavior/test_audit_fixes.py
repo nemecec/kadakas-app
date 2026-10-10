@@ -25,7 +25,7 @@ def test_serve_saves_and_opens_cdk_and_cdk_json(cad, make_serve, tmp_path):
 
 def test_mcp_saves_and_opens_cdk(tmp_path):
     f = tmp_path / "m.cdk"
-    mcp = McpClient(["mcp", *ALLOW])
+    mcp = McpClient(["mcp", "--mcp-flat", *ALLOW])
     mcp.initialize()
     try:
         mcp.tool_json("execute", {"command": rect_cmd(0, 0, 1, 1)})
