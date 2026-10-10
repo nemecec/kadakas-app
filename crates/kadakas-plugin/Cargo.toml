@@ -12,6 +12,8 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11.0"
+# Reads the structure of a module (function sizes, locals) before it is compiled. Pure.
+wasmparser = { version = "0.243.0", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }

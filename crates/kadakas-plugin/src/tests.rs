@@ -633,6 +633,97 @@ fn a_good_answer_gives_core_shapes_with_attributes() {
     ));
 }
 
+// ------------------------------------------------- time, compile limits, determinism
+
+#[test]
+fn a_bulk_memory_loop_is_stopped_by_the_time_limit() {
+    // memory.fill costs one fuel unit for 128 KiB, so fuel alone would take minutes to run out.
+    let wasm = module_with(
+        MANIFEST,
+        "",
+        Some(
+            "(loop $l (memory.fill (i32.const 0) (i32.const 1) (i32.const 131072)) (br $l)) (i64.const 0)",
+        ),
+        "",
+    );
+    let limits = Limits {
+        max_millis: 300,
+        ..Limits::default()
+    };
+    let p = load(&wasm, &limits).unwrap();
+    let started = std::time::Instant::now();
+    let e = p
+        .reset(
+            &permit_for(&p),
+            &Map::new(),
+            &Geometry::Point {
+                at: [0.0, 0.0],
+                rotation: 0.0,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&e, PluginError::Limit(m) if m.contains("300 ms")),
+        "{e}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn a_module_with_a_huge_function_many_functions_or_many_locals_is_not_compiled() {
+    let locals = format!("(func $big (local {}))", "i32 ".repeat(6000));
+    let wasm = module_with(MANIFEST, ONE_CIRCLE, None, &locals);
+    let e = load(&wasm, &Limits::default()).unwrap_err();
+    assert!(
+        matches!(&e, PluginError::Limit(m) if m.contains("local variables")),
+        "{e}"
+    );
+
+    let body = "(drop (i32.const 1)) ".repeat(100_000);
+    let wasm = module_with(MANIFEST, ONE_CIRCLE, None, &format!("(func $huge {body})"));
+    let e = load(&wasm, &Limits::default()).unwrap_err();
+    assert!(
+        matches!(&e, PluginError::Limit(m) if m.contains("A function") || m.contains("a function")),
+        "{e}"
+    );
+
+    let wasm = module_with(MANIFEST, ONE_CIRCLE, None, &"(func) ".repeat(5001));
+    let e = load(&wasm, &Limits::default()).unwrap_err();
+    assert!(
+        matches!(&e, PluginError::Limit(m) if m.contains("functions")),
+        "{e}"
+    );
+    // The example is far below the limits.
+    load(PLANTER, &Limits::default()).unwrap();
+}
+
+#[test]
+fn nan_results_are_canonical_so_every_computer_gives_the_same_bytes() {
+    let body = "(i32.store (i32.const 4096) (i32.const 0x7fc00001))
+        (f32.store (i32.const 4100) (f32.add (f32.load (i32.const 4096)) (f32.const 0)))
+        (i64.or (i64.shl (i64.const 4100) (i64.const 32)) (i64.const 4))";
+    let wasm = module_with(MANIFEST, "", Some(body), "");
+    let loaded = WasmtimeRuntime::new()
+        .load(&wasm, &Limits::default())
+        .unwrap();
+    assert_eq!(loaded.reset(b"{}").unwrap(), [0x00, 0x00, 0xc0, 0x7f]);
+}
+
+#[test]
+fn messages_from_a_plugin_are_cut_and_cleaned() {
+    let long = format!("{}\n\u{7}end", "x".repeat(2000));
+    let c = crate::plugin::clean_message(&long);
+    assert_eq!(c.chars().count(), crate::plugin::MAX_MESSAGE_CHARS + 3);
+    assert!(c.ends_with("..."));
+    assert_eq!(
+        crate::plugin::clean_message("a\nb\tc\u{1b}[31m "),
+        "a b c [31m"
+    );
+    let answer = r#"{"status":"error","message":"line one\nline two\u0007"}"#;
+    let e = run(&module(answer)).unwrap_err();
+    assert!(matches!(e, PluginError::Guest(m) if m == "line one line two"));
+}
+
 // ------------------------------------------------------------------ registry
 
 #[test]
@@ -641,33 +732,27 @@ fn the_registry_installs_replaces_and_removes() {
     assert!(reg.is_empty());
     assert_eq!(reg.engine(), "wasmtime");
     assert_eq!(reg.limits(), &Limits::default());
-    let id = reg
-        .install(PLANTER, |_| false)
-        .unwrap()
-        .manifest()
-        .id
-        .clone();
+    let id = reg.install(PLANTER).unwrap().manifest().id.clone();
     assert_eq!(reg.len(), 1);
-    // The same module again changes nothing, even when objects use it.
-    reg.install(PLANTER, |_| true).unwrap();
+    // The same module again changes nothing and is not compiled again.
+    reg.install(PLANTER).unwrap();
     assert_eq!(reg.len(), 1);
     assert!(reg.get(&id).is_some() && reg.get("nope").is_none());
     let hash = trust::hash(PLANTER);
     assert!(reg.by_hash(&hash).is_some() && reg.by_hash("00").is_none());
     assert_eq!(reg.iter().count(), 1);
 
-    // Another build with the same id (a different manifest version).
+    // Another build with the same id replaces the old one.
     let v2 = format!(
         r#"{{"id":"{id}","name":"Raised planter","version":"2","abi_version":1,"kinds":["tool"]}}"#
     );
     let other = module_with(&v2, ONE_CIRCLE, None, "");
-    let e = reg.install(&other, |i| i == id).err().unwrap();
-    assert!(matches!(e, PluginError::Refused(m) if m.contains("Remove them")));
-    assert_eq!(reg.get(&id).unwrap().hash(), hash);
-    reg.install(&other, |_| false).unwrap();
+    reg.install(&other).unwrap();
+    assert_eq!(reg.len(), 1);
     assert_eq!(reg.get(&id).unwrap().manifest().version, "2");
+    assert!(reg.by_hash(&hash).is_none());
     // A broken module is an error and leaves the registry as it was.
-    assert!(reg.install(b"junk", |_| false).is_err());
+    assert!(reg.install(b"junk").is_err());
     assert_eq!(reg.len(), 1);
 
     assert!(reg.remove(&id) && !reg.remove(&id));
@@ -678,4 +763,27 @@ fn the_registry_installs_replaces_and_removes() {
     });
     assert_eq!(reg.limits().fuel, 5);
     assert!(reg.trust.is_empty());
+}
+
+#[test]
+fn an_installed_module_is_not_compiled_twice() {
+    // With a limit that would refuse the module, the second install still works: no compile, no scan.
+    let mut reg = Registry::default();
+    reg.install(PLANTER).unwrap();
+    reg.set_limits(Limits {
+        max_functions: 1,
+        ..Limits::default()
+    });
+    reg.install(PLANTER).unwrap();
+    assert!(matches!(
+        Registry::new(
+            crate::default_runtime(),
+            Limits {
+                max_functions: 1,
+                ..Limits::default()
+            }
+        )
+        .install(PLANTER),
+        Err(PluginError::Limit(_))
+    ));
 }

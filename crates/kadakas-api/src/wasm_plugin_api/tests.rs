@@ -195,13 +195,6 @@ fn an_untrusted_module_does_not_run_without_the_flag() {
     assert_eq!(e.code, 4);
     assert!(e.message.contains(&hash) && e.message.contains("--allow-agent-scripts"));
     assert_eq!(s.editor.doc().objects.len(), 0);
-    // An agent cannot trust the module itself.
-    let e = err(
-        &mut s,
-        "plugins.trust",
-        json!({"plugin": PLANTER_ID, "hash": hash}),
-    );
-    assert_eq!(e.code, 4);
     assert!(
         err(
             &mut s,
@@ -211,6 +204,8 @@ fn an_untrusted_module_does_not_run_without_the_flag() {
         .code
             == 4
     );
+    // No API method adds trust.
+    assert!(!crate::METHODS.iter().any(|(n, _)| n.contains("trust")));
     // The user can, in the dialog of the app.
     assert!(trust_module(&mut s, "nope", &hash).is_err());
     assert!(
@@ -222,46 +217,6 @@ fn an_untrusted_module_does_not_run_without_the_flag() {
     assert_eq!(ok(&mut s, "plugins.list", json!({}))[0]["trusted"], true);
     let id = place(&mut s, json!({}));
     assert_eq!(children(&s, id).len(), 3);
-}
-
-#[test]
-fn plugins_trust_checks_the_hash() {
-    let mut s = open_session();
-    installed(&mut s);
-    let hash = ok(&mut s, "plugins.list", json!({}))[0]["hash"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(
-        err(&mut s, "plugins.trust", json!({"plugin": PLANTER_ID})).code,
-        -32602
-    );
-    let e = err(
-        &mut s,
-        "plugins.trust",
-        json!({"plugin": PLANTER_ID, "hash": "ab"}),
-    );
-    assert_eq!(e.kind, "conflict");
-    assert_eq!(
-        err(
-            &mut s,
-            "plugins.trust",
-            json!({"plugin": "nope", "hash": hash})
-        )
-        .code,
-        2
-    );
-    // The name works as well as the id, with any case.
-    let r = ok(
-        &mut s,
-        "plugins.trust",
-        json!({"plugin": "RAISED PLANTER", "hash": hash.to_uppercase()}),
-    );
-    assert_eq!(r["trusted"], true);
-    assert_eq!(r["scope"], "session");
-    assert_eq!(ok(&mut s, "plugins.list", json!({}))[0]["trusted"], true);
-    // The trust of an agent is not in the file of the user.
-    assert!(s.wasm_plugins.registry.trust.is_empty());
 }
 
 #[test]
@@ -430,15 +385,13 @@ fn reset_many_by_plugin_ids_or_one_id() {
     let rev = s.editor.revision();
     ok(&mut s, "plugins.reset", json!({"ids": []}));
     assert_eq!(s.editor.revision(), rev);
-    assert!(
-        err(
-            &mut s,
-            "plugins.reset",
-            json!({"id": "00000000-0000-0000-0000-0000000000ff"})
-        )
-        .code
-            == 2
+    // An object that cannot run is reported, and the call does not fail.
+    let r = ok(
+        &mut s,
+        "plugins.reset",
+        json!({"id": "00000000-0000-0000-0000-0000000000ff"}),
     );
+    assert_eq!(r["results"][0]["ok"], false);
 }
 
 #[test]
@@ -608,20 +561,6 @@ fn installed_plugins_stay_when_the_document_is_replaced() {
 }
 
 #[test]
-fn another_build_of_a_used_plugin_is_refused() {
-    let mut s = open_session();
-    installed(&mut s);
-    place(&mut s, json!({}));
-    let other_manifest = format!(
-        r#"{{"id":"{PLANTER_ID}","name":"Raised planter","version":"2","abi_version":1,"kinds":["tool"]}}"#
-    );
-    let path = temp_file("v2.wasm", &wat_module(&other_manifest, "(i64.const 0)"));
-    let e = err(&mut s, "plugins.install", json!({"path": path}));
-    assert_eq!(e.kind, "policy");
-    assert!(e.message.contains("Remove them"));
-}
-
-#[test]
 fn a_tool_only_plugin_installs_but_cannot_be_placed() {
     let mut s = open_session();
     let manifest =
@@ -720,7 +659,6 @@ fn describe_lists_the_methods_with_examples() {
         "plugins.info",
         "plugins.list",
         "plugins.install",
-        "plugins.trust",
         "plugins.remove",
         "plugins.place",
         "plugins.set_params",
@@ -741,5 +679,246 @@ fn describe_lists_the_methods_with_examples() {
             .as_str()
             .unwrap()
             .contains("sandboxed")
+    );
+}
+
+// ------------------------------------------------------- regeneration details
+
+/// A build of the planter plug-in with another schema: `wall` has a smaller range and the other
+/// parameters are gone. The answer is one rectangle.
+fn planter_v2() -> Vec<u8> {
+    let manifest = format!(
+        r#"{{"id":"{PLANTER_ID}","name":"Raised planter","version":"2","abi_version":1,"kinds":["object"],"object":{{"shape_type":"rectangle","params":[{{"name":"wall","type":"length","default":20,"min":10,"max":50}}]}}}}"#
+    );
+    let answer = r#"{"status":"ok","shapes":[{"kind":"rect","min":[0,0],"max":[10,10]}]}"#;
+    let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+    wat::parse_str(format!(
+        r#"(module
+          (memory (export "memory") 2)
+          (data (i32.const 1024) "{m}")
+          (data (i32.const 20000) "{a}")
+          (func (export "alloc") (param i32) (result i32) (i32.const 65536))
+          (func (export "dealloc") (param i32 i32))
+          (func (export "describe") (result i64)
+            (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const {ml})))
+          (func (export "reset") (param i32 i32) (result i64)
+            (i64.or (i64.shl (i64.const 20000) (i64.const 32)) (i64.const {al}))))"#,
+        m = esc(&manifest),
+        a = esc(answer),
+        ml = manifest.len(),
+        al = answer.len()
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_new_build_replaces_the_old_one_and_reset_regenerates_with_the_new_schema() {
+    let mut s = open_session();
+    installed(&mut s);
+    let id = place(&mut s, json!({"params": {"wall": 100, "label": false}}));
+    let info = ok(&mut s, "plugins.object", json!({"id": id}));
+    assert_eq!(info["stale"], false);
+    let old_hash = info["hash"].as_str().unwrap().to_string();
+
+    let path = temp_file("v2.wasm", &planter_v2());
+    let r = ok(&mut s, "plugins.install", json!({"path": path}));
+    assert_eq!(r["replaced"], old_hash);
+    assert_eq!(r["stale_objects"], 1);
+    assert_eq!(
+        ok(&mut s, "plugins.list", json!({}))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // The object keeps its shapes and says that its build is not the installed one.
+    let info = ok(&mut s, "plugins.object", json!({"id": id}));
+    assert_eq!(info["stale"], true);
+    assert_eq!(info["installed_hash"], r["hash"]);
+    assert_eq!(children(&s, id).len(), 2);
+
+    // The stored wall of 100 does not fit the new range, and `label` is unknown now.
+    let res = ok(&mut s, "plugins.reset", json!({"plugin": PLANTER_ID}));
+    assert_eq!(res["results"][0]["ok"], true);
+    assert_eq!(res["results"][0]["hash_changed"], true);
+    let info = ok(&mut s, "plugins.object", json!({"id": id}));
+    assert_eq!(info["params"], json!({"wall": 20.0}));
+    assert_eq!(info["stale"], false);
+    assert_eq!(children(&s, id).len(), 1);
+    // The next set_params works, although the old values were stale.
+    let r = ok(
+        &mut s,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 30}}),
+    );
+    assert_eq!(r["ok"], true);
+    assert!(r.get("hash_changed").is_none());
+}
+
+#[test]
+fn stale_parameters_do_not_block_set_params_and_null_puts_the_default_back() {
+    let mut s = open_session();
+    installed(&mut s);
+    let id = place(&mut s, json!({"params": {"wall": 100}}));
+    // Put a value into the stored data that the schema does not know and one that does not fit.
+    let mut data = s.editor.doc().object(ObjectId(id)).unwrap().data[DATA_KEY].clone();
+    data["params"]["gone"] = json!(1);
+    data["params"]["height"] = json!(99999);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_data", "id": id, "set": {DATA_KEY: data}}}),
+    );
+    let r = ok(
+        &mut s,
+        "plugins.set_params",
+        json!({"id": id, "params": {"label": false}}),
+    );
+    assert_eq!(r["ok"], true);
+    let info = ok(&mut s, "plugins.object", json!({"id": id}));
+    assert_eq!(info["params"]["height"], 450.0);
+    assert!(info["params"].get("gone").is_none());
+    assert_eq!(info["params"]["wall"], 100.0);
+    // null puts the default back.
+    ok(
+        &mut s,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": null}}),
+    );
+    assert_eq!(
+        ok(&mut s, "plugins.object", json!({"id": id}))["params"]["wall"],
+        150.0
+    );
+}
+
+#[test]
+fn the_class_stays_when_the_object_is_regenerated() {
+    let mut s = open_session();
+    installed(&mut s);
+    let class = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Beds"}}),
+    )["created"][0]
+        .as_uid()
+        .unwrap();
+    let id = place(&mut s, json!({"class": class}));
+    let class_of = |s: &Session| -> Vec<kadakas_core::model::ClassId> {
+        children(s, id)
+            .iter()
+            .map(|c| s.editor.doc().object(*c).unwrap().class)
+            .collect()
+    };
+    assert!(class_of(&s).iter().all(|c| c.0 == class));
+    ok(
+        &mut s,
+        "plugins.set_params",
+        json!({"id": id, "params": {"height": 700}}),
+    );
+    let after = class_of(&s);
+    assert_eq!(after.len(), 3);
+    assert!(after.iter().all(|c| c.0 == class), "{after:?}");
+    ok(&mut s, "plugins.reset", json!({"ids": [id]}));
+    assert!(class_of(&s).iter().all(|c| c.0 == class));
+    assert_eq!(
+        ok(&mut s, "plugins.object", json!({"id": id}))["class"],
+        json!(class)
+    );
+}
+
+#[test]
+fn shapes_that_a_user_added_to_the_group_stay() {
+    let mut s = open_session();
+    installed(&mut s);
+    let id = place(&mut s, json!({}));
+    let mine = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object_in", "parent": id,
+            "shape": {"kind": "circle", "center": [5, 5], "radius": 5}}}),
+    )["created"][0]
+        .as_uid()
+        .unwrap();
+    assert_eq!(children(&s, id).len(), 4);
+    ok(
+        &mut s,
+        "plugins.set_params",
+        json!({"id": id, "params": {"label": false}}),
+    );
+    let kids = children(&s, id);
+    assert_eq!(kids.len(), 3);
+    assert!(kids.contains(&ObjectId(mine)));
+    // Several objects in one step get their own new shapes.
+    let b = place(&mut s, json!({"min": [5000, 0], "max": [7000, 800]}));
+    let res = ok(&mut s, "plugins.reset", json!({"plugin": PLANTER_ID}));
+    assert_eq!(res["results"].as_array().unwrap().len(), 2);
+    assert_eq!(children(&s, id).len(), 3);
+    assert_eq!(children(&s, b).len(), 3);
+    assert!(children(&s, id).contains(&ObjectId(mine)));
+}
+
+#[test]
+fn reset_reports_a_failing_object_and_runs_the_rest_once() {
+    let mut s = open_session();
+    installed(&mut s);
+    let a = place(&mut s, json!({}));
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}),
+    );
+    let circle = s
+        .editor
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(o.shape, Shape::Circle { .. }) && o.parent.is_none())
+        .unwrap()
+        .id;
+    let rev = s.editor.revision();
+    let res = ok(&mut s, "plugins.reset", json!({"ids": [circle.0, a, a]}));
+    let results = res["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["ok"], false);
+    assert!(
+        results[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a plug-in object")
+    );
+    assert_eq!(results[1]["ok"], true);
+    assert_eq!(s.editor.changes_since(rev).changes.len(), 1);
+    assert_eq!(children(&s, a).len(), 3);
+}
+
+#[test]
+fn a_directory_is_not_a_module_and_install_reads_with_a_size_cap() {
+    let mut s = open_session();
+    let dir = std::env::temp_dir().join(format!("kadakas-wasm-dir-{}.wasm", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let e = err(&mut s, "plugins.install", json!({"path": dir}));
+    assert_eq!(e.code, -32602);
+    std::fs::remove_dir_all(dir).unwrap();
+    let mut limits = *s.wasm_plugins.registry.limits();
+    limits.max_module_bytes = 10;
+    s.wasm_plugins.registry.set_limits(limits);
+    let e = err(&mut s, "plugins.install", json!({"path": PLANTER}));
+    assert_eq!(e.kind, "limit");
+}
+
+#[test]
+fn list_tells_trusted_from_runnable() {
+    let mut s = Session::with_sequential_ids();
+    installed(&mut s);
+    let e = ok(&mut s, "plugins.list", json!({}));
+    assert_eq!(
+        (e[0]["trusted"].as_bool(), e[0]["runnable"].as_bool()),
+        (Some(false), Some(false))
+    );
+    s.scripting.allow_agent_scripts = true;
+    let e = ok(&mut s, "plugins.list", json!({}));
+    assert_eq!(
+        (e[0]["trusted"].as_bool(), e[0]["runnable"].as_bool()),
+        (Some(false), Some(true))
     );
 }

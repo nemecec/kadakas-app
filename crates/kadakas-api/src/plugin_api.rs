@@ -570,9 +570,11 @@ fn instance_json(
     params: &Map<String, Value>,
     geometry: &Geometry,
     origin: [f64; 2],
+    class: Option<ClassId>,
     error: Option<&str>,
 ) -> Value {
     json!({
+        "class": class,
         "definition": f.id,
         "name": f.name,
         "shape_type": f.def.shape_type,
@@ -611,7 +613,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         id: group,
         set: [(
             DATA_KEY.to_string(),
-            instance_json(&f, &params, &geometry, origin, None),
+            instance_json(&f, &params, &geometry, origin, class, None),
         )]
         .into(),
         remove: vec![],
@@ -637,6 +639,8 @@ pub struct ResetJob {
     /// The lowest corner of the members now (they may have moved).
     now: [f64; 2],
     children: Vec<ObjectId>,
+    /// The class of the members, kept when they are made again.
+    class: Option<ClassId>,
     interpreter: Option<Interpreter>,
     limits: ResetLimits,
     /// The right to run this exact script. It was made when the job was prepared.
@@ -714,6 +718,7 @@ fn prepare_reset(
         geometry,
         now,
         children,
+        class: data["class"].as_uid().map(ClassId),
         interpreter,
         limits,
         permit,
@@ -728,7 +733,14 @@ fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (
         id,
         set: [(
             DATA_KEY.to_string(),
-            instance_json(&job.found, &job.params, &job.geometry, origin, error),
+            instance_json(
+                &job.found,
+                &job.params,
+                &job.geometry,
+                origin,
+                job.class,
+                error,
+            ),
         )]
         .into(),
         remove: vec![],
@@ -741,7 +753,7 @@ fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (
                 .map(|g| Command::AddObjectIn {
                     parent: id,
                     shape: g.shape.clone(),
-                    class: None,
+                    class: job.class,
                     attrs: g.attrs.clone(),
                 })
                 .collect();

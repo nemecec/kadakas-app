@@ -36,7 +36,6 @@ import kadakas
 doc = kadakas.connect()      # to an app or a "kadakas serve" that you started with --allow-agent-scripts
 api = doc.api
 info = api.plugins_install(path="crates/kadakas-plugin/tests/fixtures/raised_planter.wasm")
-api.plugins_trust(plugin=info["id"], hash=info["hash"])
 planter = api.plugins_place(plugin=info["id"], min=[0, 0], max=[2400, 900],
                             params={"wall": 150, "corners": "Cut"})
 api.plugins_set_params(id=planter["id"], params={"height": 600})
@@ -46,7 +45,6 @@ Or with raw JSON-RPC:
 
 ```json
 {"method": "plugins.install", "params": {"path": "/home/me/plugins/raised_planter.wasm"}}
-{"method": "plugins.trust", "params": {"plugin": "org.kadakas.raised-planter", "hash": "<hash from plugins.list>"}}
 {"method": "plugins.place", "params": {"plugin": "org.kadakas.raised-planter", "min": [0, 0], "max": [2400, 900], "params": {"corners": "Cut"}}}
 ```
 
@@ -54,8 +52,16 @@ Trust works like this:
 
 - A module that nobody trusted does not run. The call fails with the error code `4` (kind `policy`). The message shows the hash.
 - The user trusts a module in the app. The trust file is `trusted_wasm_plugins.json` in the config folder. (The dialog is not in the app yet. See [What is not done yet](#what-is-not-done-yet).)
-- The host can let agents run plug-ins: start `kadakas serve`, `kadakas mcp` or the app with `--allow-agent-scripts`. Then `plugins.trust {plugin, hash}` works. The agent gives the hash that `plugins.list` shows. The trust lasts until the session ends. It is not saved.
+- No API method adds trust. Agents can run plug-ins only when the host allows it: start `kadakas serve`, `kadakas mcp` or the app with `--allow-agent-scripts`. This is the same rule as for Python scripts. `plugins.list` shows `trusted` (a user trusted this exact module) and `runnable` (trusted, or the flag is set).
 - A sandboxed module is safer than a Python script, but it can still draw wrong shapes or waste time. That is why the user still approves each module.
+
+## Upgrade a plug-in
+
+Install the new build with `plugins.install`. It replaces the old build with the same id. The objects keep their shapes. `plugins.object` shows `stale: true` for them, and `plugins.install` says how many there are. The new build must be trusted again (it has a new hash). Then call `plugins.reset {plugin}`. This regenerates all objects of the plug-in in one undo step.
+
+When a reset reads the old parameters of an object, it drops the ones that the new schema does not know, and it uses the default for the ones that no longer fit (for example, a value outside the new range). `plugins.set_params` with `null` for a name puts the default back.
+
+A reset replaces only the shapes that the plug-in made. Shapes that you added to the group stay. The class of the shapes stays too. A move of the group is followed, as long as you move the shapes of the plug-in.
 
 Installed modules are not kept between sessions yet. When you start a new session, install the module again. The shapes of existing objects stay in the drawing. If the module is not installed, the objects show their shapes and `plugins.object` says `installed: false`.
 
@@ -178,13 +184,13 @@ The module has these exports and no imports:
 |---|---|
 | `memory` | The linear memory of the module. |
 | `alloc(len: u32) -> u32` | Reserve `len` bytes. Return the address. |
-| `dealloc(ptr: u32, len: u32)` | Free a block. |
+| `dealloc(ptr: u32, len: u32)` | Free a block. The Kadakas host does not call it (see below), but the export must exist. |
 | `describe() -> u64` | Return the manifest as JSON. |
 | `reset(ptr: u32, len: u32) -> u64` | Read the request at `ptr`. Return the answer as JSON. |
 
 A `u64` result holds an address in the high 32 bits and a length in the low 32 bits. A result of `0` means "no answer", which is an error.
 
-The host calls `reset` in four steps. It calls `alloc`. It writes the request into the memory. It calls `reset`. Then it reads the answer from the memory. Every call runs in a new instance, so nothing stays in memory between calls. Your module needs no global state.
+The host calls `reset` in four steps. It calls `alloc`. It writes the request into the memory. It calls `reset`. Then it reads the answer from the memory. Every call runs in a new instance, so nothing stays in memory between calls. The host drops the instance after the call, so it does not call `dealloc`. Your module needs no global state.
 
 The manifest:
 
@@ -220,11 +226,12 @@ Version rules: a change that breaks old modules gets a new ABI version. New opti
 | Protection | How |
 |---|---|
 | No files, no network, no clock | The module has no imports. The host gives it nothing. WASI is not available. |
-| Time | Every call gets a fuel amount (200 million work units, about one per instruction). An endless loop stops with a limit error. |
+| Time | Every call gets a fuel amount (200 million work units, about one per instruction) and 1.5 seconds of real time. Fuel gives the same result on every computer. The time limit stops loops that do much work for little fuel, such as `memory.fill`. Both give a limit error. |
 | Memory | Every call can use 64 MiB. A module that needs more stops with a limit error. |
 | Stack | A deep or endless recursion stops with a limit error. |
-| Size | The module file: 8 MiB. The answer: 2 MiB, 2000 shapes, 100 000 polyline vertices. |
+| Size | The module file: 2 MiB. One function: 256 KiB. At most 5000 functions and 5000 local variables in a function (the host checks this before it compiles the module). The answer: 2 MiB, 2000 shapes, 100 000 polyline vertices. |
 | Bad answers | The call fails and the drawing does not change. Examples: bad JSON, an unknown shape kind, a radius of zero or less, a number that is not finite. Numbers above 1 000 000 000 mm fail too. |
+| Same result everywhere | NaN results are made canonical, and relaxed SIMD is off. |
 | Fresh instance | Every call starts in an empty instance. A call cannot see the memory of another call. |
 | Trust | The user trusts the module by its SHA-256 hash. Or the host lets agents run plug-ins. |
 
@@ -241,11 +248,10 @@ All methods are in `describe` with examples. The names have `plugins` in the plu
 | `plugins.info` | The engine, the limits and the number of installed plug-ins. |
 | `plugins.list` | The installed plug-ins with id, name, version, kinds, permissions, parameter schema, hash, trust and use count. |
 | `plugins.install {path}` | Load a `.wasm` file. The path rules of the other file methods apply (`--allow-dir`). The extension is `.wasm`. |
-| `plugins.trust {plugin, hash}` | Trust a module for this session. Needs `--allow-agent-scripts`. |
 | `plugins.remove {plugin}` | Remove a plug-in that no object uses. |
 | `plugins.place {plugin, params?, geometry, layer?, class?, name?}` | Make an object. One undo step. |
 | `plugins.set_params {id, params}` | Change parameters and make the shapes again. If the module fails, the old shapes stay and the object shows the error. |
-| `plugins.reset {id \| ids \| plugin}` | Make the shapes again, for example after a new build. |
+| `plugins.reset {id \| ids \| plugin}` | Make the shapes again, for example after a new build. An object that fails is reported and the others still run. |
 | `plugins.object {id}` | The state of one object. |
 | `plugins.preview {plugin, params?, geometry}` | Run the module and return the shapes. The drawing does not change. |
 

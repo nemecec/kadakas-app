@@ -1113,22 +1113,16 @@ class Api:
         return self._call("plugins.info", params or None)
 
     def plugins_list(self, **params: Any) -> Any:
-        """The installed plug-ins. Returns [{id, name, version, abi_version, description, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted, shape_type, params (the schema), instances}]. Only kind object can be placed in this version.
+        """The installed plug-ins. Returns [{id, name, version, abi_version, description, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted (a user trusted this exact module), runnable (trusted, or the host allows agents with --allow-agent-scripts), shape_type, params (the schema), instances}]. Only kind object can be placed in this version.
 
         JSON-RPC method ``plugins.list``."""
         return self._call("plugins.list", params or None)
 
     def plugins_install(self, **params: Any) -> Any:
-        """Load a plug-in module (.wasm) from a file. params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. Returns the entry of plugins.list plus {existing}.
+        """Load a plug-in module (.wasm) from a file. params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. A new build with the id of an installed plug-in replaces the old build: objects keep their shapes (plugins.object shows stale: true) until you call plugins.reset, and the new build must be trusted again. Returns the entry of plugins.list plus {existing, replaced: hash of the old build or null, stale_objects}.
 
         JSON-RPC method ``plugins.install``."""
         return self._call("plugins.install", params or None)
-
-    def plugins_trust(self, **params: Any) -> Any:
-        """Trust an installed module, so that its objects can be placed and reset. params: {plugin: id | name, hash} where hash is the SHA-256 of the module as plugins.list shows it (you confirm what you reviewed). Needs the flag --allow-agent-scripts. The trust lasts until the session ends and is not saved. Without the flag, only a user can trust a plug-in, in the dialog of the app, and that trust is saved. Returns {id, hash, trusted, scope: session}.
-
-        JSON-RPC method ``plugins.trust``."""
-        return self._call("plugins.trust", params or None)
 
     def plugins_remove(self, **params: Any) -> Any:
         """Remove an installed plug-in. params: {plugin: id | name}. Fails while objects of the document use it: delete those objects first. Returns {ok}.
@@ -1137,25 +1131,25 @@ class Api:
         return self._call("plugins.remove", params or None)
 
     def plugins_place(self, **params: Any) -> Any:
-        """Place a plug-in object: run the module and add the shapes as a group, in one undo step with the change origin script. params: {plugin: id | name, params?: {name: value} (missing values use the defaults), layer?, class?, name?} plus the geometry for the shape type of the plug-in: point {at: [x, y], rotation?: radians}; linear {a, b}; rectangle {min, max}; path {points: [[x, y]], closed?: bool}. Nothing is added if the module fails. Returns {id, children: [ids], shapes}.
+        """Place a plug-in object: run the module and add the shapes as a group, in one undo step with the change origin script. params: {plugin: id | name, params?: {name: value} (missing values use the defaults), layer?, class? (kept when the object is regenerated), name?} plus the geometry for the shape type of the plug-in: point {at: [x, y], rotation?: radians}; linear {a, b}; rectangle {min, max}; path {points: [[x, y]], closed?: bool}. Nothing is added if the module fails. Returns {id, children: [ids], shapes}.
 
         JSON-RPC method ``plugins.place``."""
         return self._call("plugins.place", params or None)
 
     def plugins_set_params(self, **params: Any) -> Any:
-        """Change parameters of a plug-in object and regenerate its shapes (one undo step, origin script). params: {id, params: {name: value}} (only the given values change). If the module fails, the old shapes stay, the parameters are saved and the object shows an error. Returns {id, ok, error?, children}.
+        """Change parameters of a plug-in object and regenerate its shapes (one undo step, origin script). params: {id, params: {name: value}} (only the given values change; null puts the default back; values that the plug-in no longer knows are dropped). If the module fails, the old shapes stay, the parameters are saved and the object shows an error. Returns {id, ok, error?, children}.
 
         JSON-RPC method ``plugins.set_params``."""
         return self._call("plugins.set_params", params or None)
 
     def plugins_reset(self, **params: Any) -> Any:
-        """Run the module again for plug-in objects, for example after installing a new build. params: {id | ids | plugin}. One undo step. Returns {results: [{id, ok, error?}]}.
+        """Run the module again for plug-in objects, for example after installing a new build. params: {id | ids | plugin}. One undo step. An object that fails is reported as {ok: false, error} and the others still run. Duplicate ids run once. Only the shapes that the plug-in made are replaced; shapes that a user added to the group stay. Returns {results: [{id, ok, error?, hash_changed?}]}.
 
         JSON-RPC method ``plugins.reset``."""
         return self._call("plugins.reset", params or None)
 
     def plugins_object(self, **params: Any) -> Any:
-        """The state of a plug-in object. params: {id}. Returns {id, plugin, name, version, hash, installed, trusted, params, schema, geometry, error, children}. error is null when the last reset worked. installed is false when the module is not in this session; the shapes still exist.
+        """The state of a plug-in object. params: {id}. Returns {id, plugin, name, version, hash, installed, installed_hash, stale, trusted, params, schema, geometry, error, children}. error is null when the last reset worked. installed is false when the module is not in this session; the shapes still exist. stale is true when the installed build is not the build that made the shapes.
 
         JSON-RPC method ``plugins.object``."""
         return self._call("plugins.object", params or None)
@@ -2216,7 +2210,6 @@ METHOD_NAMES: tuple[str, ...] = (
     "plugins.info",
     "plugins.list",
     "plugins.install",
-    "plugins.trust",
     "plugins.remove",
     "plugins.place",
     "plugins.set_params",

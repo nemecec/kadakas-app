@@ -895,13 +895,7 @@ fn changing_a_script_through_the_api_drops_trust() {
 fn nothing_in_the_api_adds_trust() {
     let mut s = open_session();
     let names: Vec<&str> = crate::METHODS.iter().map(|(n, _)| *n).collect();
-    // The one exception is `plugins.trust` for sandboxed WebAssembly modules. It needs the flag for
-    // agents, lasts for the session only and never writes the trust file (see wasm_plugin_api).
-    assert!(
-        !names
-            .iter()
-            .any(|n| n.contains("trust") && *n != "plugins.trust")
-    );
+    assert!(!names.iter().any(|n| n.contains("trust")));
     assert!(s.scripting.trust.is_empty());
     let def = define_circles(&mut s);
     ok(
@@ -1048,4 +1042,33 @@ fn a_script_with_a_hidden_return_cannot_be_defined() {
                "script": "def reset(p, g):\n    return []  # docs\rimport os\n"}),
     );
     assert!(e.contains("U+000D"), "{e}");
+}
+
+#[test]
+fn the_class_stays_when_a_python_plugin_object_is_made_again() {
+    let mut s = open_session();
+    let def = define_circles(&mut s);
+    let class = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Beds"}}),
+    )["created"][0]
+        .as_uid()
+        .unwrap();
+    let placed = ok(
+        &mut s,
+        "plugin.place",
+        json!({"definition": def, "at": [0, 0], "class": class}),
+    );
+    let id = placed["id"].as_uid().unwrap();
+    ok(
+        &mut s,
+        "plugin.set_params",
+        json!({"id": id, "params": {"n": 5}}),
+    );
+    let kids = children(&s, id);
+    assert_eq!(kids.len(), 5);
+    for k in kids {
+        assert_eq!(s.editor.doc().object(k).unwrap().class.0, class);
+    }
 }

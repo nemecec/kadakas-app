@@ -24,6 +24,8 @@ The test crate `wat` (and `wast`, `wasm-encoder` 0.261, `wasmparser` 0.261 behin
 
 The example plug-in `plugins/raised-planter` and its module `crates/kadakas-plugin/tests/fixtures/raised_planter.wasm` are own work, under the project license (Apache-2.0 OR MIT).
 
+New with the launcher (PLAT-06, `kadakas-update`): `ed25519-dalek` and `curve25519-dalek` (BSD-3-Clause, by the dalek-cryptography authors) check the signature of update manifests. `sha2` (RustCrypto, MIT OR Apache-2.0) makes the SHA-256 of downloads. `tar` and `flate2` (MIT OR Apache-2.0) unpack the update archives. Their helper crates (`ed25519`, `signature`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`, `fiat-crypto`, `digest`, `block-buffer`, `crypto-common`, `generic-array`, `cpufeatures`, `rand_core`, `filetime`) are listed in `THIRD_PARTY_NOTICES.txt` too. `ureq` (HTTP client) was already in use by `kadakas-gis`.
+
 ## Icons
 
 | Item | License | Source |

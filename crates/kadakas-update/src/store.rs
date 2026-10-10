@@ -1,0 +1,865 @@
+//! The install folder: versioned program folders and the `current` pointer file.
+//!
+//! ```text
+//! <root>/
+//!   current                 pointer file (JSON): which version is active, which one was before
+//!   versions/1.2.0/...      one folder per installed version
+//!   versions/.tmp-1.3.0/    unpacking in progress (deleted at the next start)
+//!   downloads/              archives that are downloading
+//!   seen.json               the highest manifest version seen per channel (refuses replays)
+//!   lock                    advisory lock file: one launcher changes the install at a time
+//!   launcher.json           launcher settings
+//! ```
+//!
+//! An install has three steps. Only the last one changes what runs:
+//!
+//! 1. Unpack the archive into `versions/.tmp-<ver>`.
+//! 2. Rename that folder to `versions/<ver>`. A rename is atomic.
+//! 3. Write the pointer file `current` (temporary file, flush, rename). This is the atomic switch.
+//!
+//! A crash before step 3 leaves the pointer as it was, so the old version still runs. The next
+//! start removes the half-made folder. The previous version stays on disk for rollback.
+//!
+//! Every folder in `versions/` has a marker file with the SHA-256 of the archive it came from. A
+//! folder without the right marker is never reused: it is unpacked again.
+//!
+//! A version that ships next to the launcher (from the installer) is the `bundled` slot. It is
+//! the fallback when no update was installed, and a rollback can go back to it.
+
+use crate::archive::{self, Limits};
+use crate::error::{Result, UpdateError};
+use crate::manifest::Channel;
+use crate::updater::sha256_hex;
+use crate::version::Version;
+use kadakas_sys::fsio::{self, Access};
+use serde::{Deserialize, Serialize};
+use std::io::Seek;
+use std::path::{Path, PathBuf};
+
+/// The name of the marker file in a finished version folder.
+const MARKER: &str = ".kadakas-complete";
+
+/// An archive file and the SHA-256 that it must have.
+#[derive(Clone, Debug)]
+pub struct ArchiveFile {
+    pub path: PathBuf,
+    pub sha256: String,
+}
+
+const BUNDLED: &str = "bundled";
+const TMP_PREFIX: &str = ".tmp-";
+
+/// A place where a program version lives.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Slot {
+    /// The version that the installer put next to the launcher.
+    Bundled,
+    /// A version in `versions/<ver>`.
+    Version(Version),
+}
+
+impl Slot {
+    fn parse(text: &str) -> Result<Slot> {
+        if text == BUNDLED {
+            Ok(Slot::Bundled)
+        } else {
+            Ok(Slot::Version(Version::parse(text)?))
+        }
+    }
+}
+
+impl std::fmt::Display for Slot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Slot::Bundled => f.write_str(BUNDLED),
+            Slot::Version(v) => write!(f, "{v}"),
+        }
+    }
+}
+
+impl Serialize for Slot {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Slot {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let t = String::deserialize(d)?;
+        Slot::parse(&t).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The program that came with the installer.
+#[derive(Clone, Debug)]
+pub struct Bundled {
+    pub version: Version,
+    pub dir: PathBuf,
+}
+
+/// The content of the `current` file.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pointer {
+    pub current: Option<Slot>,
+    pub previous: Option<Slot>,
+}
+
+/// A step of the install. Tests stop the install after a step, as if the computer had crashed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Extracted,
+    Moved,
+    PointerWritten,
+}
+
+impl Step {
+    fn name(self) -> &'static str {
+        match self {
+            Step::Extracted => "extracted",
+            Step::Moved => "moved",
+            Step::PointerWritten => "pointer written",
+        }
+    }
+}
+
+/// One line of the list of installed versions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Installed {
+    pub slot: Slot,
+    pub version: Version,
+    pub dir: PathBuf,
+    pub active: bool,
+    /// The version that a rollback would go to.
+    pub previous: bool,
+}
+
+/// The program that runs now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Active {
+    pub slot: Slot,
+    pub version: Version,
+    pub dir: PathBuf,
+}
+
+pub struct Store {
+    root: PathBuf,
+    bundled: Option<Bundled>,
+    fault: Option<Step>,
+    /// How long a waiting lock tries, in milliseconds.
+    lock_wait_ms: u64,
+}
+
+impl Store {
+    pub fn new(root: impl Into<PathBuf>, bundled: Option<Bundled>) -> Store {
+        Store {
+            root: root.into(),
+            bundled,
+            fault: None,
+            lock_wait_ms: 10_000,
+        }
+    }
+
+    /// For tests: stop an install after this step with [`UpdateError::Interrupted`], and clean
+    /// up nothing, as a crash would.
+    pub fn with_fault(mut self, step: Step) -> Store {
+        self.fault = Some(step);
+        self
+    }
+
+    /// Sets how long an install or rollback waits for the lock of another launcher.
+    pub fn with_lock_wait(mut self, wait: std::time::Duration) -> Store {
+        self.lock_wait_ms = wait.as_millis() as u64;
+        self
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn versions_dir(&self) -> PathBuf {
+        self.root.join("versions")
+    }
+
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.root.join("downloads")
+    }
+
+    fn pointer_path(&self) -> PathBuf {
+        self.root.join("current")
+    }
+
+    /// Takes the install lock. With `wait`, it tries for `lock_wait_ms` (10 s), then gives up with
+    /// [`UpdateError::Busy`]. Without `wait`, it returns `None` when another launcher holds it.
+    /// The lock goes when the returned file is dropped (or when the process ends).
+    fn lock(&self, wait: bool) -> Result<Option<std::fs::File>> {
+        std::fs::create_dir_all(&self.root)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.root.join("lock"))?;
+        let tries = if wait { self.lock_wait_ms / 50 + 1 } else { 1 };
+        for i in 0..tries {
+            match file.try_lock() {
+                Ok(()) => return Ok(Some(file)),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    if i + 1 < tries {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+        }
+        if wait {
+            Err(UpdateError::Busy)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn seen_path(&self) -> PathBuf {
+        self.root.join("seen.json")
+    }
+
+    fn read_seen(&self) -> std::collections::BTreeMap<String, Version> {
+        std::fs::read(self.seen_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// The highest manifest version that was accepted on a channel.
+    pub fn seen(&self, channel: Channel) -> Option<Version> {
+        self.read_seen().remove(channel.as_str())
+    }
+
+    /// Remembers a manifest version, if it is higher than the one remembered.
+    pub fn note_seen(&self, channel: Channel, version: &Version) -> Result<()> {
+        let _guard = self.lock(true)?;
+        let mut map = self.read_seen();
+        if map.get(channel.as_str()).is_some_and(|v| v >= version) {
+            return Ok(());
+        }
+        map.insert(channel.as_str().to_string(), version.clone());
+        let text = serde_json::to_vec_pretty(&map).expect("map serializes");
+        fsio::write_durable(&self.seen_path(), &text, Access::KeepExisting, ".tmp")?;
+        Ok(())
+    }
+
+    fn hit(&self, step: Step) -> Result<()> {
+        if self.fault == Some(step) {
+            Err(UpdateError::Interrupted(step.name()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reads the pointer file. A missing or damaged file means "nothing installed yet".
+    pub fn pointer(&self) -> Pointer {
+        std::fs::read(self.pointer_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_pointer(&self, p: &Pointer) -> Result<()> {
+        std::fs::create_dir_all(&self.root)?;
+        let text = serde_json::to_vec_pretty(p).expect("pointer serializes");
+        fsio::write_durable(&self.pointer_path(), &text, Access::KeepExisting, ".tmp")?;
+        Ok(())
+    }
+
+    /// The folder and version of a slot, if the folder exists.
+    fn resolve(&self, slot: &Slot) -> Option<Active> {
+        let (version, dir) = match slot {
+            Slot::Bundled => {
+                let b = self.bundled.as_ref()?;
+                (b.version.clone(), b.dir.clone())
+            }
+            Slot::Version(v) => (v.clone(), self.versions_dir().join(v.to_string())),
+        };
+        dir.is_dir().then(|| Active {
+            slot: slot.clone(),
+            version,
+            dir,
+        })
+    }
+
+    /// The program to run. It is the current slot. If that folder is gone, the previous one, then
+    /// the bundled one. So a damaged install still starts something.
+    ///
+    /// A bundled version that is newer than the pointer's choice wins. That happens when the
+    /// user installs a new Kadakas installer over an older update.
+    pub fn active(&self) -> Option<Active> {
+        let p = self.pointer();
+        let chosen = [p.current, p.previous, Some(Slot::Bundled)]
+            .into_iter()
+            .flatten()
+            .find_map(|s| self.resolve(&s))?;
+        match self.resolve(&Slot::Bundled) {
+            Some(b) if b.version > chosen.version => Some(b),
+            _ => Some(chosen),
+        }
+    }
+
+    /// The version that a rollback would switch to.
+    pub fn rollback_target(&self) -> Option<Active> {
+        let active = self.active()?;
+        let p = self.pointer();
+        let target = if p.current.as_ref() == Some(&active.slot) {
+            p.previous?
+        } else {
+            return None;
+        };
+        self.resolve(&target)
+    }
+
+    /// All installed versions: the bundled one, then the folders in `versions/`, oldest first.
+    pub fn list(&self) -> Vec<Installed> {
+        let active = self.active().map(|a| a.slot);
+        let previous = self.rollback_target().map(|a| a.slot);
+        let mut slots = Vec::new();
+        if self.bundled.is_some() {
+            slots.push(Slot::Bundled);
+        }
+        if let Ok(rd) = std::fs::read_dir(self.versions_dir()) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Ok(v) = Version::parse(&name)
+                    && e.path().is_dir()
+                {
+                    slots.push(Slot::Version(v));
+                }
+            }
+        }
+        let mut out: Vec<Installed> = slots
+            .into_iter()
+            .filter_map(|s| self.resolve(&s))
+            .map(|a| Installed {
+                active: active.as_ref() == Some(&a.slot),
+                previous: previous.as_ref() == Some(&a.slot),
+                slot: a.slot,
+                version: a.version,
+                dir: a.dir,
+            })
+            .collect();
+        out.sort_by(|a, b| a.version.cmp(&b.version));
+        out
+    }
+
+    /// Removes half-made folders from an install that did not finish.
+    /// It does nothing when another launcher holds the install lock.
+    pub fn recover(&self) {
+        let Ok(Some(_guard)) = self.lock(false) else {
+            return;
+        };
+        if let Ok(rd) = std::fs::read_dir(self.versions_dir()) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(self.downloads_dir()) {
+            for e in rd.flatten() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let _ = std::fs::remove_file(self.root.join("current.tmp"));
+    }
+
+    /// Installs `version` from the archive file and makes it the active one.
+    ///
+    /// The archive is opened once. The SHA-256 is computed from that open file, and the same file
+    /// is unpacked, so the file cannot change between the check and the use.
+    /// It refuses a version that is older than the active one, unless `allow_downgrade` is set.
+    /// The updater never sets it. To go back, the user calls [`Store::rollback`].
+    /// The whole install runs under the install lock.
+    pub fn install(
+        &self,
+        version: &Version,
+        archive_file: &ArchiveFile,
+        allow_downgrade: bool,
+    ) -> Result<()> {
+        let _guard = self.lock(true)?;
+        let old = self.active();
+        if let Some(a) = &old {
+            if a.version == *version {
+                return Err(UpdateError::AlreadyCurrent(version.to_string()));
+            }
+            if a.version > *version && !allow_downgrade {
+                return Err(UpdateError::Downgrade {
+                    current: a.version.to_string(),
+                    offered: version.to_string(),
+                });
+            }
+        }
+        let dest = self.versions_dir().join(version.to_string());
+        let reusable = std::fs::read_to_string(dest.join(MARKER))
+            .is_ok_and(|m| m.trim() == archive_file.sha256);
+        if !reusable {
+            std::fs::create_dir_all(self.versions_dir())?;
+            let mut file = std::fs::File::open(&archive_file.path)?;
+            if sha256_hex(&mut file)? != archive_file.sha256 {
+                return Err(UpdateError::HashMismatch);
+            }
+            file.rewind()?;
+            let staging = self.versions_dir().join(format!("{TMP_PREFIX}{version}"));
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir(&staging)?;
+            let unpacked =
+                archive::extract_tar_gz(&file, &staging, Limits::default()).and_then(|_| {
+                    std::fs::write(staging.join(MARKER), &archive_file.sha256).map_err(Into::into)
+                });
+            if let Err(e) = unpacked {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(e);
+            }
+            self.hit(Step::Extracted)?;
+            // A folder without the right marker is not trusted: replace it.
+            let _ = std::fs::remove_dir_all(&dest);
+            std::fs::rename(&staging, &dest)?;
+            fsio::sync_dir(&self.versions_dir());
+            self.hit(Step::Moved)?;
+        }
+        let pointer = Pointer {
+            current: Some(Slot::Version(version.clone())),
+            previous: old.map(|a| a.slot),
+        };
+        self.write_pointer(&pointer)?;
+        self.hit(Step::PointerWritten)?;
+        self.prune(&pointer);
+        Ok(())
+    }
+
+    /// Switches back to the previous version. The version that was active becomes the previous
+    /// one, so a second rollback goes forward again.
+    pub fn rollback(&self) -> Result<Slot> {
+        let _guard = self.lock(true)?;
+        let target = self
+            .rollback_target()
+            .ok_or(UpdateError::NothingToRollBack)?;
+        let p = self.pointer();
+        let new = Pointer {
+            current: Some(target.slot.clone()),
+            previous: p.current,
+        };
+        self.write_pointer(&new)?;
+        Ok(target.slot)
+    }
+
+    /// Deletes version folders that are neither active nor the rollback target.
+    fn prune(&self, keep: &Pointer) {
+        let Ok(rd) = std::fs::read_dir(self.versions_dir()) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let kept = [&keep.current, &keep.previous]
+                .into_iter()
+                .flatten()
+                .any(|s| matches!(s, Slot::Version(v) if v.to_string() == name));
+            if !kept {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::archive::tests::{build, file};
+
+    pub fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("kadakas-store-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    pub fn v(s: &str) -> Version {
+        Version::parse(s).unwrap()
+    }
+
+    /// Writes an archive file whose app prints its version.
+    pub fn archive_file(dir: &Path, ver: &str) -> ArchiveFile {
+        let bytes = build(&[
+            file("kadakas-app", format!("app {ver}").as_bytes()),
+            file("kadakas", b"cli"),
+        ]);
+        let p = dir.join(format!("a-{ver}.tar.gz"));
+        let sha256 = sha256_hex(&bytes[..]).unwrap();
+        std::fs::write(&p, bytes).unwrap();
+        ArchiveFile { path: p, sha256 }
+    }
+
+    fn app_text(a: &Active) -> String {
+        std::fs::read_to_string(a.dir.join("kadakas-app")).unwrap()
+    }
+
+    pub fn bundled(root: &Path, ver: &str) -> Bundled {
+        let dir = root.join("bundled-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kadakas-app"), format!("app {ver}")).unwrap();
+        Bundled {
+            version: v(ver),
+            dir,
+        }
+    }
+
+    #[test]
+    fn empty_store_has_nothing() {
+        let root = tmp("empty");
+        let s = Store::new(root.join("r"), None);
+        assert!(s.active().is_none());
+        assert!(s.list().is_empty());
+        assert!(matches!(s.rollback(), Err(UpdateError::NothingToRollBack)));
+        assert_eq!(s.pointer(), Pointer::default());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn install_switches_and_keeps_the_previous_version() {
+        let root = tmp("install");
+        let s = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        let a = s.active().unwrap();
+        assert_eq!(a.version, v("1.1.0"));
+        assert_eq!(app_text(&a), "app 1.1.0");
+        assert_eq!(s.rollback_target().unwrap().slot, Slot::Bundled);
+
+        s.install(&v("1.2.0"), &archive_file(&root, "1.2.0"), false)
+            .unwrap();
+        assert_eq!(s.active().unwrap().version, v("1.2.0"));
+        assert_eq!(s.rollback_target().unwrap().version, v("1.1.0"));
+        // 1.0.0 is the bundled copy. It stays. The folders: 1.1.0 and 1.2.0 only.
+        let list = s.list();
+        let names: Vec<String> = list.iter().map(|i| i.slot.to_string()).collect();
+        assert_eq!(names, ["bundled", "1.1.0", "1.2.0"]);
+        assert!(list[2].active && list[1].previous && !list[0].active);
+
+        // A third install prunes 1.1.0's predecessor: only current and previous stay.
+        s.install(&v("1.3.0"), &archive_file(&root, "1.3.0"), false)
+            .unwrap();
+        let names: Vec<String> = s.list().iter().map(|i| i.slot.to_string()).collect();
+        assert_eq!(names, ["bundled", "1.2.0", "1.3.0"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn downgrade_and_repeat_are_refused() {
+        let root = tmp("down");
+        let s = Store::new(root.join("r"), None);
+        s.install(&v("2.0.0"), &archive_file(&root, "2.0.0"), false)
+            .unwrap();
+        let old = archive_file(&root, "1.0.0");
+        let e = s.install(&v("1.0.0"), &old, false).unwrap_err();
+        assert!(matches!(e, UpdateError::Downgrade { .. }), "{e}");
+        let e = s
+            .install(&v("2.0.0"), &archive_file(&root, "2.0.0"), false)
+            .unwrap_err();
+        assert!(matches!(e, UpdateError::AlreadyCurrent(_)), "{e}");
+        assert_eq!(s.active().unwrap().version, v("2.0.0"));
+        // A pre-release of the same number is older than the release.
+        let pre = archive_file(&root, "2.0.0-beta.1");
+        assert!(s.install(&v("2.0.0-beta.1"), &pre, false).is_err());
+        // Only an explicit flag allows it.
+        s.install(&v("1.0.0"), &old, true).unwrap();
+        assert_eq!(s.active().unwrap().version, v("1.0.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn rollback_goes_back_and_forth() {
+        let root = tmp("rollback");
+        let s = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        assert_eq!(s.rollback().unwrap(), Slot::Bundled);
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        assert_eq!(app_text(&s.active().unwrap()), "app 1.0.0");
+        // The version that we left is the new rollback target.
+        assert_eq!(s.rollback_target().unwrap().version, v("1.1.0"));
+        assert_eq!(s.rollback().unwrap(), Slot::Version(v("1.1.0")));
+        assert_eq!(s.active().unwrap().version, v("1.1.0"));
+        // The rollback survives a new Store value (it is on disk).
+        let again = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
+        assert_eq!(again.active().unwrap().version, v("1.1.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn rollback_fails_when_the_old_folder_is_gone() {
+        let root = tmp("rollback-gone");
+        let s = Store::new(root.join("r"), None);
+        s.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), false)
+            .unwrap();
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        std::fs::remove_dir_all(s.versions_dir().join("1.0.0")).unwrap();
+        assert!(matches!(s.rollback(), Err(UpdateError::NothingToRollBack)));
+        assert_eq!(s.active().unwrap().version, v("1.1.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_install_keeps_the_old_version_working() {
+        for step in [Step::Extracted, Step::Moved, Step::PointerWritten] {
+            let root = tmp(&format!("crash-{step:?}"));
+            let r = root.join("r");
+            let good = Store::new(&r, None);
+            good.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), false)
+                .unwrap();
+
+            // The crash.
+            let crashing = Store::new(&r, None).with_fault(step);
+            let e = crashing
+                .install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+                .unwrap_err();
+            assert!(matches!(e, UpdateError::Interrupted(_)), "{step:?}");
+
+            // A new process starts: it cleans up and runs.
+            let after = Store::new(&r, None);
+            after.recover();
+            let a = after.active().unwrap();
+            if step == Step::PointerWritten {
+                // The switch had happened: the new version is complete and active.
+                assert_eq!(a.version, v("1.1.0"));
+                assert_eq!(app_text(&a), "app 1.1.0");
+            } else {
+                // The switch had not happened: the old version runs, whole.
+                assert_eq!(a.version, v("1.0.0"), "{step:?}");
+                assert_eq!(app_text(&a), "app 1.0.0");
+                assert!(after.pointer().previous.is_none());
+                // No half-made folder is left.
+                let leftovers: Vec<_> = std::fs::read_dir(after.versions_dir())
+                    .unwrap()
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with(TMP_PREFIX))
+                    .collect();
+                assert!(leftovers.is_empty(), "{leftovers:?}");
+                // And the update can be tried again.
+                after
+                    .install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+                    .unwrap();
+                assert_eq!(app_text(&after.active().unwrap()), "app 1.1.0");
+                assert_eq!(after.rollback_target().unwrap().version, v("1.0.0"));
+            }
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_damaged_pointer_or_missing_folder_still_starts_something() {
+        let root = tmp("damaged");
+        let r = root.join("r");
+        let s = Store::new(&r, Some(bundled(&root, "1.0.0")));
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        // The current folder is deleted: the previous (bundled) one runs.
+        std::fs::remove_dir_all(s.versions_dir().join("1.1.0")).unwrap();
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        assert!(s.rollback_target().is_none());
+        // The pointer file is garbage: the bundled one runs.
+        std::fs::write(r.join("current"), b"{ not json").unwrap();
+        assert_eq!(s.pointer(), Pointer::default());
+        assert_eq!(s.active().unwrap().slot, Slot::Bundled);
+        // A pointer with a path trick is refused when it is read.
+        std::fs::write(
+            r.join("current"),
+            br#"{"current":"../../etc","previous":null}"#,
+        )
+        .unwrap();
+        assert_eq!(s.pointer(), Pointer::default());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_bad_archive_leaves_nothing_behind() {
+        let root = tmp("badarchive");
+        let s = Store::new(root.join("r"), None);
+        s.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), false)
+            .unwrap();
+        let bad = root.join("bad.tar.gz");
+        std::fs::write(&bad, b"garbage").unwrap();
+        // Right hash, but not an archive.
+        let garbage = ArchiveFile {
+            sha256: sha256_hex(&b"garbage"[..]).unwrap(),
+            path: bad,
+        };
+        assert!(matches!(
+            s.install(&v("1.1.0"), &garbage, false),
+            Err(UpdateError::Archive(_))
+        ));
+        let missing = ArchiveFile {
+            path: root.join("missing.tar.gz"),
+            sha256: "0".repeat(64),
+        };
+        assert!(s.install(&v("1.1.0"), &missing, false).is_err());
+        assert_eq!(s.active().unwrap().version, v("1.0.0"));
+        let names: Vec<String> = std::fs::read_dir(s.versions_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["1.0.0"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recover_clears_downloads() {
+        let root = tmp("recover");
+        let s = Store::new(root.join("r"), None);
+        std::fs::create_dir_all(s.downloads_dir()).unwrap();
+        std::fs::write(s.downloads_dir().join("x.part"), b"1").unwrap();
+        s.recover();
+        assert!(!s.downloads_dir().join("x.part").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn slot_text() {
+        assert_eq!(Slot::parse("bundled").unwrap(), Slot::Bundled);
+        assert!(Slot::parse("../x").is_err());
+        assert_eq!(Slot::Version(v("1.0.0")).to_string(), "1.0.0");
+        assert_eq!(Step::Moved.name(), "moved");
+    }
+
+    #[test]
+    fn a_newer_bundled_version_wins_over_an_old_update() {
+        let root = tmp("bundled-newer");
+        let r = root.join("r");
+        let old_installer = Store::new(&r, Some(bundled(&root, "1.0.0")));
+        old_installer
+            .install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        // The user installs Kadakas 1.5.0 over it. The folder of the bundled version changes.
+        let new_installer = Store::new(&r, Some(bundled(&root, "1.5.0")));
+        let a = new_installer.active().unwrap();
+        assert_eq!((a.slot, a.version), (Slot::Bundled, v("1.5.0")));
+        // An equal or lower bundled version does not win.
+        let same = Store::new(&r, Some(bundled(&root, "1.1.0")));
+        assert_eq!(same.active().unwrap().slot, Slot::Version(v("1.1.0")));
+        // Updates below the bundled version are refused as downgrades.
+        let e = new_installer
+            .install(&v("1.2.0"), &archive_file(&root, "1.2.0"), false)
+            .unwrap_err();
+        assert!(matches!(e, UpdateError::Downgrade { .. }), "{e}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn only_one_instance_changes_the_install_at_a_time() {
+        let root = tmp("lock");
+        let r = root.join("r");
+        let a = Store::new(&r, None);
+        let b = Store::new(&r, None).with_lock_wait(std::time::Duration::from_millis(100));
+        a.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), false)
+            .unwrap();
+        // A half-made folder from a crash.
+        std::fs::create_dir_all(a.versions_dir().join(".tmp-9.9.9")).unwrap();
+        let held = a.lock(false).unwrap().expect("first lock");
+        // Recover skips: it must not delete work of the instance that holds the lock.
+        b.recover();
+        assert!(a.versions_dir().join(".tmp-9.9.9").exists());
+        // A non-waiting lock fails; a waiting one gives up with Busy.
+        assert!(b.lock(false).unwrap().is_none());
+        assert!(matches!(b.lock(true), Err(UpdateError::Busy)));
+        drop(held);
+        // The lock is free again: recover cleans up, and installs work.
+        b.recover();
+        assert!(!a.versions_dir().join(".tmp-9.9.9").exists());
+        b.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        assert_eq!(a.active().unwrap().version, v("1.1.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_waiting_install_goes_on_when_the_lock_is_freed() {
+        let root = tmp("lock-wait");
+        let r = root.join("r");
+        let a = Store::new(&r, None);
+        let held = a.lock(false).unwrap().unwrap();
+        let archive = archive_file(&root, "1.0.0");
+        let r2 = r.clone();
+        let t =
+            std::thread::spawn(move || Store::new(&r2, None).install(&v("1.0.0"), &archive, false));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(held);
+        t.join().unwrap().unwrap();
+        assert_eq!(a.active().unwrap().version, v("1.0.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_existing_folder_is_reused_only_with_the_right_marker() {
+        let root = tmp("marker");
+        let s = Store::new(root.join("r"), None);
+        s.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), false)
+            .unwrap();
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        let dir = s.versions_dir().join("1.0.0");
+        assert!(dir.join(MARKER).is_file());
+        // Somebody changed a file in the folder of the previous version. The marker is the
+        // same, so the folder is reused as it is (we trust our own folder), but a wrong or
+        // missing marker makes the install unpack again.
+        std::fs::write(dir.join("kadakas-app"), b"damaged").unwrap();
+        std::fs::remove_file(dir.join(MARKER)).unwrap();
+        // Go to 1.2.0 and back to 1.0.0 as an explicit downgrade: the folder is made again.
+        s.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), true)
+            .unwrap();
+        let a = s.active().unwrap();
+        assert_eq!(app_text(&a), "app 1.0.0");
+        assert!(a.dir.join(MARKER).is_file());
+        // Reuse with the right marker: no unpacking, so a missing archive file is no problem.
+        s.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
+            .unwrap();
+        let gone = ArchiveFile {
+            path: root.join("gone.tar.gz"),
+            sha256: archive_file(&root, "1.0.0").sha256,
+        };
+        s.install(&v("1.0.0"), &gone, true).unwrap();
+        assert_eq!(s.active().unwrap().version, v("1.0.0"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_hash_is_checked_on_the_file_that_is_unpacked() {
+        let root = tmp("hash");
+        let s = Store::new(root.join("r"), None);
+        let mut a = archive_file(&root, "1.0.0");
+        a.sha256 = "ab".repeat(32);
+        assert!(matches!(
+            s.install(&v("1.0.0"), &a, false),
+            Err(UpdateError::HashMismatch)
+        ));
+        assert!(s.active().is_none());
+        assert!(!s.versions_dir().join("1.0.0").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn highest_seen_version_is_remembered_per_channel() {
+        let root = tmp("seen");
+        let s = Store::new(root.join("r"), None);
+        assert!(s.seen(Channel::Stable).is_none());
+        s.note_seen(Channel::Stable, &v("1.2.0")).unwrap();
+        s.note_seen(Channel::Stable, &v("1.1.0")).unwrap();
+        s.note_seen(Channel::Beta, &v("2.0.0-beta.1")).unwrap();
+        assert_eq!(s.seen(Channel::Stable), Some(v("1.2.0")));
+        assert_eq!(s.seen(Channel::Beta), Some(v("2.0.0-beta.1")));
+        // It is on disk.
+        assert_eq!(
+            Store::new(root.join("r"), None).seen(Channel::Stable),
+            Some(v("1.2.0"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

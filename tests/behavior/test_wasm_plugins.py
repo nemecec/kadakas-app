@@ -38,7 +38,7 @@ def children(rpc, group):
 def test_describe_lists_the_plugin_methods_with_examples(rpc):
     d = rpc("describe")["result"]
     names = {m["name"] for m in d["methods"]}
-    assert {"plugins.info", "plugins.list", "plugins.install", "plugins.trust", "plugins.remove",
+    assert {"plugins.info", "plugins.list", "plugins.install", "plugins.remove",
             "plugins.place", "plugins.set_params", "plugins.reset", "plugins.object",
             "plugins.preview"} <= names
     assert "sandboxed" in d["plugins"]["summary"]
@@ -64,8 +64,9 @@ def test_an_untrusted_module_does_not_run_and_an_agent_cannot_trust_it(cad):
     got = cad.result("plugins.install", {"path": str(MODULE)})
     err = cad.error("plugins.place", {"plugin": PLUGIN, **AREA})
     assert err["code"] == 4 and got["hash"] in err["message"]
-    err = cad.error("plugins.trust", {"plugin": PLUGIN, "hash": got["hash"]})
-    assert err["code"] == 4 and "dialog" in err["message"]
+    # No API method adds trust: only a user in the app, or the flag of the host.
+    assert cad.error("plugins.trust", {"plugin": PLUGIN, "hash": got["hash"]})["code"] == -32601
+    assert not any("trust" in m["name"] for m in cad.result("describe")["methods"])
     assert cad.result("document.summary")["object_count"] == 0
 
 
@@ -79,6 +80,7 @@ def test_place_set_params_and_undo(make_serve):
     assert len(kids) == 3 and {o["shape"]["kind"] for o in kids} == {"polyline", "text"}
     info = cad.result("plugins.object", {"id": group})
     assert info["params"]["wall"] == 120 and info["error"] is None and info["installed"] is True
+    assert info["stale"] is False
 
     changed = cad.result("plugins.set_params", {"id": group, "params": {"label": False}})
     assert changed["ok"] and len(changed["children"]) == 2
@@ -97,12 +99,11 @@ def test_the_change_origin_is_script(make_serve):
     assert reply["result"]["id"] in notes[0]["params"]["added"]["objects"]
 
 
-def test_trust_with_the_hash_lets_the_module_run(make_serve):
+def test_list_tells_trusted_from_runnable(make_serve):
     cad = make_serve("--allow-agent-scripts")
-    got = cad.result("plugins.install", {"path": str(MODULE)})
-    assert cad.error("plugins.trust", {"plugin": PLUGIN, "hash": "00"})["code"] == 5
-    assert cad.result("plugins.trust", {"plugin": PLUGIN, "hash": got["hash"]})["trusted"] is True
-    assert cad.result("plugins.list")[0]["trusted"] is True
+    cad.result("plugins.install", {"path": str(MODULE)})
+    entry = cad.result("plugins.list")[0]
+    assert entry["trusted"] is False and entry["runnable"] is True
 
 
 def test_the_module_can_refuse_and_the_old_shapes_stay(make_serve):
@@ -153,3 +154,23 @@ def test_remove_needs_that_no_object_uses_the_plugin(make_serve):
 @pytest.mark.parametrize("method", ["plugins.list", "plugins.info"])
 def test_the_methods_are_in_the_scripting_tool_of_mcp(mcp, method):
     assert mcp.method_json("scripting", method) is not None
+
+
+def test_user_shapes_stay_and_null_puts_the_default_back(make_serve):
+    cad = make_serve("--allow-agent-scripts")
+    cad.result("plugins.install", {"path": str(MODULE)})
+    group = cad.result("plugins.place", {"plugin": PLUGIN, **AREA, "params": {"wall": 100}})["id"]
+    cad.result("execute", {"command": {"op": "add_object_in", "parent": group,
+                                       "shape": {"kind": "circle", "center": [5, 5], "radius": 5}}})
+    cad.result("plugins.set_params", {"id": group, "params": {"wall": None, "label": False}})
+    assert len(children(cad.result, group)) == 3  # two shapes of the plug-in and the circle of the user
+    assert cad.result("plugins.object", {"id": group})["params"]["wall"] == 150
+
+
+def test_reset_reports_each_object_and_skips_duplicates(make_serve):
+    cad = make_serve("--allow-agent-scripts")
+    cad.result("plugins.install", {"path": str(MODULE)})
+    group = cad.result("plugins.place", {"plugin": PLUGIN, **AREA})["id"]
+    missing = "00000000-0000-0000-0000-0000000000ff"
+    res = cad.result("plugins.reset", {"ids": [missing, group, group]})["results"]
+    assert [r["ok"] for r in res] == [False, True]

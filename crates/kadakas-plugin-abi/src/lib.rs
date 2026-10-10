@@ -16,12 +16,15 @@
 //! |---|---|
 //! | `memory` | The linear memory of the module. |
 //! | `alloc(len: u32) -> u32` | Reserve `len` bytes and return the address. |
-//! | `dealloc(ptr: u32, len: u32)` | Free a block from `alloc` or from an answer. |
+//! | `dealloc(ptr: u32, len: u32)` | Free a block from `alloc` or from an answer (see below). |
 //! | `describe() -> u64` | Return the manifest as JSON. |
 //! | `reset(ptr: u32, len: u32) -> u64` | Read a JSON request at `ptr`, return a JSON answer. |
 //!
 //! A `u64` result packs an address in the high 32 bits and a length in the low 32 bits
-//! ([`guest::pack`]). A result of 0 means "no answer". The host frees the answer with `dealloc`.
+//! ([`guest::pack`]). A result of 0 means "no answer". A host that keeps an instance between calls frees the request
+//! and the answer with `dealloc`. The Kadakas host runs every call in a new instance and drops it
+//! afterwards, so it does not call `dealloc`. A plug-in must still export it, and it must not
+//! depend on the host calling it.
 
 pub mod guest;
 pub mod manifest;

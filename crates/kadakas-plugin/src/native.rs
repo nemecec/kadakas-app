@@ -5,11 +5,21 @@
 //! - **No imports.** The linker is empty, so a module cannot call the host, WASI, files or the
 //!   network. A module that wants an import does not load.
 //! - **Fuel.** Every call gets [`Limits::fuel`]. An endless loop stops with a limit error.
+//! - **Wall-clock time.** Fuel counts instructions, but `memory.fill` and `memory.copy` cost one
+//!   unit for many bytes. So a ticker thread advances the epoch of the engine every
+//!   [`TICK_MILLIS`] ms, and every call has a deadline of [`Limits::max_millis`]. The fuel stays
+//!   as the exact limit that does not depend on the speed of the computer.
+//! - **Determinism.** NaN results are made canonical, and relaxed SIMD (whose results depend on
+//!   the processor) is off, so one module gives the same shapes on every computer.
 //! - **Memory.** A call may use [`Limits::memory_bytes`] of linear memory. Growing past it stops
 //!   the call with a limit error. A module that declares more at the start does not load.
 //! - **One instance per call.** Nothing stays in memory between calls.
 //! - Only the core WebAssembly features that plug-ins need: no threads, no 64-bit memories, no
 //!   multiple memories, no component model.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use wasmtime::{Config, Engine, Linker, Module, ResourceLimiter, Store, Trap};
 
@@ -19,9 +29,24 @@ use kadakas_plugin_abi::guest::unpack;
 /// Largest request or manifest that the host reads, as a guard: the manifest is small.
 const MAX_MANIFEST_BYTES: usize = 256 << 10;
 
-/// The wasmtime engine.
+/// How often the ticker advances the epoch, in milliseconds.
+pub const TICK_MILLIS: u64 = 50;
+
+/// The wasmtime engine. One thread per engine advances the epoch; it ends when the engine is dropped.
 pub struct WasmtimeRuntime {
     engine: Engine,
+    ticker: Arc<Ticker>,
+}
+
+/// Stops the ticker thread when the last user of the engine (the runtime or a loaded module) is gone.
+struct Ticker {
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Default for WasmtimeRuntime {
@@ -34,11 +59,25 @@ impl WasmtimeRuntime {
     pub fn new() -> Self {
         let mut config = Config::new();
         config.consume_fuel(true);
+        config.epoch_interruption(true);
+        config.cranelift_nan_canonicalization(true);
+        config.wasm_relaxed_simd(false);
         config.wasm_multi_memory(false);
         config.wasm_memory64(false);
         config.max_wasm_stack(512 << 10);
         let engine = Engine::new(&config).expect("the wasmtime configuration is valid");
-        WasmtimeRuntime { engine }
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ticker, flag) = (engine.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(TICK_MILLIS));
+                ticker.increment_epoch();
+            }
+        });
+        WasmtimeRuntime {
+            engine,
+            ticker: Arc::new(Ticker { stop }),
+        }
     }
 }
 
@@ -66,6 +105,7 @@ impl PluginRuntime for WasmtimeRuntime {
         }
         Ok(Box::new(Loaded {
             engine: self.engine.clone(),
+            _ticker: self.ticker.clone(),
             module,
             limits: *limits,
         }))
@@ -74,6 +114,7 @@ impl PluginRuntime for WasmtimeRuntime {
 
 struct Loaded {
     engine: Engine,
+    _ticker: Arc<Ticker>,
     module: Module,
     limits: Limits,
 }
@@ -136,6 +177,8 @@ impl Loaded {
             },
         );
         store.limiter(|s| s);
+        // One more tick than the limit: the first tick comes at any moment after the call starts.
+        store.set_epoch_deadline(self.limits.max_millis.div_ceil(TICK_MILLIS) + 1);
         store
             .set_fuel(self.limits.fuel)
             .expect("fuel is switched on in the engine");
@@ -157,6 +200,10 @@ impl Loaded {
             Some(Trap::OutOfFuel) => PluginError::Limit(format!(
                 "the module used all of its {} fuel units (an endless loop?)",
                 self.limits.fuel
+            )),
+            Some(Trap::Interrupt) => PluginError::Limit(format!(
+                "the module ran for more than {} ms",
+                self.limits.max_millis
             )),
             Some(Trap::StackOverflow) => {
                 PluginError::Limit("the module overflowed its stack".into())

@@ -501,6 +501,31 @@ pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
     env.and_then(|v| v.trim().parse().ok())
 }
 
+/// The workspace profile from `--profile NAME` (or `--profile=NAME`), else from the env value.
+/// A name has 1 to 40 characters: letters, digits, `-` and `_`. Anything else gives an empty name.
+/// The launcher (PLAT-06) passes the profile this way. The app only stores it for now.
+pub fn parse_profile(args: &[String], env: Option<&str>) -> String {
+    let mut found = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--profile" {
+            found = it.next().map(String::as_str);
+            break;
+        }
+        if let Some(v) = a.strip_prefix("--profile=") {
+            found = Some(v);
+            break;
+        }
+    }
+    let name = found.or(env).unwrap_or("").trim();
+    let ok = !name.is_empty()
+        && name.len() <= 40
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if ok { name.to_string() } else { String::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +702,24 @@ mod tests {
                 "--allow-dir"
             ])),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+    }
+
+    #[test]
+    fn profile_parsing() {
+        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_profile(&a(&["app", "--profile", "acad"]), Some("x")),
+            "acad"
+        );
+        assert_eq!(parse_profile(&a(&["app", "--profile=vw_2"]), None), "vw_2");
+        assert_eq!(parse_profile(&a(&["app"]), Some("env-p")), "env-p");
+        assert_eq!(parse_profile(&a(&["app"]), None), "");
+        assert_eq!(parse_profile(&a(&["app", "--profile"]), Some("e")), "e");
+        assert_eq!(parse_profile(&a(&["app", "--profile", "a/b"]), None), "");
+        assert_eq!(
+            parse_profile(&a(&["app", "--profile", &"x".repeat(41)]), None),
+            ""
         );
     }
 

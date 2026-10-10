@@ -27,10 +27,19 @@ impl<T> MaybeSend for T {}
 pub struct Limits {
     /// Work units for one call (about one per WebAssembly instruction). A call that needs more stops.
     pub fuel: u64,
+    /// Wall-clock time for one call, in milliseconds. Fuel counts instructions only. A loop of
+    /// `memory.fill` costs little fuel but much time, so the time limit stops it.
+    pub max_millis: u64,
     /// Most bytes of linear memory for one call.
     pub memory_bytes: usize,
     /// Largest module, in bytes.
     pub max_module_bytes: usize,
+    /// Largest function body, in bytes. Compiling a huge function takes long.
+    pub max_function_bytes: usize,
+    /// Most functions in a module.
+    pub max_functions: usize,
+    /// Most local variables in one function.
+    pub max_locals: usize,
     /// Most bytes in an answer.
     pub max_output_bytes: usize,
     /// Most shapes in an answer.
@@ -43,8 +52,12 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             fuel: 200_000_000,
+            max_millis: 1_500,
             memory_bytes: 64 << 20,
-            max_module_bytes: 8 << 20,
+            max_module_bytes: 2 << 20,
+            max_function_bytes: 256 << 10,
+            max_functions: 5_000,
+            max_locals: 5_000,
             max_output_bytes: 2 << 20,
             max_shapes: 2_000,
             max_vertices: 100_000,

@@ -2,7 +2,7 @@
 
 use crate::plugin::Plugin;
 use crate::runtime::{Limits, PluginError, PluginRuntime, default_runtime};
-use crate::trust::ModuleTrust;
+use crate::trust::{self, ModuleTrust};
 
 /// The installed plug-ins of one session, with the engine and the limits they run under.
 pub struct Registry {
@@ -43,32 +43,27 @@ impl Registry {
         self.limits = limits;
     }
 
-    /// Loads a module and adds it. A plug-in with the same id is replaced if no one uses it:
-    /// `in_use` tells which ids are used by objects of the document. Installing the same module
-    /// again changes nothing.
-    pub fn install(
-        &mut self,
-        wasm: &[u8],
-        in_use: impl Fn(&str) -> bool,
-    ) -> Result<&Plugin, PluginError> {
+    /// Loads a module and adds it. A module that is installed already (same hash) is not compiled
+    /// again. A module with the id of an installed plug-in replaces that build: this is the
+    /// upgrade path. Objects of the document keep their shapes, and the new build is not trusted
+    /// until its hash is trusted. The caller regenerates the objects with a reset.
+    pub fn install(&mut self, wasm: &[u8]) -> Result<&Plugin, PluginError> {
+        let hash = trust::hash(wasm);
+        if let Some(i) = self.plugins.iter().position(|p| p.hash() == hash) {
+            return Ok(&self.plugins[i]);
+        }
         let plugin = Plugin::load(self.runtime.as_ref(), wasm, &self.limits)?;
         let id = plugin.manifest().id.clone();
         match self.plugins.iter().position(|p| p.manifest().id == id) {
-            Some(i) if self.plugins[i].hash() == plugin.hash() => {}
-            Some(_) if in_use(&id) => {
-                return Err(PluginError::Refused(format!(
-                    "objects use the installed plug-in '{id}'. Remove them before you install another build of it"
-                )));
+            Some(i) => {
+                self.plugins[i] = plugin;
+                Ok(&self.plugins[i])
             }
-            Some(i) => self.plugins[i] = plugin,
-            None => self.plugins.push(plugin),
+            None => {
+                self.plugins.push(plugin);
+                Ok(self.plugins.last().expect("just pushed"))
+            }
         }
-        let i = self
-            .plugins
-            .iter()
-            .position(|p| p.manifest().id == id)
-            .expect("the plug-in is installed");
-        Ok(&self.plugins[i])
     }
 
     /// Removes a plug-in. Returns false if there is none with this id.

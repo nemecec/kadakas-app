@@ -434,8 +434,6 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     wasm_plugin_api::PLUGINS_INSTALL,
     #[cfg(not(target_arch = "wasm32"))]
-    wasm_plugin_api::PLUGINS_TRUST,
-    #[cfg(not(target_arch = "wasm32"))]
     wasm_plugin_api::PLUGINS_REMOVE,
     #[cfg(not(target_arch = "wasm32"))]
     wasm_plugin_api::PLUGINS_PLACE,

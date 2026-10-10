@@ -64,6 +64,7 @@ impl Plugin {
                     .into(),
             ));
         }
+        scan(wasm, limits)?;
         let module = runtime.load(wasm, limits)?;
         let manifest = Manifest::from_bytes(&module.describe()?).map_err(PluginError::Invalid)?;
         if let Some(p) = manifest.permissions.first() {
@@ -145,10 +146,70 @@ impl Plugin {
             Err(e) => Err(PluginError::BadOutput(format!(
                 "the answer is not valid: {e}"
             ))),
-            Ok(ResetResponse::Error { message }) => Err(PluginError::Guest(message)),
+            Ok(ResetResponse::Error { message }) => {
+                Err(PluginError::Guest(clean_message(&message)))
+            }
             Ok(ResetResponse::Ok { shapes }) => convert(&shapes, &self.limits),
         }
     }
+}
+
+/// Longest message of a plug-in that the host keeps, in characters.
+pub const MAX_MESSAGE_CHARS: usize = 1000;
+
+/// A message from a plug-in is shown to users and stored in the document. Control characters
+/// (also line ends) become spaces, and the text is cut.
+pub fn clean_message(message: &str) -> String {
+    let text: String = message
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let text = text.trim();
+    if text.chars().count() > MAX_MESSAGE_CHARS {
+        let cut: String = text.chars().take(MAX_MESSAGE_CHARS).collect();
+        format!("{cut}...")
+    } else {
+        text.to_string()
+    }
+}
+
+/// Reads the structure of the module before it is compiled. Compiling is the costly step, and it
+/// happens before anybody trusts the module, so a module with a huge function, many functions
+/// or many locals is refused here.
+pub fn scan(wasm: &[u8], limits: &Limits) -> Result<(), PluginError> {
+    use wasmparser::{Parser, Payload};
+    let invalid = |e: wasmparser::BinaryReaderError| PluginError::Invalid(e.to_string());
+    for payload in Parser::new(0).parse_all(wasm) {
+        match payload.map_err(invalid)? {
+            Payload::CodeSectionStart { count, .. } if count as usize > limits.max_functions => {
+                return Err(PluginError::Limit(format!(
+                    "the module has {count} functions. The limit is {}",
+                    limits.max_functions
+                )));
+            }
+            Payload::CodeSectionEntry(body) => {
+                let size = body.range().len();
+                if size > limits.max_function_bytes {
+                    return Err(PluginError::Limit(format!(
+                        "a function has {size} bytes. The limit is {}",
+                        limits.max_function_bytes
+                    )));
+                }
+                let mut locals = 0usize;
+                for group in body.get_locals_reader().map_err(invalid)? {
+                    locals = locals.saturating_add(group.map_err(invalid)?.0 as usize);
+                }
+                if locals > limits.max_locals {
+                    return Err(PluginError::Limit(format!(
+                        "a function has {locals} local variables. The limit is {}",
+                        limits.max_locals
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn v2(p: [f64; 2]) -> DVec2 {
