@@ -203,6 +203,55 @@ impl ShadowMap {
     }
 }
 
+/// The view of the sun on a scene, for the GPU shadow map.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SunView {
+    /// Maps the scene so that X and Y run from -1 to 1 and Z (distance from the sun) from 0 to 1.
+    pub matrix: glam::Mat4,
+    /// Size of the box around the scene in the sun view, in scene units (across, up, depth).
+    pub extent: Vec3,
+}
+
+/// The view of the sun on the scene. `None` for an empty scene or no direction.
+pub fn sun_view(scene: &Scene, to_sun: Vec3) -> Option<SunView> {
+    let (lo, hi) = scene.bounds?;
+    let l = to_sun.normalize_or_zero();
+    if l == Vec3::ZERO {
+        return None;
+    }
+    let helper = if l.z.abs() > 0.99 { Vec3::Y } else { Vec3::Z };
+    let right = helper.cross(l).normalize();
+    let up = l.cross(right);
+    let axis = -l;
+    let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for i in 0..8 {
+        let c = Vec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        );
+        let p = Vec3::new(c.dot(right), c.dot(up), c.dot(axis));
+        min = min.min(p);
+        max = max.max(p);
+    }
+    let ext = (max - min).max(Vec3::splat(1.0));
+    // Rows of the matrix: clip = M * world.
+    let row =
+        |v: Vec3, lo: f32, e: f32, scale: f32, shift: f32| (v / e * scale, -lo / e * scale + shift);
+    let (rx, cx) = row(right, min.x, ext.x, 2.0, -1.0);
+    let (ry, cy) = row(up, min.y, ext.y, 2.0, -1.0);
+    let (rz, cz) = row(axis, min.z, ext.z, 1.0, 0.0);
+    Some(SunView {
+        matrix: glam::Mat4::from_cols(
+            glam::Vec4::new(rx.x, ry.x, rz.x, 0.0),
+            glam::Vec4::new(rx.y, ry.y, rz.y, 0.0),
+            glam::Vec4::new(rx.z, ry.z, rz.z, 0.0),
+            glam::Vec4::new(cx, cy, cz, 1.0),
+        ),
+        extent: ext,
+    })
+}
+
 /// A vertex while a triangle is clipped and drawn.
 #[derive(Clone, Copy)]
 struct Vtx {

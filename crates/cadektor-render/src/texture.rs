@@ -391,6 +391,42 @@ pub fn load(texture: &Texture, base: [u8; 3]) -> Option<TextureImage> {
     }
 }
 
+/// The mip chain of an image resampled to `size` by `size` pixels (a power of two): the levels
+/// from `size` down to 1, one after the other, RGBA. The GPU uploads this for texture arrays.
+pub fn mip_chain(img: &TextureImage, size: u32) -> Vec<u8> {
+    let size = size.max(1);
+    let mut level = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let s = img.sample(
+                (x as f32 + 0.5) / size as f32,
+                1.0 - (y as f32 + 0.5) / size as f32,
+            );
+            level.extend(s.map(|c| c.round().clamp(0.0, 255.0) as u8));
+        }
+    }
+    let mut out = level.clone();
+    let mut side = size;
+    while side > 1 {
+        let next = side / 2;
+        let mut smaller = Vec::with_capacity((next * next * 4) as usize);
+        for y in 0..next {
+            for x in 0..next {
+                for c in 0..4 {
+                    let at = |dx: u32, dy: u32| {
+                        level[(((y * 2 + dy) * side + x * 2 + dx) * 4 + c) as usize] as u32
+                    };
+                    smaller.push(((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1) + 2) / 4) as u8);
+                }
+            }
+        }
+        out.extend_from_slice(&smaller);
+        level = smaller;
+        side = next;
+    }
+    out
+}
+
 /// Scales an image down by whole factors (box filter) until both sides are at most `max`.
 pub fn downscale(img: &TextureImage, max: u32) -> TextureImage {
     let k = img.width.max(img.height).div_ceil(max.max(1)).max(1);
@@ -410,8 +446,8 @@ pub fn downscale(img: &TextureImage, max: u32) -> TextureImage {
                         (y * k + dy).min(img.height - 1),
                     );
                     let i = ((sy * img.width + sx) * 4) as usize;
-                    for c in 0..4 {
-                        sum[c] += img.rgba[i + c] as u32;
+                    for (c, total) in sum.iter_mut().enumerate() {
+                        *total += img.rgba[i + c] as u32;
                     }
                     n += 1;
                 }
@@ -634,6 +670,22 @@ mod tests {
     }
 
     #[test]
+    fn mip_chains_have_every_level_and_keep_the_average() {
+        let img = procedural(Procedural::Gravel, 1, [160, 150, 140], 64);
+        let chain = mip_chain(&img, 32);
+        // 32x32 + 16x16 + 8x8 + 4x4 + 2x2 + 1x1 pixels, 4 bytes each.
+        assert_eq!(chain.len(), (1024 + 256 + 64 + 16 + 4 + 1) * 4);
+        let last = &chain[chain.len() - 4..];
+        let avg = img.average();
+        for c in 0..3 {
+            assert!((last[c] as f32 - avg[c]).abs() < 8.0, "{last:?} {avg:?}");
+        }
+        // A size of 1 is just one pixel.
+        assert_eq!(mip_chain(&img, 1).len(), 4);
+        assert_eq!(mip_chain(&img, 0).len(), 4);
+    }
+
+    #[test]
     fn downscale_averages_blocks() {
         let src = TextureImage {
             width: 4,
@@ -643,7 +695,7 @@ mod tests {
         assert_eq!(downscale(&src, 8), src);
         let d = downscale(&src, 2);
         assert_eq!((d.width, d.height), (2, 1));
-        assert_eq!(d.rgba[0], ((0 + 10 + 40 + 50) / 4) as u8);
+        assert_eq!(d.rgba[0], ((10 + 40 + 50) / 4) as u8);
         // An odd size uses the whole blocks.
         let odd = TextureImage {
             width: 3,

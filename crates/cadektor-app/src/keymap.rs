@@ -204,6 +204,9 @@ actions! {
     ViewProjection => "view.projection", "Toggle parallel and perspective projection", ["Alt+Shift+J"], true;
     ViewWireframe => "view.wireframe", "Wireframe rendering", ["Cmd/Ctrl+Shift+W"], true;
     ViewShaded => "view.shaded", "Shaded rendering", ["Cmd/Ctrl+Shift+G"], true;
+    ViewHiddenLine => "view.hidden_line", "Hidden Line rendering", ["Cmd/Ctrl+Shift+E"], true;
+    ViewDashedHiddenLine => "view.dashed_hidden_line", "Dashed Hidden Line rendering", ["Cmd/Ctrl+Shift+D"], true;
+    ViewRealistic => "view.realistic", "Realistic rendering (textures, sun and shadows)", ["Cmd/Ctrl+Shift+F"], true;
 }
 
 impl Action {
@@ -553,6 +556,18 @@ mod tests {
         assert_eq!(
             km.action_for(chord("Cmd/Ctrl+Shift+G")),
             Some(Action::ViewShaded)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+E")),
+            Some(Action::ViewHiddenLine)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+D")),
+            Some(Action::ViewDashedHiddenLine)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+F")),
+            Some(Action::ViewRealistic)
         );
         assert_eq!(Action::ViewFlyover.standard_view(), None);
     }

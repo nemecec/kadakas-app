@@ -2,11 +2,12 @@
 //! pointer and click to select. What it shows is chosen in `Session::view`.
 
 use cadektor_api::Session;
-use cadektor_render::{Projection, RenderMode};
+use cadektor_render::Projection;
+use cadektor_render::styled::{light_for, resolve_style};
 use eframe::egui_wgpu;
 use egui::Sense;
 
-use crate::gpu3d::SceneCallback;
+use crate::gpu3d::{GpuStyle, SceneCallback};
 use crate::keymap::{Action, Keymap};
 use crate::view3d::{self, View3d};
 
@@ -102,6 +103,22 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     let cam = view3d.camera;
     let bounds = scene.bounds;
     let (overlay, overlay_rev) = view3d.selection_lines(&scene, rev, &session.selection);
+    // The look: the active render style of the document, with the mode of the view bar. Materials
+    // are resolved again only when the document changes.
+    let doc = session.editor.doc();
+    let mut style = resolve_style(doc, None);
+    style.mode = session.view.mode;
+    let (look, look_rev) = view3d.look(doc, &scene, rev, style.textures);
+    let light = light_for(doc, &style);
+    let gpu_style = GpuStyle {
+        mode: style.mode,
+        edges: style.edges,
+        shadows: style.shadows && matches!(light, cadektor_render::shade::Light::Sun(_)),
+        light,
+        look: Some(look),
+        look_rev,
+    };
+    let bg = style.background.0;
     let ppp = ui.ctx().pixels_per_point();
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(
         rect,
@@ -114,12 +131,16 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             eye: cam.eye().to_array(),
             eye_dir: cam.eye_dir().to_array(),
             ortho: cam.projection == Projection::Orthographic,
-            wireframe: session.view.mode == RenderMode::Wireframe,
+            style: gpu_style,
             size: [
                 (rect.width() * ppp).round().max(1.0) as u32,
                 (rect.height() * ppp).round().max(1.0) as u32,
             ],
-            background: [0.96, 0.965, 0.975],
+            background: [
+                bg[0] as f64 / 255.0,
+                bg[1] as f64 / 255.0,
+                bg[2] as f64 / 255.0,
+            ],
         },
     ));
 }

@@ -433,3 +433,97 @@ fn shadow_map_lookups() {
     // A sun straight above uses another helper axis and still works.
     assert!(ShadowMap::build(&scene, Vec3::Z, 64, &|_| true).is_some());
 }
+
+#[test]
+fn sun_matrix_maps_the_scene_into_the_unit_box() {
+    let ed = sun_scene();
+    let scene = scene_of(&ed);
+    let (lo, hi) = scene.bounds.unwrap();
+    for to_sun in [
+        Vec3::new(0.866, 0.0, 0.5),
+        Vec3::Z,
+        Vec3::new(-0.3, 0.4, 0.8),
+    ] {
+        let view = sun_view(&scene, to_sun).unwrap();
+        let m = view.matrix;
+        assert!(view.extent.min_element() >= 1.0);
+        for i in 0..8 {
+            let c = Vec3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            );
+            let p = m * c.extend(1.0);
+            assert!(p.x.abs() <= 1.0001 && p.y.abs() <= 1.0001, "{p:?}");
+            assert!((-0.0001..=1.0001).contains(&p.z), "{p:?}");
+        }
+        // A higher point is nearer to the sun: its depth is smaller.
+        let near = m * Vec3::new(0.0, 0.0, 1000.0).extend(1.0);
+        let far = m * Vec3::new(0.0, 0.0, 0.0).extend(1.0);
+        assert!(near.z < far.z);
+    }
+    assert!(sun_view(&Scene::default(), Vec3::Z).is_none());
+    assert!(sun_view(&scene, Vec3::ZERO).is_none());
+}
+
+#[test]
+fn perspective_cameras_inside_the_scene_clip_at_the_near_plane() {
+    let mut ed = Editor::default();
+    // A big ground, a see-through slab beside the camera and a plant.
+    add(&mut ed, square(50_000.0), Some([60, 160, 60, 255]));
+    let pond = add(
+        &mut ed,
+        Shape::Hardscape {
+            boundary: cadektor_core::curve::corners(&[
+                DVec2::new(-800.0, 200.0),
+                DVec2::new(800.0, 200.0),
+                DVec2::new(800.0, 900.0),
+                DVec2::new(-800.0, 900.0),
+            ]),
+            material: "w".into(),
+            thickness: Some(100.0),
+            elevation: Some(50.0),
+        },
+        Some([60, 120, 200, 255]),
+    );
+    let water = add_material(
+        &mut ed,
+        Material {
+            opacity: 0.5,
+            base_color: Color([60, 120, 200, 255]),
+            ..Default::default()
+        },
+    );
+    assign(&mut ed, pond, water);
+    add(
+        &mut ed,
+        Shape::Plant {
+            at: DVec2::new(1500.0, 800.0),
+            species: "Oak".into(),
+            spread: 1200.0,
+            height: 2500.0,
+        },
+        None,
+    );
+    let scene = scene_of(&ed);
+    // The eye is 300 mm from the target, in the middle of the 100 m wide ground: the ground
+    // triangles reach behind the eye, and so do its outline segments.
+    let mut cam = Camera::standard(StandardView::Front, Projection::Perspective);
+    cam.target = Vec3::new(0.0, 0.0, 400.0);
+    cam.distance = 300.0;
+    let o = ShadeOptions {
+        light: Light::Sun([0.5, -0.3, 0.8]),
+        shadows: true,
+        ..opts(120, 90)
+    };
+    let look = Look::build(ed.doc(), &scene, true);
+    let img = render_scene(&scene, &look, &cam, &o);
+    assert_eq!(img, render_scene(&scene, &look, &cam, &o));
+    // Below the horizon is the green ground (and the pond in front); above it is the background.
+    let ground = img.pixel(2, 55);
+    assert!(
+        ground[1] > ground[0] + 40 && ground[1] > ground[2] + 40,
+        "{ground:?}"
+    );
+    assert_eq!(img.pixel(60, 3), crate::raster::BACKGROUND);
+}

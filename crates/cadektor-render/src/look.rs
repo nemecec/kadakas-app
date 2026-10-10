@@ -86,9 +86,10 @@ impl Look {
                 let Some(m) = present::material(doc, rid) else {
                     return NO_MATERIAL;
                 };
-                let texture = textures
-                    .then(|| m.texture.as_ref())
-                    .flatten()
+                let texture = m
+                    .texture
+                    .as_ref()
+                    .filter(|_| textures)
                     .and_then(|tx| {
                         load(
                             tx,

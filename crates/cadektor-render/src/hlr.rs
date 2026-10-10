@@ -233,6 +233,9 @@ struct Edge {
     object: Option<ObjectId>,
 }
 
+/// The two end points of an edge on a 0.1 mm grid, in a fixed order.
+type EdgeKey = ([i32; 3], [i32; 3]);
+
 fn quant(p: Vec3) -> [i32; 3] {
     // 0.1 mm grid: vertices of one corner that were made separately fall in one cell.
     [
@@ -244,7 +247,7 @@ fn quant(p: Vec3) -> [i32; 3] {
 
 /// Silhouette, crease and boundary edges of the mesh. Edges that already are in `known`
 /// are left out.
-fn mesh_edges(scene: &Scene, camera: &Camera, known: &[Edge]) -> Vec<Edge> {
+fn mesh_edges(scene: &Scene, camera: Option<&Camera>, known: &[Edge]) -> Vec<Edge> {
     let mesh = &scene.mesh;
     let key = |a: Vec3, b: Vec3| {
         let (qa, qb) = (quant(a), quant(b));
@@ -255,7 +258,7 @@ fn mesh_edges(scene: &Scene, camera: &Camera, known: &[Edge]) -> Vec<Edge> {
         .map(|e| key(e.a.as_vec3(), e.b.as_vec3()))
         .collect();
     // Edge -> (first triangle, second triangle).
-    let mut edges: HashMap<([i32; 3], [i32; 3]), (usize, Option<usize>)> = HashMap::new();
+    let mut edges: HashMap<EdgeKey, (usize, Option<usize>)> = HashMap::new();
     let mut order = Vec::new();
     for t in 0..mesh.triangle_count() {
         let p = mesh.triangle(t);
@@ -285,11 +288,14 @@ fn mesh_edges(scene: &Scene, camera: &Camera, known: &[Edge]) -> Vec<Edge> {
             .as_dvec3()
             .normalize_or_zero()
     };
-    let eye = camera.eye().as_dvec3();
-    let fwd = camera.forward().as_dvec3();
-    let front = |t: usize, n: DVec3| match camera.projection {
-        Projection::Orthographic => n.dot(-fwd) > 0.0,
-        Projection::Perspective => n.dot(eye - mesh.triangle(t)[0].as_dvec3()) > 0.0,
+    // Without a camera there are no silhouettes: only creases and open edges.
+    let front = |t: usize, n: DVec3| {
+        camera.is_some_and(|camera| match camera.projection {
+            Projection::Orthographic => n.dot(-camera.forward().as_dvec3()) > 0.0,
+            Projection::Perspective => {
+                n.dot(camera.eye().as_dvec3() - mesh.triangle(t)[0].as_dvec3()) > 0.0
+            }
+        })
     };
     let cos_crease = CREASE_ANGLE.to_radians().cos();
     let mut out = Vec::new();
@@ -304,7 +310,7 @@ fn mesh_edges(scene: &Scene, camera: &Camera, known: &[Edge]) -> Vec<Edge> {
             None => true,
             Some(t2) => {
                 let n2 = normal(t2);
-                let silhouette = front(t1, n1) != front(t2, n2);
+                let silhouette = camera.is_some() && front(t1, n1) != front(t2, n2);
                 // Two faces of different objects meet: the contour of each object stays.
                 let crease = n1.dot(n2) < cos_crease;
                 silhouette || crease
@@ -321,6 +327,26 @@ fn mesh_edges(scene: &Scene, camera: &Camera, known: &[Edge]) -> Vec<Edge> {
         }
     }
     out
+}
+
+/// Edges of the mesh that do not depend on the camera: creases and open edges that the line list
+/// does not have already. The GPU hidden-line mode draws them with the line list.
+pub fn feature_edges(scene: &Scene) -> Vec<([Vec3; 2], [u8; 4])> {
+    let known: Vec<Edge> = (0..scene.lines.segment_count())
+        .map(|s| {
+            let [a, b] = scene.lines.segment(s);
+            Edge {
+                a: a.as_dvec3(),
+                b: b.as_dvec3(),
+                color: scene.lines.colors[s],
+                object: None,
+            }
+        })
+        .collect();
+    mesh_edges(scene, None, &known)
+        .into_iter()
+        .map(|e| ([e.a.as_vec3(), e.b.as_vec3()], e.color))
+        .collect()
 }
 
 /// A triangle prepared as a cover.
@@ -486,7 +512,7 @@ pub fn hidden_lines(
         })
         .collect();
     if opts.mesh_edges {
-        let extra = mesh_edges(scene, camera, &edges);
+        let extra = mesh_edges(scene, Some(camera), &edges);
         edges.extend(extra);
     }
 
@@ -845,6 +871,29 @@ mod tests {
     }
 
     #[test]
+    fn feature_edges_leave_out_what_the_line_list_has() {
+        let mut ed = Editor::default();
+        cube_scene(&mut ed, 0.0);
+        let scene = scene_of(&ed);
+        // All twelve edges of the cube are in the line list already.
+        assert!(feature_edges(&scene).is_empty());
+        add(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::new(5000.0, 0.0),
+                species: "Oak".into(),
+                spread: 3000.0,
+                height: 6000.0,
+            },
+            None,
+        );
+        let scene = scene_of(&ed);
+        let f = feature_edges(&scene);
+        assert!(!f.is_empty());
+        assert!(f.iter().all(|(_, c)| *c == DERIVED_EDGE));
+    }
+
+    #[test]
     fn empty_scene_and_edges_behind_the_eye() {
         let ed = Editor::default();
         let scene = scene_of(&ed);
@@ -868,6 +917,41 @@ mod tests {
         cam.fit(scene.bounds, 1.0);
         let hl = hidden_lines(&scene, &cam, 100, 100, &HlOptions::default());
         assert_eq!(hl.segments.len(), 1);
+    }
+
+    #[test]
+    fn many_plants_stay_fast() {
+        let mut ed = Editor::default();
+        let positions: Vec<DVec2> = (0..2_000)
+            .map(|i| DVec2::new((i % 50) as f64 * 2500.0, (i / 50) as f64 * 2500.0))
+            .collect();
+        ed.execute(&Command::AddPlants {
+            style: None,
+            overrides: Default::default(),
+            positions,
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
+        let scene = scene_of(&ed);
+        let cam = iso(
+            &scene,
+            Projection::Orthographic,
+            StandardView::RightIsometric,
+            1200,
+            900,
+        );
+        let t = std::time::Instant::now();
+        let hl = hidden_lines(&scene, &cam, 1200, 900, &HlOptions::default());
+        let took = t.elapsed();
+        eprintln!(
+            "{} triangles, {} segments, {took:?}",
+            scene.mesh.triangle_count(),
+            hl.segments.len()
+        );
+        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+        assert!(hl.visible_edge_count() > 2_000);
     }
 
     #[test]

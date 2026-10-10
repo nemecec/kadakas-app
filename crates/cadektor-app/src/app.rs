@@ -79,7 +79,7 @@ impl CadektorApp {
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
-            let gpu = Gpu3d::new(&rs.device, rs.target_format);
+            let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
         }
@@ -593,6 +593,14 @@ impl CadektorApp {
             }
             Action::ViewWireframe => self.session.view.mode = RenderMode::Wireframe,
             Action::ViewShaded => self.session.view.mode = RenderMode::Shaded,
+            Action::ViewHiddenLine => self.session.view.mode = RenderMode::HiddenLine,
+            Action::ViewDashedHiddenLine => self.session.view.mode = RenderMode::DashedHiddenLine,
+            Action::ViewRealistic => {
+                if let Err(e) = crate::present_ui::use_builtin_style(&mut self.session, "Realistic")
+                {
+                    self.status = e;
+                }
+            }
             Action::ZoomIn => self.pending_zoom *= 2.0,
             Action::ZoomOut => self.pending_zoom *= 0.5,
             // Arrow keys move the view like the scroll bars would: the drawing follows the key.
@@ -999,7 +1007,10 @@ impl eframe::App for CadektorApp {
         }
         let before = self.session.view.view;
         egui::Panel::top("viewbar").show(ui, |ui| {
-            panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready)
+            panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready);
+            if let Some(e) = crate::present_ui::show(ui, &mut self.session, self.gpu_ready) {
+                self.status = e;
+            }
         });
         if self.session.view.view != before {
             self.set_standard_view(self.session.view.view);

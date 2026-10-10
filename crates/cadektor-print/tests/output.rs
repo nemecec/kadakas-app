@@ -1080,6 +1080,165 @@ fn pdf_embeds_3d_viewports_as_images() {
 }
 
 #[test]
+fn hidden_line_viewports_are_vector_lines_and_styles_apply() {
+    let (mut ed, sheet, vp) = project();
+    // A cube of 3000 mm in the model.
+    add(
+        &mut ed,
+        Shape::Hardscape {
+            boundary: corners(&[
+                v(0.0, 0.0),
+                v(3000.0, 0.0),
+                v(3000.0, 3000.0),
+                v(0.0, 3000.0),
+            ]),
+            material: "x".into(),
+            thickness: Some(3000.0),
+            elevation: Some(3000.0),
+        },
+        None,
+        Attributes::default(),
+    );
+    let count = |ed: &Editor| {
+        let page = compose_page(ed.doc(), sheet).unwrap();
+        let images = page
+            .prims
+            .iter()
+            .filter(|p| matches!(p, Prim::Image(_)))
+            .count();
+        let paths: Vec<&PathPrim> = page
+            .prims
+            .iter()
+            .filter_map(|p| if let Prim::Path(p) = p { Some(p) } else { None })
+            .collect();
+        (
+            images,
+            paths.len(),
+            paths.iter().filter(|p| p.dash.is_some()).count(),
+        )
+    };
+    set_viewport(&mut ed, vp, |v| {
+        v.view = "right_isometric".into();
+        v.mode = "shaded".into();
+        v.dpi = 40.0;
+    });
+    let (images, base_paths, _) = count(&ed);
+    assert_eq!(images, 1);
+    // Hidden line: no image, but the visible edges as vector paths (the cube has 9 of 12).
+    set_viewport(&mut ed, vp, |v| v.mode = "hidden_line".into());
+    let (images, paths, dashed) = count(&ed);
+    assert_eq!(images, 0);
+    assert!(paths >= base_paths + 9, "{paths} vs {base_paths}");
+    assert_eq!(dashed, 0);
+    // The same page twice gives the same display list.
+    assert_eq!(
+        compose_page(ed.doc(), sheet).unwrap().prims,
+        compose_page(ed.doc(), sheet).unwrap().prims
+    );
+    // Dashed hidden line adds dashed paths for the covered edges (the cube alone has 3).
+    set_viewport(&mut ed, vp, |v| v.mode = "dashed_hidden_line".into());
+    let (_, paths2, dashed) = count(&ed);
+    assert!(dashed >= 3, "{dashed}");
+    assert_eq!(paths2, paths + dashed);
+    // PDF and SVG write them without an image.
+    let bytes = pdf_of(&ed, &[sheet]);
+    assert!(lopdf::Document::load_mem(&bytes).is_ok());
+    let svg_text = svg::page_svg(&compose_page(ed.doc(), sheet).unwrap());
+    assert!(svg_text.contains("stroke-dasharray"));
+
+    // A render style resource replaces the mode: line weight from the style.
+    let style = ResourceId(
+        run(
+            &mut ed,
+            Command::AddResource {
+                name: "Plan lines".into(),
+                body: ResourceBody::Render(Box::new(
+                    cadektor_core::present::RenderResource::RenderStyle(
+                        cadektor_core::present::RenderStyle {
+                            mode: cadektor_core::present::RenderMode::HiddenLine,
+                            line_weight: 0.7,
+                            ..Default::default()
+                        },
+                    ),
+                )),
+            },
+        )[0],
+    );
+    set_viewport(&mut ed, vp, |v| {
+        v.mode = "shaded".into();
+        v.render_style = Some(style);
+    });
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    assert!(!page.prims.iter().any(|p| matches!(p, Prim::Image(_))));
+    assert!(
+        page.prims
+            .iter()
+            .any(|p| matches!(p, Prim::Path(p) if (p.width - 0.7).abs() < 1e-9))
+    );
+    // Without the style the viewport falls back to its mode.
+    set_viewport(&mut ed, vp, |v| v.render_style = None);
+    assert_eq!(count(&ed).0, 1);
+
+    // A material shows in the shaded viewport: the picture differs from the plain one.
+    let plain = compose_page(ed.doc(), sheet)
+        .unwrap()
+        .prims
+        .into_iter()
+        .find_map(|p| {
+            if let Prim::Image(i) = p {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let m = ResourceId(
+        run(
+            &mut ed,
+            Command::AddResource {
+                name: "Brick".into(),
+                body: ResourceBody::Render(Box::new(
+                    cadektor_core::present::RenderResource::Material(
+                        cadektor_core::present::Material {
+                            base_color: Color([160, 80, 60, 255]),
+                            texture: Some(cadektor_core::present::Texture::Procedural {
+                                kind: cadektor_core::present::Procedural::Brick,
+                                seed: 1,
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                )),
+            },
+        )[0],
+    );
+    run(
+        &mut ed,
+        Command::SetMaterialSlot {
+            target: cadektor_core::present::SlotTarget::Class { class: NONE_CLASS },
+            material: Some(m),
+        },
+    );
+    let textured = compose_page(ed.doc(), sheet)
+        .unwrap()
+        .prims
+        .into_iter()
+        .find_map(|p| {
+            if let Prim::Image(i) = p {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_ne!(plain.rgb, textured.rgb);
+    // An invalid mode name is refused by the viewport check.
+    let mut bad = Viewport::new(v(0.0, 0.0), v(10.0, 10.0), v(0.0, 0.0), 100.0, vec![]);
+    bad.mode = "sketchy".into();
+    assert!(bad.problem().unwrap().contains("hidden_line"));
+}
+
+#[test]
 fn raster_viewport_of_an_empty_model_and_big_pages_still_render() {
     let mut ed = Editor::default();
     let sheet = LayerId(

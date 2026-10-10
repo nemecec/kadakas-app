@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use cadektor_core::mesh::{Bounds3, Scene};
-use cadektor_core::model::ObjectId;
+use cadektor_core::model::{Document, ObjectId};
+use cadektor_render::look::Look;
 use cadektor_render::{Camera, StandardView, ViewSettings, pick};
 use glam::{Vec2, Vec3};
 
@@ -38,6 +39,16 @@ pub struct View3d {
     fit_pending: bool,
     selection_cache: Option<SelectionCache>,
     overlay_rev: u64,
+    look_cache: Option<LookCache>,
+}
+
+/// The materials of the scene for one document revision.
+struct LookCache {
+    scene_rev: u64,
+    textures: bool,
+    look: Arc<Look>,
+    /// Number that changes with each new look. The GPU uploads the look again when it changes.
+    look_rev: u64,
 }
 
 struct SelectionCache {
@@ -58,11 +69,38 @@ impl Default for View3d {
             fit_pending: true,
             selection_cache: None,
             overlay_rev: 0,
+            look_cache: None,
         }
     }
 }
 
 impl View3d {
+    /// The materials of the scene, with a number that changes when they change. They are resolved
+    /// again only when the document revision or the texture setting changes.
+    pub fn look(
+        &mut self,
+        doc: &Document,
+        scene: &Scene,
+        scene_rev: u64,
+        textures: bool,
+    ) -> (Arc<Look>, u64) {
+        if let Some(c) = &self.look_cache
+            && c.scene_rev == scene_rev
+            && c.textures == textures
+        {
+            return (c.look.clone(), c.look_rev);
+        }
+        let look_rev = self.look_cache.as_ref().map_or(1, |c| c.look_rev + 1);
+        let look = Arc::new(Look::build(doc, scene, textures));
+        self.look_cache = Some(LookCache {
+            scene_rev,
+            textures,
+            look: look.clone(),
+            look_rev,
+        });
+        (look, look_rev)
+    }
+
     /// Makes the camera follow `settings`. A change of the standard view turns the camera
     /// to that view and keeps target and zoom. `force` does that even without a change,
     /// as after `view.set`, which also resets an orbit that the user did.

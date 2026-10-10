@@ -966,10 +966,8 @@ fn parse_time(t: &str) -> Result<f64, RpcError> {
         .get(2)
         .map_or(Ok(0.0), |x| x.parse())
         .map_err(|_| bad_time())?;
-    if !(0.0..24.0).contains(&h) && !(h == 24.0 && min == 0.0)
-        || !(0.0..60.0).contains(&min)
-        || !(0.0..60.0).contains(&sec)
-    {
+    let hour_ok = (0.0..24.0).contains(&h) || (h == 24.0 && min == 0.0 && sec == 0.0);
+    if !hour_ok || !(0.0..60.0).contains(&min) || !(0.0..60.0).contains(&sec) {
         return Err(bad_time());
     }
     Ok(h + min / 60.0 + sec / 3600.0)

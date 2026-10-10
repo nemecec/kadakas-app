@@ -35,7 +35,7 @@ Non-goals
    - MCP server (`cadektor mcp`) for Claude Code.
    - SVG render so agents can see results.
    - A `describe` method for discovery.
-   - Planned: PNG render, live viewport screenshot, Python scripting.
+   - Planned: live viewport screenshot, Python scripting.
 6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Core line coverage of 85% or more (cargo-llvm-cov). CI on macOS, Linux, Windows.
 7. License: Apache-2.0 OR MIT.
 
@@ -304,7 +304,7 @@ Non-goals
 |---|---|---|---|
 | SHT-01 | SVG render of a layer set. | P0 | done |
 | SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
-| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
+| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster, or vector lines in the hidden-line modes), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
 | SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: object attributes, viewport class override (by-class attributes only), class attributes, defaults. A viewport keeps its own layer and class visibility. Layer and class graphic "grey" mode is missing. | P1 | done |
 | SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation objects can sit in the space too (`AnnotationItem::Shape`, see ANN-10). | P1 | done |
 | SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
@@ -321,12 +321,15 @@ Non-goals
 | 3D-01 | wgpu 3D view: orbit, pan, zoom to cursor, zoom to fit, click to select. | P1 | done |
 | 3D-02 | Standard views (top, bottom, front, back, left, right, four isometrics), parallel and perspective. | P1 | done |
 | 3D-03 | Extrude, sweep, 3D polygon. | P1 | planned |
-| 3D-04 | Render modes: wireframe and shaded. | P1 | done |
-| 3D-10 | Render mode: hidden line. | P2 | planned |
+| 3D-04 | Render modes: wireframe, shaded, hidden line and dashed hidden line (view bar, keys Cmd/Ctrl+Shift+W, G, E and D, `view.set`, `render.png`, viewports). Sketch mode is missing. | P1 | done |
+| 3D-10 | Render mode: hidden line. Exact vector output (edges cut where surfaces cover them, silhouettes and creases of curved surfaces, optional dashed covered edges) in `cadektor_render::hlr`. A hidden-line viewport on a sheet draws vector lines in PDF, SVG and PNG. `render.hidden_line` returns SVG. Deterministic. Covers with a corner behind the eye are not used in perspective. | P0 | done |
 | 3D-05 | Terrain mesh with texture. | P1 | partial: terrain mesh and contours in 3D, no texture |
-| 3D-06 | Textures and materials. | P2 | planned |
-| 3D-07 | Lights, sun position by georeference and date. | P2 | planned |
-| 3D-08 | Raster render styles. | P2 | planned |
+| 3D-06 | Materials as resources (`material.*`): base color, optional texture (generated pattern, or PNG and JPEG image stored in the document, at most 2048 px and 3 MB), mapping (planar, box, cylindrical; scale, rotation and offset in mm and degrees), roughness, metallic and opacity. A built-in library (Grass, Gravel, Concrete pavers, Bark mulch, Water, Brick, Timber) with generated textures: `material.add_defaults`. No image is downloaded. | P1 | done |
+| 3D-11 | Material slots (`material.assign`, `material.slots`): an object or a part of it (trunk and canopy of plants, surface and build-up layers of hardscapes), a plant style or hardscape style part, or a class. Order: part of the object, whole object, part of the style, class. Walls, massing and any other object take a material through the object or class slot. | P1 | done |
+| 3D-07 | Sun like a heliodon: latitude and longitude (manual, or from the georeference), date, time, time zone and north angle in `sun.set` and `sun.get`. NOAA solar position algorithm (pure function `cadektor_core::sun`, tested against Meeus examples and solstice and equinox values), sunrise, solar noon, sunset, sun path. Sun and shadows in the 3D view, `render.png` and viewports. A sun panel in the view bar. | P1 | done |
+| 3D-08 | Render styles as resources (`render_style.*`): mode, edges, shadows, sun on or off, textures, background and hidden-line weight. Built-in styles Wireframe, Shaded, Realistic, Hidden Line and Dashed Hidden Line. Chosen in the view bar, with `render_style.set_active`, in `render.png {render_style}` and per viewport (`viewport.create|update {render_style}`; cadektor-print uses them). | P1 | done |
+| 3D-12 | GPU renderer (wgpu): textured PBR-lite shading, hemisphere ambient light, a sun with a shadow map (one cascade fitted to the scene, 3 by 3 filter), 4 times MSAA, see-through surfaces sorted far to near, hidden-line and dashed hidden-line modes with depth-tested edges, mesh buffers uploaded once per revision. Checked on a real GPU in the tests (skipped without one). 10 000 plants (640 000 triangles) draw in about 4 ms per frame on a laptop GPU. True instancing is missing: plants have a coarse canopy mesh instead. | P1 | done |
+| 3D-13 | CPU renderer (`cadektor_render::shade`): the same light model as the GPU with textures, sun shading, shadow map, transparency, optional 2 by 2 supersampling and the hidden-line output. Deterministic. Used by `render.png` and by 3D viewports on sheets. | P1 | done |
 | 3D-09 | Export OBJ and STL. | P2 | planned |
 
 ### 4.15 Architecture (P1/P2)
@@ -383,6 +386,7 @@ Non-goals
 | API-12 | `cadektor mcp` server for Claude Code. | P0 | done |
 | API-13 | `render.png`: a CPU render of the 3D model, base64 PNG, also in `cadektor serve`, over `--connect` and in MCP (as an image). | P1 | done |
 | API-14 | Screenshot of the live viewport. | P1 | planned |
+| API-42 | Presentation methods: `material.*` (list, get, create, update, duplicate, delete, add_defaults, import_texture, assign, slots), `render_style.*` (list, get, create, update, duplicate, delete, set_active), `sun.set`, `sun.get`, `render.hidden_line`, and `render.png {render_style, mode, samples}`. Examples in `describe.presentation`. | P1 | done |
 | API-15 | Command schema (JSON Schema) in `describe`. | P1 | planned |
 | API-16 | Query by criteria (class, layer, record field). | P1 | planned |
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
@@ -446,7 +450,7 @@ Later (P2)
 - Irrigation design, water budget.
 - Graphic legends, section viewports, project sharing.
 - DWG, point clouds, STEP.
-- Materials, lights, sun study.
+- Light objects (spot, point), lighting devices, sketch render mode, true instancing for plants.
 - Workspaces, visual scripting, parametric plug-in objects.
 - If legal review allows, native `.vwx`.
 
