@@ -40,8 +40,8 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
 | `kadakas-launcher` | The launcher program (PLAT-06): an egui window that shows versions, channel, flavor and profile, and has Launch, Check, Update and Roll back. The window code only draws; the state is in `model.rs`. Left out of the coverage bar like the app (native only) | sys, update |
 | `kadakas-sign-manifest` (in `scripts/sign-manifest`) | The CI tool `sign-manifest`: `keygen`, `public`, `build`, `sign`, `verify` for update manifests. Holds the signing code (feature `sign` of `kadakas-update`); the launcher does not | sys, update (feature `sign`) |
-| `kadakas-ui-core` | What every UI program needs, without egui (PLAT-03): the tool state machines and tool settings, picking and box selection (the caller owns the annotation cache and passes it in `Ctx`), `effects::apply` (runs the effects of a tool in the group you are in and selects new objects), the snapping glue and smart-point key, view state (pan, zoom, screen and model transforms) and view history, the Data bar entry logic, keys and the keymap (action ids, default keys, JSON format for profiles). Input is abstracted (`keys::Key`, `Modifiers`, `tools::Input` with model coordinates). Pure and wasm-compatible | core, annot, irrigation, plants, render, site |
-| `kadakas-app` | egui and wgpu desktop app and web build. A thin adapter: it turns egui input into ui-core events and draws the ui-core previews | core, ui-core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
+| `kadakas-ui-core` | What every UI program needs, without egui (PLAT-03): the tool state machines and tool settings, picking and box selection (the caller owns the annotation cache and passes it in `Ctx`), `effects::apply` (runs the effects of a tool in the group you are in and selects new objects), the snapping glue and smart-point key, view state (pan, zoom, screen and model transforms) and view history, the Data bar entry logic, keys and the keymap (action ids, default keys, JSON format for profiles). Input is abstracted (`keys::Key`, `Modifiers`, `tools::Input` with model coordinates). Pure and wasm-compatible | core, annot, irrigation, plants, render, site, units, l10n |
+| `kadakas-app` | egui and wgpu desktop app and web build. A thin adapter: it turns egui input into ui-core events and draws the ui-core previews | core, ui-core, units, l10n, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
 
 The layers, from the bottom (a crate uses only crates above it; `cargo tree` is the truth):
 
@@ -56,7 +56,7 @@ core            sys
   |
   io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
   script (sys)    plugin-abi  ->  plugin (core, plugin-abi; sys on native)
-  ui-core (core, annot, irrigation, plants, render, site)  ->  app (and any other UI program)
+  ui-core (core, annot, irrigation, plants, render, site, units, l10n)  ->  app (and any other UI program)
   api  = everything above (collab: core only);  cli = core, sys, api;  app = api and the UI crates
 ```
 
@@ -92,6 +92,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Dependencies must have a permissive license. CI runs `cargo deny check` (settings in `deny.toml`). After you add or update a dependency, run `scripts/notices.sh` and commit `THIRD_PARTY_NOTICES.txt`; the installers ship it (`packager.toml`, `resources`).
 - Attribution: every new dependency, asset (icon, font, image), dataset or cited formula or standard updates `docs/attribution.md`. Crates go in `THIRD_PARTY_NOTICES.txt` through `scripts/notices.sh`; other items go in `docs/notices-extra.txt`, which the script appends. Reviewers check this. Name a trademark only with its owner's note (see `docs/attribution.md`).
 - Test helpers must run on Windows too: use `target/debug/kadakas.exe` there, and read pipes with a thread and a queue, not with `select`.
+- Every text that a person reads in the UI goes in a `.ftl` file under `crates/kadakas-l10n/locales/en-US/`, with the Estonian text in `locales/et/`. In code, use `tr!("id")` and never a string literal in an egui call. A number that a person reads or types goes through `kadakas-units` (`current()` and `DragValueExt`). Do not write `format!("{:.1} mm", x)` in the UI. API and JSON-RPC texts stay English. `cargo test -p kadakas-l10n` is the CI check for this rule. See `docs/localization.md`.
 - Reject numbers that are not finite. Saved files must always open again.
 - Plain English in documents and comments: short sentences, active voice.
 
