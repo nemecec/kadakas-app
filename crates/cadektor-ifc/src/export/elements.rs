@@ -22,6 +22,8 @@ impl<W: Write> Exporter<'_, W> {
             Shape::LandscapeArea { .. } => self.landscape_area(obj),
             Shape::Plant { .. } | Shape::ExistingTree { .. } => self.plant(obj),
             Shape::SiteModel { .. } => self.terrain(obj),
+            Shape::Massing(_) => self.massing(obj),
+            Shape::Underlay(_) => skip("map underlay (a picture)"),
             Shape::SiteModifier { .. } => skip("site modifier: its effect is in the terrain"),
             Shape::Viewport(_) | Shape::TitleBlock(_) => skip("sheet object (paper space)"),
             Shape::Locus3d { .. } | Shape::Polyline3d { .. } if !self.opts.include_2d => skip(
@@ -55,7 +57,7 @@ impl<W: Write> Exporter<'_, W> {
         self.ent("IFCPOLYLINE", vec![Value::refs(ids)])
     }
 
-    fn profile(&mut self, outer: &[DVec2], holes: &[Vec<DVec2>]) -> R<u64> {
+    pub(super) fn profile(&mut self, outer: &[DVec2], holes: &[Vec<DVec2>]) -> R<u64> {
         let curve = self.polyline2(outer, true)?;
         if holes.is_empty() {
             return self.ent(
@@ -79,7 +81,7 @@ impl<W: Write> Exporter<'_, W> {
     }
 
     /// An extrusion upward from height `z0` of the placement.
-    fn extrude(&mut self, profile: u64, z0: f64, depth: f64) -> R<u64> {
+    pub(super) fn extrude(&mut self, profile: u64, z0: f64, depth: f64) -> R<u64> {
         let position = self.axis3([0.0, 0.0, z0])?;
         let up = self.up()?;
         self.ent(
@@ -94,7 +96,7 @@ impl<W: Write> Exporter<'_, W> {
     }
 
     /// An `IfcTriangulatedFaceSet`, written straight to the file.
-    fn tessellation(&mut self, points: &[DVec3], idx: &[u32]) -> R<u64> {
+    pub(super) fn tessellation(&mut self, points: &[DVec3], idx: &[u32]) -> R<u64> {
         let list = self.w.entity_with("IFCCARTESIANPOINTLIST3D", |out| {
             out.write_all(b"(")?;
             for (i, p) in points.iter().enumerate() {
@@ -130,7 +132,7 @@ impl<W: Write> Exporter<'_, W> {
             .map_err(Into::into)
     }
 
-    fn color_of(&self, obj: &Object, default: [u8; 4]) -> [u8; 4] {
+    pub(super) fn color_of(&self, obj: &Object, default: [u8; 4]) -> [u8; 4] {
         let a = hardscape::styled_attrs(self.doc, obj, self.doc.resolved_attrs(obj));
         a.fill.filter(|c| c.0[3] > 0).map_or(default, |c| c.0)
     }

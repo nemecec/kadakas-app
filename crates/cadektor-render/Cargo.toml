@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64 = "0.22.1"
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 glam = { version = "0.34.1" }
 png = "0.18"
+zune-core = "0.5"
+zune-jpeg = "0.5"
 
 [dev-dependencies]
 proptest = "1.11.0"

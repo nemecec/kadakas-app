@@ -39,6 +39,22 @@ def garden(cad):
     cad.execute({"op": "add_object", "shape": {"kind": "landscape_area", "boundary": [[0, 5000], [6000, 5000], [6000, 8000], [0, 8000]], "name": "Meadow"}})
 
 
+def garden_with_materials(cad):
+    """The garden, a massing model, and materials on a massing model, a slab and the parts of a plant."""
+    garden(cad)
+    house = cad.result("massing.add", {"footprint": [[-9000, 0], [-3000, 0], [-3000, 5000], [-9000, 5000]], "floors": 2,
+                                       "floor_height": 2800, "roof": "gable", "pitch": 35, "name": "House"})["id"]
+    cad.result("material.add_defaults", {})
+    cad.result("material.create", {"name": "Steel", "base_color": [200, 210, 220, 255], "metallic": 1.0, "roughness": 0.2})
+    cad.result("material.create", {"name": "Glass", "base_color": [150, 200, 220, 255], "opacity": 0.4})
+    cad.result("material.assign", {"material": "Brick", "object": house})
+    plants = [o["id"] for o in cad.result("objects.list", {"kind": "plant"})]
+    cad.result("material.assign", {"material": "Bark mulch", "object": plants[0], "slot": "trunk"})
+    cad.result("material.assign", {"material": "Grass", "object": plants[0], "slot": "canopy"})
+    cad.result("material.assign", {"material": "Glass", "object": plants[1]})
+    return house
+
+
 def test_glb_is_a_valid_y_up_file_in_metres_with_instanced_plants(cad, tmp_path):
     garden(cad)
     out = tmp_path / "garden.glb"
@@ -164,7 +180,7 @@ def test_the_khronos_validator_accepts_the_files(cad, tmp_path):
     install = subprocess.run(["npm", "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, timeout=300)
     if install.returncode != 0:
         pytest.skip("gltf-validator could not be installed")
-    garden(cad)
+    garden_with_materials(cad)
     cad.execute({"op": "add_object", "shape": {"kind": "polyline3d", "points": [[0, 0, 0], [1000, 0, 500], [2000, 500, 100]], "closed": False}})
     files = []
     for name, options in [("a.glb", {}), ("b.gltf", {"grouping": "class"}), ("c.glb", {"y_up": False, "units": "mm", "instancing": False})]:
@@ -175,3 +191,33 @@ def test_the_khronos_validator_accepts_the_files(cad, tmp_path):
     for line in run.stdout.splitlines():
         r = json.loads(line)
         assert r["errors"] == 0 and r["warnings"] == 0, r
+
+
+def test_materials_massing_and_textures_reach_the_files(cad, tmp_path):
+    """Textures are embedded in GLB and GLTF and are files next to OBJ; trimesh reads them back."""
+    house = garden_with_materials(cad)
+    glb, gltf, obj = tmp_path / "m.glb", tmp_path / "m.gltf", tmp_path / "m.obj"
+    cad.result("export.file", {"path": str(glb)})
+    cad.result("export.file", {"path": str(gltf)})
+    r = cad.result("export.file", {"path": str(obj)})
+    assert list(tmp_path.glob("Brick_*.png")) and len(r["files"]) >= 3
+    f = read_3d(glb)["gltf"]
+    assert "House" in " ".join(f["node_names"]) or any("massing" in n for n in f["node_names"])
+    assert f["materials"] >= 5
+    t = read_3d(obj)["trimesh"]
+    assert t["triangles"] > 0
+    g = read_3d(gltf)
+    assert g["trimesh"]["triangles"] == read_3d(glb)["trimesh"]["triangles"]
+    # The massing model is 6 m by 5 m with a roof: its box in the file is at least that big.
+    nodes = {e["id"]: e for e in f["extras"]}
+    assert nodes[house]["kind"] == "massing"
+
+
+def test_massing_is_cut_by_a_section_viewport(cad):
+    house = cad.result("massing.add", {"footprint": [[0, 0], [8000, 0], [8000, 6000], [0, 6000]], "floors": 2,
+                                       "floor_height": 3000, "roof": "flat"})["id"]
+    line = cad.result("section_viewport.line_add", {"a": [-1000, 3000], "b": [9000, 3000]})["id"]
+    got = cad.result("section_viewport.get", {"id": line, "geometry": True})
+    face = got["cut_faces"][0]
+    assert face["object"] == house
+    assert face["area_m2"] == approx(8.0 * 6.0)

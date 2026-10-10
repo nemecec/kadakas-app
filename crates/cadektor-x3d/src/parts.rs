@@ -146,8 +146,11 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    fn material_index(&mut self, obj: &Object, color: [u8; 4]) -> usize {
-        let m = self.src.material(self.doc, obj, color);
+    fn material_index(&mut self, obj: &Object, tri: Option<usize>, color: [u8; 4]) -> usize {
+        let m = match tri {
+            Some(t) => self.src.material_for(self.doc, obj, t, color),
+            None => self.src.material(self.doc, obj, color),
+        };
         match self.materials.iter().position(|x| *x == m) {
             Some(i) => i,
             None => {
@@ -168,27 +171,29 @@ impl Builder<'_> {
         let scene = self.scene;
         let mesh = &scene.mesh;
         let mut out: Vec<(Prim, [u8; 4])> = Vec::new();
-        let mut by_color: BTreeMap<[u8; 4], usize> = BTreeMap::new();
+        let mut by_color: BTreeMap<(u32, [u8; 4]), usize> = BTreeMap::new();
         let mut remaps: Vec<HashMap<u32, u32>> = Vec::new();
         for t in &g.tris {
             let idx = &mesh.indices[t * 3..t * 3 + 3];
             let color = mesh.colors[idx[0] as usize];
-            let slot = *by_color.entry(color).or_insert_with(|| {
-                let material = self.material_index(obj, color);
-                out.push((
-                    Prim {
-                        material,
-                        lines: false,
-                        positions: Vec::new(),
-                        normals: Vec::new(),
-                        uvs: Vec::new(),
-                        indices: Vec::new(),
-                    },
-                    color,
-                ));
-                remaps.push(HashMap::new());
-                out.len() - 1
-            });
+            let slot = *by_color
+                .entry((self.src.group(*t), color))
+                .or_insert_with(|| {
+                    let material = self.material_index(obj, Some(*t), color);
+                    out.push((
+                        Prim {
+                            material,
+                            lines: false,
+                            positions: Vec::new(),
+                            normals: Vec::new(),
+                            uvs: Vec::new(),
+                            indices: Vec::new(),
+                        },
+                        color,
+                    ));
+                    remaps.push(HashMap::new());
+                    out.len() - 1
+                });
             let repeat = self.materials[out[slot].0.material]
                 .texture
                 .as_ref()
@@ -203,7 +208,11 @@ impl Builder<'_> {
                     prim.positions.push(self.rel(p, anchor));
                     prim.normals.push(self.conv.dir(n));
                     if let Some(repeat) = repeat {
-                        prim.uvs.push(uv(p, n, repeat, scene.origin));
+                        prim.uvs.push(
+                            self.src
+                                .uv(i as usize)
+                                .unwrap_or_else(|| uv(p, n, repeat, scene.origin)),
+                        );
                     }
                 }
                 prim.indices.push(v);
@@ -215,7 +224,7 @@ impl Builder<'_> {
             for s in &g.segs {
                 let color = l.colors[*s];
                 let slot = *by_color.entry(color).or_insert_with(|| {
-                    let material = self.material_index(obj, color);
+                    let material = self.material_index(obj, None, color);
                     out.push((
                         Prim {
                             material,
@@ -499,6 +508,12 @@ fn signature(prims: &[(Prim, [u8; 4])], tolerance: f64) -> u64 {
         }
         for i in &p.indices {
             h = mix(h, *i as u64);
+        }
+        // Equal shapes with different texture coordinates are different meshes.
+        for uv in &p.uvs {
+            for c in uv {
+                h = mix(h, c.to_bits() as u64);
+            }
         }
     }
     // Zero means "no instancing", so a real hash never is zero.

@@ -17,10 +17,11 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
 | `cadektor-io` | DXF, Shapefile and GeoJSON import and export, CRS conversion (native only) | core |
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code | core, sheet |
+| `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, io |
 | `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
 | `cadektor-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, annot, irrigation (native only for io, ifc, print and x3d) |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, gis, annot, irrigation, x3d (native only for io, ifc, gis, print and x3d) |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 

@@ -15,13 +15,14 @@
 use glam::{DVec2, Vec3};
 
 use super::style::PlantForm;
+use crate::present::{PART_CANOPY, PART_TRUNK};
 
 /// Largest triangle count of a plant at `Fine` detail (the old forms stay below it as well).
 pub const MAX_FINE_TRIANGLES: usize = 400;
 /// Largest triangle count of a plant at `Coarse` detail.
 pub const MAX_COARSE_TRIANGLES: usize = 200;
 /// Largest triangle count of a billboard.
-pub const MAX_BILLBOARD_TRIANGLES: usize = 40;
+pub const MAX_BILLBOARD_TRIANGLES: usize = 48;
 
 /// How much detail a plant mesh has.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -108,6 +109,10 @@ pub struct FormMesh {
     pub normals: Vec<Vec3>,
     pub colors: Vec<[u8; 4]>,
     pub indices: Vec<u32>,
+    /// The part (`PART_*` in `crate::present`) of every triangle, for materials: the trunk or the canopy.
+    pub tri_part: Vec<u8>,
+    /// The part that new triangles get.
+    pub part: u8,
 }
 
 impl FormMesh {
@@ -124,6 +129,7 @@ impl FormMesh {
 
     fn tri(&mut self, a: u32, b: u32, c: u32) {
         self.indices.extend_from_slice(&[a, b, c]);
+        self.tri_part.push(self.part);
     }
 
     /// Box around the vertices, or `None` for an empty mesh.
@@ -224,6 +230,13 @@ impl FormMesh {
     /// A tube from `a` to `b` through `rings` rings (at least 2), with a radius that goes from
     /// `r0` to `r1`. The ends are open (a lobe or the ground hides them).
     fn tube(&mut self, pts: &[Vec3], radii: &[f32], sides: usize, color: [u8; 4]) {
+        let keep = self.part;
+        self.part = PART_TRUNK;
+        self.tube_rings(pts, radii, sides, color);
+        self.part = keep;
+    }
+
+    fn tube_rings(&mut self, pts: &[Vec3], radii: &[f32], sides: usize, color: [u8; 4]) {
         let n = pts.len();
         if n < 2 || radii.len() != n || sides < 3 {
             return;
@@ -339,7 +352,10 @@ fn scaled(profile: &[(f32, f32)], r: f32, h: f32) -> Vec<(f32, f32)> {
 /// The mesh of a plant, with its foot at the origin. Returns an empty mesh for sizes that are
 /// not positive and finite.
 pub fn build(p: &Params) -> FormMesh {
-    let mut m = FormMesh::default();
+    let mut m = FormMesh {
+        part: PART_CANOPY,
+        ..FormMesh::default()
+    };
     if !(p.spread.is_finite() && p.height.is_finite() && p.spread > 0.0 && p.height > 0.0) {
         return m;
     }
@@ -471,6 +487,13 @@ pub fn build(p: &Params) -> FormMesh {
             }
         }
         PlantForm::Hedge => {
+            // A short stem inside the block, so that the hedge has a trunk part too.
+            m.tube(
+                &[Vec3::ZERO, Vec3::new(0.0, 0.0, 0.1 * h)],
+                &[tr, tr],
+                trunk_sides,
+                p.trunk_color,
+            );
             let path = [
                 DVec2::new(-p.spread / 2.0, 0.0),
                 DVec2::new(p.spread / 2.0, 0.0),
@@ -536,6 +559,15 @@ pub fn build(p: &Params) -> FormMesh {
                 &mut rng,
             );
         }
+    }
+    // A short stub inside the form, so that every form has a trunk part and a canopy part.
+    if !m.tri_part.contains(&PART_TRUNK) {
+        m.tube(
+            &[Vec3::ZERO, Vec3::new(0.0, 0.0, 0.08 * h)],
+            &[tr.min(r * 0.5), tr.min(r * 0.5)],
+            if coarse { 4 } else { 6 },
+            p.trunk_color,
+        );
     }
     m.fit(p.spread as f32, p.height as f32);
     m
@@ -713,6 +745,20 @@ fn billboard(p: &Params, m: &mut FormMesh) {
             .collect();
         m.two_sided_strip(&left, &right, normal, p.color);
     }
+    // A narrow trunk quad at the foot, so that the billboard has a trunk part too.
+    let tw = trunk_radius(p).min(r * 0.2);
+    m.part = PART_TRUNK;
+    {
+        let dir = Vec3::X;
+        let top = Vec3::new(0.0, 0.0, 0.25 * h);
+        m.two_sided_strip(
+            &[dir * -tw, top + dir * -tw],
+            &[dir * tw, top + dir * tw],
+            Vec3::Y,
+            p.trunk_color,
+        );
+    }
+    m.part = PART_CANOPY;
 }
 
 #[cfg(test)]
@@ -754,6 +800,24 @@ mod tests {
                 assert!(a.indices.iter().all(|i| (*i as usize) < a.positions.len()));
                 assert!(a.positions.iter().all(|p| p.is_finite()));
                 assert!(a.normals.iter().all(|n| n.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn every_form_has_a_trunk_part_and_a_canopy_part_at_every_level() {
+        for form in PlantForm::ALL {
+            for detail in [Detail::Fine, Detail::Coarse, Detail::Billboard] {
+                let m = build(&params(form, detail));
+                assert_eq!(m.tri_part.len(), m.triangle_count(), "{form:?} {detail:?}");
+                let count = |part: u8| m.tri_part.iter().filter(|p| **p == part).count();
+                assert!(count(PART_TRUNK) > 0, "{form:?} {detail:?}: no trunk");
+                assert!(count(PART_CANOPY) > 0, "{form:?} {detail:?}: no canopy");
+                assert_eq!(
+                    count(PART_TRUNK) + count(PART_CANOPY),
+                    m.triangle_count(),
+                    "{form:?} {detail:?}: other parts"
+                );
             }
         }
     }

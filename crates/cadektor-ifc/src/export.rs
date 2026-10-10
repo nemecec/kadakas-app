@@ -9,6 +9,7 @@ use std::io::Write;
 
 mod elements;
 mod finish;
+mod massing;
 
 use cadektor_core::curve;
 use cadektor_core::datamap::{self, DataMap, IfcType, IfcValue, Mapped};
@@ -106,6 +107,7 @@ fn default_class(kind: &str) -> (&'static str, Option<&'static str>) {
     match kind {
         "hardscape" => ("IfcSlab", Some("BASESLAB")),
         "site_model" => ("IfcGeographicElement", Some("TERRAIN")),
+        "massing" => ("IfcBuildingElementProxy", Some("NOTDEFINED")),
         _ => ("IfcGeographicElement", Some("USERDEFINED")),
     }
 }
@@ -148,6 +150,8 @@ pub struct Exporter<'a, W: Write> {
     site: u64,
     site_placement: u64,
     building: Option<(u64, u64)>,
+    /// `IfcBuilding`s made from massing models (option `massing_as_building`). The site aggregates them.
+    massing_buildings: Vec<u64>,
     storeys: BTreeMap<LayerId, (u64, u64)>,
     /// Elements by container: 0 is the site, else a layer ID.
     contained: BTreeMap<u64, Vec<u64>>,
@@ -201,6 +205,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             site: 0,
             site_placement: 0,
             building: None,
+            massing_buildings: Vec::new(),
             storeys: BTreeMap::new(),
             contained: BTreeMap::new(),
             styles: BTreeMap::new(),

@@ -17,7 +17,7 @@ use cadektor_core::model::{Attributes, ClassId, LayerId, LayerKind, ObjectId, Sh
 use cadektor_core::section::{self as settings, SectionLine, SectionView};
 use cadektor_core::sheets::{Viewport, fit_scale};
 use cadektor_x3d::section::{SectionDrawing, SectionSpec};
-use cadektor_x3d::{BaseColors, ExportOptions, X3dError};
+use cadektor_x3d::{DocumentMaterials, ExportOptions, X3dError};
 
 use crate::sheets_api::{class_ref, layer_list, layer_ref, sheet_ref, viewport_json};
 use crate::{RpcError, Session};
@@ -116,7 +116,7 @@ pub(crate) fn describe() -> Value {
                 "objects": "list of object IDs to export. Default all objects that have 3D geometry",
                 "lines": "true (default): 3D lines and polylines become line primitives"
             },
-            "nodes": "Each node has a name and extras {id, kind, name, layer, layer_id, class, class_id, data}. Colors are base colors (PBR metallic roughness). Materials and textures of the Resource Manager flow into the file through the MaterialSource hook of cadektor-x3d when they exist.",
+            "nodes": "Each node has a name and extras {id, kind, name, layer, layer_id, class, class_id, data}. Materials of the Resource Manager (the slots of parts, objects, styles and classes) are written as PBR metallic roughness with base color textures: embedded images in GLB and GLTF, and PNG files next to the OBJ and MTL (they follow the path policy and need overwrite to be replaced). Triangles without a material keep their color.",
             "examples": [
                 {"method": "export.file", "params": {"path": "/data/site.glb", "format": "glb", "options": {"grouping": "layer"}, "overwrite": true}},
                 {"method": "export.file", "params": {"path": "/data/site.obj", "format": "obj", "options": {"units": "mm", "y_up": false}, "overwrite": true}}
@@ -627,6 +627,7 @@ impl Session {
         }
         let scene = self.scene();
         let doc = self.editor.doc();
+        let materials = DocumentMaterials::new(doc, &scene);
         let rpc = |e: X3dError| match e {
             X3dError::Options(_) => bad(e),
             e => app(e),
@@ -638,13 +639,13 @@ impl Session {
         let stats = match kind {
             Kind::Gltf => {
                 let (text, stats) =
-                    cadektor_x3d::export_gltf(doc, &scene, &opts, &BaseColors).map_err(rpc)?;
+                    cadektor_x3d::export_gltf(doc, &scene, &opts, &materials).map_err(rpc)?;
                 write(&checked_paths[0], text.as_bytes())?;
                 stats
             }
             Kind::Glb => {
                 let (bytes, stats) =
-                    cadektor_x3d::export_glb(doc, &scene, &opts, &BaseColors).map_err(rpc)?;
+                    cadektor_x3d::export_glb(doc, &scene, &opts, &materials).map_err(rpc)?;
                 write(&checked_paths[0], &bytes)?;
                 stats
             }
@@ -654,12 +655,29 @@ impl Session {
                     .and_then(|n| n.to_str())
                     .unwrap_or("model.mtl");
                 let (obj, stats) =
-                    cadektor_x3d::export_obj(doc, &scene, &opts, &BaseColors, name).map_err(rpc)?;
+                    cadektor_x3d::export_obj(doc, &scene, &opts, &materials, name).map_err(rpc)?;
+                // The texture files follow the same path policy, and nothing is written before all pass.
+                let mut texture_paths = Vec::new();
+                for (n, _) in &obj.textures {
+                    let tp = checked_paths[0].with_file_name(n);
+                    let ext = if n.ends_with(".jpg") { "jpg" } else { "png" };
+                    let tp = if checked {
+                        self.check_path(&tp, true, &[ext]).map_err(app)?
+                    } else {
+                        tp
+                    };
+                    if checked && self.paths.is_restricted() && tp.exists() && !overwrite {
+                        return Err(app(format!(
+                            "{} exists: pass \"overwrite\": true to replace it",
+                            tp.display()
+                        )));
+                    }
+                    texture_paths.push(tp);
+                }
                 write(&checked_paths[0], obj.obj.as_bytes())?;
                 write(&checked_paths[1], obj.mtl.as_bytes())?;
                 files.push(checked_paths[1].clone());
-                for (n, data) in &obj.textures {
-                    let tp = checked_paths[0].with_file_name(n);
+                for (tp, (_, data)) in texture_paths.into_iter().zip(&obj.textures) {
                     write(&tp, data)?;
                     files.push(tp);
                 }

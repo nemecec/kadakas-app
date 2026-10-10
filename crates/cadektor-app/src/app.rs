@@ -66,6 +66,11 @@ pub struct CadektorApp {
     /// The File > Import and File > Export dialogs.
     #[cfg(not(target_arch = "wasm32"))]
     io_ui: crate::io_dialog::IoUi,
+    /// The File > Map Sources and File > Change CRS dialogs.
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_ui: crate::gis_dialogs::GisDialogs,
+    /// The coordinate readout of the Data bar.
+    readout: crate::gis_ui::ReadoutState,
 }
 
 impl CadektorApp {
@@ -78,8 +83,13 @@ impl CadektorApp {
         let mut app = Self::blank();
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
+        // Agents may fetch only the addresses of --allow-url (default: none). Network calls never block the UI.
+        let args: Vec<String> = std::env::args().collect();
+        app.session.gis.urls =
+            cadektor_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
+        app.session.gis.blocking = false;
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
-            let gpu = Gpu3d::new(&rs.device, rs.target_format);
+            let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
         }
@@ -147,6 +157,9 @@ impl CadektorApp {
             agent: None,
             #[cfg(not(target_arch = "wasm32"))]
             io_ui: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            gis_ui: Default::default(),
+            readout: Default::default(),
         }
     }
 
@@ -358,6 +371,10 @@ impl CadektorApp {
             MenuAction::Import => self.io_ui.start_import(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Export => self.io_ui.start_export(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::MapSources => self.gis_ui.open_sources(),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::ChangeCrs => self.gis_ui.open_crs(&self.session),
             #[cfg(target_arch = "wasm32")]
             _ => {
                 let _ = ctx;
@@ -593,6 +610,14 @@ impl CadektorApp {
             }
             Action::ViewWireframe => self.session.view.mode = RenderMode::Wireframe,
             Action::ViewShaded => self.session.view.mode = RenderMode::Shaded,
+            Action::ViewHiddenLine => self.session.view.mode = RenderMode::HiddenLine,
+            Action::ViewDashedHiddenLine => self.session.view.mode = RenderMode::DashedHiddenLine,
+            Action::ViewRealistic => {
+                if let Err(e) = crate::present_ui::use_builtin_style(&mut self.session, "Realistic")
+                {
+                    self.status = e;
+                }
+            }
             Action::ZoomIn => self.pending_zoom *= 2.0,
             Action::ZoomOut => self.pending_zoom *= 0.5,
             // Arrow keys move the view like the scroll bars would: the drawing follows the key.
@@ -1002,9 +1027,19 @@ impl eframe::App for CadektorApp {
         {
             self.needs_fit = true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.gis_ui.show(&ctx, &mut self.session, &mut self.status) {
+            self.session
+                .selection
+                .retain(|id| self.session.editor.doc().object(*id).is_some());
+            self.needs_fit = self.needs_fit || self.session.editor.doc().objects.len() <= 1;
+        }
         let before = self.session.view.view;
         egui::Panel::top("viewbar").show(ui, |ui| {
-            panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready)
+            panels::view_bar(ui, &mut self.session.view, &self.keys, self.gpu_ready);
+            if let Some(e) = crate::present_ui::show(ui, &mut self.session, self.gpu_ready) {
+                self.status = e;
+            }
         });
         if self.session.view.view != before {
             self.set_standard_view(self.session.view.view);
@@ -1038,6 +1073,9 @@ impl eframe::App for CadektorApp {
             });
         });
         let mut commit = false;
+        let readout = self
+            .readout
+            .text(self.session.editor.doc().georef.as_ref(), self.live_cursor);
         egui::Panel::bottom("databar").show(ui, |ui| {
             commit = panels::data_bar(
                 ui,
@@ -1047,6 +1085,7 @@ impl eframe::App for CadektorApp {
                 self.live_cursor,
                 self.snap_hit,
                 self.snap_cfg,
+                readout.as_deref().map(|t| (t, &mut self.readout.lonlat)),
             );
         });
         if commit {
@@ -1155,6 +1194,7 @@ mod tests {
                     app.live_cursor,
                     None,
                     app.snap_cfg,
+                    None,
                 );
             });
         });

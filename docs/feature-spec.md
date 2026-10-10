@@ -35,7 +35,7 @@ Non-goals
    - MCP server (`cadektor mcp`) for Claude Code.
    - SVG render so agents can see results.
    - A `describe` method for discovery.
-   - Planned: PNG render, live viewport screenshot, Python scripting.
+   - Planned: live viewport screenshot, Python scripting.
 6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Core line coverage of 85% or more (cargo-llvm-cov). CI on macOS, Linux, Windows.
 7. License: Apache-2.0 OR MIT.
 
@@ -266,8 +266,14 @@ Non-goals
 | GIS-05 | Shapefile import (points, lines, polygons with holes, Z values, dbf attributes). Export is planned. | P0 | done |
 | GIS-06 | GeoJSON import and export. | P0 | done |
 | GIS-07 | Survey point tool (set known point). | P1 | planned |
-| GIS-08 | Georeferenced images (world file, GeoTIFF). | P1 | planned |
-| GIS-09 | Web map tiles and WMS as backdrop. | P2 | planned |
+| GIS-08 | Georeferenced images: PNG or JPEG with a world file (`.pgw`, `.jgw`, `.wld`) and a `.prj`, and GeoTIFF (8 or 16 bit gray, RGB, RGBA; tiepoint and pixel scale or model transformation; GeoKeys give the CRS). The picture is warped into the model frame and becomes an image underlay (`gis.geoimage.import`). A document without georeference gets one from the picture. | P1 | done |
+| GIS-09 | Map backgrounds from WMS 1.3.0 (and 1.1.1) and WMTS 1.0.0 (`gis.wms.*`, `gis.wmts.*`). GetCapabilities gives layers, CRSs and formats. The view is cut into tiles on a fixed grid (so the cache works while you pan), requested in the document CRS when the server offers it, else in EPSG:3857 or EPSG:4326, and warped in software. WMS 1.3.0 axis order is handled (latitude first for EPSG:4326, northing first for a table of known grids such as EPSG:3301, 3035 and 3006; the Swiss and Finnish grids are easting first). GetCapabilities asks for version 1.3.0 and falls back to a request without a version; a DOCTYPE in the document (WMS 1.1.1) is dropped and never read. Tiles are cached on disk with a size limit (default 256 MB, oldest first) and an expiry of 7 days. A tile is stored only after it has been decoded at the expected size, so error answers are never cached; the header size is checked before any pixel memory is allocated. `gis.cache.clear` and the dialog clear the cache. Requests have timeouts, a size limit and manual redirects. Crate `cadektor-gis`. | P2 | done |
+| GIS-12 | Image underlay (shape kind `underlay`): a georeferenced PNG (RGBA, at most 4096 pixels per side) on a layer with an opacity. It is drawn below the vector objects in the canvas, in SVG, in sheets and in PDF (embedded image, at most 2048 pixels per side there). It has no 3D form and IFC export skips it. `gis.wms.refresh` fetches it again for a new view. | P1 | done |
+| GIS-13 | WFS 2.0 import (`gis.wfs.capabilities`, `gis.wfs.import`): GetFeature as GeoJSON or GML 3.2 simple features (Point, LineString, Curve, Polygon, Surface and the Multi forms) with a box in model coordinates. The features go through the GeoJSON/Shapefile importer: CRS conversion, origin shift, layers, classes. The properties of a feature go into the object data. The server is asked page by page (STARTINDEX and COUNT, 1000 features per page) up to `max_features` (default 5000, at most 50000); the result says `truncated` when the limit was reached. | P1 | done |
+| GIS-14 | Change the CRS of the document (`gis.reproject`, File > Change CRS): every point of every object, the data that holds positions (path center lines, area holes), underlays (warped), the georeference origin and rotation (grid convergence) are converted with `proj4rs` in one undo step. A dry run shows a report: new origin and rotation, scale factor, objects by kind, largest shift, objects that could not be converted, warnings. Heights go through the conversion (unchanged between CRSs of one datum). Annotations on design layers (dimensions, callouts, tags) are converted with the rest, so a dimension measures the new length; annotations on sheets are paper space and stay. The view stored for `gis.wms.refresh` moves with the picture. | P1 | done |
+| GIS-15 | Coordinate readout in the Data bar: northing and easting of the cursor in the document CRS, or latitude and longitude (click to switch). `gis.coords` gives the same to agents. | P1 | done |
+| GIS-16 | Network policy: agents may fetch only addresses on an allow list that the owner sets (`--allow-url` for `cadektor serve`, `mcp` and the app; default none). Only http and https; no user name in an address; redirects are checked again; answers have a time and a size limit. The dialogs of the user are trusted. Network calls run on worker threads: the app never waits (`gis.job.status` for agents). A result is applied only to the document and the georeference it was started for, and `gis.job.cancel` stops the worker at its next request. | P0 | done |
+| GIS-17 | App dialogs: File > Map Sources (add a WMS, WMTS or WFS source, layer picker with filter, geoimage file, agent allow list, tile cache size) and File > Change CRS (preview and apply). | P1 | done |
 | GIS-10 | Northing/Easting grid display. | P1 | planned |
 | GIS-11 | Georeference carried through IFC and DXF export. IFC: `IfcMapConversion`, `IfcProjectedCRS` and site latitude/longitude are done. DXF: planned. | P1 | partly done |
 
@@ -314,7 +320,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 |---|---|---|---|
 | SHT-01 | SVG render of a layer set. | P0 | done |
 | SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
-| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
+| SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster, or vector lines in the hidden-line modes), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
 | SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: object attributes, viewport class override (by-class attributes only), class attributes, defaults. A viewport keeps its own layer and class visibility. Layer and class graphic "grey" mode is missing. | P1 | done |
 | SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation objects can sit in the space too (`AnnotationItem::Shape`, see ANN-10). | P1 | done |
 | SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
@@ -331,12 +337,15 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | 3D-01 | wgpu 3D view: orbit, pan, zoom to cursor, zoom to fit, click to select. | P1 | done |
 | 3D-02 | Standard views (top, bottom, front, back, left, right, four isometrics), parallel and perspective. | P1 | done |
 | 3D-03 | Extrude, sweep, 3D polygon. | P1 | planned |
-| 3D-04 | Render modes: wireframe and shaded. | P1 | done |
-| 3D-10 | Render mode: hidden line. | P2 | planned |
+| 3D-04 | Render modes: wireframe, shaded, hidden line and dashed hidden line (view bar, keys Cmd/Ctrl+Shift+W, G, E and D, `view.set`, `render.png`, viewports). Sketch mode is missing. | P1 | done |
+| 3D-10 | Render mode: hidden line. Exact vector output (edges cut where surfaces cover them, silhouettes and creases of curved surfaces, lines where objects cut through each other such as a wall in the terrain, optional dashed covered edges) in `cadektor_render::hlr`. A hidden-line viewport on a sheet draws vector lines in PDF, SVG and PNG. `render.hidden_line` returns SVG. Deterministic. Covers with a corner behind the eye are not used in perspective. | P0 | done |
 | 3D-05 | Terrain mesh with texture. | P1 | partial: terrain mesh and contours in 3D, no texture |
-| 3D-06 | Textures and materials. | P2 | planned |
-| 3D-07 | Lights, sun position by georeference and date. | P2 | planned |
-| 3D-08 | Raster render styles. | P2 | planned |
+| 3D-06 | Materials as resources (`material.*`): base color, optional texture (generated pattern, or PNG and JPEG image stored in the document, at most 2048 px and 3 MB), mapping (planar, box, cylindrical; scale, rotation and offset in mm and degrees), roughness, metallic and opacity. A built-in library (Grass, Gravel, Concrete pavers, Bark mulch, Water, Brick, Timber) with generated textures: `material.add_defaults`. No image is downloaded. | P1 | done |
+| 3D-11 | Material slots (`material.assign`, `material.slots`): an object or a part of it (trunk and canopy of plants, surface and build-up layers of hardscapes), a plant style or hardscape style part, or a class. Order: part of the object, whole object, part of the style, class. Walls, massing and any other object take a material through the object or class slot. | P1 | done |
+| 3D-07 | Sun like a heliodon: latitude and longitude (manual, or from the georeference), date, time, time zone, summer time (`dst`) and north angle in `sun.set`; with `from_georef` the north includes the meridian convergence of the CRS (`cadektor_io::crs::place_of`, shared with the IFC export) and `sun.get`. NOAA solar position algorithm (pure function `cadektor_core::sun`, tested against Meeus examples and solstice and equinox values), sunrise, solar noon, sunset, sun path. Sun and shadows in the 3D view, `render.png` and viewports. A sun panel in the view bar. | P1 | done |
+| 3D-08 | Render styles as resources (`render_style.*`): mode, edges, shadows, sun on or off, textures, background and hidden-line weight. Built-in styles Wireframe, Shaded, Realistic, Hidden Line and Dashed Hidden Line. Chosen in the view bar, with `render_style.set_active`, in `render.png {render_style}` and per viewport (`viewport.create|update {render_style}`; cadektor-print uses them). | P1 | done |
+| 3D-12 | GPU renderer (wgpu): textured PBR-lite shading, hemisphere ambient light, a sun with a shadow map (one cascade fitted to the scene, 3 by 3 filter), 4 times MSAA, see-through surfaces sorted far to near, hidden-line and dashed hidden-line modes with depth-tested edges, mesh buffers, materials and textures uploaded again only when the geometry or the materials change (decoded textures are cached), a depth offset per object in drawing order against flicker of coplanar surfaces, dashes measured along the line. Checked on a real GPU in the tests (skipped without one). 10 000 plants (640 000 triangles) draw in about 4 ms per frame on a laptop GPU. True instancing is missing: plants have a coarse canopy mesh instead. | P1 | done |
+| 3D-13 | CPU renderer (`cadektor_render::shade`): the same light model as the GPU with textures, sun shading, shadow map, transparency, optional 2 by 2 supersampling and the hidden-line output. Deterministic. Used by `render.png` and by 3D viewports on sheets. | P1 | done |
 | 3D-09 | Export OBJ and STL. | P2 | partial: OBJ with MTL, glTF and GLB are done (X3D-01 to X3D-06). STL is missing. |
 
 ### 4.15 Architecture (P1/P2)
@@ -351,7 +360,9 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | ARC-06 | Stairs. | P2 | planned |
 | ARC-07 | Columns and beams. | P2 | planned |
 | ARC-08 | Section viewports from the model. | P2 | done (X3D-10 to X3D-16: cuts through any 3D object) |
-| ARC-09 | Massing model. | P2 | planned |
+| ARC-09 | Massing model (shape kind `massing`, tool Massing Model `Alt+Shift+M`, `massing.*`): a footprint polygon (curves allowed), an eave height or floors times a floor height, and a flat, gable or hip roof with a pitch. A closed solid in 3D (exact volume). Gable and hip roofs need a convex footprint; on a non-convex one (an L shape) the roof is built flat and the API and the property panel warn (a straight-skeleton roof is not built). Roof lines in 2D, base from the site model of the layer (lowest ground under the footprint) or a given base height. Quantities: footprint, gross floor area (footprint times floors), volume, roof and wall area. Also in the Data Manager (`Floors`, `GrossFloorArea`, `Volume`, `Height`, `Roof`). | P2 | done |
+| ARC-10 | Create massing from shapes (`massing.from_shapes`): closed polygons (for example imported WFS building footprints) become massing models in one step. The height comes from a data field (`height`, `building:height`, ... or a named field, with a unit scale) or a number of floors (`levels`, `floors`, ...). A shape in a group gives a model in the same group. The data moves over. | P2 | done |
+| ARC-11 | Massing model in IFC: `IfcBuildingElementProxy` (default) or `IfcBuilding` in the site (option `massing_as_building`), extruded solid (flat roof) or closed `IfcTriangulatedFaceSet`, property sets `Cadektor_Massing` and quantities (`Cadektor_MassingQuantities` or `Qto_BuildingBaseQuantities`). Validated with IfcOpenShell. | P2 | done |
 
 ### 4.16 Interop
 
@@ -393,11 +404,14 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | API-12 | `cadektor mcp` server for Claude Code. | P0 | done |
 | API-13 | `render.png`: a CPU render of the 3D model, base64 PNG, also in `cadektor serve`, over `--connect` and in MCP (as an image). | P1 | done |
 | API-14 | Screenshot of the live viewport. | P1 | planned |
+| API-42 | Presentation methods: `material.*` (list, get, create, update, duplicate, delete, add_defaults, import_texture, assign, slots), `render_style.*` (list, get, create, update, duplicate, delete, set_active), `sun.set`, `sun.get`, `render.hidden_line`, and `render.png {render_style, mode, samples}`. Examples in `describe.presentation`. | P1 | done |
 | API-15 | Command schema (JSON Schema) in `describe`. | P1 | planned |
 | API-16 | Query by criteria (class, layer, record field). | P1 | planned |
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
+| API-42 | GIS methods: `gis.sources`, `gis.cache.clear`, `gis.georef.set`, `gis.coords`, `gis.reproject`, `gis.wms.capabilities|add|refresh`, `gis.wmts.capabilities|add`, `gis.wfs.capabilities|import`, `gis.geoimage.import`, `gis.job.status|cancel`. Network calls follow the allow list of `--allow-url` (default: none) and the folder list of `--allow-dir` for files. Examples and the policy are in `describe.gis`. `objects.list` and `objects.get` do not send the picture of an underlay. | P0 | done |
+| API-43 | Massing methods: `massing.add`, `massing.set`, `massing.get`, `massing.from_shapes`, `massing.report`. Examples in `describe.massing`. | P1 | done |
 | API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
 | API-30 | `group.*` (create, ungroup, enter, exit, context, members, move, rotate, copy) and `selection.click`. | P1 | done |
 | API-31 | `symbol.*` (list, get, create, from_objects, place, set, convert_to_group, edit, edit_end). | P1 | done |
@@ -456,7 +470,7 @@ Later (P2)
 - Irrigation design, water budget.
 - Graphic legends, section viewports, project sharing.
 - DWG, point clouds, STEP.
-- Materials, lights, sun study.
+- Light objects (spot, point), lighting devices, sketch render mode, true instancing for plants.
 - Workspaces, visual scripting, parametric plug-in objects.
 - If legal review allows, native `.vwx`.
 
@@ -503,17 +517,18 @@ Crate `cadektor-x3d` (pure Rust, no file access, builds for wasm). It writes glT
 | X3D-03 | OBJ with MTL, with the same options (grouping, axes, unit, objects). The georeference is a comment in the header. | P2 | done |
 | X3D-04 | Grouping: a node for each object, or for each layer or class with the meshes joined (`grouping`). A list of object IDs limits the export (`objects`). | P1 | done |
 | X3D-05 | Instancing: objects with the same shape (plants, symbols) share one mesh and have their own nodes (glTF). Shapes that differ by less than `instance_tolerance` (1 mm) count as equal. The output is the same every time. | P1 | done |
-| X3D-06 | Materials hook: the writers ask a `MaterialSource` for each group of triangles. The default gives the base color of the scene. A source with PBR values and a base color texture plugs in without a change to the writers (glTF PBR metallic roughness, images and textures, texture coordinates by box projection, MTL `map_Kd`). The material resources of the document are not connected yet. | P1 | partial |
+| X3D-06 | Materials: the material resources of the document (3D-06, 3D-11) flow into the files with the same slot rules as the renderers (part of the object, object, part of the style, class). glTF PBR metallic roughness (base color, metallic, roughness, opacity as alpha blend and double sided) with the texture as an embedded PNG image (GLB and GLTF) and the texture coordinates of the mapping (planar, box, cylindrical). OBJ: MTL with `Kd`, `d` and `map_Kd`, and the texture PNGs as files next to the OBJ (path policy; `overwrite` replaces them; nothing is written if one is refused). Triangles without a material keep their color. `DocumentMaterials` is the default; the `MaterialSource` trait stays for other sources. | P1 | done |
 | X3D-07 | More plant forms: weeping, palm, columnar conifer, multi-stem and hedge (`PlantForm`). A seed from the object ID and the species makes each plant a little different, and the same every time. Every form fits its spread and height. | P1 | done |
 | X3D-08 | Hedge along a path: an open or closed polyline with `data.hedge` {width, height} becomes a block with a chamfered top, mitered at the corners. | P1 | done |
-| X3D-09 | Level of detail of plants: fine, coarse and billboard (two crossed quads with the outline of the plant), with triangle budgets (400, 200 and 40). The scene builder picks the level from the number of plants (`build_with_detail` sets it), and `lod_for` picks it from the distance for a renderer. The GPU renderer does not use it yet. | P1 | partial |
+| X3D-09 | Level of detail of plants: fine, coarse and billboard (two crossed quads with the outline of the plant and a trunk quad), with triangle budgets (400, 200 and 48). Every form and level has a trunk part and a canopy part, so that materials resolve per part (trunk, canopy). The scene builder picks the level from the number of plants (`build_with_detail` sets it), and `lod_for` picks it from the distance for a renderer. | P1 | done |
 | X3D-10 | Section line: a line object with `data.section_line` {name, look, mode, depth, beyond}. `section_viewport.line_add`, `section_viewport.line_set`. | P1 | done |
 | X3D-11 | Section viewport on a sheet: the plane under the line cuts all visible 3D objects (terrain, walls, slabs, massing, trunks). Cut faces of solids are filled with the fill and the hatch of the class of the object. Surfaces (terrain) give a profile line. Plants show as outlines. The cut is limited to the length of the line. `section_viewport.create|update|get`. | P1 | done |
-| X3D-12 | Objects beyond the cut are thin lines: silhouettes, creases and borders of the meshes (plants: silhouettes only), with hidden lines removed by depth tests against all triangles and the cut faces. This is a CPU hidden-line pass in `cadektor-x3d` (the render branch adds a hidden-line renderer; this can use it later). | P1 | done |
+| X3D-12 | Objects beyond the cut are thin lines: silhouettes, creases and borders of the meshes with hidden lines removed, from the hidden-line renderer of `cadektor_render::hlr` (one implementation for 3D views, hidden-line viewports and sections). The mesh is clipped at the plane, the cut faces are capped so they hide what is behind them, and lines on the cut outline are left out. Plants show their creases like in the 3D hidden-line view. | P1 | done |
 | X3D-13 | Elevation viewport: a section line in mode `elevation` cuts nothing and shows the lines of everything in front of the far clip (`depth`). | P1 | done |
 | X3D-14 | Line weights of the cut and of the lines beyond are settings of the viewport (`cut_weight`, `beyond_weight`). | P2 | done |
 | X3D-15 | Live update: sheets are cached by document revision (`SheetCache`), and section drawings by revision and viewport (`SectionCache`). A change of the model, the line or the class reaches the viewport. | P1 | done |
 | X3D-16 | Output: the viewport prints through `cadektor-print` (sheet render, SVG, PNG, PDF) as vector lines and fills. The terrain profile equals `site.elevation` and the site section of `section.profile`. | P1 | done |
 | X3D-17 | Elevation benchmarks (level marks) and automatic labels on section and elevation viewports. Use annotations in the viewport for now. | P2 | planned |
 | X3D-18 | Section and elevation of 2D symbols and of objects that are only 2D (no 3D geometry). | P2 | planned |
+| X3D-19 | Massing models (ARC-09) export to glTF, GLB and OBJ (kind `massing` in the extras) and are cut by section viewports. The scene has no floor face for a massing model, so a section closes the cut at the base. | P2 | done |
 

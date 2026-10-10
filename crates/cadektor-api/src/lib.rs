@@ -6,12 +6,16 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod data_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod gis_api;
 mod grading_api;
 mod hardscape_api;
 mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
+mod massing_api;
 mod plants_api;
+mod present_api;
 mod sheets_api;
 mod symbols_api;
 
@@ -21,6 +25,7 @@ use serde_json::{Value, json};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+use cadektor_core::present::RenderStyle;
 use cadektor_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;
@@ -31,10 +36,16 @@ mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 mod x3d_api;
 #[cfg(not(target_arch = "wasm32"))]
+pub use cadektor_gis::http::UrlPolicy;
+#[cfg(not(target_arch = "wasm32"))]
+pub use gis_api::{GisState, JobInfo};
+#[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod site;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod x3d_material_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod x3d_tests;
 
@@ -58,6 +69,10 @@ pub struct Session {
     /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
+    /// Map services and GIS calls: the list of addresses that agents may fetch (default: none), the
+    /// tile cache and the running network jobs (see `gis_api`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gis: GisState,
     site_cache: cadektor_site::SiteCache,
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: cadektor_annot::AnnotCache,
@@ -91,6 +106,16 @@ impl RpcError {
             code: 1,
             message: e.to_string(),
         }
+    }
+}
+
+/// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
+fn elide_image(object: &mut Value) {
+    if let Some(png) = object.pointer_mut("/shape/png") {
+        let n = png.as_str().map_or(0, str::len);
+        *png = json!(format!(
+            "<PNG picture, {n} characters of base64, not shown>"
+        ));
     }
 }
 
@@ -137,7 +162,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.png",
-        "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode, render_style}.",
     ),
     (
         "view.list",
@@ -212,6 +237,63 @@ pub const METHODS: &[(&str, &str)] = &[
     data_api::WORKSHEET_EXPORT,
     data_api::WORKSHEET_PLACE,
     data_api::WORKSHEET_FIT,
+    // Materials, render styles and the sun (see present_api.rs).
+    present_api::MATERIAL_LIST,
+    present_api::MATERIAL_GET,
+    present_api::MATERIAL_CREATE,
+    present_api::MATERIAL_UPDATE,
+    present_api::MATERIAL_DUPLICATE,
+    present_api::MATERIAL_DELETE,
+    present_api::MATERIAL_ADD_DEFAULTS,
+    present_api::MATERIAL_IMPORT_TEXTURE,
+    present_api::MATERIAL_ASSIGN,
+    present_api::MATERIAL_SLOTS,
+    present_api::RENDER_STYLE_LIST,
+    present_api::RENDER_STYLE_GET,
+    present_api::RENDER_STYLE_CREATE,
+    present_api::RENDER_STYLE_UPDATE,
+    present_api::RENDER_STYLE_DUPLICATE,
+    present_api::RENDER_STYLE_DELETE,
+    present_api::RENDER_STYLE_SET_ACTIVE,
+    present_api::SUN_SET,
+    present_api::SUN_GET,
+    present_api::RENDER_HIDDEN_LINE,
+    // GIS services, coordinate conversion and massing models (see gis_api.rs and massing_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_SOURCES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_CACHE_CLEAR,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_GEOREF_SET,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_COORDS,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_REPROJECT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_REFRESH,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMTS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMTS_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WFS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WFS_IMPORT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_GEOIMAGE_IMPORT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_JOB_STATUS,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_JOB_CANCEL,
+    massing_api::MASSING_ADD,
+    massing_api::MASSING_SET,
+    massing_api::MASSING_GET,
+    massing_api::MASSING_FROM_SHAPES,
+    massing_api::MASSING_REPORT,
     // Hardscapes and landscape areas (see hardscape_api.rs).
     hardscape_api::HARDSCAPE_STYLE_LIST,
     hardscape_api::HARDSCAPE_STYLE_GET,
@@ -440,6 +522,8 @@ impl Session {
             paths: PathPolicy::default(),
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gis: GisState::default(),
             site_cache: cadektor_site::SiteCache::default(),
             annot_cache: cadektor_annot::AnnotCache::default(),
             worksheet_cache: cadektor_sheet::SheetCache::default(),
@@ -465,6 +549,8 @@ impl Session {
     pub fn replace_document(&mut self, doc: Document) {
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
+        #[cfg(not(target_arch = "wasm32"))]
+        let gis = std::mem::take(&mut self.gis);
         *self = Session {
             replaced: true,
             view: self.view,
@@ -474,6 +560,9 @@ impl Session {
         {
             self.paths = paths;
             self.doc_dir = doc_dir;
+            self.gis = gis;
+            // Jobs that were started for the old document must not change this one.
+            self.gis.epoch += 1;
         }
     }
 
@@ -545,6 +634,10 @@ impl Session {
         if x3d_api::knows(method) {
             return self.handle_x3d(method, p);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if gis_api::is_gis_method(method) {
+            return self.gis_call(method, p, false);
+        }
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
@@ -557,6 +650,8 @@ impl Session {
                 "plants": plants_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
+                "presentation": present_api::describe(),
+                "massing": massing_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
@@ -566,6 +661,7 @@ impl Session {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     d["io"] = io::describe();
+                    d["gis"] = gis_api::describe();
                 }
                 d
             }
@@ -633,7 +729,9 @@ impl Session {
                     .filter(|o| f.class.is_none_or(|c| o.class == c))
                     .filter(|o| f.kind.as_deref().is_none_or(|k| o.shape.kind() == k))
                     .collect();
-                serde_json::to_value(list).unwrap()
+                let mut v = serde_json::to_value(list).unwrap();
+                v.as_array_mut().into_iter().flatten().for_each(elide_image);
+                v
             }
             "objects.get" => {
                 #[derive(Deserialize)]
@@ -644,7 +742,9 @@ impl Session {
                 let o = doc
                     .object(id)
                     .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
-                serde_json::to_value(o).unwrap()
+                let mut v = serde_json::to_value(o).unwrap();
+                elide_image(&mut v);
+                v
             }
             "selection.get" => json!({ "ids": self.selection }),
             "selection.set" => {
@@ -688,6 +788,8 @@ impl Session {
                     height: Option<u32>,
                     projection: Option<String>,
                     mode: Option<String>,
+                    render_style: Option<Value>,
+                    samples: Option<u32>,
                 }
                 let P {
                     view,
@@ -695,37 +797,82 @@ impl Session {
                     height,
                     projection,
                     mode,
+                    render_style,
+                    samples,
                 } = params(p)?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
                 let scene = self.scene();
+                let doc = self.editor.doc();
                 let mut camera = Camera::standard(settings.view, settings.projection);
                 camera.fit(scene.bounds, width as f32 / height as f32);
-                let img = cadektor_render::render(
-                    &scene,
-                    &camera,
-                    &RenderOptions {
+                // A named style, else the active style of the document, else none.
+                let style = match render_style.filter(|v| !v.is_null()) {
+                    Some(v) => Some(present_api::style_param(doc, &v)?),
+                    None => doc
+                        .drawing
+                        .presentation
+                        .active_style
+                        .and_then(|id| cadektor_core::present::render_style(doc, id))
+                        .cloned(),
+                };
+                let slots = cadektor_core::present::SlotIndex::new(doc);
+                let plain = style.is_none()
+                    && slots.is_empty()
+                    && matches!(settings.mode, RenderMode::Shaded | RenderMode::Wireframe);
+                let mut used_style = RenderStyle::default();
+                let (img, used_mode) = if plain {
+                    let img = cadektor_render::render(
+                        &scene,
+                        &camera,
+                        &RenderOptions {
+                            width,
+                            height,
+                            mode: settings.mode,
+                            ..Default::default()
+                        },
+                    );
+                    (img, settings.mode)
+                } else {
+                    let mut st = style.clone().unwrap_or_default();
+                    // A mode in the request, or a mode chosen with view.set, wins over a style without
+                    // a name in the request. A named style keeps its own mode unless the request gives one.
+                    if mode.is_some() || style.is_none() {
+                        st.mode = settings.mode;
+                    }
+                    let img = cadektor_render::styled::render_styled(
+                        doc,
+                        &scene,
+                        &camera,
+                        &st,
                         width,
                         height,
-                        mode: settings.mode,
-                        ..Default::default()
-                    },
-                );
+                        samples.unwrap_or(1),
+                    );
+                    let mode = st.mode;
+                    used_style = st;
+                    (img, mode)
+                };
                 use base64::Engine;
-                json!({
+                let mut out = json!({
                     "png_base64": base64::engine::general_purpose::STANDARD.encode(img.to_png()),
                     "width": width,
                     "height": height,
                     "view": settings.view.id(),
                     "projection": settings.projection.id(),
-                    "mode": settings.mode.id(),
-                })
+                    "mode": used_mode.id(),
+                });
+                // The settings of the style are only given when materials or a style were used.
+                if !plain {
+                    out["render_style"] = present_api::style_summary(&used_style);
+                }
+                out
             }
             "view.list" => json!({
                 "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),
                 "projections": [Projection::Orthographic.id(), Projection::Perspective.id()],
-                "modes": [RenderMode::Shaded.id(), RenderMode::Wireframe.id()],
+                "modes": RenderMode::ALL.map(|m| m.id()),
                 "current": view_json(self.view),
             }),
             "view.set" => {
@@ -770,7 +917,13 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             "export.file" => self.export_file(p)?,
             _ => {
+                if let Some(r) = present_api::handle(self, method, p.clone()) {
+                    return r;
+                }
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = massing_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = irrigation_api::handle(self, method, p.clone()) {
@@ -814,7 +967,10 @@ impl Session {
         }
         if let Some(n) = mode {
             v.mode = RenderMode::from_name(n).ok_or_else(|| {
-                RpcError::invalid_params(format!("unknown mode '{n}'. Use shaded or wireframe"))
+                RpcError::invalid_params(format!(
+                    "unknown mode '{n}'. Use {}",
+                    RenderMode::ALL.map(|m| m.id()).join(", ")
+                ))
             })?;
         }
         Ok(v)

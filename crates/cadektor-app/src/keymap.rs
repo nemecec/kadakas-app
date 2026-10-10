@@ -144,6 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
+    ToolMassing => "tool.massing", "Massing Model tool", ["Alt+Shift+M"], true;
     ToolIrrigation => "tool.irrigation", "Irrigation tool", ["Alt+Shift+I"], true;
     ToolGrading => "tool.grading", "Grading tool", [], true;
     ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
@@ -205,6 +206,9 @@ actions! {
     ViewProjection => "view.projection", "Toggle parallel and perspective projection", ["Alt+Shift+J"], true;
     ViewWireframe => "view.wireframe", "Wireframe rendering", ["Cmd/Ctrl+Shift+W"], true;
     ViewShaded => "view.shaded", "Shaded rendering", ["Cmd/Ctrl+Shift+G"], true;
+    ViewHiddenLine => "view.hidden_line", "Hidden Line rendering", ["Cmd/Ctrl+Shift+E"], true;
+    ViewDashedHiddenLine => "view.dashed_hidden_line", "Dashed Hidden Line rendering", ["Cmd/Ctrl+Shift+D"], true;
+    ViewRealistic => "view.realistic", "Realistic rendering (textures, sun and shadows)", ["Cmd/Ctrl+Shift+F"], true;
 }
 
 impl Action {
@@ -225,6 +229,7 @@ impl Action {
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
+            Action::ToolMassing => Tool::Massing,
             Action::ToolIrrigation => Tool::Irrigation,
             Action::ToolGrading => Tool::Grading,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
@@ -251,6 +256,7 @@ impl Action {
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
+            Tool::Massing => Action::ToolMassing,
             Tool::Irrigation => Action::ToolIrrigation,
             Tool::Grading => Action::ToolGrading,
             Tool::Dimension => Action::ToolDimension,
@@ -556,6 +562,18 @@ mod tests {
         assert_eq!(
             km.action_for(chord("Cmd/Ctrl+Shift+G")),
             Some(Action::ViewShaded)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+E")),
+            Some(Action::ViewHiddenLine)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+D")),
+            Some(Action::ViewDashedHiddenLine)
+        );
+        assert_eq!(
+            km.action_for(chord("Cmd/Ctrl+Shift+F")),
+            Some(Action::ViewRealistic)
         );
         assert_eq!(Action::ViewFlyover.standard_view(), None);
     }

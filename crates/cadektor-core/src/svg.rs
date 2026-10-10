@@ -120,7 +120,12 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     );
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
-    for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
+    // Underlays (map backgrounds) go below everything else.
+    let visible = || doc.objects.values().filter(|o| doc.is_visible(o));
+    for o in visible().filter(|o| matches!(o.shape, Shape::Underlay(_))) {
+        draw_object(doc, o, &mut s, &tag_counts, ext, 0);
+    }
+    for o in visible().filter(|o| !matches!(o.shape, Shape::Underlay(_))) {
         draw_object(doc, o, &mut s, &tag_counts, ext, 0);
     }
     s.push_str("</svg>\n");
@@ -159,6 +164,36 @@ fn draw_object(
     let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
     let _ = match &o.shape {
         Shape::Group { .. } => Ok(()),
+        Shape::Underlay(u) => writeln!(s, "{}", u.svg_element()),
+        Shape::Massing(m) => {
+            let res = if curve::all_straight(&m.footprint) {
+                writeln!(
+                    s,
+                    r#"<polygon points="{}" {style} data-kind="massing"/>"#,
+                    points_attr(&curve::positions(&m.footprint)),
+                )
+            } else {
+                writeln!(
+                    s,
+                    r#"<path d="{}" {style} data-kind="massing"/>"#,
+                    curve::path(&m.footprint, true).svg_d(),
+                )
+            };
+            // The roof lines: ridge and hips.
+            let lines = crate::massing::roof_lines(m);
+            if !lines.is_empty() {
+                let d: String = lines
+                    .iter()
+                    .map(|(p, q)| format!("M {} {} L {} {} ", p.x, -p.y, q.x, -q.y))
+                    .collect();
+                let _ = writeln!(
+                    s,
+                    r#"<path d="{}" {style} fill="none" data-kind="massing_roof"/>"#,
+                    d.trim_end()
+                );
+            }
+            res
+        }
         Shape::Irrigation(i) => {
             s.push_str(&crate::irrigation::svg(o.id.0, i, scale));
             Ok(())

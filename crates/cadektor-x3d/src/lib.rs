@@ -3,8 +3,8 @@
 //! - glTF 2.0 (`.gltf` with an embedded buffer, and `.glb`) and OBJ with MTL, from the 3D scene
 //!   of the document (`cadektor_core::mesh::Scene`). One node for each object, or for each layer
 //!   or class. Y up and metres by default. Plants and symbols with the same shape share one mesh.
-//! - Materials come from a `MaterialSource`. The default writes the base color of the scene. A
-//!   source that knows the material resources of the document plugs in there.
+//! - Materials come from a `MaterialSource`. `DocumentMaterials` resolves the material resources
+//!   of the document (PBR values and textures); `BaseColors` writes the base color of the scene.
 //! - Sections and elevations: the cut of the scene by a vertical plane, as cut faces, profiles
 //!   and visible lines beyond (see `section`).
 
@@ -19,7 +19,7 @@ use cadektor_core::mesh::Scene;
 use cadektor_core::model::Document;
 use serde::Serialize;
 
-pub use material::{BaseColors, Material, MaterialSource, Texture};
+pub use material::{BaseColors, DocumentMaterials, Material, MaterialSource, Texture};
 pub use obj::ObjFiles;
 pub use options::{ExportOptions, Grouping, Units};
 

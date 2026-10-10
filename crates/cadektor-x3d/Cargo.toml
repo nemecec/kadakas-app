@@ -7,6 +7,8 @@ description = "3D output: glTF, GLB and OBJ writers, and section and elevation d
 [dependencies]
 base64 = "0.22.1"
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-render = { version = "0.1.0", path = "../cadektor-render" }
+spade = "2.15.1"
 glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

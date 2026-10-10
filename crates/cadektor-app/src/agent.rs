@@ -381,6 +381,23 @@ pub fn parse_allow_dirs(args: &[String]) -> Vec<PathBuf> {
     dirs
 }
 
+/// Addresses from `--allow-url URL` (or `--allow-url=URL`), which agents may fetch for map services.
+/// Default: none.
+pub fn parse_allow_urls(args: &[String]) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--allow-url" {
+            if let Some(v) = it.next() {
+                urls.push(v.clone());
+            }
+        } else if let Some(v) = a.strip_prefix("--allow-url=") {
+            urls.push(v.to_string());
+        }
+    }
+    urls
+}
+
 /// Port from `--agent-port N` (or `--agent-port=N`), else from the env value.
 pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
     let mut it = args.iter();
@@ -539,6 +556,22 @@ mod tests {
         let server = start_with(0, Arc::new(|| {}), None, limits).unwrap();
         let (addr, token) = (server.addr, server.token.clone());
         (Ui::start(server), addr, token)
+    }
+
+    #[test]
+    fn allow_urls_from_arguments() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(parse_allow_urls(&a(&["app"])).is_empty());
+        assert_eq!(
+            parse_allow_urls(&a(&[
+                "app",
+                "--allow-url",
+                "maps.example.org",
+                "--allow-url=*.gov.fi",
+                "--allow-url"
+            ])),
+            vec!["maps.example.org".to_string(), "*.gov.fi".to_string()]
+        );
     }
 
     #[test]

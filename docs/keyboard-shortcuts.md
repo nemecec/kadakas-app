@@ -83,6 +83,7 @@ Tool keys switch the active tool.
 | Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
+| Massing Model tool (Cadektor) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
 | Irrigation tool (Cadektor; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
 | Grading tool (Cadektor; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
 | Data Tag tool (Cadektor) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
@@ -156,6 +157,10 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Flyover: orbit in 3D (`view.flyover`) | Shift+C (Flyover tool) | Shift+C | done |
 | Wireframe rendering (`view.wireframe`) | Cmd+Shift+W / Ctrl+Shift+W | Cmd/Ctrl+Shift+W | done |
 | Shaded rendering (`view.shaded`) | Cmd+Shift+G / Ctrl+Shift+G | Cmd/Ctrl+Shift+G | done |
+| Hidden Line rendering: vector edges with covered edges removed (`view.hidden_line`) | Cmd+Shift+E / Ctrl+Shift+E | Cmd/Ctrl+Shift+E | done |
+| Dashed Hidden Line rendering: covered edges dashed (`view.dashed_hidden_line`) | Cmd+Shift+D / Ctrl+Shift+D | Cmd/Ctrl+Shift+D | done |
+| Realistic rendering: textures, sun and shadows (`view.realistic`) | Cmd+Shift+F / Ctrl+Shift+F (final-quality rendering) | Cmd/Ctrl+Shift+F | done |
+| Sketch rendering | Cmd+Shift+Option+S / Ctrl+Shift+Alt+S | Cmd/Ctrl+Shift+Alt+S | planned |
 | Toggle parallel and perspective projection (`view.projection`) | none | Alt+Shift+J | done |
 | Next view in history | Cmd+Shift+. / Ctrl+Shift+. | Ctrl+Shift+. | planned |
 | Previous view in history | Cmd+Shift+, / Ctrl+Shift+, | Ctrl+Shift+, | planned |
@@ -237,7 +242,7 @@ These Vectorworks shortcuts have no function in Cadektor and none is planned.
 - Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page,
   2D Locus, Symbol Insertion, Double Line, Rounded Rectangle, Oval, Quarter Arc, Freehand, Regular Polygon, Spiral, Eyedropper,
   Visibility, Attribute Mapping, Connect/Combine, Move by Points, Texture.
-- Menus: Page Setup, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), render modes other than wireframe and shaded,
+- Menus: Page Setup, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), the render mode Final Shaded Polygon,
   Model menu (solids, extrusions, 3D power pack), AEC, Spotlight, Energos, Plug-in Manager, Origin, stacking order commands,
   Align and Distribute, Convert commands, Show and Hide Guides.
 - Other keys: Toggle Automatic Working Plane, X-ray Select, Coincident Selection, Set Datum, Edit list row (F2), worksheet cell keys,

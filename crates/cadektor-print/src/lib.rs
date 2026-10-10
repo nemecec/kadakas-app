@@ -14,6 +14,7 @@ pub mod png;
 pub mod section;
 pub mod svg;
 pub mod table;
+pub mod underlay;
 
 use std::path::{Path, PathBuf};
 

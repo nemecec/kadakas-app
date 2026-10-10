@@ -6,20 +6,28 @@ use serde_json::{Value, json};
 
 use crate::{RpcError, Session};
 
-fn tmp(name: &str) -> PathBuf {
+pub(crate) fn tmp(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("cadektor-api-x3d-{}-{name}", std::process::id()))
 }
 
-fn ok(s: &mut Session, method: &str, p: Value) -> Value {
+pub(crate) fn ok(s: &mut Session, method: &str, p: Value) -> Value {
     s.handle(method, p)
         .unwrap_or_else(|e| panic!("{method}: {}", e.message))
 }
 
-fn fail(s: &mut Session, method: &str, p: Value) -> RpcError {
+pub(crate) fn fail(s: &mut Session, method: &str, p: Value) -> RpcError {
     s.handle(method, p).unwrap_err()
 }
 
-fn slab(s: &mut Session, x0: i64, y0: i64, x1: i64, y1: i64, thickness: i64, top: i64) -> u64 {
+pub(crate) fn slab(
+    s: &mut Session,
+    x0: i64,
+    y0: i64,
+    x1: i64,
+    y1: i64,
+    thickness: i64,
+    top: i64,
+) -> u64 {
     ok(
         s,
         "execute",
@@ -37,7 +45,7 @@ fn plant(s: &mut Session, x: i64, y: i64) {
     );
 }
 
-fn glb_json(bytes: &[u8]) -> Value {
+pub(crate) fn glb_json(bytes: &[u8]) -> Value {
     assert_eq!(&bytes[0..4], b"glTF");
     let jl = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
     serde_json::from_slice(&bytes[20..20 + jl]).unwrap()

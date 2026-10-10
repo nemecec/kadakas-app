@@ -20,6 +20,7 @@ cadektor-print = { version = "0.1.0", path = "../cadektor-print" }
 cadektor-io = { version = "0.1.0", path = "../cadektor-io" }
 cadektor-ifc = { version = "0.1.0", path = "../cadektor-ifc" }
 cadektor-x3d = { version = "0.1.0", path = "../cadektor-x3d" }
+cadektor-gis = { version = "0.1.0", path = "../cadektor-gis" }
 
 [dev-dependencies]
 png = "0.18"

@@ -236,7 +236,12 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
     }
 
     if spec.mode == Mode::Cut {
-        cut_faces(&tris, &frame, &mut out, &plant_of);
+        // Massing models have no floor in the scene: they stand on the ground. Their open cut closes at the base.
+        let open_base = |id: ObjectId| {
+            doc.object(id)
+                .is_some_and(|o| matches!(o.shape, Shape::Massing(_)))
+        };
+        cut_faces(&tris, &frame, &mut out, &plant_of, &open_base);
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
@@ -276,6 +281,7 @@ fn cut_faces(
     frame: &Frame,
     out: &mut SectionDrawing,
     plant_of: &dyn Fn(ObjectId) -> bool,
+    open_base: &dyn Fn(ObjectId) -> bool,
 ) {
     let mut by_object: BTreeMap<u64, Vec<(DVec2, DVec2)>> = BTreeMap::new();
     for t in tris {
@@ -305,7 +311,7 @@ fn cut_faces(
         let mut rings: Vec<Vec<DVec2>> = Vec::new();
         for c in cut::chain(&segs) {
             let pts = cut::simplify(&c.points, c.closed, cut::SNAP * 2.0);
-            if c.closed {
+            if c.closed || (open_base(object) && pts.len() >= 3) {
                 let clipped = cut::clip_ring(&pts, frame.len);
                 if clipped.len() >= 3 {
                     rings.push(cut::simplify(&clipped, true, cut::SNAP * 2.0));

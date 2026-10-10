@@ -1,11 +1,16 @@
 //! Materials of the exports.
 //!
-//! The exports ask a `MaterialSource` for the material of every group of triangles. The
-//! default source, `BaseColors`, gives a plain base color. A source that knows the material
-//! resources of the document (metals, roughness, textures) plugs in here, and the writers put
-//! the result into glTF (PBR metallic roughness, with a base color texture) and into MTL.
+//! The exports ask a `MaterialSource` for the material of every group of triangles.
+//! `DocumentMaterials` is the source for documents: it resolves the material resources of the
+//! document (slots on parts, objects, styles and classes, the same as the renderers) into PBR
+//! values and base color textures. `BaseColors` gives the plain base color of the scene. The
+//! writers put the result into glTF (PBR metallic roughness, with embedded images) and into MTL
+//! (with texture files).
 
+use cadektor_core::mesh::Scene;
 use cadektor_core::model::{Document, Object};
+use cadektor_render::look::{Look, NO_MATERIAL};
+use cadektor_render::texture::encode_png;
 
 /// An image for the base color of a material. The writers make texture coordinates from the
 /// model positions (box projection): one repeat of the image covers `repeat` metres.
@@ -80,6 +85,108 @@ impl Material {
 /// Gives the material of a group of triangles. `color` is the color that the 3D scene gave them.
 pub trait MaterialSource {
     fn material(&self, doc: &Document, obj: &Object, color: [u8; 4]) -> Material;
+
+    /// The material of the group that triangle `tri` of the scene starts. The default does not
+    /// look at the triangle.
+    fn material_for(&self, doc: &Document, obj: &Object, _tri: usize, color: [u8; 4]) -> Material {
+        self.material(doc, obj, color)
+    }
+
+    /// Triangles with different groups never share a primitive, even with the same color.
+    fn group(&self, _tri: usize) -> u32 {
+        0
+    }
+
+    /// Texture coordinates of a vertex of the scene, in repeats of the image with V up. `None`
+    /// lets the writers project the texture from the box of the normal.
+    fn uv(&self, _vertex: usize) -> Option<[f32; 2]> {
+        None
+    }
+}
+
+/// The materials of the document: the material resources that the slots give to the triangles
+/// of the scene, with the texture mapping of each material. Triangles without a slot keep the
+/// color of the scene. Textures are embedded as PNG images.
+pub struct DocumentMaterials {
+    look: Look,
+    /// The material for each entry of `look.materials`, with the name of the resource.
+    materials: Vec<Material>,
+}
+
+impl DocumentMaterials {
+    pub fn new(doc: &Document, scene: &Scene) -> DocumentMaterials {
+        let look = Look::build(doc, scene, true);
+        let materials = look
+            .materials
+            .iter()
+            .map(|m| {
+                let name = doc
+                    .resources
+                    .get(m.id)
+                    .map_or_else(|| format!("material_{}", m.id.0), |r| r.name.clone());
+                let mut out = Material::from_color([m.color[0], m.color[1], m.color[2], 255]);
+                out.name = name.clone();
+                out.base_color[3] = m.opacity.clamp(0.0, 1.0);
+                out.metallic = m.metallic;
+                out.roughness = m.roughness;
+                // Glass and water are seen from both sides.
+                out.double_sided = m.opacity < 0.999;
+                if let Some(img) = m.texture.and_then(|i| look.textures.get(i))
+                    && let Ok(data) = encode_png(img.width, img.height, &img.rgba)
+                {
+                    // The texture is tinted already (generated patterns carry the base color).
+                    out.base_color = [1.0, 1.0, 1.0, out.base_color[3]];
+                    out.texture = Some(Texture {
+                        name: name.clone(),
+                        mime: "image/png".into(),
+                        data,
+                        repeat: 1.0,
+                    });
+                }
+                out
+            })
+            .collect();
+        DocumentMaterials { look, materials }
+    }
+
+    /// True if no triangle has a material of the document.
+    pub fn is_plain(&self) -> bool {
+        self.look.is_plain()
+    }
+}
+
+impl MaterialSource for DocumentMaterials {
+    fn material(&self, _doc: &Document, _obj: &Object, color: [u8; 4]) -> Material {
+        Material::from_color(color)
+    }
+
+    fn material_for(&self, _doc: &Document, _obj: &Object, tri: usize, color: [u8; 4]) -> Material {
+        match self.look.tri_material.get(tri) {
+            Some(&i) if i != NO_MATERIAL => self
+                .materials
+                .get(i as usize)
+                .cloned()
+                .unwrap_or_else(|| Material::from_color(color)),
+            _ => Material::from_color(color),
+        }
+    }
+
+    fn group(&self, tri: usize) -> u32 {
+        self.look
+            .tri_material
+            .get(tri)
+            .copied()
+            .unwrap_or(NO_MATERIAL)
+    }
+
+    fn uv(&self, vertex: usize) -> Option<[f32; 2]> {
+        match self.look.vertex_material.get(vertex) {
+            Some(&i) if i != NO_MATERIAL => {
+                self.look.uvs.get(vertex).map(|uv| [uv[0], 1.0 - uv[1]])
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The base color of the scene, nothing else. This is what the exports use until the material
