@@ -9,7 +9,7 @@ use kadakas_core::model::{
     Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind,
 };
 
-use crate::hit;
+use kadakas_ui_core::hit;
 
 mod annot_tool;
 mod irrigation_tool;

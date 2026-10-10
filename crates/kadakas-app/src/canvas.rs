@@ -9,10 +9,10 @@ use kadakas_core::model::{Color, Document, Object, ObjectId, Shape, Vertex, arc_
 use kadakas_core::plants::tag::{TagCounts, tag_counts};
 
 use crate::plant_draw;
-use crate::snap::SnapResult;
 use crate::tess;
 use crate::tools::Preview;
 use crate::view::{View, grid_step};
+use kadakas_ui_core::snap::SnapResult;
 
 pub const SELECT_COLOR: Color32 = Color32::from_rgb(30, 120, 255);
 const PREVIEW_COLOR: Color32 = Color32::from_rgb(230, 120, 20);
@@ -613,7 +613,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     }
     draw_ne_grid(&painter, view, rect, f.doc);
     crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
-    crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
+    kadakas_ui_core::annot_pick::set_revision(f.site.map_or(0, |(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     // Map underlays are drawn first, below the vector objects.

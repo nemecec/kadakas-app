@@ -8,7 +8,6 @@ use egui::{Color32, ComboBox, DragValue, Painter, Pos2, Stroke, Ui};
 use glam::DVec2;
 use kadakas_api::Session;
 use kadakas_core::command::Command;
-use kadakas_core::geom::dist_to_segment;
 use kadakas_core::irrigation::{IrrigationShape, LineType, sector_points, zone_color};
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_irrigation::report::{self, WarningRow, ZonePressure};
@@ -16,7 +15,6 @@ use kadakas_irrigation::{Catalog, DEFAULT_TOLERANCE, analyze, zone_commands};
 
 use crate::canvas::Style;
 use crate::panels::{Fields, run_command};
-use crate::snap::{SnapKind, SnapPoint};
 use crate::tools::{IrrMode, ToolSettings};
 use crate::view::View;
 
@@ -138,26 +136,6 @@ pub fn draw(painter: &Painter, view: &View, i: &IrrigationShape, st: Style, offs
                 Color32::BLACK,
             );
         }
-    }
-}
-
-/// True if `p` picks the object: a line within `tol`, other objects near their symbol.
-pub fn hit(i: &IrrigationShape, p: DVec2, tol: f64) -> bool {
-    match i {
-        IrrigationShape::Line { points, .. } => points
-            .windows(2)
-            .any(|w| dist_to_segment(p, w[0], w[1]) <= tol),
-        other => p.distance(other.anchor()) <= tol * 2.0,
-    }
-}
-
-/// Points that the pointer snaps to: the points of a line and the position of other objects.
-pub fn snap_points(i: &IrrigationShape, out: &mut Vec<SnapPoint>) {
-    match i {
-        IrrigationShape::Line { points, .. } => {
-            out.extend(points.iter().map(|p| (*p, SnapKind::Vertex)))
-        }
-        other => out.push((other.anchor(), SnapKind::Center)),
     }
 }
 
@@ -685,40 +663,6 @@ mod tests {
             },
         );
         s
-    }
-
-    #[test]
-    fn hit_and_snap() {
-        let line = IrrigationShape::Line {
-            points: vec![DVec2::ZERO, DVec2::new(1000.0, 0.0)],
-            line_type: LineType::Lateral,
-            size: "32".into(),
-            material: "PE".into(),
-            emitter_spacing: None,
-            emitter_flow: None,
-        };
-        assert!(hit(&line, DVec2::new(500.0, 4.0), 5.0));
-        assert!(!hit(&line, DVec2::new(500.0, 40.0), 5.0));
-        let poc = IrrigationShape::Poc {
-            at: DVec2::ZERO,
-            name: String::new(),
-            static_pressure: 1.0,
-            available_flow: 1.0,
-            supply_loss: None,
-            meter_loss: None,
-        };
-        assert!(hit(&poc, DVec2::new(8.0, 0.0), 5.0));
-        assert!(!hit(&poc, DVec2::new(11.0, 0.0), 5.0));
-        let mut out = vec![];
-        snap_points(&line, &mut out);
-        snap_points(&poc, &mut out);
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[2].1, SnapKind::Center);
-        // A degenerate segment still measures a distance.
-        assert_eq!(
-            dist_to_segment(DVec2::new(3.0, 4.0), DVec2::ZERO, DVec2::ZERO),
-            5.0
-        );
     }
 
     #[test]

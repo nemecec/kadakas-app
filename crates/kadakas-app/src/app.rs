@@ -23,7 +23,6 @@ use crate::prefs::{self, Prefs};
 use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
 use crate::screenshot;
-use crate::snap::{self, SnapResult};
 use crate::theme::{self, ThemeChoice};
 use crate::tools::{
     Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
@@ -33,6 +32,7 @@ use crate::view_history::{self, ViewHistory};
 use crate::view3d::{self, View3d};
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
+use kadakas_ui_core::snap::{self, SnapResult};
 
 /// Pan step of an arrow key, in px.
 const PAN_STEP_PX: f32 = 60.0;
@@ -281,7 +281,7 @@ impl KadakasApp {
 
     fn exec(&mut self, cmd: &Command) {
         panels::run_command(&mut self.session, cmd, &mut self.status);
-        crate::annot_ui::set_revision(self.session.editor.revision());
+        kadakas_ui_core::annot_pick::set_revision(self.session.editor.revision());
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
@@ -1087,7 +1087,7 @@ impl KadakasApp {
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        crate::annot_ui::set_revision(self.session.editor.revision());
+        kadakas_ui_core::annot_pick::set_revision(self.session.editor.revision());
         // A sheet layer shows its page. Changing the active sheet fits the page to the window.
         let sheet = crate::sheets_ui::active_sheet(&self.session);
         if sheet != self.nav.sheets.last_sheet {

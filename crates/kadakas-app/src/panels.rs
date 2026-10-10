@@ -14,10 +14,10 @@ use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::icon_size::{IconRole, IconSize};
 use crate::keymap::{Action, Keymap};
-use crate::snap::SnapResult;
 use crate::tools::{
     DEFAULT_ARC_RADIUS, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
+use kadakas_ui_core::snap::SnapResult;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {

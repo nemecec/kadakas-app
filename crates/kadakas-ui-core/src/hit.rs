@@ -3,6 +3,7 @@
 use glam::DVec2;
 use kadakas_core::curve;
 use kadakas_core::geom::{dist_to_segment, point_in_polygon};
+use kadakas_core::irrigation::IrrigationShape;
 use kadakas_core::model::{Document, Object, ObjectId, Shape, arc_sweep};
 
 fn edge_dist(points: &[DVec2], closed: bool, p: DVec2) -> f64 {
@@ -22,6 +23,16 @@ fn curve_tolerance(tol: f64) -> f64 {
 /// A sweep of 2π is a full circle. A sweep of zero is only the start direction.
 fn angle_in_arc(a: f64, start: f64, end: f64) -> bool {
     (a - start).rem_euclid(std::f64::consts::TAU) <= arc_sweep(start, end)
+}
+
+/// True if `p` picks an irrigation object: a line within `tol`, other objects near their symbol.
+pub fn irrigation_hit(i: &IrrigationShape, p: DVec2, tol: f64) -> bool {
+    match i {
+        IrrigationShape::Line { points, .. } => points
+            .windows(2)
+            .any(|w| dist_to_segment(p, w[0], w[1]) <= tol),
+        other => p.distance(other.anchor()) <= tol * 2.0,
+    }
 }
 
 /// True if `p` is within `tol` of the shape (or inside it, when `filled`).
@@ -107,7 +118,7 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
         }
         // A viewport is picked inside its frame. A title block is picked at its border.
         Shape::Group { .. } | Shape::Unknown { .. } => false,
-        Shape::Irrigation(i) => crate::irrigation_ui::hit(i, p, tol),
+        Shape::Irrigation(i) => irrigation_hit(i, p, tol),
         // A symbol is picked through its expanded shapes, see `hit_test`.
         Shape::Symbol { .. } => false,
         // Annotations need the document (see `object_hit`).
@@ -132,7 +143,7 @@ fn object_hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
         return kadakas_core::symbols::hit_instance(doc, o, p, tol);
     }
     if matches!(o.shape, Shape::Annotation(_)) {
-        return crate::annot_ui::hit(doc, o, p, tol);
+        return crate::annot_pick::hit(doc, o, p, tol);
     }
     let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     shape_hit(&o.shape, filled, p, tol)
@@ -203,7 +214,7 @@ pub fn box_select_in(
             continue;
         };
         let (s0, s1) = if matches!(o.shape, Shape::Annotation(_)) {
-            crate::annot_ui::bounds(doc, o)
+            crate::annot_pick::bounds(doc, o)
         } else {
             doc.object_bounds(o)
         };
@@ -276,7 +287,7 @@ pub fn lasso_select_in(
     }
     let bounds = |o: &Object| {
         if matches!(o.shape, Shape::Annotation(_)) {
-            crate::annot_ui::bounds(doc, o)
+            crate::annot_pick::bounds(doc, o)
         } else {
             doc.object_bounds(o)
         }
@@ -601,5 +612,30 @@ mod tests {
             "leader"
         );
         assert!(!shape_hit(&tag, false, DVec2::new(-500.0, 500.0), 5.0));
+    }
+
+    #[test]
+    fn irrigation_lines_and_symbols_are_picked() {
+        use kadakas_core::irrigation::LineType;
+        let line = IrrigationShape::Line {
+            points: vec![DVec2::ZERO, DVec2::new(1000.0, 0.0)],
+            line_type: LineType::Lateral,
+            size: "32".into(),
+            material: "PE".into(),
+            emitter_spacing: None,
+            emitter_flow: None,
+        };
+        assert!(irrigation_hit(&line, DVec2::new(500.0, 4.0), 5.0));
+        assert!(!irrigation_hit(&line, DVec2::new(500.0, 40.0), 5.0));
+        let poc = IrrigationShape::Poc {
+            at: DVec2::ZERO,
+            name: String::new(),
+            static_pressure: 1.0,
+            available_flow: 1.0,
+            supply_loss: None,
+            meter_loss: None,
+        };
+        assert!(irrigation_hit(&poc, DVec2::new(8.0, 0.0), 5.0));
+        assert!(!irrigation_hit(&poc, DVec2::new(11.0, 0.0), 5.0));
     }
 }

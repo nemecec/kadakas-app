@@ -2544,6 +2544,7 @@ dependencies = [
  "kadakas-sheet",
  "kadakas-site",
  "kadakas-sys",
+ "kadakas-ui-core",
  "pollster 1.0.1",
  "resvg",
  "rfd",
@@ -2784,6 +2785,21 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-ui-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-annot",
+ "kadakas-api",
+ "kadakas-core",
+ "kadakas-irrigation",
+ "kadakas-plants",
+ "kadakas-render",
+ "kadakas-site",
  "serde_json",
 ]
 

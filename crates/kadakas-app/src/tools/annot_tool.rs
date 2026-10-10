@@ -12,7 +12,7 @@ use kadakas_core::model::{Attributes, Document, Shape};
 use kadakas_core::resource::ResourceId;
 
 use super::{Ctx, Effect, Input, Preview, State, Tool, ToolMachine};
-use crate::hit;
+use kadakas_ui_core::hit;
 
 /// What the Dimension tool measures.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

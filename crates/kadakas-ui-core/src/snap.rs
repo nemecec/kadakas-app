@@ -1,8 +1,9 @@
-//! Snapping in the app: the pure math is in `kadakas_core::snapping`. This module builds the
-//! geometry that the pointer can snap to (the irrigation objects add their own points) and draws
-//! the marks, cue labels and guides.
+//! Snapping glue: the pure math is in `kadakas_core::snapping`. This module builds the geometry
+//! that the pointer can snap to (the irrigation objects add their own points) and gives the
+//! result with its cue label and guides. A UI program draws the marks.
 
 use glam::DVec2;
+use kadakas_core::irrigation::IrrigationShape;
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::snapping::{self, Context, Geometry, Guide, Kind, Reach, Settings, Smart};
 
@@ -14,6 +15,16 @@ pub enum SnapKind {
 }
 
 pub type SnapPoint = (DVec2, SnapKind);
+
+/// Points that the pointer snaps to: the points of a line and the position of other objects.
+pub fn snap_points(i: &IrrigationShape, out: &mut Vec<SnapPoint>) {
+    match i {
+        IrrigationShape::Line { points, .. } => {
+            out.extend(points.iter().map(|p| (*p, SnapKind::Vertex)))
+        }
+        other => out.push((other.anchor(), SnapKind::Center)),
+    }
+}
 
 /// A snap for the pointer, with what the canvas draws.
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +64,7 @@ pub fn geometry(
             continue;
         }
         let mut pts: Vec<SnapPoint> = Vec::new();
-        crate::irrigation_ui::snap_points(i, &mut pts);
+        snap_points(i, &mut pts);
         for (p, k) in pts {
             let near_enough = near.is_none_or(|(c, r)| p.distance(c) <= r);
             if near_enough {
@@ -202,6 +213,32 @@ mod tests {
         .unwrap();
         assert_eq!(r.kind, Kind::SmartPoint);
         assert_eq!(r.point, DVec2::new(300.0, 400.0));
+    }
+
+    #[test]
+    fn snap_points_of_lines_and_other_objects() {
+        use kadakas_core::irrigation::LineType;
+        let line = IrrigationShape::Line {
+            points: vec![DVec2::ZERO, DVec2::new(1000.0, 0.0)],
+            line_type: LineType::Lateral,
+            size: "32".into(),
+            material: "PE".into(),
+            emitter_spacing: None,
+            emitter_flow: None,
+        };
+        let poc = IrrigationShape::Poc {
+            at: DVec2::ZERO,
+            name: String::new(),
+            static_pressure: 1.0,
+            available_flow: 1.0,
+            supply_loss: None,
+            meter_loss: None,
+        };
+        let mut out = vec![];
+        snap_points(&line, &mut out);
+        snap_points(&poc, &mut out);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2].1, SnapKind::Center);
     }
 
     #[test]

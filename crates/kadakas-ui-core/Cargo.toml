@@ -1,0 +1,21 @@
+[package]
+name = "kadakas-ui-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "What every Kadakas UI program needs, without egui: tool state machines, picking, snapping glue, view state and keymaps. Pure and wasm-compatible."
+
+[dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
+kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
+kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+glam = { version = "0.34.1", features = ["serde"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+kadakas-api = { version = "0.1.0", path = "../kadakas-api" }

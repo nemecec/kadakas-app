@@ -22,7 +22,6 @@ mod gis_dialogs;
 mod gis_ui;
 mod gpu3d;
 mod grading_ui;
-mod hit;
 mod icon_size;
 mod icons;
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,7 +44,6 @@ mod screenshot;
 mod script_ui;
 mod sheets_ui;
 mod site_ui;
-mod snap;
 mod snap_ui;
 mod tess;
 mod theme;

@@ -15,6 +15,7 @@ kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }

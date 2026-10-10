@@ -2,10 +2,9 @@
 
 use egui::{Align2, Color32, DragValue, FontId, Painter, Pos2, Ui};
 use glam::DVec2;
-use kadakas_core::annot::draw::{Fill, Prim, prims_bounds};
+use kadakas_core::annot::draw::{Fill, Prim};
 use kadakas_core::annot::{Annot, Legend};
 use kadakas_core::command::Command;
-use kadakas_core::geom::dist_to_segment;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 
@@ -13,21 +12,7 @@ use crate::canvas::{Style, color32};
 use crate::tools::{DimToolMode, Tool, ToolSettings};
 use crate::view::View;
 
-thread_local! {
-    /// Primitives and legend rows by document revision, so a frame or a click does not read the
-    /// whole document again for every tag and legend.
-    static CACHE: (std::cell::Cell<u64>, kadakas_annot::AnnotCache) = Default::default();
-}
-
-/// Tells the cache which document revision is current. The canvas calls it before it draws or picks.
-pub fn set_revision(revision: u64) {
-    CACHE.with(|c| c.0.set(revision));
-}
-
-/// The primitives of an annotation object (from the cache).
-fn object_prims(doc: &Document, o: &Object) -> std::sync::Arc<Vec<Prim>> {
-    CACHE.with(|c| c.1.prims(doc, o, c.0.get()))
-}
+use kadakas_ui_core::annot_pick::object_prims;
 
 /// Draws an annotation object. `offset` is added to every point (drag ghosts).
 pub fn draw_object(
@@ -110,26 +95,6 @@ fn draw_prims(painter: &Painter, view: &View, prims: &[Prim], st: Style, offset:
             }
         }
     }
-}
-
-/// True if `p` is within `tol` of a line of the annotation or inside the box of its text.
-pub fn hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
-    object_prims(doc, o).iter().any(|prim| match prim {
-        Prim::Poly { pts, closed, .. } => {
-            let n = pts.len();
-            let segs = if *closed { n } else { n.saturating_sub(1) };
-            (0..segs).any(|i| dist_to_segment(p, pts[i], pts[(i + 1) % n]) <= tol)
-        }
-        text => {
-            let (lo, hi) = text.bounds();
-            p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
-        }
-    })
-}
-
-/// The box around what an annotation draws.
-pub fn bounds(doc: &Document, o: &Object) -> (DVec2, DVec2) {
-    prims_bounds(&object_prims(doc, o)).unwrap_or_else(|| o.shape.bounds())
 }
 
 /// The command that adds a graphic legend at `at` (the top left corner), on the active layer.
