@@ -1,5 +1,6 @@
 //! Hit testing and box selection against document objects.
 
+use crate::annot_pick::Prims;
 use glam::DVec2;
 use kadakas_core::curve;
 use kadakas_core::geom::{dist_to_segment, point_in_polygon};
@@ -138,26 +139,26 @@ fn pickable(doc: &Document, o: &Object) -> bool {
 }
 
 /// True if the object is hit at `p`. A symbol instance is hit through the shapes of its definition.
-fn object_hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
+fn object_hit(pk: Prims, doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
     if matches!(o.shape, Shape::Symbol { .. }) {
         return kadakas_core::symbols::hit_instance(doc, o, p, tol);
     }
     if matches!(o.shape, Shape::Annotation(_)) {
-        return crate::annot_pick::hit(doc, o, p, tol);
+        return pk.hit(doc, o, p, tol);
     }
     let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     shape_hit(&o.shape, filled, p, tol)
 }
 
 /// The topmost pickable object at `p` itself, not the group that holds it. Annotation tools use it.
-pub fn hit_object(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
+pub fn hit_object(pk: Prims, doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
     doc.objects
         .values()
         .rev()
         .find(|o| {
             pickable(doc, o)
                 && !matches!(o.shape, Shape::Group { .. })
-                && object_hit(doc, o, p, tol)
+                && object_hit(pk, doc, o, p, tol)
         })
         .map(|o| o.id)
 }
@@ -165,12 +166,13 @@ pub fn hit_object(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
 /// Topmost pickable object at `p`.
 #[cfg(test)]
 pub fn hit_test(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
-    hit_test_in(doc, p, tol, None)
+    hit_test_in(Prims::default(), doc, p, tol, None)
 }
 
 /// What a click at `p` selects when you are in the group `context` (none: in no group): the topmost
 /// object under the point, or the group that holds it, as a direct member of the context.
 pub fn hit_test_in(
+    pk: Prims,
     doc: &Document,
     p: DVec2,
     tol: f64,
@@ -184,7 +186,7 @@ pub fn hit_test_in(
                 && (context.is_none() && o.parent.is_none()
                     || doc.selection_target(o.id, context).is_some())
         })
-        .find(|o| object_hit(doc, o, p, tol))
+        .find(|o| object_hit(pk, doc, o, p, tol))
         .and_then(|o| doc.selection_target(o.id, context))
 }
 
@@ -193,10 +195,11 @@ pub fn hit_test_in(
 /// is selected when any of its members is selected this way (crossing) or all of them (inside).
 #[cfg(test)]
 pub fn box_select(doc: &Document, a: DVec2, b: DVec2, crossing: bool) -> Vec<ObjectId> {
-    box_select_in(doc, a, b, crossing, None)
+    box_select_in(Prims::default(), doc, a, b, crossing, None)
 }
 
 pub fn box_select_in(
+    pk: Prims,
     doc: &Document,
     a: DVec2,
     b: DVec2,
@@ -214,7 +217,7 @@ pub fn box_select_in(
             continue;
         };
         let (s0, s1) = if matches!(o.shape, Shape::Annotation(_)) {
-            crate::annot_pick::bounds(doc, o)
+            pk.bounds(doc, o)
         } else {
             doc.object_bounds(o)
         };
@@ -277,6 +280,7 @@ pub fn box_in_polygon(lo: DVec2, hi: DVec2, poly: &[DVec2], crossing: bool) -> b
 /// touch the lasso, otherwise objects must be fully inside. In a group, the members of the group
 /// are selected. A group counts when any member (crossing) or all members (inside) are selected.
 pub fn lasso_select_in(
+    pk: Prims,
     doc: &Document,
     polygon: &[DVec2],
     crossing: bool,
@@ -287,7 +291,7 @@ pub fn lasso_select_in(
     }
     let bounds = |o: &Object| {
         if matches!(o.shape, Shape::Annotation(_)) {
-            crate::annot_pick::bounds(doc, o)
+            pk.bounds(doc, o)
         } else {
             doc.object_bounds(o)
         }
@@ -390,16 +394,16 @@ mod tests {
             radius: 5.0,
         });
         let t = tri();
-        let inner = lasso_select_in(ed.doc(), &t, false, None);
+        let inner = lasso_select_in(Prims::default(), ed.doc(), &t, false, None);
         assert_eq!(inner, vec![inside]);
-        let touched = lasso_select_in(ed.doc(), &t, true, None);
+        let touched = lasso_select_in(Prims::default(), ed.doc(), &t, true, None);
         assert!(
             touched.contains(&inside) && touched.contains(&across) && !touched.contains(&outside)
         );
-        assert!(lasso_select_in(ed.doc(), &t[..2], true, None).is_empty());
+        assert!(lasso_select_in(Prims::default(), ed.doc(), &t[..2], true, None).is_empty());
     }
 
-    use kadakas_api::Session;
+    use crate::testkit::Session;
     use kadakas_core::command::Command;
     use kadakas_core::model::Attributes;
 
@@ -612,6 +616,14 @@ mod tests {
             "leader"
         );
         assert!(!shape_hit(&tag, false, DVec2::new(-500.0, 500.0), 5.0));
+    }
+
+    #[test]
+    fn a_degenerate_segment_still_measures_a_distance() {
+        assert_eq!(
+            dist_to_segment(DVec2::new(3.0, 4.0), DVec2::ZERO, DVec2::ZERO),
+            5.0
+        );
     }
 
     #[test]

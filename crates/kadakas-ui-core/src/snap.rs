@@ -124,7 +124,7 @@ pub fn acquire_smart(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kadakas_api::Session;
+    use crate::testkit::Session;
     use kadakas_core::command::Command;
     use kadakas_core::model::{Attributes, Shape};
 

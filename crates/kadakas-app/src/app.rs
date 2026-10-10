@@ -28,9 +28,10 @@ use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
+use kadakas_ui_core::annot_pick::Prims;
 use kadakas_ui_core::snap::{self, SnapResult};
 use kadakas_ui_core::tools::{
-    Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
+    Ctx, DimToolMode, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
 use kadakas_ui_core::view_history::{self, ViewHistory};
 
@@ -83,6 +84,10 @@ pub struct KadakasApp {
     resource_ui: ResourceUi,
     keys: Keymap,
     entry: DataEntry,
+    /// Primitives of annotations for picking, by document revision.
+    annot_cache: kadakas_annot::AnnotCache,
+    /// What the buttons of the Annotation part of the tool panel asked for.
+    annot_requests: crate::annot_ui::PanelRequests,
     /// Cursor before Data bar values are applied.
     live_cursor: DVec2,
     /// View changes from keys; applied in the next canvas pass.
@@ -256,6 +261,8 @@ impl KadakasApp {
             resource_ui: ResourceUi::default(),
             keys: Keymap::defaults(),
             entry: DataEntry::default(),
+            annot_cache: Default::default(),
+            annot_requests: Default::default(),
             live_cursor: DVec2::ZERO,
             pending_zoom: 1.0,
             pending_pan: egui::Vec2::ZERO,
@@ -281,7 +288,7 @@ impl KadakasApp {
 
     fn exec(&mut self, cmd: &Command) {
         panels::run_command(&mut self.session, cmd, &mut self.status);
-        kadakas_ui_core::annot_pick::set_revision(self.session.editor.revision());
+        crate::annot_ui::set_revision(self.session.editor.revision());
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
@@ -731,10 +738,10 @@ impl KadakasApp {
 
     /// Runs what the buttons of the Annotation part of the tool panel asked for.
     fn run_annot_requests(&mut self) {
-        for cmd in std::mem::take(&mut self.settings.annot.pending) {
+        for cmd in std::mem::take(&mut self.annot_requests.commands) {
             self.exec(&cmd);
         }
-        if std::mem::take(&mut self.settings.annot.legend_requested) {
+        if std::mem::take(&mut self.annot_requests.legend) {
             self.add_legend();
         }
     }
@@ -986,31 +993,7 @@ impl KadakasApp {
     /// Keys U, I, O, P, [ and ]: cycle the modes of a group of mode buttons. The path tools
     /// have one group (the vertex modes), so only group 1 does anything for them.
     fn mode_group(&mut self, group: usize) {
-        let tool = self.machine.tool();
-        if tool == Tool::Irrigation && group == 1 {
-            let irr = &mut self.settings.irrigation;
-            irr.mode = irr.mode.next();
-            self.machine.cancel();
-            self.status = format!("Irrigation mode: {}", irr.mode.label());
-        } else if tool == Tool::Dimension && group == 1 {
-            self.settings.annot.dim_mode = self.settings.annot.dim_mode.next();
-            self.machine.cancel();
-            self.status = format!("Dimension mode: {}", self.settings.annot.dim_mode.label());
-        } else if tool == Tool::Plant && group == 1 {
-            self.settings.plant.mode = self.settings.plant.mode.next();
-            self.machine.cancel();
-            self.status = format!("Placement mode: {}", self.settings.plant.mode.label());
-        } else if !has_vertex_modes(tool) {
-            self.status = format!("The {} tool has no mode buttons", tool.name());
-        } else if group == 1 {
-            self.settings.vertex_mode = self.settings.vertex_mode.next();
-            self.status = format!("Vertex mode: {}", self.settings.vertex_mode.label());
-        } else {
-            self.status = format!(
-                "The {} tool has only one group of mode buttons",
-                tool.name()
-            );
-        }
+        self.status = self.settings.cycle_mode(&mut self.machine, group);
     }
 
     /// Enter in a Data bar field: click at the typed point, as if the user had clicked there.
@@ -1046,31 +1029,19 @@ impl KadakasApp {
                 settings: &self.settings,
                 tol: self.tol(),
                 context: self.session.edit_context(),
+                annot: Prims::cached(&self.annot_cache, self.session.editor.revision()),
             };
             self.machine.handle(input, &cx)
         };
-        for e in effects {
-            match e {
-                Effect::SetSelection(s) => self.session.selection = s,
-                Effect::Notice(m) => self.status = m,
-                Effect::Exec(cmd) => {
-                    let cmd = self.session.in_context(cmd);
-                    let is_add = matches!(
-                        cmd,
-                        Command::AddObject { .. }
-                            | Command::AddObjectIn { .. }
-                            | Command::AddHardscape { .. }
-                            | Command::AddLandscapeArea { .. }
-                    );
-                    if let Some(out) =
-                        panels::run_command(&mut self.session, &cmd, &mut self.status)
-                        && is_add
-                        && !out.created.is_empty()
-                    {
-                        self.session.selection = out.created.into_iter().map(ObjectId).collect();
-                    }
-                }
-            }
+        let context = self.session.edit_context();
+        let messages = kadakas_ui_core::effects::apply(
+            effects,
+            &mut self.session.editor,
+            &mut self.session.selection,
+            context,
+        );
+        if let Some(m) = messages.into_iter().last() {
+            self.status = m;
         }
     }
 
@@ -1088,7 +1059,7 @@ impl KadakasApp {
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        kadakas_ui_core::annot_pick::set_revision(self.session.editor.revision());
+        crate::annot_ui::set_revision(self.session.editor.revision());
         // A sheet layer shows its page. Changing the active sheet fits the page to the window.
         let sheet = crate::sheets_ui::active_sheet(&self.session);
         if sheet != self.nav.sheets.last_sheet {
@@ -1232,6 +1203,7 @@ impl KadakasApp {
             settings: &self.settings,
             tol: self.tol(),
             context: self.session.edit_context(),
+            annot: Prims::cached(&self.annot_cache, self.session.editor.revision()),
         };
         let preview = if resp.hovered() || self.machine.is_busy() {
             self.machine.preview(self.cursor, &cx)
@@ -1722,6 +1694,7 @@ impl KadakasApp {
                         &self.keys,
                         &mut self.settings,
                         self.session.editor.doc(),
+                        &mut self.annot_requests,
                     )
                 });
             }
@@ -1841,7 +1814,7 @@ impl eframe::App for KadakasApp {
             // Change events (`events.subscribe`) go to the clients that asked for them.
             for conn in self.session.subscribers() {
                 for note in self.session.take_notifications(conn) {
-                    if !agent.push(conn, note.to_string()) {
+                    if agent.push(conn, note.to_string()) != crate::agent::Push::Sent {
                         self.session.drop_connection(conn);
                         break;
                     }

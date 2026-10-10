@@ -114,22 +114,33 @@ pub struct AgentServer {
     outboxes: Outboxes,
 }
 
+/// The result of `AgentServer::push`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Push {
+    /// The line is in the outbox of the connection.
+    Sent,
+    /// The server has no such connection (it ended, or never existed).
+    Unknown,
+    /// The client did not read fast enough. The server closed the connection and forgot it.
+    Closed,
+}
+
 impl AgentServer {
-    /// Sends a line (a notification) to a connection, from any thread, without waiting. False
-    /// if the connection is gone or does not read fast enough: the caller forgets it then.
-    pub fn push(&self, conn: u64, line: String) -> bool {
+    /// Sends a line (a notification) to a connection, from any thread, without waiting. Anything
+    /// but `Push::Sent` means that the caller must forget the connection.
+    pub fn push(&self, conn: u64, line: String) -> Push {
         let mut boxes = self.outboxes.lock().unwrap_or_else(|e| e.into_inner());
         let Some((tx, stream)) = boxes.get(&conn) else {
-            return false;
+            return Push::Unknown;
         };
         if tx.try_send(line).is_ok() {
-            return true;
+            return Push::Sent;
         }
         // The client does not read: close the socket. Its reader ends, and the client sees the
         // connection close, so it knows that it missed messages and can read the document again.
         let _ = stream.shutdown(std::net::Shutdown::Both);
         boxes.remove(&conn);
-        false
+        Push::Closed
     }
 
     /// Answers waiting requests for at most `FRAME_BUDGET`, with `handle`
@@ -340,26 +351,29 @@ fn send(out: &mut TcpStream, line: &str) -> bool {
     writeln!(out, "{line}").and_then(|_| out.flush()).is_ok()
 }
 
-/// Reads and checks the `auth` line. True if the client may continue.
-fn authenticate<R: BufRead>(reader: &mut R, out: &mut TcpStream, token: &str) -> bool {
+/// Reads and checks the `auth` line. Returns the reply line that confirms it, or `None` if the
+/// client may not continue (a refusal is sent here). The caller sends the confirmation after it
+/// has registered the outbox of the connection, so a client that got the confirmation can be
+/// reached with `push` at once.
+fn authenticate<R: BufRead>(reader: &mut R, out: &mut TcpStream, token: &str) -> Option<String> {
     // A web page can send bytes to this port, but not a line that starts with `{`.
     if reader
         .fill_buf()
         .map(|b| b.first() != Some(&b'{'))
         .unwrap_or(true)
     {
-        return false;
+        return None;
     }
     let Ok(Some(line)) = read_line_capped(reader, MAX_AUTH_LINE) else {
-        return false;
+        return None;
     };
     let Ok(req) = serde_json::from_str::<Value>(&line) else {
-        return false;
+        return None;
     };
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let sent = req["params"]["token"].as_str().unwrap_or("");
     if req["method"] == "auth" && constant_time_eq(sent.as_bytes(), token.as_bytes()) {
-        send(out, &response(&id, json!({"result": {"ok": true}})))
+        Some(response(&id, json!({"result": {"ok": true}})))
     } else {
         send(
             out,
@@ -368,7 +382,7 @@ fn authenticate<R: BufRead>(reader: &mut R, out: &mut TcpStream, token: &str) ->
                 json!({"error": {"code": -32001, "message": "authentication failed"}}),
             ),
         );
-        false
+        None
     }
 }
 
@@ -389,9 +403,9 @@ fn serve_client(
         stream,
         deadline: Some(Instant::now() + limits.auth_timeout),
     });
-    if !authenticate(&mut reader, &mut out, token) {
+    let Some(ok_line) = authenticate(&mut reader, &mut out, token) else {
         return;
-    }
+    };
     reader.get_mut().deadline = None;
     let _ = reader.get_ref().stream.set_read_timeout(None);
     // One thread writes replies and pushed notifications, in the order they were queued.
@@ -403,6 +417,11 @@ fn serve_client(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(conn, (outbox.clone(), handle));
+    // The outbox is known now, so the confirmation is the first line the client gets, and the
+    // client can be reached with `push` as soon as it has read the confirmation.
+    if !send(&mut out, &ok_line) {
+        return;
+    }
     thread::spawn(move || {
         for line in lines {
             if !send(&mut out, &line) {
@@ -823,7 +842,7 @@ mod tests {
             });
             for conn in session.subscribers() {
                 for note in session.take_notifications(conn) {
-                    assert!(server.push(conn, note.to_string()));
+                    assert_eq!(server.push(conn, note.to_string()), Push::Sent);
                     sent = true;
                 }
             }
@@ -832,30 +851,40 @@ mod tests {
         let note = watcher.join().unwrap();
         assert_eq!(note["params"]["op"], "add_layer");
         assert!(editor.join().unwrap()["result"]["created"].is_array());
-        assert!(!server.push(9999, "x".into()), "an unknown connection");
+        assert_eq!(
+            server.push(9999, "x".into()),
+            Push::Unknown,
+            "an unknown connection"
+        );
     }
 
     #[test]
     fn a_client_that_does_not_read_is_closed_when_its_outbox_is_full() {
         let server = start_with(0, Arc::new(|| {}), None, small_limits()).unwrap();
         let mut client = Client::connect(server.addr);
+        // The confirmation comes after the server registered the connection, so it is known now.
         client.auth(&server.token).unwrap();
-        // Wait until the server has the connection, then push more than the outbox holds.
-        let mut closed = false;
+        // Push more than the outbox holds, until the server closes the connection. The client
+        // does not read, so this ends; the bound only keeps a broken server from hanging the test.
         let big = "x".repeat(256 * 1024);
+        let mut result = Push::Sent;
         for _ in 0..400 {
-            if !server.push(1, big.clone()) {
-                closed = true;
+            result = server.push(1, big.clone());
+            if result != Push::Sent {
                 break;
             }
             thread::sleep(Duration::from_millis(2));
         }
-        assert!(closed, "push reports the closed connection");
+        assert_eq!(result, Push::Closed, "push reports the closed connection");
         assert!(
             client.drains_to_close(),
             "the client sees the connection end"
         );
-        assert!(!server.push(1, "x".into()), "the connection is forgotten");
+        assert_eq!(
+            server.push(1, "x".into()),
+            Push::Unknown,
+            "the connection is forgotten"
+        );
     }
 
     #[test]

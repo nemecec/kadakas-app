@@ -463,6 +463,7 @@ pub fn tool_panel(
     keys: &Keymap,
     settings: &mut ToolSettings,
     doc: &kadakas_core::model::Document,
+    requests: &mut crate::annot_ui::PanelRequests,
 ) {
     ui.heading("Tools");
     ui.separator();
@@ -505,7 +506,7 @@ pub fn tool_panel(
     for t in Tool::ANNOTATION {
         tool_button(ui, m, keys, t);
     }
-    crate::annot_ui::panel_buttons(ui, doc, &mut settings.annot);
+    crate::annot_ui::panel_buttons(ui, doc, requests);
     if Tool::ANNOTATION.contains(&m.tool()) {
         crate::annot_ui::tool_options(ui, m.tool(), settings, doc);
     }
@@ -1666,7 +1667,14 @@ mod tests {
                 machine.set_tool(tool);
                 let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                     object_info(ui, &mut s, &mut edit, &mut status);
-                    tool_panel(ui, &mut machine, &keys, &mut settings, &Default::default());
+                    tool_panel(
+                        ui,
+                        &mut machine,
+                        &keys,
+                        &mut settings,
+                        &Default::default(),
+                        &mut Default::default(),
+                    );
                 });
             }
         }

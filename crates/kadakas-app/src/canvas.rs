@@ -613,7 +613,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     }
     draw_ne_grid(&painter, view, rect, f.doc);
     crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
-    kadakas_ui_core::annot_pick::set_revision(f.site.map_or(0, |(_, revision)| revision));
+    crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     // Map underlays are drawn first, below the vector objects.

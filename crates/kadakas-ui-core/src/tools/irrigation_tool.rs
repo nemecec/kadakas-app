@@ -242,7 +242,7 @@ mod tests {
     use super::*;
 
     struct Fx {
-        session: kadakas_api::Session,
+        session: crate::testkit::Session,
         settings: ToolSettings,
         m: ToolMachine,
     }
@@ -254,7 +254,7 @@ mod tests {
             let mut settings = ToolSettings::default();
             settings.irrigation.mode = mode;
             Fx {
-                session: kadakas_api::Session::default(),
+                session: crate::testkit::Session::default(),
                 settings,
                 m,
             }
@@ -263,6 +263,7 @@ mod tests {
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
                 let cx = Ctx {
+                    annot: Default::default(),
                     doc: self.session.editor.doc(),
                     selection: &self.session.selection,
                     settings: &self.settings,
@@ -301,6 +302,7 @@ mod tests {
 
         fn preview(&self, x: f64, y: f64) -> Preview {
             let cx = Ctx {
+                annot: Default::default(),
                 doc: self.session.editor.doc(),
                 selection: &[],
                 settings: &self.settings,

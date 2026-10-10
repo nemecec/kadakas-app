@@ -156,10 +156,6 @@ pub struct AnnotSettings {
     pub north_size_mm: f64,
     pub bar_segment_m: f64,
     pub bar_segments: u32,
-    /// Commands from buttons of the panel that the app runs next.
-    pub pending: Vec<Command>,
-    /// The Graphic Legend button was pressed.
-    pub legend_requested: bool,
 }
 
 impl Default for AnnotSettings {
@@ -175,8 +171,6 @@ impl Default for AnnotSettings {
             north_size_mm: 15.0,
             bar_segment_m: 5.0,
             bar_segments: 4,
-            pending: Vec::new(),
-            legend_requested: false,
         }
     }
 }
@@ -318,7 +312,8 @@ impl ToolMachine {
         let mode = s.dim_mode;
         match input {
             Input::Press { p, .. } if mode.is_curve() => {
-                let Some(obj) = hit::hit_object(cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
+                let Some(obj) =
+                    hit::hit_object(cx.annot, cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
                 else {
                     return vec![Effect::Notice("Click a circle or an arc".into())];
                 };
@@ -462,7 +457,7 @@ impl ToolMachine {
                     .into(),
             )];
         };
-        let Some(obj) = hit::hit_object(doc, p, cx.tol)
+        let Some(obj) = hit::hit_object(cx.annot, doc, p, cx.tol)
             .and_then(|id| doc.object(id))
             .filter(|o| !matches!(o.shape, Shape::Annotation(_)))
         else {
@@ -589,6 +584,7 @@ mod tests {
 
     fn click(m: &mut ToolMachine, doc: &Document, s: &ToolSettings, p: DVec2) -> Vec<Effect> {
         let cx = Ctx {
+            annot: Default::default(),
             doc,
             selection: &[],
             settings: s,
@@ -644,6 +640,7 @@ mod tests {
             m.preview(
                 DVec2::new(100.0, 1000.0),
                 &Ctx {
+                    annot: Default::default(),
                     doc: &doc,
                     selection: &[],
                     settings: &s,
@@ -673,6 +670,7 @@ mod tests {
             click(&mut m, &doc, &s, p);
         }
         let cx = Ctx {
+            annot: Default::default(),
             doc: &doc,
             selection: &[],
             settings: &s,
@@ -718,6 +716,7 @@ mod tests {
 
     fn cx<'a>(doc: &'a Document, s: &'a ToolSettings) -> Ctx<'a> {
         Ctx {
+            annot: Default::default(),
             doc,
             selection: &[],
             settings: s,

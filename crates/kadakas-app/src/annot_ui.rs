@@ -12,7 +12,21 @@ use crate::canvas::{Style, color32};
 use crate::view::{View, ViewExt as _};
 use kadakas_ui_core::tools::{DimToolMode, Tool, ToolSettings};
 
-use kadakas_ui_core::annot_pick::object_prims;
+thread_local! {
+    /// Primitives and legend rows by document revision for drawing, so a frame does not read the
+    /// whole document again for every tag and legend. Picking uses a cache of the app (see `Ctx`).
+    static CACHE: (std::cell::Cell<u64>, kadakas_annot::AnnotCache) = Default::default();
+}
+
+/// Tells the drawing cache which document revision is current. The canvas calls it before it draws.
+pub fn set_revision(revision: u64) {
+    CACHE.with(|c| c.0.set(revision));
+}
+
+/// The primitives of an annotation object (from the drawing cache).
+fn object_prims(doc: &Document, o: &Object) -> std::sync::Arc<Vec<Prim>> {
+    CACHE.with(|c| c.1.prims(doc, o, c.0.get()))
+}
 
 /// Draws an annotation object. `offset` is added to every point (drag ghosts).
 pub fn draw_object(
@@ -242,16 +256,26 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
     }
 }
 
-/// The commands of the Annotation part of the tool panel: the Graphic Legend command and default
-/// styles. The app runs what is left in `pending` and places the legend when `legend_requested` is set.
-pub fn panel_buttons(ui: &mut Ui, doc: &Document, s: &mut kadakas_ui_core::tools::AnnotSettings) {
-    let cmds = &mut s.pending;
+/// What the buttons of the Annotation part of the tool panel asked for. The app runs it after the
+/// frame.
+#[derive(Default)]
+pub struct PanelRequests {
+    /// Commands to run next.
+    pub commands: Vec<Command>,
+    /// The Graphic Legend button was pressed.
+    pub legend: bool,
+}
+
+/// The buttons of the Annotation part of the tool panel: the Graphic Legend command and default
+/// styles. They fill `requests`.
+pub fn panel_buttons(ui: &mut Ui, doc: &Document, requests: &mut PanelRequests) {
+    let cmds = &mut requests.commands;
     if ui
         .button("Graphic Legend")
         .on_hover_text("Add a legend that lists the objects by style and updates itself")
         .clicked()
     {
-        s.legend_requested = true;
+        requests.legend = true;
     }
     let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
     if !has("dimension_style") || !has("tag_style") || !has("text_style") {

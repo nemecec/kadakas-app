@@ -88,7 +88,19 @@ impl Chord {
         }
     }
 
-    /// Text that `Chord::parse` reads back to the same chord, on every system.
+    /// True when this chord is held: its key is down and the modifiers are exactly its modifiers.
+    /// `mac` says whether the Control key is a modifier of its own (macOS) or the command key.
+    pub fn matches(&self, key_down: impl Fn(Key) -> bool, m: Modifiers, mac: bool) -> bool {
+        key_down(self.key)
+            && m.command == self.command
+            && (m.ctrl && mac) == self.ctrl
+            && m.shift == self.shift
+            && m.alt == self.alt
+    }
+
+    /// Text that `Chord::parse` reads back to the same chord on the system that wrote it. The
+    /// command key is `Cmd/Ctrl`, so it is the same everywhere. The Control key of macOS is
+    /// `Ctrl`; another system reads that as the command key, so profiles should use `Cmd/Ctrl`.
     pub fn to_text(&self) -> String {
         let mut s = String::new();
         if self.command {

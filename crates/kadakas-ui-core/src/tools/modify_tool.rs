@@ -186,7 +186,7 @@ impl ToolMachine {
                     })]
                 }
                 Tool::Offset => match st.first {
-                    None => match hit::hit_test_in(cx.doc, p, cx.tol, cx.context) {
+                    None => match hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) {
                         Some(id) => {
                             st.first = Some((id, p));
                             self.state = State::Modify(st);
@@ -212,7 +212,7 @@ impl ToolMachine {
                     }
                 },
                 Tool::Fillet | Tool::Chamfer => {
-                    let Some(id) = hit::hit_test_in(cx.doc, p, cx.tol, cx.context) else {
+                    let Some(id) = hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) else {
                         return notice("Click an object");
                     };
                     match st.first {
@@ -230,7 +230,7 @@ impl ToolMachine {
                     }
                 }
                 Tool::Trim | Tool::Extend | Tool::Split => {
-                    let Some(id) = hit::hit_test_in(cx.doc, p, cx.tol, cx.context) else {
+                    let Some(id) = hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) else {
                         return notice("Click an object");
                     };
                     let others: Vec<ObjectId> = cx.selection.to_vec();
@@ -363,6 +363,7 @@ mod tests {
 
         fn click(&mut self, p: DVec2) -> Vec<Effect> {
             let cx = Ctx {
+                annot: Default::default(),
                 doc: self.ed.doc(),
                 selection: &self.selection,
                 settings: &self.settings,
@@ -590,6 +591,7 @@ mod tests {
         f.settings.modify.radius = 100.0;
         f.run(v(500.0, 0.0));
         let cx = Ctx {
+            annot: Default::default(),
             doc: f.ed.doc(),
             selection: &[],
             settings: &f.settings,

@@ -318,6 +318,38 @@ impl Default for ToolSettings {
     }
 }
 
+impl ToolSettings {
+    /// Keys U, I, O, P, [ and ]: cycles the modes of a group of mode buttons. The path tools have
+    /// one group (the vertex modes), so only group 1 does anything for them. A new mode cancels the
+    /// operation of the machine. Returns the text for the status line.
+    pub fn cycle_mode(&mut self, machine: &mut ToolMachine, group: usize) -> String {
+        let tool = machine.tool();
+        if tool == Tool::Irrigation && group == 1 {
+            self.irrigation.mode = self.irrigation.mode.next();
+            machine.cancel();
+            format!("Irrigation mode: {}", self.irrigation.mode.label())
+        } else if tool == Tool::Dimension && group == 1 {
+            self.annot.dim_mode = self.annot.dim_mode.next();
+            machine.cancel();
+            format!("Dimension mode: {}", self.annot.dim_mode.label())
+        } else if tool == Tool::Plant && group == 1 {
+            self.plant.mode = self.plant.mode.next();
+            machine.cancel();
+            format!("Placement mode: {}", self.plant.mode.label())
+        } else if !has_vertex_modes(tool) {
+            format!("The {} tool has no mode buttons", tool.name())
+        } else if group == 1 {
+            self.vertex_mode = self.vertex_mode.next();
+            format!("Vertex mode: {}", self.vertex_mode.label())
+        } else {
+            format!(
+                "The {} tool has only one group of mode buttons",
+                tool.name()
+            )
+        }
+    }
+}
+
 /// Read-only context for a tool.
 pub struct Ctx<'a> {
     pub doc: &'a Document,
@@ -327,6 +359,8 @@ pub struct Ctx<'a> {
     pub tol: f64,
     /// The group you are in (selection picks its members), if any.
     pub context: Option<ObjectId>,
+    /// Where picking gets the primitives of annotations. The caller owns the cache.
+    pub annot: crate::annot_pick::Prims<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -713,55 +747,57 @@ impl ToolMachine {
 
     fn handle_select(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
         match input {
-            Input::Press { p, shift } => match hit::hit_test_in(cx.doc, p, cx.tol, cx.context) {
-                Some(id) if shift => {
-                    let mut sel = cx.selection.to_vec();
-                    match sel.iter().position(|s| *s == id) {
-                        Some(i) => {
-                            sel.remove(i);
+            Input::Press { p, shift } => {
+                match hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) {
+                    Some(id) if shift => {
+                        let mut sel = cx.selection.to_vec();
+                        match sel.iter().position(|s| *s == id) {
+                            Some(i) => {
+                                sel.remove(i);
+                            }
+                            None => sel.push(id),
                         }
-                        None => sel.push(id),
+                        vec![Effect::SetSelection(sel)]
                     }
-                    vec![Effect::SetSelection(sel)]
-                }
-                Some(id) => {
-                    let selected = cx.selection.contains(&id);
-                    let ids = if selected {
-                        cx.selection.to_vec()
-                    } else {
-                        vec![id]
-                    };
-                    self.state = State::Drag {
-                        start: p,
-                        cur: p,
-                        ids,
-                    };
-                    if selected {
-                        vec![]
-                    } else {
-                        vec![Effect::SetSelection(vec![id])]
-                    }
-                }
-                None => {
-                    self.state = if cx.settings.select_mode == SelectMode::Lasso {
-                        State::Lasso {
-                            points: vec![p],
-                            add: shift,
-                        }
-                    } else {
-                        State::Box {
+                    Some(id) => {
+                        let selected = cx.selection.contains(&id);
+                        let ids = if selected {
+                            cx.selection.to_vec()
+                        } else {
+                            vec![id]
+                        };
+                        self.state = State::Drag {
                             start: p,
                             cur: p,
-                            add: shift,
+                            ids,
+                        };
+                        if selected {
+                            vec![]
+                        } else {
+                            vec![Effect::SetSelection(vec![id])]
                         }
-                    };
-                    if shift {
-                        vec![]
-                    } else {
-                        vec![Effect::SetSelection(vec![])]
+                    }
+                    None => {
+                        self.state = if cx.settings.select_mode == SelectMode::Lasso {
+                            State::Lasso {
+                                points: vec![p],
+                                add: shift,
+                            }
+                        } else {
+                            State::Box {
+                                start: p,
+                                cur: p,
+                                add: shift,
+                            }
+                        };
+                        if shift {
+                            vec![]
+                        } else {
+                            vec![Effect::SetSelection(vec![])]
+                        }
                     }
                 }
-            },
+            }
             Input::Move(p) => {
                 match &mut self.state {
                     State::Drag { cur, .. } | State::Box { cur, .. } => *cur = p,
@@ -789,7 +825,9 @@ impl ToolMachine {
                         return vec![];
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
-                    for id in hit::box_select_in(cx.doc, start, p, p.x < start.x, cx.context) {
+                    for id in
+                        hit::box_select_in(cx.annot, cx.doc, start, p, p.x < start.x, cx.context)
+                    {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -805,7 +843,9 @@ impl ToolMachine {
                         return vec![];
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
-                    for id in hit::lasso_select_in(cx.doc, &points, p.x < start.x, cx.context) {
+                    for id in
+                        hit::lasso_select_in(cx.annot, cx.doc, &points, p.x < start.x, cx.context)
+                    {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -994,7 +1034,7 @@ impl ToolMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kadakas_api::Session;
+    use crate::testkit::Session;
 
     struct Fixture {
         session: Session,
@@ -1017,6 +1057,7 @@ mod tests {
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
                 let cx = Ctx {
+                    annot: Default::default(),
                     doc: self.session.editor.doc(),
                     selection: &self.session.selection,
                     settings: &self.settings,
@@ -1025,15 +1066,13 @@ mod tests {
                 };
                 self.m.handle(input, &cx)
             };
-            for e in &fx {
-                match e {
-                    Effect::Exec(c) => {
-                        self.session.editor.execute(c).unwrap();
-                    }
-                    Effect::SetSelection(s) => self.session.selection = s.clone(),
-                    Effect::Notice(_) => {}
-                }
-            }
+            let context = self.session.edit_context();
+            crate::effects::apply(
+                fx.clone(),
+                &mut self.session.editor,
+                &mut self.session.selection,
+                context,
+            );
             fx
         }
 
@@ -1065,6 +1104,7 @@ mod tests {
             f.m.preview(
                 DVec2::new(10.0, 0.0),
                 &Ctx {
+                    annot: Default::default(),
                     doc: f.session.editor.doc(),
                     selection: &[],
                     settings: &f.settings,
@@ -1088,6 +1128,7 @@ mod tests {
             f.m.preview(
                 DVec2::X,
                 &Ctx {
+                    annot: Default::default(),
                     doc: f.session.editor.doc(),
                     selection: &[],
                     settings: &f.settings,
@@ -1460,6 +1501,7 @@ mod tests {
         let mut f = Fixture::new(Tool::Line);
         f.click(0.0, 0.0);
         let cx = Ctx {
+            annot: Default::default(),
             doc: f.session.editor.doc(),
             selection: &[],
             settings: &f.settings,
@@ -1687,6 +1729,7 @@ mod tests {
         f.click(0.0, 0.0);
         f.click(100.0, 0.0);
         let cx = Ctx {
+            annot: Default::default(),
             doc: f.session.editor.doc(),
             selection: &[],
             settings: &f.settings,
@@ -1717,6 +1760,7 @@ mod tests {
         let mut f = Fixture::new(Tool::Polyline);
         f.click(0.0, 0.0);
         let cx = Ctx {
+            annot: Default::default(),
             doc: f.session.editor.doc(),
             selection: &[],
             settings: &f.settings,
@@ -1823,6 +1867,7 @@ mod tests {
 
     fn ctx<'a>(f: &'a Fixture) -> Ctx<'a> {
         Ctx {
+            annot: Default::default(),
             doc: f.session.editor.doc(),
             selection: &f.session.selection,
             settings: &f.settings,
@@ -1855,7 +1900,18 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_has_a_hint_and_a_readout_while_idle_or_busy() {
+    fn every_tool_has_a_hint_and_a_busy_tool_has_a_readout_and_a_preview() {
+        // Tools that collect points show a measurement and a preview after the first click.
+        let drawing = [
+            Tool::Line,
+            Tool::Rect,
+            Tool::Circle,
+            Tool::Polyline,
+            Tool::LandscapeArea,
+            Tool::Hardscape,
+            Tool::SiteModifier,
+            Tool::Massing,
+        ];
         for tool in all_tools() {
             let mut f = Fixture::new(tool);
             let idle = f.m.hint_for(&f.settings);
@@ -1864,11 +1920,18 @@ mod tests {
             }
             assert!(f.m.readout(DVec2::ZERO, &f.settings).is_empty());
             f.click(0.0, 0.0);
-            let _ = f.m.hint_for(&f.settings);
-            let _ = f.m.readout(DVec2::new(10.0, 10.0), &f.settings);
-            let _ = f.m.preview(DVec2::new(10.0, 10.0), &ctx(&f));
+            let cursor = DVec2::new(10.0, 10.0);
+            if drawing.contains(&tool) {
+                assert!(f.m.is_busy(), "{tool:?} waits for more clicks");
+                assert!(!f.m.readout(cursor, &f.settings).is_empty(), "{tool:?}");
+                assert_ne!(f.m.preview(cursor, &ctx(&f)), Preview::None, "{tool:?}");
+                assert!(!f.m.hint_for(&f.settings).is_empty());
+            }
             f.m.cancel();
             assert!(!f.m.is_busy());
+            if drawing.contains(&tool) {
+                assert_eq!(f.m.preview(cursor, &ctx(&f)), Preview::None, "{tool:?}");
+            }
         }
     }
 
@@ -2111,5 +2174,86 @@ mod tests {
         assert_eq!(f.send(Input::Enter).len(), 1);
         f.settings.grading.mode = crate::grading::GradingMode::Spot;
         assert!(f.send(Input::Enter).is_empty());
+    }
+
+    #[test]
+    fn the_mode_keys_cycle_the_modes_of_the_tool() {
+        let mut f = Fixture::new(Tool::Polyline);
+        let before = f.settings.vertex_mode;
+        f.click(0.0, 0.0);
+        let text = f.settings.cycle_mode(&mut f.m, 1);
+        assert!(text.starts_with("Vertex mode: "), "{text}");
+        assert_ne!(f.settings.vertex_mode, before);
+        assert!(f.m.is_busy(), "vertex modes may change between clicks");
+        assert!(
+            f.settings
+                .cycle_mode(&mut f.m, 2)
+                .contains("only one group")
+        );
+        for (tool, start) in [
+            (Tool::Irrigation, "Irrigation mode: "),
+            (Tool::Dimension, "Dimension mode: "),
+            (Tool::Plant, "Placement mode: "),
+        ] {
+            let mut m = ToolMachine::default();
+            m.set_tool(tool);
+            m.state = State::Points(vec![DVec2::ZERO]);
+            let text = f.settings.cycle_mode(&mut m, 1);
+            assert!(text.starts_with(start), "{text}");
+            assert!(!m.is_busy(), "a new mode starts a new object");
+        }
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::Select);
+        assert!(f.settings.cycle_mode(&mut m, 1).contains("no mode buttons"));
+    }
+
+    #[test]
+    fn the_tool_draws_inside_the_group_you_are_in() {
+        use crate::effects::apply;
+        let mut f = Fixture::new(Tool::Line);
+        let out = f
+            .session
+            .editor
+            .execute(&Command::AddObject {
+                shape: Shape::Group {
+                    name: String::new(),
+                },
+                layer: None,
+                class: None,
+                attrs: Default::default(),
+            })
+            .unwrap();
+        let group = ObjectId(out.created[0]);
+        let fx = {
+            let cx = Ctx {
+                doc: f.session.editor.doc(),
+                selection: &[],
+                settings: &f.settings,
+                tol: 5.0,
+                context: Some(group),
+                annot: Default::default(),
+            };
+            f.m.handle(
+                Input::Press {
+                    p: DVec2::ZERO,
+                    shift: false,
+                },
+                &cx,
+            );
+            f.m.handle(
+                Input::Press {
+                    p: DVec2::new(100.0, 0.0),
+                    shift: false,
+                },
+                &cx,
+            )
+        };
+        let mut sel = vec![];
+        let msgs = apply(fx, &mut f.session.editor, &mut sel, Some(group));
+        assert!(msgs.is_empty());
+        assert_eq!(
+            f.session.editor.doc().object(sel[0]).unwrap().parent,
+            Some(group)
+        );
     }
 }

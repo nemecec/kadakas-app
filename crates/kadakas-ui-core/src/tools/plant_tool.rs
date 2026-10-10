@@ -467,7 +467,7 @@ impl ToolMachine {
 mod tests {
     use super::super::*;
     use super::spec_for;
-    use kadakas_api::Session;
+    use crate::testkit::Session;
     use kadakas_core::plants::style::PlantStyle;
     use kadakas_core::resource::ResourceBody;
     use kadakas_core::resource::ResourceId;
@@ -518,6 +518,7 @@ mod tests {
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
                 let cx = Ctx {
+                    annot: Default::default(),
                     doc: self.s.editor.doc(),
                     selection: &self.s.selection,
                     settings: &self.settings,
@@ -557,6 +558,7 @@ mod tests {
 
         fn preview(&self, at: DVec2) -> Preview {
             let cx = Ctx {
+                annot: Default::default(),
                 doc: self.s.editor.doc(),
                 selection: &self.s.selection,
                 settings: &self.settings,

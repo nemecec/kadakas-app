@@ -36,12 +36,13 @@ pub fn action_for_event(
 
 /// True while the chord of `action` is held down.
 pub fn held(keys: &Keymap, action: Action, input: &egui::InputState) -> bool {
+    let m = modifiers(input.modifiers);
     keys.chords(action).iter().any(|c| {
-        egui_key(c.key).is_some_and(|k| input.key_down(k))
-            && input.modifiers.command == c.command
-            && (input.modifiers.ctrl && cfg!(target_os = "macos")) == c.ctrl
-            && input.modifiers.shift == c.shift
-            && input.modifiers.alt == c.alt
+        c.matches(
+            |k| egui_key(k).is_some_and(|k| input.key_down(k)),
+            m,
+            cfg!(target_os = "macos"),
+        )
     })
 }
 
