@@ -30,7 +30,11 @@ pub struct Style {
 }
 
 fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
-    let a = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let a = cadektor_core::viewrules::display_attrs(
+        doc,
+        o,
+        cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o)),
+    );
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let pen = color32(a.pen.unwrap_or(Color::BLACK));
     let mut fill = a.fill.map_or(Color32::TRANSPARENT, color32);
@@ -191,7 +195,7 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag {
             at, anchor, height, ..
-        } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+        } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, None, st, offset),
         // Annotations need the document (see `draw_object`).
         Shape::Annotation(_) => {}
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
@@ -273,7 +277,11 @@ fn draw_object_deep(
     if depth > cadektor_core::symbols::MAX_DEPTH + 2 {
         return;
     }
-    let attrs = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let attrs = cadektor_core::viewrules::display_attrs(
+        doc,
+        o,
+        cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o)),
+    );
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let decor_rc = decor_cached(doc, o, &attrs, scale, depth);
     let decor = (*decor_rc).as_ref();
@@ -339,7 +347,7 @@ fn draw_shape_or_object(
         }
         Shape::Group { .. } | Shape::Unknown { .. } => {}
         Shape::Plant { at, spread, .. } => {
-            let look = cadektor_core::plants::link::look(doc, o);
+            let look = cadektor_core::viewrules::plant_look(doc, o);
             // The colors of the style apply when the object has none of its own.
             let soft = |c: Color| {
                 let [r, g, b, a] = c.0;
@@ -388,9 +396,18 @@ fn draw_shape_or_object(
         Shape::PlantTag {
             at, anchor, height, ..
         } => {
-            let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts)
-                .map_or_else(|| "?".to_string(), |t| t.text());
-            plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
+            let layout = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts)
+                .map(|t| t.layout(*height));
+            plant_draw::draw_tag(
+                painter,
+                view,
+                *at,
+                *anchor,
+                *height,
+                layout.as_ref(),
+                st,
+                offset,
+            );
         }
         Shape::Annotation(_) => crate::annot_ui::draw_object(painter, view, doc, o, st, offset),
         Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
@@ -456,6 +473,59 @@ fn draw_grid(painter: &Painter, view: &View, rect: Rect) {
     );
 }
 
+/// Clips the screen segment `a..b` to the rect. `None` if it lies outside.
+fn clip_segment(a: egui::Pos2, b: egui::Pos2, r: Rect) -> Option<(egui::Pos2, egui::Pos2)> {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    let d = b - a;
+    for (p, q) in [
+        (-d.x, a.x - r.min.x),
+        (d.x, r.max.x - a.x),
+        (-d.y, a.y - r.min.y),
+        (d.y, r.max.y - a.y),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+        }
+    }
+    (t0 <= t1).then(|| (a + d * t0, a + d * t1))
+}
+
+/// The northing/easting grid of the georeference (see `cadektor_core::viewrules`).
+fn draw_ne_grid(painter: &Painter, view: &View, rect: Rect, doc: &Document) {
+    let (Some(g), Some(grid)) = (&doc.georef, &doc.drawing.view_rules.ne_grid) else {
+        return;
+    };
+    let (lo, hi) = view.visible_model(rect);
+    let [r, gr, b, a] = grid.color.0;
+    let color = Color32::from_rgba_unmultiplied(r, gr, b, a);
+    for l in cadektor_core::viewrules::grid_lines(g, grid, lo, hi) {
+        let Some((p, q)) = clip_segment(view.to_screen(l.a), view.to_screen(l.b), rect) else {
+            continue;
+        };
+        painter.line_segment([p, q], Stroke::new(1.0, color));
+        if grid.labels {
+            // Easting labels sit at the top of the view, northing labels at the left.
+            let (at, anchor) = if l.easting {
+                let top = if p.y < q.y { p } else { q };
+                (top + egui::vec2(3.0, 2.0), egui::Align2::LEFT_TOP)
+            } else {
+                let left = if p.x < q.x { p } else { q };
+                (left + egui::vec2(3.0, -2.0), egui::Align2::LEFT_BOTTOM)
+            };
+            painter.text(at, anchor, l.label, egui::FontId::proportional(11.0), color);
+        }
+    }
+}
+
 pub struct Frame<'a> {
     pub doc: &'a Document,
     pub selection: &'a [ObjectId],
@@ -494,6 +564,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if f.show_grid {
         draw_grid(&painter, view, rect);
     }
+    draw_ne_grid(&painter, view, rect, f.doc);
     crate::area_ui::set_revision(f.site.map(|(_, revision)| revision));
     crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.

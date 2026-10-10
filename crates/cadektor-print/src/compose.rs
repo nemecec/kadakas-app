@@ -260,7 +260,10 @@ fn plan_view(
         {
             continue;
         }
-        let attrs = vp.resolve(doc, obj);
+        if cadektor_core::viewrules::hidden_by_phase(doc, obj) {
+            continue;
+        }
+        let attrs = cadektor_core::viewrules::display_attrs(doc, obj, vp.resolve(doc, obj));
         shape_prims(doc, obj, &attrs, &xf, counts, tables, out);
     }
 }

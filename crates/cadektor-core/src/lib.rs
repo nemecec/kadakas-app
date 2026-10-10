@@ -32,10 +32,12 @@ pub mod section;
 pub mod sheets;
 pub mod site;
 pub mod sun;
+pub mod survey;
 pub mod svg;
 pub mod symbols;
 pub mod thumbnail;
 pub mod underlay;
+pub mod viewrules;
 pub mod worksheet_table;
 
 pub use glam::{DVec2, DVec3};

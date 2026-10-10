@@ -9,6 +9,8 @@ mod errors;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::RpcError;
+#[cfg(test)]
+mod care_api_tests;
 mod data_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod gis_api;
@@ -22,7 +24,9 @@ mod plants_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;
 mod present_api;
+mod rules_api;
 mod sheets_api;
+mod survey_api;
 mod symbols_api;
 
 use serde::Deserialize;
@@ -203,6 +207,8 @@ pub const METHODS: &[(&str, &str)] = &[
     plants_api::PLANTS_SET_STYLE,
     plants_api::REPORT_PLANT_SCHEDULE,
     plants_api::REPORT_EXISTING_TREES,
+    plants_api::PLANTS_DRAPE,
+    plants_api::PLANT_TAG_SET,
     // Records, the Data Manager and worksheets (see data_api.rs).
     data_api::RECORD_FORMAT_LIST,
     data_api::RECORD_FORMAT_GET,
@@ -332,6 +338,7 @@ pub const METHODS: &[(&str, &str)] = &[
     irrigation_api::REPORT_PIPES,
     irrigation_api::REPORT_PRESSURE,
     irrigation_api::REPORT_MATERIALS,
+    irrigation_api::REPORT_HYDROZONES,
     // Grading and site analysis (see grading_api.rs).
     grading_api::WALL_STYLE_CREATE,
     grading_api::WALL_STYLE_LIST,
@@ -351,6 +358,8 @@ pub const METHODS: &[(&str, &str)] = &[
     grading_api::SECTION_SET,
     grading_api::SECTION_PROFILE,
     grading_api::SECTION_PLACE,
+    grading_api::PAD_ADD,
+    grading_api::PAD_RETAINING_EDGE,
     // Plug-in objects and scripts (see plugin_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
     plugin_api::PLUGIN_DEFINE,
@@ -471,6 +480,22 @@ pub const METHODS: &[(&str, &str)] = &[
         "site.contours",
         "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}.",
     ),
+    // Survey data (see survey_api.rs).
+    survey_api::SURVEY_IMPORT_POINTS,
+    survey_api::TREE_IMPORT_SURVEY,
+    survey_api::SITE_CHECK,
+    survey_api::SITE_SIMPLIFY,
+    survey_api::GEOREF_SURVEY_POINT,
+    // Display rules: grid, phases, visualizations (see rules_api.rs).
+    rules_api::VIEW_RULES_GET,
+    rules_api::GRID_SET,
+    rules_api::PHASE_SET,
+    rules_api::PHASE_DISPLAY,
+    rules_api::PHASE_REPORT,
+    rules_api::VISUALIZATION_SET,
+    rules_api::VISUALIZATION_AUTO,
+    rules_api::VISUALIZATION_GET,
+    rules_api::VISUALIZATION_CLEAR,
     // Drawing documentation (see sheets_api.rs).
     sheets_api::SHEET_LIST,
     sheets_api::SHEET_CREATE,
@@ -729,6 +754,12 @@ impl Session {
         if grading_api::knows(method) {
             return self.handle_grading(method, p);
         }
+        if let Some(r) = survey_api::handle(self, method, p.clone()) {
+            return r;
+        }
+        if let Some(r) = rules_api::handle(self, method, p.clone()) {
+            return r;
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
@@ -759,6 +790,8 @@ impl Session {
                     "sheets": sheets_api::describe(),
                 "resources": symbols_api::describe(),
                 "annotation": annotation_api::describe(),
+                "survey": survey_api::describe(),
+                "display_rules": rules_api::describe(),
                 "errors": errors::describe(),
                 "unknown_shapes": "A file from a newer Cadektor may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });

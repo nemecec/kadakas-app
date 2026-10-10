@@ -27,9 +27,11 @@ mod irrigation_ui;
 mod keymap;
 mod panels;
 mod plant_draw;
+mod plant_sheet_ui;
 mod plant_ui;
 mod present_ui;
 mod resource_ui;
+mod rules_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_ui;
 mod sheets_ui;

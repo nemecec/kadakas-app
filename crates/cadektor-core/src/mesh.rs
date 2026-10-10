@@ -780,7 +780,7 @@ impl Builder<'_> {
                     trunk_radius: None,
                     seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
                 };
-                self.plant(&build, z, edge, id);
+                self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
             Shape::ExistingTree {
                 at,
@@ -799,7 +799,7 @@ impl Builder<'_> {
                     trunk_radius: Some(dbh / 2.0),
                     seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
                 };
-                self.plant(&build, z, edge, id);
+                self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
             Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Underlay(_) => {}
             Shape::Mesh3d(m) => {

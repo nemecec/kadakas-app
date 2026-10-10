@@ -227,6 +227,12 @@ pub struct PlantStyle {
     pub rpz_cap: Option<f64>,
     /// A symbol resource that draws the plant in plan, scaled to the canopy. `None` uses `graphic`.
     pub plan_symbol: Option<crate::resource::ResourceId>,
+    /// A picture of the plant: a texture resource (see `crate::graphics`). `None`: no picture.
+    pub image: Option<crate::resource::ResourceId>,
+    /// Maintenance fields (interval, pruning, fertilizer, hours per year).
+    pub maintenance: super::care::MaintenanceInfo,
+    /// Irrigation fields (water need class, hydrozone, plant factor).
+    pub irrigation: super::care::IrrigationInfo,
 }
 
 impl Default for PlantStyle {
@@ -254,6 +260,9 @@ impl Default for PlantStyle {
             rpz_factor: None,
             rpz_cap: None,
             plan_symbol: None,
+            image: None,
+            maintenance: super::care::MaintenanceInfo::default(),
+            irrigation: super::care::IrrigationInfo::default(),
         }
     }
 }
@@ -281,6 +290,8 @@ impl PlantStyle {
                 return Err(format!("{name} must be a finite number of zero or more"));
             }
         }
+        self.maintenance.is_valid()?;
+        self.irrigation.is_valid()?;
         let names = Self::field_names();
         if let Some(bad) = self
             .locked

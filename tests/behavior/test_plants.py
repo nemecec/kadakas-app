@@ -305,7 +305,8 @@ def test_sample_catalog_imports_and_round_trips(cad, make_serve):
     first = cad.result("plant_style.get", {"id": "Field maple"})
     assert first["spread"] == 7000 and first["height"] == 12000  # the sample uses meters
     assert first["category"] == "tree" and first["price"] == 185
-    assert first["custom"] == {"Water need": "low"}
+    # The water need column is a plant style field (irrigation), not free data.
+    assert first["custom"] == {} and first["irrigation"]["water_need"] == "low"
 
     exported = cad.result("plant_style.export_csv")["csv"]
     other = make_serve()

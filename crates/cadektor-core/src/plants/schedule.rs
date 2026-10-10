@@ -6,7 +6,7 @@ use super::catalog::write_csv;
 use super::link;
 use super::style::{PlantCategory, PlantStyle, QuantityType};
 use super::tree::rpz_radius;
-use crate::model::{DEFAULT_TAG_HEIGHT, Document, LayerId, ObjectId, Shape};
+use crate::model::{DEFAULT_TAG_HEIGHT, Document, LayerId, Object, ObjectId, Shape};
 use crate::resource::ResourceId;
 use glam::DVec2;
 use std::collections::HashMap;
@@ -210,6 +210,43 @@ pub fn group_tag(style: ResourceId, positions: &[DVec2], spread: f64) -> Shape {
     }
 }
 
+/// The data key of a plant tag that holds its format: `{levels: 1 to 3, bubble: bool}`.
+pub const TAG_FORMAT_KEY: &str = "tag_format";
+
+/// How much a plant tag shows. Level 1: the ID code and the count. Level 2 adds the plant
+/// name. Level 3 adds the size and the container. With a bubble, the ID code sits in a circle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct TagFormat {
+    pub levels: u8,
+    pub bubble: bool,
+}
+
+impl Default for TagFormat {
+    fn default() -> Self {
+        TagFormat {
+            levels: 1,
+            bubble: false,
+        }
+    }
+}
+
+impl TagFormat {
+    /// The format of a tag object. A missing or bad value gives the default.
+    pub fn of(obj: &Object) -> TagFormat {
+        let v = obj.data.get(TAG_FORMAT_KEY);
+        TagFormat {
+            levels: v
+                .and_then(|v| v.get("levels"))
+                .and_then(serde_json::Value::as_u64)
+                .map_or(1, |n| n.clamp(1, 3) as u8),
+            bubble: v
+                .and_then(|v| v.get("bubble"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        }
+    }
+}
+
 /// What a plant tag shows.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TagInfo {
@@ -217,12 +254,94 @@ pub struct TagInfo {
     pub code: String,
     /// Plants of this style on the layer of the tag.
     pub count: usize,
+    /// The plant name: the common name, else the botanical name (level 2).
+    pub name: String,
+    /// Size and container, for example `14-16 cm, C10` (level 3).
+    pub details: String,
+    pub format: TagFormat,
+}
+
+/// One line of text in a tag layout.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TagText {
+    /// Bottom left of the text, or its center if `centered`, from the label position. Y is up.
+    pub at: DVec2,
+    pub text: String,
+    pub centered: bool,
+}
+
+/// The shapes of a tag in model mm, relative to the label position `at`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TagLayout {
+    /// The ID bubble: center and radius.
+    pub bubble: Option<(DVec2, f64)>,
+    pub texts: Vec<TagText>,
 }
 
 impl TagInfo {
-    /// The tag text, for example `AC (12)`.
+    /// The tag text on one line, for example `AC (12)`.
     pub fn text(&self) -> String {
         format!("{} ({})", self.code, self.count)
+    }
+
+    /// The text lines from the top, by level.
+    pub fn lines(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if !self.format.bubble {
+            v.push(self.text());
+        } else {
+            v.push(format!("({})", self.count));
+        }
+        if self.format.levels >= 2 && !self.name.is_empty() {
+            v.push(self.name.clone());
+        }
+        if self.format.levels >= 3 && !self.details.is_empty() {
+            v.push(self.details.clone());
+        }
+        v
+    }
+
+    /// Where the text and the bubble go, for a text height of `h` mm.
+    pub fn layout(&self, h: f64) -> TagLayout {
+        let lines = self.lines();
+        let n = lines.len() as f64;
+        let step = 1.25 * h;
+        if self.format.bubble {
+            let chars = self.code.chars().count().max(2) as f64;
+            let r = h * (0.3 * chars + 0.5);
+            let x0 = 2.0 * r + 0.4 * h;
+            let mut texts = vec![TagText {
+                at: DVec2::new(r, 0.0),
+                text: self.code.clone(),
+                centered: true,
+            }];
+            for (k, t) in lines.into_iter().enumerate() {
+                let centre = ((n - 1.0) / 2.0 - k as f64) * step;
+                texts.push(TagText {
+                    at: DVec2::new(x0, centre - 0.5 * h),
+                    text: t,
+                    centered: false,
+                });
+            }
+            TagLayout {
+                bubble: Some((DVec2::new(r, 0.0), r)),
+                texts,
+            }
+        } else {
+            let texts = lines
+                .into_iter()
+                .enumerate()
+                .map(|(k, t)| TagText {
+                    at: DVec2::new(0.0, (n - 1.0 - k as f64) * step),
+                    text: t,
+                    centered: false,
+                })
+                .collect();
+            TagLayout {
+                bubble: None,
+                texts,
+            }
+        }
     }
 }
 
@@ -261,7 +380,24 @@ pub fn tag_info_with(doc: &Document, tag: ObjectId, counts: &TagCounts) -> Optio
         s.id_code.clone()
     };
     let count = counts.get(&(obj.layer, *style)).copied().unwrap_or(0);
-    Some(TagInfo { code, count })
+    let name = if s.common_name.trim().is_empty() {
+        s.botanical_name.clone()
+    } else {
+        s.common_name.clone()
+    };
+    let details = [s.size.trim(), s.container.trim()]
+        .iter()
+        .filter(|t| !t.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(TagInfo {
+        code,
+        count,
+        name,
+        details,
+        format: TagFormat::of(obj),
+    })
 }
 
 /// One existing tree in the tree list.
@@ -670,5 +806,87 @@ mod tests {
             (rows[0].condition, rows[0].action, rows[0].rpz_radius),
             ("good", "remove", 6000.0)
         );
+    }
+
+    fn info(levels: u8, bubble: bool) -> TagInfo {
+        TagInfo {
+            code: "AC".into(),
+            count: 12,
+            name: "Field maple".into(),
+            details: "P9, C2".into(),
+            format: TagFormat { levels, bubble },
+        }
+    }
+
+    #[test]
+    fn tag_lines_follow_the_levels_and_the_bubble() {
+        assert_eq!(info(1, false).lines(), vec!["AC (12)"]);
+        assert_eq!(info(2, false).lines(), vec!["AC (12)", "Field maple"]);
+        assert_eq!(
+            info(3, false).lines(),
+            vec!["AC (12)", "Field maple", "P9, C2"]
+        );
+        assert_eq!(info(3, true).lines()[0], "(12)");
+        // Empty fields leave their lines out.
+        let mut bare = info(3, false);
+        bare.name.clear();
+        bare.details.clear();
+        assert_eq!(bare.lines(), vec!["AC (12)"]);
+        assert_eq!(info(1, false).text(), "AC (12)");
+    }
+
+    #[test]
+    fn tag_layout_stacks_lines_and_places_the_bubble() {
+        let h = 400.0;
+        let plain = info(3, false).layout(h);
+        assert!(plain.bubble.is_none());
+        assert_eq!(plain.texts.len(), 3);
+        // The first line is the highest, and every line starts at the label position.
+        assert!(plain.texts[0].at.y > plain.texts[1].at.y);
+        assert!(plain.texts.iter().all(|t| t.at.x == 0.0 && !t.centered));
+        assert_eq!(plain.texts[2].at.y, 0.0);
+        let bubble = info(2, true).layout(h);
+        let (c, r) = bubble.bubble.unwrap();
+        assert_eq!(c.x, r);
+        assert!(bubble.texts[0].centered && bubble.texts[0].text == "AC");
+        // The text lines start to the right of the bubble.
+        assert!(bubble.texts[1..].iter().all(|t| t.at.x > 2.0 * r));
+        // A longer code gives a bigger bubble.
+        let mut long = info(1, true);
+        long.code = "ACPLX".into();
+        assert!(long.layout(h).bubble.unwrap().1 > r);
+    }
+
+    #[test]
+    fn tag_format_comes_from_the_data_and_defaults_to_one_level() {
+        let mut o = crate::model::Object::new(
+            ObjectId(1),
+            crate::model::FIRST_LAYER,
+            crate::model::NONE_CLASS,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::X,
+            },
+        );
+        assert_eq!(TagFormat::of(&o), TagFormat::default());
+        o.data.insert(
+            TAG_FORMAT_KEY.into(),
+            serde_json::json!({"levels": 3, "bubble": true}),
+        );
+        assert_eq!(
+            TagFormat::of(&o),
+            TagFormat {
+                levels: 3,
+                bubble: true
+            }
+        );
+        o.data
+            .insert(TAG_FORMAT_KEY.into(), serde_json::json!({"levels": 99}));
+        assert_eq!(TagFormat::of(&o).levels, 3);
+        o.data.insert(
+            TAG_FORMAT_KEY.into(),
+            serde_json::json!({"levels": 0, "bubble": "x"}),
+        );
+        assert_eq!(TagFormat::of(&o), TagFormat::default());
     }
 }

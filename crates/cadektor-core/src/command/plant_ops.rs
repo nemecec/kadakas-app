@@ -35,6 +35,20 @@ impl Tx<'_> {
                 v["type"].as_str().unwrap_or("resource")
             )));
         }
+        if let ResourceBody::PlantStyle(s) = body
+            && let Some(img) = s.image
+        {
+            let is_texture = matches!(
+                self.doc.resources.get(img).map(|r| &r.body),
+                Some(ResourceBody::Graphic(g)) if matches!(**g, crate::graphics::GraphicResource::Texture(_))
+            );
+            if !is_texture {
+                return Err(match self.doc.resources.get(img) {
+                    Some(_) => invalid(format!("resource {img} is not a texture (image)")),
+                    None => CommandError::NoResource(img),
+                });
+            }
+        }
         if let ResourceBody::LandscapeAreaStyle(s) = body {
             for e in &s.mix {
                 if self.doc.resources.plant_style(e.plant).is_none() {

@@ -126,6 +126,10 @@ pub enum Command {
     SetGeoreference {
         georef: Option<crate::georef::Georeference>,
     },
+    /// Replace the display rules: the N/E grid, the phase display and the data visualization.
+    SetViewRules {
+        rules: Box<crate::viewrules::ViewRules>,
+    },
     /// Set or clear the sun (heliodon) of the document.
     SetSun {
         sun: Option<crate::present::SunSettings>,
@@ -1029,6 +1033,10 @@ impl<'a> Tx<'a> {
                     return Err(CommandError::Invalid(NOT_FINITE.into()));
                 }
                 self.doc.georef = georef.clone();
+            }
+            Command::SetViewRules { rules } => {
+                rules.validate().map_err(CommandError::Invalid)?;
+                self.doc.drawing.view_rules = (**rules).clone();
             }
             Command::SetSun { .. }
             | Command::SetMaterialSlot { .. }

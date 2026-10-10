@@ -234,14 +234,35 @@ pub struct StepWriter<W: Write> {
 }
 
 impl<W: Write> StepWriter<W> {
-    /// Starts a file: writes the header section and opens the data section.
+    /// Starts an IFC4 file: writes the header section and opens the data section.
     pub fn begin(
+        out: W,
+        file_name: &str,
+        time_stamp: &str,
+        author: &str,
+        organization: &str,
+        view: &str,
+    ) -> io::Result<Self> {
+        Self::begin_schema(
+            out,
+            file_name,
+            time_stamp,
+            author,
+            organization,
+            view,
+            "IFC4",
+        )
+    }
+
+    /// Like `begin`, with the name of the schema for `FILE_SCHEMA`.
+    pub fn begin_schema(
         mut out: W,
         file_name: &str,
         time_stamp: &str,
         author: &str,
         organization: &str,
         view: &str,
+        schema: &str,
     ) -> io::Result<Self> {
         writeln!(out, "ISO-10303-21;")?;
         writeln!(out, "HEADER;")?;
@@ -254,7 +275,7 @@ impl<W: Write> StepWriter<W> {
             encode_string(author),
             encode_string(organization)
         )?;
-        writeln!(out, "FILE_SCHEMA(('IFC4'));")?;
+        writeln!(out, "FILE_SCHEMA(('{}'));", encode_string(schema))?;
         writeln!(out, "ENDSEC;")?;
         writeln!(out, "DATA;")?;
         Ok(StepWriter { out, next: 1 })

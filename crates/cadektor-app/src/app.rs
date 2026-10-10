@@ -1293,6 +1293,8 @@ impl eframe::App for CadektorApp {
                     ui.add_space(12.0);
                     panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
                     ui.add_space(12.0);
+                    crate::rules_ui::section(ui, &mut self.session, &mut self.status);
+                    ui.add_space(12.0);
                     plant_ui::resource_manager(
                         ui,
                         &mut self.session,

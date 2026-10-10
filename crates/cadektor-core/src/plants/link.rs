@@ -200,6 +200,19 @@ pub fn rotation(obj: &Object) -> f64 {
 /// The key in `Object::data` that holds the rotation of a plant.
 pub const ROTATION_KEY: &str = "rotation";
 
+/// The key in `Object::data` that holds the height of the ground under a plant or an existing
+/// tree, in mm, absolute. Set by `plants.drape` (Place on terrain). The 3D view puts the plant there.
+pub const GROUND_Z_KEY: &str = "ground_z";
+
+/// The height of the ground under a plant (see [`GROUND_Z_KEY`]). `None` if the plant sits at
+/// the elevation of its layer.
+pub fn ground_z(obj: &Object) -> Option<f64> {
+    obj.data
+        .get(GROUND_Z_KEY)
+        .and_then(Value::as_f64)
+        .filter(|z| z.is_finite())
+}
+
 /// The effective fields of a plant object, or `None` if the object is not a plant.
 /// A plant without a style (or with a style that no longer exists) gives its shape fields.
 pub fn effective(doc: &Document, obj: &Object) -> Option<Effective> {
@@ -688,5 +701,53 @@ mod tests {
         };
         adopt_shape_edit(&doc, &plain, &mut p2);
         assert_eq!(link(&p2), None);
+    }
+
+    #[test]
+    fn ground_height_lifts_the_plant_in_the_3d_scene() {
+        use crate::command::{Command, Editor};
+        use crate::model::Document;
+        let mut ed = Editor::new(Document::default());
+        let out = ed
+            .execute(&Command::AddPlants {
+                style: None,
+                overrides: serde_json::json!({"spread": 1000.0, "height": 2000.0})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                positions: vec![glam::DVec2::ZERO],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
+        let id = crate::model::ObjectId(out.created[0]);
+        let o = ed.doc().object(id).unwrap();
+        assert_eq!(ground_z(o), None);
+        let low = crate::mesh::build(ed.doc());
+        let top = |s: &crate::mesh::Scene| s.bounds.unwrap().1.z as f64 + s.origin.z;
+        let before = top(&low);
+        ed.execute(&Command::SetData {
+            id,
+            set: [(GROUND_Z_KEY.to_string(), serde_json::json!(5000.0))].into(),
+            remove: vec![],
+        })
+        .unwrap();
+        assert_eq!(ground_z(ed.doc().object(id).unwrap()), Some(5000.0));
+        let high = crate::mesh::build(ed.doc());
+        assert!(
+            (top(&high) - before - 5000.0).abs() < 1.0,
+            "{} {}",
+            top(&high),
+            before
+        );
+        // A bad value is ignored.
+        ed.execute(&Command::SetData {
+            id,
+            set: [(GROUND_Z_KEY.to_string(), serde_json::json!("high"))].into(),
+            remove: vec![],
+        })
+        .unwrap();
+        assert_eq!(ground_z(ed.doc().object(id).unwrap()), None);
     }
 }

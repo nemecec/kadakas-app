@@ -7,7 +7,6 @@ use glam::DVec2;
 use crate::curve;
 use crate::model::*;
 use crate::plants::graphic::{self, GraphicPath};
-use crate::plants::link;
 use crate::plants::schedule;
 use crate::plants::style::PlantGraphic;
 use crate::plants::tree::{self, TreeAction};
@@ -118,6 +117,39 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" viewBox="{} {} {} {}">"#,
         lo.x, -hi.y, size.x, size.y
     );
+    if let (Some(g), Some(grid)) = (&doc.georef, &doc.drawing.view_rules.ne_grid) {
+        let [r, gr, b, _] = grid.color.0;
+        let text_h = if grid.label_height > 0.0 {
+            grid.label_height
+        } else {
+            (hi - lo).max_element() * 0.012
+        };
+        let _ = writeln!(
+            s,
+            r#"<g data-kind="ne_grid" stroke="rgb({r},{gr},{b})" fill="rgb({r},{gr},{b})" stroke-width="{}" font-size="{text_h}">"#,
+            (hi - lo).max_element() * 0.0008
+        );
+        for l in crate::viewrules::grid_lines(g, grid, lo, hi) {
+            let _ = writeln!(
+                s,
+                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
+                l.a.x, -l.a.y, l.b.x, -l.b.y
+            );
+            if grid.labels {
+                // The label sits where the line enters the drawing box.
+                let at = l.a.clamp(lo, hi);
+                let _ = writeln!(
+                    s,
+                    r#"<text x="{}" y="{}" stroke="none">{}</text>"#,
+                    at.x, -at.y, l.label
+                );
+            }
+        }
+        s.push_str(
+            "</g>
+",
+        );
+    }
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     // Underlays (map backgrounds) go below everything else.
@@ -145,7 +177,11 @@ fn draw_object(
     if depth > crate::symbols::MAX_DEPTH + 2 {
         return;
     }
-    let a = crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let a = crate::viewrules::display_attrs(
+        doc,
+        o,
+        crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o)),
+    );
     let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
     let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
     let fill = a.fill.unwrap_or(Color::NONE).to_css();
@@ -339,7 +375,7 @@ fn draw_object(
             ..
         } => {
             // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
-            let look = link::look(doc, o);
+            let look = crate::viewrules::plant_look(doc, o);
             let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
                 let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
                 let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
@@ -447,19 +483,41 @@ fn draw_object(
         Shape::PlantTag {
             at, anchor, height, ..
         } => {
-            let text = schedule::tag_info_with(doc, o.id, tag_counts)
-                .map_or_else(|| "?".to_string(), |t| t.text());
-            writeln!(
-                s,
-                r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
-                anchor.x,
-                -anchor.y,
-                at.x,
-                -at.y,
-                at.x,
-                -at.y,
-                esc(&text)
-            )
+            let layout = schedule::tag_info_with(doc, o.id, tag_counts).map(|t| t.layout(*height));
+            match layout {
+                None => writeln!(
+                    s,
+                    r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">?</text></g>"#,
+                    anchor.x, -anchor.y, at.x, -at.y, at.x, -at.y
+                ),
+                Some(l) => {
+                    let mut g = format!(
+                        r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#,
+                        anchor.x, -anchor.y, at.x, -at.y
+                    );
+                    if let Some((c, r)) = l.bubble {
+                        g += &format!(
+                            r#"<circle cx="{}" cy="{}" r="{r}" fill="none" stroke="{stroke}" stroke-width="{sw}" data-kind="plant_tag_bubble"/>"#,
+                            at.x + c.x,
+                            -(at.y + c.y)
+                        );
+                    }
+                    for t in &l.texts {
+                        let (x, y) = (at.x + t.at.x, -(at.y + t.at.y));
+                        let anchor_attr = if t.centered {
+                            r#" text-anchor="middle" dominant-baseline="central""#
+                        } else {
+                            ""
+                        };
+                        g += &format!(
+                            r#"<text x="{x}" y="{y}" font-size="{height}" font-family="sans-serif" fill="{stroke}"{anchor_attr}>{}</text>"#,
+                            esc(&t.text)
+                        );
+                    }
+                    g += "</g>";
+                    writeln!(s, "{g}")
+                }
+            }
         }
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
             let res = if curve::all_straight(boundary) {

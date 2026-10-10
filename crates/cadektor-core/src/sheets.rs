@@ -262,6 +262,9 @@ pub struct Drawing {
     /// Materials in use, the sun and the render style (see `crate::present`).
     #[serde(default)]
     pub presentation: crate::present::Presentation,
+    /// The N/E grid, the display of phases and the data visualization (see `crate::viewrules`).
+    #[serde(default, skip_serializing_if = "crate::viewrules::ViewRules::is_empty")]
+    pub view_rules: crate::viewrules::ViewRules,
     /// Fields that this version does not know. They are saved again unchanged.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,

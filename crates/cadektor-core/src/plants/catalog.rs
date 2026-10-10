@@ -16,7 +16,7 @@ use super::style::{PlantCategory, PlantForm, PlantGraphic, PlantStyle};
 use crate::model::Color;
 
 /// Fields that a column can set, in export order.
-pub const FIELDS: [&str; 15] = [
+pub const FIELDS: [&str; 19] = [
     "name",
     "botanical_name",
     "common_name",
@@ -32,6 +32,10 @@ pub const FIELDS: [&str; 15] = [
     "size",
     "container",
     "root",
+    "water_need",
+    "hydrozone",
+    "hours_per_year",
+    "image",
 ];
 
 /// The unit of lengths in a CSV file.
@@ -187,6 +191,10 @@ fn field_for_key(key: &str) -> Option<&'static str> {
         "size" | "plantsize" => "size",
         "container" | "pot" | "potsize" | "containersize" => "container",
         "root" | "roottype" | "rootball" => "root",
+        "waterneed" | "wateruse" | "wucols" | "waterusecategory" => "water_need",
+        "hydrozone" | "hydrozones" | "irrigationzone" | "zone" => "hydrozone",
+        "hoursperyear" | "maintenancehours" | "annualhours" => "hours_per_year",
+        "image" | "picture" | "photo" | "imagename" => "image",
         _ => return None,
     })
 }
@@ -477,6 +485,20 @@ fn read_row(
                         Ok(c) => s.pen = c,
                         Err(e) => warns.push(e),
                     },
+                    "water_need" => match super::care::WaterNeed::from_name(cell) {
+                        Some(w) => s.irrigation.water_need = w,
+                        None => warns.push(format!(
+                            "'{cell}' is not a water need. Use very low, low, moderate or high"
+                        )),
+                    },
+                    "hydrozone" => s.irrigation.hydrozone = cell.to_string(),
+                    // The picture is a resource of the document. The file only names it.
+                    "image" => {}
+                    "hours_per_year" => {
+                        if let Ok(Some(v)) = num(&mut warns) {
+                            s.maintenance.hours_per_year = v;
+                        }
+                    }
                     "price" => {
                         if let Ok(Some(v)) = num(&mut warns) {
                             s.price = v;
@@ -568,6 +590,10 @@ pub fn export<'a>(styles: impl IntoIterator<Item = (&'a str, &'a PlantStyle)>) -
             s.size.clone(),
             s.container.clone(),
             s.root.clone(),
+            s.irrigation.water_need.id().into(),
+            s.irrigation.hydrozone.clone(),
+            number(s.maintenance.hours_per_year),
+            String::new(),
         ];
         r.extend(
             custom
@@ -644,7 +670,13 @@ mod tests {
             classify("custom:Water Need"),
             Column::Custom("Water Need".into())
         );
-        assert_eq!(classify("Water need"), Column::Custom("Water need".into()));
+        assert_eq!(classify("Water need"), Column::Field("water_need", None));
+        assert_eq!(classify("Hydrozone"), Column::Field("hydrozone", None));
+        assert_eq!(
+            classify("Hours per year"),
+            Column::Field("hours_per_year", None)
+        );
+        assert_eq!(classify("Image"), Column::Field("image", None));
         assert_eq!(
             classify("weight (kg)"),
             Column::Custom("weight (kg)".into())
@@ -703,7 +735,10 @@ mod tests {
             (8000.0, 15000.0, 120.5)
         );
         assert_eq!(s.style.category, PlantCategory::Tree);
-        assert_eq!(s.style.custom["Water need"], "low");
+        assert_eq!(
+            s.style.irrigation.water_need,
+            crate::plants::care::WaterNeed::Low
+        );
     }
 
     #[test]

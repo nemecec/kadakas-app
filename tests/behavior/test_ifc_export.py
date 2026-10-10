@@ -132,7 +132,7 @@ def test_options_storeys_2d_and_layers(cad, tmp_path):
 def test_bad_options_and_path_policy(cad, tmp_path):
     garden(cad)
     out = tmp_path / "x.ifc"
-    assert cad.error("export.file", {"path": str(out), "format": "ifc", "options": {"version": "IFC2X3"}})["code"] == -32602
+    assert cad.error("export.file", {"path": str(out), "format": "ifc", "options": {"version": "IFC5"}})["code"] == -32602
     assert cad.error("export.file", {"path": str(out), "format": "ifc", "options": {"colour": 1}})["code"] == -32602
     assert not out.exists()
     # The extension must match the format, and an existing file needs overwrite.

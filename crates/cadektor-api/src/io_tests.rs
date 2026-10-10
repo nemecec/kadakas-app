@@ -314,7 +314,7 @@ fn ifc_export_follows_the_path_policy_and_never_changes_the_document() {
         call(
             &mut s,
             "export.file",
-            json!({"path": inside.join("x.ifc"), "options": {"version": "IFC2X3"}})
+            json!({"path": inside.join("x.ifc"), "options": {"version": "IFC5"}})
         )
         .unwrap_err()
         .code,

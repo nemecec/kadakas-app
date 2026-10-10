@@ -944,6 +944,10 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
     }
     if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
         crate::plant_ui::plant_object_info(ui, session, id, status);
+        crate::plant_ui::terrain_buttons(ui, session, id, status);
+    }
+    if matches!(obj.shape, Shape::PlantTag { .. }) {
+        crate::plant_ui::plant_tag_info(ui, session, id, status);
     }
     if matches!(
         obj.shape,

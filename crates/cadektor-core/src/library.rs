@@ -36,7 +36,7 @@ pub fn body_refs(body: &ResourceBody) -> Vec<ResourceId> {
     match body {
         ResourceBody::Graphic(g) => g.refs().into_iter().map(|(r, _)| r).collect(),
         ResourceBody::LandscapeAreaStyle(s) => s.mix.iter().map(|e| e.plant).collect(),
-        ResourceBody::PlantStyle(s) => s.plan_symbol.into_iter().collect(),
+        ResourceBody::PlantStyle(s) => s.plan_symbol.into_iter().chain(s.image).collect(),
         _ => Vec::new(),
     }
 }
@@ -47,7 +47,10 @@ pub fn remap_body(body: &ResourceBody, f: &dyn Fn(ResourceId) -> ResourceId) -> 
     match &mut b {
         ResourceBody::Graphic(g) => g.remap(f),
         ResourceBody::LandscapeAreaStyle(s) => s.mix.iter_mut().for_each(|e| e.plant = f(e.plant)),
-        ResourceBody::PlantStyle(s) => s.plan_symbol = s.plan_symbol.map(f),
+        ResourceBody::PlantStyle(s) => {
+            s.plan_symbol = s.plan_symbol.map(f);
+            s.image = s.image.map(f);
+        }
         _ => {}
     }
     b

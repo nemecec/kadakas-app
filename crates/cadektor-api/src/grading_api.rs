@@ -52,16 +52,19 @@ pub const WALL_REPORT: (&str, &str) = (
     "wall.report",
     "Wall quantities. params: {ids?} (default all walls). Returns {rows: [{id, style, length_m, thickness_mm, face_area_m2 (one face), both_faces_m2, volume_m3, coping_volume_m3, min_height_mm, max_height_mm, avg_height_mm, top_start_mm, top_end_mm, bottom_start_mm, bottom_end_mm, outside_model (stations off the site model), partly_off_model}], totals}. Off the model a wall takes the height of the nearest edge of the model. Stations lie at every corner and at most 500 mm apart; the height between two stations is linear.",
 );
+mod retaining;
 #[cfg(test)]
 mod tests;
 
+pub use retaining::{PAD_ADD, PAD_RETAINING_EDGE};
+
 pub const GRADE_ADD: (&str, &str) = (
     "grade.add",
-    "Add a grade object: a line from a to b with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. params: {a: [x, y], b: [x, y], elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.",
+    "Add a grade object: a line from a to b, or a curve (path), with elevations. Give elevation_a and elevation_b, or elevation_a and a slope, or snap. On a curve the slope is along the curve. params: {a: [x, y], b: [x, y] | path: [vertices] (a curve with arcs; instead of a and b), site_modifier? (the grade changes the proposed surface: a strip of width along the path follows its elevations; no snap), width? (mm, default 1500), elevation_a?, elevation_b?, slope? ({percent: 2} | {ratio: 50} (1:50) | {angle: 1.2} (degrees); positive rises from a to b), snap? (existing | proposed: both elevations are read from the site model, live), site?, label?, end_tags?, layer?, class?}. Returns {id, grade}.",
 );
 pub const GRADE_SET: (&str, &str) = (
     "grade.set",
-    "Change a grade object. params: {id, a?, b?, ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.",
+    "Change a grade object. params: {id, a?, b?, path? (replaces the shape with a curve), ...settings as in grade.add; null removes elevation_b, slope or snap}. The slope, the end elevation and the label follow the line. Returns {id, grade}.",
 );
 pub const GRADE_GET: (&str, &str) = (
     "grade.get",
@@ -143,6 +146,8 @@ pub fn knows(method: &str) -> bool {
             | "section.set"
             | "section.profile"
             | "section.place"
+            | "pad.add"
+            | "pad.retaining_edge"
     )
 }
 
@@ -164,6 +169,21 @@ fn take_point(m: &mut Map<String, Value>, key: &str) -> Result<Option<DVec2>, Rp
         return Err(bad(format!("'{key}' must be finite numbers")));
     }
     Ok(Some(p))
+}
+
+/// Removes `path` from the parameters and reads it as vertices (at least two).
+fn take_path(m: &mut Map<String, Value>) -> Result<Option<Vec<Vertex>>, RpcError> {
+    let Some(v) = m.remove("path") else {
+        return Ok(None);
+    };
+    let path: Vec<Vertex> = serde_json::from_value(v).map_err(|e| bad(format!("bad path: {e}")))?;
+    if path.len() < 2 {
+        return Err(bad("a grade path needs 2 or more points"));
+    }
+    if !path.iter().all(Vertex::is_finite) {
+        return Err(bad("the path numbers must be finite"));
+    }
+    Ok(Some(path))
 }
 
 fn need_point(m: &mut Map<String, Value>, key: &str) -> Result<DVec2, RpcError> {
@@ -298,6 +318,8 @@ impl Session {
             "section.set" => self.section_set(m),
             "section.profile" => self.section_profile(m),
             "section.place" => self.section_place(m),
+            "pad.add" => self.pad_add(Value::Object(m)),
+            "pad.retaining_edge" => self.pad_retaining_edge(Value::Object(m)),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -613,11 +635,10 @@ impl Session {
     // ---- grade objects ----
 
     /// Solves a grade before anything is changed, so a bad grade changes nothing.
-    fn solve_grade(
+    fn solve_grade_path(
         &self,
         layer: LayerId,
-        a: DVec2,
-        b: DVec2,
+        path: &[DVec2],
         d: &grade::GradeData,
     ) -> Result<grade::Grade, RpcError> {
         let doc = self.editor.doc();
@@ -625,7 +646,7 @@ impl Session {
             grading::host(doc, &self.site_cache, self.editor.revision(), layer, d.site)
         });
         let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
-        grade::solve(a, b, d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)
+        grade::solve_path(path, d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)
     }
 
     fn grade_value(id: ObjectId, g: &grade::Grade) -> Value {
@@ -645,29 +666,42 @@ impl Session {
 
     fn grade_json(&self, id: ObjectId) -> Result<Value, RpcError> {
         let obj = self.object(id)?;
-        let Shape::Line { a, b } = &obj.shape else {
-            return Err(RpcError::validation(format!(
-                "object {id} is not a grade object"
-            )));
-        };
         let d = grade::data(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a grade object")))?;
+        let path = grade::path_of(obj, 2.0)
             .ok_or_else(|| RpcError::validation(format!("object {id} is not a grade object")))?;
         Ok(Self::grade_value(
             id,
-            &self.solve_grade(obj.layer, *a, *b, &d)?,
+            &self.solve_grade_path(obj.layer, &path, &d)?,
         ))
     }
 
     fn grade_add(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let (layer, class) = take_where(&mut m)?;
-        let (a, b) = (need_point(&mut m, "a")?, need_point(&mut m, "b")?);
+        // A curve: `path` (vertices, arcs allowed) instead of `a` and `b`.
+        let curve = take_path(&mut m)?;
+        let shape = match &curve {
+            Some(points) => Shape::Polyline {
+                points: points.clone(),
+                closed: false,
+            },
+            None => Shape::Line {
+                a: need_point(&mut m, "a")?,
+                b: need_point(&mut m, "b")?,
+            },
+        };
         let data: grade::GradeData = patched(&grade::GradeData::default(), &m, "grade")?;
         data.validate().map_err(bad)?;
         // Solve first: a grade that cannot be solved (both ends in one place, or a snap off the model) is refused.
         let on = layer.unwrap_or(self.editor.doc().active_layer);
-        let solved = self.solve_grade(on, a, b, &data)?;
+        let path = match &shape {
+            Shape::Line { a, b } => vec![*a, *b],
+            Shape::Polyline { points, .. } => cadektor_core::curve::flatten(points, false, 2.0),
+            _ => unreachable!(),
+        };
+        let solved = self.solve_grade_path(on, &path, &data)?;
         let id = self.add_object_with(
-            Shape::Line { a, b },
+            shape,
             layer,
             class,
             grade::KEY,
@@ -679,19 +713,47 @@ impl Session {
     fn grade_set(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
         let id = take_id(&mut m, "id")?;
         let (a, b) = (take_point(&mut m, "a")?, take_point(&mut m, "b")?);
+        let curve = take_path(&mut m)?;
         let obj = self.object(id)?;
-        let Shape::Line { a: old_a, b: old_b } = obj.shape else {
-            return Err(RpcError::validation(format!(
-                "object {id} is not a grade object"
-            )));
-        };
         let current = grade::data(obj)
             .ok_or_else(|| RpcError::validation(format!("object {id} is not a grade object")))?;
         let data: grade::GradeData = patched(&current, &m, "grade")?;
         data.validate().map_err(bad)?;
-        let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
-        let solved = self.solve_grade(obj.layer, na, nb, &data)?;
-        let shape = (a.is_some() || b.is_some()).then_some(Shape::Line { a: na, b: nb });
+        let (shape, path) = match (&curve, &obj.shape) {
+            (Some(points), _) => {
+                if a.is_some() || b.is_some() {
+                    return Err(bad("give a path, or a and b, not both"));
+                }
+                (
+                    Some(Shape::Polyline {
+                        points: points.clone(),
+                        closed: false,
+                    }),
+                    cadektor_core::curve::flatten(points, false, 2.0),
+                )
+            }
+            (None, Shape::Line { a: old_a, b: old_b }) => {
+                let (na, nb) = (a.unwrap_or(*old_a), b.unwrap_or(*old_b));
+                (
+                    (a.is_some() || b.is_some()).then_some(Shape::Line { a: na, b: nb }),
+                    vec![na, nb],
+                )
+            }
+            (None, _) => {
+                if a.is_some() || b.is_some() {
+                    return Err(bad(
+                        "this grade is a curve: change its 'path', or give a path to replace it",
+                    ));
+                }
+                (
+                    None,
+                    grade::path_of(obj, 2.0).ok_or_else(|| {
+                        RpcError::validation(format!("object {id} is not a grade object"))
+                    })?,
+                )
+            }
+        };
+        let solved = self.solve_grade_path(obj.layer, &path, &data)?;
         self.change_object(
             id,
             shape,

@@ -1211,6 +1211,7 @@ impl Document {
             .is_some_and(|l| l.visible && l.kind == LayerKind::Design)
             && self.class(obj.class).is_some_and(|c| c.visible)
             && !crate::symbols::is_being_edited(obj)
+            && !crate::viewrules::hidden_by_phase(self, obj)
     }
 
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the

@@ -12,6 +12,9 @@
 //! - `fill`: fill a closed boundary, by `spacing`, by `count` or by `density`
 //!   (plants per square meter).
 //! - `poly`: one plant at each vertex of a polyline that the user drew.
+//! - `hedgerow`: several rows along a path, `row_spacing` apart, centered on the path. With
+//!   `stagger`, every second row starts half a `spacing` further along, so the plants of
+//!   neighbor rows do not stand side by side.
 //!
 //! Rules that hold for the results (and that the tests check):
 //!
@@ -106,6 +109,33 @@ pub enum PlaceSpec {
     Poly {
         points: Vec<Vertex>,
     },
+    Hedgerow {
+        path: Vec<Vertex>,
+        #[serde(default)]
+        closed: bool,
+        /// Distance between plants along a row.
+        spacing: f64,
+        /// Number of rows, 1 to [`MAX_ROWS`]. Default 2.
+        #[serde(default = "default_rows")]
+        rows: usize,
+        /// Distance between rows. Needed for more than one row.
+        #[serde(default)]
+        row_spacing: Option<f64>,
+        /// Shift every second row by half a spacing. Default true.
+        #[serde(default = "yes")]
+        stagger: bool,
+    },
+}
+
+/// The most rows of a hedgerow.
+pub const MAX_ROWS: usize = 20;
+
+fn default_rows() -> usize {
+    2
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Random variation of placed plants. The same seed always gives the same plants.
@@ -221,6 +251,21 @@ pub fn place(spec: &PlaceSpec) -> Result<Vec<DVec2>, PlaceError> {
                 .collect::<Result<Vec<_>, _>>()?;
             fill_with_holes(&ring, &holes, *spacing, *count, *density, *pattern, *margin)?
         }
+        PlaceSpec::Hedgerow {
+            path,
+            closed,
+            spacing,
+            rows,
+            row_spacing,
+            stagger,
+        } => hedgerow(
+            &flat(path, *closed)?,
+            *closed,
+            *spacing,
+            *rows,
+            *row_spacing,
+            *stagger,
+        )?,
         PlaceSpec::Poly { points } => {
             if points.len() > MAX_POINTS {
                 return bad(format!(
@@ -369,6 +414,72 @@ pub fn along_path(
         .into_iter()
         .map(|d| point_at(&pts, &cum, d.min(len)))
         .collect())
+}
+
+/// Rows of plants along a path. Row `k` lies `(k - (rows - 1) / 2) * row_spacing` to the left of
+/// the path (negative: right). With `stagger`, odd rows start half a spacing along the path.
+pub fn hedgerow(
+    path: &[DVec2],
+    closed: bool,
+    spacing: f64,
+    rows: usize,
+    row_spacing: Option<f64>,
+    stagger: bool,
+) -> Result<Vec<DVec2>, PlaceError> {
+    if path.len() < 2 {
+        return bad("a path needs 2 or more points");
+    }
+    let spacing = check_spacing(spacing)?;
+    if rows == 0 || rows > MAX_ROWS {
+        return bad(format!("rows must be from 1 to {MAX_ROWS}"));
+    }
+    let row_spacing = match (rows, row_spacing) {
+        (1, rs) => rs.unwrap_or(0.0),
+        (_, Some(r)) if r.is_finite() && r >= MIN_SPACING => r,
+        (_, _) => {
+            return bad(format!(
+                "give row_spacing: a distance of {MIN_SPACING} mm or more between rows"
+            ));
+        }
+    };
+    let mut pts = path.to_vec();
+    if closed && pts.first() != pts.last() {
+        pts.push(pts[0]);
+    }
+    let mut cum = vec![0.0];
+    for w in pts.windows(2) {
+        cum.push(cum.last().unwrap() + w[0].distance(w[1]));
+    }
+    let len = *cum.last().unwrap();
+    if len <= EPS {
+        return bad("the path has no length");
+    }
+    if rows as f64 * (len / spacing + 1.0) > 2.0 * MAX_POINTS as f64 {
+        return bad("the spacing is too small for this path");
+    }
+    let mut out = Vec::new();
+    for k in 0..rows {
+        let offset = (k as f64 - (rows as f64 - 1.0) / 2.0) * row_spacing;
+        let shift = if stagger && k % 2 == 1 {
+            spacing / 2.0
+        } else {
+            0.0
+        };
+        // A closed row keeps a full spacing between its last plant and its first.
+        let limit = if closed { len - spacing + shift } else { len } + 1e-6;
+        let mut d = shift;
+        while d <= limit && d < len + 1e-6 && out.len() <= MAX_POINTS {
+            if closed && d >= len - 1e-6 {
+                break;
+            }
+            let i = cum.partition_point(|c| *c < d).clamp(1, pts.len() - 1);
+            let dir = (pts[i] - pts[i - 1]).normalize_or_zero();
+            let normal = DVec2::new(-dir.y, dir.x);
+            out.push(point_at(&pts, &cum, d.min(len)) + normal * offset);
+            d += spacing;
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,5 +1551,84 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(place(&spec).unwrap().len(), 81 - 9);
+    }
+
+    #[test]
+    fn hedgerow_makes_staggered_rows_centered_on_the_path() {
+        let path = [DVec2::new(0.0, 0.0), DVec2::new(5000.0, 0.0)];
+        let pts = hedgerow(&path, false, 1000.0, 2, Some(600.0), true).unwrap();
+        // Row 0 lies 300 mm right of the path (y = -300), row 1 300 mm left; row 1 starts at 500.
+        let row0: Vec<_> = pts.iter().filter(|p| (p.y + 300.0).abs() < 1e-9).collect();
+        let row1: Vec<_> = pts.iter().filter(|p| (p.y - 300.0).abs() < 1e-9).collect();
+        assert_eq!((row0.len(), row1.len()), (6, 5));
+        assert!((row0[0].x - 0.0).abs() < 1e-9 && (row1[0].x - 500.0).abs() < 1e-9);
+        // Without stagger the rows stand side by side.
+        let flat_rows = hedgerow(&path, false, 1000.0, 2, Some(600.0), false).unwrap();
+        assert_eq!(flat_rows.len(), 12);
+        // One row needs no row spacing, three rows are 600 apart, the middle one is on the path.
+        assert_eq!(
+            hedgerow(&path, false, 1000.0, 1, None, true).unwrap().len(),
+            6
+        );
+        let three = hedgerow(&path, false, 1000.0, 3, Some(600.0), true).unwrap();
+        assert!(three.iter().any(|p| p.y.abs() < 1e-9));
+        assert!(three.iter().any(|p| (p.y - 600.0).abs() < 1e-9));
+        // Errors.
+        for (rows, rs, sp) in [
+            (0, Some(600.0), 1000.0),
+            (21, Some(600.0), 1000.0),
+            (2, None, 1000.0),
+            (2, Some(1.0), 1000.0),
+            (2, Some(600.0), 1.0),
+        ] {
+            assert!(hedgerow(&path, false, sp, rows, rs, true).is_err());
+        }
+        assert!(hedgerow(&path[..1], false, 1000.0, 1, None, true).is_err());
+        assert!(hedgerow(&[DVec2::ZERO, DVec2::ZERO], false, 1000.0, 1, None, true).is_err());
+    }
+
+    #[test]
+    fn hedgerow_follows_a_closed_path_and_the_spec_parses() {
+        let square = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4000.0, 0.0),
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(0.0, 4000.0),
+        ];
+        let pts = hedgerow(&square, true, 1000.0, 1, None, true).unwrap();
+        assert_eq!(pts.len(), 16);
+        let spec: PlaceSpec = serde_json::from_value(serde_json::json!({
+            "mode": "hedgerow", "path": [[0, 0], [5000, 0]], "spacing": 1000, "row_spacing": 500
+        }))
+        .unwrap();
+        // Two rows by default, staggered.
+        assert_eq!(place(&spec).unwrap().len(), 11);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn hedgerow_rows_keep_their_spacing(
+            len in 2000.0f64..30000.0,
+            spacing in 200.0f64..2000.0,
+            rows in 1usize..6,
+            row_spacing in 200.0f64..1500.0,
+            stagger in proptest::bool::ANY,
+        ) {
+            let path = [DVec2::ZERO, DVec2::new(len, 0.0)];
+            let pts = hedgerow(&path, false, spacing, rows, Some(row_spacing), stagger).unwrap();
+            // Every plant lies within the band of the rows and no two plants of a row are closer than the spacing.
+            let half = (rows as f64 - 1.0) / 2.0 * row_spacing;
+            for p in &pts {
+                proptest::prop_assert!(p.y.abs() <= half + 1e-6);
+                proptest::prop_assert!(p.x >= -1e-6 && p.x <= len + 1e-6);
+            }
+            for a in &pts {
+                for b in &pts {
+                    if a != b && (a.y - b.y).abs() < 1e-9 {
+                        proptest::prop_assert!(a.distance(*b) >= spacing - 1e-6);
+                    }
+                }
+            }
+        }
     }
 }

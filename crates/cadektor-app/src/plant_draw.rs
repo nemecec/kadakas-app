@@ -142,7 +142,7 @@ pub fn draw_tag(
     at: DVec2,
     anchor: DVec2,
     height: f64,
-    text: &str,
+    layout: Option<&cadektor_core::plants::schedule::TagLayout>,
     st: Style,
     offset: DVec2,
 ) {
@@ -151,14 +151,35 @@ pub fn draw_tag(
     painter.line_segment([a, l], stroke);
     painter.circle_filled(a, 2.5, st.pen);
     let size = (height * view.zoom) as f32;
-    if size >= 3.0 {
-        painter.text(
-            l,
-            egui::Align2::LEFT_BOTTOM,
-            text,
-            egui::FontId::proportional(size.min(400.0)),
-            st.pen,
+    let font = egui::FontId::proportional(size.clamp(0.0, 400.0));
+    let Some(layout) = layout else {
+        if size >= 3.0 {
+            painter.text(l, egui::Align2::LEFT_BOTTOM, "?", font, st.pen);
+        }
+        return;
+    };
+    if let Some((c, r)) = layout.bubble {
+        painter.circle_stroke(
+            view.to_screen(at + offset + c),
+            (r * view.zoom) as f32,
+            stroke,
         );
+    }
+    if size >= 3.0 {
+        for t in &layout.texts {
+            let anchor = if t.centered {
+                egui::Align2::CENTER_CENTER
+            } else {
+                egui::Align2::LEFT_BOTTOM
+            };
+            painter.text(
+                view.to_screen(at + offset + t.at),
+                anchor,
+                &t.text,
+                font.clone(),
+                st.pen,
+            );
+        }
     }
 }
 
@@ -248,13 +269,23 @@ mod tests {
                 st,
                 DVec2::ZERO,
             );
+            let info = cadektor_core::plants::schedule::TagInfo {
+                code: "AC".into(),
+                count: 3,
+                name: "Maple".into(),
+                details: "C10".into(),
+                format: cadektor_core::plants::schedule::TagFormat {
+                    levels: 3,
+                    bubble: true,
+                },
+            };
             draw_tag(
                 &painter,
                 &view,
                 DVec2::new(10.0, 10.0),
                 DVec2::ZERO,
                 400.0,
-                "AC (3)",
+                Some(&info.layout(400.0)),
                 st,
                 DVec2::ZERO,
             );
@@ -264,7 +295,7 @@ mod tests {
                 DVec2::new(10.0, 10.0),
                 DVec2::ZERO,
                 0.001,
-                "AC (3)",
+                None,
                 st,
                 DVec2::ZERO,
             );

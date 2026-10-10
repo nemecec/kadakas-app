@@ -963,3 +963,98 @@ fn walls_and_sections_off_the_model_take_the_nearest_edge_height() {
     assert_eq!(run.first().unwrap()[1], 0.0);
     assert_eq!(run.last().unwrap()[1], 1000.0);
 }
+
+#[test]
+fn a_curved_grade_has_one_slope_along_the_curve_and_can_change_the_ground() {
+    let (mut s, site) = session_with_site();
+    // A quarter circle of radius 4 m, from (2000, 6000) to (6000, 2000), rising 2 percent along the curve.
+    let path = json!([[2000, 6000], {"p": [3171.573, 3171.573], "kind": "point_on_arc"}, {"p": [6000, 2000], "kind": "point_on_arc"}]);
+    let r = ok(
+        &mut s,
+        "grade.add",
+        json!({"path": path, "elevation_a": 5000, "slope": {"percent": 2}}),
+    );
+    let id = r["id"].as_u64().unwrap();
+    let arc = 4000.0 * std::f64::consts::FRAC_PI_2;
+    assert!(
+        (r["grade"]["length_mm"].as_f64().unwrap() - arc).abs() < 10.0,
+        "{r}"
+    );
+    assert!((r["grade"]["percent"].as_f64().unwrap() - 2.0).abs() < 0.01);
+    assert_eq!(
+        ok(&mut s, "grade.get", json!({"id": id}))["label"],
+        r["grade"]["label"]
+    );
+    // Changing the shape of the curve changes the grade.
+    let r2 = ok(
+        &mut s,
+        "grade.set",
+        json!({"id": id, "path": [[0, 0], [10000, 0]], "elevation_b": 5200}),
+    );
+    assert!((r2["grade"]["length_mm"].as_f64().unwrap() - 10_000.0).abs() < 1e-6);
+    // A grade as a site modifier raises the strip along the line.
+    let g = ok(
+        &mut s,
+        "grade.add",
+        json!({"a": [1000, 8000], "b": [9000, 8000], "elevation_a": 7000, "elevation_b": 7000, "site_modifier": true, "width": 1000}),
+    );
+    assert!(g["id"].is_u64());
+    let z = ok(
+        &mut s,
+        "site.elevation",
+        json!({"id": site, "x": 5000, "y": 8000, "surface": "proposed"}),
+    );
+    assert!((z["z"].as_f64().unwrap() - 7000.0).abs() < 1.0, "{z}");
+    let before = ok(
+        &mut s,
+        "site.elevation",
+        json!({"id": site, "x": 5000, "y": 8000, "surface": "existing"}),
+    );
+    assert!((before["z"].as_f64().unwrap() - 500.0).abs() < 1.0);
+    let cf = ok(&mut s, "site.cut_fill", json!({"id": site}));
+    assert!(cf["fill_m3"].as_f64().unwrap() > 0.0);
+    // Mistakes.
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.add",
+            json!({"path": [[0, 0]], "elevation_a": 0, "elevation_b": 1})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(fail(&mut s, "grade.add", json!({"path": [[0, 0], [1, 1]], "a": [0, 0], "b": [1, 1], "elevation_a": 0, "elevation_b": 1})).0, -32602);
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.add",
+            json!({"a": [0, 0], "b": [5000, 0], "snap": "existing", "site_modifier": true})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.add",
+            json!({"a": [0, 0], "b": [5000, 0], "elevation_b": 1, "width": 0})
+        )
+        .0,
+        -32602
+    );
+    // A curve cannot take a and b.
+    let curve = ok(&mut s, "grade.add", json!({"path": [[0, 0], [3000, 0], [3000, 3000]], "elevation_a": 0, "slope": {"percent": 1}}))["id"].clone();
+    assert_eq!(
+        fail(&mut s, "grade.set", json!({"id": curve, "a": [1, 1]})).0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.set",
+            json!({"id": curve, "path": [[0, 0], [1, 1]], "a": [1, 1]})
+        )
+        .0,
+        -32602
+    );
+}
