@@ -26,6 +26,12 @@ The example plug-in `plugins/raised-planter` and its module `crates/kadakas-plug
 
 New with the launcher (PLAT-06, `kadakas-update`): `ed25519-dalek` and `curve25519-dalek` (BSD-3-Clause, by the dalek-cryptography authors) check the signature of update manifests. `sha2` (RustCrypto, MIT OR Apache-2.0) makes the SHA-256 of downloads. `tar` and `flate2` (MIT OR Apache-2.0) unpack the update archives. Their helper crates (`ed25519`, `signature`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`, `fiat-crypto`, `digest`, `block-buffer`, `crypto-common`, `generic-array`, `cpufeatures`, `rand_core`, `filetime`) are listed in `THIRD_PARTY_NOTICES.txt` too. `ureq` (HTTP client) was already in use by `kadakas-gis`.
 
+## Localization and formats (PLAT-05)
+
+`kadakas-l10n` uses Project Fluent, the localization system of Mozilla (https://projectfluent.org): `fluent-bundle`, `fluent-syntax`, `fluent-langneg` and `intl-memoizer` (from https://github.com/projectfluent/fluent-rs, Apache-2.0 OR MIT), and `unic-langid`, `unic-langid-impl` and `intl_pluralrules` (by Zibi Braniecki, MIT OR Apache-2.0; the plural rules come from the Unicode CLDR). `tinystr` (Unicode-3.0, ICU4X) comes with them. The app reads the system language with `sys-locale` (1Password, MIT OR Apache-2.0; native builds only). All are in `THIRD_PARTY_NOTICES.txt`. The Fluent file format is an open specification. The plural categories of Estonian and English follow the Unicode CLDR plural rules. The texts in `crates/kadakas-l10n/locales/` (English and Estonian) are own work, under the project license (Apache-2.0 OR MIT).
+
+`kadakas-units` has no third-party code except `serde`. The conversion factors are exact definitions: 1 in = 25.4 mm (international yard and pound agreement, 1959), 1 ft = 12 in, 1 yd = 3 ft, 1 ac = 43 560 ft², 1 ha = 10 000 m². The calendar conversion (days and civil dates) follows the public domain algorithms of Howard Hinnant (https://howardhinnant.github.io/date_algorithms.html). The bearing forms (quadrant bearings, degrees-minutes-seconds) are common surveying practice.
+
 ## Icons
 
 | Item | License | Source |

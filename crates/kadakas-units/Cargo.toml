@@ -1,0 +1,15 @@
+[package]
+name = "kadakas-units"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Units and formats for Kadakas (PLAT-05): lengths, areas, angles, dates and numbers with a decimal point or comma, digit grouping, feet and inches. Formats and parses. Pure and wasm-compatible."
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
+serde_json = "1.0.151"

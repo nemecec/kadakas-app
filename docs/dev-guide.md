@@ -15,7 +15,9 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 
 | Crate | Content | Depends on |
 |---|---|---|
-| `kadakas-core` | Document model, UUID ids (`uid`), commands, undo, the change-event log (`change`), geometry (`geom`: shared polygon and segment helpers), the ground trait (`ground`), caches (`cache`: `RevCache`, `LruCache`), curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | none of ours |
+| `kadakas-units` | Units and formats (PLAT-05): lengths (mm, cm, m, in, ft, feet-inches with fractions), areas, volumes, angles (decimal, DMS, bearing), numbers (decimal point or comma, digit grouping), dates. Formats and parses; the current `Units` of the UI process; `Settings` for the preferences (pure, wasm-compatible) | none of ours |
+| `kadakas-l10n` | Localization with Project Fluent (PLAT-05): the `.ftl` files of `locales/` built in with `include_str!`, locale negotiation with the en-US fallback, the `tr!` macro, the process language (pure, wasm-compatible). Rules: `docs/localization.md` | none of ours |
+| `kadakas-core` | Document model, UUID ids (`uid`), commands, undo, the change-event log (`change`), geometry (`geom`: shared polygon and segment helpers), the ground trait (`ground`), caches (`cache`: `RevCache`, `LruCache`), curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | units |
 | `kadakas-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
 | `kadakas-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
 | `kadakas-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
@@ -66,7 +68,7 @@ Nothing below `api` depends on `script` any more: `io` runs its converter throug
 - The launcher holds no secret. It has public keys only (`crates/kadakas-launcher/trusted-keys.txt`). Private keys exist in CI secrets only. Signing code lives behind the `sign` feature of `kadakas-update`, and only `sign-manifest` and tests turn it on.
 - UI logic that has no egui code (tools, picking, snapping glue, view state, keymap) belongs in `kadakas-ui-core`, so another UI program can reuse it. The app only converts egui input into ui-core events and draws. Do not add `egui` to ui-core.
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
-- Core, crs, plants, collab, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Units, l10n, core, crs, plants, collab, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
@@ -99,7 +101,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```

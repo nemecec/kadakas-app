@@ -1,0 +1,399 @@
+//! Units and formats (PLAT-05): how Kadakas writes and reads lengths, areas, angles, numbers
+//! and dates.
+//!
+//! The model keeps millimeters (and mm², mm³) and angles in degrees. This crate turns them into
+//! text for people and reads what people type:
+//!
+//! - lengths: mm, cm, m, in, ft, and feet with inches and fractions (`5' 6 1/2"`);
+//! - areas: m², ha, ft², ac; volumes: m³ and yd³;
+//! - angles: decimal degrees, degrees-minutes-seconds, bearings (`N 45°30'00" E`);
+//! - numbers: decimal point or comma, digit grouping;
+//! - dates: ISO, day-month-year, month-day-year.
+//!
+//! `Units` holds one choice of all of these. `Settings` is what a person stores in the
+//! preferences ("automatic" for what the language decides). The UI process has one current
+//! `Units` (`current`, `set_current`), so code deep in the UI (tool readouts) needs no extra
+//! argument. A value in a document never depends on `Units`: files and the API keep plain
+//! numbers.
+//!
+//! Dimension texts in drawings are different: they follow the dimension style of the document
+//! (`kadakas-core`), not the language of the person who looks at them. That code uses the
+//! `format_drawing` and `format_ftin_drawing` functions of this crate, so the rounding rules
+//! exist once.
+
+mod angle;
+mod area;
+mod date;
+mod length;
+mod number;
+
+pub use angle::{AngleFormat, format_angle, parse_angle};
+pub use area::{AreaUnit, VolumeUnit, format_area, format_volume, parse_area};
+pub use date::{Date, DateFormat, days_in_month, is_leap};
+pub use length::{LengthUnit, format_drawing, format_ftin_drawing, format_length, parse_length};
+pub use number::{Decimal, Grouping, NumberFormat, round_half_away, trim_negative_zero};
+
+use std::cell::Cell;
+use std::sync::RwLock;
+
+use serde::{Deserialize, Serialize};
+
+/// The default denominator of inch fractions (1/16).
+pub const DEFAULT_FRACTION: u32 = 16;
+
+/// One complete choice of units and formats.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Units {
+    pub length: LengthUnit,
+    pub area: AreaUnit,
+    pub angle: AngleFormat,
+    pub number: NumberFormat,
+    pub date: DateFormat,
+    /// The denominator of inch fractions (2, 4, 8, 16, 32 or 64), or 0 for decimal inches.
+    pub inch_fraction: u32,
+}
+
+impl Units {
+    /// Millimeters, square meters, decimal degrees, a decimal point, ISO dates.
+    pub const METRIC: Units = Units {
+        length: LengthUnit::Mm,
+        area: AreaUnit::M2,
+        angle: AngleFormat::Decimal,
+        number: NumberFormat {
+            decimal: Decimal::Point,
+            grouping: Grouping::None,
+        },
+        date: DateFormat::Iso,
+        inch_fraction: DEFAULT_FRACTION,
+    };
+
+    /// The number and date conventions of a language (`en-US`, `et`). An unknown language gets
+    /// the conventions of en-US.
+    pub fn conventions(language: &str) -> (NumberFormat, DateFormat) {
+        match language.split(['-', '_']).next().unwrap_or_default() {
+            // Estonian: 1 234,5 and 11.10.2026.
+            "et" => (
+                NumberFormat {
+                    decimal: Decimal::Comma,
+                    grouping: Grouping::Space,
+                },
+                DateFormat::Dmy,
+            ),
+            // English (United States): 1,234.5 and 10/11/2026.
+            _ => (
+                NumberFormat {
+                    decimal: Decimal::Point,
+                    grouping: Grouping::Comma,
+                },
+                DateFormat::Mdy,
+            ),
+        }
+    }
+
+    /// The decimals that lengths get when the caller has no better idea.
+    pub fn length_decimals(&self) -> usize {
+        self.length.default_decimals()
+    }
+
+    /// A length in mm for people to read, with its unit: `1 234,5 mm`, `5' 6 1/2"`.
+    pub fn length_text(&self, mm: f64) -> String {
+        self.length_text_d(mm, self.length_decimals())
+    }
+
+    /// Like `length_text`, with a number of decimals.
+    pub fn length_text_d(&self, mm: f64, decimals: usize) -> String {
+        format_length(mm, self.length, decimals, self.inch_fraction, &self.number)
+    }
+
+    /// The text that goes into an edit field for a length: no digit grouping, and no unit for the
+    /// metric units and feet (the field shows the unit next to it, see `length_field_unit`).
+    /// Inches and feet with inches include their marks (`5' 6"`), because the marks are the unit.
+    pub fn length_field(&self, mm: f64, decimals: usize) -> String {
+        let plain = self.number.plain();
+        match self.length {
+            LengthUnit::In | LengthUnit::FtIn => {
+                format_length(mm, self.length, decimals, self.inch_fraction, &plain)
+            }
+            u => plain.format(mm / u.mm_per_unit(), decimals),
+        }
+    }
+
+    /// The unit that goes next to an edit field: `mm`, `cm`, `m`, `ft`, or empty when the text
+    /// of the field carries its marks.
+    pub fn length_field_unit(&self) -> &'static str {
+        match self.length {
+            LengthUnit::In | LengthUnit::FtIn => "",
+            u => u.short_name(),
+        }
+    }
+
+    /// Reads a length that a person typed into a field and gives mm. A number without a unit
+    /// counts in the active unit.
+    pub fn parse_length(&self, text: &str) -> Option<f64> {
+        parse_length(text, self.length, &self.number)
+    }
+
+    /// An area in mm² with its unit.
+    pub fn area_text(&self, mm2: f64) -> String {
+        format_area(mm2, self.area, self.area.default_decimals(), &self.number)
+    }
+
+    /// An area in mm² with its unit and a number of decimals.
+    pub fn area_text_d(&self, mm2: f64, decimals: usize) -> String {
+        format_area(mm2, self.area, decimals, &self.number)
+    }
+
+    /// Reads an area and gives mm².
+    pub fn parse_area(&self, text: &str) -> Option<f64> {
+        parse_area(text, self.area, &self.number)
+    }
+
+    /// The unit of volumes: m³ for metric lengths, yd³ for imperial ones.
+    pub fn volume_unit(&self) -> VolumeUnit {
+        VolumeUnit::for_length(self.length)
+    }
+
+    /// A volume in mm³ with its unit.
+    pub fn volume_text(&self, mm3: f64) -> String {
+        format_volume(mm3, self.volume_unit(), 2, &self.number)
+    }
+
+    /// An angle in degrees.
+    pub fn angle_text(&self, deg: f64) -> String {
+        self.angle_text_d(deg, 1)
+    }
+
+    /// An angle in degrees, with decimals of the degrees (decimal form) or of the seconds.
+    pub fn angle_text_d(&self, deg: f64, decimals: usize) -> String {
+        let decimals = if self.angle == AngleFormat::Decimal {
+            decimals
+        } else {
+            decimals.saturating_sub(1)
+        };
+        format_angle(deg, self.angle, decimals, &self.number)
+    }
+
+    /// The text that goes into an edit field for an angle: no grouping and no degree sign for
+    /// the decimal form.
+    pub fn angle_field(&self, deg: f64, decimals: usize) -> String {
+        match self.angle {
+            AngleFormat::Decimal => self.number.plain().format(deg, decimals),
+            f => format_angle(deg, f, decimals.saturating_sub(1), &self.number.plain()),
+        }
+    }
+
+    /// Reads an angle that a person typed. All forms are accepted. A number without a mark is
+    /// in degrees.
+    pub fn parse_angle(&self, text: &str) -> Option<f64> {
+        parse_angle(text, &self.number)
+    }
+
+    /// A plain number with `decimals` decimals (for example a scale or a count of a unit).
+    pub fn number_text(&self, v: f64, decimals: usize) -> String {
+        self.number.format(v, decimals)
+    }
+
+    /// A plain number without trailing zeros.
+    pub fn number_text_trim(&self, v: f64, max_decimals: usize) -> String {
+        self.number.format_trim(v, max_decimals)
+    }
+
+    /// Reads a plain number.
+    pub fn parse_number(&self, text: &str) -> Option<f64> {
+        self.number.parse(text)
+    }
+
+    /// A date as text.
+    pub fn date_text(&self, d: Date) -> String {
+        self.date.format(d)
+    }
+
+    /// Reads a date.
+    pub fn parse_date(&self, text: &str) -> Option<Date> {
+        self.date.parse(text)
+    }
+}
+
+impl Default for Units {
+    fn default() -> Units {
+        Units::METRIC
+    }
+}
+
+/// What a person chooses in the preferences. A choice of `None` means "from the language".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub length: LengthUnit,
+    pub area: AreaUnit,
+    pub angle: AngleFormat,
+    pub decimal: Option<Decimal>,
+    pub grouping: Option<Grouping>,
+    pub date: Option<DateFormat>,
+    /// The denominator of inch fractions, or 0 for decimal inches. `None` gives 1/16.
+    pub inch_fraction: Option<u32>,
+}
+
+impl Settings {
+    /// The units that these settings give in a language.
+    pub fn resolve(&self, language: &str) -> Units {
+        let (number, date) = Units::conventions(language);
+        Units {
+            length: self.length,
+            area: self.area,
+            angle: self.angle,
+            number: NumberFormat {
+                decimal: self.decimal.unwrap_or(number.decimal),
+                grouping: self.grouping.unwrap_or(number.grouping),
+            },
+            date: self.date.unwrap_or(date),
+            inch_fraction: self.inch_fraction.unwrap_or(DEFAULT_FRACTION),
+        }
+    }
+}
+
+/// The units of the UI process.
+static CURRENT: RwLock<Units> = RwLock::new(Units::METRIC);
+
+thread_local! {
+    /// Units that override the process units on this thread.
+    static OVERRIDE: Cell<Option<Units>> = const { Cell::new(None) };
+}
+
+/// The current units: the override of this thread, else the units of the process.
+pub fn current() -> Units {
+    OVERRIDE
+        .with(Cell::get)
+        .unwrap_or_else(|| *CURRENT.read().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Sets the units of the process. The UI calls this at start and when the person changes the
+/// preferences or the language.
+pub fn set_current(units: Units) {
+    *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = units;
+}
+
+/// Runs `f` with other units on this thread only. For tests.
+pub fn with_units<R>(units: Units, f: impl FnOnce() -> R) -> R {
+    let before = OVERRIDE.with(|o| o.replace(Some(units)));
+    let out = f();
+    OVERRIDE.with(|o| o.set(before));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn et() -> Units {
+        Settings::default().resolve("et")
+    }
+
+    #[test]
+    fn the_language_gives_conventions() {
+        let e = et();
+        assert_eq!(e.number.decimal, Decimal::Comma);
+        assert_eq!(e.date, DateFormat::Dmy);
+        let en = Settings::default().resolve("en-US");
+        assert_eq!(en.number.decimal, Decimal::Point);
+        assert_eq!(en.number.grouping, Grouping::Comma);
+        assert_eq!(en.date, DateFormat::Mdy);
+        assert_eq!(Units::conventions("xx_YY").0.decimal, Decimal::Point);
+        assert_eq!(Units::conventions("et_EE").0.decimal, Decimal::Comma);
+    }
+
+    #[test]
+    fn settings_override_the_language() {
+        let s = Settings {
+            decimal: Some(Decimal::Point),
+            grouping: Some(Grouping::None),
+            date: Some(DateFormat::Iso),
+            inch_fraction: Some(0),
+            length: LengthUnit::FtIn,
+            area: AreaUnit::Ac,
+            angle: AngleFormat::Dms,
+        };
+        let u = s.resolve("et");
+        assert_eq!(u.number, NumberFormat::default());
+        assert_eq!(u.date, DateFormat::Iso);
+        assert_eq!(u.inch_fraction, 0);
+        assert_eq!(
+            (u.length, u.area, u.angle),
+            (LengthUnit::FtIn, AreaUnit::Ac, AngleFormat::Dms)
+        );
+        assert_eq!(Settings::default().resolve("en").inch_fraction, 16);
+    }
+
+    #[test]
+    fn units_write_and_read_text() {
+        let u = et();
+        assert_eq!(u.length_text(1234567.0), "1\u{a0}234\u{a0}567,0 mm");
+        assert_eq!(u.length_text_d(1500.0, 0), "1\u{a0}500 mm");
+        assert_eq!(u.length_field(1234.56, 1), "1234,6");
+        assert_eq!(u.length_field_unit(), "mm");
+        assert_eq!(u.parse_length("1,5 m"), Some(1500.0));
+        assert_eq!(u.parse_length("12,5"), Some(12.5));
+        assert_eq!(u.area_text(12.5e6), "12,50 m\u{b2}");
+        assert_eq!(u.area_text_d(12.5e6, 0), "13 m\u{b2}");
+        assert_eq!(u.parse_area("12,5 m2"), Some(12.5e6));
+        assert_eq!(u.volume_text(2.5e9), "2,50 m\u{b3}");
+        assert_eq!(u.angle_text(45.55), "45,6\u{b0}");
+        assert_eq!(u.angle_text_d(45.0, 0), "45\u{b0}");
+        assert_eq!(u.angle_field(45.0, 1), "45,0");
+        assert_eq!(u.parse_angle("45,5\u{b0}"), Some(45.5));
+        assert_eq!(u.number_text(1234.5, 1), "1\u{a0}234,5");
+        assert_eq!(u.number_text_trim(2.50, 3), "2,5");
+        assert_eq!(u.parse_number("1 234,5"), Some(1234.5));
+        let d = Date::new(2026, 10, 11).unwrap();
+        assert_eq!(u.date_text(d), "11.10.2026");
+        assert_eq!(u.parse_date("11.10.2026"), Some(d));
+    }
+
+    #[test]
+    fn angle_forms_in_fields() {
+        let mut u = Units::METRIC;
+        u.angle = AngleFormat::Dms;
+        assert_eq!(u.angle_text(45.5), "45\u{b0}30'00\"");
+        assert_eq!(u.angle_field(45.5, 1), "45\u{b0}30'00\"");
+        u.angle = AngleFormat::Bearing;
+        assert_eq!(u.angle_text(45.0), "N 45\u{b0}00'00\" E");
+    }
+
+    #[test]
+    fn imperial_fields() {
+        let mut u = Units::METRIC;
+        u.length = LengthUnit::FtIn;
+        assert_eq!(u.length_text(25.4 * 66.5), "5' 6 1/2\"");
+        assert_eq!(u.length_field(25.4 * 66.5, 2), "5' 6 1/2\"");
+        assert_eq!(u.length_field_unit(), "");
+        assert_eq!(u.parse_length("5' 6 1/2\""), Some(25.4 * 66.5));
+        assert_eq!(u.volume_unit(), VolumeUnit::Yd3);
+        u.length = LengthUnit::Ft;
+        assert_eq!(u.length_field(304.8 * 2.5, 3), "2.500");
+        assert_eq!(u.length_field_unit(), "ft");
+    }
+
+    #[test]
+    fn the_current_units_can_be_set_and_overridden() {
+        // `set_current` is process wide; the override keeps this test apart from other tests.
+        with_units(et(), || {
+            assert_eq!(current(), et());
+            with_units(Units::METRIC, || assert_eq!(current(), Units::METRIC));
+            assert_eq!(current(), et());
+        });
+        assert_eq!(Units::default(), Units::METRIC);
+    }
+
+    #[test]
+    fn units_round_trip_through_json() {
+        let u = et();
+        let json = serde_json::to_string(&u).unwrap();
+        assert_eq!(serde_json::from_str::<Units>(&json).unwrap(), u);
+        assert_eq!(serde_json::from_str::<Units>("{}").unwrap(), Units::METRIC);
+        let s = Settings::default();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        assert_eq!(serde_json::from_str::<Settings>("{}").unwrap(), s);
+    }
+}

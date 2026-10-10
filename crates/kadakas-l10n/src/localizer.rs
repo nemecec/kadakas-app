@@ -1,0 +1,217 @@
+//! One language: a Fluent bundle for it and a bundle for en-US behind it.
+
+use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
+use unic_langid::LanguageIdentifier;
+
+use crate::{FALLBACK, languages};
+
+/// A named argument of a message.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arg {
+    /// A number. Plural rules (`[one]`, `[other]`) select on it.
+    Num(f64),
+    /// Text, for example a number that `kadakas-units` has formatted.
+    Text(String),
+}
+
+macro_rules! arg_from_num {
+    ($($t:ty),*) => {$(
+        impl From<$t> for Arg {
+            fn from(v: $t) -> Arg {
+                Arg::Num(v as f64)
+            }
+        }
+    )*};
+}
+arg_from_num!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64);
+
+impl From<&str> for Arg {
+    fn from(v: &str) -> Arg {
+        Arg::Text(v.to_string())
+    }
+}
+impl From<String> for Arg {
+    fn from(v: String) -> Arg {
+        Arg::Text(v)
+    }
+}
+impl From<&String> for Arg {
+    fn from(v: &String) -> Arg {
+        Arg::Text(v.clone())
+    }
+}
+
+/// The text of one language, with en-US as the fallback for messages that are missing.
+pub struct Localizer {
+    tag: &'static str,
+    main: FluentBundle<FluentResource>,
+    /// `None` when the language is en-US itself.
+    fallback: Option<FluentBundle<FluentResource>>,
+}
+
+fn bundle(tag: &str) -> FluentBundle<FluentResource> {
+    let lang = languages()
+        .iter()
+        .find(|l| l.tag == tag)
+        .expect("known tag");
+    bundle_from(tag, lang.files.iter().map(|(_, text)| *text))
+}
+
+fn bundle_from<'a>(
+    tag: &str,
+    texts: impl Iterator<Item = &'a str>,
+) -> FluentBundle<FluentResource> {
+    let id: LanguageIdentifier = tag.parse().expect("the tags in lang.rs are valid");
+    let mut b = FluentBundle::new(vec![id]);
+    // Unicode isolation marks around arguments are noise in a plain UI.
+    b.set_use_isolating(false);
+    for text in texts {
+        // A file with a syntax error keeps its good messages (`Err` holds both). The CI check
+        // reports the error.
+        let res = match FluentResource::try_new(text.to_string()) {
+            Ok(r) => r,
+            Err((r, _)) => r,
+        };
+        // A duplicate id keeps the first message; the CI check reports it too.
+        let _ = b.add_resource(res);
+    }
+    b
+}
+
+impl Localizer {
+    /// A localizer for a supported tag. An unknown tag gives en-US.
+    pub fn new(tag: &str) -> Localizer {
+        let tag = languages()
+            .iter()
+            .find(|l| l.tag == tag)
+            .map_or(FALLBACK, |l| l.tag);
+        Localizer {
+            tag,
+            main: bundle(tag),
+            fallback: (tag != FALLBACK).then(|| bundle(FALLBACK)),
+        }
+    }
+
+    /// The tag of the language.
+    pub fn tag(&self) -> &'static str {
+        self.tag
+    }
+
+    fn format(
+        bundle: &FluentBundle<FluentResource>,
+        id: &str,
+        args: &FluentArgs,
+    ) -> Option<String> {
+        let (name, attr) = match id.split_once('.') {
+            Some((n, a)) => (n, Some(a)),
+            None => (id, None),
+        };
+        let msg = bundle.get_message(name)?;
+        let pattern = match attr {
+            Some(a) => msg.get_attribute(a)?.value(),
+            None => msg.value()?,
+        };
+        let mut errors = Vec::new();
+        Some(
+            bundle
+                .format_pattern(pattern, Some(args), &mut errors)
+                .into_owned(),
+        )
+    }
+
+    /// True if this language itself (not the fallback) has the message.
+    pub fn has(&self, id: &str) -> bool {
+        Self::format(&self.main, id, &FluentArgs::new()).is_some()
+    }
+
+    /// The text of a message. See `crate::translate`.
+    pub fn tr(&self, id: &str, args: &[(&str, Arg)]) -> String {
+        let mut fa = FluentArgs::new();
+        for (name, value) in args {
+            match value {
+                Arg::Num(n) => fa.set(*name, FluentValue::from(*n)),
+                Arg::Text(t) => fa.set(*name, FluentValue::from(t.clone())),
+            }
+        }
+        Self::format(&self.main, id, &fa)
+            .or_else(|| {
+                self.fallback
+                    .as_ref()
+                    .and_then(|b| Self::format(b, id, &fa))
+            })
+            .unwrap_or_else(|| id.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arguments_convert() {
+        assert_eq!(Arg::from(3usize), Arg::Num(3.0));
+        assert_eq!(Arg::from(-2i32), Arg::Num(-2.0));
+        assert_eq!(Arg::from(1.5f64), Arg::Num(1.5));
+        assert_eq!(Arg::from("a"), Arg::Text("a".into()));
+        assert_eq!(Arg::from(String::from("b")), Arg::Text("b".into()));
+        assert_eq!(Arg::from(&String::from("c")), Arg::Text("c".into()));
+    }
+
+    #[test]
+    fn plurals_follow_the_language() {
+        let en = Localizer::new("en-US");
+        assert_eq!(en.tag(), "en-US");
+        assert_eq!(
+            en.tr("common-delete-n", &[("count", 1.into())]),
+            "Delete 1 object"
+        );
+        assert_eq!(
+            en.tr("common-delete-n", &[("count", 0.into())]),
+            "Delete 0 objects"
+        );
+        let et = Localizer::new("et");
+        assert_eq!(
+            et.tr("common-delete-n", &[("count", 2.into())]),
+            "Kustuta 2 objekti"
+        );
+    }
+
+    #[test]
+    fn text_arguments_and_attributes_work() {
+        let en = Localizer::new("en-US");
+        assert_eq!(
+            en.tr("common-test-hello", &[("name", "Mari".into())]),
+            "Hello Mari"
+        );
+        assert_eq!(en.tr("common-test-hello.title", &[]), "Greeting");
+        // A missing attribute and a missing message give the id.
+        assert_eq!(
+            en.tr("common-test-hello.nope", &[]),
+            "common-test-hello.nope"
+        );
+        assert!(en.has("common-test-hello"));
+        assert!(!en.has("nope"));
+    }
+
+    #[test]
+    fn a_message_missing_in_a_language_comes_from_en_us() {
+        let et = Localizer {
+            tag: "et",
+            main: bundle_from("et", ["a = A\n"].into_iter()),
+            fallback: Some(bundle_from(
+                "en-US",
+                ["a = X\nb = B\n", "bad = {\n"].into_iter(),
+            )),
+        };
+        assert_eq!(et.tr("a", &[]), "A");
+        assert!(!et.has("b"));
+        assert_eq!(et.tr("b", &[]), "B");
+        // A file with a syntax error keeps its good messages.
+        assert_eq!(et.tr("bad", &[]), "bad");
+    }
+
+    #[test]
+    fn an_unknown_tag_gives_en_us() {
+        assert_eq!(Localizer::new("xx").tag(), "en-US");
+    }
+}

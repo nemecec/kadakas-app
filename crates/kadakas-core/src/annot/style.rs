@@ -84,33 +84,9 @@ impl TextStyle {
     }
 }
 
-/// The unit in which a dimension shows lengths. The model unit is mm.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LengthUnit {
-    #[default]
-    Mm,
-    Cm,
-    M,
-    /// Inches.
-    In,
-    Ft,
-    /// Feet and inches, for example 3'-4.5".
-    FtIn,
-}
-
-impl LengthUnit {
-    pub fn suffix(self) -> &'static str {
-        match self {
-            LengthUnit::Mm => " mm",
-            LengthUnit::Cm => " cm",
-            LengthUnit::M => " m",
-            LengthUnit::In => "\"",
-            LengthUnit::Ft => "'",
-            LengthUnit::FtIn => "",
-        }
-    }
-}
+/// The unit in which a dimension shows lengths. The model unit is mm. The type lives in
+/// `kadakas-units`, which also formats lengths for the UI.
+pub use kadakas_units::LengthUnit;
 
 /// A tolerance that follows the value, in the unit of the dimension.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
