@@ -446,6 +446,12 @@ impl Client {
 
     // ----- connection -----
 
+    /// Sets the token that the next `hello` carries (for example a new one after the old one ran
+    /// out). The token is never saved.
+    pub fn set_token(&mut self, token: String) {
+        self.cfg.token = token;
+    }
+
     /// Starts the sign-in: queues `hello`. Does nothing unless the client is offline or failed.
     pub fn connect(&mut self) {
         if !matches!(self.state, ConnState::Offline | ConnState::Failed) {

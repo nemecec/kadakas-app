@@ -249,6 +249,89 @@ impl Link {
     }
 }
 
+/// How long to wait before the next try to connect: 250 ms, then 500 ms, 1 s and so on, up to
+/// 30 s (the same steps as the retry of section 4.6 of the protocol). It has no random part, so
+/// it is easy to test; a host that runs many clients may add its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Backoff {
+    next_ms: u64,
+}
+
+impl Backoff {
+    pub const FIRST_MS: u64 = 250;
+    pub const MAX_MS: u64 = 30_000;
+
+    pub fn new() -> Backoff {
+        Backoff {
+            next_ms: Self::FIRST_MS,
+        }
+    }
+
+    /// The wait for this try. The next one is twice as long, up to the limit.
+    pub fn next_delay_ms(&mut self) -> u64 {
+        let now = self.next_ms;
+        self.next_ms = (self.next_ms * 2).min(Self::MAX_MS);
+        now
+    }
+
+    /// Start again with the short wait (after a connection that worked).
+    pub fn reset(&mut self) {
+        self.next_ms = Self::FIRST_MS;
+    }
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Backoff::new()
+    }
+}
+
+/// Connects a [`Link`] again after the connection was lost, with a [`Backoff`] between tries. The
+/// host calls [`Reconnector::poll`] before every [`Link::pump`]. A client that is `Failed` (the
+/// server brought a frame that it cannot read) or that the host disconnected on purpose is not
+/// connected again: the host sets `enabled` to false for that.
+#[derive(Debug, Default)]
+pub struct Reconnector {
+    pub enabled: bool,
+    backoff: Backoff,
+    next_at_ms: u64,
+}
+
+impl Reconnector {
+    pub fn new() -> Reconnector {
+        Reconnector::default()
+    }
+
+    /// Makes one try if the link is offline and the wait is over. Returns the error of a try that
+    /// failed, `None` otherwise.
+    pub fn poll(
+        &mut self,
+        link: &mut Link,
+        endpoint: &mut dyn Endpoint,
+        now_ms: u64,
+    ) -> Option<TransportError> {
+        use crate::client::ConnState;
+        if !self.enabled {
+            return None;
+        }
+        match link.client.state() {
+            ConnState::Online => {
+                self.backoff.reset();
+                self.next_at_ms = 0;
+                return None;
+            }
+            ConnState::Offline => {}
+            _ => return None,
+        }
+        if link.is_connected() || now_ms < self.next_at_ms {
+            return None;
+        }
+        // The wait grows with every try. It starts short again only when the client is online.
+        self.next_at_ms = now_ms + self.backoff.next_delay_ms();
+        link.connect(endpoint).err()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +509,46 @@ mod tests {
         assert!(got.contains(&ClientMsg::Bye));
         // A second disconnect with no transport is fine.
         link.disconnect();
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_the_limit_and_resets() {
+        let mut b = Backoff::new();
+        let steps: Vec<u64> = (0..10).map(|_| b.next_delay_ms()).collect();
+        assert_eq!(
+            steps,
+            [250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]
+        );
+        b.reset();
+        assert_eq!(b.next_delay_ms(), 250);
+    }
+
+    #[test]
+    fn reconnector_waits_between_tries() {
+        struct Failing(usize);
+        impl Endpoint for Failing {
+            fn describe(&self) -> String {
+                "failing".into()
+            }
+            fn connect(&mut self) -> Result<Box<dyn Transport>, TransportError> {
+                self.0 += 1;
+                Err(TransportError::Failed("down".into()))
+            }
+        }
+        let mut link = Link::new(client());
+        let mut ep = Failing(0);
+        let mut r = Reconnector::new();
+        // Not enabled: nothing happens.
+        assert!(r.poll(&mut link, &mut ep, 0).is_none());
+        assert_eq!(ep.0, 0);
+        r.enabled = true;
+        assert!(r.poll(&mut link, &mut ep, 1000).is_some());
+        assert_eq!(ep.0, 1);
+        // 250 ms wait, then 500 ms.
+        assert!(r.poll(&mut link, &mut ep, 1100).is_none());
+        assert!(r.poll(&mut link, &mut ep, 1250).is_some());
+        assert!(r.poll(&mut link, &mut ep, 1600).is_none());
+        assert!(r.poll(&mut link, &mut ep, 1750).is_some());
+        assert_eq!(ep.0, 3);
     }
 }
