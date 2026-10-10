@@ -78,7 +78,7 @@ pub fn style_of(doc: &Document, obj: &Object) -> Option<(ResourceId, LandscapeAr
     Some((id, doc.resources.landscape_area_style(id)?.clone()))
 }
 
-pub(crate) fn set_data(obj: &mut Object, d: &LandscapeData) {
+pub fn set_data(obj: &mut Object, d: &LandscapeData) {
     obj.data.insert(
         KEY.into(),
         serde_json::to_value(d).expect("settings are JSON"),

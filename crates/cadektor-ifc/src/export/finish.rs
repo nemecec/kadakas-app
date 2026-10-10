@@ -255,6 +255,20 @@ impl<W: Write> Exporter<'_, W> {
                 ],
             )?;
         }
+        if !self.massing_buildings.is_empty() {
+            let buildings = std::mem::take(&mut self.massing_buildings);
+            self.ent(
+                "IFCRELAGGREGATES",
+                vec![
+                    self.guid("rel_massing", 0),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Ref(self.site),
+                    Value::refs(buildings),
+                ],
+            )?;
+        }
         let sets = std::mem::take(&mut self.layer_sets);
         for (key, (target, elements)) in sets {
             let tag = format!("rel_material:{key}");

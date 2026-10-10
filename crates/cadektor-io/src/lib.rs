@@ -13,7 +13,7 @@ pub mod crs;
 pub mod dxf;
 mod encoding;
 pub mod geojson;
-mod gis;
+pub mod gis;
 pub mod options;
 pub mod report;
 pub mod shapefile;

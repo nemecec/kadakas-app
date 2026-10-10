@@ -61,6 +61,10 @@ This covers `import.file`, `export.file`, `file.open` and `file.save`. Paths are
 leave those folders. The extension must match the format, and `export.file` needs `"overwrite": true` to replace a file
 (the old file stays as `<name>.bak`). The File > Import and Export dialogs of the app are not limited.
 
+Agents cannot use the network unless the owner allows it: the map services (`gis.wms.*`, `gis.wmts.*`, `gis.wfs.*`) fetch
+only addresses given with `--allow-url HOST_OR_PREFIX` (repeat the flag; `maps.example.org`, `*.example.org` or
+`https://maps.example.org/wms/`; default: none). The Map Sources dialog of the app is the user's own and is not limited.
+
 Saves are atomic: the app and the CLI write a temporary file and rename it. The previous file stays as `<name>.bak`.
 
 ## Agents

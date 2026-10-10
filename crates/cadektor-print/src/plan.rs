@@ -516,6 +516,22 @@ fn shape_core(
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
         Shape::Group { .. } => {}
+        Shape::Underlay(u) => {
+            if let Some(img) = crate::underlay::image_prim(u, xf) {
+                out.push(Prim::Image(img));
+            }
+        }
+        Shape::Massing(m) => {
+            let segs = if curve::all_straight(&m.footprint) {
+                mapped(&curve::positions(&m.footprint), xf)
+            } else {
+                curve_segs(&curve::path(&m.footprint, true), xf)
+            };
+            out.push(path(segs, true, &st));
+            for (p, q) in cadektor_core::massing::roof_lines(m) {
+                out.push(path(mapped(&[p, q], xf), false, &st));
+            }
+        }
         Shape::Irrigation(i) => irrigation_prims(i, &st, xf, out),
         Shape::Symbol { .. } => {
             // A symbol in paper units keeps its paper size at the scale of the drawing that shows it.

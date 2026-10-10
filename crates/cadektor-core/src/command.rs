@@ -1170,6 +1170,9 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
     if !shape.is_in_range() {
         return bad(OUT_OF_RANGE);
     }
+    if let Some(problem) = shape.problem() {
+        return bad(&problem);
+    }
     if let Some(vs) = shape.vertices() {
         vs.iter().try_for_each(validate_vertex)?;
     }

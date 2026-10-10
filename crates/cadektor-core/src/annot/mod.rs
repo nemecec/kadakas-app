@@ -147,6 +147,31 @@ impl Annot {
         }
     }
 
+    /// Moves every stored model point through `f` (a change of the CRS, for example). Paper
+    /// sizes and offsets stay. A dimension measures its points again when it is drawn, so its text
+    /// follows; a typed text stays as it was typed.
+    pub fn map_points(&mut self, f: &mut dyn FnMut(DVec2) -> DVec2) {
+        match self {
+            Annot::Dimension(x) => x.points.iter_mut().for_each(|p| *p = f(*p)),
+            Annot::Text(t) => t.at = f(t.at),
+            Annot::Callout(c) => {
+                c.at = f(c.at);
+                c.leaders
+                    .iter_mut()
+                    .flat_map(|l| l.points.iter_mut())
+                    .for_each(|p| *p = f(*p));
+            }
+            Annot::DataTag(t) => {
+                t.at = f(t.at);
+                t.anchor = f(t.anchor);
+            }
+            Annot::Legend(l) => l.at = f(l.at),
+            Annot::NorthArrow(n) => n.at = f(n.at),
+            Annot::ScaleBar(s) => s.at = f(s.at),
+            Annot::RevisionCloud(r) => r.points.iter_mut().for_each(|p| *p = f(*p)),
+        }
+    }
+
     /// The box around the stored points. Text and sizes in paper mm are not counted, because they
     /// depend on the scale (see `draw::prims` for the real extent).
     pub fn bounds(&self) -> (DVec2, DVec2) {

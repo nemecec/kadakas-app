@@ -26,6 +26,7 @@ pub(crate) fn describe() -> Value {
             "classes_as_layers": "true (default): one IfcPresentationLayerAssignment per class",
             "include_2d": "false (default). true writes 2D objects, text and survey points as IfcAnnotation",
             "layers_as_storeys": "false (default): all elements belong to the IfcSite. true adds an IfcBuilding with one IfcBuildingStorey per design layer",
+            "massing_as_building": "false (default): a massing model is an IfcBuildingElementProxy. true: an IfcBuilding in the IfcSite",
             "visible_only": "false (default)",
             "data_map": "name of a data map (Data Manager) for IFC classes and property sets. Default: the first data map of the document, else the built-in landscape mapping",
             "area_thickness": "mm, thickness of the solid of a landscape area. Default 100",
@@ -36,7 +37,8 @@ pub(crate) fn describe() -> Value {
             "hardscape": "IfcSlab BASESLAB (Vectorworks default). IfcExtrudedAreaSolid when flat, IfcTriangulatedFaceSet when sloped or draped. Style components become an IfcMaterialLayerSet. Pset_SlabCommon and Qto_SlabBaseQuantities",
             "landscape_area": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION: IFC4 has no VEGETATION type), thin extrusion with holes",
             "plant, existing_tree": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION), trunk and canopy cylinders plus an IfcBoundingBox",
-            "other": "2D objects are skipped and listed in the report"
+            "massing": "IfcBuildingElementProxy (NOTDEFINED) with an extruded solid (flat roof) or a closed IfcTriangulatedFaceSet (gable, hip). Pset_BuildingElementProxyCommon, Cadektor_Massing, Cadektor_MassingQuantities (Height, EavesHeight, FootprintArea, GrossFloorArea, GrossVolume). With massing_as_building: IfcBuilding, Pset_BuildingCommon and Qto_BuildingBaseQuantities",
+            "other": "2D objects and map underlays are skipped and listed in the report"
         },
         "georeference": "IfcMapConversion and IfcProjectedCRS (EPSG name) from the document georeference, and RefLatitude/RefLongitude of the IfcSite when the CRS is known. Needs a CRS in the georeference.",
         "global_ids": "GlobalIds come from the project GUID (project.get shows it) and the object IDs, so they stay the same in every export. Every new or loaded document has one. An export never changes the document. project.new_guid makes a fresh GUID, for a copy of a template.",

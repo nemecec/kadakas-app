@@ -6,11 +6,14 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod data_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod gis_api;
 mod grading_api;
 mod hardscape_api;
 mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
+mod massing_api;
 mod plants_api;
 mod present_api;
 mod sheets_api;
@@ -30,6 +33,10 @@ mod ifc_api;
 mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod paths;
+#[cfg(not(target_arch = "wasm32"))]
+pub use cadektor_gis::http::UrlPolicy;
+#[cfg(not(target_arch = "wasm32"))]
+pub use gis_api::{GisState, JobInfo};
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -56,6 +63,10 @@ pub struct Session {
     /// Folder of the open document. It is always an allowed folder. The host keeps it up to date.
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
+    /// Map services and GIS calls: the list of addresses that agents may fetch (default: none), the
+    /// tile cache and the running network jobs (see `gis_api`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub gis: GisState,
     site_cache: cadektor_site::SiteCache,
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: cadektor_annot::AnnotCache,
@@ -86,6 +97,16 @@ impl RpcError {
             code: 1,
             message: e.to_string(),
         }
+    }
+}
+
+/// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
+fn elide_image(object: &mut Value) {
+    if let Some(png) = object.pointer_mut("/shape/png") {
+        let n = png.as_str().map_or(0, str::len);
+        *png = json!(format!(
+            "<PNG picture, {n} characters of base64, not shown>"
+        ));
     }
 }
 
@@ -228,6 +249,42 @@ pub const METHODS: &[(&str, &str)] = &[
     present_api::SUN_SET,
     present_api::SUN_GET,
     present_api::RENDER_HIDDEN_LINE,
+    // GIS services, coordinate conversion and massing models (see gis_api.rs and massing_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_SOURCES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_CACHE_CLEAR,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_GEOREF_SET,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_COORDS,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_REPROJECT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMS_REFRESH,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMTS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WMTS_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WFS_CAPABILITIES,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_WFS_IMPORT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_GEOIMAGE_IMPORT,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_JOB_STATUS,
+    #[cfg(not(target_arch = "wasm32"))]
+    gis_api::GIS_JOB_CANCEL,
+    massing_api::MASSING_ADD,
+    massing_api::MASSING_SET,
+    massing_api::MASSING_GET,
+    massing_api::MASSING_FROM_SHAPES,
+    massing_api::MASSING_REPORT,
     // Hardscapes and landscape areas (see hardscape_api.rs).
     hardscape_api::HARDSCAPE_STYLE_LIST,
     hardscape_api::HARDSCAPE_STYLE_GET,
@@ -445,6 +502,8 @@ impl Session {
             paths: PathPolicy::default(),
             #[cfg(not(target_arch = "wasm32"))]
             doc_dir: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gis: GisState::default(),
             site_cache: cadektor_site::SiteCache::default(),
             annot_cache: cadektor_annot::AnnotCache::default(),
             worksheet_cache: cadektor_sheet::SheetCache::default(),
@@ -468,6 +527,8 @@ impl Session {
     pub fn replace_document(&mut self, doc: Document) {
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
+        #[cfg(not(target_arch = "wasm32"))]
+        let gis = std::mem::take(&mut self.gis);
         *self = Session {
             replaced: true,
             view: self.view,
@@ -477,6 +538,9 @@ impl Session {
         {
             self.paths = paths;
             self.doc_dir = doc_dir;
+            self.gis = gis;
+            // Jobs that were started for the old document must not change this one.
+            self.gis.epoch += 1;
         }
     }
 
@@ -544,6 +608,10 @@ impl Session {
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if gis_api::is_gis_method(method) {
+            return self.gis_call(method, p, false);
+        }
         let doc = self.editor.doc();
         Ok(match method {
             "describe" => {
@@ -557,6 +625,7 @@ impl Session {
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                 "presentation": present_api::describe(),
+                "massing": massing_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
@@ -566,6 +635,7 @@ impl Session {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     d["io"] = io::describe();
+                    d["gis"] = gis_api::describe();
                 }
                 d
             }
@@ -633,7 +703,9 @@ impl Session {
                     .filter(|o| f.class.is_none_or(|c| o.class == c))
                     .filter(|o| f.kind.as_deref().is_none_or(|k| o.shape.kind() == k))
                     .collect();
-                serde_json::to_value(list).unwrap()
+                let mut v = serde_json::to_value(list).unwrap();
+                v.as_array_mut().into_iter().flatten().for_each(elide_image);
+                v
             }
             "objects.get" => {
                 #[derive(Deserialize)]
@@ -644,7 +716,9 @@ impl Session {
                 let o = doc
                     .object(id)
                     .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
-                serde_json::to_value(o).unwrap()
+                let mut v = serde_json::to_value(o).unwrap();
+                elide_image(&mut v);
+                v
             }
             "selection.get" => json!({ "ids": self.selection }),
             "selection.set" => {
@@ -821,6 +895,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = massing_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = irrigation_api::handle(self, method, p.clone()) {

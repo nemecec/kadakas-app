@@ -138,6 +138,20 @@ pub fn scene_ext<'a>(
             } else {
                 cadektor_core::landscape::emit_object(doc, obj, ground, sink);
             }
+        } else if let Shape::Massing(m) = &obj.shape {
+            // Core sends a massing model here when it stands on the site model.
+            let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
+            let attrs = doc.resolved_attrs(obj);
+            let fill = attrs
+                .fill
+                .filter(|c| c.0[3] > 0)
+                .map_or(cadektor_core::massing::DEFAULT_COLOR, |c| c.0);
+            let edge = attrs
+                .pen
+                .filter(|c| c.0[3] > 0)
+                .map_or([40, 40, 40, 255], |c| c.0);
+            let base = terrain.massing_base(obj, m);
+            cadektor_core::massing::emit(m, base, fill, edge, sink);
         } else if let Shape::SiteModifier { boundary, .. } = &obj.shape {
             // The outline of a modifier, at the height of the proposed surface where it can be found.
             let ring = cadektor_core::site::boundary_points(boundary);
