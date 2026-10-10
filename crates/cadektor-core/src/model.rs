@@ -1223,7 +1223,8 @@ impl Document {
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
     /// active sheet layer.
     pub fn is_pickable(&self, obj: &Object) -> bool {
-        self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer)
+        (self.is_displayed(obj) || (self.is_shown(obj) && obj.layer == self.active_layer))
+            && !self.is_grey(obj)
     }
 
     /// True if the layer and the class of the object are visible, on any kind of layer.

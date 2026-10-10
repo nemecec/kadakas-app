@@ -262,6 +262,55 @@ fn summary_line(columns: &[ColumnDef], rows: &[&Vec<Value>]) -> Vec<Value> {
         .collect()
 }
 
+/// The objects that match some criteria, and the values of some columns for them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryResult {
+    /// The matching objects in drawing order.
+    pub ids: Vec<cadektor_core::model::ObjectId>,
+    /// One row per matching object: the value of each column expression.
+    pub rows: Vec<Vec<Value>>,
+    /// Objects for which the criteria gave an error (they are left out).
+    pub errors: usize,
+}
+
+/// Finds objects by criteria. The criteria are the same language as the criteria of a database
+/// block: `Kind = "plant" AND Area > 20`, `Class = "Trees" OR 'Soil'.'Depth' > 300`. An empty
+/// criteria text matches all objects. `columns` are expressions over object properties. A bad
+/// criteria or column text gives an error message.
+pub fn query_objects(
+    doc: &Document,
+    criteria: &str,
+    columns: &[String],
+    ground: &dyn TerrainSource,
+) -> Result<QueryResult, String> {
+    let crit: Option<Expr> = if criteria.trim().is_empty() {
+        None
+    } else {
+        Some(formula::parse(criteria).map_err(|e| format!("criteria: {e}"))?)
+    };
+    let cols: Vec<Expr> = columns
+        .iter()
+        .map(|c| formula::parse(c).map_err(|e| format!("column '{c}': {e}")))
+        .collect::<Result<_, _>>()?;
+    let mut out = QueryResult::default();
+    for obj in doc.objects.values() {
+        let env = ObjEnv { doc, obj, ground };
+        if let Some(c) = &crit {
+            match eval(c, &env).to_bool() {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(_) => {
+                    out.errors += 1;
+                    continue;
+                }
+            }
+        }
+        out.ids.push(obj.id);
+        out.rows.push(cols.iter().map(|e| eval(e, &env)).collect());
+    }
+    Ok(out)
+}
+
 /// Runs one database block against the document, with no ground.
 pub fn run(doc: &Document, db: &DatabaseDef, index: usize) -> DbOutput {
     run_on(doc, db, index, &NoTerrain)
@@ -964,5 +1013,53 @@ mod tests {
         );
         assert_eq!(out.matched, 5000);
         assert!(t.elapsed().as_secs() < 5);
+    }
+
+    #[test]
+    fn query_finds_objects_by_criteria() {
+        let mut ed = Editor::default();
+        let a = add(
+            &mut ed,
+            Shape::Polyline {
+                points: square(1000.0),
+                closed: true,
+            },
+        );
+        let b = add(
+            &mut ed,
+            Shape::Polyline {
+                points: square(5000.0),
+                closed: true,
+            },
+        );
+        add(
+            &mut ed,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 10.0,
+            },
+        );
+        let q = |crit: &str, cols: &[&str]| {
+            let cols: Vec<String> = cols.iter().map(|c| c.to_string()).collect();
+            query_objects(ed.doc(), crit, &cols, &NoTerrain)
+        };
+        assert_eq!(q("", &[]).unwrap().ids.len(), 3);
+        assert_eq!(q("   ", &[]).unwrap().ids.len(), 3);
+        let r = q("Kind = \"polyline\" AND Area > 10", &["Kind", "Area"]).unwrap();
+        assert_eq!(r.ids, vec![b]);
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0][0], Value::Text("polyline".into()));
+        let r = q("Kind = \"polyline\"", &[]).unwrap();
+        assert_eq!(r.ids, vec![a, b]);
+        assert!(r.rows.iter().all(Vec::is_empty));
+        // An error in the criteria for an object leaves it out and counts it.
+        let r = q("NoSuchProperty > 1", &[]).unwrap();
+        assert_eq!((r.ids.len(), r.errors), (0, 3));
+        // A name that is not a property in the columns gives an error value, not a failure.
+        let r = q("Kind = \"circle\"", &["NoSuchProperty"]).unwrap();
+        assert!(r.rows[0][0].is_error());
+        // Bad text.
+        assert!(q("Kind =", &[]).unwrap_err().starts_with("criteria:"));
+        assert!(q("", &["((("]).unwrap_err().starts_with("column '((('"));
     }
 }

@@ -13,7 +13,7 @@ use cadektor_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeActio
 use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::keymap::{Action, Keymap};
-use crate::snap::{SnapConfig, SnapResult};
+use crate::snap::SnapResult;
 use crate::tools::{
     DEFAULT_ARC_RADIUS, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
 };
@@ -42,6 +42,44 @@ pub enum MenuAction {
     CreateSiteModel,
     UpdateSiteModel,
     Preferences,
+    /// Modify > Duplicate Array.
+    DuplicateArray,
+    AddSurface,
+    SubtractSurface,
+    ClipSurface,
+    IntersectSurface,
+    Compose,
+    RotateLeft90,
+    RotateRight90,
+    FlipHorizontal,
+    FlipVertical,
+    /// View > Previous View and Next View.
+    PreviousView,
+    NextView,
+    QuickSearch,
+}
+
+/// What the menu needs besides the keys: the settings it changes and what is possible now.
+pub struct MenuExtras<'a> {
+    pub snap: &'a mut cadektor_core::snapping::Settings,
+    pub cues: &'a mut bool,
+    pub theme: &'a mut crate::theme::ThemeChoice,
+    pub layout_names: Vec<String>,
+    pub can_back: bool,
+    pub can_forward: bool,
+    pub has_selection: bool,
+    /// Requests that `MenuAction` (which is `Copy`) cannot hold. The menu fills this list.
+    pub requests: Vec<MenuRequest>,
+}
+
+/// A request of the Window menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuRequest {
+    ShowTab(crate::layout::Tab),
+    SaveLayoutAs,
+    LoadLayout(String),
+    DeleteLayout(String),
+    ResetLayout,
 }
 
 /// Runs a command on the session. Errors go to the status line.
@@ -65,7 +103,7 @@ pub fn menu_bar(
     keys: &Keymap,
     can_undo: bool,
     can_redo: bool,
-    snap: &mut SnapConfig,
+    extras: &mut MenuExtras,
     show_grid: &mut bool,
     can_site: bool,
     can_update_site: bool,
@@ -110,6 +148,23 @@ pub fn menu_bar(
             ui.separator();
             item(ui, "Delete", true, Delete, &mut out);
             item(ui, "Select All", true, SelectAll, &mut out);
+            ui.separator();
+            item(ui, "Quick Search...", true, QuickSearch, &mut out);
+        });
+        let sel = extras.has_selection;
+        ui.menu_button("Modify", |ui| {
+            item(ui, "Duplicate Array...", sel, DuplicateArray, &mut out);
+            ui.separator();
+            item(ui, "Rotate Left 90\u{b0}", sel, RotateLeft90, &mut out);
+            item(ui, "Rotate Right 90\u{b0}", sel, RotateRight90, &mut out);
+            item(ui, "Flip Horizontal", sel, FlipHorizontal, &mut out);
+            item(ui, "Flip Vertical", sel, FlipVertical, &mut out);
+            ui.separator();
+            item(ui, "Add Surface", sel, AddSurface, &mut out);
+            item(ui, "Subtract Surface", sel, SubtractSurface, &mut out);
+            item(ui, "Clip Surface", sel, ClipSurface, &mut out);
+            item(ui, "Intersect Surface", sel, IntersectSurface, &mut out);
+            item(ui, "Compose", sel, Compose, &mut out);
         });
         ui.menu_button("Site", |ui| {
             item(
@@ -129,10 +184,63 @@ pub fn menu_bar(
         });
         ui.menu_button("View", |ui| {
             item(ui, "Zoom to Fit", true, ZoomFit, &mut out);
+            item(ui, "Previous View", extras.can_back, PreviousView, &mut out);
+            item(ui, "Next View", extras.can_forward, NextView, &mut out);
             ui.separator();
             ui.checkbox(show_grid, "Show grid");
-            ui.checkbox(&mut snap.grid, "Snap to grid");
-            ui.checkbox(&mut snap.objects, "Snap to objects");
+            ui.menu_button("Snapping", |ui| {
+                for (name, label, tip) in crate::snap_ui::CATEGORIES {
+                    let mut on = extras.snap.set.get(name).unwrap_or(false);
+                    if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
+                        extras.snap.set.set(name, on);
+                    }
+                }
+                ui.separator();
+                ui.checkbox(extras.cues, "SmartCursor cues");
+            });
+            ui.menu_button("Theme", |ui| {
+                for t in crate::theme::ThemeChoice::ALL {
+                    ui.selectable_value(extras.theme, t, t.label());
+                }
+            });
+        });
+        ui.menu_button("Window", |ui| {
+            for tab in crate::layout::Tab::ALL {
+                if tab.closeable() && ui.button(format!("Show {}", tab.title())).clicked() {
+                    extras.requests.push(MenuRequest::ShowTab(tab));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button("Save Layout As...").clicked() {
+                extras.requests.push(MenuRequest::SaveLayoutAs);
+                ui.close();
+            }
+            if ui.button("Reset Layout").clicked() {
+                extras.requests.push(MenuRequest::ResetLayout);
+                ui.close();
+            }
+            if !extras.layout_names.is_empty() {
+                ui.separator();
+                ui.label("Saved layouts");
+                for name in extras.layout_names.clone() {
+                    ui.horizontal(|ui| {
+                        if ui.button(&name).clicked() {
+                            extras.requests.push(MenuRequest::LoadLayout(name.clone()));
+                            ui.close();
+                        }
+                        if ui
+                            .small_button("\u{d7}")
+                            .on_hover_text("Delete this layout")
+                            .clicked()
+                        {
+                            extras
+                                .requests
+                                .push(MenuRequest::DeleteLayout(name.clone()));
+                        }
+                    });
+                }
+            }
         });
     });
     out
@@ -202,6 +310,19 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::Delete => Action::Delete,
         MenuAction::SelectAll => Action::SelectAll,
         MenuAction::ZoomFit => Action::ZoomFit,
+        MenuAction::DuplicateArray => Action::CmdDuplicateArray,
+        MenuAction::AddSurface => Action::CmdAddSurface,
+        MenuAction::SubtractSurface => Action::CmdSubtractSurface,
+        MenuAction::ClipSurface => Action::CmdClipSurface,
+        MenuAction::IntersectSurface => Action::CmdIntersectSurface,
+        MenuAction::Compose => Action::CmdCompose,
+        MenuAction::RotateLeft90 => Action::CmdRotateLeft90,
+        MenuAction::RotateRight90 => Action::CmdRotateRight90,
+        MenuAction::FlipHorizontal => Action::CmdFlipHorizontal,
+        MenuAction::FlipVertical => Action::CmdFlipVertical,
+        MenuAction::PreviousView => Action::ViewHistoryPrevious,
+        MenuAction::NextView => Action::ViewHistoryNext,
+        MenuAction::QuickSearch => Action::QuickSearch,
         MenuAction::ExportSvg
         | MenuAction::Import
         | MenuAction::Export
@@ -284,6 +405,17 @@ pub fn tool_panel(
     for t in Tool::BASIC {
         tool_button(ui, m, keys, t);
     }
+    if m.tool() == Tool::Select {
+        select_mode_bar(ui, settings);
+    }
+    ui.add_space(8.0);
+    ui.label("Modify");
+    for t in Tool::MODIFY {
+        tool_button(ui, m, keys, t);
+    }
+    if crate::tools::is_modify(m.tool()) {
+        modify_options(ui, m, settings);
+    }
     ui.add_space(8.0);
     ui.label("Landscape");
     for t in Tool::LANDSCAPE {
@@ -324,6 +456,127 @@ pub fn tool_panel(
     }
 }
 
+/// The modes of the Selection tool: how a drag on empty space picks.
+fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
+    ui.add_space(4.0);
+    ui.label("Selection mode");
+    ui.horizontal_wrapped(|ui| {
+        for mode in crate::tools::SelectMode::ALL {
+            let r = ui.selectable_label(settings.select_mode == mode, mode.label());
+            let tip = match mode {
+                crate::tools::SelectMode::Rectangle => {
+                    "Drag a box. Left to right selects what is inside, right to left what the box touches."
+                }
+                crate::tools::SelectMode::Lasso => {
+                    "Drag a free-hand shape. It ends to the right of its start: objects inside. To the left: objects it touches."
+                }
+            };
+            if r.on_hover_text(tip).clicked() {
+                settings.select_mode = mode;
+            }
+        }
+    });
+}
+
+/// The options of the modify tools (the Tool bar fields).
+fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings) {
+    use cadektor_core::edit2d::modify::JoinMode;
+    let s = &mut settings.modify;
+    let tool = m.tool();
+    ui.add_space(4.0);
+    match tool {
+        Tool::Rotate | Tool::Mirror | Tool::Scale => {
+            ui.checkbox(&mut s.copy, "Duplicate")
+                .on_hover_text("Work on copies and keep the originals");
+        }
+        Tool::Offset => {
+            ui.horizontal(|ui| {
+                ui.label("Distance");
+                ui.add(
+                    DragValue::new(&mut s.offset_distance)
+                        .speed(10.0)
+                        .range(0.0..=1.0e7)
+                        .suffix(" mm"),
+                )
+                .on_hover_text("0: the copy passes through the second click");
+            });
+            ui.checkbox(&mut s.offset_copy, "Make a copy");
+        }
+        Tool::Fillet | Tool::Chamfer => {
+            if tool == Tool::Fillet {
+                ui.horizontal(|ui| {
+                    ui.label("Radius");
+                    ui.add(
+                        DragValue::new(&mut s.radius)
+                            .speed(10.0)
+                            .range(0.001..=1.0e7)
+                            .suffix(" mm"),
+                    );
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("First");
+                    ui.add(
+                        DragValue::new(&mut s.chamfer_a)
+                            .speed(10.0)
+                            .range(0.001..=1.0e7)
+                            .suffix(" mm"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Second");
+                    ui.add(
+                        DragValue::new(&mut s.chamfer_b)
+                            .speed(10.0)
+                            .range(0.001..=1.0e7)
+                            .suffix(" mm"),
+                    );
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (mode, label, tip) in [
+                    (
+                        JoinMode::Standard,
+                        "Standard",
+                        "Only add the new piece. The objects stay.",
+                    ),
+                    (
+                        JoinMode::Split,
+                        "Split",
+                        "Cut the objects at the new piece and keep the cut-off parts.",
+                    ),
+                    (
+                        JoinMode::Trim,
+                        "Trim",
+                        "Cut the objects at the new piece and remove the cut-off parts.",
+                    ),
+                ] {
+                    if ui
+                        .selectable_label(s.join_mode == mode, label)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        s.join_mode = mode;
+                    }
+                }
+            });
+        }
+        Tool::Trim | Tool::Extend => {
+            ui.horizontal_wrapped(|ui| {
+                for (mode, label) in [
+                    (crate::tools::CutTo::AllObjects, "All objects"),
+                    (crate::tools::CutTo::SelectedObjects, "Selected objects"),
+                ] {
+                    if ui.selectable_label(s.cut_to == mode, label).clicked() {
+                        s.cut_to = mode;
+                    }
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
 /// Draws the Data bar. Returns true when Enter was pressed in an entry field.
 #[allow(clippy::too_many_arguments)]
 pub fn data_bar(
@@ -332,8 +585,8 @@ pub fn data_bar(
     s: &mut ToolSettings,
     entry: &mut DataEntry,
     cursor: DVec2,
-    snap: Option<SnapResult>,
-    snap_cfg: SnapConfig,
+    snap: Option<&SnapResult>,
+    snap_on: bool,
     readout: Option<(&str, &mut bool)>,
 ) -> bool {
     let mut commit = false;
@@ -485,12 +738,7 @@ pub fn data_bar(
             ui.monospace(readout);
         }
         ui.separator();
-        let snap_text = match (snap, snap_cfg.grid || snap_cfg.objects) {
-            (Some(r), _) => format!("Snap: {}", r.kind.label()),
-            (None, true) => "Snap: none".to_string(),
-            (None, false) => "Snap: off".to_string(),
-        };
-        ui.label(snap_text);
+        ui.label(crate::snap_ui::status_text(snap, snap_on));
     });
     commit
 }

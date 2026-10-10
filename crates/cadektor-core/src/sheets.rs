@@ -265,6 +265,9 @@ pub struct Drawing {
     /// The N/E grid, the display of phases and the data visualization (see `crate::viewrules`).
     #[serde(default, skip_serializing_if = "crate::viewrules::ViewRules::is_empty")]
     pub view_rules: crate::viewrules::ViewRules,
+    /// Layers and classes that show in grey (see `crate::visibility`).
+    #[serde(default)]
+    pub grey: crate::visibility::GreySet,
     /// Fields that this version does not know. They are saved again unchanged.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,

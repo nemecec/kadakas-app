@@ -337,7 +337,7 @@ fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
 /// with the same area (outer minus hole). The bridge joins the closest pair of points that see
 /// each other: it crosses no edge of the outer ring or of the hole. A bridge that crosses an
 /// edge would make a loop.
-fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
+pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
     if hole.len() < 3 {
         return outer;
     }

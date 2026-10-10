@@ -23,7 +23,7 @@ Create `keymap.json` in the per-user config folder (or set `CADEKTOR_KEYMAP` to 
 | Windows | `%APPDATA%\cadektor\keymap.json` |
 
 ```json
-{ "tool.line": "L", "edit.redo": ["Cmd/Ctrl+Y"], "edit.delete": [] }
+{ "tool.line": "G", "edit.redo": ["Cmd/Ctrl+Y"], "edit.delete": [] }
 ```
 
 A value is one chord or a list of chords. An empty list removes the key. A chord is modifiers joined by `+`
@@ -67,14 +67,16 @@ Tool keys switch the active tool.
 | Arc tool | 3 (both) | 3 | planned |
 | 2D Polygon tool | 8 (both) | 8 | planned |
 | Reshape tool | - (hyphen) (both) | - (hyphen) | planned |
-| Rotate tool | Option+= / Alt+= | Alt+= | planned |
-| Mirror tool | = (both) | = | planned |
-| Split tool | L (both) | L | planned |
-| Trim tool | Option+Shift+L / Alt+Shift+L | Alt+Shift+L | planned |
-| Fillet tool | 7 (both) | 7 | planned |
-| Chamfer tool | Option+7 / Alt+7 | Alt+7 | planned |
-| Offset tool | Shift+- (both) | Shift+- | planned |
-| Clip tool | Option+C / Shift+N | Shift+N | planned |
+| Rotate tool: click the center, the start direction and the end direction (`tool.rotate`) | Option+= / Alt+= | Alt+= | done |
+| Mirror tool: click two points of the mirror line (`tool.mirror`) | = (both) | = | done |
+| Split tool: cut an object at the clicked point (`tool.split`) | L (both) | L | done |
+| Trim tool (`tool.trim`) | Option+Shift+L / Alt+Shift+L | Alt+Shift+L | done |
+| Fillet tool (`tool.fillet`) | 7 (both) | 7 | done |
+| Chamfer tool (`tool.chamfer`) | Option+7 / Alt+7 | Alt+7 | done |
+| Offset tool (`tool.offset`) | Shift+- (both) | Shift+- | done |
+| Clip tool (the marquee clip with modes Exclusion, Inclusion and Split is not built; the Clip Surface command is) | Option+C / Shift+N | Shift+N | planned |
+| Scale tool (Cadektor; click the fixed point, the reference point and the new place) (`tool.scale`) | none | none (no VW default) | done |
+| Extend tool (Cadektor; extends the end of a line, arc or polyline to the next object) (`tool.extend`) | none | none (no VW default) | done |
 | Constrained Linear Dimension tool (Cadektor: the Dimension tool with modes; `tool.dimension`) | N (both) | N | done |
 | Angular Dimension tool (`tool.angular_dimension`) | . (both) | . | done |
 | Radial Dimension tool (`tool.radial_dimension`) | , (both) | , | done |
@@ -122,13 +124,13 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
 |---|---|---|---|
 | Suspend snapping (hold) (`snap.suspend`) | ` (both) | Backtick (the back quote key) | done |
-| Toggle SmartCursor cues | Y (both) | Y | planned |
-| Toggle angles relative to prior segment | / (both) | / | planned |
+| Toggle SmartCursor cues (`snap.cues`) | Y (both) | Y | done |
+| Toggle angles relative to prior segment (`snap.relative_angles`) | / (both) | / | done |
 | Snap loupe | Z (both) | Z | planned |
-| Set smart point, edge or vector (snap lock) | T (both) | T | planned |
+| Set smart point or smart edge at the pointer (`snap.acquire`; the snap lock vector is not built) | T (both) | T | done |
 | Toggle Snap to Grid | none | - (menu View only; VW leaves it undefined) | done |
 | Toggle Snap to Object | none | - (menu View only; VW leaves it undefined) | done |
-| Toggle snap to angle, intersection, distance, smart points, smart edge, tangent | none | - | planned |
+| Toggle snap to angle, intersection, distance, smart points, smart edge, tangent, perpendicular, midpoints, edges | none | - (the Snapping palette and the View menu) | done |
 
 ## View, zoom and pan
 
@@ -162,8 +164,8 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Realistic rendering: textures, sun and shadows (`view.realistic`) | Cmd+Shift+F / Ctrl+Shift+F (final-quality rendering) | Cmd/Ctrl+Shift+F | done |
 | Sketch rendering | Cmd+Shift+Option+S / Ctrl+Shift+Alt+S | Cmd/Ctrl+Shift+Alt+S | planned |
 | Toggle parallel and perspective projection (`view.projection`) | none | Alt+Shift+J | done |
-| Next view in history | Cmd+Shift+. / Ctrl+Shift+. | Ctrl+Shift+. | planned |
-| Previous view in history | Cmd+Shift+, / Ctrl+Shift+, | Ctrl+Shift+, | planned |
+| Next view in history (`view.history_next`) | Cmd+Shift+. / Ctrl+Shift+. | Cmd/Ctrl+Shift+. | done |
+| Previous view in history (`view.history_previous`) | Cmd+Shift+, / Ctrl+Shift+, | Cmd/Ctrl+Shift+, | done |
 | Zoom in, factor 2 (double tap) | CC (both) | CC | planned |
 | Switch saved view | Option+Arrow / Alt+Arrow | Alt+Arrow | planned |
 | Switch active layer or class | Cmd+Arrow / Ctrl+Arrow | Ctrl+Arrow | planned |
@@ -195,19 +197,26 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Cut / Copy / Paste | Cmd+X / Cmd+C / Cmd+V / Ctrl+X / Ctrl+C / Ctrl+V | Ctrl+X / Ctrl+C / Ctrl+V | planned |
 | Paste in Place | Cmd+Option+V / Ctrl+Alt+V | Ctrl+Alt+V | planned |
 | Duplicate | Cmd+D / Ctrl+D | Ctrl+D | planned |
-| Duplicate Array | Cmd+Shift+Option+D / Ctrl+Shift+Alt+D | Ctrl+Shift+Alt+D | planned |
+| Duplicate Array (`cmd.duplicate_array`) | Cmd+Shift+Option+D / Ctrl+Shift+Alt+D | Cmd/Ctrl+Shift+Alt+D | done |
+| Add Surface (`cmd.add_surface`) | Cmd+Shift+Option+A / Ctrl+Shift+Alt+A | Cmd/Ctrl+Shift+Alt+A | done |
+| Clip Surface (`cmd.clip_surface`) | Cmd+Shift+Option+C / Ctrl+Shift+Alt+C | Cmd/Ctrl+Shift+Alt+C | done |
+| Subtract Surface (Cadektor; the base is the lowest selected shape) (`cmd.subtract_surface`) | none | none (no VW default) | done |
+| Intersect Surface (`cmd.intersect_surface`) | Cmd+Shift+Option+I / Ctrl+Shift+Alt+I | Cmd/Ctrl+Shift+Alt+I | done |
+| Compose (`cmd.compose`) | Cmd+Shift+Option+P / Ctrl+Shift+Alt+P | Cmd/Ctrl+Shift+Alt+P | done |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
 | Group (`edit.group`) | Cmd+G / Ctrl+G | Cmd/Ctrl+G | done |
 | Ungroup (`edit.ungroup`) | Cmd+U / Ctrl+U | Cmd/Ctrl+U | done |
 | Edit group (`edit.enter_group`) | Cmd+[ / Ctrl+[ | Cmd/Ctrl+[ | done |
 | Exit group (`edit.exit_group`) | Cmd+] / Ctrl+] | Cmd/Ctrl+] | done |
-| Rotate left 90 / right 90 | Cmd+L / Cmd+Shift+R / Ctrl+L / Ctrl+Shift+R | Ctrl+L / Ctrl+Shift+R | planned |
-| Flip horizontal / vertical | Cmd+Shift+H / Cmd+Shift+V / Ctrl+Shift+H / Ctrl+Shift+V | Ctrl+Shift+H / Ctrl+Shift+V | planned |
+| Rotate left 90 (`cmd.rotate_left_90`) | Cmd+L / Ctrl+L | Cmd/Ctrl+L | done |
+| Rotate right 90 (`cmd.rotate_right_90`) | Cmd+Shift+R / Ctrl+Shift+R | Cmd/Ctrl+Shift+R | done |
+| Flip horizontal (`cmd.flip_horizontal`) | Cmd+Shift+H / Ctrl+Shift+H | Cmd/Ctrl+Shift+H | done |
+| Flip vertical (`cmd.flip_vertical`) | Cmd+Shift+V / Ctrl+Shift+V | Cmd/Ctrl+Shift+V | done |
 | Trim (command) | Cmd+T / Ctrl+T | Ctrl+T | planned |
 | Close polygon, polyline or path | K (both) | K | planned |
 | Exit text editing | Esc (both) | Escape | planned |
 | Palettes: Object Info, Navigation, Attributes, Resource Manager | Cmd+I / Cmd+Shift+N / Cmd+Shift+A / Cmd+R / Ctrl+I / Ctrl+Shift+N / Ctrl+Shift+A / Ctrl+R | Ctrl+I / Ctrl+Shift+N / Ctrl+Shift+A / Ctrl+R | planned |
-| Quick search | F (both) | F | planned |
+| Quick search (`ui.quick_search`) | F (both) | F | done |
 | Edit current workspace | Cmd+Shift+Option+W / Ctrl+Shift+Alt+W | Ctrl+Shift+Alt+W | planned |
 
 ## Data bar
@@ -233,7 +242,7 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 | Duplicate an object while moving | Option-drag / Ctrl-drag | Option/Ctrl-drag | planned |
 | Create a similar object | Cmd+Option-click / Ctrl+Alt-click | Cmd/Ctrl+Alt-click | planned |
 | Activate the Selection tool | Double-click in the drawing (both) | Double-click in the drawing | planned |
-| Previous or next view | Mouse buttons 4 and 5 (Windows only) | Mouse buttons 4 and 5 | planned |
+| Previous or next view | Mouse buttons 4 and 5 (Windows only) | Mouse buttons 4 and 5 | done |
 
 ## Not applicable
 
