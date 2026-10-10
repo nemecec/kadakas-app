@@ -12,6 +12,8 @@ pub mod annot_pick;
 pub mod area;
 pub mod grading;
 pub mod hit;
+pub mod keymap;
+pub mod keys;
 pub mod massing;
 pub mod snap;
 pub mod tools;

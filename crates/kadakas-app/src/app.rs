@@ -171,7 +171,7 @@ impl KadakasApp {
         for w in prefs_warning.iter().chain(layout_warning.iter()) {
             eprintln!("kadakas: {w}");
         }
-        let (keys, warnings) = Keymap::load();
+        let (keys, warnings) = keymap::load();
         app.keys = keys;
         for w in &warnings {
             eprintln!("kadakas: {w}");
@@ -949,7 +949,8 @@ impl KadakasApp {
                 .collect()
         });
         for (key, physical, mods, repeat) in events {
-            let Some((action, chord)) = self.keys.action_for_event(key, physical, mods) else {
+            let Some((action, chord)) = keymap::action_for_event(&self.keys, key, physical, mods)
+            else {
                 continue;
             };
             if repeat && !action.repeats() {
@@ -1111,8 +1112,8 @@ impl KadakasApp {
                     i.pointer.latest_pos(),
                     i.pointer.hover_pos(),
                     i.modifiers,
-                    !typing && self.keys.held(Action::PanHold, i),
-                    !typing && self.keys.held(Action::SnapSuspend, i),
+                    !typing && keymap::held(&self.keys, Action::PanHold, i),
+                    !typing && keymap::held(&self.keys, Action::SnapSuspend, i),
                     i.smooth_scroll_delta.y,
                     i.zoom_delta(),
                     i.pointer.primary_pressed(),

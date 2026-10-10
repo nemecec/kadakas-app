@@ -63,7 +63,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         (
             i.pointer.hover_pos(),
             i.modifiers,
-            keys.held(Action::PanHold, i),
+            crate::keymap::held(keys, Action::PanHold, i),
             i.smooth_scroll_delta.y,
             i.zoom_delta(),
         )
