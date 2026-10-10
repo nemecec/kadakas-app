@@ -14,7 +14,7 @@ LIB_MIN=95
 # lower because some start-up error paths (a broken terminal, a closed stdout) cannot be reached.
 CLI_MIN=90
 
-LIBS=(core render io annot gis ifc x3d irrigation script plugin-abi plugin site sheet print api update sign-manifest ui-core)
+LIBS=(core collab render io annot gis ifc x3d irrigation script plugin-abi plugin site sheet print api update sign-manifest ui-core)
 
 if [ "$#" -gt 0 ]; then
   CRATES=("$@")

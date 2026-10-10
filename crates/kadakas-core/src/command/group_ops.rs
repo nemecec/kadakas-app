@@ -376,6 +376,7 @@ impl Tx<'_> {
                 shape,
                 class,
                 attrs,
+                id: wanted,
             } => {
                 self.editable(*parent)?;
                 let g = self.doc.object(*parent).expect("checked");
@@ -392,7 +393,12 @@ impl Tx<'_> {
                     },
                     out,
                 )?;
-                let id = ObjectId(*out.created.last().expect("added"));
+                let mut id = ObjectId(*out.created.last().expect("added"));
+                if let Some(w) = wanted {
+                    self.rename_new(id, *w)?;
+                    id = *w;
+                    *out.created.last_mut().expect("added") = w.0;
+                }
                 self.doc.object_mut(id).expect("added").parent = Some(*parent);
             }
             Command::SetParent { ids, parent } => {
@@ -790,6 +796,41 @@ mod tests {
             panic!()
         };
         center
+    }
+
+    #[test]
+    fn add_object_in_can_take_an_id() {
+        let mut ed = Editor::with_sequential_ids();
+        let a = add(
+            &mut ed,
+            Shape::Circle {
+                center: v(0.0, 0.0),
+                radius: 1.0,
+            },
+        );
+        let g = group(&mut ed, &[a]);
+        let want = ObjectId(Uid::derive(g.0, 2, 0));
+        let make = |id| Command::AddObjectIn {
+            parent: g,
+            shape: Shape::Circle {
+                center: v(9.0, 0.0),
+                radius: 1.0,
+            },
+            class: None,
+            attrs: Attributes::default(),
+            id,
+        };
+        let out = ed.execute(&make(Some(want))).unwrap();
+        assert_eq!(out.created, vec![want.0]);
+        assert_eq!(ed.doc().object(want).unwrap().parent, Some(g));
+        assert!(matches!(
+            ed.execute(&make(Some(want))),
+            Err(CommandError::Invalid(m)) if m.contains("exists")
+        ));
+        assert!(ed.undo());
+        assert!(ed.doc().object(want).is_none());
+        assert!(ed.redo());
+        assert!(ed.doc().object(want).is_some());
     }
 
     #[test]
@@ -1530,6 +1571,7 @@ mod tests {
                 },
                 class: None,
                 attrs: Attributes::default(),
+                id: None,
             })
             .unwrap();
         let n = ObjectId(out.created[0]);
@@ -1537,7 +1579,7 @@ mod tests {
         assert!(ed.undo());
         assert!(ed.doc().object(n).is_none());
         assert!(
-            matches!(ed.execute(&Command::AddObjectIn { parent: a, shape: Shape::Circle { center: v(9.0, 0.0), radius: 1.0 }, class: None, attrs: Attributes::default() }), Err(CommandError::Invalid(m)) if m.contains("not a group"))
+            matches!(ed.execute(&Command::AddObjectIn { parent: a, shape: Shape::Circle { center: v(9.0, 0.0), radius: 1.0 }, class: None, attrs: Attributes::default(), id: None }), Err(CommandError::Invalid(m)) if m.contains("not a group"))
         );
         // Move b into the group, then out again.
         ed.execute(&Command::SetParent {

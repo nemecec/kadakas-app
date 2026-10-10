@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d4aac5757de97287b4e4d9b5e6df2ced246dd253712f76db627a6884652b0e1d # shrinks to n = 2, acts = [Edit { c: 1, kind: 0, t: 0, p: 0, v: 0 }, Connect { c: 1 }, Edit { c: 2, kind: 0, t: 1, p: 0, v: 0 }, Disconnect { c: 1 }, Edit { c: 0, kind: 0, t: 1, p: 0, v: 0 }, Edit { c: 0, kind: 0, t: 1, p: 0, v: 0 }], order = [0, 1, 2, 3]
+cc 5fbcbcec7b2330189ff6ad7f1835fdbdf9a2e4d3779a2476b500875fcb6c2b06 # shrinks to n = 2, acts = [Connect { c: 0 }, Edit { c: 2, kind: 0, t: 7, p: 0, v: 0 }, Connect { c: 1 }, Deliver { c: 1 }, Deliver { c: 0 }, Edit { c: 1, kind: 0, t: 7, p: 0, v: 0 }, Deliver { c: 1 }, Deliver { c: 2 }, Undo { c: 0 }], order = [0, 1, 2, 3]
+cc 784c868229f97f5d9d6aec9843ae21f4ef7fe5235e99c5afc4c7b510754bb796 # shrinks to n = 2, acts = [Connect { c: 0 }, Connect { c: 1 }, Edit { c: 2, kind: 0, t: 4, p: 2, v: 0 }, Deliver { c: 0 }, Deliver { c: 1 }, Edit { c: 1, kind: 2, t: 4, p: 0, v: 0 }, Edit { c: 1, kind: 1, t: 4, p: 0, v: 0 }, Undo { c: 1 }, Redo { c: 1 }], order = [0, 1, 2, 3]

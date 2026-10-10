@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod annotation_api;
+mod collab_api;
 mod errors;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
@@ -97,6 +98,8 @@ pub struct Session {
     pub smart: kadakas_core::snapping::Smart,
     replaced: bool,
     view_changed: bool,
+    /// The collaboration client and where it connects (see `collab_api`).
+    collab: collab_api::CollabState,
     /// Who subscribed to the change events (see `events`), and the connection of the current call.
     events: events::EventHub,
     conn: u64,
@@ -630,6 +633,14 @@ pub const METHODS: &[(&str, &str)] = &[
     annotation_api::ANNOTATION_EVALUATE,
     annotation_api::ANNOTATION_APPLY_TEXT_STYLE,
     annotation_api::REVISION_LIST,
+    // Collaboration (see collab_api.rs).
+    collab_api::STATUS,
+    collab_api::CONNECT,
+    collab_api::DISCONNECT,
+    collab_api::SYNC,
+    collab_api::PRESENCE,
+    collab_api::UNDO,
+    collab_api::REDO,
     (
         "events.subscribe",
         "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
@@ -696,6 +707,7 @@ impl Session {
             smart: Default::default(),
             replaced: false,
             view_changed: false,
+            collab: Default::default(),
             events: Default::default(),
             conn: events::LOCAL,
             limits: SessionLimits::default(),
@@ -758,6 +770,7 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let wasm_plugins = std::mem::take(&mut self.wasm_plugins);
         let limits = self.limits.clone();
+        let collab = std::mem::take(&mut self.collab);
         let mut hub = std::mem::take(&mut self.events);
         hub.document_replaced();
         let sequential = self.sequential_ids;
@@ -768,6 +781,7 @@ impl Session {
             ..Session::with_document(doc)
         };
         self.events = hub;
+        self.collab = collab;
         self.set_sequential_ids(sequential);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -912,6 +926,19 @@ impl Session {
         if let Some(r) = rules_api::handle(self, method, p.clone()) {
             return r;
         }
+        if let Some(r) = collab_api::handle(self, method, p.clone()) {
+            return r;
+        }
+        if method == "document.load" && collab_api::is_connected(self) {
+            return Err(RpcError::conflict(
+                "this session is connected to a shared document: call collab.disconnect before you load another document",
+            ));
+        }
+        if matches!(method, "undo" | "redo") && collab_api::is_connected(self) {
+            return Err(RpcError::conflict(format!(
+                "this session is connected to a shared document: use collab.{method}, which takes back only your own edits"
+            )));
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }
@@ -947,6 +974,7 @@ impl Session {
                 "annotation": annotation_api::describe(),
                 "survey": survey_api::describe(),
                 "display_rules": rules_api::describe(),
+                "collaboration": collab_api::describe(),
                 "errors": errors::describe(),
                 "unknown_shapes": "A file from a newer Kadakas may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
@@ -1330,6 +1358,7 @@ impl Session {
                 shape: shape.clone(),
                 class: *class,
                 attrs: attrs.clone(),
+                id: None,
             },
             _ => cmd,
         }
@@ -1398,6 +1427,8 @@ fn command_examples() -> Value {
         {"op": "set_vertex", "id": "00000000-0000-0000-0000-000000000002", "index": 1, "kind": {"kind": "arc", "radius": 250}},
         {"op": "move_objects", "ids": ["00000000-0000-0000-0000-000000000002"], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},
+        {"op": "arrange", "ids": ["00000000-0000-0000-0000-000000000002"], "how": "front"},
+        {"op": "move_layer", "id": "00000000-0000-0000-0000-000000000001", "index": 0},
         {"op": "batch", "commands": [{"op": "delete_objects", "ids": ["00000000-0000-0000-0000-000000000002"]}]},
         {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
         {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}},

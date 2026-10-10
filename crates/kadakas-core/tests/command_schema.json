@@ -1,5 +1,30 @@
 {
   "$defs": {
+    "Arrange": {
+      "description": "How `Command::Arrange` moves objects in the stacking order.",
+      "oneOf": [
+        {
+          "const": "front",
+          "description": "Above all other objects.",
+          "type": "string"
+        },
+        {
+          "const": "back",
+          "description": "Below all other objects.",
+          "type": "string"
+        },
+        {
+          "const": "forward",
+          "description": "One step up, past the nearest object of the same layer that is not moved.",
+          "type": "string"
+        },
+        {
+          "const": "backward",
+          "description": "One step down.",
+          "type": "string"
+        }
+      ]
+    },
     "ArrayParams": {
       "description": "A duplicate array.",
       "oneOf": [
@@ -1473,6 +1498,53 @@
       "type": "object"
     },
     {
+      "description": "Move objects in the stacking order (z-order): to the front or the back of all objects, or\none step forward or backward past the nearest object on the same layer that is not moved.",
+      "properties": {
+        "how": {
+          "$ref": "#/$defs/Arrange"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "op": {
+          "const": "arrange",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "how"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Move a layer to a place in the list of layers (0 is the first). A number past the end\nputs it last.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LayerId"
+        },
+        "index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "op": {
+          "const": "move_layer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "index"
+      ],
+      "type": "object"
+    },
+    {
       "properties": {
         "attrs": {
           "$ref": "#/$defs/Attributes",
@@ -2540,6 +2612,18 @@
             }
           ],
           "default": null
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The ID of the new object. Without one a new ID is made. A program that makes the same\nobjects again and again (the shapes of a plug-in object) gives IDs that follow from the\nsource (`Uid::derive`), so two users who do it at the same time make the same IDs. It\nfails if an object with this ID exists."
         },
         "op": {
           "const": "add_object_in",

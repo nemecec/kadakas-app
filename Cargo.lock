@@ -2497,6 +2497,7 @@ dependencies = [
  "base64 0.22.1",
  "glam",
  "kadakas-annot",
+ "kadakas-collab",
  "kadakas-core",
  "kadakas-crs",
  "kadakas-gis",
@@ -2514,6 +2515,7 @@ dependencies = [
  "kadakas-sys",
  "kadakas-x3d",
  "png",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -2565,6 +2567,18 @@ dependencies = [
  "kadakas-core",
  "kadakas-sys",
  "serde_json",
+]
+
+[[package]]
+name = "kadakas-collab"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

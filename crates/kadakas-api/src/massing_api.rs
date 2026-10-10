@@ -154,6 +154,7 @@ fn add(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             shape,
             class: place.class,
             attrs: Attributes::default(),
+            id: None,
         },
         None => Command::AddObject {
             shape,

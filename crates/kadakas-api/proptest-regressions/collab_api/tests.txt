@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 077d85ccb8bbb09b0080f0ef894f6013e4492365e8a73b9c891c54f8dd4618fd # shrinks to acts = [Place { s: true, x: 0 }, Redo { s: true }]

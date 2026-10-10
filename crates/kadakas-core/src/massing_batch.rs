@@ -264,6 +264,7 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
                 shape,
                 class: Some(o.class),
                 attrs,
+                id: None,
             },
             None => Command::AddObject {
                 shape,

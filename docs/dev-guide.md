@@ -19,6 +19,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
 | `kadakas-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
 | `kadakas-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
+| `kadakas-collab` | Collaboration client (PLAT-07, PLAT-08): wire protocol, merge rules, client state machine, per-user undo, offline log, presence, transport trait. No network code and no server (the server is the separate `kadakas-server` repository). `testkit` feature: an in-memory reference sequencer for tests | core |
 | `kadakas-render` | Camera, standard views, picking, CPU rasterizer | core |
 | `kadakas-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants |
 | `kadakas-annot` | Data tags, legends and annotation output on top of the worksheet code (pure, wasm-compatible) | core, sheet |
@@ -33,7 +34,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, crs, io |
 | `kadakas-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, crs, sys, io, site |
 | `kadakas-print` | Sheet composition and output: PDF, SVG and PNG pages from sheet layers | core, sys, render, sheet, annot, site, x3d |
-| `kadakas-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs; native only: sys, io, ifc, gis, print, script, plugin, plugin-abi, x3d. Also: `SessionLimits`, the event hub (`events`) |
+| `kadakas-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs, collab; native only: sys, io, ifc, gis, print, script, plugin, plugin-abi, x3d. Also: `SessionLimits`, the event hub (`events`) |
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
 | `kadakas-launcher` | The launcher program (PLAT-06): an egui window that shows versions, channel, flavor and profile, and has Launch, Check, Update and Roll back. The window code only draws; the state is in `model.rs`. Left out of the coverage bar like the app (native only) | sys, update |
 | `kadakas-sign-manifest` (in `scripts/sign-manifest`) | The CI tool `sign-manifest`: `keygen`, `public`, `build`, `sign`, `verify` for update manifests. Holds the signing code (feature `sign` of `kadakas-update`); the launcher does not | sys, update (feature `sign`) |
@@ -54,7 +55,7 @@ core            sys
   io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
   script (sys)    plugin-abi  ->  plugin (core, plugin-abi; sys on native)
   ui-core (core, annot, irrigation, plants, render, site)  ->  app (and any other UI program)
-  api  = everything above;  cli = core, sys, api;  app = api and the UI crates
+  api  = everything above (collab: core only);  cli = core, sys, api;  app = api and the UI crates
 ```
 
 Plug-ins (`docs/plugins.md`) are WebAssembly modules. The example plug-in lives in `plugins/raised-planter`, outside the workspace (it builds for `wasm32-unknown-unknown` with its own lock file). The tests use its committed module `crates/kadakas-plugin/tests/fixtures/raised_planter.wasm`; run `scripts/build-plugin-fixtures.sh` after you change the example or the ABI, and commit the new module.
@@ -65,7 +66,7 @@ Nothing below `api` depends on `script` any more: `io` runs its converter throug
 - The launcher holds no secret. It has public keys only (`crates/kadakas-launcher/trusted-keys.txt`). Private keys exist in CI secrets only. Signing code lives behind the `sign` feature of `kadakas-update`, and only `sign-manifest` and tests turn it on.
 - UI logic that has no egui code (tools, picking, snapping glue, view state, keymap) belongs in `kadakas-ui-core`, so another UI program can reuse it. The app only converts egui input into ui-core events and draws. Do not add `egui` to ui-core.
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
-- Core, crs, plants, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Core, crs, plants, collab, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
@@ -98,7 +99,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
