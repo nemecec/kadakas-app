@@ -121,6 +121,38 @@ Inside the block, drawing calls wait. When the block ends, they go out together 
 
 New objects inside the block are `Pending`. Their `.id` is known only after the block. You cannot use a `Pending` object in a later call inside the same block. Calls that are not commands, for example `plants.place`, cannot be part of a group.
 
+### IDs
+
+Every object, layer, class and resource has an ID. An ID is a UUID text such as `0192f3c4-7b1a-7c2e-9d41-5e6f7a8b9c0d`. IDs are unique in the world, so a client that works offline never makes an ID that another client made. A file from an older format version, with number IDs, does not open: the loader says "unsupported old format".
+
+In Python, an ID is a `str` (`cadektor.Id`). Use `cadektor.is_id(text)` to test one. Wherever a layer, class or resource is expected, you can give its ID or its name.
+
+For tests that need IDs that you can predict, start the session with the flag `--sequential-ids`. New IDs then count up from `00000000-0000-0000-0000-000000000002`. Do not use this flag for documents that you merge with others.
+
+### Change events
+
+`doc.events` tells you what changed, so you need not read the document again.
+
+```python
+doc.events.subscribe(kinds=["objects"])      # kinds is optional
+doc.add.circle([0, 0], 300)
+for message in doc.events.take():
+    change = message["params"]
+    print(change["op"], change["origin"], change["added"]["objects"])
+```
+
+A change set has these fields: `revision`, `op` (the command name, or `undo`, `redo` or `rollback`), `origin` (`user`, `agent` or `script`), `added`, `changed` and `removed` (each lists the IDs of `objects`, `layers`, `classes` and `resources`), and `document` (flags: `active_layer`, `active_class`, `georef`, `drawing`). A batch or an undo group gives one change set. A command that fails gives none. When you replace the whole document, you get `events.reset` instead: read the document again.
+
+| Name | Use |
+|---|---|
+| `doc.events.subscribe(kinds=None, callback=None)` | Start the events. Returns the revision now. The callback gets each message. |
+| `doc.events.take()` | The messages since the last call, oldest first. |
+| `doc.events.wait(timeout)` | Like `take()`, and waits for a message (a connection to the app only). |
+| `doc.events.poll(since_revision, kinds=None)` | The change sets after a revision, as `{revision, truncated, changes}`. For clients that cannot receive messages. If `truncated` is true, read the document again. |
+| `doc.events.unsubscribe()` | Stop the events. |
+
+Over a `cadektor serve` process, a message comes before the reply of the call that made the change. A connection to the app also gets the changes that the user makes, at any time. The change log has a limit; `poll` and `events.reset` tell you when changes were lost. MCP does not carry events.
+
 ### Everything else
 
 The package has one method for every API method. They come from `describe`:
@@ -350,6 +382,7 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 | `doc.move(items, dx, dy)`, `doc.delete(items)`, `doc.group(items)` | Many objects. |
 | `doc.selection.ids() / objects() / set(items) / clear()` | The selection. |
 | `doc.undo_group()`, `doc.undo()`, `doc.redo()` | Undo. |
+| `doc.events.subscribe / take / wait / poll / unsubscribe` | Change events (see above). |
 | `doc.plants.place / styles / create_style / schedule` | Plants. |
 | `doc.report.plants / plant_schedule / areas / hardscape` | Reports. |
 | `doc.worksheets.create / set_cell / evaluate / csv / place / list` | Worksheets. |
@@ -364,6 +397,9 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 The text of every API method is the docstring of `doc.api.<method>`. Use `help(doc.api.plants_place)`.
 
 ### JSON-RPC methods for scripting
+
+The methods `events.subscribe`, `events.unsubscribe` and `events.poll` give the change events. The server sends `{"jsonrpc": "2.0", "method": "events.change", "params": ChangeSet}` as a message without an id.
+
 
 | Method | Use |
 |---|---|

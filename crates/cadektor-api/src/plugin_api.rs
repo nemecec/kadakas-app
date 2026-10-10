@@ -300,7 +300,12 @@ fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
 
 fn exec(s: &mut Session, cmd: &Command) -> Result<Vec<cadektor_core::uid::Uid>, RpcError> {
     let cmd = s.in_context(cmd.clone());
-    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
+    // Plug-in objects change because a script ran, so the change events say so.
+    let before = s.editor.origin();
+    s.editor.set_origin(cadektor_core::change::Origin::Script);
+    let out = s.editor.execute(&cmd).map_err(RpcError::from);
+    s.editor.set_origin(before);
+    let out = out?;
     s.prune_selection();
     Ok(out.created)
 }

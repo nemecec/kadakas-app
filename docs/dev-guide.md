@@ -15,29 +15,59 @@ The "Depends on" column lists the other Cadektor crates that a crate uses (`carg
 
 | Crate | Content | Depends on |
 |---|---|---|
-| `cadektor-core` | Document model, commands, undo, geometry, curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | none of ours |
+| `cadektor-core` | Document model, UUID ids (`uid`), commands, undo, the change-event log (`change`), geometry (`geom`: shared polygon and segment helpers), the ground trait (`ground`), caches (`cache`: `RevCache`, `LruCache`), curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | none of ours |
+| `cadektor-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
+| `cadektor-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
+| `cadektor-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
 | `cadektor-render` | Camera, standard views, picking, CPU rasterizer | core |
-| `cadektor-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core |
+| `cadektor-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants |
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code (pure, wasm-compatible) | core, sheet |
 | `cadektor-site` | Site model: TIN, contours, slope, site modifiers, cut and fill, grading (pure, wasm-compatible) | core |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
 | `cadektor-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core, render |
-| `cadektor-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core |
-| `cadektor-io` | DXF, Shapefile and GeoJSON import and export, DWG through an external converter, CRS conversion (native only) | core, annot, script (process groups for the converter), site |
-| `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, io |
-| `cadektor-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, io, site |
-| `cadektor-print` | Sheet composition and output: PDF, SVG and PNG pages from sheet layers | core, render, sheet, annot, site, x3d |
-| `cadektor-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation; native only: io, ifc, gis, print, script, x3d |
-| `cadektor-cli` | The `cadektor` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, api |
-| `cadektor-app` | egui and wgpu desktop app and web build | core, render, sheet, annot, site, irrigation, print, api; native only: gis, script |
+| `cadektor-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core, sys |
+| `cadektor-io` | DXF, Shapefile and GeoJSON import and export, DWG through an external converter, CRS conversion through `crs` (native only) | core, annot, sys, crs, site |
+| `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, crs, io |
+| `cadektor-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, crs, sys, io, site |
+| `cadektor-print` | Sheet composition and output: PDF, SVG and PNG pages from sheet layers | core, sys, render, sheet, annot, site, x3d |
+| `cadektor-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs; native only: sys, io, ifc, gis, print, script, x3d. Also: `SessionLimits`, the event hub (`events`) |
+| `cadektor-cli` | The `cadektor` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
+| `cadektor-app` | egui and wgpu desktop app and web build | core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
+
+The layers, from the bottom (a crate uses only crates above it; `cargo tree` is the truth):
+
+```
+core            sys
+  |              |
+  +-- render  site  sheet  irrigation  crs  plants       (each uses core; sheet also plants)
+  |     |       |     |
+  |   x3d     annot --+                                   (x3d: core, render; annot: core, sheet)
+  |     |       |
+  |     +- print -+-- sys                                 (print: also sheet, site)
+  |
+  io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
+  script (sys)
+  api  = everything above;  cli = core, sys, api;  app = api and the UI crates
+```
+
+Nothing below `api` depends on `script` any more: `io` runs its converter through `sys`.
 
 - Put each feature in its own crate or module, for example `cadektor-io` for file formats and `cadektor-site` for terrain. Keep the interface small.
-- Core, render, site, annot, x3d, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Core, crs, plants, render, site, annot, x3d, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
 - After you add or change a `Command`, renew its JSON Schema: `UPDATE_SCHEMA=1 cargo test -p cadektor-core --test command_schema`, and commit `crates/cadektor-core/tests/command_schema.json`. The schema comes from `schemars`; the types inside a command that other crates own (shapes, resource bodies, patches) are described in `crates/cadektor-core/src/schema.rs`.
 - After you add or change an API method, renew the Python package: `CADEKTOR_BIN=<your binary> python python/tools/codegen.py`. The test `python/tests/test_drift.py` fails when `python/cadektor/_api.py` and `describe` differ.
+
+## Many documents in one process
+
+A host can run many `Session` values in one process (PLAT-12). The rules:
+
+- A session owns all of its state. A library crate has no `static` with document data. A `static` is allowed for an id allocator (the editor revision, the GUID counter) or for a table that never changes.
+- Every cache is per session and bounded: `RevCache` for one entry by revision, `LruCache` for many. The site analysis cache is in `SiteCache`, which `Session` owns.
+- `SessionLimits` sets the limits of one session: objects, memory, request time, picture size and so on. `Session::set_limits` changes them. A call that breaks a limit is undone.
+- New ids are UUIDv7 (`Document::alloc_id`). A web build must call `Document::seed_ids(ms, salt)` once, because `std::time` is not available there. Tests and fixtures use `Document::with_sequential_ids()` or `cadektor serve --sequential-ids`.
 
 ## Quality rules
 
@@ -55,7 +85,7 @@ The "Depends on" column lists the other Cadektor crates that a crate uses (`carg
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-x3d -p cadektor-app --target wasm32-unknown-unknown
+cargo check -p cadektor-core -p cadektor-crs -p cadektor-plants -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-x3d -p cadektor-app --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```

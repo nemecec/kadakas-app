@@ -1791,7 +1791,7 @@ impl eframe::App for CadektorApp {
                 .get_or_insert_with(|| (agent.addr.to_string(), agent.token.clone()));
             let now = ctx.input(|i| i.time);
             let (shots, shot_key) = (&mut self.shots, &mut self.shot_key);
-            agent.poll_ext(&mut |line, reply| {
+            agent.poll_ext(&mut |line, reply, conn| {
                 // A screenshot is answered in a later frame, when the window has sent the picture.
                 match screenshot::parse(line) {
                     Some(Ok((id, request))) => {
@@ -1814,10 +1814,20 @@ impl eframe::App for CadektorApp {
                 crate::agent::Reply::Now(file_io::agent_line(
                     &mut self.session,
                     &mut self.path,
+                    conn,
                     line,
                     &mut fx,
                 ))
             });
+            // Change events (`events.subscribe`) go to the clients that asked for them.
+            for conn in self.session.subscribers() {
+                for note in self.session.take_notifications(conn) {
+                    if !agent.push(conn, note.to_string()) {
+                        self.session.drop_connection(conn);
+                        break;
+                    }
+                }
+            }
             if fx.replaced {
                 self.machine.cancel();
                 self.needs_fit = true;

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod errors;
+pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 pub use errors::RpcError;
@@ -88,6 +89,9 @@ pub struct Session {
     pub smart: cadektor_core::snapping::Smart,
     replaced: bool,
     view_changed: bool,
+    /// Who subscribed to the change events (see `events`), and the connection of the current call.
+    events: events::EventHub,
+    conn: u64,
     /// Memory, time and size limits of this session (see `SessionLimits`).
     limits: SessionLimits,
     /// New IDs count 2, 3, 4 and so on (see `Session::with_sequential_ids`). The mode stays when
@@ -167,6 +171,18 @@ pub const METHODS: &[(&str, &str)] = &[
     (
         "document.load",
         "Replace the document. params: {document}. Clears history.",
+    ),
+    (
+        "events.subscribe",
+        "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
+    ),
+    (
+        "events.unsubscribe",
+        "Stop the change events. Returns {done}.",
+    ),
+    (
+        "events.poll",
+        "Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.",
     ),
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
@@ -650,6 +666,8 @@ impl Session {
             smart: Default::default(),
             replaced: false,
             view_changed: false,
+            events: Default::default(),
+            conn: events::LOCAL,
             limits: SessionLimits::default(),
             sequential_ids: false,
             mesh_cache: MeshCache::default(),
@@ -706,6 +724,8 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let scripting = std::mem::take(&mut self.scripting);
         let limits = self.limits.clone();
+        let mut hub = std::mem::take(&mut self.events);
+        hub.document_replaced();
         let sequential = self.sequential_ids;
         *self = Session {
             replaced: true,
@@ -713,6 +733,7 @@ impl Session {
             snap: self.snap,
             ..Session::with_document(doc)
         };
+        self.events = hub;
         self.set_sequential_ids(sequential);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -842,6 +863,9 @@ impl Session {
     }
 
     fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        if let Some(r) = events::handle(self, method, p.clone()) {
+            return r;
+        }
         if grading_api::knows(method) {
             return self.handle_grading(method, p);
         }
@@ -1271,6 +1295,11 @@ impl Session {
     /// Handles one JSON-RPC 2.0 request line and returns the response line.
     /// Returns `None` for a notification (a request without an id).
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
+        self.handle_line_as(events::LOCAL, line)
+    }
+
+    /// Like `handle_line`, for a request from the connection `conn` (see `events`).
+    pub fn handle_line_as(&mut self, conn: u64, line: &str) -> Option<String> {
         let req: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
@@ -1289,7 +1318,8 @@ impl Session {
                 "missing method",
             ));
         };
-        let result = self.handle(method, req.get("params").cloned().unwrap_or(Value::Null));
+        let params = req.get("params").cloned().unwrap_or(Value::Null);
+        let result = self.handle_as(conn, cadektor_core::change::Origin::Agent, method, params);
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),

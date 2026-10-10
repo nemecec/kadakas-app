@@ -64,12 +64,13 @@ pub struct AgentEffects {
     pub path_changed: bool,
 }
 
-/// Answers one request line from an agent. Like `Session::handle_line`, and
+/// Answers one request line from the agent connection `conn`. Like `Session::handle_line_as`, and
 /// also `file.save {path}` and `file.open {path}`, which need the app's file path.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn agent_line(
     session: &mut Session,
     path: &mut Option<PathBuf>,
+    conn: u64,
     line: &str,
     fx: &mut AgentEffects,
 ) -> Option<String> {
@@ -79,7 +80,7 @@ pub fn agent_line(
         .and_then(|r| r["method"].as_str())
         .filter(|m| matches!(*m, "file.save" | "file.open"));
     let (Some(req), Some(method)) = (&req, method) else {
-        let resp = session.handle_line(line);
+        let resp = session.handle_line_as(conn, line);
         if session.take_replaced() {
             // `document.load`: the new document does not come from the file that was open.
             *path = None;
@@ -181,7 +182,7 @@ mod tests {
         fx: &mut AgentEffects,
         req: Value,
     ) -> Value {
-        serde_json::from_str(&agent_line(s, path, &req.to_string(), fx).unwrap()).unwrap()
+        serde_json::from_str(&agent_line(s, path, 0, &req.to_string(), fx).unwrap()).unwrap()
     }
 
     #[test]
@@ -324,6 +325,7 @@ mod tests {
             agent_line(
                 &mut s,
                 &mut path,
+                0,
                 &json!({"method": "file.save", "params": {"path": p}}).to_string(),
                 &mut fx
             )
@@ -368,7 +370,7 @@ mod tests {
         assert_eq!(fx, AgentEffects::default());
 
         // Lines that are not JSON still get the normal parse error.
-        let line = agent_line(&mut s, &mut path, "{nope", &mut fx).unwrap();
+        let line = agent_line(&mut s, &mut path, 0, "{nope", &mut fx).unwrap();
         assert!(line.contains("-32700"));
     }
 

@@ -9,8 +9,10 @@ import socket
 import subprocess
 import sys
 import threading
+import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .errors import CadektorError, ConnectionFailed, RequestTimeout
 
@@ -50,6 +52,10 @@ def find_binary(binary: str | os.PathLike[str] | None = None) -> str:
     return str(found)
 
 
+NOTIFICATION_LIMIT = 10_000
+"""How many notifications a transport keeps for a client that does not take them."""
+
+
 class _LineRpc:
     """Shared request logic for transports that read and write one JSON object per line."""
 
@@ -57,6 +63,36 @@ class _LineRpc:
         self._lock = threading.Lock()
         self._next_id = 1
         self._abandoned: set[Any] = set()
+        # Messages without an id (``events.change``), oldest first. The newest ones stay.
+        self._notes: deque[dict[str, Any]] = deque(maxlen=NOTIFICATION_LIMIT)
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
+
+    def add_listener(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Call ``callback(message)`` for each notification, in the thread that reads it."""
+        self._listeners.append(callback)
+
+    def drain_notifications(self) -> list[dict[str, Any]]:
+        """The notifications that arrived and were not taken yet, oldest first."""
+        with self._lock:
+            notes = list(self._notes)
+            self._notes.clear()
+        return notes
+
+    def wait_notifications(self, timeout: float | None = None) -> list[dict[str, Any]]:
+        """Like ``drain_notifications``, but waits up to ``timeout`` seconds for one if there is none.
+        Only a transport that can read without a request waits (TCP). Others return at once."""
+        with self._lock:
+            if not self._notes:
+                self._wait_for_note(timeout)
+        return self.drain_notifications()
+
+    def _wait_for_note(self, timeout: float | None) -> None:
+        """Reads until a notification is queued or the time is over. Called with the lock held."""
+
+    def _note(self, message: dict[str, Any]) -> None:
+        self._notes.append(message)
+        for callback in list(self._listeners):
+            callback(message)
 
     def _send_line(self, line: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -75,6 +111,9 @@ class _LineRpc:
             try:
                 while True:
                     reply = json.loads(self._read_line())
+                    if "method" in reply and "id" not in reply:
+                        self._note(reply)
+                        continue
                     if reply.get("id") in self._abandoned:
                         # The late answer of a request that timed out. Throw it away.
                         self._abandoned.discard(reply.get("id"))
@@ -182,6 +221,25 @@ class TcpTransport(_LineRpc):
             if not chunk:
                 raise ConnectionFailed("the connection to the app is closed")
             self._buffer += chunk
+
+    def _wait_for_note(self, timeout: float | None) -> None:
+        old = self._sock.gettimeout()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        try:
+            while not self._notes:
+                left = None if deadline is None else max(deadline - time.monotonic(), 0.0)
+                if left == 0.0:
+                    return
+                self._sock.settimeout(left)
+                try:
+                    message = json.loads(self._read_line())
+                except RequestTimeout:
+                    return
+                if "method" in message and "id" not in message:
+                    self._note(message)
+                # A reply here is the late answer of a request that timed out: drop it.
+        finally:
+            self._sock.settimeout(old)
 
     def close(self) -> None:
         try:

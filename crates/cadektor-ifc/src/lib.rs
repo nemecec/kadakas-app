@@ -29,8 +29,10 @@
 //! `TrueNorth` of the context includes the rotation of the model and the meridian convergence of the CRS at the
 //! site origin (computed with proj4rs). Without a known CRS it is grid north.
 //!
-//! GlobalIds come from the project GUID in the document (`drawing.project.guid`) and the object IDs,
-//! so they stay the same in every export. The output is deterministic.
+//! The GlobalId of an object is its UUID in the IFC alphabet (22 characters), so it is the same in
+//! every export and in every document that holds a copy. The GlobalIds of other things (the project,
+//! layers, materials) come from the project GUID (`drawing.project.guid`) and their names. The
+//! output is deterministic.
 
 pub mod geo;
 pub mod geom;

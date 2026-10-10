@@ -124,7 +124,8 @@ struct RemoteArgs {
 /// Where requests go: a local document, or a running app over TCP.
 enum Backend {
     Local(Box<Session>),
-    Remote(BufReader<TcpStream>),
+    /// The connection, and the notifications (`events.change`) that came before a reply.
+    Remote(BufReader<TcpStream>, Vec<Value>),
 }
 
 impl Backend {
@@ -133,7 +134,7 @@ impl Backend {
             let info =
                 sys_agent::agent_info_path().and_then(|p| sys_agent::read_agent_info(&p).ok());
             let (addr, token) = resolve_remote(&connect, remote.token.as_deref(), info)?;
-            return connect_remote(&addr, &token).map(Backend::Remote);
+            return connect_remote(&addr, &token).map(|c| Backend::Remote(c, Vec::new()));
         }
         let mut session = Session::default();
         let sequential = remote.sequential_ids;
@@ -156,6 +157,15 @@ impl Backend {
         Ok(Backend::Local(Box::new(session)))
     }
 
+    /// The change-event notifications that are ready (see `events.subscribe`), oldest first.
+    /// A remote app sends them between replies, so they arrive with the next reply.
+    fn notifications(&mut self) -> Vec<Value> {
+        match self {
+            Backend::Local(s) => s.take_notifications(cadektor_api::events::LOCAL),
+            Backend::Remote(_, pending) => std::mem::take(pending),
+        }
+    }
+
     /// Calls one method and returns the JSON-RPC response object.
     fn call(&mut self, id: Value, method: &str, params: Value) -> Value {
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -166,7 +176,7 @@ impl Backend {
                 }
                 _ => s.handle_line(&req.to_string()),
             },
-            Backend::Remote(conn) => remote_call(conn, &req),
+            Backend::Remote(conn, pending) => remote_call(conn, pending, &req),
         };
         line.and_then(|l| serde_json::from_str(&l).ok())
             .unwrap_or_else(|| json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": "no response"}}))
@@ -201,7 +211,8 @@ fn connect_remote(addr: &str, token: &str) -> Result<BufReader<TcpStream>, Strin
     let s = TcpStream::connect(addr).map_err(|e| format!("cannot connect to {addr}: {e}"))?;
     let mut conn = BufReader::new(s);
     let auth = json!({"jsonrpc": "2.0", "id": 0, "method": "auth", "params": {"token": token}});
-    let reply = remote_call(&mut conn, &auth).and_then(|l| serde_json::from_str::<Value>(&l).ok());
+    let reply = remote_call(&mut conn, &mut Vec::new(), &auth)
+        .and_then(|l| serde_json::from_str::<Value>(&l).ok());
     match reply {
         Some(r) if r.get("error").is_none() && r.get("result").is_some() => Ok(conn),
         _ => Err(format!(
@@ -210,12 +221,30 @@ fn connect_remote(addr: &str, token: &str) -> Result<BufReader<TcpStream>, Strin
     }
 }
 
-fn remote_call(conn: &mut BufReader<TcpStream>, req: &Value) -> Option<String> {
+/// Sends a request and reads its reply. Messages without an id are notifications: they go to
+/// `pending`, and the newest `MAX_PENDING` stay.
+fn remote_call(
+    conn: &mut BufReader<TcpStream>,
+    pending: &mut Vec<Value>,
+    req: &Value,
+) -> Option<String> {
+    const MAX_PENDING: usize = 1000;
     writeln!(conn.get_mut(), "{req}").ok()?;
-    let mut line = String::new();
-    match conn.read_line(&mut line) {
-        Ok(n) if n > 0 => Some(line),
-        _ => None,
+    loop {
+        let mut line = String::new();
+        match conn.read_line(&mut line) {
+            Ok(n) if n > 0 => {}
+            _ => return None,
+        }
+        match serde_json::from_str::<Value>(&line) {
+            Ok(v) if v.get("id").is_none() && v.get("method").is_some() => {
+                pending.push(v);
+                if pending.len() > MAX_PENDING {
+                    pending.remove(0);
+                }
+            }
+            _ => return Some(line),
+        }
     }
 }
 
@@ -262,10 +291,15 @@ fn serve(mut backend: Backend) {
             continue;
         };
         let resp = backend.call(req["id"].clone(), method, req["params"].clone());
+        // Change events (after `events.subscribe`) are messages without an id. They come before the
+        // reply of the request that caused them, so a client that waits for its reply has them.
+        for note in backend.notifications() {
+            let _ = writeln!(out, "{note}");
+        }
         if req.get("id").is_some() {
             let _ = writeln!(out, "{resp}");
-            let _ = out.flush();
         }
+        let _ = out.flush();
     }
 }
 

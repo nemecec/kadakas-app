@@ -10,12 +10,13 @@
 //! A connection whose first byte is not `{` (for example an HTTP request from a
 //! browser) is closed at once, and nothing it sent is run.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -60,7 +61,16 @@ pub enum Reply {
     Later,
 }
 
+/// Lines that wait for the writer of one connection. A client that does not read is dropped when
+/// this is full, so a slow client cannot hold memory or the UI thread.
+const OUTBOX_LINES: usize = 4096;
+
+/// The writers of the open connections, by connection ID.
+type Outboxes = Arc<Mutex<HashMap<u64, SyncSender<String>>>>;
+
 pub struct Request {
+    /// The connection that sent it (see [`AgentServer::push`]).
+    pub conn: u64,
     pub line: String,
     pub reply: Sender<Option<String>>,
     /// Set by the socket thread when it gave up waiting. The request is then not run.
@@ -96,9 +106,24 @@ pub struct AgentServer {
     wake: Arc<dyn Fn() + Send + Sync>,
     info_path: Option<PathBuf>,
     stop: Arc<AtomicBool>,
+    outboxes: Outboxes,
 }
 
 impl AgentServer {
+    /// Sends a line (a notification) to a connection, from any thread, without waiting. False
+    /// if the connection is gone or does not read fast enough: the caller forgets it then.
+    pub fn push(&self, conn: u64, line: String) -> bool {
+        let mut boxes = self.outboxes.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(tx) = boxes.get(&conn) else {
+            return false;
+        };
+        if tx.try_send(line).is_ok() {
+            return true;
+        }
+        boxes.remove(&conn); // the writer ends and closes the connection
+        false
+    }
+
     /// Answers waiting requests for at most `FRAME_BUDGET`, with `handle`
     /// turning each request line into a response line.
     /// Returns how many it handled.
@@ -115,7 +140,7 @@ impl AgentServer {
         budget: Duration,
         handle: &mut dyn FnMut(&str) -> Option<String>,
     ) -> usize {
-        self.poll_ext_for(budget, &mut |line, _| Reply::Now(handle(line)))
+        self.poll_ext_for(budget, &mut |line, _, _| Reply::Now(handle(line)))
     }
 
     /// Like `poll`, for a handler that can answer later: it gets the sender of the reply and
@@ -123,7 +148,7 @@ impl AgentServer {
     /// the handler sends the answer line, or `None` for no answer.
     pub fn poll_ext(
         &self,
-        handle: &mut dyn FnMut(&str, &Sender<Option<String>>) -> Reply,
+        handle: &mut dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply,
     ) -> usize {
         self.poll_ext_for(FRAME_BUDGET, handle)
     }
@@ -131,7 +156,7 @@ impl AgentServer {
     pub fn poll_ext_for(
         &self,
         budget: Duration,
-        handle: &mut dyn FnMut(&str, &Sender<Option<String>>) -> Reply,
+        handle: &mut dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply,
     ) -> usize {
         let start = Instant::now();
         let mut n = 0;
@@ -146,7 +171,7 @@ impl AgentServer {
             if req.cancelled.load(Ordering::SeqCst) {
                 continue; // the client was told that this request was cancelled
             }
-            match handle(&req.line, &req.reply) {
+            match handle(&req.line, &req.reply, req.conn) {
                 Reply::Now(answer) => {
                     let _ = req.reply.send(answer);
                 }
@@ -220,8 +245,11 @@ pub fn start_with(
     let (tx, rx) = mpsc::channel::<Request>();
     let stop = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicUsize::new(0));
+    let outboxes: Outboxes = Arc::default();
     {
         let (token, wake, stop) = (token.clone(), wake.clone(), stop.clone());
+        let outboxes = outboxes.clone();
+        let next_conn = AtomicU64::new(1);
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 if stop.load(Ordering::SeqCst) {
@@ -233,9 +261,15 @@ pub fn start_with(
                 }
                 let guard = ClientGuard(active.clone());
                 let (tx, wake, token) = (tx.clone(), wake.clone(), token.clone());
+                let conn = next_conn.fetch_add(1, Ordering::SeqCst);
+                let outboxes = outboxes.clone();
                 thread::spawn(move || {
                     let _guard = guard;
-                    serve_client(stream, &token, limits, tx, wake);
+                    serve_client(stream, &token, limits, conn, &outboxes, tx, wake);
+                    outboxes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&conn);
                 });
             }
         });
@@ -248,6 +282,7 @@ pub fn start_with(
         wake,
         info_path,
         stop,
+        outboxes,
     })
 }
 
@@ -340,6 +375,8 @@ fn serve_client(
     stream: TcpStream,
     token: &str,
     limits: Limits,
+    conn: u64,
+    outboxes: &Outboxes,
     tx: Sender<Request>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
@@ -356,6 +393,20 @@ fn serve_client(
     }
     reader.get_mut().deadline = None;
     let _ = reader.get_ref().stream.set_read_timeout(None);
+    // One thread writes replies and pushed notifications, in the order they were queued.
+    let (outbox, lines) = mpsc::sync_channel::<String>(OUTBOX_LINES);
+    outboxes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(conn, outbox.clone());
+    thread::spawn(move || {
+        for line in lines {
+            if !send(&mut out, &line) {
+                let _ = out.shutdown(std::net::Shutdown::Both);
+                return;
+            }
+        }
+    });
     while let Ok(Some(line)) = read_line_capped(&mut reader, limits.max_line) {
         if line.trim().is_empty() {
             continue;
@@ -368,6 +419,7 @@ fn serve_client(
         let cancelled = Arc::new(AtomicBool::new(false));
         if tx
             .send(Request {
+                conn,
                 line,
                 reply,
                 cancelled: cancelled.clone(),
@@ -388,7 +440,7 @@ fn serve_client(
             Err(RecvTimeoutError::Disconnected) => return,
         };
         if let Some(resp) = resp
-            && !send(&mut out, &resp)
+            && outbox.send(resp).is_err()
         {
             return;
         }
@@ -677,6 +729,63 @@ mod tests {
             4,
             "the auth line does not wake the UI"
         );
+    }
+
+    #[test]
+    fn change_events_are_pushed_to_the_subscriber_only() {
+        let server = start(0, Arc::new(|| {}), None).unwrap();
+        let (addr, token) = (server.addr, server.token.clone());
+        let watcher = thread::spawn({
+            let token = token.clone();
+            move || {
+                let mut c = Client::connect(addr);
+                c.auth(&token).unwrap();
+                let sub = c.call(1, "events.subscribe");
+                assert!(sub["result"]["revision"].is_u64());
+                // The other client changes the document. A notification arrives, with no request.
+                let note = c.read().unwrap();
+                assert_eq!(note["method"], "events.change");
+                assert!(note.get("id").is_none());
+                assert_eq!(note["params"]["origin"], "agent");
+                note
+            }
+        });
+        let editor = thread::spawn(move || {
+            let mut c = Client::connect(addr);
+            c.auth(&token).unwrap();
+            thread::sleep(Duration::from_millis(150));
+            let r = c.call(1, "execute");
+            r
+        });
+        let mut session = Session::with_sequential_ids();
+        let mut sent = false;
+        let mut handled = 0;
+        let started = Instant::now();
+        while !(sent && handled >= 2) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the test hangs"
+            );
+            handled += server.poll_ext(&mut |line, _, conn| {
+                let line = if line.contains(r#""execute""#) {
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "execute", "params": {"command": {"op": "add_layer", "name": "L", "elevation": 0}}}).to_string()
+                } else {
+                    line.to_string()
+                };
+                Reply::Now(session.handle_line_as(conn, &line))
+            });
+            for conn in session.subscribers() {
+                for note in session.take_notifications(conn) {
+                    assert!(server.push(conn, note.to_string()));
+                    sent = true;
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let note = watcher.join().unwrap();
+        assert_eq!(note["params"]["op"], "add_layer");
+        assert!(editor.join().unwrap()["result"]["created"].is_array());
+        assert!(!server.push(9999, "x".into()), "an unknown connection");
     }
 
     #[test]

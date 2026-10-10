@@ -319,6 +319,56 @@ class Worksheets:
         return self._doc.api.worksheet_place(id=sheet, at=list(at), **params)["id"]
 
 
+class Events:
+    """The change events of the document (``doc.events``).
+
+    After ``subscribe()`` the program sends a message for each change: ``{"method":
+    "events.change", "params": {revision, op, origin, added, changed, removed, document}}``.
+    ``added``, ``changed`` and ``removed`` list the IDs of ``objects``, ``layers``, ``classes`` and
+    ``resources``. ``origin`` is ``user``, ``agent`` or ``script``. A message ``events.reset`` says
+    that the whole document was replaced: read it again. Over stdio the messages come before the
+    reply of the call that made the change, so ``take()`` has them when the call returns. A
+    connection to the app also gets the changes that the user makes, at any time: use ``wait()``.
+    """
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def subscribe(self, kinds: list[str] | None = None, callback: Any = None) -> int:
+        """Start the events. ``kinds`` limits them to some of ``objects``, ``layers``, ``classes``,
+        ``resources`` and ``document``. ``callback(message)`` is called for each message, in the
+        thread that reads it. Returns the revision of the document now."""
+        if callback is not None:
+            add = getattr(self._doc._transport, "add_listener", None)
+            if add is None:
+                raise NotImplementedError("this transport has no events")
+            add(callback)
+        params = {"kinds": kinds} if kinds is not None else None
+        return self._doc.call_raw("events.subscribe", params)["revision"]
+
+    def unsubscribe(self) -> bool:
+        """Stop the events. Returns false if there was no subscription."""
+        return self._doc.call_raw("events.unsubscribe")["done"]
+
+    def take(self) -> list[JsonDict]:
+        """The messages that came since the last call, oldest first."""
+        drain = getattr(self._doc._transport, "drain_notifications", None)
+        return drain() if drain else []
+
+    def wait(self, timeout: float | None = None) -> list[JsonDict]:
+        """Like ``take()``, and waits up to ``timeout`` seconds when there is nothing (TCP only)."""
+        wait = getattr(self._doc._transport, "wait_notifications", None)
+        return wait(timeout) if wait else []
+
+    def poll(self, since_revision: int, kinds: list[str] | None = None) -> JsonDict:
+        """The change sets after a revision: ``{revision, truncated, changes}``. For a client that
+        cannot receive messages. If ``truncated`` is true, read the document again."""
+        params: JsonDict = {"since_revision": since_revision}
+        if kinds is not None:
+            params["kinds"] = kinds
+        return self._doc.call_raw("events.poll", params)
+
+
 class Document:
     """A session with a document. Make one with ``cadektor.open()`` or ``cadektor.connect()``."""
 
@@ -330,6 +380,7 @@ class Document:
         self.selection = Selection(self)
         self.report = Reports(self)
         self.worksheets = Worksheets(self)
+        self.events = Events(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 
         self.plugins = Plugins(self)
