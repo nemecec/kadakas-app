@@ -120,8 +120,90 @@ fn finite(shape: &Shape) -> bool {
     shape.is_finite()
 }
 
+/// A star-shaped polygon: alternating long and short radii at growing angles. Simple, mostly concave.
+fn star() -> impl Strategy<Value = Shape> {
+    (
+        point(),
+        5usize..10,
+        100.0f64..300.0,
+        30.0f64..100.0,
+        0.0f64..6.0,
+    )
+        .prop_map(|(c, n, long, short, rot)| Shape::Polyline {
+            points: corners(
+                &(0..2 * n)
+                    .map(|i| {
+                        let r = if i % 2 == 0 { long } else { short };
+                        c + DVec2::from_angle(
+                            rot + std::f64::consts::TAU * i as f64 / (2 * n) as f64,
+                        ) * r
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            closed: true,
+        })
+}
+
+/// True if no two edges of the closed polygon cross (edges that share a corner may touch).
+fn is_simple(shape: &Shape) -> bool {
+    let Shape::Polyline { points, .. } = shape else {
+        return true;
+    };
+    let p: Vec<DVec2> = points.iter().map(|v| v.p).collect();
+    let n = p.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            if j == i + 1 || (i == 0 && j == n - 1) {
+                continue;
+            }
+            let (a, b, c, d) = (p[i], p[(i + 1) % n], p[j], p[(j + 1) % n]);
+            let (r, s) = (b - a, d - c);
+            let den = r.perp_dot(s);
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let t = (c - a).perp_dot(s) / den;
+            let u = (c - a).perp_dot(r) / den;
+            if t > 1e-6 && t < 1.0 - 1e-6 && u > 1e-6 && u < 1.0 - 1e-6 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
+
+    /// An inward offset is simple and smaller than the source, or it collapses with an error.
+    #[test]
+    fn inward_offsets_are_simple_and_smaller(shape in prop_oneof![star(), convex(), rect()], d in 1.0f64..140.0) {
+        match offset::offset_shapes(&shape, d, Side::Inside) {
+            Ok(parts) => {
+                let total: f64 = parts.iter().map(|s| s.area().unwrap()).sum();
+                prop_assert!(total < shape.area().unwrap(), "{total} vs {}", shape.area().unwrap());
+                for p in &parts {
+                    prop_assert!(is_simple(p), "{p:?}");
+                    prop_assert!(p.is_finite());
+                }
+            }
+            Err(e) => prop_assert!(e.contains("collapses"), "{e}"),
+        }
+    }
+
+    /// An outward offset contains the source.
+    #[test]
+    fn outward_offsets_contain_the_source(shape in prop_oneof![star(), convex(), rect()], d in 1.0f64..200.0) {
+        let parts = offset::offset_shapes(&shape, d, Side::Outside).unwrap();
+        let rings: Vec<boolean::Ring> = parts.iter().filter_map(boolean::ring_of).collect();
+        prop_assert!(!rings.is_empty());
+        let out_area: f64 = boolean::union(&rings).iter().map(poly_area).sum();
+        prop_assert!(out_area > shape.area().unwrap());
+        let mut all = rings.clone();
+        all.push(boolean::ring_of(&shape).unwrap());
+        let both: f64 = boolean::union(&all).iter().map(poly_area).sum();
+        prop_assert!(close(both, out_area, 1e-6), "{both} vs {out_area}");
+    }
 
     /// Cutting a closed shape by a line keeps the area (the two pieces add up).
     #[test]

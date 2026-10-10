@@ -169,8 +169,8 @@ actions! {
     CmdAddSurface => "cmd.add_surface", "Add Surface", ["Cmd/Ctrl+Shift+Alt+A"], true;
     CmdSubtractSurface => "cmd.subtract_surface", "Subtract Surface", [], true;
     CmdClipSurface => "cmd.clip_surface", "Clip Surface", ["Cmd/Ctrl+Shift+Alt+C"], true;
-    CmdIntersectSurface => "cmd.intersect_surface", "Intersect Surface", [], true;
-    CmdCompose => "cmd.compose", "Compose", [], true;
+    CmdIntersectSurface => "cmd.intersect_surface", "Intersect Surface", ["Cmd/Ctrl+Shift+Alt+I"], true;
+    CmdCompose => "cmd.compose", "Compose", ["Cmd/Ctrl+Shift+Alt+P"], true;
     CmdRotateLeft90 => "cmd.rotate_left_90", "Rotate left 90 degrees", ["Cmd/Ctrl+L"], true;
     CmdRotateRight90 => "cmd.rotate_right_90", "Rotate right 90 degrees", ["Cmd/Ctrl+Shift+R"], true;
     CmdFlipHorizontal => "cmd.flip_horizontal", "Flip horizontal", ["Cmd/Ctrl+Shift+H"], true;

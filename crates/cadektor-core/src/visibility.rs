@@ -90,6 +90,24 @@ mod tests {
     use crate::model::{Attributes, FIRST_LAYER, NONE_CLASS, ObjectId, Shape};
     use glam::DVec2;
 
+    /// Adds a layer and makes it the active one, so that the first layer may be grey.
+    fn other_active(ed: &mut Editor) {
+        let id = ed
+            .execute(&Command::AddLayer {
+                name: "Work".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(crate::model::LayerId(id)),
+            class: None,
+        })
+        .unwrap();
+    }
+
     fn line(ed: &mut Editor) -> ObjectId {
         ObjectId(
             ed.execute(&Command::AddObject {
@@ -110,6 +128,7 @@ mod tests {
     fn modes_follow_the_command_and_undo() {
         let mut ed = Editor::default();
         let id = line(&mut ed);
+        other_active(&mut ed);
         assert_eq!(ed.doc().layer_mode(FIRST_LAYER), Some(VisMode::Visible));
         ed.execute(&Command::SetVisibility {
             layers: vec![FIRST_LAYER],
@@ -185,6 +204,7 @@ mod tests {
     #[test]
     fn old_files_load_and_grey_survives_a_round_trip() {
         let mut ed = Editor::default();
+        other_active(&mut ed);
         ed.execute(&Command::SetVisibility {
             layers: vec![FIRST_LAYER],
             classes: vec![],
@@ -197,5 +217,82 @@ mod tests {
         let mut plain = serde_json::to_value(Editor::default().doc()).unwrap();
         plain.as_object_mut().unwrap().remove("drawing");
         assert!(Document::from_value(plain).is_ok());
+    }
+
+    #[test]
+    fn grey_objects_cannot_be_edited_and_the_active_layer_cannot_be_grey() {
+        let mut ed = Editor::default();
+        let id = line(&mut ed);
+        let grey = |ed: &mut Editor, layers: Vec<crate::model::LayerId>, classes: Vec<ClassId>| {
+            ed.execute(&Command::SetVisibility {
+                layers,
+                classes,
+                mode: VisMode::Grey,
+            })
+        };
+        // The active layer cannot go grey.
+        let err = grey(&mut ed, vec![FIRST_LAYER], vec![]).unwrap_err();
+        assert!(err.to_string().contains("active layer"), "{err}");
+        other_active(&mut ed);
+        grey(&mut ed, vec![FIRST_LAYER], vec![]).unwrap();
+        // Commands refuse the objects of a grey layer.
+        for cmd in [
+            Command::MoveObjects {
+                ids: vec![id],
+                delta: DVec2::X,
+            },
+            Command::DeleteObjects { ids: vec![id] },
+            Command::RotateObjects {
+                ids: vec![id],
+                center: DVec2::ZERO,
+                angle: 1.0,
+            },
+        ] {
+            let err = ed.execute(&cmd).unwrap_err();
+            assert!(err.to_string().contains("grey"), "{err}");
+        }
+        // A grey layer cannot be made active, and nothing can be added to it.
+        assert!(
+            ed.execute(&Command::SetActive {
+                layer: Some(FIRST_LAYER),
+                class: None
+            })
+            .is_err()
+        );
+        assert!(
+            ed.execute(&Command::AddObject {
+                shape: Shape::Line {
+                    a: DVec2::ZERO,
+                    b: DVec2::X
+                },
+                layer: Some(FIRST_LAYER),
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .is_err()
+        );
+        // Visible again: editable.
+        ed.execute(&Command::SetVisibility {
+            layers: vec![FIRST_LAYER],
+            classes: vec![],
+            mode: VisMode::Visible,
+        })
+        .unwrap();
+        ed.execute(&Command::MoveObjects {
+            ids: vec![id],
+            delta: DVec2::X,
+        })
+        .unwrap();
+        // A grey class: the objects in it cannot be edited.
+        grey(&mut ed, vec![], vec![NONE_CLASS]).unwrap();
+        assert!(
+            ed.execute(&Command::MoveObjects {
+                ids: vec![id],
+                delta: DVec2::X
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("grey class")
+        );
     }
 }

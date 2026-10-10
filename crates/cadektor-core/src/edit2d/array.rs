@@ -12,6 +12,9 @@ use super::xform::Xf;
 /// The most copies one array makes.
 pub const MAX_COPIES: usize = 10_000;
 
+/// The most objects that one array or transform command creates, groups and their members counted.
+pub const MAX_CREATED: usize = 100_000;
+
 /// The shape of an array.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layout {
@@ -53,6 +56,14 @@ impl ArraySpec {
             layout,
             resize: 1.0,
             rotate: None,
+        }
+    }
+
+    /// How many copies of the objects the array makes (before the numbers are checked).
+    pub fn copies(&self) -> usize {
+        match self.layout {
+            Layout::Linear { count, .. } | Layout::Circular { count, .. } => count,
+            Layout::Rectangular { columns, rows, .. } => columns.saturating_mul(rows),
         }
     }
 

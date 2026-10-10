@@ -770,6 +770,20 @@ mod tests {
             attrs: Attributes::default(),
         })
         .unwrap();
+        let work = ed
+            .execute(&Command::AddLayer {
+                name: "Work".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(cadektor_core::model::LayerId(work)),
+            class: None,
+        })
+        .unwrap();
         ed.execute(&Command::SetVisibility {
             layers: vec![FIRST_LAYER],
             classes: vec![],

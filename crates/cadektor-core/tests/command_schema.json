@@ -186,6 +186,7 @@
     },
     "ClassId": {
       "description": "An ID.",
+      "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
     },
@@ -214,6 +215,7 @@
     },
     "LayerId": {
       "description": "An ID.",
+      "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
     },
@@ -226,6 +228,7 @@
     },
     "ObjectId": {
       "description": "An ID.",
+      "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
     },
@@ -268,6 +271,7 @@
     },
     "ResourceId": {
       "description": "An ID.",
+      "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
     },
@@ -276,43 +280,573 @@
       "type": "object"
     },
     "Shape": {
-      "additionalProperties": true,
-      "description": "A shape. `kind` names the variant; the other keys depend on it (see describe: command_examples and the sections of each feature).",
-      "properties": {
-        "kind": {
-          "enum": [
-            "line",
-            "rect",
-            "circle",
-            "arc",
-            "polyline",
-            "text",
-            "plant",
-            "existing_tree",
-            "plant_tag",
-            "landscape_area",
-            "hardscape",
-            "locus3d",
-            "polyline3d",
-            "site_model",
-            "site_modifier",
-            "viewport",
-            "massing",
-            "underlay",
-            "title_block",
-            "annotation",
-            "group",
-            "symbol",
-            "mesh3d",
-            "irrigation"
+      "anyOf": [
+        {
+          "properties": {
+            "a": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "b": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "kind": {
+              "const": "line"
+            }
+          },
+          "required": [
+            "kind",
+            "a",
+            "b"
           ],
-          "type": "string"
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "rect"
+            },
+            "max": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "min": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "min",
+            "max"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "center": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "kind": {
+              "const": "circle"
+            },
+            "radius": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "radius"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "center": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "end": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "arc"
+            },
+            "radius": {
+              "type": "number"
+            },
+            "start": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "radius",
+            "start",
+            "end"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "closed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "polyline"
+            },
+            "points": {
+              "items": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "corner",
+                          "point_on_arc",
+                          "bezier",
+                          "cubic"
+                        ]
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "arc"
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "radius": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind",
+                      "radius"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet."
+              },
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "points",
+            "closed"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "at": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "height": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "at",
+            "text",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "at": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "height": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "plant"
+            },
+            "species": {
+              "type": "string"
+            },
+            "spread": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "at",
+            "species",
+            "spread",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "locus3d"
+            },
+            "p": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "p"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "closed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "polyline3d"
+            },
+            "points": {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "points",
+            "closed"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "group"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "boundary": {
+              "items": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "corner",
+                          "point_on_arc",
+                          "bezier",
+                          "cubic"
+                        ]
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "arc"
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "radius": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind",
+                      "radius"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet."
+              },
+              "minItems": 3,
+              "type": "array"
+            },
+            "kind": {
+              "const": "landscape_area"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "boundary",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "boundary": {
+              "items": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "corner",
+                          "point_on_arc",
+                          "bezier",
+                          "cubic"
+                        ]
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "arc"
+                      },
+                      "p": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "radius": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "p",
+                      "kind",
+                      "radius"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet."
+              },
+              "minItems": 3,
+              "type": "array"
+            },
+            "elevation": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "hardscape"
+            },
+            "material": {
+              "type": "string"
+            },
+            "thickness": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "boundary",
+            "material"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Structural only: the fields of these kinds are not checked.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "existing_tree",
+                "plant_tag",
+                "site_model",
+                "site_modifier",
+                "viewport",
+                "massing",
+                "underlay",
+                "title_block",
+                "annotation",
+                "symbol",
+                "mesh3d",
+                "irrigation"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "kind"
       ],
-      "type": "object"
+      "description": "A shape. `kind` names it. The kinds line, rect, circle, arc, polyline, text, plant, locus3d, polyline3d, group, landscape_area and hardscape are described field by field; the other kinds are checked for `kind` only (see describe: command_examples and the section of each feature)."
     },
     "SlotTarget": {
       "additionalProperties": true,
@@ -466,8 +1000,7 @@
       "type": "object"
     },
     "Vertex": {
-      "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: arc | point_on_arc | bezier | cubic | corner, radius?} is a curved vertex.",
-      "oneOf": [
+      "anyOf": [
         {
           "items": {
             "type": "number"
@@ -477,16 +1010,51 @@
           "type": "array"
         },
         {
+          "additionalProperties": false,
+          "properties": {
+            "p": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "p"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "kind": {
               "enum": [
                 "corner",
-                "arc",
                 "point_on_arc",
                 "bezier",
                 "cubic"
-              ],
-              "type": "string"
+              ]
+            },
+            "p": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "p",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "arc"
             },
             "p": {
               "items": {
@@ -501,31 +1069,50 @@
             }
           },
           "required": [
-            "p"
+            "p",
+            "kind",
+            "radius"
           ],
           "type": "object"
         }
-      ]
+      ],
+      "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet."
     },
     "VertexKind": {
-      "additionalProperties": true,
-      "description": "The kind of a vertex. `arc` has a radius.",
-      "properties": {
-        "kind": {
-          "enum": [
-            "corner",
-            "arc",
-            "point_on_arc",
-            "bezier",
-            "cubic"
+      "anyOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "corner",
+                "point_on_arc",
+                "bezier",
+                "cubic"
+              ]
+            }
+          },
+          "required": [
+            "kind"
           ],
-          "type": "string"
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "arc"
+            },
+            "radius": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "radius"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "kind"
       ],
-      "type": "object"
+      "description": "The kind of a vertex. `arc` has a radius."
     },
     "VisMode": {
       "enum": [
@@ -2217,6 +2804,27 @@
         "op",
         "ids",
         "transform"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add an object with a new shape that takes everything else from `source`: layer, class,\nattributes, group and record data (not the transient editing keys of symbols). The edit\ntools use it for the pieces they cut from an object. Returns the ID in `created`.",
+      "properties": {
+        "op": {
+          "const": "add_object_like",
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/Shape"
+        },
+        "source": {
+          "$ref": "#/$defs/ObjectId"
+        }
+      },
+      "required": [
+        "op",
+        "source",
+        "shape"
       ],
       "type": "object"
     },

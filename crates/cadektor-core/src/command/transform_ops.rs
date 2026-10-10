@@ -13,6 +13,19 @@ fn invalid(m: impl Into<String>) -> CommandError {
     CommandError::Invalid(m.into())
 }
 
+/// Refuses a command that would create more than `MAX_CREATED` objects: `copies` times the
+/// objects with their group members.
+fn check_created(copies: usize, objects: usize) -> Result<(), CommandError> {
+    if copies.saturating_mul(objects) > crate::edit2d::array::MAX_CREATED {
+        return Err(invalid(format!(
+            "this would create {} objects. One command creates at most {}",
+            copies.saturating_mul(objects),
+            crate::edit2d::array::MAX_CREATED
+        )));
+    }
+    Ok(())
+}
+
 /// Applies the transform to the shape of one object, and to the data that goes with the shape.
 /// A plant keeps its own turn in its data.
 pub fn transform_object(o: &mut Object, xf: &Xf) -> Result<(), String> {
@@ -92,6 +105,7 @@ impl Tx<'_> {
                         let layer = self.doc.object(id).expect("exists").layer;
                         self.check_layer(layer)?;
                     }
+                    check_created(1, all.len())?;
                     let copies = self.copy_transformed(&ids, &xf)?;
                     out.created.extend(copies.iter().map(|c| c.0));
                     return Ok(());
@@ -120,6 +134,8 @@ impl Tx<'_> {
                     self.check_layer(layer)?;
                 }
                 let spec = array.to_spec().map_err(invalid)?;
+                // The limit is checked before any work starts.
+                check_created(spec.copies(), all.len())?;
                 // The reference point: the center of the bounds of the objects.
                 let (mut lo, mut hi) = (
                     glam::DVec2::splat(f64::INFINITY),
@@ -150,6 +166,32 @@ impl Tx<'_> {
                 if !array.retain {
                     self.run(&Command::DeleteObjects { ids }, out)?;
                 }
+            }
+            Command::AddObjectLike { source, shape } => {
+                let src = self
+                    .doc
+                    .object(*source)
+                    .ok_or(CommandError::NoObject(*source))?;
+                let (layer, class, parent, attrs, mut data) = (
+                    src.layer,
+                    src.class,
+                    src.parent,
+                    src.attrs.clone(),
+                    src.data.clone(),
+                );
+                self.check_layer(layer)?;
+                validate_shape(shape)?;
+                self.check_shape_refs(shape)?;
+                self.check_sheet_rules(layer, shape, None)?;
+                data.remove(EDITING_KEY);
+                data.remove(EDIT_GROUP_KEY);
+                let id = ObjectId(self.alloc()?);
+                let mut o = Object::new(id, layer, class, shape.clone());
+                o.attrs = attrs;
+                o.parent = parent;
+                o.data = data;
+                self.add_new(o);
+                out.created.push(id.0);
             }
             _ => unreachable!("run_transform gets only transform commands"),
         }
@@ -467,5 +509,30 @@ mod tests {
             panic!()
         };
         assert_eq!(spread, 4.0);
+    }
+
+    #[test]
+    fn the_number_of_created_objects_is_limited_before_any_work() {
+        let mut ed = Editor::default();
+        let ids: Vec<ObjectId> = (0..11).map(|_| circle(&mut ed)).collect();
+        let before = ed.doc().objects.len();
+        // 10 000 copies of 11 objects is 110 000 objects.
+        let r = ed.execute(&Command::ArrayObjects {
+            ids: ids.clone(),
+            array: array(serde_json::json!({"shape": "linear", "count": 10000, "offset": [1, 0]})),
+        });
+        let Err(CommandError::Invalid(m)) = r else {
+            panic!("{r:?}")
+        };
+        assert!(m.contains("110000") && m.contains("100000"), "{m}");
+        assert_eq!(ed.doc().objects.len(), before);
+        // A small array is fine.
+        let r = ed.execute(&Command::ArrayObjects {
+            ids: ids[..10].to_vec(),
+            array: array(serde_json::json!({"shape": "linear", "count": 50, "offset": [1, 0]})),
+        });
+        assert!(r.is_ok(), "{r:?}");
+        ed.undo();
+        assert_eq!(ed.doc().objects.len(), before);
     }
 }

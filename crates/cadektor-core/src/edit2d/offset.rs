@@ -14,7 +14,7 @@ use glam::DVec2;
 use crate::curve;
 use crate::model::Shape;
 
-use super::piece::{Chain, Piece, curve_intersections};
+use super::piece::{Chain, Piece, curve_intersections, piece_intersections};
 
 /// A miter longer than this many times the distance becomes a bevel.
 pub const MITER_LIMIT: f64 = 4.0;
@@ -111,6 +111,16 @@ fn alive(orig: &Piece, off: &Piece) -> bool {
 /// The chain moved sideways by `d`: to the left of its direction if `d` is above zero, to the
 /// right if below. See the module notes for how the corners are joined.
 pub fn offset_chain(chain: &Chain, d: f64) -> Result<Chain, String> {
+    offset_chain_with(chain, d, false)
+}
+
+/// Like `offset_chain`, but keeps every piece, even the ones that turn round at a tight corner.
+/// The result can cross itself. `clean_closed` takes the loops out.
+fn offset_chain_raw(chain: &Chain, d: f64) -> Result<Chain, String> {
+    offset_chain_with(chain, d, true)
+}
+
+fn offset_chain_with(chain: &Chain, d: f64, raw: bool) -> Result<Chain, String> {
     if !d.is_finite() {
         return Err("the distance must be a finite number".into());
     }
@@ -119,10 +129,14 @@ pub fn offset_chain(chain: &Chain, d: f64) -> Result<Chain, String> {
     }
     let mut items: Vec<(Piece, Piece)> = Vec::new();
     for p in &chain.pieces {
-        let o = p
-            .offset(d)
-            .ok_or_else(|| "the distance is larger than the radius of an arc".to_string())?;
-        items.push((*p, o));
+        match p.offset(d) {
+            Some(o) => items.push((*p, o)),
+            // An arc that shrinks to nothing: the raw offset leaves it out.
+            None if raw => {}
+            None => {
+                return Err("the distance is larger than the radius of an arc".to_string());
+            }
+        }
     }
     for _ in 0..16 {
         let m = items.len();
@@ -147,14 +161,23 @@ pub fn offset_chain(chain: &Chain, d: f64) -> Result<Chain, String> {
                 .into_iter()
                 .min_by(|p, q| p.distance(corner).total_cmp(&q.distance(corner)));
             match best {
-                Some(x) if x.distance(corner) <= MITER_LIMIT * d.abs() + 1e-9 => {
+                // An inner corner: the offset pieces overlap, and they are always cut at their
+                // crossing. At an outer corner they are extended, up to the miter limit.
+                Some(x)
+                    if (a.param_of(x) <= 1.0 + 1e-9 && b.param_of(x) >= -1e-9)
+                        || x.distance(corner) <= MITER_LIMIT * d.abs() + 1e-9 =>
+                {
                     offs[j] = set_end(&a, x);
                     offs[k] = set_start(&b, x);
                 }
                 _ => bevels[j] = Some(Piece::line(a.to(), b.from())),
             }
         }
-        let bad: Vec<usize> = (0..m).filter(|&i| !alive(&items[i].0, &offs[i])).collect();
+        let bad: Vec<usize> = if raw {
+            Vec::new()
+        } else {
+            (0..m).filter(|&i| !alive(&items[i].0, &offs[i])).collect()
+        };
         if bad.is_empty() {
             let mut pieces = Vec::new();
             for i in 0..m {
@@ -179,8 +202,131 @@ pub fn offset_chain(chain: &Chain, d: f64) -> Result<Chain, String> {
     Err("the offset leaves nothing of the shape".into())
 }
 
-/// The shape moved by `distance` (above zero) to `side`. Circles and rectangles stay what they are.
+/// The largest piece of `offset_shapes`.
 pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, String> {
+    offset_shapes(shape, distance, side).map(|mut v| v.remove(0))
+}
+
+/// Chord tolerance when a self-crossing offset is cleaned (curves become short lines).
+const CLEAN_TOLERANCE: f64 = 0.05;
+
+/// True if two pieces that are not neighbors cross, or a neighbor pair overlaps more than at
+/// the shared end.
+fn crosses_itself(chain: &Chain) -> bool {
+    let n = chain.pieces.len();
+    for i in 0..n {
+        for j in i + 2..n {
+            if chain.closed && i == 0 && j == n - 1 {
+                continue;
+            }
+            if !piece_intersections(&chain.pieces[i], &chain.pieces[j]).is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Cleans the offset of a closed chain: the loops with the wrong winding and the crossing
+/// pieces go (a union of the parts that wind the same way as the source). The pieces that are
+/// left are returned, the largest first. Empty if the offset collapses the shape.
+fn clean_closed(raw: &Chain, source_ccw: bool) -> Vec<Vec<DVec2>> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::core::overlay_rule::OverlayRule;
+    use i_overlay::float::single::SingleFloatOverlay;
+    let mut ring: Vec<DVec2> = Vec::new();
+    for p in &raw.pieces {
+        let f = p.flatten(CLEAN_TOLERANCE);
+        ring.extend_from_slice(&f[..f.len() - 1]);
+    }
+    if !source_ccw {
+        ring.reverse();
+    }
+    let contour: Vec<[f64; 2]> = ring.iter().map(|p| [p.x, p.y]).collect();
+    let shapes = contour.overlay(
+        &Vec::<Vec<[f64; 2]>>::new(),
+        OverlayRule::Union,
+        FillRule::Positive,
+    );
+    shapes_to_rings(shapes)
+}
+
+/// An inward offset that has to be cleaned: the points that are farther than `d` from the
+/// outline, as the shape minus a band of width `2 d` along its outline (a rectangle along each
+/// edge, a 32-sided polygon around each corner). Corners that point into the shape come out
+/// rounded. The band is a little wider than `d` at the corners, never narrower.
+fn erode(chain: &Chain, d: f64, source_ccw: bool) -> Vec<Vec<DVec2>> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::core::overlay_rule::OverlayRule;
+    use i_overlay::float::single::SingleFloatOverlay;
+    let mut ring: Vec<DVec2> = Vec::new();
+    for p in &chain.pieces {
+        let f = p.flatten(CLEAN_TOLERANCE);
+        ring.extend_from_slice(&f[..f.len() - 1]);
+    }
+    if !source_ccw {
+        ring.reverse();
+    }
+    let n = ring.len();
+    let ccw = |mut r: Vec<DVec2>| -> Vec<[f64; 2]> {
+        if super::boolean::ring_area2(&r) < 0.0 {
+            r.reverse();
+        }
+        r.into_iter().map(|p| [p.x, p.y]).collect()
+    };
+    let mut band: Vec<Vec<[f64; 2]>> = Vec::new();
+    const SIDES: usize = 32;
+    let corner_r = d / (PI / SIDES as f64).cos();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        if let Some(u) = (b - a).try_normalize() {
+            let nrm = DVec2::new(-u.y, u.x) * d;
+            band.push(ccw(vec![a - nrm, b - nrm, b + nrm, a + nrm]));
+        }
+        band.push(ccw((0..SIDES)
+            .map(|k| a + DVec2::from_angle(TAU * k as f64 / SIDES as f64) * corner_r)
+            .collect()));
+    }
+    let subject: Vec<[f64; 2]> = ring.iter().map(|p| [p.x, p.y]).collect();
+    let shapes = subject.overlay(&band, OverlayRule::Difference, FillRule::NonZero);
+    shapes_to_rings(shapes)
+}
+
+fn shapes_to_rings(shapes: Vec<Vec<Vec<[f64; 2]>>>) -> Vec<Vec<DVec2>> {
+    let mut polys: Vec<Vec<Vec<DVec2>>> = shapes
+        .into_iter()
+        .map(|s| {
+            s.into_iter()
+                .map(|c| c.into_iter().map(|p| DVec2::new(p[0], p[1])).collect())
+                .collect()
+        })
+        .collect();
+    let area = |p: &Vec<Vec<DVec2>>| -> f64 {
+        p.iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let a = super::boolean::ring_area2(r).abs() / 2.0;
+                if i == 0 { a } else { -a }
+            })
+            .sum()
+    };
+    polys.retain(|p| area(p) > 1e-6);
+    polys.sort_by(|a, b| area(b).total_cmp(&area(a)));
+    polys
+        .into_iter()
+        .map(|p| super::boolean::poly_ring(&p))
+        .collect()
+}
+
+/// The shapes moved by `distance` (above zero) to `side`. Circles and rectangles stay what they
+/// are. A closed shape whose offset crosses itself (an inward offset of a narrow part, or of a
+/// small shape) is cleaned: what is left is one or more closed polylines, the largest first. If
+/// nothing is left, the error says that the offset collapses the shape.
+pub fn offset_shapes(shape: &Shape, distance: f64, side: Side) -> Result<Vec<Shape>, String> {
+    offset_shapes_inner(shape, distance, side)
+}
+
+fn offset_shapes_inner(shape: &Shape, distance: f64, side: Side) -> Result<Vec<Shape>, String> {
     if !distance.is_finite() || distance <= 0.0 {
         return Err("the offset distance must be above zero".into());
     }
@@ -195,12 +341,12 @@ pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, S
         Shape::Circle { center, radius } => {
             let r = radius + grow(side, "circle")?;
             if r <= 0.0 {
-                return Err("the offset is larger than the radius".into());
+                return Err("offset collapses the shape: it is larger than the radius".into());
             }
-            Ok(Shape::Circle {
+            Ok(vec![Shape::Circle {
                 center: *center,
                 radius: r,
-            })
+            }])
         }
         Shape::Rect { min, max } => {
             let g = grow(side, "rect")?;
@@ -209,9 +355,9 @@ pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, S
                 min.max(*max) + DVec2::splat(g),
             );
             if lo.x >= hi.x || lo.y >= hi.y {
-                return Err("the offset is larger than the rectangle".into());
+                return Err("offset collapses the shape: it is larger than the rectangle".into());
             }
-            Ok(Shape::Rect { min: lo, max: hi })
+            Ok(vec![Shape::Rect { min: lo, max: hi }])
         }
         _ => {
             let chain = Chain::from_shape(shape)
@@ -230,8 +376,39 @@ pub fn offset_shape(shape: &Shape, distance: f64, side: Side) -> Result<Shape, S
                     (side == Side::Inside) == ccw
                 }
             };
-            let off = offset_chain(&chain, if left { distance } else { -distance })?;
-            Ok(off.to_shape())
+            let signed = if left { distance } else { -distance };
+            let collapse = |e: String| format!("offset collapses the shape: {e}");
+            let exact = offset_chain(&chain, signed);
+            if !chain.closed {
+                return Ok(vec![exact.map_err(collapse)?.to_shape()]);
+            }
+            let source_area = signed_area(&chain);
+            // The exact offset is used when it is a proper closed curve. Else the raw offset is
+            // cleaned.
+            if let Ok(off) = &exact
+                && off.closed
+                && signed_area(off) * source_area > 0.0
+                && !crosses_itself(off)
+            {
+                return Ok(vec![off.to_shape()]);
+            }
+            let inward = left == (source_area > 0.0);
+            let rings = if inward {
+                erode(&chain, distance, source_area > 0.0)
+            } else {
+                let off = offset_chain_raw(&chain, signed).map_err(collapse)?;
+                clean_closed(&off, source_area > 0.0)
+            };
+            if rings.is_empty() {
+                return Err("offset collapses the shape".into());
+            }
+            Ok(rings
+                .into_iter()
+                .map(|r| Shape::Polyline {
+                    points: curve::corners(&r),
+                    closed: true,
+                })
+                .collect())
         }
     }
 }
@@ -495,5 +672,76 @@ mod tests {
             }),
             None
         );
+    }
+
+    fn u_shape() -> Shape {
+        poly(
+            &[
+                v(0.0, 0.0),
+                v(3000.0, 0.0),
+                v(3000.0, 2000.0),
+                v(2200.0, 2000.0),
+                v(2200.0, 600.0),
+                v(800.0, 600.0),
+                v(800.0, 2000.0),
+                v(0.0, 2000.0),
+            ],
+            true,
+        )
+    }
+
+    fn shoelace(s: &Shape) -> f64 {
+        s.area().unwrap()
+    }
+
+    #[test]
+    fn an_inward_offset_of_a_narrow_part_is_cleaned() {
+        let u = u_shape();
+        let src = shoelace(&u);
+        // 250 in: the arms are 800 wide and stay 300 wide; the base keeps 100.
+        let r = offset_shapes(&u, 250.0, Side::Inside).unwrap();
+        assert_eq!(r.len(), 1);
+        let a: f64 = r.iter().map(shoelace).sum();
+        assert!(a < src && a > 0.0, "{a} {src}");
+        let Shape::Polyline { points, .. } = &r[0] else {
+            panic!()
+        };
+        assert!(points.len() >= 8);
+        // 600 in: the arms are gone and so is the base. A clear error, not a loop.
+        let e = offset_shapes(&u, 600.0, Side::Inside).unwrap_err();
+        assert!(e.contains("collapses"), "{e}");
+        // 5000 in: the offset would be a larger reversed polygon.
+        let e = offset_shapes(&u, 5000.0, Side::Inside).unwrap_err();
+        assert!(e.contains("collapses"), "{e}");
+        let sq = poly(
+            &[v(0.0, 0.0), v(100.0, 0.0), v(100.0, 100.0), v(0.0, 100.0)],
+            true,
+        );
+        assert!(
+            offset_shapes(&sq, 70.0, Side::Inside)
+                .unwrap_err()
+                .contains("collapses")
+        );
+        // The same square, wound the other way.
+        let cw = poly(
+            &[v(0.0, 100.0), v(100.0, 100.0), v(100.0, 0.0), v(0.0, 0.0)],
+            true,
+        );
+        assert!(
+            offset_shapes(&cw, 70.0, Side::Inside)
+                .unwrap_err()
+                .contains("collapses")
+        );
+        assert!((shoelace(&offset_shape(&cw, 10.0, Side::Inside).unwrap()) - 6400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_outward_offset_closes_a_narrow_notch() {
+        let u = u_shape();
+        // The slot between the arms is 1400 wide; 800 out closes it, and leaves a hole at most.
+        let r = offset_shapes(&u, 800.0, Side::Outside).unwrap();
+        assert!(!r.is_empty());
+        let a: f64 = r.iter().map(shoelace).sum();
+        assert!(a > shoelace(&u));
     }
 }

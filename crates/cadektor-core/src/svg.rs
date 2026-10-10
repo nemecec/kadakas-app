@@ -1269,6 +1269,20 @@ mod tests {
             attrs: Attributes::default(),
         })
         .unwrap();
+        let work = ed
+            .execute(&Command::AddLayer {
+                name: "Work".into(),
+                elevation: 0.0,
+                scale: None,
+                kind: None,
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::SetActive {
+            layer: Some(crate::model::LayerId(work)),
+            class: None,
+        })
+        .unwrap();
         let plain = render(ed.doc(), 200);
         assert!(!plain.contains("data-visibility"));
         ed.execute(&Command::SetVisibility {

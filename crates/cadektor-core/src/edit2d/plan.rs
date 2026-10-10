@@ -30,21 +30,11 @@ fn chain_of(o: &Object) -> Result<Chain, String> {
     })
 }
 
-/// A command that adds an object like `src` (same layer, class, attributes and group).
+/// A command that adds an object like `src`: same layer, class, attributes, group and record data.
 fn add_like(src: &Object, shape: Shape) -> Command {
-    match src.parent {
-        Some(parent) => Command::AddObjectIn {
-            parent,
-            shape,
-            class: Some(src.class),
-            attrs: src.attrs.clone(),
-        },
-        None => Command::AddObject {
-            shape,
-            layer: Some(src.layer),
-            class: Some(src.class),
-            attrs: src.attrs.clone(),
-        },
+    Command::AddObjectLike {
+        source: src.id,
+        shape,
     }
 }
 
@@ -97,7 +87,7 @@ fn other_chains(
         }
         None => {
             for o in doc.objects.values() {
-                if o.id != target.id && o.layer == target.layer && doc.is_pickable(o) {
+                if o.id != target.id && o.layer == target.layer && doc.is_visible(o) {
                     out.extend(Chain::from_shape(&o.shape));
                 }
             }
@@ -277,12 +267,16 @@ pub fn offset(doc: &Document, id: ObjectId, to: OffsetTo, copy: bool) -> Result<
         OffsetTo::Distance(d, s) => (d, s),
         OffsetTo::Through(p) => offset::offset_through(&o.shape, p)?,
     };
-    let shape = offset::offset_shape(&o.shape, d, side)?;
-    Ok(batch(vec![if copy {
-        add_like(o, shape)
-    } else {
-        modify_shape(id, shape)
-    }]))
+    let shapes = offset::offset_shapes(&o.shape, d, side)?;
+    let mut cmds = Vec::new();
+    for (i, shape) in shapes.into_iter().enumerate() {
+        cmds.push(if copy || i > 0 {
+            add_like(o, shape)
+        } else {
+            modify_shape(id, shape)
+        });
+    }
+    Ok(batch(cmds))
 }
 
 /// The surface operations.
@@ -429,12 +423,13 @@ pub fn surface(
                     adds.push(add_like(src, boolean::poly_shape(p)));
                 }
             }
+            // The new shapes copy their source, so the originals go last.
+            cmds.extend(adds);
             if !keep_tools {
                 cmds.push(Command::DeleteObjects {
                     ids: objs.iter().map(|o| o.id).collect(),
                 });
             }
-            cmds.extend(adds);
         }
     }
     Ok(batch(cmds))
@@ -698,5 +693,65 @@ mod tests {
             ChamferSize::Length(4.0)
         );
         assert!(chamfer_size(None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn pieces_keep_the_records_and_the_attributes_of_their_source() {
+        use crate::record::RecordFormat;
+        use crate::resource::ResourceBody;
+        let mut ed = Editor::default();
+        let t = line(&mut ed, v(0.0, 0.0), v(1000.0, 0.0));
+        line(&mut ed, v(300.0, -50.0), v(300.0, 50.0));
+        line(&mut ed, v(700.0, -50.0), v(700.0, 50.0));
+        let format: RecordFormat = serde_json::from_value(serde_json::json!({
+            "fields": [{"name": "Depth", "type": "dimension", "default": 300}]
+        }))
+        .unwrap();
+        let fmt = ed
+            .execute(&Command::AddResource {
+                name: "Pset".into(),
+                body: ResourceBody::RecordFormat(Box::new(format)),
+            })
+            .unwrap()
+            .created[0];
+        ed.execute(&Command::AttachRecord {
+            ids: vec![t],
+            record: crate::resource::ResourceId(fmt),
+            values: serde_json::Map::from_iter([("Depth".to_string(), serde_json::json!(250))]),
+        })
+        .unwrap();
+        ed.execute(&Command::ModifyObject {
+            id: t,
+            shape: None,
+            layer: None,
+            class: None,
+            attrs: Some(Attributes {
+                line_weight: Some(0.7),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        let before = ed.doc().object(t).unwrap().data.clone();
+        assert!(!before.is_empty());
+        for cmd in [
+            trim(ed.doc(), t, v(500.0, 0.0), None).unwrap(),
+            split(ed.doc(), t, &[v(500.0, 0.0)]).unwrap(),
+            offset(ed.doc(), t, OffsetTo::Distance(10.0, Side::Left), true).unwrap(),
+        ] {
+            let mut copy = Editor::new(ed.doc().clone());
+            let out = copy.execute(&cmd).unwrap();
+            assert!(!out.created.is_empty());
+            for id in out.created {
+                let o = copy.doc().object(ObjectId(id)).unwrap();
+                assert_eq!(o.data, before, "the record data is copied");
+                assert_eq!(o.attrs.line_weight, Some(0.7));
+            }
+        }
+        // Compose deletes its sources after copying them.
+        let a = rect(&mut ed, 0.0, 100.0, 10.0);
+        let b = rect(&mut ed, 5.0, 105.0, 10.0);
+        let cmd = surface(ed.doc(), SurfaceOp::Compose, &[a, b], None, false).unwrap();
+        ed.execute(&cmd).unwrap();
+        assert!(ed.doc().object(a).is_none());
     }
 }

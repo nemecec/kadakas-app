@@ -72,10 +72,13 @@ macro_rules! schema_impl {
     };
 }
 
+/// The largest ID that every JSON reader keeps exactly (2^53 - 1).
+const MAX_ID: u64 = 9_007_199_254_740_991;
+
 macro_rules! id_schema {
     ($ty:ty, $name:literal) => {
         schema_impl!($ty, $name, |_g| json_schema!({
-            "type": "integer", "minimum": 0, "description": "An ID."
+            "type": "integer", "minimum": 0, "maximum": MAX_ID, "description": "An ID."
         }));
     };
 }
@@ -109,27 +112,139 @@ schema_impl!(Attributes, "Attributes", |g| {
 
 schema_impl!(LayerKind, "LayerKind", |_g| string_enum::<LayerKind>());
 
-schema_impl!(Shape, "Shape", |_g| tagged_object::<Shape>(
-    "kind",
-    "A shape. `kind` names the variant; the other keys depend on it (see describe: command_examples and the sections of each feature)."
-));
+fn pt() -> Value {
+    json!({"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2})
+}
 
-schema_impl!(Vertex, "Vertex", |_g| json_schema!({
-    "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: arc | point_on_arc | bezier | cubic | corner, radius?} is a curved vertex.",
-    "oneOf": [
-        {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-        {"type": "object", "required": ["p"], "properties": {
-            "p": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-            "kind": {"type": "string", "enum": variant_names::<VertexKind>(Some("kind"))},
-            "radius": {"type": "number"}
-        }}
+fn pt3() -> Value {
+    json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3})
+}
+
+fn vertex_value() -> Value {
+    json!({
+        "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet.",
+        "anyOf": [
+            pt(),
+            {"type": "object", "required": ["p"], "properties": {"p": pt()}, "additionalProperties": false},
+            {"type": "object", "required": ["p", "kind"],
+             "properties": {"p": pt(), "kind": {"enum": ["corner", "point_on_arc", "bezier", "cubic"]}}},
+            {"type": "object", "required": ["p", "kind", "radius"],
+             "properties": {"p": pt(), "kind": {"const": "arc"}, "radius": {"type": "number"}}}
+        ]
+    })
+}
+
+fn vertices(min: u64) -> Value {
+    json!({"type": "array", "minItems": min, "items": vertex_value()})
+}
+
+/// The kinds of shape that the schema describes field by field. The schema accepts only what
+/// serde accepts for these (a test checks it).
+pub const EXACT_SHAPE_KINDS: [&str; 12] = [
+    "line",
+    "rect",
+    "circle",
+    "arc",
+    "polyline",
+    "text",
+    "plant",
+    "locus3d",
+    "polyline3d",
+    "group",
+    "landscape_area",
+    "hardscape",
+];
+
+/// The kinds of shape that the schema only names (`kind` and an object). Their fields are in
+/// the examples of `describe`. The schema accepts objects that serde may still refuse.
+pub fn structural_shape_kinds() -> Vec<String> {
+    variant_names::<Shape>(Some("kind"))
+        .into_iter()
+        .filter(|k| !EXACT_SHAPE_KINDS.contains(&k.as_str()))
+        .collect()
+}
+
+fn shape_value() -> Value {
+    let kind = |k: &str, required: &[&str], props: Value| {
+        let mut p = props.as_object().cloned().unwrap_or_default();
+        p.insert("kind".into(), json!({"const": k}));
+        let mut req = vec!["kind"];
+        req.extend_from_slice(required);
+        json!({"type": "object", "required": req, "properties": p})
+    };
+    let num = json!({"type": "number"});
+    let mut any_of = vec![
+        kind("line", &["a", "b"], json!({"a": pt(), "b": pt()})),
+        kind("rect", &["min", "max"], json!({"min": pt(), "max": pt()})),
+        kind(
+            "circle",
+            &["center", "radius"],
+            json!({"center": pt(), "radius": num}),
+        ),
+        kind(
+            "arc",
+            &["center", "radius", "start", "end"],
+            json!({"center": pt(), "radius": num, "start": num, "end": num}),
+        ),
+        kind(
+            "polyline",
+            &["points", "closed"],
+            json!({"points": vertices(2), "closed": {"type": "boolean"}}),
+        ),
+        kind(
+            "text",
+            &["at", "text", "height"],
+            json!({"at": pt(), "text": {"type": "string"}, "height": num}),
+        ),
+        kind(
+            "plant",
+            &["at", "species", "spread", "height"],
+            json!({"at": pt(), "species": {"type": "string"}, "spread": num, "height": num}),
+        ),
+        kind("locus3d", &["p"], json!({"p": pt3()})),
+        kind(
+            "polyline3d",
+            &["points", "closed"],
+            json!({"points": {"type": "array", "minItems": 2, "items": pt3()}, "closed": {"type": "boolean"}}),
+        ),
+        kind("group", &[], json!({"name": {"type": "string"}})),
+        kind(
+            "landscape_area",
+            &["boundary", "name"],
+            json!({"boundary": vertices(3), "name": {"type": "string"}}),
+        ),
+        kind(
+            "hardscape",
+            &["boundary", "material"],
+            json!({"boundary": vertices(3), "material": {"type": "string"}, "thickness": num, "elevation": num}),
+        ),
+    ];
+    any_of.push(json!({
+        "type": "object", "required": ["kind"],
+        "properties": {"kind": {"enum": structural_shape_kinds()}},
+        "description": "Structural only: the fields of these kinds are not checked."
+    }));
+    json!({
+        "description": "A shape. `kind` names it. The kinds line, rect, circle, arc, polyline, text, plant, locus3d, polyline3d, group, landscape_area and hardscape are described field by field; the other kinds are checked for `kind` only (see describe: command_examples and the section of each feature).",
+        "anyOf": any_of
+    })
+}
+
+schema_impl!(Shape, "Shape", |_g| Schema::try_from(shape_value())
+    .expect("the shape schema is an object"));
+
+schema_impl!(Vertex, "Vertex", |_g| Schema::try_from(vertex_value())
+    .expect("the vertex schema is an object"));
+
+schema_impl!(VertexKind, "VertexKind", |_g| json_schema!({
+    "description": "The kind of a vertex. `arc` has a radius.",
+    "anyOf": [
+        {"type": "object", "required": ["kind"],
+         "properties": {"kind": {"enum": ["corner", "point_on_arc", "bezier", "cubic"]}}},
+        {"type": "object", "required": ["kind", "radius"],
+         "properties": {"kind": {"const": "arc"}, "radius": {"type": "number"}}}
     ]
 }));
-
-schema_impl!(VertexKind, "VertexKind", |_g| tagged_object::<VertexKind>(
-    "kind",
-    "The kind of a vertex. `arc` has a radius."
-));
 
 schema_impl!(ResourceBody, "ResourceBody", |_g| json_schema!({
     "type": "object",

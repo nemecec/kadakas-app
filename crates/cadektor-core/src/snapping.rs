@@ -340,6 +340,7 @@ impl Geometry {
         near: Option<(DVec2, f64)>,
     ) -> Geometry {
         let mut g = Geometry::default();
+        let exclude: std::collections::HashSet<ObjectId> = exclude.iter().copied().collect();
         for o in doc.objects.values() {
             if exclude.contains(&o.id) || !reach.allows(doc, o) {
                 continue;

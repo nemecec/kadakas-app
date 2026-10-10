@@ -125,6 +125,9 @@ def test_new_commands_fit_the_schema(cad, schema):
     assert validate(schema, {"op": "transform_objects", "ids": [2], "transform": {"type": "tilt"}})
     # What the schema accepts, the server runs.
     cad.execute({"op": "add_object", "shape": {"kind": "circle", "center": [10, 0], "radius": 2}})
+    # The active layer cannot be grey: the visibility command works on a second layer.
+    other = cad.execute({"op": "add_layer", "name": "Other", "elevation": 0})[0]
+    cmds[2]["layers"] = [other]
     for c in cmds[:3]:
         resp = cad.rpc("execute", {"command": c})
         assert "error" not in resp, (c, resp)

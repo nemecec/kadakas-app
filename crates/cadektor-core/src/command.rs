@@ -419,6 +419,13 @@ pub enum Command {
         #[serde(default)]
         copy: bool,
     },
+    /// Add an object with a new shape that takes everything else from `source`: layer, class,
+    /// attributes, group and record data (not the transient editing keys of symbols). The edit
+    /// tools use it for the pieces they cut from an object. Returns the ID in `created`.
+    AddObjectLike {
+        source: ObjectId,
+        shape: Shape,
+    },
     /// Duplicate array: linear, rectangular or circular copies of objects (a group as one unit).
     /// Returns the IDs of the copies of `ids` in `created`. See `edit2d::ArrayParams`.
     ArrayObjects {
@@ -657,13 +664,24 @@ impl<'a> Tx<'a> {
 
     fn editable(&self, id: ObjectId) -> Result<(), CommandError> {
         let obj = self.doc.object(id).ok_or(CommandError::NoObject(id))?;
-        self.check_layer(obj.layer)
+        self.check_layer(obj.layer)?;
+        if self.doc.drawing.grey.classes.contains(&obj.class) {
+            return Err(CommandError::Invalid(format!(
+                "object {id} is in a grey class and cannot be edited. Make the class visible first"
+            )));
+        }
+        Ok(())
     }
 
     fn check_layer(&self, id: LayerId) -> Result<(), CommandError> {
         match self.doc.layer(id) {
             None => Err(CommandError::NoLayer(id)),
             Some(l) if l.locked => Err(CommandError::LayerLocked(id)),
+            Some(_) if self.doc.drawing.grey.layers.contains(&id) => {
+                Err(CommandError::Invalid(format!(
+                    "layer {id} is grey: its objects cannot be selected or edited. Make it visible first"
+                )))
+            }
             Some(_) => Ok(()),
         }
     }
@@ -1047,6 +1065,11 @@ impl<'a> Tx<'a> {
             Command::SetActive { layer, class } => {
                 if let Some(l) = layer {
                     self.doc.layer(*l).ok_or(CommandError::NoLayer(*l))?;
+                    if self.doc.drawing.grey.layers.contains(l) {
+                        return Err(CommandError::Invalid(
+                            "the active layer cannot be grey".into(),
+                        ));
+                    }
                     self.doc.active_layer = *l;
                 }
                 if let Some(c) = class {
@@ -1098,9 +1121,9 @@ impl<'a> Tx<'a> {
             | Command::SaveView { .. }
             | Command::DeleteView { .. }
             | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
-            Command::TransformObjects { .. } | Command::ArrayObjects { .. } => {
-                self.run_transform(cmd, out)?
-            }
+            Command::TransformObjects { .. }
+            | Command::ArrayObjects { .. }
+            | Command::AddObjectLike { .. } => self.run_transform(cmd, out)?,
             Command::SetVisibility {
                 layers,
                 classes,
@@ -1117,6 +1140,11 @@ impl<'a> Tx<'a> {
                 }
                 for c in classes {
                     self.check_class(*c)?;
+                }
+                if *mode == VisMode::Grey && layers.contains(&self.doc.active_layer) {
+                    return Err(CommandError::Invalid(
+                        "the active layer cannot be grey. Make another layer active first".into(),
+                    ));
                 }
                 for l in layers {
                     if let Some(layer) = self.doc.layers.iter_mut().find(|x| x.id == *l) {

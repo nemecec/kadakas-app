@@ -76,7 +76,7 @@ class Api:
         return self._call("selection.get", params or None)
 
     def selection_set(self, **params: Any) -> Any:
-        """Select objects. params: {ids: [id]}.
+        """Select objects. params: {ids: [id]}. Objects of grey layers and classes cannot be selected.
 
         JSON-RPC method ``selection.set``."""
         return self._call("selection.set", params or None)
@@ -1468,7 +1468,7 @@ class Api:
         return self._call("surface.compose", params or None)
 
     def objects_query(self, **params: Any) -> Any:
-        """Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = "plant" AND Area > 20, Class = "Trees", Layer = "Site", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. "Area", "Style"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.
+        """Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = "plant" AND Area > 20, Class = "Trees", Layer = "Site", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. "Area", "Style"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches, except objects of grey layers and classes, which cannot be selected)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error), grey_not_selected}. Names are properties: see describe.data.
 
         JSON-RPC method ``objects.query``."""
         return self._call("objects.query", params or None)
@@ -1504,7 +1504,7 @@ class Api:
         return self._call("visibility.get", params or None)
 
     def visibility_set(self, **params: Any) -> Any:
-        """Set the visibility mode of layers and classes in one undo step. params: {mode: visible | grey | invisible, layers? ([ids]), classes? ([ids])}. A grey layer or class is drawn in grey and its objects cannot be picked, edited or (by default) snapped to. Returns what visibility.get returns.
+        """Set the visibility mode of layers and classes in one undo step. params: {mode: visible | grey | invisible, layers? ([ids]), classes? ([ids])}. A grey layer or class is drawn in grey and its objects cannot be selected, edited (commands refuse them) or (by default) snapped to. The active layer cannot be grey. Trim and extend may still use grey objects as cutters and boundaries. Returns what visibility.get returns.
 
         JSON-RPC method ``visibility.set``."""
         return self._call("visibility.set", params or None)

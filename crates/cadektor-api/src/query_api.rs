@@ -15,7 +15,7 @@ use crate::{RpcError, Session};
 
 pub const OBJECTS_QUERY: (&str, &str) = (
     "objects.query",
-    "Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = \"plant\" AND Area > 20, Class = \"Trees\", Layer = \"Site\", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. \"Area\", \"Style\"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error)}. Names are properties: see describe.data.",
+    "Find objects by criteria. params: {criteria? (the criteria language of worksheet database blocks: Kind = \"plant\" AND Area > 20, Class = \"Trees\", Layer = \"Site\", 'Soil'.'Depth' > 300; empty matches all), columns? ([expressions, e.g. \"Area\", \"Style\"]; their values are returned per object), layer?, class?, kind? (as objects.list), limit? (default 1000), select? (true selects the matches, except objects of grey layers and classes, which cannot be selected)}. Returns {count, ids, rows? ([{id, values}] when columns are given), truncated, skipped (objects for which the criteria gave an error), grey_not_selected}. Names are properties: see describe.data.",
 );
 pub const SNAP_GET: (&str, &str) = (
     "snap.get",
@@ -39,7 +39,7 @@ pub const VISIBILITY_GET: (&str, &str) = (
 );
 pub const VISIBILITY_SET: (&str, &str) = (
     "visibility.set",
-    "Set the visibility mode of layers and classes in one undo step. params: {mode: visible | grey | invisible, layers? ([ids]), classes? ([ids])}. A grey layer or class is drawn in grey and its objects cannot be picked, edited or (by default) snapped to. Returns what visibility.get returns.",
+    "Set the visibility mode of layers and classes in one undo step. params: {mode: visible | grey | invisible, layers? ([ids]), classes? ([ids])}. A grey layer or class is drawn in grey and its objects cannot be selected, edited (commands refuse them) or (by default) snapped to. The active layer cannot be grey. Trim and extend may still use grey objects as cutters and boundaries. Returns what visibility.get returns.",
 );
 
 const METHOD_NAMES: &[&str] = &[
@@ -206,11 +206,18 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                 }
             }
             let truncated = count > ids.len();
-            if p.select {
-                s.selection = ids.clone();
-            }
-            let mut out =
-                json!({"count": count, "ids": ids, "truncated": truncated, "skipped": q.errors});
+            // Grey objects cannot be selected.
+            let skipped_grey = if p.select {
+                let doc = s.editor.doc();
+                let (keep, grey): (Vec<ObjectId>, Vec<ObjectId>) = ids
+                    .iter()
+                    .partition(|id| doc.object(**id).is_some_and(|o| !doc.is_grey(o)));
+                s.selection = keep;
+                grey.len()
+            } else {
+                0
+            };
+            let mut out = json!({"count": count, "ids": ids, "truncated": truncated, "skipped": q.errors, "grey_not_selected": skipped_grey});
             if !p.columns.is_empty() {
                 out["rows"] = json!(rows);
             }

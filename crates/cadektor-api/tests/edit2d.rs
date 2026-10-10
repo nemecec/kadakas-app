@@ -739,3 +739,107 @@ fn the_command_schema_and_the_screenshot_error() {
     assert_eq!(code, 1);
     assert!(msg.contains("live window"), "{msg}");
 }
+
+#[test]
+fn grey_objects_cannot_be_selected_or_edited_but_they_can_cut() {
+    let mut s = Session::default();
+    let survey = call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Survey", "elevation": 0}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
+    let t = call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "layer": survey, "shape": {"kind": "line", "a": [0, 0], "b": [1000, 0]}}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
+    let plain = line(&mut s, [0.0, 100.0], [1000.0, 100.0]);
+    call(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "grey", "layers": [survey]}),
+    );
+    // The active layer cannot be grey.
+    let (code, msg) = fail(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "grey", "layers": [1]}),
+    );
+    assert_eq!(code, 3);
+    assert!(msg.contains("active layer"), "{msg}");
+    // Not selectable, by query or by id; not editable.
+    let q = call(&mut s, "objects.query", json!({"select": true}));
+    assert_eq!(q["grey_not_selected"], 1);
+    assert_eq!(
+        call(&mut s, "selection.get", json!({}))["ids"],
+        json!([plain])
+    );
+    assert_eq!(fail(&mut s, "selection.set", json!({"ids": [t]})).0, 3);
+    assert_eq!(
+        fail(
+            &mut s,
+            "edit.mirror",
+            json!({"ids": [t], "a": [0, 0], "b": [0, 1]})
+        )
+        .0,
+        3
+    );
+    assert_eq!(
+        fail(&mut s, "edit.split", json!({"id": t, "at": [[400, 0]]})).0,
+        3
+    );
+    // A grey class on the active layer: its line cuts, and it cannot be cut.
+    let class = call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Existing"}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
+    let wall = call(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "class": class, "shape": {"kind": "line", "a": [400, -500], "b": [400, 500]}}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
+    call(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "grey", "classes": [class]}),
+    );
+    let out = call(
+        &mut s,
+        "edit.trim",
+        json!({"id": plain, "pick": [800, 100]}),
+    );
+    assert!(out["created"].as_array().unwrap().is_empty());
+    assert!(
+        near(&shape(&mut s, plain)["b"], [400.0, 100.0]),
+        "the grey wall was the cutter"
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "edit.extend",
+            json!({"id": wall, "pick": [400, 400], "boundaries": [plain]})
+        )
+        .0,
+        3
+    );
+    // Visible again: editable.
+    call(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "visible", "classes": [class]}),
+    );
+    call(
+        &mut s,
+        "edit.mirror",
+        json!({"ids": [wall], "a": [0, 0], "b": [0, 1]}),
+    );
+}

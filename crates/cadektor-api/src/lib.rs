@@ -160,7 +160,10 @@ pub const METHODS: &[(&str, &str)] = &[
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
     ("selection.get", "Selected object IDs."),
-    ("selection.set", "Select objects. params: {ids: [id]}."),
+    (
+        "selection.set",
+        "Select objects. params: {ids: [id]}. Objects of grey layers and classes cannot be selected.",
+    ),
     (
         "render.svg",
         "SVG image of visible objects. params: {width?: px}.",
@@ -809,7 +812,10 @@ impl Session {
                     d["scripting"] = plugin_api::describe();
                 }
                 d["schemas"] = json!({
-                    "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Shapes, resource bodies and patches are objects with a `kind` or `type`; their fields are in command_examples and in the sections of this answer.",
+                    "command": "The JSON Schema (draft 2020-12) of every command that `execute` takes. Call describe with {\"schema\": true} to get it in `command_schema` (about 30 KB). Everything the schema accepts for add_object, add_object_in, modify_object and set_vertex with an exact shape kind is accepted by the server too (a test fuzzes this). Other parts are structural only: they check the shape of the object and the kind, not every field, so the server may still refuse what the schema accepts. Their fields are in command_examples and in the sections of this answer.",
+                    "exact_shape_kinds": cadektor_core::schema::EXACT_SHAPE_KINDS,
+                    "structural_only_shape_kinds": cadektor_core::schema::structural_shape_kinds(),
+                    "structural_only_commands": "Commands with a resource body (add_resource, modify_resource), a patch (set_hardscape, set_landscape_area), a saved view, a georeference, sun settings, a material slot target or a plant variation take an object for that field that the schema does not describe.",
                 });
                 if want_schema {
                     d["command_schema"] = cadektor_core::schema::command_schema();
@@ -911,6 +917,14 @@ impl Session {
                 let P { ids } = params(p)?;
                 if let Some(bad) = ids.iter().find(|id| doc.object(**id).is_none()) {
                     return Err(RpcError::not_found(format!("object {bad} does not exist")));
+                }
+                if let Some(g) = ids
+                    .iter()
+                    .find(|id| doc.object(**id).is_some_and(|o| doc.is_grey(o)))
+                {
+                    return Err(RpcError::validation(format!(
+                        "object {g} is on a grey layer or in a grey class and cannot be selected"
+                    )));
                 }
                 self.selection = ids;
                 json!({ "ids": self.selection })

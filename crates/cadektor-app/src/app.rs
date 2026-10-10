@@ -61,6 +61,8 @@ pub struct CadektorApp {
     layouts: Layouts,
     /// A name being typed for Window > Save Layout As.
     layout_name: Option<String>,
+    /// Time of the last check whether the layout changed (seconds).
+    layout_checked: f64,
     quick: QuickSearch,
     array_dlg: ArrayDialog,
     view_history: ViewHistory,
@@ -212,6 +214,7 @@ impl CadektorApp {
             dark: false,
             layouts: Layouts::default(),
             layout_name: None,
+            layout_checked: 0.0,
             quick: QuickSearch::default(),
             array_dlg: ArrayDialog::default(),
             view_history: ViewHistory::default(),
@@ -1569,7 +1572,8 @@ impl CadektorApp {
     }
 
     /// Saves the preferences and the layout when they changed.
-    fn persist(&mut self) {
+    fn persist(&mut self, now: f64) {
+        let _ = now;
         self.prefs.snap = self.session.snap;
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1582,8 +1586,12 @@ impl CadektorApp {
                     }
                 }
             }
-            if self.layouts.changed() {
-                self.save_layouts();
+            // The layout is compared and saved at most twice a second, not on every frame.
+            if now - self.layout_checked >= 0.5 {
+                self.layout_checked = now;
+                if self.layouts.changed() {
+                    self.save_layouts();
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -1755,7 +1763,7 @@ impl eframe::App for CadektorApp {
         self.agent = None;
         // A clean exit: the recovery copies are not needed any more.
         self.autosave.finish();
-        self.persist();
+        self.persist(f64::INFINITY);
         self.save_layouts();
     }
 
@@ -1983,7 +1991,8 @@ impl eframe::App for CadektorApp {
             self.run_quick(&ctx, cmd);
         }
         self.layout_prompt(&ctx);
-        self.persist();
+        let now = ctx.input(|i| i.time);
+        self.persist(now);
     }
 }
 
@@ -2247,6 +2256,30 @@ mod tests {
         );
         assert!(items.iter().any(|i| i.label == "Theme: Dark"));
         assert!(items.iter().all(|i| !i.label.is_empty()));
+        for (label, keys) in [
+            ("Add Surface", "Cmd/Ctrl+Shift+Alt+A"),
+            ("Subtract Surface", ""),
+            ("Clip Surface", "Cmd/Ctrl+Shift+Alt+C"),
+            ("Intersect Surface", "Cmd/Ctrl+Shift+Alt+I"),
+            ("Compose", "Cmd/Ctrl+Shift+Alt+P"),
+            ("Duplicate Array", "Cmd/Ctrl+Shift+Alt+D"),
+            ("Flip horizontal", "Cmd/Ctrl+Shift+H"),
+            ("Flip vertical", "Cmd/Ctrl+Shift+V"),
+            ("Rotate left 90 degrees", "Cmd/Ctrl+L"),
+            ("Rotate right 90 degrees", "Cmd/Ctrl+Shift+R"),
+        ] {
+            let item = items
+                .iter()
+                .find(|i| i.label == label)
+                .unwrap_or_else(|| panic!("{label}"));
+            // The hint shows the key of this system (Ctrl or Cmd).
+            assert_eq!(
+                item.keys.is_empty(),
+                keys.is_empty(),
+                "{label}: {}",
+                item.keys
+            );
+        }
         app.run_quick(&ctx, QuickCommand::Theme(ThemeChoice::Dark));
         assert_eq!(app.prefs.theme, ThemeChoice::Dark);
         app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));

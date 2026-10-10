@@ -201,8 +201,8 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Add Surface (`cmd.add_surface`) | Cmd+Shift+Option+A / Ctrl+Shift+Alt+A | Cmd/Ctrl+Shift+Alt+A | done |
 | Clip Surface (`cmd.clip_surface`) | Cmd+Shift+Option+C / Ctrl+Shift+Alt+C | Cmd/Ctrl+Shift+Alt+C | done |
 | Subtract Surface (Cadektor; the base is the lowest selected shape) (`cmd.subtract_surface`) | none | none (no VW default) | done |
-| Intersect Surface (`cmd.intersect_surface`) | none | none (no VW default) | done |
-| Compose (`cmd.compose`) | none | none (no VW default) | done |
+| Intersect Surface (`cmd.intersect_surface`) | Cmd+Shift+Option+I / Ctrl+Shift+Alt+I | Cmd/Ctrl+Shift+Alt+I | done |
+| Compose (`cmd.compose`) | Cmd+Shift+Option+P / Ctrl+Shift+Alt+P | Cmd/Ctrl+Shift+Alt+P | done |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
 | Group (`edit.group`) | Cmd+G / Ctrl+G | Cmd/Ctrl+G | done |
 | Ungroup (`edit.ungroup`) | Cmd+U / Ctrl+U | Cmd/Ctrl+U | done |
