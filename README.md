@@ -6,6 +6,8 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 - `crates/cadektor-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
 - `crates/cadektor-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. The core never parses files.
 - `crates/cadektor-ifc`: IFC4 export (writer only; the STEP entity model and parser are shared for a later reader).
+- `crates/cadektor-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.
+- `python/cadektor`: the Python package for scripts and automation (`import cadektor`).
 - `crates/cadektor-cli`: the `cadektor` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/cadektor-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
@@ -121,6 +123,30 @@ claude mcp add cadektor -- /path/to/cadektor mcp
 The MCP tools are the API methods with `.` replaced by `_` (for example `objects_list`), plus `file_open`
 and `file_save`. `execute` is the only tool that changes the drawing.
 
+## Scripting and plug-in objects
+
+Control Cadektor from Python, run `.py` files from **File > Scripts...** (with a console), and make parametric
+plug-in objects whose shapes a short Python script draws again when a parameter changes. Python is not embedded:
+Cadektor starts `python3` (or `uv run`). Scripts run only when you start them; agents may run scripts only with
+`--allow-agent-scripts`.
+
+```sh
+uv pip install -e python
+```
+
+```python
+import cadektor
+
+with cadektor.open() as doc:                 # or cadektor.connect() for the running app
+    doc.plugins.install_example("Bench")
+    bench = doc.plugins.place("Bench", at=[2000, 1000], params={"length": 2400})
+    with doc.undo_group():                   # one undo step
+        doc.add.circle([0, 0], 300)
+    doc.render_svg("plan.svg")
+```
+
+See `docs/scripting.md`.
+
 ## Keyboard shortcuts
 
 The default keys follow Vectorworks 2026: `X` Selection, `1` Text, `2` Line, `4` Rectangle, `5` Polyline, `6` Circle,
@@ -138,6 +164,7 @@ The full table, with the status of each key, is in `docs/keyboard-shortcuts.md`.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p cadektor-cli && uv run --with pytest pytest tests/behavior -q
+CADEKTOR_BIN=target/debug/cadektor uv run --no-project --with pytest pytest python/tests   # the Python package
 cargo test -p cadektor-core --release --test perf -- --ignored --nocapture   # speed on 50,000 objects
 cargo llvm-cov -p cadektor-core --summary-only
 cargo llvm-cov -p cadektor-io --summary-only

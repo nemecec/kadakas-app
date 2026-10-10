@@ -507,6 +507,8 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
             st
         };
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::script_ui::draw_badge(&painter, view, f.doc, o);
         if let Some(t) = cadektor_core::worksheet_table::data(o) {
             crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
         }

@@ -32,6 +32,8 @@ pub enum MenuAction {
     MapSources,
     /// File > Change CRS: convert the document.
     ChangeCrs,
+    /// File > Scripts: the Scripts palette with its console.
+    Scripts,
     Undo,
     Redo,
     Delete,
@@ -94,6 +96,8 @@ pub fn menu_bar(
                 ui.separator();
                 item(ui, "Map Sources...", true, MapSources, &mut out);
                 item(ui, "Change CRS...", true, ChangeCrs, &mut out);
+                ui.separator();
+                item(ui, "Scripts...", true, Scripts, &mut out);
             }
         });
         ui.menu_button("Edit", |ui| {
@@ -195,6 +199,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::Export
         | MenuAction::MapSources
         | MenuAction::ChangeCrs
+        | MenuAction::Scripts
         | MenuAction::CreateSiteModel
         | MenuAction::UpdateSiteModel => return None,
     })

@@ -69,6 +69,9 @@ pub struct CadektorApp {
     /// The File > Map Sources and File > Change CRS dialogs.
     #[cfg(not(target_arch = "wasm32"))]
     gis_ui: crate::gis_dialogs::GisDialogs,
+    /// The Scripts palette, its console, and the parameters of plug-in objects.
+    #[cfg(not(target_arch = "wasm32"))]
+    script_ui: crate::script_ui::ScriptUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
 }
@@ -88,6 +91,9 @@ impl CadektorApp {
         app.session.gis.urls =
             cadektor_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
         app.session.gis.blocking = false;
+        // Agents run their own scripts only if the user starts the app with this flag.
+        app.session.scripting.allow_agent_scripts =
+            args.iter().any(|a| a == "--allow-agent-scripts");
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
@@ -159,6 +165,8 @@ impl CadektorApp {
             io_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             gis_ui: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            script_ui: Default::default(),
             readout: Default::default(),
         }
     }
@@ -375,10 +383,29 @@ impl CadektorApp {
             MenuAction::MapSources => self.gis_ui.open_sources(),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ChangeCrs => self.gis_ui.open_crs(&self.session),
+            #[cfg(not(target_arch = "wasm32"))]
+            MenuAction::Scripts => self.script_ui.open(),
             #[cfg(target_arch = "wasm32")]
             _ => {
                 let _ = ctx;
             }
+        }
+    }
+
+    /// Makes sure that scripts have a live session to connect to. Without `--agent-port` the
+    /// app starts the agent server on a free port now, without a runtime file.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_script_endpoint(&mut self, ctx: &egui::Context) {
+        if self.agent.is_none() {
+            let wake = ctx.clone();
+            match crate::agent::start(0, std::sync::Arc::new(move || wake.request_repaint()), None)
+            {
+                Ok(server) => self.agent = Some(server),
+                Err(e) => self.status = format!("Cannot start the session for scripts: {e}"),
+            }
+        }
+        if let Some(a) = &self.agent {
+            self.session.scripting.endpoint = Some((a.addr.to_string(), a.token.clone()));
         }
     }
 
@@ -961,6 +988,11 @@ impl eframe::App for CadektorApp {
                 .as_ref()
                 .and_then(|p| p.parent())
                 .map(std::path::Path::to_path_buf);
+            // Scripts that the user starts connect to this address, with this token.
+            self.session
+                .scripting
+                .endpoint
+                .get_or_insert_with(|| (agent.addr.to_string(), agent.token.clone()));
             agent.poll(&mut |line| {
                 file_io::agent_line(&mut self.session, &mut self.path, line, &mut fx)
             });
@@ -1018,6 +1050,12 @@ impl eframe::App for CadektorApp {
             == crate::io_dialog::IoEvent::Imported
         {
             self.needs_fit = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(script) = self.script_ui.show(&ctx, &mut self.session) {
+            self.ensure_script_endpoint(&ctx);
+            self.script_ui
+                .start(&mut self.session, script, &mut self.status);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.gis_ui.show(&ctx, &mut self.session, &mut self.status) {
@@ -1100,6 +1138,9 @@ impl eframe::App for CadektorApp {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.script_ui
+                        .plugin_info(ui, &mut self.session, &mut self.status);
                     ui.add_space(12.0);
                     panels::navigation(ui, &mut self.session, &mut self.nav, &mut self.status);
                     ui.add_space(12.0);

@@ -100,6 +100,10 @@ struct RemoteArgs {
     /// (`https://maps.example.org/wms/`). Repeat for more. Default: none, so agents cannot use the network.
     #[arg(long = "allow-url", value_name = "URL")]
     allow_url: Vec<String>,
+    /// Let requests from agents run Python scripts (`script.run`, and plug-in objects with their own
+    /// scripts). Default: off. The plug-in objects that ship with the app always run.
+    #[arg(long = "allow-agent-scripts")]
+    allow_agent_scripts: bool,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -124,6 +128,7 @@ impl Backend {
         };
         session.paths = cadektor_api::PathPolicy::restricted(dirs);
         session.gis.urls = cadektor_api::UrlPolicy::allow_list(remote.allow_url);
+        session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
             session.doc_dir = doc_dir_of(&f);

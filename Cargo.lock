@@ -571,6 +571,7 @@ dependencies = [
  "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
+ "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
  "glam",
@@ -591,6 +592,7 @@ dependencies = [
  "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
+ "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
  "eframe",
@@ -712,6 +714,15 @@ dependencies = [
  "glam",
  "png",
  "proptest",
+]
+
+[[package]]
+name = "cadektor-script"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

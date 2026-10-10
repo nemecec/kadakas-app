@@ -20,7 +20,8 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 | `cadektor-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, io |
 | `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, gis, annot, irrigation (native only for io, ifc and gis) |
+| `cadektor-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, gis, annot, irrigation, script (native only for io, ifc, gis and script) |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 
@@ -29,6 +30,7 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
+- After you add or change an API method, renew the Python package: `CADEKTOR_BIN=<your binary> python python/tools/codegen.py`. The test `python/tests/test_drift.py` fails when `python/cadektor/_api.py` and `describe` differ.
 
 ## Quality rules
 
@@ -46,9 +48,10 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior -q
+uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests)
 ```
 
-All five must pass. End each commit message with the co-author line that the project uses.
+All five must pass. The Python package tests belong to check 5. End each commit message with the co-author line that the project uses.
 
 ## Parallel work in worktrees
 

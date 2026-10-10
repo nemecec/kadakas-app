@@ -21,6 +21,8 @@ mod panels;
 mod plant_draw;
 mod plant_ui;
 mod resource_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod script_ui;
 mod sheets_ui;
 mod site_ui;
 mod snap;
