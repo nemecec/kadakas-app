@@ -17,11 +17,11 @@ use crate::{RpcError, Session};
 
 pub const MASSING_ADD: (&str, &str) = (
     "massing.add",
-    "Add a massing model (a building block) in one undo step. params: {footprint: [vertices] (a closed outline; curves are allowed like in polylines), height? (eave height in mm, default 3000) or floors? (number) with floor_height? (mm, default 3000), roof? (flat | gable | hip), pitch? (roof pitch in degrees, default 30), ridge_angle? (radians; default: along the long side), base? (height of the base above the layer in mm; default: on the site model of the layer, else 0), name?, layer?, class?, parent? (a group)}. Returns {id, quantities}.",
+    "Add a massing model (a building block) in one undo step. params: {footprint: [vertices] (a closed outline; curves are allowed like in polylines), height? (eave height in mm, default 3000) or floors? (number) with floor_height? (mm, default 3000), roof? (flat | gable | hip), pitch? (roof pitch in degrees, default 30), ridge_angle? (radians; default: along the long side), base? (height of the base above the layer in mm; default: on the site model of the layer, else 0), name?, layer?, class?, parent? (a group)}. Returns {id, quantities, warnings}. A gable or hip roof needs a convex footprint: on any other footprint the roof is built flat and warnings says so.",
 );
 pub const MASSING_SET: (&str, &str) = (
     "massing.set",
-    "Change massing models. params: {id | ids, footprint?, height?, floors? (null for none), floor_height?, roof?, pitch?, ridge_angle? (null for the default), base? (null: on the site model), name?}. Returns {changed: [ids]}.",
+    "Change massing models. params: {id | ids, footprint?, height?, floors? (null for none), floor_height?, roof?, pitch?, ridge_angle? (null for the default), base? (null: on the site model), name?}. Returns {changed: [ids], warnings}.",
 );
 pub const MASSING_GET: (&str, &str) = (
     "massing.get",
@@ -162,6 +162,7 @@ fn add(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let base = Massing::new(Vec::new(), 3000.0);
     let model = patched(&base, m)?;
     let quantities = quantities_json(&model);
+    let warnings: Vec<String> = model.roof_warning().into_iter().collect();
     let shape = Shape::Massing(Box::new(model));
     let command = match place.parent {
         Some(parent) => Command::AddObjectIn {
@@ -178,7 +179,7 @@ fn add(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         },
     };
     let out = s.editor.execute(&command).map_err(app)?;
-    Ok(json!({"id": out.created[0], "quantities": quantities}))
+    Ok(json!({"id": out.created[0], "quantities": quantities, "warnings": warnings}))
 }
 
 fn ids_of(m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError> {
@@ -194,6 +195,7 @@ fn ids_of(m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError> {
 fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let ids = ids_of(m)?;
     let mut commands = Vec::new();
+    let mut warnings = Vec::new();
     for id in &ids {
         let o = s
             .editor
@@ -204,6 +206,9 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             return Err(bad(format!("object {id} is not a massing model")));
         };
         let new = patched(cur, m)?;
+        if let Some(w) = new.roof_warning() {
+            warnings.push(json!({"id": id, "warning": w}));
+        }
         commands.push(Command::ModifyObject {
             id: *id,
             shape: Some(Shape::Massing(Box::new(new))),
@@ -215,7 +220,7 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     s.editor
         .execute(&Command::Batch { commands })
         .map_err(app)?;
-    Ok(json!({"changed": ids}))
+    Ok(json!({"changed": ids, "warnings": warnings}))
 }
 
 /// The height of the base above the origin of the model: the layer elevation plus the base of the
@@ -245,6 +250,7 @@ fn get(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     v["pitch"] = json!(mm.pitch_deg);
     v["base_elevation_mm"] = json!(base_elevation(s, id));
     v["quantities"] = quantities_json(mm);
+    v["warnings"] = json!(mm.roof_warning().into_iter().collect::<Vec<_>>());
     Ok(v)
 }
 

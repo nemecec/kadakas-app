@@ -9,20 +9,51 @@ use crate::{GisError, Result};
 /// Most pixels of a picture that is decoded (64 megapixels).
 pub const MAX_PIXELS: u64 = 64 * 1024 * 1024;
 
-/// Decodes a PNG or JPEG (the format comes from the bytes, not from the name).
-pub fn decode_image(bytes: &[u8]) -> Result<Rgba> {
-    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+/// Most memory that the decoder may use for one picture (512 MB).
+pub const MAX_ALLOC: u64 = 512 * 1024 * 1024;
+
+fn reader(bytes: &[u8]) -> Result<image::ImageReader<std::io::Cursor<&[u8]>>> {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_ALLOC);
+    limits.max_image_width = Some(32768);
+    limits.max_image_height = Some(32768);
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| GisError::Format(format!("cannot read the picture: {e}")))?;
-    let (w, h) = reader
+    r.limits(limits);
+    Ok(r)
+}
+
+/// The size of a picture, read from its header only.
+pub fn image_size(bytes: &[u8]) -> Result<(u32, u32)> {
+    reader(bytes)?
         .into_dimensions()
-        .map_err(|e| GisError::Format(format!("cannot read the picture: {e}")))?;
+        .map_err(|e| GisError::Format(format!("cannot read the picture: {e}")))
+}
+
+/// Decodes a picture that must have exactly the size `expect`. The size comes from the header,
+/// so a picture of another size is refused before any pixel memory is allocated.
+pub fn decode_sized(bytes: &[u8], expect: (u32, u32)) -> Result<Rgba> {
+    let got = image_size(bytes)?;
+    if got != expect {
+        return Err(GisError::Format(format!(
+            "the server sent a picture of {} by {} pixels, not {} by {}",
+            got.0, got.1, expect.0, expect.1
+        )));
+    }
+    decode_image(bytes)
+}
+
+/// Decodes a PNG or JPEG (the format comes from the bytes, not from the name).
+pub fn decode_image(bytes: &[u8]) -> Result<Rgba> {
+    let (w, h) = image_size(bytes)?;
     if u64::from(w) * u64::from(h) > MAX_PIXELS {
         return Err(GisError::Limit(format!(
             "the picture is {w} by {h} pixels. The limit is {MAX_PIXELS} pixels"
         )));
     }
-    let img = image::load_from_memory(bytes)
+    let img = reader(bytes)?
+        .decode()
         .map_err(|e| GisError::Format(format!("cannot read the picture: {e}")))?
         .to_rgba8();
     Ok(Rgba {
@@ -229,6 +260,54 @@ mod tests {
         assert_eq!(back, img);
         assert!(decode_image(b"nonsense").is_err());
         assert!(decode_image(&[]).is_err());
+    }
+
+    /// A PNG whose header says `w` by `h` pixels, with the checksum made again. It has no pixel data.
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        fn crc(data: &[u8]) -> u32 {
+            let mut c = 0xFFFF_FFFFu32;
+            for b in data {
+                c ^= u32::from(*b);
+                for _ in 0..8 {
+                    c = if c & 1 == 1 {
+                        (c >> 1) ^ 0xEDB8_8320
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        let mut ihdr = b"IHDR".to_vec();
+        ihdr.extend(w.to_be_bytes());
+        ihdr.extend(h.to_be_bytes());
+        ihdr.extend([8, 6, 0, 0, 0]);
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        out.extend(13u32.to_be_bytes());
+        out.extend(&ihdr);
+        out.extend(crc(&ihdr).to_be_bytes());
+        // The first bytes of the pixel data: the reader stops at the header and needs no more.
+        let mut idat = b"IDAT".to_vec();
+        idat.extend([0x78, 0x9C]);
+        out.extend(2u32.to_be_bytes());
+        out.extend(&idat);
+        out.extend(crc(&idat).to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn a_picture_of_the_wrong_size_is_refused_from_its_header() {
+        // Six pictures of 8000 by 8000 pixels would need 1.5 GB: the size check comes first.
+        let big = png_header(8000, 8000);
+        assert_eq!(image_size(&big).unwrap(), (8000, 8000));
+        let e = decode_sized(&big, (512, 512)).unwrap_err().to_string();
+        assert!(e.contains("8000 by 8000 pixels, not 512 by 512"), "{e}");
+        let huge = png_header(30_000, 30_000);
+        let e = decode_image(&huge).unwrap_err().to_string();
+        assert!(e.contains("limit") || e.contains("cannot read"), "{e}");
+        let ok = solid(4, 3, [1, 2, 3, 255]).to_png();
+        assert_eq!(decode_sized(&ok, (4, 3)).unwrap().width, 4);
+        assert!(image_size(b"junk").is_err());
     }
 
     #[test]

@@ -109,6 +109,19 @@ fn redirects_are_followed_and_checked_again() {
 }
 
 #[test]
+fn a_cancelled_client_sends_nothing_more() {
+    let m = Mock::start(|_| Reply::Ok("text/plain", b"x".to_vec()));
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let c = HttpClient::new(UrlPolicy::unrestricted(), Duration::from_secs(5))
+        .with_cancel(flag.clone());
+    assert!(c.get(&format!("{}/a", m.base)).is_ok());
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = c.get(&format!("{}/b", m.base)).unwrap_err().to_string();
+    assert_eq!(e, "cancelled");
+    assert_eq!(m.hit_count(), 1);
+}
+
+#[test]
 fn the_policy_blocks_before_any_request() {
     let m = Mock::start(|_| Reply::Ok("text/plain", b"x".to_vec()));
     let c = HttpClient::new(UrlPolicy::deny_all(), Duration::from_secs(2));

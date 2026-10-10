@@ -142,6 +142,14 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
         }
     });
     ui.end_row();
+    if let Some(w) = m.roof_warning() {
+        ui.label(
+            egui::RichText::new(w)
+                .small()
+                .color(Color32::from_rgb(190, 110, 0)),
+        );
+        ui.end_row();
+    }
     let q = m.quantities();
     ui.label("Floor area");
     ui.label(format!(

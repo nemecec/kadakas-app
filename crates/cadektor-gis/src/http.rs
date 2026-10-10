@@ -204,6 +204,7 @@ pub struct HttpClient {
     agent: ureq::Agent,
     policy: UrlPolicy,
     max_body: usize,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl HttpClient {
@@ -221,7 +222,15 @@ impl HttpClient {
             agent,
             policy,
             max_body: MAX_BODY,
+            cancel: None,
         }
+    }
+
+    /// Makes the client stop at the next request once the flag is set. A job that is cancelled
+    /// sets it, so its worker thread does not go on fetching tiles that nobody wants.
+    pub fn with_cancel(mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
     }
 
     /// Sets the largest answer in bytes.
@@ -251,6 +260,13 @@ impl Fetch for HttpClient {
     fn get(&self, url: &str) -> Result<Response> {
         let mut url = url.trim().to_string();
         for _ in 0..=MAX_REDIRECTS {
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return Err(GisError::Http("cancelled".into()));
+            }
             self.policy.check(&url)?;
             let mut resp = self
                 .agent

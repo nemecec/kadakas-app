@@ -101,11 +101,27 @@ impl Mapper<'_> {
         Ok(())
     }
 
+    /// A point with a height (mm). The height goes through the conversion too: it stays the same
+    /// between CRSs that share a datum, and changes by the datum shift where they do not.
+    fn point3(&self, p: cadektor_core::DVec3) -> Result<cadektor_core::DVec3> {
+        let m = self.old_g.to_map(p.truncate()) / self.old.to_meter();
+        let (x, y, z) = Transformer::new(self.old, self.new)
+            .apply(m.x, m.y, p.z / 1000.0)
+            .map_err(GisError::Crs)?;
+        let q = self.new_g.to_model(DVec2::new(x, y) * self.new.to_meter());
+        let out = q.extend(z * 1000.0);
+        if out.is_finite() && out.abs().max_element() <= cadektor_core::model::MAX_COORD {
+            Ok(out)
+        } else {
+            Err(GisError::Crs(
+                "a point is out of range in the new CRS".into(),
+            ))
+        }
+    }
+
     fn vec3(&self, v: &mut [cadektor_core::DVec3]) -> Result<()> {
         for p in v {
-            let q = self.point(p.truncate())?;
-            p.x = q.x;
-            p.y = q.y;
+            *p = self.point3(*p)?;
         }
         Ok(())
     }
@@ -141,11 +157,7 @@ impl Mapper<'_> {
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => self.vertices(boundary)?,
             Shape::Massing(m) => self.vertices(&mut m.footprint)?,
-            Shape::Locus3d { p } => {
-                let q = self.point(p.truncate())?;
-                p.x = q.x;
-                p.y = q.y;
-            }
+            Shape::Locus3d { p } => *p = self.point3(*p)?,
             Shape::Polyline3d { points, .. } => self.vec3(points)?,
             Shape::SiteModel { points, lines, .. } => {
                 self.vec3(points)?;
@@ -170,10 +182,22 @@ impl Mapper<'_> {
             }
             // Paper space, derived or placed by other code.
             Shape::Viewport(vp) => vp.center = self.point(vp.center)?,
-            Shape::TitleBlock(_)
-            | Shape::Group { .. }
-            | Shape::Annotation(_)
-            | Shape::Underlay(_) => {
+            // Annotations on a design layer carry model points. The caller does not send those on a
+            // sheet, where they are paper millimeters.
+            Shape::Annotation(a) => {
+                let mut failed = None;
+                a.map_points(&mut |p| match self.point(p) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                        p
+                    }
+                });
+                if let Some(e) = failed {
+                    return Err(e);
+                }
+            }
+            Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Underlay(_) => {
                 return Ok(false);
             }
         }
@@ -240,6 +264,11 @@ impl Mapper<'_> {
     }
 }
 
+fn on_sheet(doc: &Document, o: &Object) -> bool {
+    doc.layer(o.layer)
+        .is_some_and(|l| l.kind == cadektor_core::model::LayerKind::Sheet)
+}
+
 /// Plans the change of the CRS of a document to `target`.
 pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<ReprojectPlan> {
     let old_g = doc
@@ -265,10 +294,8 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
         l.locked
             && doc.objects.values().any(|o| {
                 o.layer == l.id
-                    && !matches!(
-                        o.shape,
-                        Shape::Group { .. } | Shape::TitleBlock(_) | Shape::Annotation(_)
-                    )
+                    && !matches!(o.shape, Shape::Group { .. } | Shape::TitleBlock(_))
+                    && !(matches!(o.shape, Shape::Annotation(_)) && on_sheet(doc, o))
             })
     }) {
         return Err(GisError::Param(format!(
@@ -343,8 +370,11 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
         skipped: Vec::new(),
         warnings: Vec::new(),
     };
-    let mut annotations = 0;
     for o in doc.objects.values() {
+        // Paper space annotations are in paper millimeters and do not change.
+        if matches!(o.shape, Shape::Annotation(_)) && on_sheet(doc, o) {
+            continue;
+        }
         let mut shape = o.shape.clone();
         let mut obj = o.clone();
         let moved = match &mut shape {
@@ -375,9 +405,6 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
             },
         };
         if !moved {
-            if matches!(o.shape, Shape::Annotation(_)) {
-                annotations += 1;
-            }
             continue;
         }
         if let Err(e) = mapper.data(&mut obj) {
@@ -401,6 +428,10 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
         if a.is_finite() && na.is_finite() {
             report.max_shift_mm = report.max_shift_mm.max(a.distance(na)).max(b.distance(nb));
         }
+        let new_view = match &shape {
+            Shape::Underlay(u) => Some([u.min.x, u.min.y, u.max.x, u.max.y]),
+            _ => None,
+        };
         let modify = Command::ModifyObject {
             id: o.id,
             shape: Some(shape),
@@ -434,16 +465,23 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
         } else {
             commands.push(modify);
         }
+        // The view that a map was fetched for is part of its source. It moves with the picture.
+        if let (Some(view), Some(src)) = (new_view, o.data.get("gis_source"))
+            && src.get("bbox").is_some()
+        {
+            let mut src = src.clone();
+            src["bbox"] = serde_json::json!(view);
+            commands.push(Command::SetData {
+                id: o.id,
+                set: BTreeMap::from([("gis_source".to_string(), src)]),
+                remove: Vec::new(),
+            });
+        }
         *report
             .changed
             .entry(o.shape.kind().to_string())
             .or_default() += 1;
         report.objects_changed += 1;
-    }
-    if annotations > 0 {
-        report.warnings.push(format!(
-            "{annotations} annotation object(s) (dimensions, tags, callouts) keep their model positions and are not moved. Check them"
-        ));
     }
     if !report.skipped.is_empty() {
         report.warnings.push(format!(
@@ -1040,7 +1078,7 @@ mod tests {
                 source: String::new(),
             })),
         );
-        // A north arrow on the design layer keeps its place, and the report says so.
+        // A north arrow on the design layer moves like the rest.
         let arrow: cadektor_core::annot::Annot =
             serde_json::from_value(serde_json::json!({"type": "north_arrow", "at": [0, 0]}))
                 .unwrap();
@@ -1050,7 +1088,10 @@ mod tests {
         assert_eq!(p.report.changed["landscape_area"], 1);
         assert_eq!(p.report.skipped.len(), 1);
         assert_eq!(p.report.skipped[0].kind, "underlay");
-        assert!(p.report.warnings.iter().any(|w| w.contains("annotation")));
+        assert_eq!(
+            p.report.changed["annotation"], 1,
+            "the arrow moves with the drawing"
+        );
         ed.execute(&p.command.unwrap()).unwrap();
         let id = *before.objects.keys().next().unwrap();
         let old = cadektor_core::landscape::data(&before.objects[&id]).unwrap();
@@ -1059,5 +1100,84 @@ mod tests {
         for (a, b) in old.holes[0].iter().zip(&new.holes[0]) {
             assert!((lonlat(&before, a.p) - lonlat(ed.doc(), b.p)).length() < 1e-8);
         }
+    }
+
+    #[test]
+    fn dimensions_heights_and_the_refresh_view_follow() {
+        use cadektor_core::annot::Annot;
+        use cadektor_core::underlay::{PngData, Rgba, Underlay};
+        let mut ed = doc_in("EPSG:3067", DVec2::new(385_000.0, 6_672_000.0), 0.0);
+        let dim: Annot = serde_json::from_value(serde_json::json!({
+            "type": "dimension", "mode": {"type": "linear", "axis": "aligned"}, "points": [[0, 0], [40000, 0]], "offset": 5.0
+        }))
+        .unwrap();
+        let dim_id = add(&mut ed, Shape::Annotation(Box::new(dim)));
+        let locus = add(
+            &mut ed,
+            Shape::Locus3d {
+                p: cadektor_core::DVec3::new(10.0, 20.0, 5000.0),
+            },
+        );
+        let img = Rgba {
+            width: 2,
+            height: 2,
+            data: [1, 2, 3, 255].repeat(4),
+        };
+        let map = add(
+            &mut ed,
+            Shape::Underlay(Box::new(Underlay {
+                name: "m".into(),
+                min: DVec2::ZERO,
+                max: DVec2::new(50_000.0, 50_000.0),
+                width: 2,
+                height: 2,
+                png: PngData(std::sync::Arc::new(img.to_png())),
+                opacity: 1.0,
+                source: String::new(),
+            })),
+        );
+        ed.execute(&Command::SetData {
+            id: map,
+            set: BTreeMap::from([(
+                "gis_source".to_string(),
+                serde_json::json!({"kind": "wms", "source": {}, "bbox": [0.0, 0.0, 50000.0, 50000.0], "max_px": 100}),
+            )]),
+            remove: vec![],
+        })
+        .unwrap();
+        let before = ed.doc().clone();
+        let p = plan(&before, "EPSG:32635", &ReprojectOptions::default()).unwrap();
+        let k = p.report.scale_factor;
+        ed.execute(&p.command.unwrap()).unwrap();
+        // The dimension spans the same two places, so it measures the new, longer or shorter, length.
+        let Shape::Annotation(a) = &ed.doc().object(dim_id).unwrap().shape else {
+            panic!()
+        };
+        let Annot::Dimension(d) = &**a else { panic!() };
+        let len = d.points[0].distance(d.points[1]);
+        assert!(
+            (len - 40_000.0 * k).abs() < 1.0,
+            "{len} against {}",
+            40_000.0 * k
+        );
+        assert!(
+            (lonlat(&before, DVec2::new(40_000.0, 0.0)) - lonlat(ed.doc(), d.points[1])).length()
+                < 1e-8
+        );
+        assert_eq!(d.offset, 5.0, "paper offsets stay");
+        // The height went through the conversion (the same datum, so it is unchanged).
+        let Shape::Locus3d { p: l } = ed.doc().object(locus).unwrap().shape else {
+            panic!()
+        };
+        assert!((l.z - 5000.0).abs() < 1e-6);
+        // The view that the map was fetched for moved with the picture.
+        let o = ed.doc().object(map).unwrap();
+        let Shape::Underlay(u) = &o.shape else {
+            panic!()
+        };
+        let bbox = o.data["gis_source"]["bbox"].as_array().unwrap();
+        assert_eq!(bbox[0].as_f64().unwrap(), u.min.x);
+        assert_eq!(bbox[3].as_f64().unwrap(), u.max.y);
+        assert_eq!(o.data["gis_source"]["kind"], "wms");
     }
 }

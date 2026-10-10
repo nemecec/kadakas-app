@@ -13,6 +13,8 @@
 //! the app they return `{job, status: "running"}` at once, and `gis.job.status` gives the result.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cadektor_core::DVec2;
@@ -80,7 +82,7 @@ pub const GIS_WFS_CAPABILITIES: (&str, &str) = (
 );
 pub const GIS_WFS_IMPORT: (&str, &str) = (
     "gis.wfs.import",
-    "Import the features of a WFS 2.0 feature type (GetFeature as GeoJSON or GML 3.2 simple features) as vector objects. They go through the importer of GeoJSON and Shapefile files, so the georeference, the layers, classes and the object data (the properties of the features) work the same way. params: {url, type_name, crs?, bbox? ([min x, min y, max x, max y] in model mm), max_features? (default 5000), format? ('geojson' or 'gml'), options? (as in import.file: layer, class_field, origin, ...), caps? (false: skip GetCapabilities), wait?}. Returns like import.file: {imported, skipped, report, georeference} or {job, status}.",
+    "Import the features of a WFS 2.0 feature type (GetFeature as GeoJSON or GML 3.2 simple features) as vector objects. They go through the importer of GeoJSON and Shapefile files, so the georeference, the layers, classes and the object data (the properties of the features) work the same way. params: {url, type_name, crs?, bbox? ([min x, min y, max x, max y] in model mm), max_features? (default 5000), format? ('geojson' or 'gml'), options? (as in import.file: layer, class_field, origin, ...), caps? (false: skip GetCapabilities), wait?}. The server is asked page by page (1000 features each) up to max_features (default 5000, at most 50000); truncated is true when the limit was reached and the server may have more. Returns like import.file: {imported, skipped, truncated, report, georeference} or {job, status}.",
 );
 pub const GIS_GEOIMAGE_IMPORT: (&str, &str) = (
     "gis.geoimage.import",
@@ -126,6 +128,9 @@ pub struct GisState {
     pub blocking: bool,
     next_job: u64,
     jobs: Vec<Entry>,
+    /// Counts the documents of the session. A job result is applied only to the document it was
+    /// started for.
+    pub(crate) epoch: u64,
 }
 
 impl Default for GisState {
@@ -138,6 +143,7 @@ impl Default for GisState {
             blocking: true,
             next_job: 1,
             jobs: Vec::new(),
+            epoch: 0,
         }
     }
 }
@@ -170,6 +176,11 @@ struct Entry {
     auto: bool,
     done: Option<Result<Value, String>>,
     reported: bool,
+    /// The document (see `GisState::epoch`) and its georeference when the job started.
+    epoch: u64,
+    georef: Option<Georeference>,
+    /// Set to stop the worker at its next request.
+    cancel: Arc<AtomicBool>,
 }
 
 /// A job as the UI shows it.
@@ -285,11 +296,32 @@ impl Session {
         }
         let r = self.gis.jobs[pos].job.take();
         let result = match r {
-            Some(Ok(outcome)) => self.apply(outcome).map_err(|e| e.message),
+            Some(Ok(outcome)) => match self.stale(pos, &outcome) {
+                Some(why) => Err(why.to_string()),
+                None => self.apply(outcome).map_err(|e| e.message),
+            },
             Some(Err(e)) => Err(e.to_string()),
             None => return,
         };
         self.gis.jobs[pos].done = Some(result);
+    }
+
+    /// Why the result of a job must not be applied, if so: it was made for another document or
+    /// for another georeference than the one the session has now.
+    fn stale(&self, pos: usize, outcome: &Outcome) -> Option<&'static str> {
+        if matches!(outcome, Outcome::Json(_)) {
+            return None;
+        }
+        let e = &self.gis.jobs[pos];
+        if e.epoch != self.gis.epoch {
+            Some("another document was opened while the call ran, so its result was dropped")
+        } else if e.georef != self.editor.doc().georef {
+            Some(
+                "the georeference changed while the call ran, so its result was dropped. Run the call again",
+            )
+        } else {
+            None
+        }
     }
 
     /// Starts a network job. `trusted` calls come from the user's dialogs.
@@ -310,7 +342,8 @@ impl Session {
         };
         let timeout = self.gis.timeout;
         let cache = self.tile_cache();
-        let http = HttpClient::new(policy, timeout);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let http = HttpClient::new(policy, timeout).with_cancel(cancel.clone());
         let job = Job::spawn(kind, move || f(&http, &cache));
         let id = self.gis.next_job;
         self.gis.next_job += 1;
@@ -326,6 +359,9 @@ impl Session {
             auto: trusted,
             done: None,
             reported: false,
+            epoch: self.gis.epoch,
+            georef: self.editor.doc().georef.clone(),
+            cancel,
         });
         let wait = if trusted {
             false
@@ -370,6 +406,7 @@ impl Session {
                 Ok(json!({
                     "imported": result.report.total(),
                     "skipped": result.report.skipped_total(),
+                    "truncated": fetched.truncated,
                     "report": result.report,
                     "georeference": self.editor.doc().georef,
                 }))
@@ -486,6 +523,7 @@ impl Session {
                 let id = job_id(m)?;
                 match self.gis.jobs.iter_mut().find(|e| e.id == id) {
                     Some(e) => {
+                        e.cancel.store(true, Ordering::SeqCst);
                         e.job.cancel();
                         e.done = Some(Err("cancelled".into()));
                         Ok(json!({"cancelled": true}))

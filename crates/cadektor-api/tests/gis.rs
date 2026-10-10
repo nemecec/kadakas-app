@@ -935,3 +935,167 @@ fn massing_in_a_group_and_report_filters() {
         9000.0
     );
 }
+
+#[test]
+fn a_result_is_applied_only_to_the_document_it_was_made_for() {
+    let m = Mock::start(|p| {
+        if p.contains("REQUEST=GetFeature") {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Reply::Ok(
+                "application/json",
+                br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[385000,6672000]}}]}"#.to_vec(),
+            )
+        } else {
+            Reply::Status(404, "-")
+        }
+    });
+    let import = |s: &mut Session| {
+        ok(
+            s,
+            "gis.wfs.import",
+            json!({"url": format!("{}/wfs", m.base), "type_name": "t", "caps": false, "format": "geojson"}),
+        )
+    };
+    // 1. Another document is opened while the call runs.
+    let mut s = session_for(&m);
+    s.gis.blocking = false;
+    set_crs(&mut s);
+    let job = import(&mut s)["job"].as_u64().unwrap();
+    s.replace_document(cadektor_core::model::Document::default());
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    assert_eq!(r["status"], "failed");
+    assert!(
+        r["error"].as_str().unwrap().contains("another document"),
+        "{r}"
+    );
+    assert!(s.editor.doc().objects.is_empty());
+    // 2. The georeference changes while the call runs.
+    set_crs(&mut s);
+    let job = import(&mut s)["job"].as_u64().unwrap();
+    ok(
+        &mut s,
+        "gis.georef.set",
+        json!({"crs": "EPSG:32635", "origin": [500000, 6670000]}),
+    );
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    assert_eq!(r["status"], "failed");
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("georeference changed"),
+        "{r}"
+    );
+    assert!(s.editor.doc().objects.is_empty());
+    // 3. Nothing changed: the result is applied.
+    let job = import(&mut s)["job"].as_u64().unwrap();
+    let r = ok(&mut s, "gis.job.status", json!({"job": job, "wait": 5}));
+    assert_eq!(r["status"], "done", "{r}");
+    assert_eq!(s.editor.doc().objects.len(), 1);
+}
+
+#[test]
+fn cancel_stops_the_worker() {
+    let m = Mock::start(|p| {
+        if p.contains("REQUEST=GetFeature") {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let start: usize = p
+                .split("STARTINDEX=")
+                .nth(1)
+                .and_then(|t| t.split('&').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0);
+            let count: usize = p
+                .split("COUNT=")
+                .nth(1)
+                .and_then(|t| t.split('&').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(1000);
+            let features: Vec<String> = (start..start + count)
+                .map(|i| format!(r#"{{"type":"Feature","properties":{{"i":{i}}},"geometry":{{"type":"Point","coordinates":[385000,6672000]}}}}"#))
+                .collect();
+            Reply::Ok(
+                "application/json",
+                format!(
+                    r#"{{"type":"FeatureCollection","features":[{}]}}"#,
+                    features.join(",")
+                )
+                .into_bytes(),
+            )
+        } else {
+            Reply::Status(404, "-")
+        }
+    });
+    let mut s = session_for(&m);
+    s.gis.blocking = false;
+    set_crs(&mut s);
+    let r = ok(
+        &mut s,
+        "gis.wfs.import",
+        json!({"url": format!("{}/wfs", m.base), "type_name": "t", "caps": false, "format": "geojson", "max_features": 20000}),
+    );
+    let job = r["job"].as_u64().unwrap();
+    while m.hit_count() == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    ok(&mut s, "gis.job.cancel", json!({"job": job}));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let seen = m.hit_count();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(
+        m.hit_count(),
+        seen,
+        "no request after the worker saw the cancel"
+    );
+    assert!(seen < 6, "it would have asked 20 times: {seen}");
+    assert!(s.editor.doc().objects.is_empty());
+}
+
+#[test]
+fn wfs_reports_when_the_limit_cut_the_features() {
+    let m = Mock::start(|p| {
+        if p.contains("REQUEST=GetFeature") {
+            let start: usize = p
+                .split("STARTINDEX=")
+                .nth(1)
+                .and_then(|t| t.split('&').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(0);
+            let count: usize = p
+                .split("COUNT=")
+                .nth(1)
+                .and_then(|t| t.split('&').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(1000);
+            let features: Vec<String> = (start..start + count)
+                .map(|i| format!(r#"{{"type":"Feature","properties":{{"i":{i}}},"geometry":{{"type":"Point","coordinates":[385000,6672000]}}}}"#))
+                .collect();
+            Reply::Ok(
+                "application/json",
+                format!(
+                    r#"{{"type":"FeatureCollection","features":[{}]}}"#,
+                    features.join(",")
+                )
+                .into_bytes(),
+            )
+        } else {
+            Reply::Status(404, "-")
+        }
+    });
+    let mut s = session_for(&m);
+    set_crs(&mut s);
+    let r = ok(
+        &mut s,
+        "gis.wfs.import",
+        json!({"url": format!("{}/wfs", m.base), "type_name": "t", "caps": false, "format": "geojson", "max_features": 2500}),
+    );
+    assert_eq!(r["imported"], 2500);
+    assert_eq!(r["truncated"], true);
+    assert!(
+        r["report"]["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("limit"))
+    );
+}

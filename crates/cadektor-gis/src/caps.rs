@@ -38,6 +38,31 @@ fn numbers(s: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Removes the DOCTYPE (with an internal subset in brackets). Real WMS 1.1.1 documents carry one
+/// that names a DTD on the server. The parser never reads a DTD and never expands entities, so
+/// dropping the declaration is safe: a document that uses an entity then fails to parse.
+pub fn strip_doctype(xml: &str) -> std::borrow::Cow<'_, str> {
+    let Some(start) = xml.find("<!DOCTYPE") else {
+        return xml.into();
+    };
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in xml[start..].char_indices() {
+        match (c, quote) {
+            ('"' | '\'', None) => quote = Some(c),
+            (q, Some(open)) if q == open => quote = None,
+            ('[', None) => depth += 1,
+            (']', None) => depth = depth.saturating_sub(1),
+            ('>', None) if depth == 0 => {
+                let end = start + i + 1;
+                return format!("{}{}", &xml[..start], &xml[end..]).into();
+            }
+            _ => {}
+        }
+    }
+    xml.into()
+}
+
 fn parse_doc(xml: &str) -> Result<Document<'_>> {
     let opts = roxmltree::ParsingOptions {
         allow_dtd: false,
@@ -74,7 +99,8 @@ pub enum ServiceKind {
 
 /// Finds out which service type a capabilities document is for.
 pub fn detect(xml: &str) -> Result<ServiceKind> {
-    let doc = parse_doc(xml)?;
+    let xml = strip_doctype(xml);
+    let doc = parse_doc(&xml)?;
     match doc.root_element().tag_name().name() {
         "WMS_Capabilities" | "WMT_MS_Capabilities" => Ok(ServiceKind::Wms),
         "WFS_Capabilities" => Ok(ServiceKind::Wfs),
@@ -207,7 +233,8 @@ fn read_wms_layers(n: Node<'_, '_>, inherited: &[String], depth: usize, out: &mu
 
 /// Reads a WMS capabilities document.
 pub fn parse_wms(xml: &str) -> Result<WmsCaps> {
-    let doc = parse_doc(xml)?;
+    let xml = strip_doctype(xml);
+    let doc = parse_doc(&xml)?;
     let root = doc.root_element();
     if !matches!(
         root.tag_name().name(),
@@ -299,7 +326,8 @@ fn pair(s: &str) -> Option<(f64, f64)> {
 
 /// Reads a WMTS 1.0.0 capabilities document.
 pub fn parse_wmts(xml: &str) -> Result<WmtsCaps> {
-    let doc = parse_doc(xml)?;
+    let xml = strip_doctype(xml);
+    let doc = parse_doc(&xml)?;
     let root = doc.root_element();
     if root.tag_name().name() != "Capabilities" {
         return Err(GisError::Format(format!(
@@ -448,7 +476,8 @@ impl WfsCaps {
 
 /// Reads a WFS 2.0 (or 1.1) capabilities document.
 pub fn parse_wfs(xml: &str) -> Result<WfsCaps> {
-    let doc = parse_doc(xml)?;
+    let xml = strip_doctype(xml);
+    let doc = parse_doc(&xml)?;
     let root = doc.root_element();
     if root.tag_name().name() != "WFS_Capabilities" {
         return Err(GisError::Format(format!(
@@ -705,6 +734,25 @@ mod tests {
     }
 
     #[test]
+    fn real_wms_111_documents_with_a_doctype_are_read() {
+        let doc = format!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE WMT_MS_Capabilities SYSTEM \"http://schemas.opengis.net/wms/1.1.1/WMS_MS_Capabilities.dtd\" [\n <!ELEMENT VendorSpecificCapabilities EMPTY>\n]>\n{}",
+            WMS_111.split_once("?>").unwrap().1
+        );
+        let c = parse_wms(&doc).unwrap();
+        assert!(c.layer("countries").is_some());
+        assert_eq!(detect(&doc).unwrap(), ServiceKind::Wms);
+        assert_eq!(strip_doctype("<a/>"), "<a/>");
+        // A broken declaration is left alone, and the parser then refuses the document.
+        assert!(parse_wms("<!DOCTYPE a [ <WMS_Capabilities/>").is_err());
+        // Quotes with a bracket or a greater-than sign inside do not end the declaration.
+        assert_eq!(
+            strip_doctype("<!DOCTYPE a [<!ENTITY b \"]>\">]><r/>"),
+            "<r/>"
+        );
+    }
+
+    #[test]
     fn rejects_other_documents_and_reports_server_errors() {
         assert!(parse_wms("not xml").is_err());
         assert!(
@@ -746,7 +794,8 @@ mod tests {
                 .to_string()
                 .contains("Contents")
         );
-        // A DTD is refused (entity expansion attacks).
-        assert!(parse_wms("<!DOCTYPE a [<!ENTITY b \"c\">]><WMS_Capabilities/>").is_err());
+        // A DOCTYPE is dropped, never read; an entity that it defines is not expanded.
+        let with_entity = "<!DOCTYPE a [<!ENTITY b \"c\">]><WMS_Capabilities><Capability><Layer><Title>&b;</Title></Layer></Capability></WMS_Capabilities>";
+        assert!(parse_wms(with_entity).is_err());
     }
 }

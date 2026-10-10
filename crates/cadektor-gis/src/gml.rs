@@ -225,6 +225,7 @@ pub fn read_gml(xml: &str) -> Result<GisData> {
         allow_dtd: false,
         ..Default::default()
     };
+    let xml = crate::caps::strip_doctype(xml);
     let doc = roxmltree::Document::parse_with_options(xml.trim_start_matches('\u{feff}'), opts)
         .map_err(|e| GisError::Format(format!("the answer is not XML: {e}")))?;
     let root = doc.root_element();
@@ -392,6 +393,8 @@ mod tests {
         assert!(!y_first("EPSG:4326"));
         assert!(!y_first("urn:ogc:def:crs:EPSG::3067"));
         assert!(y_first("urn:ogc:def:crs:EPSG::3035"));
+        assert!(y_first("urn:ogc:def:crs:EPSG::3301"));
+        assert!(!y_first("urn:ogc:def:crs:EPSG::2056"));
         assert!(!y_first("urn:ogc:def:crs:nonsense"));
     }
 

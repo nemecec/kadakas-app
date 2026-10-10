@@ -70,8 +70,21 @@ impl WmsSource {
     }
 }
 
-/// The address for GetCapabilities.
+/// The address for GetCapabilities. It asks for version 1.3.0; a server that only knows an older
+/// version answers with that one.
 pub fn capabilities_url(base: &str) -> String {
+    with_query(
+        base,
+        &[
+            ("SERVICE", "WMS".into()),
+            ("VERSION", "1.3.0".into()),
+            ("REQUEST", "GetCapabilities".into()),
+        ],
+    )
+}
+
+/// The same without a version, for servers that refuse a request with one.
+pub fn capabilities_url_unversioned(base: &str) -> String {
     with_query(
         base,
         &[
@@ -81,10 +94,15 @@ pub fn capabilities_url(base: &str) -> String {
     )
 }
 
-/// Fetches and reads the capabilities of a WMS.
+/// Fetches and reads the capabilities of a WMS. If the request with a version fails, the one
+/// without a version is tried, and the first error is reported when both fail.
 pub fn fetch_capabilities(http: &dyn Fetch, base: &str) -> Result<WmsCaps> {
-    let r = http.get(&capabilities_url(base))?;
-    crate::caps::parse_wms(&String::from_utf8_lossy(&r.body))
+    let read = |url: &str| {
+        let r = http.get(url)?;
+        crate::caps::parse_wms(&String::from_utf8_lossy(&r.body))
+    };
+    read(&capabilities_url(base))
+        .or_else(|first| read(&capabilities_url_unversioned(base)).map_err(|_| first))
 }
 
 /// The CRS to request: the one the source names, else the document CRS if every layer has it, else
@@ -345,7 +363,7 @@ mod tests {
         assert!(u.ends_with("EXCEPTIONS=application%2Fvnd.ogc.se_xml"));
         assert_eq!(
             capabilities_url("http://x/wms"),
-            "http://x/wms?SERVICE=WMS&REQUEST=GetCapabilities"
+            "http://x/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities"
         );
         assert!(s.label().contains("ortho, roads (http://example.test/wms)"));
     }
@@ -505,6 +523,23 @@ mod tests {
         let c = fetch_capabilities(&fake, "http://example.test/wms").unwrap();
         assert_eq!(c.layers.len(), 4);
         assert!(fetch_capabilities(&fake, "http://example.test/other").is_err());
+        // A server that refuses the versioned request still works without the version.
+        let mut old = Fake::default();
+        old.answers.insert(
+            capabilities_url_unversioned("http://old.test/wms"),
+            crate::testing::text(WMS_111, "text/xml"),
+        );
+        assert_eq!(
+            fetch_capabilities(&old, "http://old.test/wms")
+                .unwrap()
+                .version,
+            "1.1.1"
+        );
+        // When both fail, the first error is the one that is shown.
+        let e = fetch_capabilities(&old, "http://none.test/wms")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("VERSION=1.3.0") || e.contains("404"), "{e}");
         let s = serde_json::to_string(&WmsSource::new("http://x", &["a"])).unwrap();
         assert!(!s.contains("crs"));
         assert!(

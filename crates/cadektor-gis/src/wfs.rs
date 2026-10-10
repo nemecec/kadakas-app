@@ -21,6 +21,9 @@ use crate::{GisError, Result};
 
 /// Features per request when the source says nothing.
 pub const DEFAULT_COUNT: u32 = 5000;
+/// Features in one page. A larger request is made of several pages (STARTINDEX and COUNT), so a
+/// server with a lower limit of its own still gives all the features up to `max_features`.
+pub const PAGE: u32 = 1000;
 /// Most features per request.
 pub const MAX_COUNT: u32 = 50_000;
 
@@ -113,7 +116,15 @@ pub fn choose_crs(
     }
 }
 
-/// The GetFeature address.
+/// The most features that a request may bring.
+pub fn cap_of(source: &WfsSource) -> u32 {
+    source
+        .max_features
+        .unwrap_or(DEFAULT_COUNT)
+        .clamp(1, MAX_COUNT)
+}
+
+/// The GetFeature address of the first page.
 pub fn getfeature_url(
     base: &str,
     source: &WfsSource,
@@ -121,10 +132,27 @@ pub fn getfeature_url(
     json_format: Option<&str>,
     bbox: Option<&crate::tiles::Bbox>,
 ) -> String {
-    let count = source
-        .max_features
-        .unwrap_or(DEFAULT_COUNT)
-        .clamp(1, MAX_COUNT);
+    page_url(
+        base,
+        source,
+        crs,
+        json_format,
+        bbox,
+        0,
+        cap_of(source).min(PAGE),
+    )
+}
+
+/// The GetFeature address of a page: `count` features from index `start`.
+pub fn page_url(
+    base: &str,
+    source: &WfsSource,
+    crs: &Crs,
+    json_format: Option<&str>,
+    bbox: Option<&crate::tiles::Bbox>,
+    start: u32,
+    count: u32,
+) -> String {
     let mut p: Vec<(&str, String)> = vec![
         ("SERVICE", "WFS".into()),
         ("VERSION", "2.0.0".into()),
@@ -146,6 +174,9 @@ pub fn getfeature_url(
             ),
         ));
     }
+    if start > 0 {
+        p.push(("STARTINDEX", start.to_string()));
+    }
     p.push((
         "OUTPUTFORMAT",
         encode(json_format.unwrap_or("application/gml+xml; version=3.2")),
@@ -156,7 +187,10 @@ pub fn getfeature_url(
 /// What a GetFeature request returned.
 #[derive(Clone, Debug)]
 pub struct Fetched {
-    pub body: Vec<u8>,
+    /// The answers of the pages, in order.
+    pub pages: Vec<Vec<u8>>,
+    /// True when the cap was reached with a full page: the server may have more features.
+    pub truncated: bool,
     pub format: FeatureFormat,
     /// The CRS that was asked for.
     pub crs: String,
@@ -227,34 +261,75 @@ pub fn fetch_features(
         .and_then(|k| k.getfeature_url.clone())
         .filter(|u| crate::http::parse_url(u).is_ok())
         .unwrap_or_else(|| source.url.clone());
-    let url = getfeature_url(&base, source, &crs, json_format, bbox.as_ref());
-    let r = http.get(&url)?;
-    let first = r.body.iter().find(|b| !b.is_ascii_whitespace()).copied();
-    let format = if first == Some(b'{') {
-        FeatureFormat::GeoJson
-    } else {
-        FeatureFormat::Gml
-    };
+    let cap = cap_of(source) as usize;
+    let mut pages: Vec<Vec<u8>> = Vec::new();
+    let (mut got, mut truncated, mut format) = (0usize, false, FeatureFormat::Gml);
+    while got < cap {
+        let want = (cap - got).min(PAGE as usize);
+        let url = page_url(
+            &base,
+            source,
+            &crs,
+            json_format,
+            bbox.as_ref(),
+            got as u32,
+            want as u32,
+        );
+        let body = http.get(&url)?.body;
+        let first = body.iter().find(|b| !b.is_ascii_whitespace()).copied();
+        format = if first == Some(b'{') {
+            FeatureFormat::GeoJson
+        } else {
+            FeatureFormat::Gml
+        };
+        // A server that ignores STARTINDEX sends the same page again: stop there.
+        if pages.last() == Some(&body) {
+            break;
+        }
+        let data = parse_page(&body, format)?;
+        let n = data.features.len() + data.skipped.len();
+        pages.push(body);
+        got += n;
+        if n < want {
+            break;
+        }
+        truncated = got >= cap;
+    }
     Ok(Fetched {
-        body: r.body,
+        pages,
+        truncated,
         format,
         crs: crs.spec,
         type_name: source.type_name.clone(),
     })
 }
 
-/// Reads the answer into features.
-pub fn parse_features(f: &Fetched) -> Result<GisData> {
-    match f.format {
+fn parse_page(body: &[u8], format: FeatureFormat) -> Result<GisData> {
+    match format {
         FeatureFormat::GeoJson => {
-            let text = std::str::from_utf8(&f.body)
+            let text = std::str::from_utf8(body)
                 .map_err(|_| GisError::Format("the answer is not UTF-8 text".into()))?;
             let v: serde_json::Value = serde_json::from_str(text)
                 .map_err(|e| GisError::Format(format!("the answer is not JSON: {e}")))?;
             cadektor_io::geojson::read(&v).map_err(|e| GisError::Format(e.to_string()))
         }
-        FeatureFormat::Gml => crate::gml::read_gml(&String::from_utf8_lossy(&f.body)),
+        FeatureFormat::Gml => crate::gml::read_gml(&String::from_utf8_lossy(body)),
     }
+}
+
+/// Reads the answers of all pages into features.
+pub fn parse_features(f: &Fetched) -> Result<GisData> {
+    let mut all = GisData::default();
+    for page in &f.pages {
+        let d = parse_page(page, f.format)?;
+        all.features.extend(d.features);
+        all.skipped.extend(d.skipped);
+        all.notes.extend(d.notes);
+        if all.file_crs.is_none() {
+            all.file_crs = d.file_crs;
+        }
+    }
+    Ok(all)
 }
 
 /// Turns the answer into an import (one batch of commands and a report).
@@ -266,8 +341,24 @@ pub fn import(fetched: &Fetched, ctx: &Context, opts: &ImportOptions) -> Result<
         .next()
         .unwrap_or(&fetched.type_name)
         .to_string();
-    cadektor_io::gis::build("wfs", &name, data, ctx, opts, Some(&fetched.crs))
-        .map_err(|e| GisError::Format(e.to_string()))
+    let mut result = cadektor_io::gis::build("wfs", &name, data, ctx, opts, Some(&fetched.crs))
+        .map_err(|e| GisError::Format(e.to_string()))?;
+    if fetched.truncated {
+        result.report.note(&format!(
+            "the import stopped at the limit of {} features. The server may have more: raise max_features or use a smaller box",
+            count_of(fetched)
+        ));
+    }
+    Ok(result)
+}
+
+/// The number of features in the pages (for messages).
+fn count_of(f: &Fetched) -> usize {
+    f.pages
+        .iter()
+        .filter_map(|p| parse_page(p, f.format).ok())
+        .map(|d| d.features.len() + d.skipped.len())
+        .sum()
 }
 
 #[cfg(test)]
@@ -308,14 +399,20 @@ mod tests {
         );
         let u = getfeature_url("http://x/wfs", &WfsSource::new("x", "t"), &crs, None, None);
         assert!(
-            u.contains("COUNT=5000")
+            u.contains("COUNT=1000")
                 && u.ends_with("OUTPUTFORMAT=application%2Fgml%2Bxml%3B%20version%3D3.2")
         );
         let big = WfsSource {
             max_features: Some(10_000_000),
             ..WfsSource::new("x", "t")
         };
-        assert!(getfeature_url("http://x", &big, &crs, None, None).contains("COUNT=50000"));
+        assert!(getfeature_url("http://x", &big, &crs, None, None).contains("COUNT=1000"));
+        assert_eq!(cap_of(&big), 50_000);
+        let page = page_url("http://x", &big, &crs, None, None, 2000, 500);
+        assert!(
+            page.contains("COUNT=500&STARTINDEX=2000&OUTPUTFORMAT="),
+            "{page}"
+        );
         assert!(capabilities_url("http://x/wfs").contains("REQUEST=GetCapabilities&VERSION=2.0.0"));
     }
 
@@ -479,14 +576,16 @@ mod tests {
         );
         // Junk answers.
         let junk = Fetched {
-            body: b"{broken".to_vec(),
+            pages: vec![b"{broken".to_vec()],
+            truncated: false,
             format: FeatureFormat::GeoJson,
             crs: "EPSG:4326".into(),
             type_name: "t".into(),
         };
         assert!(parse_features(&junk).is_err());
         let bin = Fetched {
-            body: vec![0xff, 0xfe],
+            pages: vec![vec![0xff, 0xfe]],
+            truncated: false,
             format: FeatureFormat::GeoJson,
             crs: "EPSG:4326".into(),
             type_name: "t".into(),
@@ -527,5 +626,86 @@ mod tests {
             text(GEOJSON, "application/json"),
         );
         assert!(fetch_features(&fake, &s, Some(&c), Some((&crs, &g))).is_ok());
+    }
+
+    /// A page of `n` point features.
+    fn points(n: usize, offset: usize) -> String {
+        let features: Vec<String> = (offset..offset + n)
+            .map(|i| format!(r#"{{"type":"Feature","properties":{{"i":{i}}},"geometry":{{"type":"Point","coordinates":[385000,6672000]}}}}"#))
+            .collect();
+        format!(
+            r#"{{"type":"FeatureCollection","features":[{}]}}"#,
+            features.join(",")
+        )
+    }
+
+    #[test]
+    fn big_requests_come_in_pages_up_to_the_cap() {
+        let crs = Crs::parse("EPSG:3067").unwrap();
+        let mut s = WfsSource::new("http://f.test/wfs", "ns:b");
+        s.crs = Some("EPSG:3067".into());
+        s.format = Some("geojson".into());
+        let url = |s: &WfsSource, start, count| {
+            page_url(
+                "http://f.test/wfs",
+                s,
+                &crs,
+                Some("application/json"),
+                None,
+                start,
+                count,
+            )
+        };
+        // 2500 asked, the server has plenty: three pages, and the cap is reached.
+        s.max_features = Some(2500);
+        let mut fake = Fake::default();
+        for (start, count) in [(0, 1000), (1000, 1000), (2000, 500)] {
+            fake.answers.insert(
+                url(&s, start, count),
+                text(&points(count as usize, start as usize), "application/json"),
+            );
+        }
+        let f = fetch_features(&fake, &s, None, None).unwrap();
+        assert_eq!(f.pages.len(), 3);
+        assert!(f.truncated, "the cap was reached with a full page");
+        assert_eq!(parse_features(&f).unwrap().features.len(), 2500);
+        let doc = Document::default();
+        let r = import(&f, &Context::of(&doc), &ImportOptions::default()).unwrap();
+        assert!(
+            r.report
+                .notes
+                .iter()
+                .any(|n| n.contains("stopped at the limit of 2500"))
+        );
+        // The server has 1200: a short second page ends it without a warning.
+        let mut fake = Fake::default();
+        fake.answers
+            .insert(url(&s, 0, 1000), text(&points(1000, 0), "application/json"));
+        fake.answers.insert(
+            url(&s, 1000, 1000),
+            text(&points(200, 1000), "application/json"),
+        );
+        let f = fetch_features(&fake, &s, None, None).unwrap();
+        assert_eq!((f.pages.len(), f.truncated), (2, false));
+        assert_eq!(parse_features(&f).unwrap().features.len(), 1200);
+        // A server that ignores STARTINDEX repeats the first page: the repeat is dropped.
+        let mut fake = Fake::default();
+        let first = text(&points(1000, 0), "application/json");
+        fake.answers.insert(url(&s, 0, 1000), first.clone());
+        fake.answers.insert(url(&s, 1000, 1000), first);
+        let f = fetch_features(&fake, &s, None, None).unwrap();
+        assert_eq!(f.pages.len(), 1);
+        assert_eq!(parse_features(&f).unwrap().features.len(), 1000);
+        // A small request is one page.
+        s.max_features = Some(10);
+        let mut fake = Fake::default();
+        fake.answers
+            .insert(url(&s, 0, 10), text(&points(10, 0), "application/json"));
+        let f = fetch_features(&fake, &s, None, None).unwrap();
+        assert_eq!(
+            (f.pages.len(), f.truncated),
+            (1, true),
+            "exactly the cap: there may be more"
+        );
     }
 }

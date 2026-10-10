@@ -516,6 +516,8 @@ impl Session {
             self.paths = paths;
             self.doc_dir = doc_dir;
             self.gis = gis;
+            // Jobs that were started for the old document must not change this one.
+            self.gis.epoch += 1;
         }
     }
 

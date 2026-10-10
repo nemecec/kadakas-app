@@ -7,9 +7,9 @@ use cadektor_core::underlay::{MAX_SIDE_PX, PngData, Underlay};
 use cadektor_io::crs::Crs;
 use serde::Serialize;
 
-use crate::cache::{TileCache, fetch_cached};
+use crate::cache::TileCache;
 use crate::http::Fetch;
-use crate::raster::{Affine, GeoRaster, Rgba, blank, blit, decode_image};
+use crate::raster::{Affine, GeoRaster, Rgba, blank, blit, decode_sized};
 use crate::tiles::Bbox;
 use crate::warp::{Frame, fit_size, warp};
 use crate::{GisError, Result};
@@ -146,7 +146,17 @@ fn fetch_one(
     cache: Option<&TileCache>,
     plan: &TilePlan,
 ) -> Result<(Rgba, bool, usize)> {
-    let (resp, hit) = fetch_cached(cache, http, &plan.url)?;
+    let size = (plan.width, plan.height);
+    // A tile from the disk is used only if it is a good picture of the right size.
+    if let Some(c) = cache
+        && let Some(bytes) = c.get(&plan.url)
+    {
+        match decode_sized(&bytes, size) {
+            Ok(img) => return Ok((img, true, bytes.len())),
+            Err(_) => c.remove(&plan.url),
+        }
+    }
+    let resp = http.get(&plan.url)?;
     // A WMS sends an error as XML, often with status 200.
     if resp.content_type.contains("xml") || resp.body.first() == Some(&b'<') {
         let text = String::from_utf8_lossy(&resp.body);
@@ -155,14 +165,12 @@ fn fetch_one(
             Ok(_) => GisError::Format("the server sent XML instead of a picture".into()),
         });
     }
-    let img = decode_image(&resp.body)?;
-    if (img.width, img.height) != (plan.width, plan.height) {
-        return Err(GisError::Format(format!(
-            "the server sent a picture of {} by {} pixels, not {} by {}",
-            img.width, img.height, plan.width, plan.height
-        )));
+    let img = decode_sized(&resp.body, size)?;
+    // Only a good picture is kept.
+    if let Some(c) = cache {
+        c.put(&plan.url, &resp.body);
     }
-    Ok((img, hit, resp.body.len()))
+    Ok((img, false, resp.body.len()))
 }
 
 /// Puts tiles of one pixel size together into one picture in their CRS.
@@ -293,6 +301,34 @@ mod tests {
         assert_eq!(f.log.lock().unwrap().len(), 8);
         let (imgs, _, _) = fetch_tiles(&f, None, &[]).unwrap();
         assert!(imgs.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn error_answers_are_never_cached_and_bad_cached_tiles_are_fetched_again() {
+        let dir = std::env::temp_dir().join(format!("cadektor-mosaic-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = TileCache::new(&dir, 1 << 20);
+        let mut f = Fake::default();
+        f.answers.insert(
+            "err".into(),
+            Response {
+                status: 200,
+                content_type: "text/xml".into(),
+                body: br#"<ServiceExceptionReport><ServiceException>Busy</ServiceException></ServiceExceptionReport>"#.to_vec(),
+            },
+        );
+        f.answers.insert("small".into(), png(2, 2, [1, 2, 3, 255]));
+        assert!(fetch_tiles(&f, Some(&cache), &[plan(0, "err")]).is_err());
+        assert!(fetch_tiles(&f, Some(&cache), &[plan(0, "small")]).is_err());
+        assert_eq!(cache.stats().0, 0, "nothing bad was kept");
+        f.answers.insert("good".into(), png(4, 4, [9, 9, 9, 255]));
+        cache.put("good", b"damaged");
+        let (imgs, cached, _) = fetch_tiles(&f, Some(&cache), &[plan(0, "good")]).unwrap();
+        assert_eq!((imgs.len(), cached), (1, 0));
+        assert_eq!(cache.stats().0, 1);
+        let (_, cached, _) = fetch_tiles(&f, Some(&cache), &[plan(0, "good")]).unwrap();
+        assert_eq!(cached, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -149,6 +149,27 @@ impl Massing {
         None
     }
 
+    /// The roof that is built. A gable or hip roof is built over the bounding rectangle of the
+    /// footprint, which is right for a convex footprint only. An L-shaped or other non-convex
+    /// footprint gets a flat roof (see [`Massing::roof_warning`]).
+    pub fn effective_roof(&self) -> RoofStyle {
+        if self.roof != RoofStyle::Flat && !is_convex(&self.ring()) {
+            RoofStyle::Flat
+        } else {
+            self.roof
+        }
+    }
+
+    /// A message for the user when the roof that is built is not the roof that was asked for.
+    pub fn roof_warning(&self) -> Option<String> {
+        (self.effective_roof() != self.roof).then(|| {
+            format!(
+                "the footprint is not convex, so the {} roof is built flat. Split the building into convex parts for a pitched roof",
+                self.roof.name()
+            )
+        })
+    }
+
     /// Eave height in mm.
     pub fn eave_height(&self) -> f64 {
         match self.floors {
@@ -203,7 +224,7 @@ impl Massing {
 
     /// Height of the roof above the eave at `p` (0 for a flat roof).
     pub fn roof_at(&self, p: DVec2, frame: &(DVec2, DVec2, f64, f64)) -> f64 {
-        if self.roof == RoofStyle::Flat || self.pitch_deg <= 0.0 {
+        if self.effective_roof() == RoofStyle::Flat || self.pitch_deg <= 0.0 {
             return 0.0;
         }
         let (c, u, a, b) = *frame;
@@ -219,7 +240,7 @@ impl Massing {
 
     /// Height of the ridge above the eave in mm.
     pub fn roof_rise(&self) -> f64 {
-        if self.roof == RoofStyle::Flat {
+        if self.effective_roof() == RoofStyle::Flat {
             return 0.0;
         }
         let ring = self.ring();
@@ -248,7 +269,7 @@ impl Massing {
             .into_iter()
             .map(|[a, b, c]| [ring[a], ring[b], ring[c]])
             .collect();
-        if self.roof != RoofStyle::Flat && self.pitch_deg > 0.0 {
+        if self.effective_roof() != RoofStyle::Flat && self.pitch_deg > 0.0 {
             for line in crease_lines(self.roof, &frame) {
                 tris = tris.into_iter().flat_map(|t| split(t, line)).collect();
             }
@@ -321,7 +342,7 @@ const ROOF_TINT: f64 = 0.72;
 
 /// The ridge and hip lines of the roof, cut at the footprint, for the 2D drawing.
 pub fn roof_lines(m: &Massing) -> Vec<(DVec2, DVec2)> {
-    if m.roof == RoofStyle::Flat || m.pitch_deg <= 0.0 {
+    if m.effective_roof() == RoofStyle::Flat || m.pitch_deg <= 0.0 {
         return Vec::new();
     }
     let ring = m.ring();
@@ -510,6 +531,20 @@ impl Solid {
                 .iter()
                 .all(|(&(a, b), &n)| n == 1 && edges.get(&(b, a)) == Some(&1))
     }
+}
+
+/// True if the counterclockwise ring turns left at every corner (a small tolerance lets the
+/// flat segments of a curve count as convex).
+fn is_convex(ring: &[DVec2]) -> bool {
+    let n = ring.len();
+    let scale = ring
+        .iter()
+        .fold(0.0f64, |m, p| m.max(p.abs().max_element()))
+        .max(1.0);
+    (0..n).all(|i| {
+        let (a, b, c) = (ring[i], ring[(i + 1) % n], ring[(i + 2) % n]);
+        (b - a).perp_dot(c - b) >= -1e-9 * scale * scale
+    })
 }
 
 fn key(p: DVec2) -> (i64, i64) {
@@ -705,8 +740,17 @@ mod tests {
             m.pitch_deg = 20.0;
             let s = m.solid(0.0, true);
             assert!(s.is_closed(), "{roof:?}");
-            assert!(s.volume() > m.footprint_area() * 3000.0);
+            // A non-convex footprint gets a flat roof: the volume is the exact prism.
+            assert!((s.volume() - m.footprint_area() * 3000.0).abs() < 1.0);
+            assert_eq!(m.effective_roof(), RoofStyle::Flat);
+            assert!(m.roof_warning().unwrap().contains("not convex"));
+            assert_eq!(m.roof_rise(), 0.0);
+            assert!(roof_lines(&m).is_empty());
+            assert_eq!(m.quantities().ridge_height, 3000.0);
         }
+        let mut convex = Massing::new(l[..3].to_vec(), 3000.0);
+        convex.roof = RoofStyle::Hip;
+        assert!(convex.roof_warning().is_none());
     }
 
     #[test]
