@@ -42,7 +42,10 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
             Shape::Hardscape { .. } => tinted([175, 150, 115, 130]),
             Shape::Plant { .. } => tinted([70, 150, 70, 70]),
             Shape::ExistingTree { .. } => tinted([110, 130, 110, 50]),
-            Shape::SiteModifier { modifier: cadektor_core::model::ModifierKind::Pad { .. }, .. } => tinted([200, 170, 120, 70]),
+            Shape::SiteModifier {
+                modifier: cadektor_core::model::ModifierKind::Pad { .. },
+                ..
+            } => tinted([200, 170, 120, 70]),
             _ => fill,
         };
     }
@@ -67,7 +70,9 @@ fn fill_polygon(painter: &Painter, model: &[DVec2], screen: &[Pos2], color: Colo
 fn arc_points(center: DVec2, r: f64, start: f64, end: f64) -> Vec<DVec2> {
     let sweep = arc_sweep(start, end);
     let n = ((sweep / std::f64::consts::TAU * 96.0).ceil() as usize).max(4);
-    (0..=n).map(|i| center + DVec2::from_angle(start + sweep * i as f64 / n as f64) * r).collect()
+    (0..=n)
+        .map(|i| center + DVec2::from_angle(start + sweep * i as f64 / n as f64) * r)
+        .collect()
 }
 
 /// Chord tolerance for drawing curves: a quarter of a screen pixel, in model units.
@@ -80,7 +85,12 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
     let s = |p: DVec2| view.to_screen(p + offset);
     let stroke = Stroke::new(st.width, st.pen);
     let path = |pts: &[DVec2], closed: bool| {
-        painter.add(PathShape { points: pts.iter().map(|p| s(*p)).collect(), closed, fill: Color32::TRANSPARENT, stroke: PathStroke::new(st.width, st.pen) });
+        painter.add(PathShape {
+            points: pts.iter().map(|p| s(*p)).collect(),
+            closed,
+            fill: Color32::TRANSPARENT,
+            stroke: PathStroke::new(st.width, st.pen),
+        });
     };
     match shape {
         Shape::Line { a, b } => {
@@ -94,7 +104,12 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         Shape::Circle { center, radius } => {
             painter.circle(s(*center), (*radius * view.zoom) as f32, st.fill, stroke);
         }
-        Shape::Arc { center, radius, start, end } => path(&arc_points(*center, *radius, *start, *end), false),
+        Shape::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => path(&arc_points(*center, *radius, *start, *end), false),
         Shape::Polyline { points, closed } => {
             let flat = curve::flatten(points, *closed, curve_tolerance(view.zoom));
             if *closed {
@@ -119,7 +134,13 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         Shape::Text { at, text, height } => {
             let size = (*height * view.zoom) as f32;
             if size >= 3.0 {
-                painter.text(s(*at), egui::Align2::LEFT_BOTTOM, text, egui::FontId::proportional(size.min(400.0)), st.pen);
+                painter.text(
+                    s(*at),
+                    egui::Align2::LEFT_BOTTOM,
+                    text,
+                    egui::FontId::proportional(size.min(400.0)),
+                    st.pen,
+                );
             } else {
                 painter.circle_filled(s(*at), 1.5, st.pen);
             }
@@ -136,23 +157,157 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             let outline = cadektor_core::svg::site_outline(shape);
             path(&outline, true);
         }
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => {
+        Shape::LandscapeArea { boundary, .. }
+        | Shape::Hardscape { boundary, .. }
+        | Shape::SiteModifier { boundary, .. } => {
             let flat = curve::flatten(boundary, true, curve_tolerance(view.zoom));
             let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
             fill_polygon(painter, &flat, &sp, st.fill);
             path(&flat, true);
         }
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
-        Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+        Shape::PlantTag {
+            at, anchor, height, ..
+        } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
-        Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+        Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Symbol { .. } => {}
     }
 }
 
 /// Draws an object. Plants and tags need the document: a plant draws the outline and colors
 /// of its style, and a tag shows the live ID code and count.
-pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2) {
+pub fn draw_object(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    counts: &TagCounts,
+    o: &Object,
+    st: Style,
+    offset: DVec2,
+) {
+    draw_object_deep(painter, view, doc, counts, o, st, offset, 0);
+}
+
+type DecorCache = (
+    u64,
+    std::collections::HashMap<(ObjectId, u64), std::rc::Rc<Option<cadektor_core::pattern::Decor>>>,
+);
+
+thread_local! {
+    static DECOR: std::cell::RefCell<DecorCache> = std::cell::RefCell::new((0, Default::default()));
+}
+
+/// The pattern geometry of an object. It is kept for one revision of the document, so a hatch is not
+/// computed again for every frame. Parts of a symbol (depth > 0) share an object ID and are not kept.
+fn decor_cached(
+    doc: &Document,
+    o: &Object,
+    attrs: &cadektor_core::model::Attributes,
+    scale: f64,
+    depth: usize,
+) -> std::rc::Rc<Option<cadektor_core::pattern::Decor>> {
+    let revision = if depth == 0 {
+        crate::area_ui::current_revision()
+    } else {
+        None
+    };
+    let Some(rev) = revision else {
+        return std::rc::Rc::new(cadektor_core::pattern::decorate(doc, o, attrs, scale));
+    };
+    DECOR.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.0 != rev {
+            *c = (rev, Default::default());
+        }
+        let key = (o.id, scale.to_bits());
+        c.1.entry(key)
+            .or_insert_with(|| {
+                std::rc::Rc::new(cadektor_core::pattern::decorate(doc, o, attrs, scale))
+            })
+            .clone()
+    })
+}
+
+/// Like `draw_object`, for a symbol also through the shapes of its definition. `depth` stops loops.
+#[allow(clippy::too_many_arguments)]
+fn draw_object_deep(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    counts: &TagCounts,
+    o: &Object,
+    st: Style,
+    offset: DVec2,
+    depth: usize,
+) {
+    if depth > cadektor_core::symbols::MAX_DEPTH + 2 {
+        return;
+    }
+    let attrs = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
+    let decor_rc = decor_cached(doc, o, &attrs, scale, depth);
+    let decor = (*decor_rc).as_ref();
+    // A line type draws the outline in dashes, so the plain outline is left out.
+    let outline_st = if decor.is_some_and(|d| d.replaces_outline) {
+        Style { width: 0.0, ..st }
+    } else {
+        st
+    };
+    draw_shape_or_object(painter, view, doc, counts, o, outline_st, offset, depth);
+    if let Some(d) = decor {
+        let s = |p: DVec2| view.to_screen(p + offset);
+        for seg in &d.fill {
+            let pen = seg.color.map_or(st.pen, color32);
+            let w = seg.weight.map_or(st.width, |w| {
+                (w * scale * view.zoom).clamp(1.0, 24.0) as f32
+            });
+            painter.line_segment(
+                [s(seg.a), s(seg.b)],
+                Stroke::new(w.min(st.width.max(1.0)), pen),
+            );
+        }
+        for stroke in &d.strokes {
+            painter.add(PathShape {
+                points: stroke.iter().map(|p| s(*p)).collect(),
+                closed: false,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(st.width, st.pen),
+            });
+        }
+        for m in &d.marks {
+            let inst = cadektor_core::symbols::mark_object(
+                o,
+                attrs.pen,
+                attrs.line_weight,
+                m.symbol,
+                m.at,
+                m.angle,
+                m.scale,
+            );
+            draw_object_deep(painter, view, doc, counts, &inst, st, offset, depth + 1);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_shape_or_object(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    counts: &TagCounts,
+    o: &Object,
+    st: Style,
+    offset: DVec2,
+    depth: usize,
+) {
     match &o.shape {
+        Shape::Symbol { .. } => {
+            for v in cadektor_core::symbols::instance_objects(doc, o) {
+                let vst = object_style(doc, &v, view.zoom);
+                draw_object_deep(painter, view, doc, counts, &v, vst, offset, depth + 1);
+            }
+        }
+        Shape::Group { .. } => {}
         Shape::Plant { at, spread, .. } => {
             let look = cadektor_core::plants::link::look(doc, o);
             // The colors of the style apply when the object has none of its own.
@@ -171,10 +326,40 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
             {
                 st.pen = color32(c);
             }
-            plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
+            let parts = look
+                .symbol
+                .map(|sym| {
+                    cadektor_core::symbols::plant_symbol_objects(
+                        doc,
+                        o,
+                        sym,
+                        *at,
+                        *spread,
+                        look.rotation,
+                    )
+                })
+                .unwrap_or_default();
+            if parts.is_empty() {
+                plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
+            } else {
+                for v in &parts {
+                    let vst = Style {
+                        pen: if o.attrs.pen.is_none() && v.attrs.pen.is_none() {
+                            st.pen
+                        } else {
+                            object_style(doc, v, view.zoom).pen
+                        },
+                        ..object_style(doc, v, view.zoom)
+                    };
+                    draw_object(painter, view, doc, counts, v, vst, offset);
+                }
+            }
         }
-        Shape::PlantTag { at, anchor, height, .. } => {
-            let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
+        Shape::PlantTag {
+            at, anchor, height, ..
+        } => {
+            let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts)
+                .map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
         }
         Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
@@ -190,10 +375,19 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
 fn draw_vertex_markers(painter: &Painter, view: &View, vertices: &[Vertex]) {
     for v in vertices.iter().take(1000) {
         let r = Rect::from_center_size(view.to_screen(v.p), egui::vec2(6.0, 6.0));
-        if matches!(v.kind, cadektor_core::model::VertexKind::Corner | cadektor_core::model::VertexKind::PointOnArc) {
+        if matches!(
+            v.kind,
+            cadektor_core::model::VertexKind::Corner | cadektor_core::model::VertexKind::PointOnArc
+        ) {
             painter.rect_filled(r, 0.0, SELECT_COLOR);
         } else {
-            painter.rect(r, 0.0, Color32::WHITE, Stroke::new(1.0, SELECT_COLOR), egui::StrokeKind::Middle);
+            painter.rect(
+                r,
+                0.0,
+                Color32::WHITE,
+                Stroke::new(1.0, SELECT_COLOR),
+                egui::StrokeKind::Middle,
+            );
         }
     }
 }
@@ -219,8 +413,16 @@ fn draw_grid(painter: &Painter, view: &View, rect: Rect) {
     }
     // Origin axes.
     let o = view.to_screen(DVec2::ZERO);
-    painter.vline(o.x, rect.y_range(), Stroke::new(1.0, Color32::from_rgb(220, 120, 120)));
-    painter.hline(rect.x_range(), o.y, Stroke::new(1.0, Color32::from_rgb(120, 170, 120)));
+    painter.vline(
+        o.x,
+        rect.y_range(),
+        Stroke::new(1.0, Color32::from_rgb(220, 120, 120)),
+    );
+    painter.hline(
+        rect.x_range(),
+        o.y,
+        Stroke::new(1.0, Color32::from_rgb(120, 170, 120)),
+    );
 }
 
 pub struct Frame<'a> {
@@ -240,9 +442,19 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     if let Some((sheets, page)) = f.sheet {
         painter.rect_filled(rect, 0.0, Color32::from_gray(205));
         sheets.paint(&painter, view, page);
-        for o in f.doc.objects.values().filter(|o| f.selection.contains(&o.id)) {
-            let (lo, hi) = o.shape.bounds();
-            painter.rect_stroke(Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(2.0), 0.0, Stroke::new(1.5, SELECT_COLOR), egui::StrokeKind::Middle);
+        for o in f
+            .doc
+            .objects
+            .values()
+            .filter(|o| f.selection.contains(&o.id))
+        {
+            let (lo, hi) = f.doc.object_bounds(o);
+            painter.rect_stroke(
+                Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(2.0),
+                0.0,
+                Stroke::new(1.5, SELECT_COLOR),
+                egui::StrokeKind::Middle,
+            );
         }
         draw_preview(&painter, view, f);
         return;
@@ -256,9 +468,23 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
         let st = object_style(f.doc, o, view.zoom);
-        let selected = f.selection.contains(&o.id);
+        let direct = f.selection.contains(&o.id);
+        let via_group = !direct
+            && o.parent.is_some()
+            && f.doc
+                .ancestors(o.id)
+                .iter()
+                .any(|g| f.selection.contains(g));
+        let selected = direct || via_group;
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
-        let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
+        let st = if locked {
+            Style {
+                pen: st.pen.gamma_multiply(0.6),
+                ..st
+            }
+        } else {
+            st
+        };
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
         if let Some(t) = cadektor_core::worksheet_table::data(o) {
             crate::data_ui::draw_table(&painter, view, f.doc, o, &t, st.pen, f.site);
@@ -267,18 +493,30 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
             crate::site_ui::draw_contours(&painter, view, f.doc, o, cache, revision, st.width);
         }
         if selected {
-            let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
-            draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
+            let hl = Style {
+                pen: SELECT_COLOR,
+                fill: Color32::TRANSPARENT,
+                width: st.width + 1.5,
+            };
+            if let Shape::Symbol { .. } = o.shape {
+                for v in cadektor_core::symbols::instance_objects(f.doc, o) {
+                    draw_shape(&painter, view, &v.shape, hl, DVec2::ZERO);
+                }
+            } else {
+                draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
+            }
             if let Some(vs) = o.shape.vertices() {
                 draw_vertex_markers(&painter, view, vs);
             }
-            let (lo, hi) = o.shape.bounds();
-            painter.rect_stroke(
-                Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(3.0),
-                0.0,
-                Stroke::new(1.0, SELECT_COLOR.gamma_multiply(0.6)),
-                egui::StrokeKind::Middle,
-            );
+            let (lo, hi) = f.doc.object_bounds(o);
+            if direct && lo.is_finite() && hi.is_finite() {
+                painter.rect_stroke(
+                    Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(3.0),
+                    0.0,
+                    Stroke::new(1.0, SELECT_COLOR.gamma_multiply(0.6)),
+                    egui::StrokeKind::Middle,
+                );
+            }
         }
     }
     draw_preview(&painter, view, f);
@@ -291,7 +529,12 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
                 painter.line_segment([c - egui::vec2(0.0, 4.0), c + egui::vec2(0.0, 4.0)], stroke);
             }
             crate::snap::SnapKind::Vertex => {
-                painter.rect_stroke(Rect::from_center_size(c, egui::vec2(9.0, 9.0)), 0.0, stroke, egui::StrokeKind::Middle);
+                painter.rect_stroke(
+                    Rect::from_center_size(c, egui::vec2(9.0, 9.0)),
+                    0.0,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
             }
             crate::snap::SnapKind::Center => {
                 painter.circle_stroke(c, 5.0, stroke);
@@ -301,7 +544,11 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
 }
 
 fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
-    let st = Style { pen: PREVIEW_COLOR, fill: PREVIEW_COLOR.gamma_multiply(0.12), width: 1.5 };
+    let st = Style {
+        pen: PREVIEW_COLOR,
+        fill: PREVIEW_COLOR.gamma_multiply(0.12),
+        width: 1.5,
+    };
     match f.preview {
         Preview::None => {}
         Preview::Shape(shape) => draw_shape(painter, view, shape, st, DVec2::ZERO),
@@ -311,12 +558,27 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
             if *closed && points.len() >= 3 {
                 fill_polygon(painter, &points, &sp, st.fill);
             }
-            painter.add(PathShape { points: sp, closed: *closed, fill: Color32::TRANSPARENT, stroke: PathStroke::new(1.5, PREVIEW_COLOR) });
+            painter.add(PathShape {
+                points: sp,
+                closed: *closed,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(1.5, PREVIEW_COLOR),
+            });
         }
         Preview::Box { min, max, crossing } => {
             let r = Rect::from_two_pos(view.to_screen(*min), view.to_screen(*max));
-            let c = if *crossing { Color32::from_rgb(40, 160, 70) } else { SELECT_COLOR };
-            painter.rect(r, 0.0, c.gamma_multiply(0.1), Stroke::new(1.0, c), egui::StrokeKind::Middle);
+            let c = if *crossing {
+                Color32::from_rgb(40, 160, 70)
+            } else {
+                SELECT_COLOR
+            };
+            painter.rect(
+                r,
+                0.0,
+                c.gamma_multiply(0.1),
+                Stroke::new(1.0, c),
+                egui::StrokeKind::Middle,
+            );
         }
         Preview::Move { ids, delta } => {
             let counts = tag_counts(f.doc);
@@ -337,7 +599,9 @@ mod tests {
         let full = arc_points(DVec2::ZERO, 10.0, 0.5, 0.5 + TAU);
         assert!(full.len() > 50, "a full circle is not a dot");
         let three_pi = arc_points(DVec2::ZERO, 10.0, 0.0, 3.0 * PI);
-        assert!(three_pi.len() > 50 && three_pi.last().unwrap().distance(DVec2::new(10.0, 0.0)) < 1e-9);
+        assert!(
+            three_pi.len() > 50 && three_pi.last().unwrap().distance(DVec2::new(10.0, 0.0)) < 1e-9
+        );
     }
 
     #[test]
@@ -349,7 +613,10 @@ mod tests {
 
     #[test]
     fn color_conversion() {
-        assert_eq!(color32(Color([255, 0, 0, 255])), Color32::from_rgb(255, 0, 0));
+        assert_eq!(
+            color32(Color([255, 0, 0, 255])),
+            Color32::from_rgb(255, 0, 0)
+        );
         assert_eq!(color32(Color::NONE).a(), 0);
     }
 }

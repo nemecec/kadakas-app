@@ -154,9 +154,16 @@ impl ImportOptions {
         if v.is_null() {
             return Ok(ImportOptions::default());
         }
-        let o: ImportOptions = serde_json::from_value(v.clone()).map_err(|e| crate::IoError::Option(format!("bad import options: {e}")))?;
-        if !(o.tolerance.is_finite() && o.tolerance > 0.0 && o.default_text_height.is_finite() && o.default_text_height > 0.0) {
-            return Err(crate::IoError::Option("tolerance and default_text_height must be positive numbers".into()));
+        let o: ImportOptions = serde_json::from_value(v.clone())
+            .map_err(|e| crate::IoError::Option(format!("bad import options: {e}")))?;
+        if !(o.tolerance.is_finite()
+            && o.tolerance > 0.0
+            && o.default_text_height.is_finite()
+            && o.default_text_height > 0.0)
+        {
+            return Err(crate::IoError::Option(
+                "tolerance and default_text_height must be positive numbers".into(),
+            ));
         }
         Ok(o)
     }
@@ -191,7 +198,13 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { origin: ExportOrigin::File, layer_mode: LayerMode::Classes, unit: Unit::Mm, visible_only: false, tolerance: 1.0 }
+        ExportOptions {
+            origin: ExportOrigin::File,
+            layer_mode: LayerMode::Classes,
+            unit: Unit::Mm,
+            visible_only: false,
+            tolerance: 1.0,
+        }
     }
 }
 
@@ -200,9 +213,12 @@ impl ExportOptions {
         if v.is_null() {
             return Ok(ExportOptions::default());
         }
-        let o: ExportOptions = serde_json::from_value(v.clone()).map_err(|e| crate::IoError::Option(format!("bad export options: {e}")))?;
+        let o: ExportOptions = serde_json::from_value(v.clone())
+            .map_err(|e| crate::IoError::Option(format!("bad export options: {e}")))?;
         if !(o.tolerance.is_finite() && o.tolerance > 0.0) {
-            return Err(crate::IoError::Option("tolerance must be a positive number".into()));
+            return Err(crate::IoError::Option(
+                "tolerance must be a positive number".into(),
+            ));
         }
         Ok(o)
     }
@@ -215,15 +231,24 @@ mod tests {
 
     #[test]
     fn defaults_and_json() {
-        assert_eq!(ImportOptions::from_json(&json!(null)).unwrap(), ImportOptions::default());
-        let o = ImportOptions::from_json(&json!({"layer_mode": "layers", "unit": "foot", "points": "with_z"})).unwrap();
+        assert_eq!(
+            ImportOptions::from_json(&json!(null)).unwrap(),
+            ImportOptions::default()
+        );
+        let o = ImportOptions::from_json(
+            &json!({"layer_mode": "layers", "unit": "foot", "points": "with_z"}),
+        )
+        .unwrap();
         assert_eq!(o.layer_mode, LayerMode::Layers);
         assert_eq!(o.unit, Some(Unit::Foot));
         assert_eq!(o.points, PointMode::WithZ);
         assert!(o.explode_blocks);
         assert!(ImportOptions::from_json(&json!({"unit": "parsec"})).is_err());
         assert!(ImportOptions::from_json(&json!({"tolerance": 0})).is_err());
-        assert_eq!(ExportOptions::from_json(&json!(null)).unwrap(), ExportOptions::default());
+        assert_eq!(
+            ExportOptions::from_json(&json!(null)).unwrap(),
+            ExportOptions::default()
+        );
         let e = ExportOptions::from_json(&json!({"unit": "m", "visible_only": true})).unwrap();
         assert_eq!(e.unit, Unit::M);
         assert!(e.visible_only);
@@ -233,7 +258,16 @@ mod tests {
 
     #[test]
     fn unit_codes() {
-        for u in [Unit::Mm, Unit::Cm, Unit::M, Unit::Km, Unit::Inch, Unit::Foot, Unit::Yard, Unit::Mile] {
+        for u in [
+            Unit::Mm,
+            Unit::Cm,
+            Unit::M,
+            Unit::Km,
+            Unit::Inch,
+            Unit::Foot,
+            Unit::Yard,
+            Unit::Mile,
+        ] {
             assert_eq!(Unit::from_insunits(u.insunits()), Some(u));
             assert!(u.mm_per_unit() >= 1.0);
         }

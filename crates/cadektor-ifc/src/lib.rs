@@ -76,7 +76,11 @@ pub fn project_guid(doc: &Document) -> (String, bool) {
 }
 
 /// Writes the document as IFC4 to `out`. Returns the output and the report.
-pub fn export_to<W: Write>(doc: &Document, opts: &IfcOptions, out: W) -> Result<(W, Report), IfcError> {
+pub fn export_to<W: Write>(
+    doc: &Document,
+    opts: &IfcOptions,
+    out: W,
+) -> Result<(W, Report), IfcError> {
     opts.check()?;
     let cache = SiteCache::default();
     let (project, stored) = project_guid(doc);
@@ -97,19 +101,24 @@ pub fn export_bytes(doc: &Document, opts: &IfcOptions) -> Result<(Vec<u8>, Repor
 /// entity at a time, and is renamed over `path` at the end, so a crash never leaves half a file.
 pub fn export_file(path: &Path, doc: &Document, opts: &IfcOptions) -> Result<Report, IfcError> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = target.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     let mut opts = opts.clone();
     if opts.file_name.is_none() {
         opts.file_name = Some(name);
     }
     let result = (|| {
-        let file = std::fs::File::create(&tmp).map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
+        let file = std::fs::File::create(&tmp)
+            .map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
         let (out, report) = export_to(doc, &opts, std::io::BufWriter::new(file))?;
         let file = out.into_inner().map_err(|e| IfcError::Io(e.to_string()))?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&tmp, &target).map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
+        std::fs::rename(&tmp, &target)
+            .map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
         Ok(report)
     })();
     if result.is_err() {

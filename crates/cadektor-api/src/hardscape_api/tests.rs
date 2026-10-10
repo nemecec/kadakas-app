@@ -1,7 +1,8 @@
 use super::*;
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
-    s.handle(method, params).unwrap_or_else(|e| panic!("{method}: {}", e.message))
+    s.handle(method, params)
+        .unwrap_or_else(|e| panic!("{method}: {}", e.message))
 }
 
 fn fail(s: &mut Session, method: &str, params: Value) -> (i64, String) {
@@ -15,8 +16,16 @@ fn square(w: i64) -> Value {
 
 fn setup() -> Session {
     let mut s = Session::default();
-    ok(&mut s, "plant_style.create", json!({"name": "Lavender", "id_code": "LA", "spread": 500, "price": 4}));
-    ok(&mut s, "plant_style.create", json!({"name": "Sedge", "id_code": "SE", "spread": 400, "category": "grass"}));
+    ok(
+        &mut s,
+        "plant_style.create",
+        json!({"name": "Lavender", "id_code": "LA", "spread": 500, "price": 4}),
+    );
+    ok(
+        &mut s,
+        "plant_style.create",
+        json!({"name": "Sedge", "id_code": "SE", "spread": 400, "category": "grass"}),
+    );
     s
 }
 
@@ -38,41 +47,158 @@ fn hardscape_styles_crud() {
     assert_eq!(got["joints"]["kind"], "herringbone");
     assert_eq!(got["border"]["sides"], "left");
     assert_eq!(got["used_by"], 0);
-    let h = ok(&mut s, "hardscape.add", json!({"boundary": square(3000), "style": id}))["id"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "hardscape_style.list", json!(null))["styles"][0]["used_by"], 1);
+    let h = ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": square(3000), "style": id}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        ok(&mut s, "hardscape_style.list", json!(null))["styles"][0]["used_by"],
+        1
+    );
     // Update: the object follows, null clears.
-    let r = ok(&mut s, "hardscape_style.update", json!({"id": id, "name": "Setts 2", "thickness": 80, "border": null}));
+    let r = ok(
+        &mut s,
+        "hardscape_style.update",
+        json!({"id": id, "name": "Setts 2", "thickness": 80, "border": null}),
+    );
     assert_eq!(r["name"], "Setts 2");
     assert!(r["border"].is_null());
     let o = ok(&mut s, "objects.get", json!({"id": h}));
     assert_eq!(o["shape"]["thickness"], 270.0);
     assert_eq!(o["shape"]["material"], "Granite");
     // Duplicate, delete.
-    let copy = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "hardscape_style.get", json!({"id": copy}))["name"], "Setts 2 copy");
-    let copy2 = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "hardscape_style.get", json!({"id": copy2}))["name"], "Setts 2 copy 2");
-    let named = ok(&mut s, "hardscape_style.duplicate", json!({"id": id, "name": "Mine"}))["id"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "hardscape_style.get", json!({"id": named}))["name"], "Mine");
-    assert_eq!(fail(&mut s, "hardscape_style.delete", json!({"id": id})).0, 1, "in use");
-    ok(&mut s, "hardscape_style.delete", json!({"id": id, "reassign": copy}));
-    assert_eq!(ok(&mut s, "objects.get", json!({"id": h}))["data"]["hardscape"]["style"], copy);
+    let copy = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        ok(&mut s, "hardscape_style.get", json!({"id": copy}))["name"],
+        "Setts 2 copy"
+    );
+    let copy2 = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        ok(&mut s, "hardscape_style.get", json!({"id": copy2}))["name"],
+        "Setts 2 copy 2"
+    );
+    let named = ok(
+        &mut s,
+        "hardscape_style.duplicate",
+        json!({"id": id, "name": "Mine"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        ok(&mut s, "hardscape_style.get", json!({"id": named}))["name"],
+        "Mine"
+    );
+    assert_eq!(
+        fail(&mut s, "hardscape_style.delete", json!({"id": id})).0,
+        1,
+        "in use"
+    );
+    ok(
+        &mut s,
+        "hardscape_style.delete",
+        json!({"id": id, "reassign": copy}),
+    );
+    assert_eq!(
+        ok(&mut s, "objects.get", json!({"id": h}))["data"]["hardscape"]["style"],
+        copy
+    );
     ok(&mut s, "hardscape_style.delete", json!({"id": named}));
     // Errors.
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"name": "X", "colour": 1})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"name": "X", "thickness": -1})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"name": "X", "thickness": "thick"})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"thickness": 5})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"name": 5})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.create", json!({"name": "Setts 2 copy"})).0, 1, "name exists");
-    assert_eq!(fail(&mut s, "hardscape_style.get", json!({"id": 999})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.get", json!({"id": true})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.update", json!({"id": copy, "name": 5})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.duplicate", json!({"id": copy, "name": 5})).0, -32602);
-    assert_eq!(fail(&mut s, "hardscape_style.delete", json!({"id": copy, "reassign": 999})).0, -32602);
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.create",
+            json!({"name": "X", "colour": 1})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.create",
+            json!({"name": "X", "thickness": -1})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.create",
+            json!({"name": "X", "thickness": "thick"})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(&mut s, "hardscape_style.create", json!({"thickness": 5})).0,
+        -32602
+    );
+    assert_eq!(
+        fail(&mut s, "hardscape_style.create", json!({"name": 5})).0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.create",
+            json!({"name": "Setts 2 copy"})
+        )
+        .0,
+        1,
+        "name exists"
+    );
+    assert_eq!(
+        fail(&mut s, "hardscape_style.get", json!({"id": 999})).0,
+        -32602
+    );
+    assert_eq!(
+        fail(&mut s, "hardscape_style.get", json!({"id": true})).0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.update",
+            json!({"id": copy, "name": 5})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.duplicate",
+            json!({"id": copy, "name": 5})
+        )
+        .0,
+        -32602
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "hardscape_style.delete",
+            json!({"id": copy, "reassign": 999})
+        )
+        .0,
+        -32602
+    );
     // A plant style is not a hardscape style.
-    let plant = ok(&mut s, "plant_style.create", json!({"name": "Oak"}))["id"].as_u64().unwrap();
-    assert_eq!(fail(&mut s, "hardscape_style.get", json!({"id": plant})).0, -32602);
+    let plant = ok(&mut s, "plant_style.create", json!({"name": "Oak"}))["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        fail(&mut s, "hardscape_style.get", json!({"id": plant})).0,
+        -32602
+    );
 }
 
 #[test]
@@ -94,29 +220,68 @@ fn landscape_area_styles_crud_and_mix_names() {
     let list = ok(&mut s, "landscape_area_style.list", json!({}));
     assert_eq!(list["styles"].as_array().unwrap().len(), 1);
     // Plant styles show how many mixes use them.
-    assert_eq!(ok(&mut s, "plant_style.get", json!({"id": "Lavender"}))["used_by"], 1);
-    let r = ok(&mut s, "landscape_area_style.update", json!({"id": id, "mix": [{"plant": "Sedge"}], "name": "Sedge lawn"}));
+    assert_eq!(
+        ok(&mut s, "plant_style.get", json!({"id": "Lavender"}))["used_by"],
+        1
+    );
+    let r = ok(
+        &mut s,
+        "landscape_area_style.update",
+        json!({"id": id, "mix": [{"plant": "Sedge"}], "name": "Sedge lawn"}),
+    );
     assert_eq!(r["mix_names"], json!(["Sedge"]));
     assert_eq!(r["name"], "Sedge lawn");
-    let copy = ok(&mut s, "landscape_area_style.duplicate", json!({"id": id}))["id"].as_u64().unwrap();
-    assert_eq!(ok(&mut s, "landscape_area_style.get", json!({"id": copy}))["name"], "Sedge lawn copy");
+    let copy = ok(&mut s, "landscape_area_style.duplicate", json!({"id": id}))["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        ok(&mut s, "landscape_area_style.get", json!({"id": copy}))["name"],
+        "Sedge lawn copy"
+    );
     ok(&mut s, "landscape_area_style.delete", json!({"id": copy}));
     // Errors.
     let e = |s: &mut Session, p: Value| fail(s, "landscape_area_style.create", p).0;
-    assert_eq!(e(&mut s, json!({"name": "A", "mix": [{"plant": "Nope"}]})), -32602);
-    assert_eq!(e(&mut s, json!({"name": "A", "mix": [{"percent": 5}]})), -32602);
+    assert_eq!(
+        e(&mut s, json!({"name": "A", "mix": [{"plant": "Nope"}]})),
+        -32602
+    );
+    assert_eq!(
+        e(&mut s, json!({"name": "A", "mix": [{"percent": 5}]})),
+        -32602
+    );
     assert_eq!(e(&mut s, json!({"name": "A", "mix": 5})), -32602);
     assert_eq!(e(&mut s, json!({"name": "A", "mix": [5]})), -32602);
-    assert_eq!(e(&mut s, json!({"name": "A", "mix": [{"plant": "Sedge", "percent": 150}]})), -32602);
-    assert_eq!(e(&mut s, json!({"name": "A", "mix": [{"plant": "Sedge", "spacing": 5, "density": 5}]})), -32602);
+    assert_eq!(
+        e(
+            &mut s,
+            json!({"name": "A", "mix": [{"plant": "Sedge", "percent": 150}]})
+        ),
+        -32602
+    );
+    assert_eq!(
+        e(
+            &mut s,
+            json!({"name": "A", "mix": [{"plant": "Sedge", "spacing": 5, "density": 5}]})
+        ),
+        -32602
+    );
     assert_eq!(e(&mut s, json!({"name": "A", "wild": 1})), -32602);
-    assert_eq!(fail(&mut s, "landscape_area_style.get", json!({"id": "Nope"})).0, -32602);
+    assert_eq!(
+        fail(&mut s, "landscape_area_style.get", json!({"id": "Nope"})).0,
+        -32602
+    );
 }
 
 #[test]
 fn hardscape_add_and_set() {
     let mut s = Session::default();
-    let st = ok(&mut s, "hardscape_style.create", json!({"name": "Setts", "thickness": 60}))["id"].as_u64().unwrap();
+    let st = ok(
+        &mut s,
+        "hardscape_style.create",
+        json!({"name": "Setts", "thickness": 60}),
+    )["id"]
+        .as_u64()
+        .unwrap();
     // A path with a curve.
     let p = ok(
         &mut s,
@@ -130,16 +295,37 @@ fn hardscape_add_and_set() {
     assert_eq!(o["data"]["hardscape"]["style"], st);
     assert!(o["shape"]["boundary"].as_array().unwrap().len() > 8);
     // Set: width, slope, drape, site modifier, then back to a slab.
-    ok(&mut s, "hardscape.set", json!({"ids": [p], "width": 2000, "slope": {"type": "cross", "percent": 2}, "drape": true, "site_modifier": false}));
+    ok(
+        &mut s,
+        "hardscape.set",
+        json!({"ids": [p], "width": 2000, "slope": {"type": "cross", "percent": 2}, "drape": true, "site_modifier": false}),
+    );
     let d = ok(&mut s, "objects.get", json!({"id": p}))["data"]["hardscape"].clone();
-    assert_eq!((d["width"].clone(), d["drape"].clone(), d["slope"]["percent"].clone()), (json!(2000.0), json!(true), json!(2.0)));
-    ok(&mut s, "hardscape.set", json!({"id": p, "slope": null, "mode": "slab", "style": null, "material": "Gravel", "thickness": 100}));
+    assert_eq!(
+        (
+            d["width"].clone(),
+            d["drape"].clone(),
+            d["slope"]["percent"].clone()
+        ),
+        (json!(2000.0), json!(true), json!(2.0))
+    );
+    ok(
+        &mut s,
+        "hardscape.set",
+        json!({"id": p, "slope": null, "mode": "slab", "style": null, "material": "Gravel", "thickness": 100}),
+    );
     let o = ok(&mut s, "objects.get", json!({"id": p}));
     assert_eq!(o["data"]["hardscape"]["mode"], "slab");
     assert!(o["data"]["hardscape"]["style"].is_null());
     assert_eq!(o["shape"]["material"], "Gravel");
     // A slab with every option, in a layer and a class.
-    let layer = ok(&mut s, "execute", json!({"command": {"op": "add_layer", "name": "Hard"}}))["created"][0].as_u64().unwrap();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Hard"}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
     let slab = ok(
         &mut s,
         "hardscape.add",
@@ -147,42 +333,175 @@ fn hardscape_add_and_set() {
     )["id"]
         .as_u64()
         .unwrap();
-    assert_eq!(ok(&mut s, "objects.get", json!({"id": slab}))["layer"], layer);
+    assert_eq!(
+        ok(&mut s, "objects.get", json!({"id": slab}))["layer"],
+        layer
+    );
     // Undo is one step.
     assert!(ok(&mut s, "undo", json!({}))["done"].as_bool().unwrap());
     assert_eq!(fail(&mut s, "objects.get", json!({"id": slab})).0, 1);
     // Errors.
     let f = |s: &mut Session, m: &str, p: Value| fail(s, m, p).0;
-    assert_eq!(f(&mut s, "hardscape.add", json!({})), 1, "needs a boundary or a center line");
-    assert_eq!(f(&mut s, "hardscape.add", json!({"mode": "path", "boundary": square(10)})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"mode": "slab", "center": [[0, 0], [5, 0]]})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "center": [[0, 0], [5, 0]]})), 1);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "style": "Nope"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "mode": "tower"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "join": "x"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "wibble": 1})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "width": "wide"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "drape": 1})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "site_modifier": 1})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "material": 1})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "thickness": "x"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "elevation": "x"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "slope": {"type": "tilt"}})), -32602);
+    assert_eq!(
+        f(&mut s, "hardscape.add", json!({})),
+        1,
+        "needs a boundary or a center line"
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"mode": "path", "boundary": square(10)})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"mode": "slab", "center": [[0, 0], [5, 0]]})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "center": [[0, 0], [5, 0]]})
+        ),
+        1
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "style": "Nope"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "mode": "tower"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "join": "x"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "wibble": 1})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "width": "wide"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "drape": 1})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "site_modifier": 1})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "material": 1})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "thickness": "x"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "elevation": "x"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "slope": {"type": "tilt"}})
+        ),
+        -32602
+    );
     assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": 5})), -32602);
     assert_eq!(f(&mut s, "hardscape.add", json!({"center": 5})), -32602);
-    assert_eq!(f(&mut s, "hardscape.add", json!({"boundary": square(10), "layer": "x"})), -32602);
-    assert_eq!(f(&mut s, "hardscape.set", json!({"width": 5})), -32602, "needs an id");
-    assert_eq!(f(&mut s, "hardscape.set", json!({"id": p})), 1, "nothing to change");
-    assert_eq!(f(&mut s, "hardscape.set", json!({"id": "x", "width": 5})), -32602);
-    assert_eq!(f(&mut s, "hardscape.set", json!({"id": 999, "width": 5})), 1);
-    assert_eq!(f(&mut s, "hardscape.set", json!({"id": p, "id2": 1})), -32602);
+    assert_eq!(
+        f(
+            &mut s,
+            "hardscape.add",
+            json!({"boundary": square(10), "layer": "x"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(&mut s, "hardscape.set", json!({"width": 5})),
+        -32602,
+        "needs an id"
+    );
+    assert_eq!(
+        f(&mut s, "hardscape.set", json!({"id": p})),
+        1,
+        "nothing to change"
+    );
+    assert_eq!(
+        f(&mut s, "hardscape.set", json!({"id": "x", "width": 5})),
+        -32602
+    );
+    assert_eq!(
+        f(&mut s, "hardscape.set", json!({"id": 999, "width": 5})),
+        1
+    );
+    assert_eq!(
+        f(&mut s, "hardscape.set", json!({"id": p, "id2": 1})),
+        -32602
+    );
     assert_eq!(f(&mut s, "report.hardscape", json!(5)), -32602);
 }
 
 #[test]
 fn landscape_areas_holes_and_reports() {
     let mut s = setup();
-    ok(&mut s, "landscape_area_style.create", json!({"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 4}, {"plant": "Sedge", "percent": 40, "density": 4}]}));
+    ok(
+        &mut s,
+        "landscape_area_style.create",
+        json!({"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 4}, {"plant": "Sedge", "percent": 40, "density": 4}]}),
+    );
     let pond = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [5000, 5000], "radius": 1000}}}))["created"][0].as_u64().unwrap();
     let rect = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [7000, 1000], "max": [8000, 2000]}}}))["created"][0].as_u64().unwrap();
     let a = ok(
@@ -204,31 +523,118 @@ fn landscape_areas_holes_and_reports() {
     assert_eq!(row["rows"][0]["name"], "Lavender");
     assert_eq!(r["totals"]["gross_area_m2"], 100.0);
     // Set: replace holes, rename, unstyle.
-    ok(&mut s, "landscape_area.set", json!({"id": a, "holes": [], "name": "Bed B", "drape": true}));
+    ok(
+        &mut s,
+        "landscape_area.set",
+        json!({"id": a, "holes": [], "name": "Bed B", "drape": true}),
+    );
     let r = ok(&mut s, "report.landscape_areas", json!({"format": "csv"}));
     assert_eq!(r["rows"][0]["name"], "Bed B");
     assert_eq!(r["rows"][0]["holes_area_m2"], 0.0);
     assert!(r["csv"].as_str().unwrap().contains("Lavender"));
-    ok(&mut s, "landscape_area.set", json!({"ids": [a], "style": null}));
-    assert!(ok(&mut s, "report.landscape_areas", json!({}))["rows"][0]["rows"].as_array().unwrap().is_empty());
+    ok(
+        &mut s,
+        "landscape_area.set",
+        json!({"ids": [a], "style": null}),
+    );
+    assert!(
+        ok(&mut s, "report.landscape_areas", json!({}))["rows"][0]["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     // A hole outside the area is an error; so are unknown fields.
     let f = |s: &mut Session, m: &str, p: Value| fail(s, m, p).0;
-    assert_eq!(f(&mut s, "landscape_area.set", json!({"id": a, "holes": [[[-50, 0], [10, 0], [10, 10]]]})), 1);
-    assert_eq!(f(&mut s, "landscape_area.set", json!({"id": a, "wibble": 1})), -32602);
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.set",
+            json!({"id": a, "holes": [[[-50, 0], [10, 0], [10, 10]]]})
+        ),
+        1
+    );
+    assert_eq!(
+        f(&mut s, "landscape_area.set", json!({"id": a, "wibble": 1})),
+        -32602
+    );
     assert_eq!(f(&mut s, "landscape_area.set", json!({"id": a})), 1);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"name": "x"})), -32602, "needs a boundary");
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "style": "Nope"})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "name": 5})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "show_plants": 5})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "drape": 5})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "exclude": [999]})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "exclude": "x"})), -32602);
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "holes": 5})), -32602);
+    assert_eq!(
+        f(&mut s, "landscape_area.add", json!({"name": "x"})),
+        -32602,
+        "needs a boundary"
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "style": "Nope"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "name": 5})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "show_plants": 5})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "drape": 5})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "exclude": [999]})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "exclude": "x"})
+        ),
+        -32602
+    );
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "holes": 5})
+        ),
+        -32602
+    );
     let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
-    assert_eq!(f(&mut s, "landscape_area.add", json!({"boundary": square(10), "exclude": [line]})), -32602);
+    assert_eq!(
+        f(
+            &mut s,
+            "landscape_area.add",
+            json!({"boundary": square(10), "exclude": [line]})
+        ),
+        -32602
+    );
     // A polyline and another area can be holes.
     let poly = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[100, 100], [900, 100], [900, 900]]}}}))["created"][0].as_u64().unwrap();
-    ok(&mut s, "landscape_area.set", json!({"id": a, "exclude": [poly, a]}));
+    ok(
+        &mut s,
+        "landscape_area.set",
+        json!({"id": a, "exclude": [poly, a]}),
+    );
 }
 
 #[test]
@@ -241,19 +647,45 @@ fn hardscape_report_and_plant_list() {
     )["id"]
         .as_u64()
         .unwrap();
-    ok(&mut s, "hardscape.add", json!({"boundary": square(4000), "style": st}));
-    ok(&mut s, "hardscape.add", json!({"boundary": square(1000), "material": "Gravel", "thickness": 100}));
+    ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": square(4000), "style": st}),
+    );
+    ok(
+        &mut s,
+        "hardscape.add",
+        json!({"boundary": square(1000), "material": "Gravel", "thickness": 100}),
+    );
     let r = ok(&mut s, "report.hardscape", json!({"format": "csv"}));
     assert_eq!(r["rows"].as_array().unwrap().len(), 2);
     assert_eq!(r["rows"][0]["plan_area_m2"], 16.0);
     assert_eq!(r["rows"][0]["layers"].as_array().unwrap().len(), 3);
-    assert!(r["materials"].as_array().unwrap().iter().any(|m| m["material"] == "Stone"));
+    assert!(
+        r["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["material"] == "Stone")
+    );
     assert_eq!(r["totals"]["plan_area_m2"], 17.0);
     assert!(r["csv"].as_str().unwrap().starts_with("Id,Name,Style"));
     // Plant list: single plants plus the areas.
-    ok(&mut s, "plants.place", json!({"mode": "single", "style": "Lavender", "at": [0, 0]}));
-    ok(&mut s, "landscape_area_style.create", json!({"name": "Meadow", "mix": [{"plant": "Lavender", "density": 4}]}));
-    ok(&mut s, "landscape_area.add", json!({"boundary": square(2000), "name": "Bed", "style": "Meadow"}));
+    ok(
+        &mut s,
+        "plants.place",
+        json!({"mode": "single", "style": "Lavender", "at": [0, 0]}),
+    );
+    ok(
+        &mut s,
+        "landscape_area_style.create",
+        json!({"name": "Meadow", "mix": [{"plant": "Lavender", "density": 4}]}),
+    );
+    ok(
+        &mut s,
+        "landscape_area.add",
+        json!({"boundary": square(2000), "name": "Bed", "style": "Meadow"}),
+    );
     let list = ok(&mut s, "report.plant_list", json!({"format": "csv"}));
     assert_eq!(list["rows"][0]["name"], "Lavender");
     assert_eq!(list["rows"][0]["plants"], 1);
@@ -261,7 +693,10 @@ fn hardscape_report_and_plant_list() {
     assert_eq!(list["total_count"], 17);
     assert!(list["csv"].as_str().unwrap().contains("Lavender"));
     // The old plant report is unchanged: single plants only.
-    assert_eq!(ok(&mut s, "report.plants", json!({}))["rows"][0]["count"], 1);
+    assert_eq!(
+        ok(&mut s, "report.plants", json!({}))["rows"][0]["count"],
+        1
+    );
     // Describe has the examples.
     let d = ok(&mut s, "describe", json!(null));
     assert!(d["hardscapes"]["examples"].as_array().unwrap().len() >= 6);
@@ -274,7 +709,18 @@ fn drape_uses_the_site_model_in_reports_and_in_3d() {
     // A ramp: z = x / 10, on 7 by 7 points of 1 m.
     let pts: Vec<Value> =
         (0..7).flat_map(|i| (0..7).map(move |j| json!({"kind": "locus3d", "p": [i as f64 * 1000.0, j as f64 * 1000.0, i as f64 * 100.0]}))).collect();
-    let ids: Vec<u64> = pts.iter().map(|p| ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": p}}))["created"][0].as_u64().unwrap()).collect();
+    let ids: Vec<u64> = pts
+        .iter()
+        .map(|p| {
+            ok(
+                &mut s,
+                "execute",
+                json!({"command": {"op": "add_object", "shape": p}}),
+            )["created"][0]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
     ok(&mut s, "site.create", json!({"source_ids": ids}));
     let h = ok(&mut s, "hardscape.add", json!({"boundary": [[1000, 1000], [3000, 1000], [3000, 3000], [1000, 3000]], "drape": true, "thickness": 100}))["id"]
         .as_u64()
@@ -285,10 +731,16 @@ fn drape_uses_the_site_model_in_reports_and_in_3d() {
     let want = 4.0 * (1.0f64 + 0.01).sqrt();
     assert!((q["surface_area_m2"].as_f64().unwrap() - want).abs() < 1e-6);
     ok(&mut s, "hardscape.set", json!({"id": h, "drape": false}));
-    assert_eq!(ok(&mut s, "report.hardscape", json!({}))["rows"][0]["draped"], false);
+    assert_eq!(
+        ok(&mut s, "report.hardscape", json!({}))["rows"][0]["draped"],
+        false
+    );
     // The 3D scene follows the ground when it drapes.
     ok(&mut s, "hardscape.set", json!({"id": h, "drape": true}));
     let scene = s.scene();
     let (lo, hi) = scene.object_bounds(ObjectId(h)).unwrap();
-    assert!(hi.z - lo.z > 150.0, "the slab follows the 200 mm rise: {lo:?} {hi:?}");
+    assert!(
+        hi.z - lo.z > 150.0,
+        "the slab follows the 200 mm rise: {lo:?} {hi:?}"
+    );
 }

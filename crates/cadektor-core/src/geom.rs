@@ -10,7 +10,9 @@ pub fn polygon_area(points: &[DVec2]) -> f64 {
     }
     // Relative to the first point: sums of absolute coordinates lose precision far from the origin.
     let o = points[0];
-    let twice: f64 = (0..n).map(|i| (points[i] - o).perp_dot(points[(i + 1) % n] - o)).sum();
+    let twice: f64 = (0..n)
+        .map(|i| (points[i] - o).perp_dot(points[(i + 1) % n] - o))
+        .sum();
     twice.abs() / 2.0
 }
 
@@ -54,6 +56,9 @@ mod tests {
     fn segment_distance() {
         let d = dist_to_segment(DVec2::new(5.0, 3.0), DVec2::ZERO, DVec2::new(10.0, 0.0));
         assert_eq!(d, 3.0);
-        assert_eq!(dist_to_segment(DVec2::new(-4.0, 3.0), DVec2::ZERO, DVec2::X), 5.0);
+        assert_eq!(
+            dist_to_segment(DVec2::new(-4.0, 3.0), DVec2::ZERO, DVec2::X),
+            5.0
+        );
     }
 }

@@ -75,12 +75,23 @@ impl StandardView {
             .trim()
             .to_ascii_lowercase()
             .chars()
-            .map(|c| if c == ' ' || c == '-' || c == '/' { '_' } else { c })
+            .map(|c| {
+                if c == ' ' || c == '-' || c == '/' {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect();
         let norm = norm.replace("isometric", "iso");
         StandardView::ALL.into_iter().find(|v| {
             let id = v.id().replace("isometric", "iso");
-            id == norm || v.label().to_ascii_lowercase().replace(['/', ' '], "_").replace("isometric", "iso") == norm
+            id == norm
+                || v.label()
+                    .to_ascii_lowercase()
+                    .replace(['/', ' '], "_")
+                    .replace("isometric", "iso")
+                    == norm
         })
     }
 
@@ -185,25 +196,49 @@ mod tests {
 
     #[test]
     fn view_names() {
-        assert_eq!(StandardView::from_name("Top/Plan"), Some(StandardView::Plan));
+        assert_eq!(
+            StandardView::from_name("Top/Plan"),
+            Some(StandardView::Plan)
+        );
         assert_eq!(StandardView::from_name("plan"), Some(StandardView::Plan));
         assert_eq!(StandardView::from_name("top"), Some(StandardView::Top));
         assert!(StandardView::Plan.is_plan() && !StandardView::Top.is_plan());
-        assert_eq!(StandardView::from_name(" Right Isometric "), Some(StandardView::RightIsometric));
-        assert_eq!(StandardView::from_name("left-rear-isometric"), Some(StandardView::LeftRearIsometric));
-        assert_eq!(StandardView::from_name("right_iso"), Some(StandardView::RightIsometric));
+        assert_eq!(
+            StandardView::from_name(" Right Isometric "),
+            Some(StandardView::RightIsometric)
+        );
+        assert_eq!(
+            StandardView::from_name("left-rear-isometric"),
+            Some(StandardView::LeftRearIsometric)
+        );
+        assert_eq!(
+            StandardView::from_name("right_iso"),
+            Some(StandardView::RightIsometric)
+        );
         assert_eq!(StandardView::from_name("sideways"), None);
         for v in StandardView::ALL {
             assert_eq!(StandardView::from_name(v.id()), Some(v));
             assert_eq!(StandardView::from_name(v.label()), Some(v));
         }
-        assert_eq!(Projection::from_name("Orthographic"), Some(Projection::Orthographic));
-        assert_eq!(Projection::from_name("persp"), Some(Projection::Perspective));
+        assert_eq!(
+            Projection::from_name("Orthographic"),
+            Some(Projection::Orthographic)
+        );
+        assert_eq!(
+            Projection::from_name("persp"),
+            Some(Projection::Perspective)
+        );
         assert_eq!(Projection::from_name("fisheye"), None);
-        assert_eq!(Projection::Orthographic.toggled().toggled(), Projection::Orthographic);
+        assert_eq!(
+            Projection::Orthographic.toggled().toggled(),
+            Projection::Orthographic
+        );
         assert_eq!(Projection::Perspective.id(), "perspective");
         assert_eq!(Projection::Orthographic.id(), "ortho");
-        assert_eq!(RenderMode::from_name("Wireframe"), Some(RenderMode::Wireframe));
+        assert_eq!(
+            RenderMode::from_name("Wireframe"),
+            Some(RenderMode::Wireframe)
+        );
         assert_eq!(RenderMode::from_name("x"), None);
         assert_eq!(RenderMode::Shaded.toggled(), RenderMode::Wireframe);
         assert_eq!(RenderMode::Shaded.toggled().id(), "wireframe");

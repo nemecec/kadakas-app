@@ -18,11 +18,27 @@ impl Importer for ShapefileFormat {
         Format::Shapefile
     }
 
-    fn import(&self, src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<ImportResult, IoError> {
-        let enc = src.extra.get("cpg").and_then(|b| crate::encoding::from_cpg(&String::from_utf8_lossy(b)));
+    fn import(
+        &self,
+        src: &Source,
+        ctx: &Context,
+        opts: &ImportOptions,
+    ) -> Result<ImportResult, IoError> {
+        let enc = src
+            .extra
+            .get("cpg")
+            .and_then(|b| crate::encoding::from_cpg(&String::from_utf8_lossy(b)));
         let mut data = read_with(&src.data, src.extra.get("dbf").map(Vec::as_slice), enc)?;
-        data.file_crs = src.extra.get("prj").map(|b| String::from_utf8_lossy(b).trim().to_string()).filter(|s| !s.is_empty());
-        let name = if src.name.is_empty() { "Shapefile" } else { &src.name };
+        data.file_crs = src
+            .extra
+            .get("prj")
+            .map(|b| String::from_utf8_lossy(b).trim().to_string())
+            .filter(|s| !s.is_empty());
+        let name = if src.name.is_empty() {
+            "Shapefile"
+        } else {
+            &src.name
+        };
         gis::build("shapefile", name, data, ctx, opts, None)
     }
 }
@@ -53,12 +69,20 @@ fn read_shape(rec: &[u8]) -> Result<Vec<Part>, &'static str> {
     match t {
         0 => Ok(vec![]),
         1 | 11 | 21 => {
-            let (x, y) = (b.f64le(4).ok_or("record is too short")?, b.f64le(12).ok_or("record is too short")?);
-            let z = if has_z { Some(b.f64le(20).ok_or("record is too short")?).filter(|z| *z > -1.0e38) } else { None };
+            let (x, y) = (
+                b.f64le(4).ok_or("record is too short")?,
+                b.f64le(12).ok_or("record is too short")?,
+            );
+            let z = if has_z {
+                Some(b.f64le(20).ok_or("record is too short")?).filter(|z| *z > -1.0e38)
+            } else {
+                None
+            };
             Ok(vec![Part::Point(Pt { x, y, z })])
         }
         8 | 18 | 28 => {
-            let n = usize::try_from(b.i32le(36).ok_or("record is too short")?).map_err(|_| "negative point count")?;
+            let n = usize::try_from(b.i32le(36).ok_or("record is too short")?)
+                .map_err(|_| "negative point count")?;
             if n > rec.len() / 16 {
                 return Err("point count is larger than the record");
             }
@@ -67,14 +91,17 @@ fn read_shape(rec: &[u8]) -> Result<Vec<Part>, &'static str> {
         }
         3 | 13 | 23 | 5 | 15 | 25 => {
             let polygon = matches!(t, 5 | 15 | 25);
-            let parts_n = usize::try_from(b.i32le(36).ok_or("record is too short")?).map_err(|_| "negative part count")?;
-            let pts_n = usize::try_from(b.i32le(40).ok_or("record is too short")?).map_err(|_| "negative point count")?;
+            let parts_n = usize::try_from(b.i32le(36).ok_or("record is too short")?)
+                .map_err(|_| "negative part count")?;
+            let pts_n = usize::try_from(b.i32le(40).ok_or("record is too short")?)
+                .map_err(|_| "negative point count")?;
             if parts_n > rec.len() / 4 || pts_n > rec.len() / 16 {
                 return Err("counts are larger than the record");
             }
             let mut starts = Vec::with_capacity(parts_n);
             for i in 0..parts_n {
-                let s = usize::try_from(b.i32le(44 + i * 4).ok_or("record is too short")?).map_err(|_| "negative part start")?;
+                let s = usize::try_from(b.i32le(44 + i * 4).ok_or("record is too short")?)
+                    .map_err(|_| "negative part start")?;
                 if s > pts_n || starts.last().is_some_and(|l| s < *l) {
                     return Err("part starts are not in order");
                 }
@@ -91,7 +118,10 @@ fn read_shape(rec: &[u8]) -> Result<Vec<Part>, &'static str> {
                 }
                 if polygon {
                     // Shoelace sum: positive for clockwise rings.
-                    let area: f64 = ring.windows(2).map(|w| (w[1].x - w[0].x) * (w[1].y + w[0].y)).sum();
+                    let area: f64 = ring
+                        .windows(2)
+                        .map(|w| (w[1].x - w[0].x) * (w[1].y + w[0].y))
+                        .sum();
                     out.push(Part::Ring(ring, area < 0.0));
                 } else {
                     out.push(Part::Line(ring));
@@ -105,7 +135,13 @@ fn read_shape(rec: &[u8]) -> Result<Vec<Part>, &'static str> {
 }
 
 /// `n` points at `at`, with Z values after the bounds range if `has_z`.
-fn read_points(b: &Bytes, at: usize, n: usize, has_z: bool, z_block: usize) -> Result<Vec<Pt>, &'static str> {
+fn read_points(
+    b: &Bytes,
+    at: usize,
+    n: usize,
+    has_z: bool,
+    z_block: usize,
+) -> Result<Vec<Pt>, &'static str> {
     let mut pts = Vec::with_capacity(n);
     for i in 0..n {
         let x = b.f64le(at + i * 16).ok_or("record is too short")?;
@@ -129,7 +165,11 @@ pub fn read(shp: &[u8], dbf: Option<&[u8]>) -> Result<GisData, IoError> {
 
 /// Like [`read`]. `enc` is the encoding of dbf text (from the `.cpg` file). Without it, the language
 /// driver byte of the dbf decides, else UTF-8 or Latin-1.
-pub fn read_with(shp: &[u8], dbf: Option<&[u8]>, enc: Option<&'static encoding_rs::Encoding>) -> Result<GisData, IoError> {
+pub fn read_with(
+    shp: &[u8],
+    dbf: Option<&[u8]>,
+    enc: Option<&'static encoding_rs::Encoding>,
+) -> Result<GisData, IoError> {
     let b = Bytes(shp);
     if shp.len() < 100 || b.i32be(0) != Some(9994) {
         return Err(IoError::Format("not a shapefile: wrong file code".into()));
@@ -145,23 +185,28 @@ pub fn read_with(shp: &[u8], dbf: Option<&[u8]>, enc: Option<&'static encoding_r
         let len = match b.i32be(pos + 4) {
             Some(l) if l >= 2 => l as usize * 2,
             _ => {
-                data.notes.push("the shapefile has a bad record: the rest is ignored".into());
+                data.notes
+                    .push("the shapefile has a bad record: the rest is ignored".into());
                 break;
             }
         };
         let Some(rec) = shp.get(pos + 8..pos + 8 + len) else {
-            data.notes.push("the shapefile ends early: imported what could be read".into());
+            data.notes
+                .push("the shapefile ends early: imported what could be read".into());
             break;
         };
         pos += 8 + len;
         let record = attrs.as_ref().and_then(|a| a.get(index));
         index += 1;
         if let Some(None) = record {
-            data.skipped.push(("record".into(), "deleted in the dbf file".into()));
+            data.skipped
+                .push(("record".into(), "deleted in the dbf file".into()));
             continue;
         }
         match read_shape(rec) {
-            Ok(parts) if parts.is_empty() => data.skipped.push(("record".into(), "null shape".into())),
+            Ok(parts) if parts.is_empty() => {
+                data.skipped.push(("record".into(), "null shape".into()))
+            }
             Ok(parts) => {
                 let props = record.cloned().flatten().unwrap_or_default();
                 data.features.push(Feature { parts, props });
@@ -172,7 +217,10 @@ pub fn read_with(shp: &[u8], dbf: Option<&[u8]>, enc: Option<&'static encoding_r
     if let Some(a) = &attrs
         && a.len() != index
     {
-        data.notes.push(format!("the dbf file has {} records, the shapefile has {index}", a.len()));
+        data.notes.push(format!(
+            "the dbf file has {} records, the shapefile has {index}",
+            a.len()
+        ));
     }
     // Index of a feature is its record number.
     Ok(data)
@@ -190,9 +238,15 @@ fn text(bytes: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> String {
 }
 
 /// The records of a dbf file. A deleted record is `None`.
-fn read_dbf(d: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
+fn read_dbf(
+    d: &[u8],
+    enc: Option<&'static encoding_rs::Encoding>,
+) -> Result<Vec<Option<BTreeMap<String, Value>>>, IoError> {
     let b = Bytes(d);
-    let enc = enc.or_else(|| d.get(29).and_then(|id| crate::encoding::from_dbf_language_driver(*id)));
+    let enc = enc.or_else(|| {
+        d.get(29)
+            .and_then(|id| crate::encoding::from_dbf_language_driver(*id))
+    });
     let bad = || IoError::Format("the dbf file is damaged".into());
     let count = b.i32le(4).filter(|c| *c >= 0).ok_or_else(bad)? as usize;
     let header_len = b.arr::<2>(8).map(u16::from_le_bytes).ok_or_else(bad)? as usize;
@@ -210,13 +264,19 @@ fn read_dbf(d: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> Result<Vec
     while at + 32 <= header_len && d[at] != 0x0D {
         let raw = &d[at..at + 11];
         let name = text(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(11)], enc);
-        fields.push(Field { name, kind: d[at + 11], len: d[at + 16] as usize });
+        fields.push(Field {
+            name,
+            kind: d[at + 11],
+            len: d[at + 16] as usize,
+        });
         at += 32;
     }
     let mut out = Vec::new();
     for i in 0..count {
         let start = header_len + i * rec_len;
-        let Some(rec) = d.get(start..start + rec_len) else { break };
+        let Some(rec) = d.get(start..start + rec_len) else {
+            break;
+        };
         if rec[0] == b'*' {
             out.push(None);
             continue;
@@ -224,21 +284,29 @@ fn read_dbf(d: &[u8], enc: Option<&'static encoding_rs::Encoding>) -> Result<Vec
         let mut props = BTreeMap::new();
         let mut off = 1;
         for f in &fields {
-            let Some(raw) = rec.get(off..off + f.len) else { break };
+            let Some(raw) = rec.get(off..off + f.len) else {
+                break;
+            };
             off += f.len;
             let s = text(raw, enc);
             let s = s.trim_matches(|c: char| c == ' ' || c == '\0');
             let v = match f.kind {
                 b'N' | b'F' | b'O' | b'I' => match s.parse::<i64>() {
                     Ok(n) => Value::from(n),
-                    Err(_) => s.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or(Value::Null, Value::Number),
+                    Err(_) => s
+                        .parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map_or(Value::Null, Value::Number),
                 },
                 b'L' => match s.to_ascii_lowercase().as_str() {
                     "t" | "y" => Value::Bool(true),
                     "f" | "n" => Value::Bool(false),
                     _ => Value::Null,
                 },
-                b'D' if s.len() == 8 && s.bytes().all(|c| c.is_ascii_digit()) => Value::from(format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..])),
+                b'D' if s.len() == 8 && s.bytes().all(|c| c.is_ascii_digit()) => {
+                    Value::from(format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..]))
+                }
                 _ if s.is_empty() => Value::Null,
                 _ => Value::from(s),
             };
@@ -340,7 +408,14 @@ pub(crate) mod tests {
     fn points_with_attributes_and_deleted_records() {
         let shp = point_shp(&[(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]);
         let d = dbf(
-            &[("NAME", b'C', 8), ("H", b'N', 6), ("W", b'F', 8), ("OK", b'L', 1), ("DAY", b'D', 8), ("X", b'C', 3)],
+            &[
+                ("NAME", b'C', 8),
+                ("H", b'N', 6),
+                ("W", b'F', 8),
+                ("OK", b'L', 1),
+                ("DAY", b'D', 8),
+                ("X", b'C', 3),
+            ],
             &[
                 (true, vec!["Birch", "12", "1.5", "T", "20240131", ""]),
                 (false, vec!["Gone", "1", "1", "F", "20240101", "a"]),
@@ -363,13 +438,23 @@ pub(crate) mod tests {
         assert_eq!(q["OK"], Value::Null);
         assert_eq!(q["DAY"], "bad");
         assert_eq!(data.skipped.len(), 1);
-        assert_eq!(data.features[1].parts, vec![Part::Point(Pt { x: 5.0, y: 6.0, z: None })]);
+        assert_eq!(
+            data.features[1].parts,
+            vec![Part::Point(Pt {
+                x: 5.0,
+                y: 6.0,
+                z: None
+            })]
+        );
     }
 
     #[test]
     fn latin1_names_and_count_mismatch() {
         let shp = point_shp(&[(1.0, 2.0)]);
-        let mut d = dbf(&[("N", b'C', 3)], &[(true, vec!["abc"]), (true, vec!["def"])]);
+        let mut d = dbf(
+            &[("N", b'C', 3)],
+            &[(true, vec!["abc"]), (true, vec!["def"])],
+        );
         let at = d.len() - 8;
         d[at + 1] = 0xE4;
         let data = read(&shp, Some(&d)).unwrap();
@@ -387,9 +472,20 @@ pub(crate) mod tests {
         let src = |extra: &[(&str, &[u8])]| Source {
             name: "s".into(),
             data: shp.clone(),
-            extra: [("dbf".to_string(), d.clone())].into_iter().chain(extra.iter().map(|(k, v)| (k.to_string(), v.to_vec()))).collect(),
+            extra: [("dbf".to_string(), d.clone())]
+                .into_iter()
+                .chain(extra.iter().map(|(k, v)| (k.to_string(), v.to_vec())))
+                .collect(),
         };
-        let name = |s: Source| ShapefileFormat.import(&s, &Context::of(&cadektor_core::model::Document::default()), &ImportOptions::default()).unwrap();
+        let name = |s: Source| {
+            ShapefileFormat
+                .import(
+                    &s,
+                    &Context::of(&cadektor_core::model::Document::default()),
+                    &ImportOptions::default(),
+                )
+                .unwrap()
+        };
         for cpg in ["1257", "CP1257\n", "windows-1257", "ANSI 1257"] {
             let data = read_with(&shp, Some(&d), crate::encoding::from_cpg(cpg)).unwrap();
             assert_eq!(data.features[0].props["N"], "\u{160}\u{f5}\u{f5}", "{cpg}");
@@ -400,31 +496,61 @@ pub(crate) mod tests {
         // The language driver byte of the dbf (0xCC is CP1257) works without a .cpg file.
         let mut d2 = d.clone();
         d2[29] = 0xCC;
-        assert_eq!(read(&shp, Some(&d2)).unwrap().features[0].props["N"], "\u{160}\u{f5}\u{f5}");
+        assert_eq!(
+            read(&shp, Some(&d2)).unwrap().features[0].props["N"],
+            "\u{160}\u{f5}\u{f5}"
+        );
         // UTF-8 stays UTF-8.
         let mut d3 = dbf(&[("N", b'C', 4)], &[(true, vec!["\u{e4}x"])]);
         d3[29] = 0;
-        assert_eq!(read_with(&shp, Some(&d3), crate::encoding::from_cpg("UTF-8")).unwrap().features[0].props["N"], "\u{e4}x");
+        assert_eq!(
+            read_with(&shp, Some(&d3), crate::encoding::from_cpg("UTF-8"))
+                .unwrap()
+                .features[0]
+                .props["N"],
+            "\u{e4}x"
+        );
     }
 
     #[test]
     fn polylines_polygons_holes_and_z() {
-        let outer: &[(f64, f64)] = &[(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0)];
+        let outer: &[(f64, f64)] = &[
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0),
+        ];
         let hole: &[(f64, f64)] = &[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0)];
         let mut shp = header(5);
         shp.extend(poly_record(5, &[outer, hole], None));
-        shp.extend(poly_record(3, &[&[(0.0, 0.0), (1.0, 1.0)], &[(5.0, 5.0), (6.0, 5.0), (7.0, 5.0)]], None));
+        shp.extend(poly_record(
+            3,
+            &[
+                &[(0.0, 0.0), (1.0, 1.0)],
+                &[(5.0, 5.0), (6.0, 5.0), (7.0, 5.0)],
+            ],
+            None,
+        ));
         shp.extend(poly_record(13, &[&[(0.0, 0.0), (1.0, 1.0)]], Some(7.5)));
         shp.extend(poly_record(15, &[outer], Some(2.0)));
         let data = read(&shp, None).unwrap();
         assert_eq!(data.features.len(), 4);
-        let Part::Ring(_, h0) = &data.features[0].parts[0] else { panic!() };
-        let Part::Ring(_, h1) = &data.features[0].parts[1] else { panic!() };
+        let Part::Ring(_, h0) = &data.features[0].parts[0] else {
+            panic!()
+        };
+        let Part::Ring(_, h1) = &data.features[0].parts[1] else {
+            panic!()
+        };
         assert!(!h0 && *h1);
         assert_eq!(data.features[1].parts.len(), 2);
-        let Part::Line(l) = &data.features[2].parts[0] else { panic!() };
+        let Part::Line(l) = &data.features[2].parts[0] else {
+            panic!()
+        };
         assert_eq!(l[0].z, Some(7.5));
-        let Part::Ring(r, _) = &data.features[3].parts[0] else { panic!() };
+        let Part::Ring(r, _) = &data.features[3].parts[0] else {
+            panic!()
+        };
         assert_eq!(r[0].z, Some(2.0));
     }
 
@@ -453,8 +579,22 @@ pub(crate) mod tests {
         let data = read(&shp, None).unwrap();
         assert_eq!(data.features.len(), 3);
         assert_eq!(data.features[0].parts.len(), 2);
-        assert_eq!(data.features[1].parts[0], Part::Point(Pt { x: 5.0, y: 6.0, z: None }));
-        assert_eq!(data.features[2].parts[0], Part::Point(Pt { x: 5.0, y: 6.0, z: Some(9.0) }));
+        assert_eq!(
+            data.features[1].parts[0],
+            Part::Point(Pt {
+                x: 5.0,
+                y: 6.0,
+                z: None
+            })
+        );
+        assert_eq!(
+            data.features[2].parts[0],
+            Part::Point(Pt {
+                x: 5.0,
+                y: 6.0,
+                z: Some(9.0)
+            })
+        );
         assert_eq!(data.skipped.len(), 3);
     }
 
@@ -529,10 +669,15 @@ pub(crate) mod tests {
         let src = Source {
             name: "trees".into(),
             data: shp.clone(),
-            extra: BTreeMap::from([("dbf".to_string(), d), ("prj".to_string(), prj.as_bytes().to_vec())]),
+            extra: BTreeMap::from([
+                ("dbf".to_string(), d),
+                ("prj".to_string(), prj.as_bytes().to_vec()),
+            ]),
         };
         let doc = cadektor_core::model::Document::default();
-        let r = ShapefileFormat.import(&src, &Context::of(&doc), &ImportOptions::default()).unwrap();
+        let r = ShapefileFormat
+            .import(&src, &Context::of(&doc), &ImportOptions::default())
+            .unwrap();
         let mut ed = cadektor_core::command::Editor::new(doc);
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().georef.as_ref().unwrap().crs, "EPSG:32635");
@@ -541,8 +686,18 @@ pub(crate) mod tests {
         assert_eq!(ed.doc().class(o.class).unwrap().name, "trees");
         assert_eq!(ShapefileFormat.format(), Format::Shapefile);
         // Without a name and without prj.
-        let src = Source { name: String::new(), data: shp, extra: BTreeMap::new() };
-        let r = ShapefileFormat.import(&src, &Context::of(&ed.doc().clone()), &ImportOptions::default()).unwrap();
+        let src = Source {
+            name: String::new(),
+            data: shp,
+            extra: BTreeMap::new(),
+        };
+        let r = ShapefileFormat
+            .import(
+                &src,
+                &Context::of(&ed.doc().clone()),
+                &ImportOptions::default(),
+            )
+            .unwrap();
         assert!(r.report.classes_created.contains(&"Shapefile".to_string()));
     }
 }

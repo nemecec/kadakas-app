@@ -4,7 +4,7 @@
 use cadektor_core::command::Command;
 use cadektor_core::curve;
 use cadektor_core::model::{Attributes, Shape};
-use cadektor_core::plants::placement::{self, PlaceSpec, Pattern, Variation};
+use cadektor_core::plants::placement::{self, Pattern, PlaceSpec, Variation};
 use cadektor_core::plants::schedule::group_tag;
 use cadektor_core::resource::ResourceId;
 use glam::DVec2;
@@ -31,7 +31,14 @@ pub enum PlantMode {
 }
 
 impl PlantMode {
-    pub const ALL: [PlantMode; 6] = [PlantMode::Single, PlantMode::Path, PlantMode::Grid, PlantMode::Triangular, PlantMode::Fill, PlantMode::Poly];
+    pub const ALL: [PlantMode; 6] = [
+        PlantMode::Single,
+        PlantMode::Path,
+        PlantMode::Grid,
+        PlantMode::Triangular,
+        PlantMode::Fill,
+        PlantMode::Poly,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -47,7 +54,9 @@ impl PlantMode {
     pub fn help(self) -> &'static str {
         match self {
             PlantMode::Single => "Click to place one plant.",
-            PlantMode::Path => "Click the points of a path. Enter or double-click places the plants along it.",
+            PlantMode::Path => {
+                "Click the points of a path. Enter or double-click places the plants along it."
+            }
             PlantMode::Grid => "Click two corners. Plants go on a rectangular grid.",
             PlantMode::Triangular => "Click two corners. Plants go on a staggered grid.",
             PlantMode::Fill => "Click the corners of an area. Enter or double-click fills it.",
@@ -146,14 +155,22 @@ impl PlantSettings {
     /// `by`, or the first choice if the mode does not offer it.
     fn effective_by(&self) -> By {
         let c = self.by_choices();
-        if c.contains(&self.by) { self.by } else { c.first().copied().unwrap_or(By::Spacing) }
+        if c.contains(&self.by) {
+            self.by
+        } else {
+            c.first().copied().unwrap_or(By::Spacing)
+        }
     }
 }
 
 /// The plant parameters for a click: the style and the overrides.
 fn plant_params(cx: &Ctx) -> (Option<ResourceId>, Map<String, Value>) {
     let s = cx.settings;
-    if let Some(id) = s.plant.style.filter(|id| cx.doc.resources.plant_style(*id).is_some()) {
+    if let Some(id) = s
+        .plant
+        .style
+        .filter(|id| cx.doc.resources.plant_style(*id).is_some())
+    {
         return (Some(id), Map::new());
     }
     let mut o = Map::new();
@@ -165,7 +182,10 @@ fn plant_params(cx: &Ctx) -> (Option<ResourceId>, Map<String, Value>) {
 
 /// Spread of the plants that the tool places now.
 fn spread_now(cx: &Ctx) -> f64 {
-    plant_params(cx).0.and_then(|id| cx.doc.resources.plant_style(id)).map_or(cx.settings.spread, |s| s.spread)
+    plant_params(cx)
+        .0
+        .and_then(|id| cx.doc.resources.plant_style(id))
+        .map_or(cx.settings.spread, |s| s.spread)
 }
 
 /// The command for plants at these positions: one `Batch`, so one undo step.
@@ -173,10 +193,27 @@ pub fn place_command(cx: &Ctx, positions: Vec<DVec2>) -> Command {
     let (style, overrides) = plant_params(cx);
     let spread = spread_now(cx);
     let ps = &cx.settings.plant;
-    let variation = Some(Variation { seed: ps.seed, size: ps.size_variation.clamp(0.0, 0.9), rotation: ps.random_rotation }).filter(Variation::is_active);
-    let mut commands = vec![Command::AddPlants { style, overrides, positions: positions.clone(), layer: None, class: None, variation }];
+    let variation = Some(Variation {
+        seed: ps.seed,
+        size: ps.size_variation.clamp(0.0, 0.9),
+        rotation: ps.random_rotation,
+    })
+    .filter(Variation::is_active);
+    let mut commands = vec![Command::AddPlants {
+        style,
+        overrides,
+        positions: positions.clone(),
+        layer: None,
+        class: None,
+        variation,
+    }];
     if let (true, Some(id)) = (cx.settings.plant.tag, style) {
-        commands.push(Command::AddObject { shape: group_tag(id, &positions, spread), layer: None, class: None, attrs: Attributes::default() });
+        commands.push(Command::AddObject {
+            shape: group_tag(id, &positions, spread),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        });
     }
     Command::Batch { commands }
 }
@@ -184,25 +221,50 @@ pub fn place_command(cx: &Ctx, positions: Vec<DVec2>) -> Command {
 /// The placement request for the clicked points, or an error text.
 pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceSpec, String> {
     let vertices = curve::corners(pts);
-    let (spacing_x, spacing_y) = if ps.spacing_is_spread { (spread, spread) } else { (ps.spacing, ps.spacing_y) };
+    let (spacing_x, spacing_y) = if ps.spacing_is_spread {
+        (spread, spread)
+    } else {
+        (ps.spacing, ps.spacing_y)
+    };
     let by = ps.effective_by();
     Ok(match ps.mode {
-        PlantMode::Single => PlaceSpec::Single { at: *pts.first().ok_or("click a point")? },
+        PlantMode::Single => PlaceSpec::Single {
+            at: *pts.first().ok_or("click a point")?,
+        },
         PlantMode::Path => {
             if pts.len() < 2 {
                 return Err("a path needs 2 or more points".into());
             }
             let spacing = matches!(by, By::Spacing | By::SpacingAndCount).then_some(spacing_x);
             let count = matches!(by, By::Count | By::SpacingAndCount).then_some(ps.count);
-            PlaceSpec::Path { path: vertices, closed: false, spacing, count }
+            PlaceSpec::Path {
+                path: vertices,
+                closed: false,
+                spacing,
+                count,
+            }
         }
         PlantMode::Grid | PlantMode::Triangular => {
-            let [a, b] = pts else { return Err("click two corners".into()) };
+            let [a, b] = pts else {
+                return Err("click two corners".into());
+            };
             let (min, max) = (a.min(*b), a.max(*b));
             if ps.mode == PlantMode::Grid {
-                PlaceSpec::Grid { min, max, spacing: None, spacing_x: Some(spacing_x), spacing_y: Some(spacing_y), margin: ps.margin }
+                PlaceSpec::Grid {
+                    min,
+                    max,
+                    spacing: None,
+                    spacing_x: Some(spacing_x),
+                    spacing_y: Some(spacing_y),
+                    margin: ps.margin,
+                }
             } else {
-                PlaceSpec::Triangular { min, max, spacing: spacing_x, margin: ps.margin }
+                PlaceSpec::Triangular {
+                    min,
+                    max,
+                    spacing: spacing_x,
+                    margin: ps.margin,
+                }
             }
         }
         PlantMode::Fill => {
@@ -224,7 +286,8 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
 }
 
 fn finish(cx: &Ctx, pts: &[DVec2]) -> Vec<Effect> {
-    let result = spec_for(&cx.settings.plant, pts, spread_now(cx)).and_then(|spec| placement::place(&spec).map_err(|e| e.0));
+    let result = spec_for(&cx.settings.plant, pts, spread_now(cx))
+        .and_then(|spec| placement::place(&spec).map_err(|e| e.0));
     match result {
         Ok(positions) => vec![Effect::Exec(place_command(cx, positions))],
         Err(e) => vec![Effect::Notice(format!("Plant: {e}"))],
@@ -237,13 +300,17 @@ impl ToolMachine {
         match input {
             Input::Press { p, .. } => match mode {
                 PlantMode::Single => finish(cx, &[p]),
-                PlantMode::Grid | PlantMode::Triangular => match std::mem::replace(&mut self.state, State::Idle) {
-                    State::Points(pts) if pts.len() == 1 && pts[0] != p => finish(cx, &[pts[0], p]),
-                    _ => {
-                        self.state = State::Points(vec![p]);
-                        vec![]
+                PlantMode::Grid | PlantMode::Triangular => {
+                    match std::mem::replace(&mut self.state, State::Idle) {
+                        State::Points(pts) if pts.len() == 1 && pts[0] != p => {
+                            finish(cx, &[pts[0], p])
+                        }
+                        _ => {
+                            self.state = State::Points(vec![p]);
+                            vec![]
+                        }
                     }
-                },
+                }
                 PlantMode::Path | PlantMode::Fill | PlantMode::Poly => {
                     match &mut self.state {
                         State::Points(pts) => {
@@ -256,7 +323,9 @@ impl ToolMachine {
                     vec![]
                 }
             },
-            Input::DoubleClick | Input::Enter if matches!(mode, PlantMode::Path | PlantMode::Fill | PlantMode::Poly) => {
+            Input::DoubleClick | Input::Enter
+                if matches!(mode, PlantMode::Path | PlantMode::Fill | PlantMode::Poly) =>
+            {
                 match std::mem::replace(&mut self.state, State::Idle) {
                     State::Points(pts) => finish(cx, &pts),
                     _ => vec![],
@@ -272,22 +341,40 @@ impl ToolMachine {
             (State::Points(pts), PlantMode::Path | PlantMode::Poly | PlantMode::Fill) => {
                 let mut v: Vec<DVec2> = pts.clone();
                 v.push(cursor);
-                Preview::Path { vertices: curve::corners(&v), closed: mode == PlantMode::Fill }
+                Preview::Path {
+                    vertices: curve::corners(&v),
+                    closed: mode == PlantMode::Fill,
+                }
             }
-            (State::Points(pts), PlantMode::Grid | PlantMode::Triangular) => {
-                Preview::Box { min: pts[0].min(cursor), max: pts[0].max(cursor), crossing: false }
-            }
+            (State::Points(pts), PlantMode::Grid | PlantMode::Triangular) => Preview::Box {
+                min: pts[0].min(cursor),
+                max: pts[0].max(cursor),
+                crossing: false,
+            },
             (State::Idle, PlantMode::Single) => {
                 let (style, overrides) = plant_params(cx);
-                let (species, spread, height) = match style.and_then(|id| cx.doc.resources.plant_style(id)) {
-                    Some(st) => (st.species("Plant"), st.spread, st.height),
-                    None => (
-                        overrides["botanical_name"].as_str().unwrap_or("").to_string(),
-                        cx.settings.spread,
-                        cx.settings.plant_height,
-                    ),
-                };
-                if spread > 0.0 { Preview::Shape(Shape::Plant { at: cursor, species, spread, height }) } else { Preview::None }
+                let (species, spread, height) =
+                    match style.and_then(|id| cx.doc.resources.plant_style(id)) {
+                        Some(st) => (st.species("Plant"), st.spread, st.height),
+                        None => (
+                            overrides["botanical_name"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            cx.settings.spread,
+                            cx.settings.plant_height,
+                        ),
+                    };
+                if spread > 0.0 {
+                    Preview::Shape(Shape::Plant {
+                        at: cursor,
+                        species,
+                        spread,
+                        height,
+                    })
+                } else {
+                    Preview::None
+                }
             }
             _ => Preview::None,
         }
@@ -300,9 +387,9 @@ mod tests {
     use super::spec_for;
     use cadektor_api::Session;
     use cadektor_core::plants::placement::Pattern;
-    use cadektor_core::resource::ResourceId;
     use cadektor_core::plants::style::PlantStyle;
     use cadektor_core::resource::ResourceBody;
+    use cadektor_core::resource::ResourceId;
 
     struct Fx {
         s: Session,
@@ -317,19 +404,44 @@ mod tests {
             m.set_tool(Tool::Plant);
             let mut settings = ToolSettings::default();
             settings.plant.mode = mode;
-            Fx { s: Session::default(), settings, m, notices: vec![] }
+            Fx {
+                s: Session::default(),
+                settings,
+                m,
+                notices: vec![],
+            }
         }
 
         fn style(&mut self) -> ResourceId {
-            let style = PlantStyle { spread: 1000.0, height: 2000.0, id_code: "AB".into(), ..PlantStyle::default() };
-            let id = ResourceId(self.s.editor.execute(&Command::AddResource { name: "Box".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+            let style = PlantStyle {
+                spread: 1000.0,
+                height: 2000.0,
+                id_code: "AB".into(),
+                ..PlantStyle::default()
+            };
+            let id = ResourceId(
+                self.s
+                    .editor
+                    .execute(&Command::AddResource {
+                        name: "Box".into(),
+                        body: ResourceBody::plant_style(style),
+                    })
+                    .unwrap()
+                    .created[0],
+            );
             self.settings.plant.style = Some(id);
             id
         }
 
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
-                let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0 };
+                let cx = Ctx {
+                    doc: self.s.editor.doc(),
+                    selection: &self.s.selection,
+                    settings: &self.settings,
+                    tol: 5.0,
+                    context: self.s.edit_context(),
+                };
                 self.m.handle(input, &cx)
             };
             for e in &fx {
@@ -345,15 +457,30 @@ mod tests {
         }
 
         fn click(&mut self, x: f64, y: f64) {
-            self.send(Input::Press { p: DVec2::new(x, y), shift: false });
+            self.send(Input::Press {
+                p: DVec2::new(x, y),
+                shift: false,
+            });
         }
 
         fn plants(&self) -> usize {
-            self.s.editor.doc().objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. })).count()
+            self.s
+                .editor
+                .doc()
+                .objects
+                .values()
+                .filter(|o| matches!(o.shape, Shape::Plant { .. }))
+                .count()
         }
 
         fn preview(&self, at: DVec2) -> Preview {
-            let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0 };
+            let cx = Ctx {
+                doc: self.s.editor.doc(),
+                selection: &self.s.selection,
+                settings: &self.settings,
+                tol: 5.0,
+                context: self.s.edit_context(),
+            };
             self.m.preview(at, &cx)
         }
     }
@@ -363,8 +490,10 @@ mod tests {
         let mut f = Fx::new(PlantMode::Single);
         f.click(10.0, 20.0);
         let o = f.s.editor.doc().objects.values().next().unwrap();
-        assert!(matches!(&o.shape, Shape::Plant { at, species, spread, height }
-            if *at == DVec2::new(10.0, 20.0) && species == "Acer campestre" && *spread == 4000.0 && *height == 8000.0));
+        assert!(
+            matches!(&o.shape, Shape::Plant { at, species, spread, height }
+            if *at == DVec2::new(10.0, 20.0) && species == "Acer campestre" && *spread == 4000.0 && *height == 8000.0)
+        );
         assert!(o.data.is_empty());
     }
 
@@ -377,7 +506,9 @@ mod tests {
         assert_eq!(cadektor_core::plants::link::link(o).unwrap().style, id);
         assert!(matches!(o.shape, Shape::Plant { spread, .. } if spread == 1000.0));
         // A style that was deleted falls back to the Data bar values.
-        f.s.editor.execute(&Command::DeleteResource { id, reassign: None }).unwrap_err();
+        f.s.editor
+            .execute(&Command::DeleteResource { id, reassign: None })
+            .unwrap_err();
     }
 
     #[test]
@@ -388,7 +519,10 @@ mod tests {
         f.click(0.0, 0.0);
         f.click(2000.0, 0.0);
         assert!(f.m.is_busy() && f.plants() == 1 - 1);
-        assert!(matches!(f.preview(DVec2::new(5.0, 5.0)), Preview::Path { closed: false, .. }));
+        assert!(matches!(
+            f.preview(DVec2::new(5.0, 5.0)),
+            Preview::Path { closed: false, .. }
+        ));
         f.send(Input::Enter);
         assert_eq!(f.plants(), 5);
         assert!(!f.m.is_busy());
@@ -409,7 +543,10 @@ mod tests {
         f.settings.plant.spacing = 500.0;
         f.settings.plant.spacing_y = 1000.0;
         f.click(0.0, 0.0);
-        assert!(matches!(f.preview(DVec2::new(1000.0, 1000.0)), Preview::Box { .. }));
+        assert!(matches!(
+            f.preview(DVec2::new(1000.0, 1000.0)),
+            Preview::Box { .. }
+        ));
         f.click(1000.0, 1000.0);
         assert_eq!(f.plants(), 3 * 2);
         f.settings.plant.mode = PlantMode::Triangular;
@@ -435,10 +572,19 @@ mod tests {
         for (x, y) in [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)] {
             f.click(x, y);
         }
-        assert!(matches!(f.preview(DVec2::ZERO), Preview::Path { closed: true, .. }));
+        assert!(matches!(
+            f.preview(DVec2::ZERO),
+            Preview::Path { closed: true, .. }
+        ));
         f.send(Input::Enter);
         assert_eq!(f.plants(), 9);
-        assert!(f.s.editor.doc().objects.values().any(|o| matches!(o.shape, Shape::PlantTag { .. })));
+        assert!(
+            f.s.editor
+                .doc()
+                .objects
+                .values()
+                .any(|o| matches!(o.shape, Shape::PlantTag { .. }))
+        );
         f.s.editor.undo();
         assert_eq!(f.s.editor.doc().objects.len(), 0);
         f.settings.plant.tag = false;
@@ -485,10 +631,25 @@ mod tests {
             f.click(i as f64 * 2000.0, 0.0);
         }
         f.send(Input::Enter);
-        let objs: Vec<_> = f.s.editor.doc().objects.values().filter(|o| matches!(o.shape, Shape::Plant { .. })).collect();
-        let sizes: std::collections::HashSet<u64> = objs.iter().map(|o| match o.shape { Shape::Plant { spread, .. } => spread.to_bits(), _ => 0 }).collect();
+        let objs: Vec<_> =
+            f.s.editor
+                .doc()
+                .objects
+                .values()
+                .filter(|o| matches!(o.shape, Shape::Plant { .. }))
+                .collect();
+        let sizes: std::collections::HashSet<u64> = objs
+            .iter()
+            .map(|o| match o.shape {
+                Shape::Plant { spread, .. } => spread.to_bits(),
+                _ => 0,
+            })
+            .collect();
         assert!(sizes.len() > 1);
-        assert!(objs.iter().any(|o| cadektor_core::plants::link::rotation(o) > 0.0));
+        assert!(
+            objs.iter()
+                .any(|o| cadektor_core::plants::link::rotation(o) > 0.0)
+        );
         // No variation: no rotation data.
         f.settings.plant.size_variation = 0.0;
         f.settings.plant.random_rotation = false;
@@ -536,9 +697,13 @@ mod tests {
     #[test]
     fn single_preview_shows_the_style() {
         let mut f = Fx::new(PlantMode::Single);
-        assert!(matches!(f.preview(DVec2::ZERO), Preview::Shape(Shape::Plant { spread, .. }) if spread == 4000.0));
+        assert!(
+            matches!(f.preview(DVec2::ZERO), Preview::Shape(Shape::Plant { spread, .. }) if spread == 4000.0)
+        );
         f.style();
-        assert!(matches!(f.preview(DVec2::ZERO), Preview::Shape(Shape::Plant { spread, .. }) if spread == 1000.0));
+        assert!(
+            matches!(f.preview(DVec2::ZERO), Preview::Shape(Shape::Plant { spread, .. }) if spread == 1000.0)
+        );
         f.settings.spread = 0.0;
         f.settings.plant.style = None;
         assert_eq!(f.preview(DVec2::ZERO), Preview::None);

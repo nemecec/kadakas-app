@@ -49,7 +49,10 @@ pub struct TinBuilder {
 
 impl Default for TinBuilder {
     fn default() -> Self {
-        TinBuilder { cdt: ConstrainedDelaunayTriangulation::new(), seen: HashMap::new() }
+        TinBuilder {
+            cdt: ConstrainedDelaunayTriangulation::new(),
+            seen: HashMap::new(),
+        }
     }
 }
 
@@ -65,7 +68,13 @@ impl TinBuilder {
         if let Some(h) = self.seen.get(&key) {
             return Ok(*h);
         }
-        let h = self.cdt.insert(V { pos: Point2::new(p.x, p.y), z: p.z }).map_err(|_| SiteError::NotFinite)?;
+        let h = self
+            .cdt
+            .insert(V {
+                pos: Point2::new(p.x, p.y),
+                z: p.z,
+            })
+            .map_err(|_| SiteError::NotFinite)?;
         self.seen.insert(key, h);
         Ok(h)
     }
@@ -82,12 +91,21 @@ impl TinBuilder {
 
     /// Adds a polyline as points and edges. Returns the number of edges that were refused.
     pub fn add_line(&mut self, points: &[DVec3], closed: bool) -> Result<usize, SiteError> {
-        let handles = points.iter().map(|p| self.add_point(*p)).collect::<Result<Vec<_>, _>>()?;
+        let handles = points
+            .iter()
+            .map(|p| self.add_point(*p))
+            .collect::<Result<Vec<_>, _>>()?;
         let n = handles.len();
-        let segs = if closed && n > 2 { n } else { n.saturating_sub(1) };
+        let segs = if closed && n > 2 {
+            n
+        } else {
+            n.saturating_sub(1)
+        };
         let mut refused = 0;
         for i in 0..segs {
-            if !self.add_edge(handles[i], handles[(i + 1) % n]) && handles[i] != handles[(i + 1) % n] {
+            if !self.add_edge(handles[i], handles[(i + 1) % n])
+                && handles[i] != handles[(i + 1) % n]
+            {
                 refused += 1;
             }
         }
@@ -107,8 +125,16 @@ impl TinBuilder {
             .map(|f| {
                 let [a, b, c] = f.vertices().map(|v| v.fix().index() as u32);
                 // Keep every triangle counterclockwise.
-                let (pa, pb, pc) = (vertices[a as usize].truncate(), vertices[b as usize].truncate(), vertices[c as usize].truncate());
-                if (pb - pa).perp_dot(pc - pa) < 0.0 { [a, c, b] } else { [a, b, c] }
+                let (pa, pb, pc) = (
+                    vertices[a as usize].truncate(),
+                    vertices[b as usize].truncate(),
+                    vertices[c as usize].truncate(),
+                );
+                if (pb - pa).perp_dot(pc - pa) < 0.0 {
+                    [a, c, b]
+                } else {
+                    [a, b, c]
+                }
             })
             .collect();
         Tin::from_parts(vertices, triangles)
@@ -185,7 +211,11 @@ impl Tin {
             })
             .collect();
         let index = GridIndex::new(&boxes);
-        Ok(Tin { vertices, triangles: tris, index })
+        Ok(Tin {
+            vertices,
+            triangles: tris,
+            index,
+        })
     }
 
     /// The three corners of triangle `i`.
@@ -229,7 +259,11 @@ impl Tin {
         let gx = (u.z * v.y - v.z * u.y) / det;
         let gy = (v.z * u.x - u.z * v.x) / det;
         let slope = gx.hypot(gy);
-        let aspect = if slope < 1e-12 { None } else { Some((-gx).atan2(-gy).rem_euclid(std::f64::consts::TAU)) };
+        let aspect = if slope < 1e-12 {
+            None
+        } else {
+            Some((-gx).atan2(-gy).rem_euclid(std::f64::consts::TAU))
+        };
         SlopeAspect { slope, aspect }
     }
 
@@ -240,14 +274,19 @@ impl Tin {
 
     /// Lowest and highest elevation.
     pub fn z_range(&self) -> (f64, f64) {
-        self.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.z), hi.max(v.z)))
+        self.vertices
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                (lo.min(v.z), hi.max(v.z))
+            })
     }
 
     /// Box around the surface in XY.
     pub fn bounds(&self) -> (DVec2, DVec2) {
-        self.vertices.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), v| {
-            (lo.min(v.truncate()), hi.max(v.truncate()))
-        })
+        self.vertices.iter().fold(
+            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+            |(lo, hi), v| (lo.min(v.truncate()), hi.max(v.truncate())),
+        )
     }
 
     /// Area of the surface seen from above.
@@ -262,7 +301,8 @@ impl Tin {
 
     /// Edges that belong to one triangle, as (from, to) in the direction of that triangle.
     pub fn boundary_edges(&self) -> Vec<(u32, u32)> {
-        let mut count: HashMap<(u32, u32), (u32, (u32, u32))> = HashMap::with_capacity(self.triangles.len() * 2);
+        let mut count: HashMap<(u32, u32), (u32, (u32, u32))> =
+            HashMap::with_capacity(self.triangles.len() * 2);
         for t in &self.triangles {
             for k in 0..3 {
                 let (a, b) = (t[k], t[(k + 1) % 3]);
@@ -270,12 +310,19 @@ impl Tin {
                 e.0 += 1;
             }
         }
-        count.into_values().filter(|(n, _)| *n == 1).map(|(_, e)| e).collect()
+        count
+            .into_values()
+            .filter(|(n, _)| *n == 1)
+            .map(|(_, e)| e)
+            .collect()
     }
 
     /// Vertices on the outer edge of the surface (edges that belong to one triangle).
     pub fn boundary_vertices(&self) -> HashSet<u32> {
-        self.boundary_edges().into_iter().flat_map(|(a, b)| [a, b]).collect()
+        self.boundary_edges()
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .collect()
     }
 
     /// Vertical walls: pairs of outer edges that have the same place in XY and different heights
@@ -332,7 +379,11 @@ mod tests {
     #[test]
     fn plane_is_reproduced_everywhere() {
         let f = |x: f64, y: f64| 100.0 + 0.1 * x - 0.05 * y;
-        let tin = Tin::build(&SourceData { points: grid_points(6, 10.0, f), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: grid_points(6, 10.0, f),
+            lines: vec![],
+        })
+        .unwrap();
         assert_eq!(tin.triangles.len(), 2 * 25);
         for &(x, y) in &[(0.0, 0.0), (13.7, 22.1), (50.0, 50.0), (49.99, 0.01)] {
             let z = tin.elevation_at(DVec2::new(x, y)).unwrap();
@@ -348,7 +399,11 @@ mod tests {
     #[test]
     fn source_points_keep_their_elevation() {
         let pts = grid_points(5, 7.0, |x, y| (x * 0.3).sin() * 4.0 + y * 0.2);
-        let tin = Tin::build(&SourceData { points: pts.clone(), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: pts.clone(),
+            lines: vec![],
+        })
+        .unwrap();
         for p in pts {
             assert!((tin.elevation_at(p.truncate()).unwrap() - p.z).abs() < 1e-9);
         }
@@ -356,8 +411,17 @@ mod tests {
 
     #[test]
     fn duplicate_xy_keeps_the_first_elevation() {
-        let pts = vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.0, 0.0, 9.0), DVec3::new(10.0, 0.0, 1.0), DVec3::new(0.0, 10.0, 1.0)];
-        let tin = Tin::build(&SourceData { points: pts, lines: vec![] }).unwrap();
+        let pts = vec![
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(0.0, 0.0, 9.0),
+            DVec3::new(10.0, 0.0, 1.0),
+            DVec3::new(0.0, 10.0, 1.0),
+        ];
+        let tin = Tin::build(&SourceData {
+            points: pts,
+            lines: vec![],
+        })
+        .unwrap();
         assert_eq!(tin.vertices.len(), 3);
         assert!((tin.elevation_at(DVec2::ZERO).unwrap() - 1.0).abs() < 1e-12);
     }
@@ -365,15 +429,34 @@ mod tests {
     #[test]
     fn collinear_and_few_points_make_no_surface() {
         let line = (0..5).map(|i| DVec3::new(i as f64, 0.0, 0.0)).collect();
-        assert_eq!(Tin::build(&SourceData { points: line, lines: vec![] }).unwrap_err(), SiteError::NoSurface);
-        assert_eq!(Tin::build(&SourceData::default()).unwrap_err(), SiteError::NoSurface);
+        assert_eq!(
+            Tin::build(&SourceData {
+                points: line,
+                lines: vec![]
+            })
+            .unwrap_err(),
+            SiteError::NoSurface
+        );
+        assert_eq!(
+            Tin::build(&SourceData::default()).unwrap_err(),
+            SiteError::NoSurface
+        );
     }
 
     #[test]
     fn non_finite_points_are_refused() {
-        let src = SourceData { points: vec![DVec3::new(f64::NAN, 0.0, 0.0)], lines: vec![] };
+        let src = SourceData {
+            points: vec![DVec3::new(f64::NAN, 0.0, 0.0)],
+            lines: vec![],
+        };
         assert_eq!(Tin::build(&src).unwrap_err(), SiteError::NotFinite);
-        let src = SourceData { points: vec![], lines: vec![SourceLine { points: vec![DVec3::new(0.0, f64::INFINITY, 0.0)], closed: false }] };
+        let src = SourceData {
+            points: vec![],
+            lines: vec![SourceLine {
+                points: vec![DVec3::new(0.0, f64::INFINITY, 0.0)],
+                closed: false,
+            }],
+        };
         assert_eq!(Tin::build(&src).unwrap_err(), SiteError::NotFinite);
     }
 
@@ -386,9 +469,19 @@ mod tests {
             DVec3::new(10.0, 1.0, 0.0),
             DVec3::new(0.0, 1.0, 0.0),
         ];
-        let line = SourceLine { points: vec![pts[0], pts[2]], closed: false };
-        let tin = Tin::build(&SourceData { points: pts, lines: vec![line] }).unwrap();
-        let has_edge = tin.triangles.iter().any(|t| t.contains(&0) && t.contains(&2));
+        let line = SourceLine {
+            points: vec![pts[0], pts[2]],
+            closed: false,
+        };
+        let tin = Tin::build(&SourceData {
+            points: pts,
+            lines: vec![line],
+        })
+        .unwrap();
+        let has_edge = tin
+            .triangles
+            .iter()
+            .any(|t| t.contains(&0) && t.contains(&2));
         assert!(has_edge);
         let edges: HashSet<(u32, u32)> = tin
             .triangles
@@ -396,19 +489,37 @@ mod tests {
             .flat_map(|t| (0..3).map(move |k| (t[k].min(t[(k + 1) % 3]), t[k].max(t[(k + 1) % 3]))))
             .collect();
         let idx = |p: DVec3| tin.vertices.iter().position(|v| *v == p).unwrap() as u32;
-        let (a, b) = (idx(DVec3::new(0.0, 0.0, 0.0)), idx(DVec3::new(10.0, 1.0, 0.0)));
+        let (a, b) = (
+            idx(DVec3::new(0.0, 0.0, 0.0)),
+            idx(DVec3::new(10.0, 1.0, 0.0)),
+        );
         assert!(edges.contains(&(a.min(b), a.max(b))));
     }
 
     #[test]
     fn crossing_constraints_are_dropped_and_counted() {
         let mut b = TinBuilder::default();
-        let refused = b.add_line(&[DVec3::new(0.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 0.0)], false).unwrap();
+        let refused = b
+            .add_line(
+                &[DVec3::new(0.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 0.0)],
+                false,
+            )
+            .unwrap();
         assert_eq!(refused, 0);
-        let refused = b.add_line(&[DVec3::new(0.0, 10.0, 0.0), DVec3::new(10.0, 0.0, 0.0)], false).unwrap();
+        let refused = b
+            .add_line(
+                &[DVec3::new(0.0, 10.0, 0.0), DVec3::new(10.0, 0.0, 0.0)],
+                false,
+            )
+            .unwrap();
         assert_eq!(refused, 1);
         // A closed ring, and a repeated point that makes a zero-length segment.
-        let ring = [DVec3::new(20.0, 0.0, 0.0), DVec3::new(30.0, 0.0, 0.0), DVec3::new(30.0, 0.0, 0.0), DVec3::new(25.0, 9.0, 0.0)];
+        let ring = [
+            DVec3::new(20.0, 0.0, 0.0),
+            DVec3::new(30.0, 0.0, 0.0),
+            DVec3::new(30.0, 0.0, 0.0),
+            DVec3::new(25.0, 9.0, 0.0),
+        ];
         assert_eq!(b.add_line(&ring, true).unwrap(), 0);
         assert!(b.finish().is_ok());
     }
@@ -417,20 +528,40 @@ mod tests {
     fn slope_and_aspect_of_a_tilted_plane() {
         // Falls toward +X by 10 percent: the surface faces east, 90 degrees clockwise from north.
         let f = |x: f64, _y: f64| 50.0 - 0.1 * x;
-        let tin = Tin::build(&SourceData { points: grid_points(4, 10.0, f), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: grid_points(4, 10.0, f),
+            lines: vec![],
+        })
+        .unwrap();
         let s = tin.slope_at(DVec2::new(12.0, 7.0)).unwrap();
         assert!((s.slope - 0.1).abs() < 1e-12 && (s.percent() - 10.0).abs() < 1e-9);
         assert!((s.aspect.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         assert!((s.angle() - 0.1f64.atan()).abs() < 1e-12);
         // Falls toward +Y: faces north, aspect 0.
-        let tin = Tin::build(&SourceData { points: grid_points(4, 10.0, |_, y| -y), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: grid_points(4, 10.0, |_, y| -y),
+            lines: vec![],
+        })
+        .unwrap();
         let a = tin.slope_at(DVec2::new(5.0, 5.0)).unwrap().aspect.unwrap();
         assert!(a.abs() < 1e-9 || (a - std::f64::consts::TAU).abs() < 1e-9);
         // Falls toward -Y: faces south.
-        let tin = Tin::build(&SourceData { points: grid_points(4, 10.0, |_, y| y), lines: vec![] }).unwrap();
-        assert!((tin.slope_at(DVec2::new(5.0, 5.0)).unwrap().aspect.unwrap() - std::f64::consts::PI).abs() < 1e-9);
+        let tin = Tin::build(&SourceData {
+            points: grid_points(4, 10.0, |_, y| y),
+            lines: vec![],
+        })
+        .unwrap();
+        assert!(
+            (tin.slope_at(DVec2::new(5.0, 5.0)).unwrap().aspect.unwrap() - std::f64::consts::PI)
+                .abs()
+                < 1e-9
+        );
         // Flat ground has no aspect.
-        let tin = Tin::build(&SourceData { points: grid_points(3, 10.0, |_, _| 5.0), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: grid_points(3, 10.0, |_, _| 5.0),
+            lines: vec![],
+        })
+        .unwrap();
         let flat = tin.slope_at(DVec2::new(5.0, 5.0)).unwrap();
         assert_eq!((flat.slope, flat.aspect), (0.0, None));
         assert!(tin.slope_at(DVec2::new(99.0, 5.0)).is_none());
@@ -438,7 +569,11 @@ mod tests {
 
     #[test]
     fn boundary_vertices_are_the_hull() {
-        let tin = Tin::build(&SourceData { points: grid_points(4, 10.0, |_, _| 0.0), lines: vec![] }).unwrap();
+        let tin = Tin::build(&SourceData {
+            points: grid_points(4, 10.0, |_, _| 0.0),
+            lines: vec![],
+        })
+        .unwrap();
         assert_eq!(tin.boundary_vertices().len(), 12);
     }
 
@@ -447,7 +582,13 @@ mod tests {
         let v = vec![DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::new(0.0, 0.0, 0.0)];
         let tin = Tin::from_parts(v.clone(), vec![[0, 2, 1], [0, 0, 1]]).unwrap();
         assert_eq!(tin.triangles, vec![[0, 1, 2]]);
-        assert_eq!(Tin::from_parts(v.clone(), vec![[0, 1, 9]]).unwrap_err(), SiteError::BadTriangle);
-        assert_eq!(Tin::from_parts(v, vec![]).unwrap_err(), SiteError::NoSurface);
+        assert_eq!(
+            Tin::from_parts(v.clone(), vec![[0, 1, 9]]).unwrap_err(),
+            SiteError::BadTriangle
+        );
+        assert_eq!(
+            Tin::from_parts(v, vec![]).unwrap_err(),
+            SiteError::NoSurface
+        );
     }
 }

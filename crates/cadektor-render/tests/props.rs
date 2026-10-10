@@ -4,7 +4,7 @@ use cadektor_core::command::{Command, Editor};
 use cadektor_core::curve::corners;
 use cadektor_core::mesh::build;
 use cadektor_core::model::{Attributes, Shape};
-use cadektor_render::{render, Camera, Projection, RenderMode, RenderOptions, StandardView};
+use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, render};
 use glam::{DVec2, DVec3};
 use proptest::prelude::*;
 
@@ -30,17 +30,33 @@ fn shape() -> impl Strategy<Value = Shape> {
         (point(), point()).prop_map(|(a, b)| Shape::Line { a, b }),
         (point(), point()).prop_map(|(min, max)| Shape::Rect { min, max }),
         (point(), num()).prop_map(|(center, radius)| Shape::Circle { center, radius }),
-        (point(), num(), num()).prop_map(|(at, spread, height)| Shape::Plant { at, species: "p".into(), spread, height }),
-        (prop::collection::vec(point(), 0..8), num(), num()).prop_map(|(pts, t, e)| Shape::Hardscape {
-            boundary: corners(&pts),
-            material: "m".into(),
-            thickness: Some(t),
-            elevation: Some(e),
+        (point(), num(), num()).prop_map(|(at, spread, height)| Shape::Plant {
+            at,
+            species: "p".into(),
+            spread,
+            height
         }),
-        (prop::collection::vec(point(), 0..8), any::<bool>()).prop_map(|(pts, closed)| Shape::Polyline { points: corners(&pts), closed }),
+        (prop::collection::vec(point(), 0..8), num(), num()).prop_map(|(pts, t, e)| {
+            Shape::Hardscape {
+                boundary: corners(&pts),
+                material: "m".into(),
+                thickness: Some(t),
+                elevation: Some(e),
+            }
+        }),
+        (prop::collection::vec(point(), 0..8), any::<bool>()).prop_map(|(pts, closed)| {
+            Shape::Polyline {
+                points: corners(&pts),
+                closed,
+            }
+        }),
         point3().prop_map(|p| Shape::Locus3d { p }),
-        (prop::collection::vec(point3(), 0..8), any::<bool>()).prop_map(|(points, closed)| Shape::Polyline3d { points, closed }),
-        prop::collection::vec(point(), 0..8).prop_map(|pts| Shape::LandscapeArea { boundary: corners(&pts), name: "a".into() }),
+        (prop::collection::vec(point3(), 0..8), any::<bool>())
+            .prop_map(|(points, closed)| Shape::Polyline3d { points, closed }),
+        prop::collection::vec(point(), 0..8).prop_map(|pts| Shape::LandscapeArea {
+            boundary: corners(&pts),
+            name: "a".into()
+        }),
     ]
 }
 

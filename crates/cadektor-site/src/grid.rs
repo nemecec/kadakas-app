@@ -30,10 +30,19 @@ impl GridIndex {
         let size = (hi - lo).max(DVec2::splat(1e-9));
         // About two items per cell, and never more than 4 cells per item.
         let target_cells = (boxes.len() as f64 / 2.0).max(1.0);
-        let cell = (size.x * size.y / target_cells).sqrt().max(size.max_element() / 4096.0);
+        let cell = (size.x * size.y / target_cells)
+            .sqrt()
+            .max(size.max_element() / 4096.0);
         let nx = ((size.x / cell).ceil() as usize).max(1);
         let ny = ((size.y / cell).ceil() as usize).max(1);
-        let mut grid = GridIndex { origin: lo, cell, nx, ny, starts: vec![0; nx * ny + 1], items: Vec::new() };
+        let mut grid = GridIndex {
+            origin: lo,
+            cell,
+            nx,
+            ny,
+            starts: vec![0; nx * ny + 1],
+            items: Vec::new(),
+        };
         for (a, b) in boxes {
             let ((x0, y0), (x1, y1)) = grid.cell_range(*a, *b);
             for y in y0..=y1 {
@@ -62,7 +71,10 @@ impl GridIndex {
 
     fn cell_of(&self, p: DVec2) -> (usize, usize) {
         let f = |v: f64, n: usize| ((v / self.cell).floor().max(0.0) as usize).min(n - 1);
-        (f(p.x - self.origin.x, self.nx), f(p.y - self.origin.y, self.ny))
+        (
+            f(p.x - self.origin.x, self.nx),
+            f(p.y - self.origin.y, self.ny),
+        )
     }
 
     fn cell_range(&self, lo: DVec2, hi: DVec2) -> ((usize, usize), (usize, usize)) {
@@ -83,7 +95,9 @@ impl GridIndex {
         for y in y0..=y1 {
             for x in x0..=x1 {
                 let c = y * self.nx + x;
-                self.items[self.starts[c] as usize..self.starts[c + 1] as usize].iter().for_each(|i| f(*i));
+                self.items[self.starts[c] as usize..self.starts[c + 1] as usize]
+                    .iter()
+                    .for_each(|i| f(*i));
             }
         }
     }
@@ -99,13 +113,19 @@ mod tests {
 
     #[test]
     fn finds_items_near_a_point_and_in_a_box() {
-        let boxes = vec![bx(0.0, 0.0, 1.0, 1.0), bx(9.0, 9.0, 10.0, 10.0), bx(0.0, 0.0, 10.0, 0.5)];
+        let boxes = vec![
+            bx(0.0, 0.0, 1.0, 1.0),
+            bx(9.0, 9.0, 10.0, 10.0),
+            bx(0.0, 0.0, 10.0, 0.5),
+        ];
         let g = GridIndex::new(&boxes);
         assert!(g.near_point(DVec2::new(0.5, 0.2)).contains(&0));
         assert!(g.near_point(DVec2::new(0.5, 0.2)).contains(&2));
         assert!(g.near_point(DVec2::new(9.5, 9.5)).contains(&1));
         let mut seen = Vec::new();
-        g.for_each_in_box(DVec2::new(8.0, 8.0), DVec2::new(11.0, 11.0), |i| seen.push(i));
+        g.for_each_in_box(DVec2::new(8.0, 8.0), DVec2::new(11.0, 11.0), |i| {
+            seen.push(i)
+        });
         assert!(seen.contains(&1));
         // A point outside the grid is clamped to the nearest cell instead of failing.
         let _ = g.near_point(DVec2::new(-100.0, 500.0));

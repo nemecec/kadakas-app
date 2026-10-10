@@ -1,8 +1,8 @@
 //! Export to DXF, import again, and compare the geometry.
 
 use cadektor_core::command::Editor;
-use cadektor_core::curve::{self, corners, Vertex, VertexKind};
-use cadektor_core::model::{arc_sweep, Document, Object, ObjectId, Shape};
+use cadektor_core::curve::{self, Vertex, VertexKind, corners};
+use cadektor_core::model::{Document, Object, ObjectId, Shape, arc_sweep};
 use cadektor_core::{DVec2, DVec3};
 use cadektor_io::dxf::DxfFormat;
 use cadektor_io::{Context, ExportOptions, Exporter, ImportOptions, Importer, Source, Unit};
@@ -10,13 +10,22 @@ use proptest::prelude::*;
 
 fn add(doc: &mut Document, shape: Shape) {
     let id = ObjectId(doc.alloc_id().unwrap());
-    doc.objects.insert(id, Object::new(id, doc.layers[0].id, doc.classes[0].id, shape));
+    doc.objects.insert(
+        id,
+        Object::new(id, doc.layers[0].id, doc.classes[0].id, shape),
+    );
 }
 
 fn roundtrip(doc: &Document, eo: &ExportOptions, io: &ImportOptions) -> Document {
     let bytes = DxfFormat.export(doc, eo).unwrap().bytes;
-    let src = Source { name: "rt".into(), data: bytes, extra: Default::default() };
-    let r = DxfFormat.import(&src, &Context::of(&Document::default()), io).unwrap();
+    let src = Source {
+        name: "rt".into(),
+        data: bytes,
+        extra: Default::default(),
+    };
+    let r = DxfFormat
+        .import(&src, &Context::of(&Document::default()), io)
+        .unwrap();
     assert_eq!(r.report.skipped_total(), 0, "{:?}", r.report.skipped);
     let mut ed = Editor::new(Document::default());
     ed.execute(&r.command).unwrap();
@@ -30,7 +39,11 @@ fn deviation(a: &[DVec2], b: &[DVec2]) -> f64 {
             .map(|w| {
                 let (s, e) = (w[0], w[1]);
                 let d = e - s;
-                let t = if d.length_squared() == 0.0 { 0.0 } else { ((p - s).dot(d) / d.length_squared()).clamp(0.0, 1.0) };
+                let t = if d.length_squared() == 0.0 {
+                    0.0
+                } else {
+                    ((p - s).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+                };
                 p.distance(s + d * t)
             })
             .fold(f64::INFINITY, f64::min)
@@ -60,16 +73,39 @@ fn all_shapes_round_trip() {
         Vertex::corner(DVec2::new(0.0, 0.0)),
         Vertex::new(DVec2::new(1500.0, -800.0), VertexKind::PointOnArc),
         Vertex::corner(DVec2::new(3000.0, 0.0)),
-        Vertex::new(DVec2::new(3000.0, 1000.0), VertexKind::Arc { radius: 300.0 }),
+        Vertex::new(
+            DVec2::new(3000.0, 1000.0),
+            VertexKind::Arc { radius: 300.0 },
+        ),
         Vertex::corner(DVec2::new(0.0, 2000.0)),
     ];
     let shapes = vec![
-        Shape::Line { a: DVec2::new(1.5, 2.5), b: DVec2::new(1000.0, -2000.25) },
-        Shape::Rect { min: DVec2::new(-500.0, 100.0), max: DVec2::new(2500.0, 900.0) },
-        Shape::Circle { center: DVec2::new(100.0, 200.0), radius: 750.5 },
-        Shape::Arc { center: DVec2::new(-100.0, 50.0), radius: 400.0, start: 5.5, end: 1.0 },
-        Shape::Polyline { points: arc_poly.clone(), closed: false },
-        Shape::Polyline { points: arc_poly.clone(), closed: true },
+        Shape::Line {
+            a: DVec2::new(1.5, 2.5),
+            b: DVec2::new(1000.0, -2000.25),
+        },
+        Shape::Rect {
+            min: DVec2::new(-500.0, 100.0),
+            max: DVec2::new(2500.0, 900.0),
+        },
+        Shape::Circle {
+            center: DVec2::new(100.0, 200.0),
+            radius: 750.5,
+        },
+        Shape::Arc {
+            center: DVec2::new(-100.0, 50.0),
+            radius: 400.0,
+            start: 5.5,
+            end: 1.0,
+        },
+        Shape::Polyline {
+            points: arc_poly.clone(),
+            closed: false,
+        },
+        Shape::Polyline {
+            points: arc_poly.clone(),
+            closed: true,
+        },
         Shape::Polyline {
             points: vec![
                 Vertex::corner(DVec2::new(0.0, 0.0)),
@@ -78,14 +114,51 @@ fn all_shapes_round_trip() {
             ],
             closed: false,
         },
-        Shape::Text { at: DVec2::new(10.0, 20.0), text: "Hello, W\u{f6}rld \u{b0}".into(), height: 250.0 },
-        Shape::Text { at: DVec2::new(10.0, 20.0), text: "two\nlines".into(), height: 100.0 },
-        Shape::LandscapeArea { boundary: arc_poly.clone(), name: "Lawn".into() },
-        Shape::Hardscape { boundary: corners(&[DVec2::ZERO, DVec2::new(3000.0, 0.0), DVec2::new(3000.0, 2000.0)]), material: "Granite".into(), thickness: None, elevation: None },
-        Shape::Locus3d { p: DVec3::new(12_345.678, -2_000.5, 4_321.25) },
-        Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 10.0), DVec3::new(1000.0, 0.0, 20.5), DVec3::new(0.0, 1000.0, -3.0)], closed: true },
-        Shape::Polyline3d { points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(10.0, 10.0, 2.0)], closed: false },
-        Shape::Plant { at: DVec2::new(5000.0, 5000.0), species: "Betula pendula".into(), spread: 3000.0, height: 8000.0 },
+        Shape::Text {
+            at: DVec2::new(10.0, 20.0),
+            text: "Hello, W\u{f6}rld \u{b0}".into(),
+            height: 250.0,
+        },
+        Shape::Text {
+            at: DVec2::new(10.0, 20.0),
+            text: "two\nlines".into(),
+            height: 100.0,
+        },
+        Shape::LandscapeArea {
+            boundary: arc_poly.clone(),
+            name: "Lawn".into(),
+        },
+        Shape::Hardscape {
+            boundary: corners(&[
+                DVec2::ZERO,
+                DVec2::new(3000.0, 0.0),
+                DVec2::new(3000.0, 2000.0),
+            ]),
+            material: "Granite".into(),
+            thickness: None,
+            elevation: None,
+        },
+        Shape::Locus3d {
+            p: DVec3::new(12_345.678, -2_000.5, 4_321.25),
+        },
+        Shape::Polyline3d {
+            points: vec![
+                DVec3::new(0.0, 0.0, 10.0),
+                DVec3::new(1000.0, 0.0, 20.5),
+                DVec3::new(0.0, 1000.0, -3.0),
+            ],
+            closed: true,
+        },
+        Shape::Polyline3d {
+            points: vec![DVec3::new(0.0, 0.0, 1.0), DVec3::new(10.0, 10.0, 2.0)],
+            closed: false,
+        },
+        Shape::Plant {
+            at: DVec2::new(5000.0, 5000.0),
+            species: "Betula pendula".into(),
+            spread: 3000.0,
+            height: 8000.0,
+        },
     ];
     for s in &shapes {
         add(&mut doc, s.clone());
@@ -98,33 +171,103 @@ fn all_shapes_round_trip() {
     let mut i = 0;
     for s in &shapes {
         match (s, b[i]) {
-            (Shape::Line { a, b: e }, Shape::Line { a: a2, b: e2 }) => assert!(a.distance(*a2) < tol && e.distance(*e2) < tol),
-            (Shape::Rect { min, max }, Shape::Polyline { points, closed: true }) => {
-                let want = [*min, DVec2::new(max.x, min.y), *max, DVec2::new(min.x, max.y)];
+            (Shape::Line { a, b: e }, Shape::Line { a: a2, b: e2 }) => {
+                assert!(a.distance(*a2) < tol && e.distance(*e2) < tol)
+            }
+            (
+                Shape::Rect { min, max },
+                Shape::Polyline {
+                    points,
+                    closed: true,
+                },
+            ) => {
+                let want = [
+                    *min,
+                    DVec2::new(max.x, min.y),
+                    *max,
+                    DVec2::new(min.x, max.y),
+                ];
                 assert_eq!(points.len(), 4);
                 assert!(points.iter().zip(want).all(|(v, w)| v.p.distance(w) < tol));
             }
-            (Shape::Circle { center, radius }, Shape::Circle { center: c2, radius: r2 }) => assert!(center.distance(*c2) < tol && (radius - r2).abs() < tol),
-            (Shape::Arc { center, radius, start, end }, Shape::Arc { center: c2, radius: r2, start: s2, end: e2 }) => {
+            (
+                Shape::Circle { center, radius },
+                Shape::Circle {
+                    center: c2,
+                    radius: r2,
+                },
+            ) => assert!(center.distance(*c2) < tol && (radius - r2).abs() < tol),
+            (
+                Shape::Arc {
+                    center,
+                    radius,
+                    start,
+                    end,
+                },
+                Shape::Arc {
+                    center: c2,
+                    radius: r2,
+                    start: s2,
+                    end: e2,
+                },
+            ) => {
                 assert!(center.distance(*c2) < tol && (radius - r2).abs() < tol);
-                assert!((start - s2).rem_euclid(std::f64::consts::TAU).min(std::f64::consts::TAU - (start - s2).rem_euclid(std::f64::consts::TAU)) < 1e-9);
+                assert!(
+                    (start - s2).rem_euclid(std::f64::consts::TAU).min(
+                        std::f64::consts::TAU - (start - s2).rem_euclid(std::f64::consts::TAU)
+                    ) < 1e-9
+                );
                 assert!((arc_sweep(*start, *end) - arc_sweep(*s2, *e2)).abs() < 1e-9);
             }
-            (Shape::Polyline { points, closed }, Shape::Polyline { points: p2, closed: c2 }) => assert_same_curve(points, *closed, p2, *c2, 1.2),
-            (Shape::LandscapeArea { boundary, .. }, Shape::Polyline { points: p2, closed: true }) => assert_same_curve(boundary, true, p2, true, 1.2),
-            (Shape::Hardscape { boundary, .. }, Shape::Polyline { points: p2, closed: true }) => assert_same_curve(boundary, true, p2, true, 1.2),
-            (Shape::Text { at, text, height }, Shape::Text { at: a2, text: t2, height: h2 }) => {
+            (
+                Shape::Polyline { points, closed },
+                Shape::Polyline {
+                    points: p2,
+                    closed: c2,
+                },
+            ) => assert_same_curve(points, *closed, p2, *c2, 1.2),
+            (
+                Shape::LandscapeArea { boundary, .. },
+                Shape::Polyline {
+                    points: p2,
+                    closed: true,
+                },
+            ) => assert_same_curve(boundary, true, p2, true, 1.2),
+            (
+                Shape::Hardscape { boundary, .. },
+                Shape::Polyline {
+                    points: p2,
+                    closed: true,
+                },
+            ) => assert_same_curve(boundary, true, p2, true, 1.2),
+            (
+                Shape::Text { at, text, height },
+                Shape::Text {
+                    at: a2,
+                    text: t2,
+                    height: h2,
+                },
+            ) => {
                 assert!(at.distance(*a2) < tol && (height - h2).abs() < tol);
                 assert_eq!(text, t2);
             }
             (Shape::Locus3d { p }, Shape::Locus3d { p: p2 }) => assert!(p.distance(*p2) < tol),
-            (Shape::Polyline3d { points, closed }, Shape::Polyline3d { points: p2, closed: c2 }) => {
+            (
+                Shape::Polyline3d { points, closed },
+                Shape::Polyline3d {
+                    points: p2,
+                    closed: c2,
+                },
+            ) => {
                 assert_eq!(closed, c2);
                 assert!(points.iter().zip(p2).all(|(a, b)| a.distance(*b) < tol));
             }
             (Shape::Plant { at, spread, .. }, Shape::Circle { center, radius }) => {
                 assert!(at.distance(*center) < tol && (spread / 2.0 - radius).abs() < tol);
-                assert!(matches!(b[i + 1], Shape::Line { .. }) && matches!(b[i + 2], Shape::Line { .. }));
+                assert!(
+                    matches!(b[i + 1], Shape::Line { .. })
+                        && matches!(b[i + 2], Shape::Line { .. })
+                );
                 i += 2;
             }
             (a, b) => panic!("{a:?} came back as {b:?}"),
@@ -141,22 +284,51 @@ fn classes_and_layers_round_trip_by_name() {
         id: walls,
         name: "Walls & fences".into(),
         visible: false,
-        attrs: cadektor_core::model::Attributes { pen: Some(cadektor_core::model::Color([200, 10, 30, 255])), fill: None, line_weight: Some(0.5) },
+        attrs: cadektor_core::model::Attributes {
+            pen: Some(cadektor_core::model::Color([200, 10, 30, 255])),
+            fill: None,
+            line_weight: Some(0.5),
+            ..Default::default()
+        },
     });
-    add(&mut doc, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
+    add(
+        &mut doc,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+    );
     let id = ObjectId(doc.alloc_id().unwrap());
-    let mut o = Object::new(id, doc.layers[0].id, walls, Shape::Line { a: DVec2::ZERO, b: DVec2::Y });
+    let mut o = Object::new(
+        id,
+        doc.layers[0].id,
+        walls,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::Y,
+        },
+    );
     o.attrs.pen = Some(cadektor_core::model::Color([1, 2, 3, 255]));
     o.attrs.line_weight = Some(0.35);
     doc.objects.insert(id, o);
     let back = roundtrip(&doc, &ExportOptions::default(), &ImportOptions::default());
-    let c = back.classes.iter().find(|c| c.name == "Walls & fences").unwrap();
+    let c = back
+        .classes
+        .iter()
+        .find(|c| c.name == "Walls & fences")
+        .unwrap();
     assert!(!c.visible);
-    assert_eq!(c.attrs.pen, Some(cadektor_core::model::Color([200, 10, 30, 255])));
+    assert_eq!(
+        c.attrs.pen,
+        Some(cadektor_core::model::Color([200, 10, 30, 255]))
+    );
     assert_eq!(c.attrs.line_weight, Some(0.5));
     let objs: Vec<_> = back.objects.values().collect();
     assert_eq!(objs[1].class, c.id);
-    assert_eq!(objs[1].attrs.pen, Some(cadektor_core::model::Color([1, 2, 3, 255])));
+    assert_eq!(
+        objs[1].attrs.pen,
+        Some(cadektor_core::model::Color([1, 2, 3, 255]))
+    );
     assert_eq!(objs[1].attrs.line_weight, Some(0.35));
     // The class "None" is layer 0.
     assert!(back.classes.iter().any(|c| c.name == "0"));
@@ -165,13 +337,35 @@ fn classes_and_layers_round_trip_by_name() {
 #[test]
 fn units_scale_both_ways() {
     let mut doc = Document::default();
-    add(&mut doc, Shape::Line { a: DVec2::ZERO, b: DVec2::new(1000.0, 0.0) });
-    add(&mut doc, Shape::Locus3d { p: DVec3::new(10.0, 20.0, 3000.0) });
+    add(
+        &mut doc,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::new(1000.0, 0.0),
+        },
+    );
+    add(
+        &mut doc,
+        Shape::Locus3d {
+            p: DVec3::new(10.0, 20.0, 3000.0),
+        },
+    );
     for unit in [Unit::M, Unit::Foot, Unit::Inch, Unit::Cm] {
-        let back = roundtrip(&doc, &ExportOptions { unit, ..Default::default() }, &ImportOptions::default());
-        let Shape::Line { b, .. } = back.objects.values().next().unwrap().shape else { panic!() };
+        let back = roundtrip(
+            &doc,
+            &ExportOptions {
+                unit,
+                ..Default::default()
+            },
+            &ImportOptions::default(),
+        );
+        let Shape::Line { b, .. } = back.objects.values().next().unwrap().shape else {
+            panic!()
+        };
         assert!((b.x - 1000.0).abs() < 1e-6, "{unit:?}");
-        let Shape::Locus3d { p } = back.objects.values().nth(1).unwrap().shape else { panic!() };
+        let Shape::Locus3d { p } = back.objects.values().nth(1).unwrap().shape else {
+            panic!()
+        };
         assert!((p.z - 3000.0).abs() < 1e-6, "{unit:?}");
     }
 }
@@ -238,8 +432,18 @@ fn survey_in_lest97_keeps_its_real_world_coordinates() {
     let text = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\
 0\nLINE\n8\nA\n10\n6589000\n20\n540000\n11\n6589100\n21\n540050\n\
 0\nPOINT\n8\nA\n10\n6589050.25\n20\n540025.5\n30\n12.5\n0\nENDSEC\n0\nEOF\n";
-    let src = Source { name: "s".into(), data: text.as_bytes().to_vec(), extra: Default::default() };
-    let r = DxfFormat.import(&src, &Context::of(&Document::default()), &ImportOptions::default()).unwrap();
+    let src = Source {
+        name: "s".into(),
+        data: text.as_bytes().to_vec(),
+        extra: Default::default(),
+    };
+    let r = DxfFormat
+        .import(
+            &src,
+            &Context::of(&Document::default()),
+            &ImportOptions::default(),
+        )
+        .unwrap();
     let mut ed = Editor::new(Document::default());
     ed.execute(&r.command).unwrap();
     let doc = ed.doc().clone();
@@ -250,22 +454,58 @@ fn survey_in_lest97_keeps_its_real_world_coordinates() {
         assert!(lo.abs().max_element() < 1.0e6 && hi.abs().max_element() < 1.0e6);
     }
     // Default export: real-world numbers in meters. `document`: model numbers.
-    let meters = ExportOptions { unit: Unit::M, ..ExportOptions::default() };
+    let meters = ExportOptions {
+        unit: Unit::M,
+        ..ExportOptions::default()
+    };
     let out = String::from_utf8(DxfFormat.export(&doc, &meters).unwrap().bytes).unwrap();
-    for v in ["6589000", "540050", "6589100", "6589050.25", "540025.5", "12.5"] {
-        assert!(out.lines().any(|l| l.trim().parse::<f64>().is_ok_and(|x| (x - v.parse::<f64>().unwrap()).abs() < 1e-6)), "{v}");
+    for v in [
+        "6589000",
+        "540050",
+        "6589100",
+        "6589050.25",
+        "540025.5",
+        "12.5",
+    ] {
+        assert!(
+            out.lines()
+                .any(|l| l
+                    .trim()
+                    .parse::<f64>()
+                    .is_ok_and(|x| (x - v.parse::<f64>().unwrap()).abs() < 1e-6)),
+            "{v}"
+        );
     }
-    let local = ExportOptions { unit: Unit::M, origin: cadektor_io::ExportOrigin::Document, ..ExportOptions::default() };
+    let local = ExportOptions {
+        unit: Unit::M,
+        origin: cadektor_io::ExportOrigin::Document,
+        ..ExportOptions::default()
+    };
     let out = String::from_utf8(DxfFormat.export(&doc, &local).unwrap().bytes).unwrap();
     assert!(!out.lines().any(|l| l.trim() == "6589000"));
     // Import the export again: the same georeference and the same shapes.
     let again = DxfFormat.export(&doc, &meters).unwrap().bytes;
-    let src = Source { name: "s".into(), data: again, extra: Default::default() };
-    let r = DxfFormat.import(&src, &Context::of(&Document::default()), &ImportOptions::default()).unwrap();
+    let src = Source {
+        name: "s".into(),
+        data: again,
+        extra: Default::default(),
+    };
+    let r = DxfFormat
+        .import(
+            &src,
+            &Context::of(&Document::default()),
+            &ImportOptions::default(),
+        )
+        .unwrap();
     let mut ed2 = Editor::new(Document::default());
     ed2.execute(&r.command).unwrap();
     assert_eq!(ed2.doc().georef, doc.georef);
-    let back: Vec<_> = ed2.doc().objects.values().map(|o| o.shape.clone()).collect();
+    let back: Vec<_> = ed2
+        .doc()
+        .objects
+        .values()
+        .map(|o| o.shape.clone())
+        .collect();
     let orig: Vec<_> = doc.objects.values().map(|o| o.shape.clone()).collect();
     assert_eq!(back.len(), orig.len());
     for (a, b) in back.iter().zip(&orig) {

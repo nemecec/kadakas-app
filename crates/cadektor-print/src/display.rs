@@ -77,12 +77,29 @@ pub struct Page {
 
 impl PathPrim {
     pub fn stroked(segs: Vec<PSeg>, closed: bool, color: Rgba, width: f64) -> PathPrim {
-        PathPrim { segs, closed, stroke: Some(color), fill: None, width, dash: None }
+        PathPrim {
+            segs,
+            closed,
+            stroke: Some(color),
+            fill: None,
+            width,
+            dash: None,
+        }
     }
 
     /// Move and line pieces through the points.
     pub fn polyline(points: &[DVec2]) -> Vec<PSeg> {
-        points.iter().enumerate().map(|(i, p)| if i == 0 { PSeg::Move(*p) } else { PSeg::Line(*p) }).collect()
+        points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if i == 0 {
+                    PSeg::Move(*p)
+                } else {
+                    PSeg::Line(*p)
+                }
+            })
+            .collect()
     }
 }
 
@@ -127,7 +144,12 @@ pub fn sample(segs: &[PSeg], per_curve: usize) -> Vec<DVec2> {
                 for i in 1..=per_curve {
                     let t = i as f64 / per_curve as f64;
                     let u = 1.0 - t;
-                    out.push(cur * (u * u * u) + c1 * (3.0 * u * u * t) + c2 * (3.0 * u * t * t) + p * (t * t * t));
+                    out.push(
+                        cur * (u * u * u)
+                            + c1 * (3.0 * u * u * t)
+                            + c2 * (3.0 * u * t * t)
+                            + p * (t * t * t),
+                    );
                 }
                 cur = p;
             }

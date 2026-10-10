@@ -91,7 +91,10 @@ impl Default for SiteSettings {
 impl SiteSettings {
     /// True if every number is finite.
     pub fn is_finite(&self) -> bool {
-        self.minor_interval.is_finite() && self.major_interval.is_finite() && self.datum.is_finite() && self.crop.iter().all(|p| p.is_finite())
+        self.minor_interval.is_finite()
+            && self.major_interval.is_finite()
+            && self.datum.is_finite()
+            && self.crop.iter().all(|p| p.is_finite())
     }
 
     /// Why the settings are not usable, if they are not.
@@ -140,7 +143,8 @@ impl ModifierKind {
     pub fn is_finite(&self) -> bool {
         match self {
             ModifierKind::Pad { elevation, slope } => {
-                elevation.is_finite() && slope.is_none_or(|s| s.direction.is_finite() && s.percent.is_finite())
+                elevation.is_finite()
+                    && slope.is_none_or(|s| s.direction.is_finite() && s.percent.is_finite())
             }
             ModifierKind::GradeLimit => true,
         }
@@ -173,9 +177,17 @@ fn reach(boundary: &[DVec2], direction: f64) -> f64 {
 
 /// A pad slope from the elevation at its end: the height where the boundary ends in the
 /// falling `direction`. `None` if the boundary has no extent in that direction.
-pub fn slope_from_end_elevation(boundary: &[DVec2], elevation: f64, direction: f64, end_elevation: f64) -> Option<PadSlope> {
+pub fn slope_from_end_elevation(
+    boundary: &[DVec2],
+    elevation: f64,
+    direction: f64,
+    end_elevation: f64,
+) -> Option<PadSlope> {
     let r = reach(boundary, direction);
-    (r > 0.0 && end_elevation.is_finite()).then(|| PadSlope { direction, percent: (elevation - end_elevation) / r * 100.0 })
+    (r > 0.0 && end_elevation.is_finite()).then(|| PadSlope {
+        direction,
+        percent: (elevation - end_elevation) / r * 100.0,
+    })
 }
 
 /// The elevation at the end of a sloped pad (see `slope_from_end_elevation`).
@@ -211,7 +223,8 @@ mod tests {
 
     #[test]
     fn settings_read_with_missing_fields() {
-        let s: SiteSettings = serde_json::from_str(r#"{"minor_interval": 250.0, "display_2d": "both"}"#).unwrap();
+        let s: SiteSettings =
+            serde_json::from_str(r#"{"minor_interval": 250.0, "display_2d": "both"}"#).unwrap();
         assert_eq!(s.minor_interval, 250.0);
         assert_eq!(s.display_2d, SurfaceDisplay::Both);
         assert_eq!(s.major_interval, 2500.0);
@@ -219,19 +232,47 @@ mod tests {
 
     #[test]
     fn modifier_kind_numbers_and_json() {
-        let k = ModifierKind::Pad { elevation: 5.0, slope: Some(PadSlope { direction: 0.0, percent: 2.0 }) };
+        let k = ModifierKind::Pad {
+            elevation: 5.0,
+            slope: Some(PadSlope {
+                direction: 0.0,
+                percent: 2.0,
+            }),
+        };
         assert!(k.is_finite());
         assert_eq!(k.numbers(), vec![5.0, 2.0]);
         let json = serde_json::to_string(&k).unwrap();
         assert_eq!(serde_json::from_str::<ModifierKind>(&json).unwrap(), k);
-        assert!(!ModifierKind::Pad { elevation: f64::NAN, slope: None }.is_finite());
-        assert!(!ModifierKind::Pad { elevation: 0.0, slope: Some(PadSlope { direction: f64::NAN, percent: 1.0 }) }.is_finite());
-        assert!(ModifierKind::GradeLimit.is_finite() && ModifierKind::GradeLimit.numbers().is_empty());
+        assert!(
+            !ModifierKind::Pad {
+                elevation: f64::NAN,
+                slope: None
+            }
+            .is_finite()
+        );
+        assert!(
+            !ModifierKind::Pad {
+                elevation: 0.0,
+                slope: Some(PadSlope {
+                    direction: f64::NAN,
+                    percent: 1.0
+                })
+            }
+            .is_finite()
+        );
+        assert!(
+            ModifierKind::GradeLimit.is_finite() && ModifierKind::GradeLimit.numbers().is_empty()
+        );
     }
 
     #[test]
     fn slope_from_the_elevation_at_the_end() {
-        let sq = [DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0), DVec2::new(0.0, 10.0)];
+        let sq = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ];
         // Falls toward +X; the end is 5 from the middle. 10 at the middle and 9 at the end is 20 percent.
         let s = slope_from_end_elevation(&sq, 10.0, 0.0, 9.0).unwrap();
         assert!((s.percent - 20.0).abs() < 1e-9 && s.direction == 0.0);

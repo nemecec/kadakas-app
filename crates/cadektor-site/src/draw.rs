@@ -23,10 +23,13 @@ const PROPOSED_LINE: Color = Color([30, 120, 50, 255]);
 /// the existing one.
 pub fn shown_surfaces(site: &SiteResult, display: SurfaceDisplay) -> Vec<Surface> {
     let mut v = Vec::new();
-    if matches!(display, SurfaceDisplay::Existing | SurfaceDisplay::Both) || (site.proposed.is_none() && display == SurfaceDisplay::Proposed) {
+    if matches!(display, SurfaceDisplay::Existing | SurfaceDisplay::Both)
+        || (site.proposed.is_none() && display == SurfaceDisplay::Proposed)
+    {
         v.push(Surface::Existing);
     }
-    if site.proposed.is_some() && matches!(display, SurfaceDisplay::Proposed | SurfaceDisplay::Both) {
+    if site.proposed.is_some() && matches!(display, SurfaceDisplay::Proposed | SurfaceDisplay::Both)
+    {
         v.push(Surface::Proposed);
     }
     v
@@ -73,19 +76,33 @@ pub fn draw_3d(site: &SiteResult, sink: &mut SceneSink<'_>) {
 }
 
 /// Draws the whole 3D part of one object, if it is a site model. For `mesh::build_with`.
-pub fn scene_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, &Object, &mut SceneSink<'_>) + 'a {
+pub fn scene_ext<'a>(
+    cache: &'a SiteCache,
+    revision: u64,
+) -> impl Fn(&Document, &Object, &mut SceneSink<'_>) + 'a {
     move |doc, obj, sink| {
         if let Shape::SiteModel { .. } = obj.shape {
             if let Ok(site) = cache.get(revision, doc, obj.id) {
                 draw_3d(&site, sink);
             }
-        } else if matches!(obj.shape, Shape::Hardscape { .. } | Shape::LandscapeArea { .. }) {
+        } else if matches!(
+            obj.shape,
+            Shape::Hardscape { .. } | Shape::LandscapeArea { .. }
+        ) {
             // Core sends only the objects that drape. They follow the site models on their layer.
             let terrain = crate::terrain::SiteTerrain::new(cache, revision, doc);
             let at = |p| terrain.elevation(obj, p);
             // Fully outside the site models there is no ground to follow.
-            let ring = cadektor_core::curve::flatten(obj.shape.vertices().map_or(&[][..], |v| v.as_slice()), true, 2.0);
-            let ground: Option<cadektor_core::hardscape::Terrain<'_>> = ring.iter().step_by((ring.len() / 64).max(1)).any(|p| terrain.covered(obj, *p)).then_some(&at);
+            let ring = cadektor_core::curve::flatten(
+                obj.shape.vertices().map_or(&[][..], |v| v.as_slice()),
+                true,
+                2.0,
+            );
+            let ground: Option<cadektor_core::hardscape::Terrain<'_>> = ring
+                .iter()
+                .step_by((ring.len() / 64).max(1))
+                .any(|p| terrain.covered(obj, *p))
+                .then_some(&at);
             if matches!(obj.shape, Shape::Hardscape { .. }) {
                 cadektor_core::hardscape::emit_object(doc, obj, ground, sink);
             } else {
@@ -99,24 +116,53 @@ pub fn scene_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, 
                 .values()
                 .filter(|o| o.layer == obj.layer && matches!(o.shape, Shape::SiteModel { .. }))
                 .find_map(|o| cache.get(revision, doc, o.id).ok());
-            let pts: Vec<DVec3> = ring.iter().map(|p| p.extend(host.as_ref().and_then(|h| h.elevation_at(*p)).unwrap_or(0.0))).collect();
+            let pts: Vec<DVec3> = ring
+                .iter()
+                .map(|p| {
+                    p.extend(
+                        host.as_ref()
+                            .and_then(|h| h.elevation_at(*p))
+                            .unwrap_or(0.0),
+                    )
+                })
+                .collect();
             sink.polyline(&pts, true, [90, 90, 90, 255]);
         }
     }
 }
 
-fn contour_svg(out: &mut String, doc: &Document, obj: &Object, which: Surface, color: Color, c: &Contour, label: bool) {
+fn contour_svg(
+    out: &mut String,
+    doc: &Document,
+    obj: &Object,
+    which: Surface,
+    color: Color,
+    c: &Contour,
+    label: bool,
+) {
     let scale = doc.layer(obj.layer).map_or(100.0, |l| l.scale);
     let width = if c.major { 0.5 } else { 0.18 } * scale;
     let tag = if c.closed { "polygon" } else { "polyline" };
-    let pts: Vec<String> = c.points.iter().map(|p| format!("{},{}", p.x, -p.y)).collect();
-    let dash = if which == Surface::Existing { format!(r#" stroke-dasharray="{} {}""#, 3.0 * scale, 1.5 * scale) } else { String::new() };
+    let pts: Vec<String> = c
+        .points
+        .iter()
+        .map(|p| format!("{},{}", p.x, -p.y))
+        .collect();
+    let dash = if which == Surface::Existing {
+        format!(r#" stroke-dasharray="{} {}""#, 3.0 * scale, 1.5 * scale)
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         out,
         r#"<{tag} points="{}" fill="none" stroke="{}" stroke-width="{width}"{dash} data-kind="contour" data-surface="{}" data-level="{}" data-major="{}" data-site="{}"/>"#,
         pts.join(" "),
         color.to_css(),
-        if which == Surface::Existing { "existing" } else { "proposed" },
+        if which == Surface::Existing {
+            "existing"
+        } else {
+            "proposed"
+        },
         c.level,
         c.major,
         obj.id
@@ -143,12 +189,17 @@ pub fn format_level(mm: f64) -> String {
 }
 
 /// Adds the contours of a site model to the SVG of the drawing. For `svg::render_with`.
-pub fn svg_ext<'a>(cache: &'a SiteCache, revision: u64) -> impl Fn(&Document, &Object, &str, &mut String) + 'a {
+pub fn svg_ext<'a>(
+    cache: &'a SiteCache,
+    revision: u64,
+) -> impl Fn(&Document, &Object, &str, &mut String) + 'a {
     move |doc, obj, _style, out| {
         if !matches!(obj.shape, Shape::SiteModel { .. }) {
             return;
         }
-        let Ok(site) = cache.get(revision, doc, obj.id) else { return };
+        let Ok(site) = cache.get(revision, doc, obj.id) else {
+            return;
+        };
         for which in shown_surfaces(&site, site.settings.display_2d) {
             let color = line_color(&site, which);
             for c in site.contours(which).unwrap_or(&[]) {
@@ -171,17 +222,42 @@ mod tests {
     fn site_with_pad() -> (Editor, cadektor_core::model::ObjectId) {
         let mut ed = Editor::default();
         let id = add(&mut ed, grid_site(9, 1000.0, |x, _| x / 10.0));
-        let b = cadektor_core::curve::corners(&[DVec2::new(2000.0, 2000.0), DVec2::new(4000.0, 2000.0), DVec2::new(4000.0, 4000.0), DVec2::new(2000.0, 4000.0)]);
-        add(&mut ed, Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: 300.0, slope: None }, boundary: b });
+        let b = cadektor_core::curve::corners(&[
+            DVec2::new(2000.0, 2000.0),
+            DVec2::new(4000.0, 2000.0),
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(2000.0, 4000.0),
+        ]);
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 300.0,
+                    slope: None,
+                },
+                boundary: b,
+            },
+        );
         (ed, id)
     }
 
-    fn set_settings(ed: &mut Editor, id: cadektor_core::model::ObjectId, f: impl Fn(&mut cadektor_core::model::SiteSettings)) {
+    fn set_settings(
+        ed: &mut Editor,
+        id: cadektor_core::model::ObjectId,
+        f: impl Fn(&mut cadektor_core::model::SiteSettings),
+    ) {
         let mut shape = ed.doc().object(id).unwrap().shape.clone();
         if let Shape::SiteModel { settings, .. } = &mut shape {
             f(settings);
         }
-        ed.execute(&cadektor_core::command::Command::ModifyObject { id, shape: Some(shape), layer: None, class: None, attrs: None }).unwrap();
+        ed.execute(&cadektor_core::command::Command::ModifyObject {
+            id,
+            shape: Some(shape),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .unwrap();
     }
 
     #[test]
@@ -201,10 +277,16 @@ mod tests {
         };
         let count = |svg: &str, what: &str| svg.matches(what).count();
         let proposed = render(&ed);
-        assert!(count(&proposed, r#"data-surface="proposed""#) > 0 && count(&proposed, r#"data-surface="existing""#) == 0);
+        assert!(
+            count(&proposed, r#"data-surface="proposed""#) > 0
+                && count(&proposed, r#"data-surface="existing""#) == 0
+        );
         set_settings(&mut ed, id, |s| s.display_2d = SurfaceDisplay::Both);
         let both = render(&ed);
-        assert!(count(&both, r#"data-surface="existing""#) > 0 && count(&both, r#"data-surface="proposed""#) > 0);
+        assert!(
+            count(&both, r#"data-surface="existing""#) > 0
+                && count(&both, r#"data-surface="proposed""#) > 0
+        );
         assert!(both.contains("stroke-dasharray"));
         assert!(!both.contains("contour-label"));
         set_settings(&mut ed, id, |s| {
@@ -224,7 +306,14 @@ mod tests {
     #[test]
     fn site_without_a_surface_draws_only_its_outline() {
         let mut ed = Editor::default();
-        add(&mut ed, Shape::SiteModel { points: vec![glam::DVec3::ZERO], lines: vec![], settings: Default::default() });
+        add(
+            &mut ed,
+            Shape::SiteModel {
+                points: vec![glam::DVec3::ZERO],
+                lines: vec![],
+                settings: Default::default(),
+            },
+        );
         let cache = SiteCache::default();
         let ext = svg_ext(&cache, ed.revision());
         assert!(!svg::render_with(ed.doc(), 400, Some(&ext)).contains("contour"));
@@ -252,7 +341,9 @@ mod tests {
         assert!(scene.lines.segment_count() > outline_only);
         // Contours are at their level height.
         let zs: Vec<f32> = scene.lines.positions.iter().map(|p| p.z).collect();
-        assert!(zs.iter().any(|z| (*z - 250.0).abs() < 1e-3 || (*z - 300.0).abs() < 1e-3 || (*z - 500.0).abs() < 1e-3));
+        assert!(zs.iter().any(|z| (*z - 250.0).abs() < 1e-3
+            || (*z - 300.0).abs() < 1e-3
+            || (*z - 500.0).abs() < 1e-3));
         set_settings(&mut ed, id, |s| {
             s.display_3d = Display3d::Both;
             s.surface_3d = SurfaceDisplay::Both;
@@ -260,7 +351,10 @@ mod tests {
             s.proposed_color = Some(Color([4, 5, 6, 255]));
         });
         let scene = build(&ed);
-        assert!(scene.mesh.colors.contains(&[1, 2, 3, 255]) && scene.mesh.colors.contains(&[4, 5, 6, 255]));
+        assert!(
+            scene.mesh.colors.contains(&[1, 2, 3, 255])
+                && scene.mesh.colors.contains(&[4, 5, 6, 255])
+        );
         // Core alone draws only the modifier outline.
         let bare = mesh::build_with(ed.doc(), glam::DVec3::ZERO, None);
         assert_eq!(bare.mesh.triangle_count(), 0);
@@ -272,12 +366,27 @@ mod tests {
         let mut ed = Editor::default();
         let id = add(&mut ed, grid_site(3, 1000.0, |x, _| x));
         let site = SiteResult::compute(ed.doc(), id).unwrap();
-        assert_eq!(shown_surfaces(&site, SurfaceDisplay::Proposed), vec![Surface::Existing]);
-        assert_eq!(shown_surfaces(&site, SurfaceDisplay::Both), vec![Surface::Existing]);
-        assert_eq!(shown_surfaces(&site, SurfaceDisplay::Existing), vec![Surface::Existing]);
+        assert_eq!(
+            shown_surfaces(&site, SurfaceDisplay::Proposed),
+            vec![Surface::Existing]
+        );
+        assert_eq!(
+            shown_surfaces(&site, SurfaceDisplay::Both),
+            vec![Surface::Existing]
+        );
+        assert_eq!(
+            shown_surfaces(&site, SurfaceDisplay::Existing),
+            vec![Surface::Existing]
+        );
         let (ed, id) = site_with_pad();
         let site = SiteResult::compute(ed.doc(), id).unwrap();
-        assert_eq!(shown_surfaces(&site, SurfaceDisplay::Both), vec![Surface::Existing, Surface::Proposed]);
-        assert_eq!(shown_surfaces(&site, SurfaceDisplay::Proposed), vec![Surface::Proposed]);
+        assert_eq!(
+            shown_surfaces(&site, SurfaceDisplay::Both),
+            vec![Surface::Existing, Surface::Proposed]
+        );
+        assert_eq!(
+            shown_surfaces(&site, SurfaceDisplay::Proposed),
+            vec![Surface::Proposed]
+        );
     }
 }

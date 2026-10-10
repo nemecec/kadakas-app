@@ -17,8 +17,21 @@ use crate::model::Color;
 
 /// Fields that a column can set, in export order.
 pub const FIELDS: [&str; 15] = [
-    "name", "botanical_name", "common_name", "id_code", "category", "spread", "height", "graphic", "form", "fill", "pen", "price", "size",
-    "container", "root",
+    "name",
+    "botanical_name",
+    "common_name",
+    "id_code",
+    "category",
+    "spread",
+    "height",
+    "graphic",
+    "form",
+    "fill",
+    "pen",
+    "price",
+    "size",
+    "container",
+    "root",
 ];
 
 /// The unit of lengths in a CSV file.
@@ -62,7 +75,10 @@ pub fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
     let mut quoted = false;
     let mut was_quoted = false;
     let mut chars = text.chars().peekable();
-    let end_row = |row: &mut Vec<String>, field: &mut String, rows: &mut Vec<Vec<String>>, was_quoted: &mut bool| {
+    let end_row = |row: &mut Vec<String>,
+                   field: &mut String,
+                   rows: &mut Vec<Vec<String>>,
+                   was_quoted: &mut bool| {
         row.push(std::mem::take(field));
         let blank = row.len() == 1 && row[0].trim().is_empty() && !*was_quoted;
         if !blank {
@@ -125,8 +141,14 @@ fn detect_delimiter(text: &str) -> char {
             _ => {}
         }
     }
-    let best = (0..3).max_by_key(|i| (counts[*i], std::cmp::Reverse(*i))).unwrap();
-    if counts[best] == 0 { ',' } else { [',', ';', '\t'][best] }
+    let best = (0..3)
+        .max_by_key(|i| (counts[*i], std::cmp::Reverse(*i)))
+        .unwrap();
+    if counts[best] == 0 {
+        ','
+    } else {
+        [',', ';', '\t'][best]
+    }
 }
 
 fn quote(s: &str) -> String {
@@ -152,15 +174,21 @@ pub fn write_csv(rows: &[Vec<String>]) -> String {
 
 /// Lowercase letters and digits of a header, split at other characters.
 fn tokens(s: &str) -> Vec<String> {
-    s.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).map(|t| t.to_lowercase()).collect()
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_lowercase())
+        .collect()
 }
 
 fn field_for_key(key: &str) -> Option<&'static str> {
     Some(match key {
         "name" | "stylename" | "style" | "plantname" | "plantstyle" => "name",
-        "botanical" | "botanicalname" | "latin" | "latinname" | "species" | "scientificname" | "scientific" => "botanical_name",
+        "botanical" | "botanicalname" | "latin" | "latinname" | "species" | "scientificname"
+        | "scientific" => "botanical_name",
         "common" | "commonname" => "common_name",
-        "id" | "idcode" | "tag" | "tagid" | "plantid" | "code" | "plantcode" | "tagcode" => "id_code",
+        "id" | "idcode" | "tag" | "tagid" | "plantid" | "code" | "plantcode" | "tagcode" => {
+            "id_code"
+        }
         "category" | "type" | "group" | "plantcategory" | "planttype" => "category",
         "spread" | "width" | "canopy" | "diameter" | "crown" => "spread",
         "height" | "matureheight" => "height",
@@ -206,7 +234,11 @@ fn classify(header: &str) -> Column {
 
 fn hex(c: Color) -> String {
     let [r, g, b, a] = c.0;
-    if a == 255 { format!("#{r:02X}{g:02X}{b:02X}") } else { format!("#{r:02X}{g:02X}{b:02X}{a:02X}") }
+    if a == 255 {
+        format!("#{r:02X}{g:02X}{b:02X}")
+    } else {
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
 }
 
 fn parse_color(s: &str) -> Result<Option<Color>, String> {
@@ -217,7 +249,12 @@ fn parse_color(s: &str) -> Result<Option<Color>, String> {
     let h = s.strip_prefix('#').unwrap_or(s);
     if (h.len() == 6 || h.len() == 8) && h.chars().all(|c| c.is_ascii_hexdigit()) {
         let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap();
-        return Ok(Some(Color([b(0), b(2), b(4), if h.len() == 8 { b(6) } else { 255 }])));
+        return Ok(Some(Color([
+            b(0),
+            b(2),
+            b(4),
+            if h.len() == 8 { b(6) } else { 255 },
+        ])));
     }
     Err(format!("'{s}' is not a color. Use #RRGGBB"))
 }
@@ -234,7 +271,10 @@ fn parse_number(s: &str) -> Result<Option<(f64, bool)>, String> {
     if s.is_empty() {
         return Ok(None);
     }
-    let t: String = s.chars().filter(|c| !c.is_whitespace() && *c != '\'').collect();
+    let t: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '\'')
+        .collect();
     let (dots, commas) = (t.matches('.').count(), t.matches(',').count());
     let mut ambiguous = false;
     let clean = match (dots, commas) {
@@ -243,13 +283,20 @@ fn parse_number(s: &str) -> Result<Option<(f64, bool)>, String> {
         (_, 0) => t.replace('.', ""),
         (0, 1) => {
             let (head, tail) = t.split_once(',').expect("one comma");
-            ambiguous = tail.len() == 3 && tail.chars().all(|c| c.is_ascii_digit()) && !head.is_empty() && head.len() <= 3;
+            ambiguous = tail.len() == 3
+                && tail.chars().all(|c| c.is_ascii_digit())
+                && !head.is_empty()
+                && head.len() <= 3;
             t.replace(',', ".")
         }
         (0, _) => t.replace(',', ""),
         _ => {
             // Both marks: the one that comes last is the decimal mark.
-            let decimal = if t.rfind('.') > t.rfind(',') { '.' } else { ',' };
+            let decimal = if t.rfind('.') > t.rfind(',') {
+                '.'
+            } else {
+                ','
+            };
             let thousands = if decimal == '.' { ',' } else { '.' };
             // The decimal mark must appear once, and the thousands mark must not come after it.
             if t.matches(decimal).count() != 1 || t.rfind(thousands) > t.rfind(decimal) {
@@ -258,7 +305,12 @@ fn parse_number(s: &str) -> Result<Option<(f64, bool)>, String> {
             t.replace(thousands, "").replace(',', ".")
         }
     };
-    clean.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| Some((v, ambiguous))).ok_or_else(|| format!("'{s}' is not a number"))
+    clean
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .map(|v| Some((v, ambiguous)))
+        .ok_or_else(|| format!("'{s}' is not a number"))
 }
 
 // ---------------------------------------------------------------------------
@@ -315,14 +367,21 @@ pub struct ImportResult {
 /// Reads plant styles from CSV text.
 pub fn import(text: &str, opts: &ImportOptions) -> Result<ImportResult, String> {
     let rows = parse_csv(text)?;
-    let Some((head, body)) = rows.split_first() else { return Err("the file is empty".into()) };
+    let Some((head, body)) = rows.split_first() else {
+        return Err("the file is empty".into());
+    };
     let mut cols: Vec<Column> = head.iter().map(|h| classify(h)).collect();
     for (field, header) in &opts.mapping {
-        let field = FIELDS.iter().find(|f| **f == field.as_str()).ok_or_else(|| format!("unknown field '{field}' in the mapping"))?;
+        let field = FIELDS
+            .iter()
+            .find(|f| **f == field.as_str())
+            .ok_or_else(|| format!("unknown field '{field}' in the mapping"))?;
         let i = head
             .iter()
             .position(|h| h.trim().eq_ignore_ascii_case(header.trim()))
-            .ok_or_else(|| format!("the mapping names a column '{header}' that the file does not have"))?;
+            .ok_or_else(|| {
+                format!("the mapping names a column '{header}' that the file does not have")
+            })?;
         // A column that was mapped by hand replaces the automatic match of the same field.
         for c in &mut cols {
             if matches!(c, Column::Field(f, _) if f == field) {
@@ -331,7 +390,12 @@ pub fn import(text: &str, opts: &ImportOptions) -> Result<ImportResult, String> 
         }
         cols[i] = Column::Field(field, None);
     }
-    if !cols.iter().any(|c| matches!(c, Column::Field("name" | "botanical_name" | "common_name", _))) {
+    if !cols.iter().any(|c| {
+        matches!(
+            c,
+            Column::Field("name" | "botanical_name" | "common_name", _)
+        )
+    }) {
         return Err("no column gives a name. Add a 'name' or 'botanical name' column".into());
     }
     let mut out = ImportResult::default();
@@ -339,9 +403,17 @@ pub fn import(text: &str, opts: &ImportOptions) -> Result<ImportResult, String> 
         let line = n + 2;
         match read_row(row, &cols, head, opts.unit) {
             Ok((imported, warns)) => {
-                out.warnings.extend(warns.into_iter().map(|w| format!("row {line}: {w}")));
-                if out.styles.iter().any(|s| s.name.eq_ignore_ascii_case(&imported.name)) {
-                    out.warnings.push(format!("row {line}: skipped, the name '{}' appears twice", imported.name));
+                out.warnings
+                    .extend(warns.into_iter().map(|w| format!("row {line}: {w}")));
+                if out
+                    .styles
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&imported.name))
+                {
+                    out.warnings.push(format!(
+                        "row {line}: skipped, the name '{}' appears twice",
+                        imported.name
+                    ));
                 } else {
                     out.styles.push(imported);
                 }
@@ -352,7 +424,12 @@ pub fn import(text: &str, opts: &ImportOptions) -> Result<ImportResult, String> 
     Ok(out)
 }
 
-fn read_row(row: &[String], cols: &[Column], head: &[String], unit: Unit) -> Result<(ImportedStyle, Vec<String>), String> {
+fn read_row(
+    row: &[String],
+    cols: &[Column],
+    head: &[String],
+    unit: Unit,
+) -> Result<(ImportedStyle, Vec<String>), String> {
     let mut s = PlantStyle::default();
     let mut name = String::new();
     let mut warns = Vec::new();
@@ -373,7 +450,11 @@ fn read_row(row: &[String], cols: &[Column], head: &[String], unit: Unit) -> Res
                     match parse_number(cell).map_err(|e| format!("{} {e}", head[i])) {
                         Ok(Some((v, ambiguous))) => {
                             if ambiguous {
-                                warns.push(format!("{} '{cell}' could be {} or {v}. Read as {v}", head[i], v * 1000.0));
+                                warns.push(format!(
+                                    "{} '{cell}' could be {} or {v}. Read as {v}",
+                                    head[i],
+                                    v * 1000.0
+                                ));
                             }
                             Ok(Some(v))
                         }
@@ -417,7 +498,11 @@ fn read_row(row: &[String], cols: &[Column], head: &[String], unit: Unit) -> Res
                     "spread" | "height" => {
                         if let Ok(Some(v)) = num(&mut warns) {
                             let mm = v * u.unwrap_or(unit).to_mm();
-                            if *f == "spread" { s.spread = mm } else { s.height = mm }
+                            if *f == "spread" {
+                                s.spread = mm
+                            } else {
+                                s.height = mm
+                            }
                         }
                     }
                     _ => unreachable!("FIELDS lists every field"),
@@ -430,13 +515,24 @@ fn read_row(row: &[String], cols: &[Column], head: &[String], unit: Unit) -> Res
         }
     }
     if name.is_empty() {
-        name = [&s.botanical_name, &s.common_name].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default();
+        name = [&s.botanical_name, &s.common_name]
+            .into_iter()
+            .find(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_default();
     }
     if name.is_empty() {
         return Err("no name".into());
     }
     s.validate().map_err(|e| format!("'{name}': {e}"))?;
-    Ok((ImportedStyle { name, style: s, given }, warns))
+    Ok((
+        ImportedStyle {
+            name,
+            style: s,
+            given,
+        },
+        warns,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +552,16 @@ pub fn export<'a>(styles: impl IntoIterator<Item = (&'a str, &'a PlantStyle)>) -
         keys.dedup();
         keys
     };
-    let mut head: Vec<String> = FIELDS.iter().map(|f| if matches!(*f, "spread" | "height") { format!("{f}_mm") } else { f.to_string() }).collect();
+    let mut head: Vec<String> = FIELDS
+        .iter()
+        .map(|f| {
+            if matches!(*f, "spread" | "height") {
+                format!("{f}_mm")
+            } else {
+                f.to_string()
+            }
+        })
+        .collect();
     head.extend(custom.iter().map(|k| format!("custom:{k}")));
     let mut rows = vec![head];
     for (name, s) in styles {
@@ -477,7 +582,11 @@ pub fn export<'a>(styles: impl IntoIterator<Item = (&'a str, &'a PlantStyle)>) -
             s.container.clone(),
             s.root.clone(),
         ];
-        r.extend(custom.iter().map(|k| s.custom.get(*k).cloned().unwrap_or_default()));
+        r.extend(
+            custom
+                .iter()
+                .map(|k| s.custom.get(*k).cloned().unwrap_or_default()),
+        );
         rows.push(r);
     }
     write_csv(&rows)
@@ -492,8 +601,16 @@ mod tests {
 
     #[test]
     fn parses_quotes_line_breaks_and_delimiters() {
-        let rows = parse_csv("a,b\r\n\"x, y\",\"he said \"\"hi\"\"\"\n\n\"multi\nline\",z").unwrap();
-        assert_eq!(rows, vec![vec!["a", "b"], vec!["x, y", "he said \"hi\""], vec!["multi\nline", "z"]]);
+        let rows =
+            parse_csv("a,b\r\n\"x, y\",\"he said \"\"hi\"\"\"\n\n\"multi\nline\",z").unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec!["a", "b"],
+                vec!["x, y", "he said \"hi\""],
+                vec!["multi\nline", "z"]
+            ]
+        );
         assert_eq!(parse_csv("a;b\n1,5;2").unwrap()[1], vec!["1,5", "2"]);
         assert_eq!(parse_csv("a\tb\n1\t2").unwrap()[1], vec!["1", "2"]);
         assert_eq!(parse_csv("\u{feff}a,b\n1,2\r3,4").unwrap().len(), 3);
@@ -505,22 +622,46 @@ mod tests {
 
     #[test]
     fn writes_quotes_where_needed() {
-        let rows = vec![vec!["a b".to_string(), "c,d".into(), "e\"f".into(), " lead".into(), "".into()]];
+        let rows = vec![vec![
+            "a b".to_string(),
+            "c,d".into(),
+            "e\"f".into(),
+            " lead".into(),
+            "".into(),
+        ]];
         assert_eq!(write_csv(&rows), "a b,\"c,d\",\"e\"\"f\",\" lead\",\n");
         assert_eq!(parse_csv(&write_csv(&rows)).unwrap(), rows);
     }
 
     #[test]
     fn headers_match_by_name_synonym_and_unit() {
-        assert_eq!(classify("Botanical Name"), Column::Field("botanical_name", None));
+        assert_eq!(
+            classify("Botanical Name"),
+            Column::Field("botanical_name", None)
+        );
         assert_eq!(classify("LATIN"), Column::Field("botanical_name", None));
-        assert_eq!(classify("Spread (m)"), Column::Field("spread", Some(Unit::M)));
-        assert_eq!(classify("height_cm"), Column::Field("height", Some(Unit::Cm)));
-        assert_eq!(classify("spread_mm"), Column::Field("spread", Some(Unit::Mm)));
+        assert_eq!(
+            classify("Spread (m)"),
+            Column::Field("spread", Some(Unit::M))
+        );
+        assert_eq!(
+            classify("height_cm"),
+            Column::Field("height", Some(Unit::Cm))
+        );
+        assert_eq!(
+            classify("spread_mm"),
+            Column::Field("spread", Some(Unit::Mm))
+        );
         assert_eq!(classify("Tag ID"), Column::Field("id_code", None));
-        assert_eq!(classify("custom:Water Need"), Column::Custom("Water Need".into()));
+        assert_eq!(
+            classify("custom:Water Need"),
+            Column::Custom("Water Need".into())
+        );
         assert_eq!(classify("Water need"), Column::Custom("Water need".into()));
-        assert_eq!(classify("weight (kg)"), Column::Custom("weight (kg)".into()));
+        assert_eq!(
+            classify("weight (kg)"),
+            Column::Custom("weight (kg)".into())
+        );
     }
 
     #[test]
@@ -548,8 +689,14 @@ mod tests {
         assert_eq!(parse_number(""), Ok(None));
         assert!(parse_number("abc").is_err());
         assert!(parse_number("inf").is_err());
-        assert_eq!(parse_color("#336699"), Ok(Some(Color([0x33, 0x66, 0x99, 255]))));
-        assert_eq!(parse_color("33669980"), Ok(Some(Color([0x33, 0x66, 0x99, 0x80]))));
+        assert_eq!(
+            parse_color("#336699"),
+            Ok(Some(Color([0x33, 0x66, 0x99, 255])))
+        );
+        assert_eq!(
+            parse_color("33669980"),
+            Ok(Some(Color([0x33, 0x66, 0x99, 0x80])))
+        );
         assert_eq!(parse_color("none"), Ok(None));
         assert!(parse_color("red").is_err());
         assert_eq!(hex(Color([1, 2, 3, 255])), "#010203");
@@ -564,7 +711,10 @@ mod tests {
         let s = &r.styles[0];
         assert_eq!(s.name, "Oak");
         assert_eq!(s.style.botanical_name, "Quercus robur");
-        assert_eq!((s.style.spread, s.style.height, s.style.price), (8000.0, 15000.0, 120.5));
+        assert_eq!(
+            (s.style.spread, s.style.height, s.style.price),
+            (8000.0, 15000.0, 120.5)
+        );
         assert_eq!(s.style.category, PlantCategory::Tree);
         assert_eq!(s.style.custom["Water need"], "low");
     }
@@ -572,9 +722,26 @@ mod tests {
     #[test]
     fn unit_option_applies_to_columns_without_a_unit() {
         let csv = "name,spread,height\nA,2,3\n";
-        let r = import(csv, &ImportOptions { unit: Unit::M, ..Default::default() }).unwrap();
-        assert_eq!((r.styles[0].style.spread, r.styles[0].style.height), (2000.0, 3000.0));
-        let r = import(csv, &ImportOptions { unit: Unit::Cm, ..Default::default() }).unwrap();
+        let r = import(
+            csv,
+            &ImportOptions {
+                unit: Unit::M,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (r.styles[0].style.spread, r.styles[0].style.height),
+            (2000.0, 3000.0)
+        );
+        let r = import(
+            csv,
+            &ImportOptions {
+                unit: Unit::Cm,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.styles[0].style.spread, 20.0);
         assert_eq!(Unit::from_name(" CM "), Some(Unit::Cm));
         assert_eq!(Unit::from_name("ft"), None);
@@ -587,7 +754,14 @@ mod tests {
         mapping.insert("name".to_string(), "Plant".to_string());
         mapping.insert("botanical_name".to_string(), "Bloom".to_string());
         mapping.insert("spread".to_string(), "wide".to_string());
-        let r = import(csv, &ImportOptions { mapping, ..Default::default() }).unwrap();
+        let r = import(
+            csv,
+            &ImportOptions {
+                mapping,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.styles[0].name, "Rose");
         assert_eq!(r.styles[0].style.botanical_name, "Rosa");
         assert_eq!(r.styles[0].style.spread, 1200.0);
@@ -595,7 +769,14 @@ mod tests {
         let csv = "Name,Width,Span\nA,100,900\n";
         let mut mapping = BTreeMap::new();
         mapping.insert("spread".to_string(), "Span".to_string());
-        let r = import(csv, &ImportOptions { mapping, ..Default::default() }).unwrap();
+        let r = import(
+            csv,
+            &ImportOptions {
+                mapping,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.styles[0].style.spread, 900.0);
     }
 
@@ -604,24 +785,58 @@ mod tests {
         let csv = "Name\nA\n";
         let mut m = BTreeMap::new();
         m.insert("spread".to_string(), "Nope".to_string());
-        assert!(import(csv, &ImportOptions { mapping: m, ..Default::default() }).unwrap_err().contains("Nope"));
+        assert!(
+            import(
+                csv,
+                &ImportOptions {
+                    mapping: m,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .contains("Nope")
+        );
         let mut m = BTreeMap::new();
         m.insert("colour".to_string(), "Name".to_string());
-        assert!(import(csv, &ImportOptions { mapping: m, ..Default::default() }).unwrap_err().contains("unknown field"));
+        assert!(
+            import(
+                csv,
+                &ImportOptions {
+                    mapping: m,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
         assert!(import("", &ImportOptions::default()).is_err());
-        assert!(import("price\n3\n", &ImportOptions::default()).unwrap_err().contains("name"));
+        assert!(
+            import("price\n3\n", &ImportOptions::default())
+                .unwrap_err()
+                .contains("name")
+        );
     }
 
     #[test]
     fn european_numbers_import_and_ambiguous_ones_warn() {
         let csv = "name;spread;height;price\nA;2,5;3,000;1.234,50\nB;1,234;1;2\n";
-        let r = import(csv, &ImportOptions { unit: Unit::M, ..Default::default() }).unwrap();
+        let r = import(
+            csv,
+            &ImportOptions {
+                unit: Unit::M,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.styles[0].style.price, 1234.5);
         assert_eq!(r.styles[0].style.spread, 2500.0);
         assert_eq!(r.styles[1].style.spread, 1234.0);
         let w = r.warnings.join("\n");
         assert_eq!(r.warnings.len(), 2, "{w}");
-        assert!(w.contains("row 2") && w.contains("'3,000' could be 3000 or 3"), "{w}");
+        assert!(
+            w.contains("row 2") && w.contains("'3,000' could be 3000 or 3"),
+            "{w}"
+        );
         assert!(w.contains("row 3") && w.contains("'1,234'"), "{w}");
     }
 
@@ -654,7 +869,10 @@ mod tests {
     fn name_falls_back_to_the_botanical_name_and_short_rows_work() {
         let csv = "botanical name,common name,id\nAcer campestre\n,Maple,M\n";
         let r = import(csv, &ImportOptions::default()).unwrap();
-        assert_eq!(r.styles.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["Acer campestre", "Maple"]);
+        assert_eq!(
+            r.styles.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["Acer campestre", "Maple"]
+        );
         assert_eq!(r.styles[1].style.id_code, "M");
     }
 
@@ -678,25 +896,50 @@ mod tests {
             ..PlantStyle::default()
         };
         a.custom.insert("water need".into(), "low".into());
-        let b = PlantStyle { botanical_name: "Poa".into(), category: PlantCategory::Grass, ..PlantStyle::default() };
+        let b = PlantStyle {
+            botanical_name: "Poa".into(),
+            category: PlantCategory::Grass,
+            ..PlantStyle::default()
+        };
         let text = export([("Field maple", &a), ("Meadow grass", &b)]);
         let back = import(&text, &ImportOptions::default()).unwrap();
         assert!(back.warnings.is_empty(), "{:?}", back.warnings);
         assert_eq!(back.styles.len(), 2);
-        assert_eq!((back.styles[0].name.as_str(), &back.styles[0].style), ("Field maple", &a));
-        assert_eq!((back.styles[1].name.as_str(), &back.styles[1].style), ("Meadow grass", &b));
+        assert_eq!(
+            (back.styles[0].name.as_str(), &back.styles[0].style),
+            ("Field maple", &a)
+        );
+        assert_eq!(
+            (back.styles[1].name.as_str(), &back.styles[1].style),
+            ("Meadow grass", &b)
+        );
     }
 
     #[test]
     fn apply_to_changes_only_the_given_columns() {
-        let base = PlantStyle { botanical_name: "Acer".into(), price: 5.0, spread: 1000.0, ..PlantStyle::default() };
+        let base = PlantStyle {
+            botanical_name: "Acer".into(),
+            price: 5.0,
+            spread: 1000.0,
+            ..PlantStyle::default()
+        };
         let mut base = base;
         base.custom.insert("a".into(), "keep".into());
         base.custom.insert("b".into(), "old".into());
-        let r = import("name,spread (m),b,price\nX,3,new,\n", &ImportOptions::default()).unwrap();
+        let r = import(
+            "name,spread (m),b,price\nX,3,new,\n",
+            &ImportOptions::default(),
+        )
+        .unwrap();
         let out = r.styles[0].apply_to(&base);
-        assert_eq!((out.botanical_name.as_str(), out.spread, out.price), ("Acer", 3000.0, 5.0));
-        assert_eq!((out.custom["a"].as_str(), out.custom["b"].as_str()), ("keep", "new"));
+        assert_eq!(
+            (out.botanical_name.as_str(), out.spread, out.price),
+            ("Acer", 3000.0, 5.0)
+        );
+        assert_eq!(
+            (out.custom["a"].as_str(), out.custom["b"].as_str()),
+            ("keep", "new")
+        );
     }
 
     #[test]

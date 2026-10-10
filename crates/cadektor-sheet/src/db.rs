@@ -52,7 +52,10 @@ struct ListEnv<'a> {
 }
 
 fn norm(s: &str) -> String {
-    s.chars().filter(|c| !matches!(c, ' ' | '_' | '-')).collect::<String>().to_ascii_lowercase()
+    s.chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-'))
+        .collect::<String>()
+        .to_ascii_lowercase()
 }
 
 impl Env for ListEnv<'_> {
@@ -172,7 +175,13 @@ pub fn summarize(s: Summary, values: &[&Value]) -> Value {
 }
 
 /// The matching objects with their column values.
-fn select(doc: &Document, db: &DatabaseDef, label: &str, ground: &dyn TerrainSource, out: &mut DbOutput) -> Vec<Vec<Value>> {
+fn select(
+    doc: &Document,
+    db: &DatabaseDef,
+    label: &str,
+    ground: &dyn TerrainSource,
+    out: &mut DbOutput,
+) -> Vec<Vec<Value>> {
     let criteria: Option<Expr> = if db.criteria.trim().is_empty() {
         None
     } else {
@@ -184,18 +193,34 @@ fn select(doc: &Document, db: &DatabaseDef, label: &str, ground: &dyn TerrainSou
             }
         }
     };
-    let exprs: Vec<Result<Expr, String>> = db.columns.iter().map(|c| formula::parse(&c.expr).map_err(|e| e.to_string())).collect();
+    let exprs: Vec<Result<Expr, String>> = db
+        .columns
+        .iter()
+        .map(|c| formula::parse(&c.expr).map_err(|e| e.to_string()))
+        .collect();
     for (c, e) in db.columns.iter().zip(&exprs) {
         if let Err(e) = e {
-            out.problems.push(format!("{label}: column '{}': {e}", c.header));
+            out.problems
+                .push(format!("{label}: column '{}': {e}", c.header));
         }
     }
     let mut rows = Vec::new();
     let mut criteria_errors = 0;
-    let list = if db.source == RowSource::PlantList { plant_list(doc).rows } else { Vec::new() };
+    let list = if db.source == RowSource::PlantList {
+        plant_list(doc).rows
+    } else {
+        Vec::new()
+    };
     let envs: Vec<Box<dyn Env + '_>> = match db.source {
-        RowSource::Objects => doc.objects.values().map(|obj| Box::new(ObjEnv { doc, obj, ground }) as Box<dyn Env + '_>).collect(),
-        RowSource::PlantList => list.iter().map(|row| Box::new(ListEnv { row }) as Box<dyn Env + '_>).collect(),
+        RowSource::Objects => doc
+            .objects
+            .values()
+            .map(|obj| Box::new(ObjEnv { doc, obj, ground }) as Box<dyn Env + '_>)
+            .collect(),
+        RowSource::PlantList => list
+            .iter()
+            .map(|row| Box::new(ListEnv { row }) as Box<dyn Env + '_>)
+            .collect(),
     };
     for env in &envs {
         let env: &dyn Env = env.as_ref();
@@ -209,7 +234,15 @@ fn select(doc: &Document, db: &DatabaseDef, label: &str, ground: &dyn TerrainSou
                 }
             }
         }
-        rows.push(exprs.iter().map(|e| e.as_ref().map_or(Value::Error(ErrorKind::Parse), |e| eval(e, env))).collect());
+        rows.push(
+            exprs
+                .iter()
+                .map(|e| {
+                    e.as_ref()
+                        .map_or(Value::Error(ErrorKind::Parse), |e| eval(e, env))
+                })
+                .collect(),
+        );
     }
     if criteria_errors > 0 {
         out.problems.push(format!("{label}: the criteria give an error for {criteria_errors} object(s), which are left out (check the names)"));
@@ -218,7 +251,15 @@ fn select(doc: &Document, db: &DatabaseDef, label: &str, ground: &dyn TerrainSou
 }
 
 fn summary_line(columns: &[ColumnDef], rows: &[&Vec<Value>]) -> Vec<Value> {
-    columns.iter().enumerate().map(|(i, c)| c.summary.map_or(Value::Empty, |s| summarize(s, &rows.iter().map(|r| &r[i]).collect::<Vec<_>>()))).collect()
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            c.summary.map_or(Value::Empty, |s| {
+                summarize(s, &rows.iter().map(|r| &r[i]).collect::<Vec<_>>())
+            })
+        })
+        .collect()
 }
 
 /// Runs one database block against the document, with no ground.
@@ -227,14 +268,28 @@ pub fn run(doc: &Document, db: &DatabaseDef, index: usize) -> DbOutput {
 }
 
 /// Runs one database block against the document and the ground of its site models.
-pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn TerrainSource) -> DbOutput {
-    let label = if db.name.trim().is_empty() { format!("database {}", index + 1) } else { format!("database '{}'", db.name.trim()) };
+pub fn run_on(
+    doc: &Document,
+    db: &DatabaseDef,
+    index: usize,
+    ground: &dyn TerrainSource,
+) -> DbOutput {
+    let label = if db.name.trim().is_empty() {
+        format!("database {}", index + 1)
+    } else {
+        format!("database '{}'", db.name.trim())
+    };
     let mut out = DbOutput::default();
     let mut rows = select(doc, db, &label, ground, &mut out);
     out.matched = rows.len();
 
     // Sort: the group column first, then the sort keys. Stable, so objects keep document order on ties.
-    let keys: Vec<(usize, bool)> = db.group_by.map(|g| (g, false)).into_iter().chain(db.sort.iter().map(|k| (k.column, k.descending))).collect();
+    let keys: Vec<(usize, bool)> = db
+        .group_by
+        .map(|g| (g, false))
+        .into_iter()
+        .chain(db.sort.iter().map(|k| (k.column, k.descending)))
+        .collect();
     if !keys.is_empty() {
         rows.sort_by(|a, b| {
             for &(c, desc) in &keys {
@@ -248,28 +303,46 @@ pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn Terra
     }
 
     if db.header {
-        out.lines.push(Line { kind: LineKind::Header, values: db.columns.iter().map(|c| Value::Text(c.header.clone())).collect() });
+        out.lines.push(Line {
+            kind: LineKind::Header,
+            values: db
+                .columns
+                .iter()
+                .map(|c| Value::Text(c.header.clone()))
+                .collect(),
+        });
     }
     let any_summary = db.columns.iter().any(|c| c.summary.is_some());
     match db.group_by {
-        None => out.lines.extend(rows.iter().map(|r| Line { kind: LineKind::Detail, values: r.clone() })),
+        None => out.lines.extend(rows.iter().map(|r| Line {
+            kind: LineKind::Detail,
+            values: r.clone(),
+        })),
         Some(g) => {
             let mut start = 0;
             while start < rows.len() {
                 let mut end = start + 1;
-                while end < rows.len() && rows[end][g].compare(&rows[start][g]) == std::cmp::Ordering::Equal {
+                while end < rows.len()
+                    && rows[end][g].compare(&rows[start][g]) == std::cmp::Ordering::Equal
+                {
                     end += 1;
                 }
                 let group: Vec<&Vec<Value>> = rows[start..end].iter().collect();
                 match db.group_mode {
                     GroupMode::Detail => {
-                        out.lines.extend(group.iter().map(|r| Line { kind: LineKind::Detail, values: (*r).clone() }));
+                        out.lines.extend(group.iter().map(|r| Line {
+                            kind: LineKind::Detail,
+                            values: (*r).clone(),
+                        }));
                         if any_summary {
                             let mut v = summary_line(&db.columns, &group);
                             if db.columns[g].summary.is_none() {
                                 v[g] = Value::Text(format!("{} total", rows[start][g].to_text()));
                             }
-                            out.lines.push(Line { kind: LineKind::Subtotal, values: v });
+                            out.lines.push(Line {
+                                kind: LineKind::Subtotal,
+                                values: v,
+                            });
                         }
                     }
                     GroupMode::Summary => {
@@ -277,10 +350,20 @@ pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn Terra
                         for (i, c) in db.columns.iter().enumerate() {
                             if c.summary.is_none() {
                                 let first = &group[0][i];
-                                v[i] = if group.iter().all(|r| r[i].compare(first) == std::cmp::Ordering::Equal) { first.clone() } else { Value::Empty };
+                                v[i] = if group
+                                    .iter()
+                                    .all(|r| r[i].compare(first) == std::cmp::Ordering::Equal)
+                                {
+                                    first.clone()
+                                } else {
+                                    Value::Empty
+                                };
                             }
                         }
-                        out.lines.push(Line { kind: LineKind::Subtotal, values: v });
+                        out.lines.push(Line {
+                            kind: LineKind::Subtotal,
+                            values: v,
+                        });
                     }
                 }
                 start = end;
@@ -293,7 +376,10 @@ pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn Terra
         if db.columns[0].summary.is_none() {
             v[0] = Value::Text("Total".into());
         }
-        out.lines.push(Line { kind: LineKind::Total, values: v });
+        out.lines.push(Line {
+            kind: LineKind::Total,
+            values: v,
+        });
     }
     out
 }
@@ -302,33 +388,64 @@ pub fn run_on(doc: &Document, db: &DatabaseDef, index: usize, ground: &dyn Terra
 mod tests {
     use super::*;
     use crate::def::{RowSource, SortKey};
+    use cadektor_core::DVec2;
     use cadektor_core::command::{Command, Editor};
     use cadektor_core::curve::corners;
     use cadektor_core::model::{Attributes, ObjectId, Shape};
     use cadektor_core::plants::style::PlantStyle;
     use cadektor_core::record::{FieldDef, FieldType, RecordFormat};
     use cadektor_core::resource::{ResourceBody, ResourceId};
-    use cadektor_core::DVec2;
     use serde_json::json;
 
     fn add(ed: &mut Editor, shape: Shape) -> ObjectId {
-        ObjectId(ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0])
+        ObjectId(
+            ed.execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap()
+            .created[0],
+        )
     }
 
     fn square(side: f64) -> Vec<cadektor_core::curve::Vertex> {
-        corners(&[DVec2::ZERO, DVec2::new(side, 0.0), DVec2::new(side, side), DVec2::new(0.0, side)])
+        corners(&[
+            DVec2::ZERO,
+            DVec2::new(side, 0.0),
+            DVec2::new(side, side),
+            DVec2::new(0.0, side),
+        ])
     }
 
     fn hardscape(ed: &mut Editor, material: &str, side: f64) -> ObjectId {
-        add(ed, Shape::Hardscape { boundary: square(side), material: material.into(), thickness: None, elevation: None })
+        add(
+            ed,
+            Shape::Hardscape {
+                boundary: square(side),
+                material: material.into(),
+                thickness: None,
+                elevation: None,
+            },
+        )
     }
 
     fn col(header: &str, expr: &str, summary: Option<Summary>) -> ColumnDef {
-        ColumnDef { header: header.into(), expr: expr.into(), summary, ..ColumnDef::default() }
+        ColumnDef {
+            header: header.into(),
+            expr: expr.into(),
+            summary,
+            ..ColumnDef::default()
+        }
     }
 
     fn database(criteria: &str, columns: Vec<ColumnDef>) -> DatabaseDef {
-        DatabaseDef { criteria: criteria.into(), columns, ..DatabaseDef::default() }
+        DatabaseDef {
+            criteria: criteria.into(),
+            columns,
+            ..DatabaseDef::default()
+        }
     }
 
     fn texts(out: &DbOutput, c: usize) -> Vec<String> {
@@ -340,8 +457,20 @@ mod tests {
         hardscape(&mut ed, "Granite", 2000.0); // 4 m2
         hardscape(&mut ed, "Brick", 1000.0); // 1 m2
         hardscape(&mut ed, "Granite", 3000.0); // 9 m2
-        add(&mut ed, Shape::LandscapeArea { boundary: square(5000.0), name: "Lawn".into() }); // 25 m2
-        add(&mut ed, Shape::Line { a: DVec2::ZERO, b: DVec2::new(1000.0, 0.0) });
+        add(
+            &mut ed,
+            Shape::LandscapeArea {
+                boundary: square(5000.0),
+                name: "Lawn".into(),
+            },
+        ); // 25 m2
+        add(
+            &mut ed,
+            Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::new(1000.0, 0.0),
+            },
+        );
         ed
     }
 
@@ -383,20 +512,41 @@ mod tests {
     #[test]
     fn criteria_errors_and_parse_problems() {
         let ed = scene();
-        let out = run(ed.doc(), &database("Bogus = 1", vec![col("Id", "Id", None)]), 0);
+        let out = run(
+            ed.doc(),
+            &database("Bogus = 1", vec![col("Id", "Id", None)]),
+            0,
+        );
         assert_eq!(out.matched, 0);
-        assert!(out.problems[0].contains("5 object(s)") && out.problems[0].contains("database 1"), "{:?}", out.problems);
-        let out = run(ed.doc(), &database("Kind =", vec![col("Id", "Id", None)]), 2);
+        assert!(
+            out.problems[0].contains("5 object(s)") && out.problems[0].contains("database 1"),
+            "{:?}",
+            out.problems
+        );
+        let out = run(
+            ed.doc(),
+            &database("Kind =", vec![col("Id", "Id", None)]),
+            2,
+        );
         assert!(out.problems[0].contains("criteria") && out.problems[0].contains("database 3"));
         assert_eq!(out.lines.len(), 1, "only the header is shown");
         let mut named = database("", vec![col("Bad", "1 +", None), col("Id", "Id", None)]);
         named.name = "Mine".into();
         let out = run(ed.doc(), &named, 0);
-        assert!(out.problems[0].contains("database 'Mine'") && out.problems[0].contains("column 'Bad'"));
+        assert!(
+            out.problems[0].contains("database 'Mine'") && out.problems[0].contains("column 'Bad'")
+        );
         assert_eq!(out.lines[1].values[0], Value::Error(ErrorKind::Parse));
         // A cell reference in a column is not allowed.
-        let out = run(ed.doc(), &database("", vec![col("X", "A1", None), col("Y", "SUM(A1:B2)", None)]), 0);
-        assert_eq!(out.lines[1].values, vec![Value::Error(ErrorKind::Ref), Value::Error(ErrorKind::Ref)]);
+        let out = run(
+            ed.doc(),
+            &database("", vec![col("X", "A1", None), col("Y", "SUM(A1:B2)", None)]),
+            0,
+        );
+        assert_eq!(
+            out.lines[1].values,
+            vec![Value::Error(ErrorKind::Ref), Value::Error(ErrorKind::Ref)]
+        );
         // Unknown names in a column show #NAME?.
         let out = run(ed.doc(), &database("", vec![col("X", "Bogus", None)]), 0);
         assert_eq!(out.lines[1].values[0], Value::Error(ErrorKind::Name));
@@ -405,15 +555,41 @@ mod tests {
     #[test]
     fn columns_header_and_not_applicable() {
         let ed = scene();
-        let out = run(ed.doc(), &database("Kind = \"hardscape\"", vec![col("Material", "Material", None), col("Area m2", "Area", None), col("Double", "Area * 2", None), col("Perimeter", "Perimeter", None)]), 0);
+        let out = run(
+            ed.doc(),
+            &database(
+                "Kind = \"hardscape\"",
+                vec![
+                    col("Material", "Material", None),
+                    col("Area m2", "Area", None),
+                    col("Double", "Area * 2", None),
+                    col("Perimeter", "Perimeter", None),
+                ],
+            ),
+            0,
+        );
         assert_eq!(texts(&out, 0), ["Material", "Granite", "Brick", "Granite"]);
         assert_eq!(texts(&out, 1), ["Area m2", "4", "1", "9"]);
         assert_eq!(texts(&out, 2), ["Double", "8", "2", "18"]);
         assert_eq!(texts(&out, 3), ["Perimeter", "8", "4", "12"]);
         assert_eq!(out.lines[0].kind, LineKind::Header);
         // An object without the property gives an empty cell, and arithmetic treats it as zero.
-        let out = run(ed.doc(), &database("Kind = \"line\"", vec![col("A", "Area", None), col("B", "Area + 1", None), col("L", "Length", None)]), 0);
-        assert_eq!(out.lines[1].values, vec![Value::Empty, Value::Number(1.0), Value::Number(1.0)]);
+        let out = run(
+            ed.doc(),
+            &database(
+                "Kind = \"line\"",
+                vec![
+                    col("A", "Area", None),
+                    col("B", "Area + 1", None),
+                    col("L", "Length", None),
+                ],
+            ),
+            0,
+        );
+        assert_eq!(
+            out.lines[1].values,
+            vec![Value::Empty, Value::Number(1.0), Value::Number(1.0)]
+        );
         let mut d = database("", vec![col("Id", "Id", None)]);
         d.header = false;
         assert_eq!(run(ed.doc(), &d, 0).lines.len(), 5);
@@ -422,12 +598,30 @@ mod tests {
     #[test]
     fn sort_by_columns_ascending_and_descending() {
         let ed = scene();
-        let mut d = database("Kind = \"hardscape\"", vec![col("Material", "Material", None), col("Area", "Area", None)]);
-        d.sort = vec![SortKey { column: 1, descending: false }];
+        let mut d = database(
+            "Kind = \"hardscape\"",
+            vec![col("Material", "Material", None), col("Area", "Area", None)],
+        );
+        d.sort = vec![SortKey {
+            column: 1,
+            descending: false,
+        }];
         assert_eq!(texts(&run(ed.doc(), &d, 0), 1), ["Area", "1", "4", "9"]);
-        d.sort = vec![SortKey { column: 1, descending: true }];
+        d.sort = vec![SortKey {
+            column: 1,
+            descending: true,
+        }];
         assert_eq!(texts(&run(ed.doc(), &d, 0), 1), ["Area", "9", "4", "1"]);
-        d.sort = vec![SortKey { column: 0, descending: false }, SortKey { column: 1, descending: true }];
+        d.sort = vec![
+            SortKey {
+                column: 0,
+                descending: false,
+            },
+            SortKey {
+                column: 1,
+                descending: true,
+            },
+        ];
         let out = run(ed.doc(), &d, 0);
         assert_eq!(texts(&out, 0), ["Material", "Brick", "Granite", "Granite"]);
         assert_eq!(texts(&out, 1), ["Area", "1", "9", "4"]);
@@ -436,15 +630,38 @@ mod tests {
     #[test]
     fn totals_and_summaries() {
         let ed = scene();
-        let cols = vec![col("Material", "Material", None), col("N", "Count", Some(Summary::Sum)), col("Area", "Area", Some(Summary::Sum)), col("Avg", "Area", Some(Summary::Average)), col("Min", "Area", Some(Summary::Min)), col("Max", "Area", Some(Summary::Max)), col("Has", "Area", Some(Summary::Count))];
+        let cols = vec![
+            col("Material", "Material", None),
+            col("N", "Count", Some(Summary::Sum)),
+            col("Area", "Area", Some(Summary::Sum)),
+            col("Avg", "Area", Some(Summary::Average)),
+            col("Min", "Area", Some(Summary::Min)),
+            col("Max", "Area", Some(Summary::Max)),
+            col("Has", "Area", Some(Summary::Count)),
+        ];
         let out = run(ed.doc(), &database("Kind = \"hardscape\"", cols.clone()), 0);
         let total = out.lines.last().unwrap();
         assert_eq!(total.kind, LineKind::Total);
         assert_eq!(total.values[0], Value::Text("Total".into()));
-        assert_eq!(&total.values[1..], &[Value::Number(3.0), Value::Number(14.0), Value::Number(14.0 / 3.0), Value::Number(1.0), Value::Number(9.0), Value::Number(3.0)]);
+        assert_eq!(
+            &total.values[1..],
+            &[
+                Value::Number(3.0),
+                Value::Number(14.0),
+                Value::Number(14.0 / 3.0),
+                Value::Number(1.0),
+                Value::Number(9.0),
+                Value::Number(3.0)
+            ]
+        );
         let mut d = database("Kind = \"hardscape\"", cols.clone());
         d.total = false;
-        assert!(run(ed.doc(), &d, 0).lines.iter().all(|l| l.kind != LineKind::Total));
+        assert!(
+            run(ed.doc(), &d, 0)
+                .lines
+                .iter()
+                .all(|l| l.kind != LineKind::Total)
+        );
         // No summary column: no total row.
         let out = run(ed.doc(), &database("", vec![col("Id", "Id", None)]), 0);
         assert!(out.lines.iter().all(|l| l.kind != LineKind::Total));
@@ -454,7 +671,14 @@ mod tests {
         assert_eq!(total.values[1], Value::Empty);
         assert_eq!(total.values[6], Value::Number(0.0));
         // The first column may carry the summary: no label then.
-        let out = run(ed.doc(), &database("Kind = \"hardscape\"", vec![col("N", "Count", Some(Summary::Sum))]), 0);
+        let out = run(
+            ed.doc(),
+            &database(
+                "Kind = \"hardscape\"",
+                vec![col("N", "Count", Some(Summary::Sum))],
+            ),
+            0,
+        );
         assert_eq!(out.lines.last().unwrap().values[0], Value::Number(3.0));
     }
 
@@ -466,61 +690,138 @@ mod tests {
         assert_eq!(summarize(Summary::Sum, &[&n, &e]), e);
         assert_eq!(summarize(Summary::Count, &[&n, &e]), e);
         assert_eq!(summarize(Summary::Sum, &[&t, &n, &Value::Empty]), n);
-        assert_eq!(summarize(Summary::Count, &[&t, &n, &Value::Empty]), Value::Number(2.0));
+        assert_eq!(
+            summarize(Summary::Count, &[&t, &n, &Value::Empty]),
+            Value::Number(2.0)
+        );
         assert_eq!(summarize(Summary::Max, &[&t]), Value::Empty);
-        assert_eq!(summarize(Summary::Min, &[&n, &Value::Number(-1.0)]), Value::Number(-1.0));
+        assert_eq!(
+            summarize(Summary::Min, &[&n, &Value::Number(-1.0)]),
+            Value::Number(-1.0)
+        );
     }
 
     #[test]
     fn grouping_in_detail_and_summary_mode() {
         let ed = scene();
-        let cols = vec![col("Material", "Material", None), col("Area", "Area", Some(Summary::Sum)), col("Layer", "Layer", None)];
+        let cols = vec![
+            col("Material", "Material", None),
+            col("Area", "Area", Some(Summary::Sum)),
+            col("Layer", "Layer", None),
+        ];
         let mut d = database("Kind = \"hardscape\"", cols.clone());
         d.group_by = Some(0);
         let out = run(ed.doc(), &d, 0);
-        assert_eq!(texts(&out, 0), ["Material", "Brick", "Brick total", "Granite", "Granite", "Granite total", "Total"]);
+        assert_eq!(
+            texts(&out, 0),
+            [
+                "Material",
+                "Brick",
+                "Brick total",
+                "Granite",
+                "Granite",
+                "Granite total",
+                "Total"
+            ]
+        );
         assert_eq!(texts(&out, 1), ["Area", "1", "1", "4", "9", "13", "14"]);
         assert_eq!(out.lines[2].kind, LineKind::Subtotal);
         d.group_mode = GroupMode::Summary;
         let out = run(ed.doc(), &d, 0);
         assert_eq!(texts(&out, 0), ["Material", "Brick", "Granite", "Total"]);
         assert_eq!(texts(&out, 1), ["Area", "1", "13", "14"]);
-        assert_eq!(texts(&out, 2), ["Layer", "Layer 1", "Layer 1", ""], "equal values show, the total has none");
+        assert_eq!(
+            texts(&out, 2),
+            ["Layer", "Layer 1", "Layer 1", ""],
+            "equal values show, the total has none"
+        );
         // Group by a summarized column keeps its number in detail mode.
         let mut d = database("Kind = \"hardscape\"", cols);
         d.group_by = Some(1);
         let out = run(ed.doc(), &d, 0);
         assert_eq!(texts(&out, 1), ["Area", "1", "1", "4", "4", "9", "9", "14"]);
         // No summary column at all: groups are sorted, with no subtotal rows.
-        let mut d = database("Kind = \"hardscape\"", vec![col("Material", "Material", None)]);
+        let mut d = database(
+            "Kind = \"hardscape\"",
+            vec![col("Material", "Material", None)],
+        );
         d.group_by = Some(0);
-        assert_eq!(texts(&run(ed.doc(), &d, 0), 0), ["Material", "Brick", "Granite", "Granite"]);
+        assert_eq!(
+            texts(&run(ed.doc(), &d, 0), 0),
+            ["Material", "Brick", "Granite", "Granite"]
+        );
         // Summary mode: a column that differs inside the group is empty.
-        let mut d = database("Kind = \"hardscape\"", vec![col("Kind", "Kind", None), col("Material", "Material", None), col("N", "Count", Some(Summary::Sum))]);
+        let mut d = database(
+            "Kind = \"hardscape\"",
+            vec![
+                col("Kind", "Kind", None),
+                col("Material", "Material", None),
+                col("N", "Count", Some(Summary::Sum)),
+            ],
+        );
         d.group_by = Some(0);
         d.group_mode = GroupMode::Summary;
         let out = run(ed.doc(), &d, 0);
-        assert_eq!(out.lines[1].values, vec![Value::Text("hardscape".into()), Value::Empty, Value::Number(3.0)]);
+        assert_eq!(
+            out.lines[1].values,
+            vec![
+                Value::Text("hardscape".into()),
+                Value::Empty,
+                Value::Number(3.0)
+            ]
+        );
     }
 
     #[test]
     fn plants_and_plant_fields() {
         let mut ed = Editor::default();
-        let style = |name: &str, botanical: &str, price: f64| {
-            Command::AddResource { name: name.into(), body: ResourceBody::plant_style(PlantStyle { botanical_name: botanical.into(), price, spread: 3000.0, ..PlantStyle::default() }) }
+        let style = |name: &str, botanical: &str, price: f64| Command::AddResource {
+            name: name.into(),
+            body: ResourceBody::plant_style(PlantStyle {
+                botanical_name: botanical.into(),
+                price,
+                spread: 3000.0,
+                ..PlantStyle::default()
+            }),
         };
-        let oak = ResourceId(ed.execute(&style("Oak", "Quercus robur", 100.0)).unwrap().created[0]);
-        let birch = ResourceId(ed.execute(&style("Birch", "Betula pendula", 40.0)).unwrap().created[0]);
+        let oak = ResourceId(
+            ed.execute(&style("Oak", "Quercus robur", 100.0))
+                .unwrap()
+                .created[0],
+        );
+        let birch = ResourceId(
+            ed.execute(&style("Birch", "Betula pendula", 40.0))
+                .unwrap()
+                .created[0],
+        );
         for (s, n) in [(oak, 2), (birch, 3)] {
-            ed.execute(&Command::AddPlants { style: Some(s), overrides: Default::default(), positions: (0..n).map(|i| DVec2::new(f64::from(i) * 5000.0, 0.0)).collect(), layer: None, class: None, variation: None }).unwrap();
+            ed.execute(&Command::AddPlants {
+                style: Some(s),
+                overrides: Default::default(),
+                positions: (0..n)
+                    .map(|i| DVec2::new(f64::from(i) * 5000.0, 0.0))
+                    .collect(),
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
         }
-        let cols = vec![col("Style", "Style", None), col("Botanical", "Botanical", None), col("Count", "Count", Some(Summary::Sum)), col("Cost", "Plant.price", Some(Summary::Sum))];
+        let cols = vec![
+            col("Style", "Style", None),
+            col("Botanical", "Botanical", None),
+            col("Count", "Count", Some(Summary::Sum)),
+            col("Cost", "Plant.price", Some(Summary::Sum)),
+        ];
         let mut d = database("Kind = \"plant\"", cols);
         d.group_by = Some(0);
         d.group_mode = GroupMode::Summary;
         let out = run(ed.doc(), &d, 0);
         assert_eq!(texts(&out, 0), ["Style", "Birch", "Oak", "Total"]);
-        assert_eq!(texts(&out, 1), ["Botanical", "Betula pendula", "Quercus robur", ""]);
+        assert_eq!(
+            texts(&out, 1),
+            ["Botanical", "Betula pendula", "Quercus robur", ""]
+        );
         assert_eq!(texts(&out, 2), ["Count", "3", "2", "5"]);
         assert_eq!(texts(&out, 3), ["Cost", "120", "200", "320"]);
     }
@@ -528,12 +829,42 @@ mod tests {
     #[test]
     fn record_fields_in_criteria_and_columns() {
         let mut ed = scene();
-        let fmt = RecordFormat { fields: vec![FieldDef::new("Depth", FieldType::Dimension), FieldDef::new("Note", FieldType::Text)] };
-        let rid = ResourceId(ed.execute(&Command::AddResource { name: "Soil".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) }).unwrap().created[0]);
+        let fmt = RecordFormat {
+            fields: vec![
+                FieldDef::new("Depth", FieldType::Dimension),
+                FieldDef::new("Note", FieldType::Text),
+            ],
+        };
+        let rid = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Soil".into(),
+                body: ResourceBody::RecordFormat(Box::new(fmt)),
+            })
+            .unwrap()
+            .created[0],
+        );
         let ids: Vec<ObjectId> = ed.doc().objects.keys().copied().collect();
-        ed.execute(&Command::AttachRecord { ids: vec![ids[0]], record: rid, values: json!({"Depth": 300, "Note": "a"}).as_object().unwrap().clone() }).unwrap();
-        ed.execute(&Command::AttachRecord { ids: vec![ids[1]], record: rid, values: json!({"Depth": 100}).as_object().unwrap().clone() }).unwrap();
-        let cols = vec![col("Id", "Id", None), col("Depth", "Soil.Depth", Some(Summary::Sum)), col("Same", "FIELD(\"Soil\", \"Depth\")", None), col("Quoted", "'Soil'.'Note'", None)];
+        ed.execute(&Command::AttachRecord {
+            ids: vec![ids[0]],
+            record: rid,
+            values: json!({"Depth": 300, "Note": "a"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        })
+        .unwrap();
+        ed.execute(&Command::AttachRecord {
+            ids: vec![ids[1]],
+            record: rid,
+            values: json!({"Depth": 100}).as_object().unwrap().clone(),
+        })
+        .unwrap();
+        let cols = vec![
+            col("Id", "Id", None),
+            col("Depth", "Soil.Depth", Some(Summary::Sum)),
+            col("Same", "FIELD(\"Soil\", \"Depth\")", None),
+            col("Quoted", "'Soil'.'Note'", None),
+        ];
         let out = run(ed.doc(), &database("HASRECORD(\"Soil\")", cols.clone()), 0);
         assert_eq!(out.matched, 2);
         assert_eq!(texts(&out, 1), ["Depth", "300", "100", "400"]);
@@ -552,7 +883,15 @@ mod tests {
     #[test]
     fn plant_list_rows_have_names_and_errors() {
         let mut ed = Editor::default();
-        ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions: vec![DVec2::ZERO, DVec2::new(3000.0, 0.0)], layer: None, class: None, variation: None }).unwrap();
+        ed.execute(&Command::AddPlants {
+            style: None,
+            overrides: Default::default(),
+            positions: vec![DVec2::ZERO, DVec2::new(3000.0, 0.0)],
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
         let cols = vec![
             col("Style", "Style", None),
             col("Code", "Code", None),
@@ -575,14 +914,23 @@ mod tests {
         let row = &out.lines[1].values;
         assert_eq!(row[2], Value::Number(2.0));
         assert_eq!(row[3], Value::Text("plant".into()));
-        assert_eq!((row[4].clone(), row[5].clone()), (Value::Number(2.0), Value::Number(0.0)));
+        assert_eq!(
+            (row[4].clone(), row[5].clone()),
+            (Value::Number(2.0), Value::Number(0.0))
+        );
         assert_eq!(row[10], Value::Error(ErrorKind::Name));
         assert_eq!(row[11], Value::Error(ErrorKind::Name));
         assert_eq!(row[12], Value::Error(ErrorKind::Ref));
-        let mut d2 = database("SUM(A1:B2) = 0 OR HASRECORD(\"x\")", vec![col("S", "Style", None)]);
+        let mut d2 = database(
+            "SUM(A1:B2) = 0 OR HASRECORD(\"x\")",
+            vec![col("S", "Style", None)],
+        );
         d2.source = RowSource::PlantList;
         assert_eq!(run(ed.doc(), &d2, 0).matched, 0, "errors leave a row out");
-        let mut d3 = database("HASRECORD(\"x\") OR Style = \"nothing\"", vec![col("S", "Style", None)]);
+        let mut d3 = database(
+            "HASRECORD(\"x\") OR Style = \"nothing\"",
+            vec![col("S", "Style", None)],
+        );
         d3.source = RowSource::PlantList;
         assert_eq!(run(ed.doc(), &d3, 0).matched, 0);
     }
@@ -590,10 +938,30 @@ mod tests {
     #[test]
     fn many_objects_are_fast() {
         let mut ed = Editor::default();
-        let positions: Vec<DVec2> = (0..5000).map(|i| DVec2::new(f64::from(i) * 100.0, 0.0)).collect();
-        ed.execute(&Command::AddPlants { style: None, overrides: Default::default(), positions, layer: None, class: None, variation: None }).unwrap();
+        let positions: Vec<DVec2> = (0..5000)
+            .map(|i| DVec2::new(f64::from(i) * 100.0, 0.0))
+            .collect();
+        ed.execute(&Command::AddPlants {
+            style: None,
+            overrides: Default::default(),
+            positions,
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
         let t = std::time::Instant::now();
-        let out = run(ed.doc(), &database("Kind = \"plant\"", vec![col("N", "Count", Some(Summary::Sum)), col("A", "Area", Some(Summary::Sum))]), 0);
+        let out = run(
+            ed.doc(),
+            &database(
+                "Kind = \"plant\"",
+                vec![
+                    col("N", "Count", Some(Summary::Sum)),
+                    col("A", "Area", Some(Summary::Sum)),
+                ],
+            ),
+            0,
+        );
         assert_eq!(out.matched, 5000);
         assert!(t.elapsed().as_secs() < 5);
     }

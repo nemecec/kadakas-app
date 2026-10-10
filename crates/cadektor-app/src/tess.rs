@@ -16,7 +16,11 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
         return Vec::new();
     }
     let area2: f64 = (0..n).map(|i| pts[i].perp_dot(pts[(i + 1) % n])).sum();
-    let mut idx: Vec<usize> = if area2 >= 0.0 { (0..n).collect() } else { (0..n).rev().collect() };
+    let mut idx: Vec<usize> = if area2 >= 0.0 {
+        (0..n).collect()
+    } else {
+        (0..n).rev().collect()
+    };
     let mut out = Vec::with_capacity(n - 2);
     while idx.len() > 3 {
         let m = idx.len();
@@ -27,7 +31,11 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
                 return false;
             }
             !idx.iter().any(|&k| {
-                k != a && k != b && k != c && ![pa, pb, pc].contains(&pts[k]) && in_triangle(pts[k], pa, pb, pc)
+                k != a
+                    && k != b
+                    && k != c
+                    && ![pa, pb, pc].contains(&pts[k])
+                    && in_triangle(pts[k], pa, pb, pc)
             })
         });
         match ear {
@@ -54,7 +62,9 @@ mod tests {
     use super::*;
 
     fn area(pts: &[DVec2], tris: &[[usize; 3]]) -> f64 {
-        tris.iter().map(|t| ((pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]])).abs() / 2.0).sum()
+        tris.iter()
+            .map(|t| ((pts[t[1]] - pts[t[0]]).perp_dot(pts[t[2]] - pts[t[0]])).abs() / 2.0)
+            .sum()
     }
 
     #[test]
@@ -67,7 +77,8 @@ mod tests {
 
     #[test]
     fn concave_l_shape() {
-        let l = [(0., 0.), (2., 0.), (2., 1.), (1., 1.), (1., 2.), (0., 2.)].map(|(x, y)| DVec2::new(x, y));
+        let l = [(0., 0.), (2., 0.), (2., 1.), (1., 1.), (1., 2.), (0., 2.)]
+            .map(|(x, y)| DVec2::new(x, y));
         let t = triangulate(&l);
         assert_eq!(t.len(), 4);
         assert!((area(&l, &t) - 3.0).abs() < 1e-9);

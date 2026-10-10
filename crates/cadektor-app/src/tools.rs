@@ -4,7 +4,9 @@
 
 use cadektor_core::command::Command;
 use cadektor_core::curve;
-use cadektor_core::model::{Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind};
+use cadektor_core::model::{
+    Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind,
+};
 use glam::DVec2;
 
 use crate::hit;
@@ -49,7 +51,14 @@ impl ModifierMode {
 }
 
 impl Tool {
-    pub const BASIC: [Tool; 6] = [Tool::Select, Tool::Line, Tool::Rect, Tool::Circle, Tool::Polyline, Tool::Text];
+    pub const BASIC: [Tool; 6] = [
+        Tool::Select,
+        Tool::Line,
+        Tool::Rect,
+        Tool::Circle,
+        Tool::Polyline,
+        Tool::Text,
+    ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
     pub const SITE: [Tool; 1] = [Tool::SiteModifier];
 
@@ -74,7 +83,10 @@ pub const DEFAULT_ARC_RADIUS: f64 = 500.0;
 
 /// True for the tools that draw a path of vertices and have vertex modes.
 pub fn has_vertex_modes(tool: Tool) -> bool {
-    matches!(tool, Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier)
+    matches!(
+        tool,
+        Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier
+    )
 }
 
 /// What the next click adds to a polyline, landscape area or hardscape.
@@ -207,6 +219,8 @@ pub struct Ctx<'a> {
     pub settings: &'a ToolSettings,
     /// Pick distance in mm.
     pub tol: f64,
+    /// The group you are in (selection picks its members), if any.
+    pub context: Option<ObjectId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -230,10 +244,20 @@ pub enum Effect {
 pub enum Preview {
     None,
     Shape(Shape),
-    Path { vertices: Vec<Vertex>, closed: bool },
-    Box { min: DVec2, max: DVec2, crossing: bool },
+    Path {
+        vertices: Vec<Vertex>,
+        closed: bool,
+    },
+    Box {
+        min: DVec2,
+        max: DVec2,
+        crossing: bool,
+    },
     /// Move the listed objects by this delta.
-    Move { ids: Vec<ObjectId>, delta: DVec2 },
+    Move {
+        ids: Vec<ObjectId>,
+        delta: DVec2,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,8 +267,16 @@ enum State {
     /// The vertices of a path after each click. The last entry is the current path.
     /// Taking back a click removes the last entry.
     Path(Vec<Vec<Vertex>>),
-    Drag { start: DVec2, cur: DVec2, ids: Vec<ObjectId> },
-    Box { start: DVec2, cur: DVec2, add: bool },
+    Drag {
+        start: DVec2,
+        cur: DVec2,
+        ids: Vec<ObjectId>,
+    },
+    Box {
+        start: DVec2,
+        cur: DVec2,
+        add: bool,
+    },
 }
 
 pub struct ToolMachine {
@@ -254,12 +286,20 @@ pub struct ToolMachine {
 
 impl Default for ToolMachine {
     fn default() -> Self {
-        ToolMachine { tool: Tool::Select, state: State::Idle }
+        ToolMachine {
+            tool: Tool::Select,
+            state: State::Idle,
+        }
     }
 }
 
 fn add(shape: Shape) -> Effect {
-    Effect::Exec(Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() })
+    Effect::Exec(Command::AddObject {
+        shape,
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
 }
 
 /// Removes a vertex that sits on the same point as the one before it.
@@ -352,7 +392,12 @@ impl ToolMachine {
             let last = pts.len() - 1;
             pts[0].kind = VertexKind::Corner;
             pts[last].kind = VertexKind::Corner;
-            return s.areas.hardscape_command(&pts).map(Effect::Exec).into_iter().collect();
+            return s
+                .areas
+                .hardscape_command(&pts)
+                .map(Effect::Exec)
+                .into_iter()
+                .collect();
         }
         let styled = match self.tool {
             Tool::Hardscape if pts.len() >= 3 => s.areas.hardscape_command(&pts),
@@ -363,17 +408,42 @@ impl ToolMachine {
             return vec![Effect::Exec(cmd)];
         }
         let shape = match self.tool {
-            Tool::Polyline if pts.len() >= 2 => Shape::Polyline { points: pts, closed: false },
-            Tool::LandscapeArea if pts.len() >= 3 => Shape::LandscapeArea { boundary: pts, name: s.area_name.clone() },
-            Tool::Hardscape if pts.len() >= 3 => Shape::Hardscape { boundary: pts, material: s.material.clone(), thickness: None, elevation: None },
+            Tool::Polyline if pts.len() >= 2 => Shape::Polyline {
+                points: pts,
+                closed: false,
+            },
+            Tool::LandscapeArea if pts.len() >= 3 => Shape::LandscapeArea {
+                boundary: pts,
+                name: s.area_name.clone(),
+            },
+            Tool::Hardscape if pts.len() >= 3 => Shape::Hardscape {
+                boundary: pts,
+                material: s.material.clone(),
+                thickness: None,
+                elevation: None,
+            },
             Tool::SiteModifier if pts.len() >= 3 && s.modifier_mode == ModifierMode::Pad => {
                 let flat = cadektor_core::site::boundary_points(&pts);
                 let slope = s.pad_end_elevation.and_then(|end| {
-                    cadektor_core::site::slope_from_end_elevation(&flat, s.pad_elevation, s.pad_direction_deg.to_radians(), end)
+                    cadektor_core::site::slope_from_end_elevation(
+                        &flat,
+                        s.pad_elevation,
+                        s.pad_direction_deg.to_radians(),
+                        end,
+                    )
                 });
-                Shape::SiteModifier { modifier: ModifierKind::Pad { elevation: s.pad_elevation, slope }, boundary: pts }
+                Shape::SiteModifier {
+                    modifier: ModifierKind::Pad {
+                        elevation: s.pad_elevation,
+                        slope,
+                    },
+                    boundary: pts,
+                }
             }
-            Tool::SiteModifier if pts.len() >= 3 => Shape::SiteModifier { modifier: ModifierKind::GradeLimit, boundary: pts },
+            Tool::SiteModifier if pts.len() >= 3 => Shape::SiteModifier {
+                modifier: ModifierKind::GradeLimit,
+                boundary: pts,
+            },
             _ => return vec![],
         };
         vec![add(shape)]
@@ -388,21 +458,28 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
-            Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => match input {
-                Input::Press { p, .. } => {
-                    let s = cx.settings;
-                    if !matches!(self.state, State::Path(_)) {
-                        self.state = State::Path(vec![]);
+            Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => {
+                match input {
+                    Input::Press { p, .. } => {
+                        let s = cx.settings;
+                        if !matches!(self.state, State::Path(_)) {
+                            self.state = State::Path(vec![]);
+                        }
+                        if let State::Path(history) = &mut self.state {
+                            let next = extend_path(
+                                history.last().map_or(&[], |v| v.as_slice()),
+                                p,
+                                s.vertex_mode,
+                                s.arc_radius,
+                            );
+                            history.push(next);
+                        }
+                        vec![]
                     }
-                    if let State::Path(history) = &mut self.state {
-                        let next = extend_path(history.last().map_or(&[], |v| v.as_slice()), p, s.vertex_mode, s.arc_radius);
-                        history.push(next);
-                    }
-                    vec![]
+                    Input::DoubleClick | Input::Enter => self.finish_polygon(cx),
+                    _ => vec![],
                 }
-                Input::DoubleClick | Input::Enter => self.finish_polygon(cx),
-                _ => vec![],
-            },
+            }
         }
     }
 
@@ -410,7 +487,11 @@ impl ToolMachine {
         let s = cx.settings;
         match self.tool {
             Tool::Text if !s.text.is_empty() && s.text_height > 0.0 => {
-                vec![add(Shape::Text { at: p, text: s.text.clone(), height: s.text_height })]
+                vec![add(Shape::Text {
+                    at: p,
+                    text: s.text.clone(),
+                    height: s.text_height,
+                })]
             }
             _ => vec![],
         }
@@ -422,18 +503,26 @@ impl ToolMachine {
         }
         Some(match tool {
             Tool::Line => Shape::Line { a, b },
-            Tool::Rect => Shape::Rect { min: a.min(b), max: a.max(b) },
-            Tool::Circle => Shape::Circle { center: a, radius: a.distance(b) },
+            Tool::Rect => Shape::Rect {
+                min: a.min(b),
+                max: a.max(b),
+            },
+            Tool::Circle => Shape::Circle {
+                center: a,
+                radius: a.distance(b),
+            },
             _ => return None,
         })
     }
 
     fn handle_two_click(&mut self, input: Input) -> Vec<Effect> {
-        let Input::Press { p, .. } = input else { return vec![] };
+        let Input::Press { p, .. } = input else {
+            return vec![];
+        };
         match std::mem::replace(&mut self.state, State::Idle) {
-            State::Points(pts) if !pts.is_empty() => {
-                Self::two_click_shape(self.tool, pts[0], p).map(|s| vec![add(s)]).unwrap_or_default()
-            }
+            State::Points(pts) if !pts.is_empty() => Self::two_click_shape(self.tool, pts[0], p)
+                .map(|s| vec![add(s)])
+                .unwrap_or_default(),
             _ => {
                 self.state = State::Points(vec![p]);
                 vec![]
@@ -443,7 +532,7 @@ impl ToolMachine {
 
     fn handle_select(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
         match input {
-            Input::Press { p, shift } => match hit::hit_test(cx.doc, p, cx.tol) {
+            Input::Press { p, shift } => match hit::hit_test_in(cx.doc, p, cx.tol, cx.context) {
                 Some(id) if shift => {
                     let mut sel = cx.selection.to_vec();
                     match sel.iter().position(|s| *s == id) {
@@ -456,13 +545,33 @@ impl ToolMachine {
                 }
                 Some(id) => {
                     let selected = cx.selection.contains(&id);
-                    let ids = if selected { cx.selection.to_vec() } else { vec![id] };
-                    self.state = State::Drag { start: p, cur: p, ids };
-                    if selected { vec![] } else { vec![Effect::SetSelection(vec![id])] }
+                    let ids = if selected {
+                        cx.selection.to_vec()
+                    } else {
+                        vec![id]
+                    };
+                    self.state = State::Drag {
+                        start: p,
+                        cur: p,
+                        ids,
+                    };
+                    if selected {
+                        vec![]
+                    } else {
+                        vec![Effect::SetSelection(vec![id])]
+                    }
                 }
                 None => {
-                    self.state = State::Box { start: p, cur: p, add: shift };
-                    if shift { vec![] } else { vec![Effect::SetSelection(vec![])] }
+                    self.state = State::Box {
+                        start: p,
+                        cur: p,
+                        add: shift,
+                    };
+                    if shift {
+                        vec![]
+                    } else {
+                        vec![Effect::SetSelection(vec![])]
+                    }
                 }
             },
             Input::Move(p) => {
@@ -486,7 +595,7 @@ impl ToolMachine {
                         return vec![];
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
-                    for id in hit::box_select(cx.doc, start, p, p.x < start.x) {
+                    for id in hit::box_select_in(cx.doc, start, p, p.x < start.x, cx.context) {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -503,24 +612,40 @@ impl ToolMachine {
     pub fn preview(&self, cursor: DVec2, cx: &Ctx) -> Preview {
         match (&self.state, self.tool) {
             (State::Points(pts), Tool::Line | Tool::Rect | Tool::Circle) => {
-                Self::two_click_shape(self.tool, pts[0], cursor).map_or(Preview::None, Preview::Shape)
+                Self::two_click_shape(self.tool, pts[0], cursor)
+                    .map_or(Preview::None, Preview::Shape)
             }
             (_, Tool::Plant) => self.plant_preview(cursor, cx),
             (State::Points(_), _) => Preview::None,
             (State::Path(h), _) => {
                 let s = cx.settings;
-                let vertices = extend_path(h.last().map_or(&[], |v| v.as_slice()), cursor, s.vertex_mode, s.arc_radius);
-                Preview::Path { vertices, closed: self.tool != Tool::Polyline }
+                let vertices = extend_path(
+                    h.last().map_or(&[], |v| v.as_slice()),
+                    cursor,
+                    s.vertex_mode,
+                    s.arc_radius,
+                );
+                Preview::Path {
+                    vertices,
+                    closed: self.tool != Tool::Polyline,
+                }
             }
-            (State::Drag { start, ids, .. }, _) => Preview::Move { ids: ids.clone(), delta: cursor - *start },
-            (State::Box { start, .. }, _) => {
-                Preview::Box { min: start.min(cursor), max: start.max(cursor), crossing: cursor.x < start.x }
+            (State::Drag { start, ids, .. }, _) => Preview::Move {
+                ids: ids.clone(),
+                delta: cursor - *start,
+            },
+            (State::Box { start, .. }, _) => Preview::Box {
+                min: start.min(cursor),
+                max: start.max(cursor),
+                crossing: cursor.x < start.x,
+            },
+            (State::Idle, Tool::Text) if !cx.settings.text.is_empty() => {
+                Preview::Shape(Shape::Text {
+                    at: cursor,
+                    text: cx.settings.text.clone(),
+                    height: cx.settings.text_height.max(1.0),
+                })
             }
-            (State::Idle, Tool::Text) if !cx.settings.text.is_empty() => Preview::Shape(Shape::Text {
-                at: cursor,
-                text: cx.settings.text.clone(),
-                height: cx.settings.text_height.max(1.0),
-            }),
             _ => Preview::None,
         }
     }
@@ -529,7 +654,11 @@ impl ToolMachine {
     pub fn readout(&self, cursor: DVec2, settings: &ToolSettings) -> String {
         let seg = |a: DVec2, b: DVec2| {
             let d = b - a;
-            format!("Length {:.1} mm  Angle {:.1}\u{b0}", d.length(), d.y.atan2(d.x).to_degrees())
+            format!(
+                "Length {:.1} mm  Angle {:.1}\u{b0}",
+                d.length(),
+                d.y.atan2(d.x).to_degrees()
+            )
         };
         match (&self.state, self.tool) {
             (State::Points(p), Tool::Rect) => {
@@ -545,10 +674,23 @@ impl ToolMachine {
                 let verts = h.last().map_or(&[][..], |v| v.as_slice());
                 let last = verts.last().map_or(cursor, |v| v.p);
                 let mode = settings.vertex_mode;
-                let radius = if mode == VertexMode::Arc { format!("  Radius {:.1} mm", settings.arc_radius) } else { String::new() };
-                format!("{}  Points {}  Mode {}{radius}", seg(last, cursor), verts.len(), mode.label())
+                let radius = if mode == VertexMode::Arc {
+                    format!("  Radius {:.1} mm", settings.arc_radius)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{}  Points {}  Mode {}{radius}",
+                    seg(last, cursor),
+                    verts.len(),
+                    mode.label()
+                )
             }
-            (State::Drag { start, .. }, _) => format!("Move dX {:.1}  dY {:.1} mm", cursor.x - start.x, cursor.y - start.y),
+            (State::Drag { start, .. }, _) => format!(
+                "Move dX {:.1}  dY {:.1} mm",
+                cursor.x - start.x,
+                cursor.y - start.y
+            ),
             (State::Box { start, .. }, _) => {
                 let d = (cursor - *start).abs();
                 format!("Box {:.1} x {:.1} mm", d.x, d.y)
@@ -560,15 +702,21 @@ impl ToolMachine {
     /// Hint for the status line.
     pub fn hint(&self) -> &'static str {
         match (self.tool, self.is_busy()) {
-            (Tool::Select, _) => "Click to select, Shift-click to toggle, drag to move or box select. Delete removes.",
-            (Tool::Line | Tool::Rect | Tool::Circle, false) => "Click the first point. Esc returns to Selection.",
+            (Tool::Select, _) => {
+                "Click to select, Shift-click to toggle, drag to move or box select. Delete removes."
+            }
+            (Tool::Line | Tool::Rect | Tool::Circle, false) => {
+                "Click the first point. Esc returns to Selection."
+            }
             (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",
             (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
             (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
             (Tool::Text, _) => "Click to place. Set values in the Data bar.",
-            (Tool::Plant, _) => "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels.",
+            (Tool::Plant, _) => {
+                "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
+            }
         }
     }
 }
@@ -588,13 +736,23 @@ mod tests {
         fn new(tool: Tool) -> Self {
             let mut m = ToolMachine::default();
             m.set_tool(tool);
-            Fixture { session: Session::default(), settings: ToolSettings::default(), m }
+            Fixture {
+                session: Session::default(),
+                settings: ToolSettings::default(),
+                m,
+            }
         }
 
         /// Sends an input and applies the effects like the app does.
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
-                let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: 5.0 };
+                let cx = Ctx {
+                    doc: self.session.editor.doc(),
+                    selection: &self.session.selection,
+                    settings: &self.settings,
+                    tol: 5.0,
+                    context: self.session.edit_context(),
+                };
                 self.m.handle(input, &cx)
             };
             for e in &fx {
@@ -610,10 +768,19 @@ mod tests {
         }
 
         fn click(&mut self, x: f64, y: f64) -> Vec<Effect> {
-            self.send(Input::Press { p: DVec2::new(x, y), shift: false })
+            self.send(Input::Press {
+                p: DVec2::new(x, y),
+                shift: false,
+            })
         }
         fn shapes(&self) -> Vec<Shape> {
-            self.session.editor.doc().objects.values().map(|o| o.shape.clone()).collect()
+            self.session
+                .editor
+                .doc()
+                .objects
+                .values()
+                .map(|o| o.shape.clone())
+                .collect()
         }
     }
 
@@ -631,10 +798,24 @@ mod tests {
             g.click(x, y);
         }
         g.send(Input::DoubleClick);
-        let Shape::SiteModifier { modifier, boundary } = &f.shapes()[0] else { panic!("not a modifier") };
-        assert_eq!(*modifier, ModifierKind::Pad { elevation: 1250.0, slope: None });
+        let Shape::SiteModifier { modifier, boundary } = &f.shapes()[0] else {
+            panic!("not a modifier")
+        };
+        assert_eq!(
+            *modifier,
+            ModifierKind::Pad {
+                elevation: 1250.0,
+                slope: None
+            }
+        );
         assert_eq!(boundary.len(), 3);
-        assert!(matches!(&g.shapes()[0], Shape::SiteModifier { modifier: ModifierKind::GradeLimit, .. }));
+        assert!(matches!(
+            &g.shapes()[0],
+            Shape::SiteModifier {
+                modifier: ModifierKind::GradeLimit,
+                ..
+            }
+        ));
         // A sloped pad: the elevation at its end sets the percent.
         let mut k = Fixture::new(Tool::SiteModifier);
         k.settings.pad_elevation = 1000.0;
@@ -643,8 +824,17 @@ mod tests {
             k.click(x, y);
         }
         k.send(Input::Enter);
-        let Shape::SiteModifier { modifier: ModifierKind::Pad { slope: Some(s), .. }, .. } = &k.shapes()[0] else { panic!("no slope") };
-        assert!((s.percent - 20.0).abs() < 1e-9 && s.direction == 0.0, "{s:?}");
+        let Shape::SiteModifier {
+            modifier: ModifierKind::Pad { slope: Some(s), .. },
+            ..
+        } = &k.shapes()[0]
+        else {
+            panic!("no slope")
+        };
+        assert!(
+            (s.percent - 20.0).abs() < 1e-9 && s.direction == 0.0,
+            "{s:?}"
+        );
         // Two points are not enough.
         let mut h = Fixture::new(Tool::SiteModifier);
         h.click(0.0, 0.0);
@@ -652,7 +842,14 @@ mod tests {
         h.send(Input::Enter);
         assert!(h.shapes().is_empty());
         assert!(has_vertex_modes(Tool::SiteModifier) && Tool::SITE.contains(&Tool::SiteModifier));
-        assert_eq!((Tool::SiteModifier.name(), ModifierMode::GradeLimits.name(), ModifierMode::Pad.name()), ("Site Modifiers", "Grade Limits", "Pad"));
+        assert_eq!(
+            (
+                Tool::SiteModifier.name(),
+                ModifierMode::GradeLimits.name(),
+                ModifierMode::Pad.name()
+            ),
+            ("Site Modifiers", "Grade Limits", "Pad")
+        );
         assert!(h.m.hint().contains("Click points"));
     }
 
@@ -663,7 +860,13 @@ mod tests {
         assert!(f.m.is_busy());
         f.click(100.0, 50.0);
         assert!(!f.m.is_busy());
-        assert_eq!(f.shapes(), vec![Shape::Line { a: DVec2::ZERO, b: DVec2::new(100.0, 50.0) }]);
+        assert_eq!(
+            f.shapes(),
+            vec![Shape::Line {
+                a: DVec2::ZERO,
+                b: DVec2::new(100.0, 50.0)
+            }]
+        );
     }
 
     #[test]
@@ -671,11 +874,23 @@ mod tests {
         let mut f = Fixture::new(Tool::Rect);
         f.click(100.0, 100.0);
         f.click(0.0, 20.0);
-        assert_eq!(f.shapes(), vec![Shape::Rect { min: DVec2::new(0.0, 20.0), max: DVec2::new(100.0, 100.0) }]);
+        assert_eq!(
+            f.shapes(),
+            vec![Shape::Rect {
+                min: DVec2::new(0.0, 20.0),
+                max: DVec2::new(100.0, 100.0)
+            }]
+        );
         let mut f = Fixture::new(Tool::Circle);
         f.click(0.0, 0.0);
         f.click(30.0, 40.0);
-        assert_eq!(f.shapes(), vec![Shape::Circle { center: DVec2::ZERO, radius: 50.0 }]);
+        assert_eq!(
+            f.shapes(),
+            vec![Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 50.0
+            }]
+        );
     }
 
     #[test]
@@ -696,7 +911,14 @@ mod tests {
         f.send(Input::DoubleClick);
         assert_eq!(
             f.shapes(),
-            vec![Shape::Polyline { points: curve::corners(&[DVec2::ZERO, DVec2::new(100.0, 0.0), DVec2::new(100.0, 100.0)]), closed: false }]
+            vec![Shape::Polyline {
+                points: curve::corners(&[
+                    DVec2::ZERO,
+                    DVec2::new(100.0, 0.0),
+                    DVec2::new(100.0, 100.0)
+                ]),
+                closed: false
+            }]
         );
         assert!(!f.m.is_busy());
     }
@@ -716,7 +938,9 @@ mod tests {
             f.click(x, y);
         }
         f.send(Input::Enter);
-        assert!(matches!(&f.shapes()[0], Shape::Hardscape { boundary, material, .. } if boundary.len() == 3 && material == "Paving"));
+        assert!(
+            matches!(&f.shapes()[0], Shape::Hardscape { boundary, material, .. } if boundary.len() == 3 && material == "Paving")
+        );
     }
 
     #[test]
@@ -727,7 +951,10 @@ mod tests {
         let style = ResourceId(
             f.session
                 .editor
-                .execute(&Command::AddResource { name: "S".into(), body: cadektor_core::resource::ResourceBody::HardscapeStyle(Default::default()) })
+                .execute(&Command::AddResource {
+                    name: "S".into(),
+                    body: cadektor_core::resource::ResourceBody::HardscapeStyle(Default::default()),
+                })
                 .unwrap()
                 .created[0],
         );
@@ -737,18 +964,38 @@ mod tests {
             f.click(x, y);
         }
         f.send(Input::Enter);
-        let o = f.session.editor.doc().objects.values().next().unwrap().clone();
+        let o = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .next()
+            .unwrap()
+            .clone();
         assert_eq!(hardscape::data(&o).unwrap().style, Some(style));
         // Path mode needs two points and makes a path with the width.
         f.settings.areas.path = true;
         f.settings.areas.width = 800.0;
         f.click(0.0, 0.0);
         f.send(Input::Enter);
-        assert_eq!(f.session.editor.doc().objects.len(), 1, "one point is not a path");
+        assert_eq!(
+            f.session.editor.doc().objects.len(),
+            1,
+            "one point is not a path"
+        );
         f.click(0.0, 0.0);
         f.click(5000.0, 0.0);
         f.send(Input::Enter);
-        let path = f.session.editor.doc().objects.values().nth(1).unwrap().clone();
+        let path = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .nth(1)
+            .unwrap()
+            .clone();
         let d = hardscape::data(&path).unwrap();
         assert_eq!((d.mode, d.width), (hardscape::Mode::Path, 800.0));
         assert!((path.shape.area().unwrap() - 4.0e6).abs() < 1.0);
@@ -757,7 +1004,12 @@ mod tests {
         let ls = ResourceId(
             g.session
                 .editor
-                .execute(&Command::AddResource { name: "L".into(), body: cadektor_core::resource::ResourceBody::LandscapeAreaStyle(Default::default()) })
+                .execute(&Command::AddResource {
+                    name: "L".into(),
+                    body: cadektor_core::resource::ResourceBody::LandscapeAreaStyle(
+                        Default::default(),
+                    ),
+                })
                 .unwrap()
                 .created[0],
         );
@@ -766,7 +1018,15 @@ mod tests {
             g.click(x, y);
         }
         g.send(Input::Enter);
-        let a = g.session.editor.doc().objects.values().next().unwrap().clone();
+        let a = g
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .next()
+            .unwrap()
+            .clone();
         assert_eq!(cadektor_core::landscape::data(&a).unwrap().style, Some(ls));
         assert!(matches!(a.shape, Shape::LandscapeArea { ref name, .. } if name == "Planting bed"));
     }
@@ -777,7 +1037,9 @@ mod tests {
         f.settings.species = "Quercus robur".into();
         f.settings.spread = 6000.0;
         f.click(10.0, 20.0);
-        assert!(matches!(&f.shapes()[0], Shape::Plant { species, spread, .. } if species == "Quercus robur" && *spread == 6000.0));
+        assert!(
+            matches!(&f.shapes()[0], Shape::Plant { species, spread, .. } if species == "Quercus robur" && *spread == 6000.0)
+        );
     }
 
     fn with_two_circles(f: &mut Fixture) {
@@ -785,7 +1047,10 @@ mod tests {
             f.session
                 .editor
                 .execute(&Command::AddObject {
-                    shape: Shape::Circle { center: DVec2::new(x, 0.0), radius: 100.0 },
+                    shape: Shape::Circle {
+                        center: DVec2::new(x, 0.0),
+                        radius: 100.0,
+                    },
                     layer: None,
                     class: None,
                     attrs: Attributes::default(),
@@ -798,14 +1063,27 @@ mod tests {
     fn select_click_shift_and_empty() {
         let mut f = Fixture::new(Tool::Select);
         with_two_circles(&mut f);
-        let ids: Vec<_> = f.session.editor.doc().objects.values().map(|o| o.id).collect();
+        let ids: Vec<_> = f
+            .session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .map(|o| o.id)
+            .collect();
         f.click(100.0, 0.0);
         f.send(Input::Release(DVec2::new(100.0, 0.0)));
         assert_eq!(f.session.selection, vec![ids[0]]);
-        f.send(Input::Press { p: DVec2::new(1100.0, 0.0), shift: true });
+        f.send(Input::Press {
+            p: DVec2::new(1100.0, 0.0),
+            shift: true,
+        });
         f.send(Input::Release(DVec2::new(1100.0, 0.0)));
         assert_eq!(f.session.selection, vec![ids[0], ids[1]]);
-        f.send(Input::Press { p: DVec2::new(1100.0, 0.0), shift: true });
+        f.send(Input::Press {
+            p: DVec2::new(1100.0, 0.0),
+            shift: true,
+        });
         assert_eq!(f.session.selection, vec![ids[0]]);
         f.click(500.0, 500.0);
         f.send(Input::Release(DVec2::new(500.0, 500.0)));
@@ -822,9 +1100,13 @@ mod tests {
         let fx = f.send(Input::Release(DVec2::new(200.0, 40.0)));
         assert_eq!(fx.len(), 1);
         let doc = &f.session.editor.doc();
-        assert!(matches!(doc.objects[0].shape, Shape::Circle { center, .. } if center == DVec2::new(100.0, 40.0)));
+        assert!(
+            matches!(doc.objects[0].shape, Shape::Circle { center, .. } if center == DVec2::new(100.0, 40.0))
+        );
         f.session.editor.undo();
-        assert!(matches!(f.session.editor.doc().objects[0].shape, Shape::Circle { center, .. } if center == DVec2::ZERO));
+        assert!(
+            matches!(f.session.editor.doc().objects[0].shape, Shape::Circle { center, .. } if center == DVec2::ZERO)
+        );
     }
 
     #[test]
@@ -853,9 +1135,21 @@ mod tests {
     fn previews_and_keys() {
         let mut f = Fixture::new(Tool::Line);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
-        assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Shape(Shape::Line { .. })));
-        assert!(f.m.readout(DVec2::new(3.0, 4.0), &f.settings).contains("Length 5.0"));
+        let cx = Ctx {
+            doc: f.session.editor.doc(),
+            selection: &[],
+            settings: &f.settings,
+            tol: 1.0,
+            context: None,
+        };
+        assert!(matches!(
+            f.m.preview(DVec2::X, &cx),
+            Preview::Shape(Shape::Line { .. })
+        ));
+        assert!(
+            f.m.readout(DVec2::new(3.0, 4.0), &f.settings)
+                .contains("Length 5.0")
+        );
         assert_eq!(f.m.anchor(), Some(DVec2::ZERO));
         f.m.pop_point();
         assert!(!f.m.is_busy() && f.m.anchor().is_none());
@@ -876,8 +1170,22 @@ mod tests {
         assert_eq!(seen[..6], VertexMode::ALL);
         assert_eq!(seen[6], VertexMode::Corner);
         let labels: Vec<_> = VertexMode::ALL.iter().map(|m| m.label()).collect();
-        assert_eq!(labels, ["Corner", "B\u{e9}zier", "Cubic", "Tangent arc", "Point on arc", "Arc"]);
-        assert!(has_vertex_modes(Tool::Polyline) && has_vertex_modes(Tool::Hardscape) && has_vertex_modes(Tool::LandscapeArea));
+        assert_eq!(
+            labels,
+            [
+                "Corner",
+                "B\u{e9}zier",
+                "Cubic",
+                "Tangent arc",
+                "Point on arc",
+                "Arc"
+            ]
+        );
+        assert!(
+            has_vertex_modes(Tool::Polyline)
+                && has_vertex_modes(Tool::Hardscape)
+                && has_vertex_modes(Tool::LandscapeArea)
+        );
         assert!(!has_vertex_modes(Tool::Line) && !has_vertex_modes(Tool::Select));
         assert_eq!(ToolSettings::default().vertex_mode, VertexMode::Corner);
     }
@@ -921,7 +1229,12 @@ mod tests {
         f.send(Input::Enter);
         let vs = verts(&f.shapes()[0]);
         assert_eq!(vs[0].kind, VertexKind::Corner);
-        assert_eq!(vs[1].kind, VertexKind::Arc { radius: DEFAULT_ARC_RADIUS });
+        assert_eq!(
+            vs[1].kind,
+            VertexKind::Arc {
+                radius: DEFAULT_ARC_RADIUS
+            }
+        );
         assert_eq!(vs[2].kind, VertexKind::Corner);
     }
 
@@ -952,18 +1265,36 @@ mod tests {
         f.click(100.0, 0.0); // No segment yet before this one: a line.
         f.click(200.0, 100.0);
         f.send(Input::Enter);
-        let Shape::Polyline { points, .. } = &f.shapes()[0] else { panic!() };
+        let Shape::Polyline { points, .. } = &f.shapes()[0] else {
+            panic!()
+        };
         // Corner, corner, point on arc, corner.
         let kinds: Vec<_> = points.iter().map(|v| v.kind).collect();
-        assert_eq!(kinds, [VertexKind::Corner, VertexKind::Corner, VertexKind::PointOnArc, VertexKind::Corner]);
+        assert_eq!(
+            kinds,
+            [
+                VertexKind::Corner,
+                VertexKind::Corner,
+                VertexKind::PointOnArc,
+                VertexKind::Corner
+            ]
+        );
         assert_eq!(points[3].p, DVec2::new(200.0, 100.0));
         // The arc is a circle of radius 100 around (100, 100), tangent to the line at (100, 0).
         let path = curve::path(points, false);
-        let arcs: Vec<_> = path.segs.iter().filter(|s| matches!(s, curve::Seg::Arc { .. })).collect();
+        let arcs: Vec<_> = path
+            .segs
+            .iter()
+            .filter(|s| matches!(s, curve::Seg::Arc { .. }))
+            .collect();
         assert_eq!(arcs.len(), 2);
         for s in arcs {
-            let curve::Seg::Arc { center, radius, .. } = s else { unreachable!() };
-            assert!(center.distance(DVec2::new(100.0, 100.0)) < 1e-9 && (radius - 100.0).abs() < 1e-9);
+            let curve::Seg::Arc { center, radius, .. } = s else {
+                unreachable!()
+            };
+            assert!(
+                center.distance(DVec2::new(100.0, 100.0)) < 1e-9 && (radius - 100.0).abs() < 1e-9
+            );
         }
         assert_eq!(path.segs.last().unwrap().to(), DVec2::new(200.0, 100.0));
     }
@@ -981,7 +1312,12 @@ mod tests {
         let vs = verts(&f.shapes()[0]);
         let kinds: Vec<_> = vs.iter().map(|v| v.kind).collect();
         use VertexKind::{Corner, PointOnArc};
-        assert_eq!(kinds, [Corner, Corner, Corner, PointOnArc, Corner, PointOnArc, Corner]);
+        assert_eq!(
+            kinds,
+            [
+                Corner, Corner, Corner, PointOnArc, Corner, PointOnArc, Corner
+            ]
+        );
         // Everything is connected and the path ends exactly at the last click.
         let path = curve::path(&vs, false);
         let mut at = path.start;
@@ -1009,7 +1345,12 @@ mod tests {
         f.send(Input::Enter);
         let vs = verts(&f.shapes()[0]);
         assert_eq!(vs.len(), 3);
-        assert_eq!(vs[1].kind, VertexKind::Arc { radius: DEFAULT_ARC_RADIUS });
+        assert_eq!(
+            vs[1].kind,
+            VertexKind::Arc {
+                radius: DEFAULT_ARC_RADIUS
+            }
+        );
         f.m.pop_point();
         assert!(!f.m.is_busy());
     }
@@ -1021,21 +1362,47 @@ mod tests {
         f.settings.arc_radius = 80.0;
         f.click(0.0, 0.0);
         f.click(100.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
-        let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else { panic!() };
+        let cx = Ctx {
+            doc: f.session.editor.doc(),
+            selection: &[],
+            settings: &f.settings,
+            tol: 1.0,
+            context: None,
+        };
+        let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else {
+            panic!()
+        };
         assert!(closed);
         assert_eq!(vertices.len(), 3);
-        assert_eq!(vertices[2], Vertex::new(DVec2::new(100.0, 100.0), VertexKind::Arc { radius: 80.0 }));
+        assert_eq!(
+            vertices[2],
+            Vertex::new(DVec2::new(100.0, 100.0), VertexKind::Arc { radius: 80.0 })
+        );
         let readout = f.m.readout(DVec2::new(100.0, 100.0), &f.settings);
-        assert!(readout.contains("Mode Arc") && readout.contains("Radius 80.0"), "{readout}");
+        assert!(
+            readout.contains("Mode Arc") && readout.contains("Radius 80.0"),
+            "{readout}"
+        );
         f.settings.vertex_mode = VertexMode::Corner;
         let readout = f.m.readout(DVec2::new(100.0, 100.0), &f.settings);
-        assert!(readout.contains("Mode Corner") && !readout.contains("Radius"), "{readout}");
+        assert!(
+            readout.contains("Mode Corner") && !readout.contains("Radius"),
+            "{readout}"
+        );
         // A polyline preview is open.
         let mut f = Fixture::new(Tool::Polyline);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
-        assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Path { closed: false, .. }));
+        let cx = Ctx {
+            doc: f.session.editor.doc(),
+            selection: &[],
+            settings: &f.settings,
+            tol: 1.0,
+            context: None,
+        };
+        assert!(matches!(
+            f.m.preview(DVec2::X, &cx),
+            Preview::Path { closed: false, .. }
+        ));
     }
 
     #[test]
@@ -1049,7 +1416,10 @@ mod tests {
         f.send(Input::Enter);
         let expected = 1000.0 * 1000.0 - (4.0 - std::f64::consts::PI) * 100.0 * 100.0;
         let area = f.shapes()[0].area().unwrap();
-        assert!((area - expected).abs() < 1e-6 * expected, "{area} vs {expected}");
+        assert!(
+            (area - expected).abs() < 1e-6 * expected,
+            "{area} vs {expected}"
+        );
     }
 
     #[test]

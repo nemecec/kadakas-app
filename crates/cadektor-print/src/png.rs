@@ -4,11 +4,12 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use glam::DVec2;
 use tiny_skia::{
-    BlendMode, FillRule, LineCap, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, StrokeDash, Transform,
+    BlendMode, FillRule, LineCap, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke,
+    StrokeDash, Transform,
 };
 
-use crate::display::*;
 use crate::PrintError;
+use crate::display::*;
 
 /// Largest side of a sheet PNG in pixels.
 pub const MAX_SIDE: u32 = 12_000;
@@ -23,7 +24,9 @@ fn font() -> FontRef<'static> {
 pub fn measure(text: &str, height: f64) -> f64 {
     let f = font();
     let scaled = f.as_scaled(PxScale::from(height as f32));
-    text.chars().map(|c| scaled.h_advance(f.glyph_id(c))).sum::<f32>() as f64
+    text.chars()
+        .map(|c| scaled.h_advance(f.glyph_id(c)))
+        .sum::<f32>() as f64
 }
 
 fn color(c: Rgba) -> Paint<'static> {
@@ -39,9 +42,14 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
         return Err(PrintError::Invalid("dpi must be 10 to 1200".into()));
     }
     let k = dpi / 25.4;
-    let (w, h) = ((page.size.x * k).round() as u32, (page.size.y * k).round() as u32);
+    let (w, h) = (
+        (page.size.x * k).round() as u32,
+        (page.size.y * k).round() as u32,
+    );
     if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || w as u64 * h as u64 > MAX_PIXELS {
-        return Err(PrintError::Invalid(format!("the image would be {w} by {h} px. Use a lower dpi")));
+        return Err(PrintError::Invalid(format!(
+            "the image would be {w} by {h} px. Use a lower dpi"
+        )));
     }
     let mut pix = Pixmap::new(w, h).ok_or_else(|| PrintError::Invalid("image too large".into()))?;
     pix.fill(tiny_skia::Color::WHITE);
@@ -62,7 +70,11 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
                 let mut pb = PathBuilder::new();
                 for (i, p) in poly.iter().enumerate() {
                     let (x, y) = px(*p);
-                    if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+                    if i == 0 {
+                        pb.move_to(x, y)
+                    } else {
+                        pb.line_to(x, y)
+                    }
                 }
                 pb.close();
                 if let Some(path) = pb.finish() {
@@ -83,10 +95,13 @@ pub fn page_png(page: &Page, dpi: f64) -> Result<Vec<u8>, PrintError> {
             }
             Prim::Path(p) => draw_path(&mut pix, p, tf, depth.checked_sub(1).map(|d| &masks[d]), k),
             Prim::Text(t) => draw_text(&mut pix, t, k, h, depth.checked_sub(1).map(|d| &masks[d])),
-            Prim::Image(i) => draw_image(&mut pix, i, k, h, depth.checked_sub(1).map(|d| &masks[d])),
+            Prim::Image(i) => {
+                draw_image(&mut pix, i, k, h, depth.checked_sub(1).map(|d| &masks[d]))
+            }
         }
     }
-    pix.encode_png().map_err(|e| PrintError::Invalid(e.to_string()))
+    pix.encode_png()
+        .map_err(|e| PrintError::Invalid(e.to_string()))
 }
 
 fn draw_path(pix: &mut Pixmap, p: &PathPrim, tf: Transform, mask: Option<&Mask>, k: f64) {
@@ -95,7 +110,9 @@ fn draw_path(pix: &mut Pixmap, p: &PathPrim, tf: Transform, mask: Option<&Mask>,
         match *s {
             PSeg::Move(a) => pb.move_to(a.x as f32, a.y as f32),
             PSeg::Line(a) => pb.line_to(a.x as f32, a.y as f32),
-            PSeg::Cubic(a, b, c) => pb.cubic_to(a.x as f32, a.y as f32, b.x as f32, b.y as f32, c.x as f32, c.y as f32),
+            PSeg::Cubic(a, b, c) => pb.cubic_to(
+                a.x as f32, a.y as f32, b.x as f32, b.y as f32, c.x as f32, c.y as f32,
+            ),
         }
     }
     if p.closed {
@@ -108,7 +125,11 @@ fn draw_path(pix: &mut Pixmap, p: &PathPrim, tf: Transform, mask: Option<&Mask>,
     if let Some(s) = p.stroke {
         // Work in pixels, so a thin line is never thinner than one pixel.
         let width = ((p.width * k) as f32).max(1.0);
-        let mut stroke = Stroke { width, line_cap: LineCap::Butt, ..Stroke::default() };
+        let mut stroke = Stroke {
+            width,
+            line_cap: LineCap::Butt,
+            ..Stroke::default()
+        };
         if let Some([d, g]) = p.dash {
             stroke.dash = StrokeDash::new(vec![(d * k) as f32, (g * k) as f32], 0.0);
         }
@@ -127,7 +148,12 @@ fn draw_text(pix: &mut Pixmap, t: &TextPrim, k: f64, h: u32, mask: Option<&Mask>
     let scaled = f.as_scaled(PxScale::from(size));
     let mut x = (t.at.x * k) as f32;
     if t.align == Align::Center {
-        x -= t.text.chars().map(|c| scaled.h_advance(f.glyph_id(c))).sum::<f32>() / 2.0;
+        x -= t
+            .text
+            .chars()
+            .map(|c| scaled.h_advance(f.glyph_id(c)))
+            .sum::<f32>()
+            / 2.0;
     }
     let y = (h as f64 - t.at.y * k) as f32;
     let (w, ph) = (pix.width() as i32, pix.height() as i32);
@@ -135,7 +161,9 @@ fn draw_text(pix: &mut Pixmap, t: &TextPrim, k: f64, h: u32, mask: Option<&Mask>
         let id = f.glyph_id(ch);
         let glyph = id.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, y));
         x += scaled.h_advance(id);
-        let Some(out) = f.outline_glyph(glyph) else { continue };
+        let Some(out) = f.outline_glyph(glyph) else {
+            continue;
+        };
         let b = out.px_bounds();
         out.draw(|gx, gy, cov| {
             let (px, py) = (b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32);
@@ -156,12 +184,27 @@ fn draw_text(pix: &mut Pixmap, t: &TextPrim, k: f64, h: u32, mask: Option<&Mask>
 
 fn draw_image(pix: &mut Pixmap, i: &ImagePrim, k: f64, h: u32, mask: Option<&Mask>) {
     let mut src = Pixmap::new(i.width, i.height).expect("image size is valid");
-    for (d, s) in src.data_mut().chunks_exact_mut(4).zip(i.rgb.chunks_exact(3)) {
+    for (d, s) in src
+        .data_mut()
+        .chunks_exact_mut(4)
+        .zip(i.rgb.chunks_exact(3))
+    {
         d.copy_from_slice(&[s[0], s[1], s[2], 255]);
     }
     let sx = (i.max.x - i.min.x) * k / i.width as f64;
     let sy = (i.max.y - i.min.y) * k / i.height as f64;
-    let tf = Transform::from_row(sx as f32, 0.0, 0.0, sy as f32, (i.min.x * k) as f32, (h as f64 - i.max.y * k) as f32);
-    let paint = PixmapPaint { blend_mode: BlendMode::SourceOver, quality: tiny_skia::FilterQuality::Bilinear, ..PixmapPaint::default() };
+    let tf = Transform::from_row(
+        sx as f32,
+        0.0,
+        0.0,
+        sy as f32,
+        (i.min.x * k) as f32,
+        (h as f64 - i.max.y * k) as f32,
+    );
+    let paint = PixmapPaint {
+        blend_mode: BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Bilinear,
+        ..PixmapPaint::default()
+    };
     pix.draw_pixmap(0, 0, src.as_ref(), &paint, tf, mask);
 }
