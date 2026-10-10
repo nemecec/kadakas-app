@@ -738,3 +738,127 @@ fn a_local_change_of_the_order_becomes_new_keys_between_neighbours() {
     let m = materialize(&shadow, ed.doc());
     assert_eq!(m.doc.layers[0].id, second);
 }
+
+#[test]
+fn moving_one_point_of_a_site_model_sends_one_chunk() {
+    use kadakas_core::command::{Command, Editor};
+    let points = |n: usize, bump: Option<usize>| -> Vec<Value> {
+        (0..n)
+            .map(|i| {
+                let z = if Some(i) == bump { 99.0 } else { 0.0 };
+                json!([i as f64, (i % 7) as f64, z])
+            })
+            .collect()
+    };
+    let mut ed = Editor::with_sequential_ids();
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "add_object",
+        "shape": {"kind": "site_model", "points": points(1000, None)}
+    }))
+    .unwrap();
+    let id = ObjectId(ed.execute(&cmd).unwrap().created[0]);
+    let mut shadow = replica_of(ed.doc());
+    let e = shadow.alive(Target::new(Kind::Object, id.0)).unwrap();
+    let chunks = e
+        .visible()
+        .keys()
+        .filter(|k| k.starts_with("shape.points."))
+        .count();
+    assert_eq!(chunks, 1000_usize.div_ceil(crate::docsync::POINT_CHUNK));
+    assert!(e.get("shape.points.00000000").is_some());
+    // The base of the shape has no points, so a change of a setting is small too.
+    assert!(e.get("shape").unwrap().get("points").is_none());
+
+    // Change one point in the middle.
+    let rev = ed.revision();
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "modify_object", "id": id,
+        "shape": {"kind": "site_model", "points": points(1000, Some(600))}
+    }))
+    .unwrap();
+    ed.execute(&cmd).unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    assert_eq!(ops.len(), 1, "{} ops", ops.len());
+    assert!(matches!(&ops[0], Op::Set { prop, value, .. }
+            if prop == "shape.points.00000002" && value.as_array().unwrap().len() == crate::docsync::POINT_CHUNK));
+    shadow.apply_all(Writer::BASELINE, &ops);
+
+    // Two users change points in different chunks: both stay. The document builds back.
+    let mut r = replica_of(ed.doc());
+    let pts = |k: usize, z: f64| -> Value {
+        let mut chunk = r_chunk(&r, id, k);
+        chunk[0][2] = json!(z);
+        chunk
+    };
+    fn r_chunk(r: &Replica, id: ObjectId, k: usize) -> Value {
+        r.alive(Target::new(Kind::Object, id.0))
+            .unwrap()
+            .get(&format!("shape.points.{k:08}"))
+            .unwrap()
+            .clone()
+    }
+    let a = pts(0, 5.0);
+    let b = pts(3, 7.0);
+    set(
+        &mut r,
+        w(1, 1),
+        Kind::Object,
+        id.0.low_u64(),
+        "shape.points.00000000",
+        a,
+    );
+    set(
+        &mut r,
+        w(2, 1),
+        Kind::Object,
+        id.0.low_u64(),
+        "shape.points.00000003",
+        b,
+    );
+    let m = materialize(&r, ed.doc());
+    assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
+    match &m.doc.object(id).unwrap().shape {
+        kadakas_core::model::Shape::SiteModel { points, .. } => {
+            assert_eq!(points.len(), 1000);
+            assert_eq!(points[0].z, 5.0);
+            assert_eq!(points[768].z, 7.0);
+            assert_eq!(points[600].z, 99.0);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Fewer points: the extra chunks go.
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "modify_object", "id": id,
+        "shape": {"kind": "site_model", "points": points(300, None)}
+    }))
+    .unwrap();
+    ed.execute(&cmd).unwrap();
+    let ops = crate::docsync::ops_from_diff(&shadow, ed.doc());
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::Unset { prop, .. } if prop == "shape.points.00000003"))
+    );
+    shadow.apply_all(Writer::BASELINE, &ops);
+    let m = materialize(&shadow, ed.doc());
+    assert_eq!(
+        m.doc.object(id),
+        ed.doc()
+            .object(id)
+            .map(|o| {
+                let mut o = o.clone();
+                o.extra.insert(
+                    "order".into(),
+                    m.doc.object(id).unwrap().extra["order"].clone(),
+                );
+                o
+            })
+            .as_ref()
+    );
+}

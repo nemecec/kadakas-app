@@ -125,6 +125,23 @@ pub(crate) fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Valu
                     out.insert(format!("data.{f}"), x);
                 }
             }
+            (Kind::Object, "shape", Value::Object(mut m))
+                if m.get("kind").and_then(Value::as_str) == Some("site_model") =>
+            {
+                // The points of a site model go in chunks and the lines one by one, so moving one
+                // point sends one chunk, not all points.
+                if let Some(Value::Array(points)) = m.remove("points") {
+                    for (n, chunk) in points.chunks(POINT_CHUNK).enumerate() {
+                        out.insert(format!("shape.points.{n:08}"), Value::Array(chunk.to_vec()));
+                    }
+                }
+                if let Some(Value::Array(lines)) = m.remove("lines") {
+                    for (n, line) in lines.into_iter().enumerate() {
+                        out.insert(format!("shape.lines.{n:08}"), line);
+                    }
+                }
+                out.insert("shape".into(), Value::Object(m));
+            }
             (Kind::Document, "drawing", Value::Object(m)) => {
                 for (f, x) in m {
                     match (f.as_str(), x) {
@@ -172,7 +189,27 @@ pub(crate) fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Va
     }
     let mut out = Map::new();
     let mut sheets: std::collections::BTreeMap<String, Value> = Default::default();
+    // The parts of a site model: chunks of points and single lines, in the order of their keys.
+    let mut points: Vec<Value> = Vec::new();
+    let mut lines: Vec<Value> = Vec::new();
+    let mut has_points = false;
+    let mut has_lines = false;
     for (k, v) in flat {
+        if kind == Kind::Object {
+            if let Some(n) = k.strip_prefix("shape.points.") {
+                let _ = n;
+                has_points = true;
+                if let Value::Array(a) = v {
+                    points.extend(a.iter().cloned());
+                }
+                continue;
+            }
+            if k.starts_with("shape.lines.") {
+                has_lines = true;
+                lines.push(v.clone());
+                continue;
+            }
+        }
         if matches!(kind, Kind::Object | Kind::Class)
             && let Some(f) = k.strip_prefix("attrs.")
         {
@@ -196,6 +233,18 @@ pub(crate) fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Va
             out.insert(k.clone(), v.clone());
         }
     }
+    if has_points || has_lines {
+        let shape = sub(&mut out, "shape");
+        shape
+            .entry("kind")
+            .or_insert_with(|| Value::String("site_model".into()));
+        if has_points {
+            shape.insert("points".into(), Value::Array(points));
+        }
+        if has_lines {
+            shape.insert("lines".into(), Value::Array(lines));
+        }
+    }
     if !sheets.is_empty() {
         let pairs = sheets
             .into_iter()
@@ -208,6 +257,9 @@ pub(crate) fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Va
     }
     out
 }
+
+/// The most points of a site model in one property.
+pub const POINT_CHUNK: usize = 256;
 
 /// The most operations in a transaction that [`split`] makes.
 pub const CHUNK_OPS: usize = 5_000;
