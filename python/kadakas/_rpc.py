@@ -172,12 +172,14 @@ class _LineRpc:
 class StdioTransport(_LineRpc):
     """Starts ``kadakas serve`` and talks to it over its standard input and output."""
 
-    def __init__(self, args: list[str], binary: str | os.PathLike[str] | None = None) -> None:
+    def __init__(self, args: list[str], binary: str | os.PathLike[str] | None = None,
+                 env: dict[str, str] | None = None) -> None:
         super().__init__()
         program = find_binary(binary)
         try:
             self._proc = subprocess.Popen(
                 [program, "serve", *args],
+                env={**os.environ, **env} if env else None,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 text=True,

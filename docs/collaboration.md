@@ -632,14 +632,15 @@ snapshot, and is not saved in the document.
 ## 9. The JSON-RPC API
 
 An agent or a user interface can drive a collaboration client through the normal API (see
-`describe`). The host gives the session an **endpoint** (`Session::set_collab_endpoint`): the place
-to connect to. The core crates have no network code. A WebSocket endpoint can be written later in a
-native crate behind a feature.
+`describe`). The host gives the session an **endpoint** (`Session::set_collab_endpoint`) or a
+**factory** that makes endpoints from a URL (`Session::set_collab_endpoint_factory`). The core
+crates have no network code. The WebSocket is in the crate `kadakas-collab-ws`; the program
+`kadakas` gives its factory to the session (section 9.1).
 
 | Method | Purpose |
 |---|---|
 | `collab.status` | State of the client, the IDs, the sequence numbers, the waiting edits, the number of other clients, and the things that were quarantined. |
-| `collab.connect` | Connect. The shared document replaces the open one. Refused in a session with predictable (sequential) IDs. `store` names the files of the offline log (native only). |
+| `collab.connect` | Connect. `{url, token, doc, name?, user?, store?}`. The shared document replaces the open one. Refused in a session with predictable (sequential) IDs. `store` names the files of the offline log (native only). See section 9.1. |
 | `collab.disconnect` | Say goodbye. Edits go on offline. |
 | `collab.sync` | Send local changes, move messages, apply changes of others to the open document. |
 | `collab.presence` | Set your presence and list the others. |
@@ -657,6 +658,77 @@ context of the session stay (objects that are gone leave the selection). The und
 normal `undo` is cleared, because its steps no longer fit. While a session is connected, the normal
 `undo`, `redo` and `document.load` refuse with a message that points to `collab.undo` or
 `collab.disconnect`.
+
+### 9.1 Connecting a program to a server (the client)
+
+**The call.** `collab.connect {url, token, doc}`:
+
+- `url` is `ws://host:port` or `wss://host` (also `http://` and `https://`, as the same) together
+  with `doc`, the document ID. A full address `ws://host:port/ws/<document ID>` works without `doc`.
+  An address with a user name, a password, a query or a fragment is refused: a secret must not be
+  in an address.
+- `token` is the token that the admin of the server made for you (a JWT). It is optional for a
+  server that lets the client sign in with `hello` only.
+- `store` (a path without extension) keeps the offline log in two files, so the edits of a closed
+  program are not lost.
+- Without `url`, the call uses the endpoint that the host gave, or the default URL (below).
+
+**Wait until the client is online before you edit.** The shared document replaces the open one when
+the first snapshot arrives. An edit made before that is lost. Call `collab.sync` until
+`status.state` is `online` (the Python call `doc.collab.connect` does this by default).
+
+**Defaults and the command line.** The program sets the defaults for `collab.connect` from the
+environment variables `KADAKAS_COLLAB_URL` and `KADAKAS_COLLAB_TOKEN`, or from the flags
+`--collab-url` and `--collab-token` of `kadakas serve` and `kadakas mcp`. A flag shows in the list
+of processes, so prefer the variables. A call without `url` or `token` uses them.
+
+```
+export KADAKAS_COLLAB_URL=ws://127.0.0.1:8787
+export KADAKAS_COLLAB_TOKEN=<token>
+kadakas serve        # then: {"method": "collab.connect", "params": {"doc": "<document ID>"}}
+```
+
+**Tokens are secrets.** They are kept in memory only. The client never writes a token to the
+journal, the checkpoint or any other file, and it never puts one in the status, the events, an error
+text or a log. The `describe()` text of an endpoint is the address without anything secret.
+
+**The address policy.** The same rule as `--allow-url` for map services:
+
+- A server on this computer (`localhost`, `127.0.0.0/8`, `::1`) is always allowed.
+- Any other server must be on the list of `--allow-url` (a host name, `*.domain`, or an address
+  prefix such as `wss://collab.example.org/`). The default list is empty.
+- A server that is not on this computer must use `wss://`. The token would cross the network.
+- `kadakas serve` without the WebSocket support (a host that gave no factory) refuses every URL.
+
+**Signing in on the upgrade.** The client sends the token with the upgrade request: first as
+`Authorization: Bearer <token>`. If the server answers the upgrade with an HTTP error (for example a
+proxy that removes the header), it tries once more with the sub-protocols
+`kadakas.v1, kadakas.token.<token>`, which is also the way for a browser. It also sends the token in
+`hello`. A refused token ends with the error "the server refused the token (HTTP 401)".
+
+**Frames and keep-alive.** One message is one text frame. The client sends no frame above 64 MiB
+(`MAX_FRAME_BYTES`) and reads frames up to 1 GiB (`MAX_SNAPSHOT_BYTES`). It sends a WebSocket ping
+every 20 s and drops a connection that was silent for 75 s.
+
+**Reconnecting.** A session that connected with a `url` connects again by itself after a lost
+connection, with a wait of 250 ms, 500 ms, 1 s and so on up to 30 s (the same steps as the retry of
+section 4.6). The tries happen inside `collab.sync`, `collab.presence` and `collab.undo`, so the
+document only changes when the caller asks for it. `collab.status` shows `reconnecting` and
+`last_error`. Edits made while offline wait in the queue and go out after the reconnect. A client
+that is `failed` (a refused token or protocol, a frame it cannot read) does not try again: call
+`collab.connect` with a good token. `collab.disconnect` stops the tries.
+
+**The crates.**
+
+| Crate | Content |
+|---|---|
+| `kadakas-collab` | `Backoff` and `Reconnector` (a back-off, and a link that connects again), `CollabUrl` (the address and the policy match), the `Transport` and `Endpoint` traits. Pure. |
+| `kadakas-collab-ws` | `WsEndpoint` and `WsTransport`. Native: a blocking client, one thread per connection, rustls with the `ring` provider and the Mozilla roots of `webpki-roots` (feature `native-roots` adds the roots of the operating system; `with_root_certificate_der` adds one). Browser (`wasm32`): the `WebSocket` of the browser through `web-sys`; the token goes in the sub-protocol and messages wait while the socket opens. Feature `test-server`: an in-process WebSocket server on the reference sequencer, for tests. |
+| `kadakas-api` | `Session::set_collab_endpoint_factory`, `set_collab_defaults`, `set_collab_allowed_urls`. |
+
+The tests of these crates need no Docker. The tests against the real server (concurrent edits, a
+restart of the server, offline edits, presence, per-user undo, a plug-in object in a session that
+does not have the plug-in) are in the `kadakas-server` repository, in `tests/e2e`.
 
 ## 10. Not in version 1
 
