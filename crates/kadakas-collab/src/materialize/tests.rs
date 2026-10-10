@@ -628,24 +628,24 @@ fn an_older_whole_property_and_a_cut_one_merge() {
 #[test]
 fn objects_and_layers_follow_their_keys_and_ties_go_by_id() {
     let mut r = replica_of(&base());
-    for (id, key) in [(30, "m"), (31, "c"), (32, "m"), (33, "x")] {
+    for (id, key) in [(30, "a5"), (31, "a1"), (32, "a5"), (33, "a9")] {
         let mut o = rect(FIRST_LAYER.0);
         o["order"] = json!(key);
         make(&mut r, w(1, 1), Kind::Object, id, o);
     }
     let order = |m: &Materialized| -> Vec<Uid> { m.doc.objects.keys().map(|k| k.0).collect() };
     let m = run(&r);
-    // c, then the two m (by ID), then x.
+    // a1, then the two a5 (by ID), then a9.
     assert_eq!(order(&m), vec![n(31), n(30), n(32), n(33)]);
     // The key is in the document, so a saved file keeps it.
     let o = m.doc.object(ObjectId(n(31))).unwrap();
-    assert_eq!(o.extra["order"], json!("c"));
+    assert_eq!(o.extra["order"], json!("a1"));
     // The order of the host's own document does not matter.
     let other = materialize(&r, &m.doc);
     assert_eq!(order(&other), order(&m));
     // Layers too.
     let mut l = layer("design");
-    l["order"] = json!("0a");
+    l["order"] = json!("Zz");
     make(&mut r, w(1, 2), Kind::Layer, 40, l);
     let m = run(&r);
     assert_eq!(m.doc.layers[0].id.0, n(40), "a small key comes first");
@@ -861,4 +861,46 @@ fn moving_one_point_of_a_site_model_sends_one_chunk() {
             })
             .as_ref()
     );
+}
+
+#[test]
+fn a_hostile_key_is_refused_by_the_check_and_counts_as_no_key() {
+    let mut r = replica_of(&base());
+    for (id, key) in [(50, "a1"), (51, "~"), (52, "a0V0")] {
+        let mut o = rect(FIRST_LAYER.0);
+        o["order"] = json!(key);
+        make(&mut r, w(1, 1), Kind::Object, id, o);
+    }
+    let m = run(&r);
+    // The objects with a hostile key are quarantined by the check of the thing.
+    assert!(m.doc.object(ObjectId(n(50))).is_some());
+    assert!(m.doc.object(ObjectId(n(51))).is_none());
+    assert!(
+        m.quarantined
+            .iter()
+            .any(|q| q.target.id == n(51) && q.reason.contains("order"))
+    );
+    // A key in `extra` of the host's own document that is not valid is ignored by the sort and
+    // replaced by a good one.
+    let mut doc = base();
+    let mut o = Object::new(
+        ObjectId(n(60)),
+        FIRST_LAYER,
+        NONE_CLASS,
+        kadakas_core::model::Shape::Group {
+            name: String::new(),
+        },
+    );
+    o.extra.insert("order".into(), json!("~"));
+    doc.objects.insert(o.id, o);
+    let r = replica_of(&doc);
+    let key = r
+        .alive(Target::new(Kind::Object, n(60)))
+        .unwrap()
+        .get("order")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(crate::order::valid_key(&key));
 }

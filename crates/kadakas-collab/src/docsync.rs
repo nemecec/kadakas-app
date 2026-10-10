@@ -336,7 +336,7 @@ fn stored_key(extra: &Map<String, Value>) -> Option<String> {
     extra
         .get("order")
         .and_then(Value::as_str)
-        .filter(|k| !k.is_empty())
+        .filter(|k| crate::order::valid_key(k))
         .map(str::to_string)
 }
 

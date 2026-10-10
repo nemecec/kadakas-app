@@ -266,9 +266,11 @@ pub fn materialize_with(
 /// Sorts a list by the stacking key (the field `order` in `extra`), then by ID. A thing without a
 /// key comes first.
 fn sort_by_key<T>(list: &mut [T], key: impl Fn(&T) -> (&Map<String, Value>, Uid)) {
+    // A key that is not valid counts as no key.
     let text = |m: &Map<String, Value>| {
         m.get("order")
             .and_then(Value::as_str)
+            .filter(|k| crate::order::valid_key(k))
             .unwrap_or("")
             .to_string()
     };

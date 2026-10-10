@@ -67,6 +67,15 @@ pub fn layer_problem(l: &Layer) -> Option<String> {
 
 /// Checks the properties of one thing. `Ok` if they make a valid thing of this kind.
 pub fn validate_entity(kind: Kind, id: Uid, props: &Map<String, Value>) -> Result<(), String> {
+    if matches!(kind, Kind::Object | Kind::Layer)
+        && let Some(k) = props.get("order")
+        && !k.as_str().is_some_and(crate::order::valid_key)
+    {
+        return Err(format!(
+            "order must be a key of the digits 0-9A-Za-z (no 0 at the end, at most {} characters)",
+            crate::order::MAX_KEY_LEN
+        ));
+    }
     let props = &crate::docsync::unflatten(kind, props);
     let full = with_id(id, props);
     let read = |e: serde_json::Error| format!("not a valid {kind:?}: {e}");
@@ -198,6 +207,23 @@ mod tests {
         assert!(validate_entity(Kind::Document, Uid::NIL, &bad).is_err());
         let bad = props(json!({"georef": 5}));
         assert!(validate_entity(Kind::Document, Uid::NIL, &bad).is_err());
+        // The key of the stacking order: a good key passes, a hostile one does not.
+        let mut o = rect();
+        o.insert("order".into(), json!("a0V"));
+        assert_eq!(validate_entity(Kind::Object, id, &o), Ok(()));
+        for hostile in [
+            json!("~"),
+            json!(""),
+            json!("a0V0"),
+            json!(5),
+            json!("a".repeat(2000)),
+        ] {
+            o.insert("order".into(), hostile);
+            assert!(validate_entity(Kind::Object, id, &o).is_err());
+        }
+        let mut l = layer.clone();
+        l.insert("order".into(), json!("~"));
+        assert!(validate_entity(Kind::Layer, id, &l).is_err());
     }
 
     #[test]
