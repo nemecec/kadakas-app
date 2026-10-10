@@ -571,12 +571,14 @@ dependencies = [
  "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
+ "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
  "glam",
  "png",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -591,6 +593,7 @@ dependencies = [
  "cadektor-irrigation",
  "cadektor-print",
  "cadektor-render",
+ "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
  "eframe",
@@ -715,6 +718,18 @@ dependencies = [
  "proptest",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "cadektor-script"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

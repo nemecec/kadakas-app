@@ -15,6 +15,8 @@ mod irrigation_api;
 mod libfiles;
 mod massing_api;
 mod plants_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod plugin_api;
 mod present_api;
 mod sheets_api;
 mod symbols_api;
@@ -36,9 +38,16 @@ mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cadektor_gis::http::UrlPolicy;
 #[cfg(not(target_arch = "wasm32"))]
+pub use cadektor_script::trust::TrustStore;
+#[cfg(not(target_arch = "wasm32"))]
 pub use gis_api::{GisState, JobInfo};
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin_api::{
+    DATA_KEY as PLUGIN_DATA_KEY, ResetJob, ScriptingState, UNTRUSTED_CODE, instance_info,
+    trust_plugin, user_finish, user_prepare, user_set_params,
+};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod site;
@@ -77,6 +86,9 @@ pub struct Session {
     sheet_cache: cadektor_print::SheetCache,
     /// The saved view that `saved_view.restore` applied last, until the host takes it.
     applied_view: Option<SavedView>,
+    /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub scripting: ScriptingState,
 }
 
 #[derive(Debug)]
@@ -343,6 +355,41 @@ pub const METHODS: &[(&str, &str)] = &[
     grading_api::SECTION_SET,
     grading_api::SECTION_PROFILE,
     grading_api::SECTION_PLACE,
+    // Plug-in objects and scripts (see plugin_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_DEFINE,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_DELETE,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_LIST,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_GET,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_EXAMPLES,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_INSTALL_EXAMPLE,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_PLACE,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_SET_PARAMS,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_RESET,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_OBJECT,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::PLUGIN_PREVIEW,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::SCRIPT_INFO,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::SCRIPT_RUN,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::SCRIPT_STATUS,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::SCRIPT_STOP,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_api::SCRIPT_LIST,
     // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
     symbols_api::GROUP_CREATE,
     symbols_api::GROUP_UNGROUP,
@@ -510,6 +557,8 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             sheet_cache: cadektor_print::SheetCache::default(),
             applied_view: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            scripting: ScriptingState::default(),
         }
     }
 
@@ -529,6 +578,8 @@ impl Session {
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
         #[cfg(not(target_arch = "wasm32"))]
         let gis = std::mem::take(&mut self.gis);
+        #[cfg(not(target_arch = "wasm32"))]
+        let scripting = std::mem::take(&mut self.scripting);
         *self = Session {
             replaced: true,
             view: self.view,
@@ -539,6 +590,7 @@ impl Session {
             self.paths = paths;
             self.doc_dir = doc_dir;
             self.gis = gis;
+            self.scripting = scripting;
             // Jobs that were started for the old document must not change this one.
             self.gis.epoch += 1;
         }
@@ -636,6 +688,7 @@ impl Session {
                 {
                     d["io"] = io::describe();
                     d["gis"] = gis_api::describe();
+                    d["scripting"] = plugin_api::describe();
                 }
                 d
             }
@@ -891,6 +944,10 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             "export.file" => self.export_file(p)?,
             _ => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(r) = plugin_api::handle(self, method, p.clone()) {
+                    return r;
+                }
                 if let Some(r) = present_api::handle(self, method, p.clone()) {
                     return r;
                 }

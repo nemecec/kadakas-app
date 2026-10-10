@@ -1,0 +1,15 @@
+[package]
+name = "cadektor-script"
+version = "0.1.0"
+edition = "2024"
+description = "Scripting for Cadektor: Python discovery, safe process runs, plug-in object definitions and the reset protocol, and the script host for the Scripts palette. Native only."
+
+[dependencies]
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+sha2 = "0.11.0"
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
