@@ -7,12 +7,14 @@
 //! extension hooks of core (see `hook`).
 
 pub mod analysis;
+pub mod draw;
 pub mod grade;
 pub mod hook;
 pub mod section;
 pub mod spot;
 pub mod wall;
 
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use glam::DVec2;
@@ -48,12 +50,76 @@ impl Follow {
     }
 }
 
-/// The height of the ground at a point, for a surface. `None` outside the site model.
-pub type Ground<'a> = &'a dyn Fn(DVec2, Follow) -> Option<f64>;
+/// The ground that an object stands on. `exact` is the height of the site model, `None` outside
+/// it. `clamped` also answers outside the model: there the ground has the height of the nearest
+/// edge of the model, as hardscapes do. An object that follows the ground uses `clamped` and says
+/// that it is partly off the model. Snapping picks up only `exact` heights.
+pub trait GroundSource {
+    fn exact(&self, p: DVec2, which: Follow) -> Option<f64>;
 
-/// The ground of one site model.
-pub fn ground_of(site: &SiteResult) -> impl Fn(DVec2, Follow) -> Option<f64> + '_ {
-    move |p, which| site.surface(which.surface()).elevation_at(p)
+    fn clamped(&self, p: DVec2, which: Follow) -> Option<f64> {
+        self.exact(p, which)
+    }
+}
+
+/// A closure is a ground without an edge (`clamped` is `exact`).
+impl<F: Fn(DVec2, Follow) -> Option<f64>> GroundSource for F {
+    fn exact(&self, p: DVec2, which: Follow) -> Option<f64> {
+        self(p, which)
+    }
+}
+
+/// The ground of an object: a source of heights.
+pub type Ground<'a> = &'a dyn GroundSource;
+
+/// The ground of one site model, with the heights of its edge for places outside it.
+pub struct SiteGround<'a> {
+    site: &'a SiteResult,
+    edges: [OnceCell<Vec<[glam::DVec3; 2]>>; 2],
+}
+
+impl<'a> SiteGround<'a> {
+    pub fn new(site: &'a SiteResult) -> Self {
+        SiteGround {
+            site,
+            edges: [OnceCell::new(), OnceCell::new()],
+        }
+    }
+}
+
+impl GroundSource for SiteGround<'_> {
+    fn exact(&self, p: DVec2, which: Follow) -> Option<f64> {
+        self.site.surface(which.surface()).elevation_at(p)
+    }
+
+    fn clamped(&self, p: DVec2, which: Follow) -> Option<f64> {
+        if let Some(z) = self.exact(p, which) {
+            return Some(z);
+        }
+        let tin = self.site.surface(which.surface());
+        let edges = self.edges[which as usize].get_or_init(|| {
+            tin.boundary_edges()
+                .into_iter()
+                .map(|(a, b)| [tin.vertices[a as usize], tin.vertices[b as usize]])
+                .collect()
+        });
+        edges
+            .iter()
+            .map(|[a, b]| {
+                let ab = (b - a).truncate();
+                let t = if ab.length_squared() == 0.0 {
+                    0.0
+                } else {
+                    ((p - a.truncate()).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+                };
+                (
+                    p.distance_squared(a.truncate() + ab * t),
+                    a.z + (b.z - a.z) * t,
+                )
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map(|(_, z)| z)
+    }
 }
 
 /// The settings under `key` of an object, if present and valid.
@@ -61,13 +127,13 @@ pub fn read<T: DeserializeOwned>(obj: &Object, key: &str) -> Option<T> {
     serde_json::from_value(obj.data.get(key)?.clone()).ok()
 }
 
-/// The site model that serves an object: the one it names, or the first visible site model on its
+/// The site model that serves a layer: the one named, or the first visible site model on the
 /// layer whose surface can be built.
 pub fn host(
     doc: &Document,
     cache: &SiteCache,
     revision: u64,
-    obj: &Object,
+    layer: cadektor_core::model::LayerId,
     named: Option<ObjectId>,
 ) -> Option<Arc<SiteResult>> {
     if let Some(id) = named {
@@ -76,7 +142,7 @@ pub fn host(
     doc.objects
         .values()
         .filter(|o| {
-            o.layer == obj.layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o)
+            o.layer == layer && matches!(o.shape, Shape::SiteModel { .. }) && doc.is_visible(o)
         })
         .find_map(|o| cache.get(revision, doc, o.id).ok())
 }
@@ -181,24 +247,44 @@ mod tests {
         );
         let cache = SiteCache::default();
         let obj = ed.doc().object(circle).unwrap();
-        assert!(host(ed.doc(), &cache, ed.revision(), obj, None).is_none());
+        assert!(host(ed.doc(), &cache, ed.revision(), obj.layer, None).is_none());
         let s = site(&mut ed, |x, _| x);
         let obj = ed.doc().object(circle).unwrap();
-        let found = host(ed.doc(), &cache, ed.revision(), obj, None).unwrap();
+        let found = host(ed.doc(), &cache, ed.revision(), obj.layer, None).unwrap();
         assert_eq!(found.id, s);
         assert_eq!(
-            host(ed.doc(), &cache, ed.revision(), obj, Some(s))
+            host(ed.doc(), &cache, ed.revision(), obj.layer, Some(s))
                 .unwrap()
                 .id,
             s
         );
-        assert!(host(ed.doc(), &cache, ed.revision(), obj, Some(circle)).is_none());
-        let g = ground_of(&found);
+        assert!(host(ed.doc(), &cache, ed.revision(), obj.layer, Some(circle)).is_none());
+        let g = SiteGround::new(&found);
         assert_eq!(
-            g(DVec2::new(5000.0, 5000.0), Follow::Proposed),
+            g.exact(DVec2::new(5000.0, 5000.0), Follow::Proposed),
             Some(5000.0)
         );
-        assert_eq!(g(DVec2::new(-5.0, 0.0), Follow::Existing), None);
+        assert_eq!(g.exact(DVec2::new(-5.0, 0.0), Follow::Existing), None);
+        // Outside the model the ground has the height of the nearest edge. The edge list is made once.
+        assert_eq!(
+            g.clamped(DVec2::new(-500.0, 3000.0), Follow::Existing),
+            Some(0.0)
+        );
+        assert_eq!(
+            g.clamped(DVec2::new(20_000.0, 3000.0), Follow::Existing),
+            Some(10_000.0)
+        );
+        assert_eq!(
+            g.clamped(DVec2::new(20_000.0, 3000.0), Follow::Proposed),
+            Some(10_000.0)
+        );
+        assert_eq!(
+            g.clamped(DVec2::new(5000.0, 5000.0), Follow::Proposed),
+            Some(5000.0)
+        );
+        // A closure is a ground without an edge.
+        let flat = |_: DVec2, _: Follow| Some(7.0);
+        assert_eq!(flat.clamped(DVec2::ZERO, Follow::Existing), Some(7.0));
         assert!(read::<wall::WallData>(ed.doc().object(circle).unwrap(), "nothing").is_none());
     }
 }

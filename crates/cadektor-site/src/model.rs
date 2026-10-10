@@ -76,24 +76,29 @@ pub fn modifiers_for(doc: &Document, site: ObjectId) -> Vec<(ObjectId, Modifier)
         return Vec::new();
     };
     let (lo, hi) = obj.shape.bounds();
-    doc.objects
+    let mut list: Vec<(bool, ObjectId, Modifier)> = doc
+        .objects
         .values()
         .filter(|o| o.layer == obj.layer && doc.is_visible(o))
         .flat_map(|o| {
             let (a, b) = o.shape.bounds();
             let touches = a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y;
-            let mods: Vec<Modifier> = if touches {
-                modifier_of(&o.shape)
-                    .or_else(|| crate::terrain::pad_of(doc, o))
-                    .into_iter()
-                    .chain(crate::grading::wall::pads_of(doc, o))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            mods.into_iter().map(move |m| (o.id, m))
+            let mut mods: Vec<(bool, Modifier)> = Vec::new();
+            if touches {
+                let own = modifier_of(&o.shape).or_else(|| crate::terrain::pad_of(doc, o));
+                mods.extend(own.map(|m| (false, m)));
+                mods.extend(
+                    crate::grading::wall::pads_of(doc, o)
+                        .into_iter()
+                        .map(|m| (true, m)),
+                );
+            }
+            mods.into_iter().map(move |(w, m)| (w, o.id, m))
         })
-        .collect()
+        .collect();
+    // The ground behind a retaining wall comes first, so that a pad of the user wins where they overlap.
+    list.sort_by_key(|(wall, ..)| !*wall);
+    list.into_iter().map(|(_, id, m)| (id, m)).collect()
 }
 
 /// The contour settings of a site model.

@@ -1,36 +1,56 @@
 //! The drawing hooks of the grading objects. `draw::svg_ext` and `draw::scene_ext` call these for
-//! objects that `cadektor_core::site::carries_extra` accepts.
+//! objects that `cadektor_core::site::carries_extra` accepts. The canvas and the print module use
+//! `extras` and `site_layers`, so every output shows the same graphics.
 
 use glam::DVec2;
 
 use cadektor_core::mesh::SceneSink;
 use cadektor_core::model::{Document, Object, Shape};
 
-use super::{analysis, grade, ground_of, host, section, spot, wall};
-use crate::model::SiteCache;
+use super::draw::{Drawn, Label, Poly};
+use super::{SiteGround, analysis, grade, host, section, spot, wall};
+use crate::model::{SiteCache, Surface};
 
 fn scale_of(doc: &Document, obj: &Object) -> f64 {
     doc.layer(obj.layer).map_or(100.0, |l| l.scale)
 }
 
-/// Adds the SVG of the extras of one object (after its plain shape).
-pub fn svg(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, out: &mut String) {
-    let scale = scale_of(doc, obj);
+/// What a wall, grade, spot elevation, section line or legend adds to a drawing, at the scale of its layer.
+pub fn extras(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object) -> Drawn {
+    extras_at(doc, cache, revision, obj, scale_of(doc, obj))
+}
+
+/// Like `extras`, with the drawing scale given (model mm per paper mm), for a viewport at its own scale.
+pub fn extras_at(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    obj: &Object,
+    scale: f64,
+) -> Drawn {
     if let Some(d) = wall::data(obj) {
-        let site = host(doc, cache, revision, obj, d.site);
-        let ground = site.as_ref().map(|s| ground_of(s));
-        if let Some(w) = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as super::Ground<'_>)) {
-            out.push_str(&wall::svg(&w, scale));
+        let site = host(doc, cache, revision, obj.layer, d.site);
+        let ground = site.as_ref().map(|s| SiteGround::new(s));
+        let dz = site_dz(doc, site.as_deref(), obj);
+        if let Some(w) = wall::evaluate_at(
+            doc,
+            obj,
+            ground.as_ref().map(|g| g as super::Ground<'_>),
+            dz,
+        ) {
+            return wall::draw(&w, scale);
         }
     } else if let Some(d) = grade::data(obj) {
-        let site = d.snap.and_then(|_| host(doc, cache, revision, obj, d.site));
-        let ground = site.as_ref().map(|s| ground_of(s));
+        let site = d
+            .snap
+            .and_then(|_| host(doc, cache, revision, obj.layer, d.site));
+        let ground = site.as_ref().map(|s| SiteGround::new(s));
         if let Some((d, g)) = grade::evaluate(obj, ground.as_ref().map(|g| g as super::Ground<'_>))
         {
-            out.push_str(&grade::svg(obj.id, &d, &g, scale));
+            return grade::draw(obj.id, &d, &g, scale);
         }
     } else if let (Some(d), Shape::Circle { center, radius }) = (spot::data(obj), &obj.shape) {
-        let text = match host(doc, cache, revision, obj, d.site) {
+        let text = match host(doc, cache, revision, obj.layer, d.site) {
             Some(site) => spot::label(
                 &d,
                 &spot::read_at(&site, *center),
@@ -39,9 +59,9 @@ pub fn svg(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, out: 
             ),
             None => "no site model".to_string(),
         };
-        out.push_str(&spot::svg(obj.id, *center, *radius, &d, &text, scale));
+        return spot::draw(obj.id, *center, *radius, &d, &text, scale);
     } else if let (Some(d), Shape::Line { a, b }) = (section::data(obj), &obj.shape) {
-        out.push_str(&section_svg(obj, &d.name, *a, *b, scale));
+        return section_ends(obj, &d.name, *a, *b, scale);
     } else if let (Some(d), Shape::Rect { min, max }) = (analysis::legend_of(obj), &obj.shape) {
         let site_obj = d.site.and_then(|id| doc.object(id)).or_else(|| {
             doc.objects.values().find(|o| {
@@ -55,52 +75,96 @@ pub fn svg(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, out: 
             analysis::for_site(&site, &analysis::spec_of(so)?)
         });
         if let Some(a) = result {
-            out.push_str(&analysis::legend_svg(
-                obj.id,
-                min.min(*max),
-                min.max(*max),
-                &d,
-                &a,
-            ));
+            return analysis::legend_draw(obj.id, min.min(*max), min.max(*max), &d, &a);
         }
     }
+    Drawn::default()
+}
+
+/// The height of the layer of `obj` above the layer of the site model.
+fn site_dz(doc: &Document, site: Option<&crate::SiteResult>, obj: &Object) -> f64 {
+    let elev = |layer| doc.layer(layer).map_or(0.0, |l| l.elevation);
+    site.and_then(|s| doc.object(s.id))
+        .map_or(0.0, |so| elev(obj.layer) - elev(so.layer))
+}
+
+/// What a site model adds to a drawing besides its outline: the analysis colors and the contours.
+/// The SVG of the plan draws the contours itself, so it asks only for the analysis (`contours` false).
+pub fn site_layers(
+    doc: &Document,
+    cache: &SiteCache,
+    revision: u64,
+    obj: &Object,
+    scale: f64,
+    contours: bool,
+) -> Drawn {
+    let mut out = Drawn::default();
+    let Ok(site) = cache.get(revision, doc, obj.id) else {
+        return out;
+    };
+    if let Some(a) = analysis::spec_of(obj).and_then(|s| analysis::for_site(&site, &s)) {
+        out.extend(analysis::draw(obj.id, &a));
+    }
+    if contours {
+        for which in crate::draw::shown_surfaces(&site, site.settings.display_2d) {
+            let color = match which {
+                Surface::Existing => site
+                    .settings
+                    .existing_color
+                    .map_or([150, 104, 60, 255], |c| c.0),
+                Surface::Proposed => site
+                    .settings
+                    .proposed_color
+                    .map_or([30, 120, 50, 255], |c| c.0),
+            };
+            for c in site.contours(which).unwrap_or(&[]) {
+                let weight = if c.major { 0.5 } else { 0.18 } * scale;
+                out.polys.push(
+                    Poly::new("contour", obj.id, vec![c.points.clone()], c.closed)
+                        .stroked(color, weight),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// The ends of a section line: a tick across the line and the name of the section.
-fn section_svg(obj: &Object, name: &str, a: DVec2, b: DVec2, scale: f64) -> String {
-    use std::fmt::Write;
+fn section_ends(obj: &Object, name: &str, a: DVec2, b: DVec2, scale: f64) -> Drawn {
+    let mut out = Drawn::default();
     let len = a.distance(b);
     if len <= 0.0 {
-        return String::new();
+        return out;
     }
     let dir = (b - a) / len;
     let n = DVec2::new(-dir.y, dir.x);
     let tick = 4.0 * scale;
-    let mut out = String::new();
     for p in [a, b] {
-        let (p0, p1) = (p - n * tick, p + n * tick);
-        let _ = writeln!(
-            out,
-            r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" stroke-width="{}" data-kind="section-end" data-section="{}"/>"#,
-            p0.x,
-            -p0.y,
-            p1.x,
-            -p1.y,
-            0.5 * scale,
-            obj.id
+        out.polys.push(
+            Poly::new(
+                "section-end",
+                obj.id,
+                vec![vec![p - n * tick, p + n * tick]],
+                false,
+            )
+            .stroked([0, 0, 0, 255], 0.5 * scale),
         );
-        let t = p + n * tick * 1.4;
-        let _ = writeln!(
-            out,
-            r#"<text x="{}" y="{}" font-size="{}" font-family="sans-serif" text-anchor="middle" fill="black" data-kind="section-name" data-section="{}">{}</text>"#,
-            t.x,
-            -t.y,
-            3.5 * scale,
+        let mut label = Label::new(
+            "section-name",
             obj.id,
-            super::esc(name)
+            p + n * tick * 1.4,
+            name.to_string(),
+            3.5 * scale,
         );
+        label.center = true;
+        out.labels.push(label);
     }
     out
+}
+
+/// Adds the SVG of the extras of one object (after its plain shape).
+pub fn svg(doc: &Document, cache: &SiteCache, revision: u64, obj: &Object, out: &mut String) {
+    out.push_str(&extras(doc, cache, revision, obj).svg());
 }
 
 /// Adds the 3D solid of a wall to a scene sink.
@@ -112,9 +176,15 @@ pub fn scene(
     sink: &mut SceneSink<'_>,
 ) {
     let Some(d) = wall::data(obj) else { return };
-    let site = host(doc, cache, revision, obj, d.site);
-    let ground = site.as_ref().map(|s| ground_of(s));
-    if let Some(w) = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as super::Ground<'_>)) {
+    let site = host(doc, cache, revision, obj.layer, d.site);
+    let ground = site.as_ref().map(|s| SiteGround::new(s));
+    let dz = site_dz(doc, site.as_deref(), obj);
+    if let Some(w) = wall::evaluate_at(
+        doc,
+        obj,
+        ground.as_ref().map(|g| g as super::Ground<'_>),
+        dz,
+    ) {
         wall::emit(&w, sink);
     }
 }

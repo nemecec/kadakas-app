@@ -234,15 +234,7 @@ pub fn svg_ext<'a>(
         let Ok(site) = cache.get(revision, doc, obj.id) else {
             return;
         };
-        if let Some(a) =
-            grading::analysis::spec_of(obj).and_then(|s| grading::analysis::for_site(&site, &s))
-        {
-            out.push_str(&grading::analysis::svg(
-                obj.id,
-                site.surface(a.surface.surface()),
-                &a,
-            ));
-        }
+        out.push_str(&grading::hook::site_layers(doc, cache, revision, obj, 1.0, false).svg());
         for which in shown_surfaces(&site, site.settings.display_2d) {
             let color = line_color(&site, which);
             for c in site.contours(which).unwrap_or(&[]) {

@@ -640,6 +640,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-render",
  "cadektor-sheet",
+ "cadektor-site",
  "epaint_default_fonts",
  "glam",
  "lopdf",

@@ -3,15 +3,14 @@
 //! under `Object::data["spot_elevation"]`. A stake object shows the northing and easting from the
 //! georeference of the document, for setting out.
 
-use std::fmt::Write;
-
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use cadektor_core::georef::Georeference;
 use cadektor_core::model::{Object, ObjectId, Shape};
 
-use super::{esc, finite, meters, read};
+use super::draw::{Drawn, Label, Poly};
+use super::{finite, meters, read};
 use crate::model::SiteResult;
 
 /// The key in `Object::data` that holds the settings.
@@ -160,37 +159,43 @@ pub fn data(obj: &Object) -> Option<SpotData> {
     read(obj, KEY)
 }
 
-/// SVG of the label and a cross in the marker. `scale` is the drawing scale of the layer.
-pub fn svg(
+/// The label and a cross in the marker. `scale` is the drawing scale of the layer.
+pub fn draw(
     id: ObjectId,
     center: DVec2,
     radius: f64,
     d: &SpotData,
     text: &str,
     scale: f64,
-) -> String {
-    let mut out = String::new();
-    let height = d.label_height * scale;
-    let _ = writeln!(
-        out,
-        r#"<path d="M {} {} L {} {} M {} {} L {} {}" stroke="black" stroke-width="{}" fill="none" data-kind="spot-marker" data-spot="{id}"/>"#,
-        center.x - radius,
-        -center.y,
-        center.x + radius,
-        -center.y,
-        center.x,
-        -center.y - radius,
-        center.x,
-        -center.y + radius,
-        0.18 * scale
+) -> Drawn {
+    let mut out = Drawn::default();
+    let black = [0, 0, 0, 255];
+    let w = 0.18 * scale;
+    out.polys.push(
+        Poly::new(
+            "spot-marker",
+            id,
+            vec![vec![center - DVec2::X * radius, center + DVec2::X * radius]],
+            false,
+        )
+        .stroked(black, w),
     );
-    let _ = writeln!(
-        out,
-        r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="black" data-kind="spot-label" data-spot="{id}">{}</text>"#,
-        center.x + radius * 1.5,
-        -center.y - radius * 1.2,
-        esc(text)
+    out.polys.push(
+        Poly::new(
+            "spot-marker",
+            id,
+            vec![vec![center - DVec2::Y * radius, center + DVec2::Y * radius]],
+            false,
+        )
+        .stroked(black, w),
     );
+    out.labels.push(Label::new(
+        "spot-label",
+        id,
+        center + DVec2::new(radius * 1.5, radius * 1.2),
+        text.to_string(),
+        d.label_height * scale,
+    ));
     out
 }
 
@@ -390,7 +395,10 @@ mod tests {
         );
         let d = data(ed.doc().object(id).unwrap()).unwrap();
         assert_eq!(d.prefix, "<A>");
-        let s = svg(id, DVec2::new(10.0, 20.0), 100.0, &d, "<A> 1.20", 100.0);
+        let out = draw(id, DVec2::new(10.0, 20.0), 100.0, &d, "<A> 1.20", 100.0);
+        assert_eq!(out.polys.len(), 2);
+        assert_eq!(out.labels[0].height, 250.0);
+        let s = out.svg();
         assert!(
             s.contains("spot-marker")
                 && s.contains("&lt;A&gt; 1.20")

@@ -144,7 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
-    ToolGrading => "tool.grading", "Grading tool", ["Alt+Shift+W"], true;
+    ToolGrading => "tool.grading", "Grading tool", [], true;
     ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
     ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
     ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
@@ -780,7 +780,12 @@ mod tests {
                 "status of {id} disagrees with the code"
             );
             let binding = cells[2].split(" (").next().unwrap();
-            let mut want: Vec<Chord> = binding.split(" or ").map(|c| chord(c.trim())).collect();
+            // A tool without a default key says "none".
+            let mut want: Vec<Chord> = if binding == "none" {
+                Vec::new()
+            } else {
+                binding.split(" or ").map(|c| chord(c.trim())).collect()
+            };
             let mut have = km.chords(action).to_vec();
             want.sort();
             have.sort();

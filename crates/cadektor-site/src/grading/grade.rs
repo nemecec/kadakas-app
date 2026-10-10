@@ -4,14 +4,13 @@
 //! slope, the end elevation and the label follow from the line and the settings each time. So they
 //! update when an end point moves. With `snap` the elevations come live from the site model.
 
-use std::fmt::Write;
-
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use cadektor_core::model::{MAX_COORD, Object, ObjectId, Shape};
 
-use super::{Follow, Ground, esc, finite, meters, read};
+use super::draw::{Drawn, Label, Poly};
+use super::{Follow, Ground, finite, meters, read};
 
 /// The key in `Object::data` that holds the settings.
 pub const KEY: &str = "grade_object";
@@ -151,7 +150,7 @@ pub fn solve(
         return Err("the end points of a grade must be apart".into());
     }
     let (za, zb) = match (d.snap, ground) {
-        (Some(f), Some(g)) => match (g(a, f), g(b, f)) {
+        (Some(f), Some(g)) => match (g.exact(a, f), g.exact(b, f)) {
             (Some(za), Some(zb)) => (za, zb),
             _ => {
                 return Err(
@@ -202,64 +201,47 @@ pub fn evaluate(obj: &Object, ground: Option<Ground<'_>>) -> Option<(GradeData, 
     Some((d, g))
 }
 
-/// SVG of a grade object: an arrow that points downhill at the middle of the line, the slope
+/// A grade object in plan: an arrow that points downhill at the middle of the line, the slope
 /// label along the line and the end elevations. `scale` is the drawing scale of the layer.
-pub fn svg(id: ObjectId, d: &GradeData, g: &Grade, scale: f64) -> String {
-    let mut out = String::new();
+pub fn draw(id: ObjectId, d: &GradeData, g: &Grade, scale: f64) -> Drawn {
+    let mut out = Drawn::default();
     let dir = (g.b - g.a) / g.length;
     let n = DVec2::new(-dir.y, dir.x);
     let mid = (g.a + g.b) / 2.0;
     let size = 3.0 * scale;
     let height = 2.5 * scale;
+    let black = [0, 0, 0, 255];
     if d.label {
         // The arrow: a head at the middle, in the direction of the fall. Level ground has a bar.
         if g.rise.abs() > 1e-9 {
             let d2 = if g.falls() { dir } else { -dir };
             let tip = mid + d2 * size / 2.0;
-            let (p, q) = (
-                mid - d2 * size / 2.0 + n * size / 2.5,
-                mid - d2 * size / 2.0 - n * size / 2.5,
-            );
-            let _ = writeln!(
-                out,
-                r#"<polygon points="{},{} {},{} {},{}" fill="black" data-kind="grade-arrow" data-grade="{id}"/>"#,
-                tip.x, -tip.y, p.x, -p.y, q.x, -q.y
-            );
+            let base = mid - d2 * size / 2.0;
+            let ring = vec![tip, base + n * size / 2.5, base - n * size / 2.5];
+            out.polys
+                .push(Poly::new("grade-arrow", id, vec![ring], true).filled(black));
         } else {
-            let (p, q) = (mid + n * size / 2.0, mid - n * size / 2.0);
-            let _ = writeln!(
-                out,
-                r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="black" data-kind="grade-arrow" data-grade="{id}"/>"#,
-                p.x, -p.y, q.x, -q.y
-            );
+            let bar = vec![mid + n * size / 2.0, mid - n * size / 2.0];
+            out.polys
+                .push(Poly::new("grade-arrow", id, vec![bar], false).stroked(black, 0.25 * scale));
         }
-        let at = mid + n * height * 0.8;
-        let mut angle = (-dir.y).atan2(dir.x).to_degrees();
+        // The text reads from the left, whichever way the line runs.
+        let mut angle = dir.y.atan2(dir.x).to_degrees();
         if angle > 90.0 {
             angle -= 180.0;
         } else if angle < -90.0 {
             angle += 180.0;
         }
-        let _ = writeln!(
-            out,
-            r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" text-anchor="middle" fill="black" transform="rotate({angle} {} {})" data-kind="grade-label" data-grade="{id}">{}</text>"#,
-            at.x,
-            -at.y,
-            at.x,
-            -at.y,
-            esc(&g.label())
-        );
+        let mut label = Label::new("grade-label", id, mid + n * height * 0.8, g.label(), height);
+        label.center = true;
+        label.angle_deg = angle;
+        out.labels.push(label);
     }
     if d.end_tags {
         for (p, z) in [(g.a, g.elevation_a), (g.b, g.elevation_b)] {
             let at = p - dir * height * 0.5 - n * height * 1.2;
-            let _ = writeln!(
-                out,
-                r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="black" data-kind="grade-tag" data-grade="{id}">{}</text>"#,
-                at.x,
-                -at.y,
-                meters(z, 2)
-            );
+            out.labels
+                .push(Label::new("grade-tag", id, at, meters(z, 2), height));
         }
     }
     out
@@ -533,48 +515,25 @@ mod tests {
             ..GradeData::default()
         };
         let g = solve(a(), b(10_000.0), &d, None).unwrap();
-        let svg = svg(ObjectId(7), &d, &g, 100.0);
+        let out = draw(ObjectId(7), &d, &g, 100.0);
+        let texts: Vec<&str> = out.labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["2.0% (1:50)", "1.00", "1.20"]);
+        assert!(out.polys.len() == 1 && out.polys[0].tag == "grade-arrow");
+        // The arrow points downhill: for a rise from a to b the tip is left of the middle.
+        assert!(out.polys[0].rings[0][0].x < 5000.0);
+        let svg = out.svg();
         assert!(
             svg.contains("grade-arrow")
                 && svg.contains("grade-label")
                 && svg.matches("grade-tag").count() == 2
         );
-        assert!(svg.contains("2.0% (1:50)") && !svg.contains(">1<") && !svg.contains(">1.2<"));
-        assert!(svg.contains(">1.00<") && svg.contains(">1.20<"));
-        // The arrow points downhill: for a rise from a to b it points to a (left).
-        let tip: Vec<&str> = svg
-            .lines()
-            .next()
-            .unwrap()
-            .split('"')
-            .nth(1)
-            .unwrap()
-            .split(' ')
-            .collect();
-        assert!(tip[0].split(',').next().unwrap().parse::<f64>().unwrap() < 5000.0);
         let down = GradeData {
             elevation_b: Some(800.0),
             ..d.clone()
         };
         let g2 = solve(a(), b(10_000.0), &down, None).unwrap();
-        let s2 = super::svg(ObjectId(7), &down, &g2, 100.0);
-        let tip2: f64 = s2
-            .lines()
-            .next()
-            .unwrap()
-            .split('"')
-            .nth(1)
-            .unwrap()
-            .split(' ')
-            .next()
-            .unwrap()
-            .split(',')
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(tip2 > 5000.0);
-        // Level ground has a bar. Rotation keeps the text upright for lines that run to the left.
+        assert!(draw(ObjectId(7), &down, &g2, 100.0).polys[0].rings[0][0].x > 5000.0);
+        // Level ground has a bar.
         let level = GradeData {
             elevation_b: Some(1000.0),
             label: true,
@@ -582,19 +541,14 @@ mod tests {
             ..d.clone()
         };
         let g3 = solve(b(10_000.0), a(), &level, None).unwrap();
-        let s3 = super::svg(ObjectId(7), &level, &g3, 100.0);
-        assert!(s3.contains("<line") && !s3.contains("grade-tag") && s3.contains("rotate(0"));
-        let s4 = super::svg(
-            ObjectId(7),
-            &GradeData {
-                label: false,
-                end_tags: false,
-                ..d.clone()
-            },
-            &g,
-            100.0,
-        );
-        assert!(s4.is_empty());
+        let s3 = draw(ObjectId(7), &level, &g3, 100.0);
+        assert!(!s3.polys[0].closed && s3.labels.len() == 1 && s3.labels[0].angle_deg == 0.0);
+        let none = GradeData {
+            label: false,
+            end_tags: false,
+            ..d.clone()
+        };
+        assert!(draw(ObjectId(7), &none, &g, 100.0).is_empty());
         // Steep lines in both directions rotate by less than 90 degrees.
         for (p, q) in [
             (DVec2::new(0.0, 0.0), DVec2::new(1.0, 5.0)),
@@ -603,16 +557,7 @@ mod tests {
             (DVec2::new(0.0, 5.0), DVec2::new(-1.0, 0.0)),
         ] {
             let gg = solve(p, q, &d, None).unwrap();
-            let s = super::svg(ObjectId(1), &d, &gg, 100.0);
-            let r: f64 = s
-                .split("rotate(")
-                .nth(1)
-                .unwrap()
-                .split(' ')
-                .next()
-                .unwrap()
-                .parse()
-                .unwrap();
+            let r = draw(ObjectId(1), &d, &gg, 100.0).labels[0].angle_deg;
             assert!(r.abs() <= 90.0);
         }
     }

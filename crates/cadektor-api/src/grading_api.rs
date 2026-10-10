@@ -41,7 +41,7 @@ pub const WALL_STYLE_DELETE: (&str, &str) = (
 );
 pub const WALL_ADD: (&str, &str) = (
     "wall.add",
-    "Add a landscape wall: a path (curves allowed) with a thickness and a top that follows a rule. params: {path: [vertices], closed?, thickness? (mm, default 300), top? ({mode: fixed, elevation} | {mode: terrain, offset} (the ground plus an offset; default offset 900) | {mode: slope, start, end} (heights at both ends)), bottom? (existing | proposed: the ground that the bottom and a terrain top follow), embed? (mm below the ground), style? (ID or name; its thickness and coping win), site? (site model ID; default the first on the layer), site_modifier? (the wall is a vertical break in the proposed surface; needs a fixed or slope top and follows the existing ground), layer?, class?}. The 3D solid stands between the ground and the top. Returns {id, quantities}.",
+    "Add a landscape wall: a path (curves allowed) with a thickness and a top that follows a rule. params: {path: [vertices], closed?, thickness? (mm, default 300), top? ({mode: fixed, elevation} | {mode: terrain, offset} (the ground plus an offset; default offset 900) | {mode: slope, start, end} (heights at both ends)), bottom? (existing | proposed: the ground that the bottom and a terrain top follow), embed? (mm below the ground), style? (ID or name; its thickness and coping win), site? (site model ID; default the first on the layer), site_modifier? (the wall is a retaining edge: the ground behind it is set to the top of the wall, the other side keeps its height, and the wall adds no earth; needs a fixed or slope top and follows the existing ground), retains? (left | right: the side of the path, seen from its start, where the ground is at the top; default left), backfill? (mm the retained ground reaches behind the wall, default 1500), layer?, class?}. The 3D solid stands between the ground and the top. Returns {id, quantities}.",
 );
 pub const WALL_SET: (&str, &str) = (
     "wall.set",
@@ -49,7 +49,7 @@ pub const WALL_SET: (&str, &str) = (
 );
 pub const WALL_REPORT: (&str, &str) = (
     "wall.report",
-    "Wall quantities. params: {ids?} (default all walls). Returns {rows: [{id, style, length_m, thickness_mm, face_area_m2 (one face), both_faces_m2, volume_m3, coping_volume_m3, min_height_mm, max_height_mm, avg_height_mm, top_start_mm, top_end_mm, bottom_start_mm, bottom_end_mm, outside_model (stations without ground)}], totals}. Stations lie at every corner and at most 500 mm apart; the height between two stations is linear.",
+    "Wall quantities. params: {ids?} (default all walls). Returns {rows: [{id, style, length_m, thickness_mm, face_area_m2 (one face), both_faces_m2, volume_m3, coping_volume_m3, min_height_mm, max_height_mm, avg_height_mm, top_start_mm, top_end_mm, bottom_start_mm, bottom_end_mm, outside_model (stations off the site model), partly_off_model}], totals}. Off the model a wall takes the height of the nearest edge of the model. Stations lie at every corner and at most 500 mm apart; the height between two stations is linear.",
 );
 #[cfg(test)]
 mod tests;
@@ -92,7 +92,7 @@ pub const SECTION_SET: (&str, &str) = (
 );
 pub const SECTION_PROFILE: (&str, &str) = (
     "section.profile",
-    "The profile of a section: the existing and proposed ground and the objects cut. params: {id}. Returns {length_mm, modified, existing: [[[s, z]...]] (runs of distance and elevation in mm; a point at every triangle edge, so it equals the site model there), proposed, walls: [{id, s, width, top, bottom}], hardscapes: [{id, s0, s1, top0, top1, thickness}], plants: [{id, s, offset, spread, height, base}], z_min, z_max}.",
+    "The profile of a section: the existing and proposed ground and the objects cut. params: {id}. Returns {length_mm, modified, existing: [[[s, z]...]] (one run of distance and elevation in mm; a point at every triangle edge, so it equals the site model there; off the model the nearest edge height), proposed, off_model: [[s0, s1]] (where the line is off the site model), walls: [{id, s, width, top, bottom}], hardscapes: [{id, s0, s1, top0, top1, thickness}], plants: [{id, s, offset, spread, height, base}], z_min, z_max}.",
 );
 pub const SECTION_PLACE: (&str, &str) = (
     "section.place",
@@ -390,7 +390,7 @@ impl Session {
             self.editor.doc(),
             &self.site_cache,
             self.editor.revision(),
-            obj,
+            obj.layer,
             named,
         )
     }
@@ -486,7 +486,7 @@ impl Session {
         let obj = doc.object(id)?;
         let d = wall::data(obj)?;
         let site = self.site_for(obj, d.site);
-        let ground = site.as_ref().map(|s| grading::ground_of(s));
+        let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
         let w = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as grading::Ground<'_>))?;
         let q = w.quantities;
         let (first, last) = (w.stations.first()?, w.stations.last()?);
@@ -508,6 +508,7 @@ impl Session {
             "bottom_start_mm": first.bottom,
             "bottom_end_mm": last.bottom,
             "outside_model": w.outside(),
+            "partly_off_model": w.partly_off_model(),
             "site_modifier": w.data.site_modifier,
         }))
     }
@@ -620,26 +621,24 @@ impl Session {
 
     // ---- grade objects ----
 
-    fn grade_json(&self, id: ObjectId) -> Result<Value, RpcError> {
+    /// Solves a grade before anything is changed, so a bad grade changes nothing.
+    fn solve_grade(
+        &self,
+        layer: LayerId,
+        a: DVec2,
+        b: DVec2,
+        d: &grade::GradeData,
+    ) -> Result<grade::Grade, RpcError> {
         let doc = self.editor.doc();
-        let obj = self.object(id)?;
-        let Shape::Line { a, b } = &obj.shape else {
-            return Err(app(format!("object {id} is not a grade object")));
-        };
-        let d =
-            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
         let site = d.snap.and_then(|_| {
-            grading::host(doc, &self.site_cache, self.editor.revision(), obj, d.site)
+            grading::host(doc, &self.site_cache, self.editor.revision(), layer, d.site)
         });
-        let ground = site.as_ref().map(|s| grading::ground_of(s));
-        let g = grade::solve(
-            *a,
-            *b,
-            &d,
-            ground.as_ref().map(|g| g as grading::Ground<'_>),
-        )
-        .map_err(app)?;
-        Ok(json!({
+        let ground = site.as_ref().map(|s| grading::SiteGround::new(s));
+        grade::solve(a, b, d, ground.as_ref().map(|g| g as grading::Ground<'_>)).map_err(app)
+    }
+
+    fn grade_value(id: ObjectId, g: &grade::Grade) -> Value {
+        json!({
             "id": id,
             "length_mm": g.length,
             "elevation_a": g.elevation_a,
@@ -650,7 +649,20 @@ impl Session {
             "angle_deg": g.angle_deg,
             "falls": g.falls(),
             "label": g.label(),
-        }))
+        })
+    }
+
+    fn grade_json(&self, id: ObjectId) -> Result<Value, RpcError> {
+        let obj = self.object(id)?;
+        let Shape::Line { a, b } = &obj.shape else {
+            return Err(app(format!("object {id} is not a grade object")));
+        };
+        let d =
+            grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
+        Ok(Self::grade_value(
+            id,
+            &self.solve_grade(obj.layer, *a, *b, &d)?,
+        ))
     }
 
     fn grade_add(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
@@ -658,6 +670,9 @@ impl Session {
         let (a, b) = (need_point(&mut m, "a")?, need_point(&mut m, "b")?);
         let data: grade::GradeData = patched(&grade::GradeData::default(), &m, "grade")?;
         data.validate().map_err(bad)?;
+        // Solve first: a grade that cannot be solved (both ends in one place, or a snap off the model) is refused.
+        let on = layer.unwrap_or(self.editor.doc().active_layer);
+        let solved = self.solve_grade(on, a, b, &data)?;
         let id = self.add_object_with(
             Shape::Line { a, b },
             layer,
@@ -665,14 +680,7 @@ impl Session {
             grade::KEY,
             serde_json::to_value(&data).expect("JSON"),
         )?;
-        match self.grade_json(id) {
-            Ok(g) => Ok(json!({ "id": id, "grade": g })),
-            Err(e) => {
-                // A grade that cannot be solved (for example, both ends at one place) is not kept.
-                self.editor.undo();
-                Err(e)
-            }
-        }
+        Ok(json!({ "id": id, "grade": Self::grade_value(id, &solved) }))
     }
 
     fn grade_set(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
@@ -686,23 +694,16 @@ impl Session {
             grade::data(obj).ok_or_else(|| app(format!("object {id} is not a grade object")))?;
         let data: grade::GradeData = patched(&current, &m, "grade")?;
         data.validate().map_err(bad)?;
-        let shape = (a.is_some() || b.is_some()).then(|| Shape::Line {
-            a: a.unwrap_or(old_a),
-            b: b.unwrap_or(old_b),
-        });
+        let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
+        let solved = self.solve_grade(obj.layer, na, nb, &data)?;
+        let shape = (a.is_some() || b.is_some()).then_some(Shape::Line { a: na, b: nb });
         self.change_object(
             id,
             shape,
             grade::KEY,
             serde_json::to_value(&data).expect("JSON"),
         )?;
-        match self.grade_json(id) {
-            Ok(g) => Ok(json!({ "id": id, "grade": g })),
-            Err(e) => {
-                self.editor.undo();
-                Err(e)
-            }
-        }
+        Ok(json!({ "id": id, "grade": Self::grade_value(id, &solved) }))
     }
 
     fn grade_get(&mut self, mut m: Map<String, Value>) -> Result<Value, RpcError> {
@@ -775,8 +776,14 @@ impl Session {
             out["legend"] = json!(l);
         }
         if spec.mode != analysis::Mode::Off {
-            let site = grading::host(doc, &self.site_cache, self.editor.revision(), obj, Some(id))
-                .ok_or_else(|| app("the site model has no surface yet"))?;
+            let site = grading::host(
+                doc,
+                &self.site_cache,
+                self.editor.revision(),
+                obj.layer,
+                Some(id),
+            )
+            .ok_or_else(|| app("the site model has no surface yet"))?;
             if let Some(a) = analysis::for_site(&site, &spec) {
                 let total: f64 = a.bands.iter().map(|b| b.area_xy).sum();
                 out["breaks"] = json!(a.breaks);
@@ -964,6 +971,7 @@ impl Session {
             "modified": p.modified,
             "existing": runs(&p.existing),
             "proposed": runs(&p.proposed),
+            "off_model": p.off_model.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
             "walls": p.walls.iter().map(|w| json!({"id": w.id, "s": w.s, "width": w.width, "top": w.top, "bottom": w.bottom})).collect::<Vec<_>>(),
             "hardscapes": p.slabs.iter().map(|s| json!({"id": s.id, "s0": s.s0, "s1": s.s1, "top0": s.top0, "top1": s.top1, "thickness": s.thickness})).collect::<Vec<_>>(),
             "plants": p.plants.iter().map(|x| json!({"id": x.id, "s": x.s, "offset": x.offset, "spread": x.spread, "height": x.height, "base": x.base})).collect::<Vec<_>>(),

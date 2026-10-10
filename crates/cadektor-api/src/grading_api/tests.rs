@@ -299,21 +299,40 @@ fn wall_as_site_modifier_breaks_the_proposed_surface() {
     let id = w["id"].as_u64().unwrap();
     let after = ok(&mut s, "site.cut_fill", json!({"id": site}));
     assert!(after["fill_m3"].as_f64().unwrap() > 0.0, "{after}");
-    // The proposed surface on the wall is at the top; beside the wall it keeps the old height.
-    let on = ok(
-        &mut s,
-        "site.elevation",
-        json!({"id": site, "x": 5000, "y": 5000, "surface": "proposed"}),
-    );
-    assert!((on["z"].as_f64().unwrap() - 1500.0).abs() < 1e-6, "{on}");
-    let beside = ok(
-        &mut s,
-        "site.elevation",
-        json!({"id": site, "x": 5000, "y": 5400, "surface": "proposed"}),
-    );
+    // The wall is a retaining edge. The ground behind it (left of the path, +Y) is at the top, under
+    // the wall and on the low side the ground keeps its height, and the wall adds no earth.
+    let z = |s: &mut Session, y: i64| {
+        ok(
+            s,
+            "site.elevation",
+            json!({"id": site, "x": 5000, "y": y, "surface": "proposed"}),
+        )["z"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!((z(&mut s, 5600) - 1500.0).abs() < 1e-6);
+    assert!((z(&mut s, 5000) - 500.0).abs() < 1e-6, "under the wall");
+    assert!((z(&mut s, 4600) - 500.0).abs() < 1e-6, "low side");
+    // 6 m of wall, 1.5 m of ground behind it, raised from 0.5 m to 1.5 m.
     assert!(
-        (beside["z"].as_f64().unwrap() - 500.0).abs() < 1e-6,
-        "{beside}"
+        (after["fill_m3"].as_f64().unwrap() - 6.0 * 1.5 * 1.0).abs() < 1e-6,
+        "{after}"
+    );
+    assert_eq!(after["cut_m3"], 0.0);
+    let right = ok(
+        &mut s,
+        "wall.set",
+        json!({"id": id, "retains": "right", "backfill": 1000}),
+    );
+    assert_eq!(right["ids"], json!([id]));
+    assert!(
+        (z(&mut s, 4600) - 1500.0).abs() < 1e-6,
+        "now the right side is retained"
+    );
+    assert!((z(&mut s, 5600) - 500.0).abs() < 1e-6);
+    assert_eq!(
+        fail(&mut s, "wall.set", json!({"id": id, "backfill": 0})).0,
+        -32602
     );
     assert_eq!(
         ok(&mut s, "site.refresh", json!({"id": site}))["modifiers"],
@@ -438,6 +457,32 @@ fn grade_objects() {
         fail(&mut s, "grade.set", json!({"id": id, "b": [0, 0]})).0,
         1
     );
+    // A refused grade changes nothing and leaves no redo step behind.
+    let before = ok(&mut s, "document.get", json!({}));
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.add",
+            json!({"a": [0, 0], "b": [0, 0], "elevation_a": 1, "elevation_b": 2})
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        fail(&mut s, "grade.set", json!({"id": id, "b": [0, 0]})).0,
+        1
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.set",
+            json!({"id": id, "snap": "proposed", "a": [-9000, 0], "b": [-8000, 0]})
+        )
+        .0,
+        1
+    );
+    assert_eq!(ok(&mut s, "document.get", json!({})), before);
+    assert_eq!(ok(&mut s, "redo", json!({}))["done"], false);
     assert_eq!(
         fail(&mut s, "grade.set", json!({"id": id, "bogus": 1})).0,
         -32602
@@ -877,4 +922,44 @@ fn describe_has_grading_examples_and_methods_are_routed() {
         s.handle_grading("nope.nope", json!({})).unwrap_err().code,
         -32601
     );
+}
+
+#[test]
+fn walls_and_sections_off_the_model_take_the_nearest_edge_height() {
+    // The ground rises 100 mm per meter over x 0 to 10 000.
+    let (mut s, _) = session_with_site();
+    let w = ok(
+        &mut s,
+        "wall.add",
+        json!({"path": [[-3000, 5000], [13000, 5000]], "top": {"mode": "terrain", "offset": 500}}),
+    );
+    let q = &w["quantities"];
+    assert_eq!(q["partly_off_model"], true);
+    assert!(q["outside_model"].as_u64().unwrap() > 0);
+    assert_eq!(q["bottom_start_mm"], 0.0);
+    assert_eq!(q["bottom_end_mm"], 1000.0);
+    assert_eq!(q["top_end_mm"], 1500.0);
+    let inside = ok(
+        &mut s,
+        "wall.add",
+        json!({"path": [[1000, 5000], [9000, 5000]]}),
+    );
+    assert_eq!(inside["quantities"]["partly_off_model"], false);
+    let sec = ok(
+        &mut s,
+        "section.add",
+        json!({"a": [-2000, 5000], "b": [12000, 5000]}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let p = ok(&mut s, "section.profile", json!({"id": sec}));
+    let off = p["off_model"].as_array().unwrap();
+    assert_eq!(off.len(), 2);
+    assert!(
+        (off[0][1].as_f64().unwrap() - 2000.0).abs() < 1e-6
+            && (off[1][0].as_f64().unwrap() - 12000.0).abs() < 1e-6
+    );
+    let run = p["existing"][0].as_array().unwrap();
+    assert_eq!(run.first().unwrap()[1], 0.0);
+    assert_eq!(run.last().unwrap()[1], 1000.0);
 }

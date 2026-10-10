@@ -12,9 +12,9 @@ use cadektor_core::curve;
 use cadektor_core::geom::point_in_polygon;
 use cadektor_core::hardscape;
 use cadektor_core::mesh::DEFAULT_SLAB_THICKNESS;
-use cadektor_core::model::{Document, Object, ObjectId, Shape};
+use cadektor_core::model::{Document, LayerKind, Object, ObjectId, Shape};
 
-use super::{Follow, Ground, finite, ground_of, meters, read, wall};
+use super::{Follow, Ground, GroundSource, SiteGround, finite, meters, read, wall};
 use crate::drape::drape;
 use crate::model::SiteResult;
 use crate::tin::Tin;
@@ -117,9 +117,12 @@ pub struct PlantCut {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Profile {
     pub length: f64,
-    /// Runs of (distance, elevation). A line that leaves the site model has several runs.
+    /// Runs of (distance, elevation). There is one run along the whole line. Where the line is
+    /// off the site model, the ground has the height of the nearest edge of the model (see `off_model`).
     pub existing: Vec<Vec<(f64, f64)>>,
     pub proposed: Vec<Vec<(f64, f64)>>,
+    /// Distances (from, to) where the line is off the site model.
+    pub off_model: Vec<(f64, f64)>,
     /// True if the proposed surface is not the existing one.
     pub modified: bool,
     pub walls: Vec<WallCut>,
@@ -129,36 +132,94 @@ pub struct Profile {
     pub z_max: f64,
 }
 
-/// The runs of (distance, elevation) of a surface along the line a to b. When the whole line lies
-/// on the surface, the runs have a point at every triangle edge, so the profile is exact. Else the
-/// line is sampled every `step` and the points off the surface are left out.
-pub fn sample(tin: &Tin, a: DVec2, b: DVec2, step: f64) -> Vec<Vec<(f64, f64)>> {
+/// A run of (distance, elevation), and the distances (from, to) where the line is off the surface.
+pub type Samples = (Vec<(f64, f64)>, Vec<(f64, f64)>);
+
+/// The profile of a surface along the line a to b, as one run of (distance, elevation), and the
+/// distances where the line is off the surface.
+///
+/// On the surface the run has a point at every triangle edge, so it equals the surface there. Off the
+/// surface the ground has the height of the nearest edge (`clamp`), sampled every `step`. The ends
+/// of the parts are found by bisection, so the run changes exactly where the line enters or leaves.
+pub fn sample(
+    tin: &Tin,
+    clamp: &dyn Fn(DVec2) -> Option<f64>,
+    a: DVec2,
+    b: DVec2,
+    step: f64,
+) -> Samples {
+    let len = a.distance(b);
+    let at = |t: f64| a.lerp(b, t);
+    let inside = |t: f64| tin.elevation_at(at(t)).is_some();
     if let Ok(pts) = drape(tin, &[a, b], false) {
-        return vec![
+        return (
             pts.iter()
                 .map(|p| (a.distance(p.truncate()), p.z))
                 .collect(),
-        ];
+            Vec::new(),
+        );
     }
-    let len = a.distance(b);
     let n = ((len / step).ceil() as usize).clamp(1, MAX_SAMPLES);
-    let mut runs: Vec<Vec<(f64, f64)>> = Vec::new();
-    let mut open = false;
-    for i in 0..=n {
-        let s = len * i as f64 / n as f64;
-        match tin.elevation_at(a.lerp(b, i as f64 / n as f64)) {
-            Some(z) => {
-                if !open {
-                    runs.push(Vec::new());
-                    open = true;
+    // The parts of the line, in 0..1, and whether they are on the surface.
+    let mut parts: Vec<(f64, f64, bool)> = Vec::new();
+    let mut start = 0.0;
+    let mut state = inside(0.0);
+    for i in 1..=n {
+        let t = i as f64 / n as f64;
+        if inside(t) != state {
+            // Find where the line crosses the edge of the surface.
+            let (mut on, mut off) = if state {
+                ((i - 1) as f64 / n as f64, t)
+            } else {
+                (t, (i - 1) as f64 / n as f64)
+            };
+            for _ in 0..50 {
+                let mid = (on + off) / 2.0;
+                if inside(mid) {
+                    on = mid;
+                } else {
+                    off = mid;
                 }
-                runs.last_mut().expect("a run is open").push((s, z));
             }
-            None => open = false,
+            parts.push((start, on, state));
+            start = on;
+            state = !state;
         }
     }
-    runs.retain(|r| r.len() > 1);
-    runs
+    parts.push((start, 1.0, state));
+    let mut run: Vec<(f64, f64)> = Vec::new();
+    let mut off_model = Vec::new();
+    for (t0, t1, on) in parts {
+        let mut piece: Vec<(f64, f64)> = Vec::new();
+        if on {
+            match drape(tin, &[at(t0), at(t1)], false) {
+                Ok(pts) => piece.extend(pts.iter().map(|p| (a.distance(p.truncate()), p.z))),
+                Err(_) => piece.extend([t0, t1].map(|t| {
+                    (
+                        len * t,
+                        tin.elevation_at(at(t))
+                            .or_else(|| clamp(at(t)))
+                            .unwrap_or(0.0),
+                    )
+                })),
+            }
+        } else {
+            off_model.push((len * t0, len * t1));
+            let k = (((t1 - t0) * len / step).ceil() as usize).clamp(1, MAX_SAMPLES);
+            for i in 0..=k {
+                let t = t0 + (t1 - t0) * i as f64 / k as f64;
+                piece.push((len * t, clamp(at(t)).unwrap_or(0.0)));
+            }
+        }
+        // The parts meet at one point.
+        if let (Some(last), Some(first)) = (run.last(), piece.first())
+            && (last.0 - first.0).abs() < 1e-6
+        {
+            piece.remove(0);
+        }
+        run.extend(piece);
+    }
+    (run, off_model)
 }
 
 /// Where the segment a-b crosses the segment c-d: the parameters (t on a-b, u on c-d).
@@ -199,22 +260,24 @@ pub fn clip(ring: &[DVec2], a: DVec2, b: DVec2) -> Vec<(f64, f64)> {
     out
 }
 
-fn wall_cuts(
-    doc: &Document,
-    section: &Object,
-    a: DVec2,
-    b: DVec2,
-    ground: Ground<'_>,
-) -> Vec<WallCut> {
+/// The objects that a section sees: the visible ones on design layers. `dz` is the height of the
+/// layer of an object above the layer of the site model.
+fn seen<'a>(doc: &'a Document, base: f64) -> impl Iterator<Item = (&'a Object, f64)> + 'a {
+    doc.objects
+        .values()
+        .filter(|o| doc.is_visible(o))
+        .filter_map(move |o| {
+            let l = doc.layer(o.layer).filter(|l| l.kind == LayerKind::Design)?;
+            Some((o, l.elevation - base))
+        })
+}
+
+fn wall_cuts(doc: &Document, base: f64, a: DVec2, b: DVec2, ground: Ground<'_>) -> Vec<WallCut> {
     let len = a.distance(b);
     let dir = (b - a) / len;
     let mut out = Vec::new();
-    for o in doc
-        .objects
-        .values()
-        .filter(|o| o.layer == section.layer && doc.is_visible(o))
-    {
-        let Some(w) = wall::evaluate(doc, o, Some(ground)) else {
+    for (o, dz) in seen(doc, base) {
+        let Some(w) = wall::evaluate_at(doc, o, Some(ground), dz) else {
             continue;
         };
         let Some(path) = wall::centerline(o) else {
@@ -243,20 +306,10 @@ fn wall_cuts(
     out
 }
 
-fn slab_cuts(
-    doc: &Document,
-    section: &Object,
-    a: DVec2,
-    b: DVec2,
-    ground: Ground<'_>,
-) -> Vec<SlabCut> {
+fn slab_cuts(doc: &Document, base: f64, a: DVec2, b: DVec2, ground: Ground<'_>) -> Vec<SlabCut> {
     let len = a.distance(b);
     let mut out = Vec::new();
-    for o in doc
-        .objects
-        .values()
-        .filter(|o| o.layer == section.layer && doc.is_visible(o))
-    {
+    for (o, dz) in seen(doc, base) {
         let Shape::Hardscape {
             boundary,
             thickness,
@@ -277,9 +330,11 @@ fn slab_cuts(
         let top_at = |t: f64| {
             raise
                 + if drapes {
-                    ground(a.lerp(b, t), Follow::Proposed).unwrap_or(0.0)
+                    ground
+                        .clamped(a.lerp(b, t), Follow::Proposed)
+                        .unwrap_or(0.0)
                 } else {
-                    0.0
+                    dz
                 }
         };
         for (t0, t1) in clip(&curve::flatten(boundary, true, 2.0), a, b) {
@@ -298,7 +353,7 @@ fn slab_cuts(
 
 fn plant_cuts(
     doc: &Document,
-    section: &Object,
+    base: f64,
     a: DVec2,
     b: DVec2,
     band: f64,
@@ -306,10 +361,8 @@ fn plant_cuts(
 ) -> Vec<PlantCut> {
     let len = a.distance(b);
     let dir = (b - a) / len;
-    doc.objects
-        .values()
-        .filter(|o| o.layer == section.layer && doc.is_visible(o))
-        .filter_map(|o| {
+    seen(doc, base)
+        .filter_map(|(o, _)| {
             let (at, spread, height) = match &o.shape {
                 Shape::Plant {
                     at, spread, height, ..
@@ -327,7 +380,7 @@ fn plant_cuts(
                 offset,
                 spread,
                 height,
-                base: ground(at, Follow::Proposed).unwrap_or(0.0),
+                base: ground.clamped(at, Follow::Proposed).unwrap_or(0.0),
             })
         })
         .collect()
@@ -352,26 +405,47 @@ pub fn profile(doc: &Document, obj: &Object, site: &SiteResult) -> Option<Profil
     if !(length > 0.0 && length.is_finite()) {
         return None;
     }
-    let existing = sample(site.surface(crate::Surface::Existing), *a, *b, d.step);
+    let ground = SiteGround::new(site);
+    let ground_ref = &ground;
+    let clamp = |which: Follow| move |p: DVec2| ground_ref.clamped(p, which);
+    let (existing, off_model) = sample(
+        site.surface(crate::Surface::Existing),
+        &clamp(Follow::Existing),
+        *a,
+        *b,
+        d.step,
+    );
     let modified = site.proposed.is_some();
     let proposed = if modified {
-        sample(site.surface(crate::Surface::Proposed), *a, *b, d.step)
+        sample(
+            site.surface(crate::Surface::Proposed),
+            &clamp(Follow::Proposed),
+            *a,
+            *b,
+            d.step,
+        )
+        .0
     } else {
         existing.clone()
     };
-    let ground = ground_of(site);
+    let (existing, proposed) = (vec![existing], vec![proposed]);
+    // Heights of the objects count from the layer of the site model.
+    let base = doc
+        .object(site.id)
+        .and_then(|o| doc.layer(o.layer))
+        .map_or(0.0, |l| l.elevation);
     let walls = if d.walls {
-        wall_cuts(doc, obj, *a, *b, &ground)
+        wall_cuts(doc, base, *a, *b, &ground)
     } else {
         Vec::new()
     };
     let slabs = if d.hardscapes {
-        slab_cuts(doc, obj, *a, *b, &ground)
+        slab_cuts(doc, base, *a, *b, &ground)
     } else {
         Vec::new()
     };
     let plants = if d.plants {
-        plant_cuts(doc, obj, *a, *b, d.band, &ground)
+        plant_cuts(doc, base, *a, *b, d.band, &ground)
     } else {
         Vec::new()
     };
@@ -399,6 +473,7 @@ pub fn profile(doc: &Document, obj: &Object, site: &SiteResult) -> Option<Profil
         length,
         existing,
         proposed,
+        off_model,
         modified,
         walls,
         slabs,
@@ -765,8 +840,9 @@ mod tests {
     }
 
     #[test]
-    fn a_line_that_leaves_the_model_is_sampled_in_runs() {
+    fn a_line_that_leaves_the_model_keeps_the_exact_profile_on_it_and_clamps_outside() {
         let mut ed = Editor::default();
+        // The model spans x 0 to 4000 and its ground is x / 10.
         let sid = add(&mut ed, grid_site(5, 1000.0, |x, _| x / 10.0));
         let sec = section(
             &mut ed,
@@ -778,41 +854,122 @@ mod tests {
         let p = profile(ed.doc(), ed.doc().object(sec).unwrap(), &site).unwrap();
         assert_eq!(p.existing.len(), 1);
         let run = &p.existing[0];
+        assert_eq!((run[0].0, run.last().unwrap().0), (0.0, 8000.0));
+        assert_eq!(p.off_model.len(), 2);
         assert!(
-            (run[0].0 - 2000.0).abs() < 1e-9 && (run.last().unwrap().0 - 6000.0).abs() < 1e-9,
-            "{run:?}"
+            (p.off_model[0].0).abs() < 1e-6 && (p.off_model[0].1 - 2000.0).abs() < 1e-6,
+            "{:?}",
+            p.off_model
         );
         assert!(
-            run.iter()
-                .all(|(s, z)| (z - (s - 2000.0) / 10.0).abs() < 1e-9)
+            (p.off_model[1].0 - 6000.0).abs() < 1e-6 && (p.off_model[1].1 - 8000.0).abs() < 1e-6
         );
-        // A line that misses the model has no runs. One that enters twice has two.
+        for (s, z) in run {
+            let want = (s - 2000.0).clamp(0.0, 4000.0) / 10.0;
+            assert!((z - want).abs() < 1e-6, "s={s}: {z} vs {want}");
+        }
+        // The part on the model has a point at every triangle edge, where the grid has its lines.
+        let on: Vec<_> = run
+            .iter()
+            .filter(|(s, _)| (2000.0..=6000.0).contains(s))
+            .collect();
+        for x in [3000.0, 4000.0, 5000.0] {
+            assert!(
+                on.iter().any(|(s, _)| (s - x).abs() < 1e-6),
+                "no point at {x}"
+            );
+        }
+        // A line that misses the model is all off it, at the height of the nearest edge.
         let miss = section(&mut ed, (-9000.0, 9000.0), (-5000.0, 9000.0), json!({}));
+        let m = profile(ed.doc(), ed.doc().object(miss).unwrap(), &site).unwrap();
+        assert_eq!(m.off_model, vec![(0.0, 4000.0)]);
+        assert!(m.existing[0].iter().all(|(_, z)| z.abs() < 1e-9));
+        // A line that is inside from end to end has nothing off the model.
+        let all_in = section(&mut ed, (500.0, 500.0), (3500.0, 3500.0), json!({}));
         assert!(
-            profile(ed.doc(), ed.doc().object(miss).unwrap(), &site)
+            profile(ed.doc(), ed.doc().object(all_in).unwrap(), &site)
                 .unwrap()
-                .existing
+                .off_model
                 .is_empty()
         );
-        assert_eq!(
-            (
-                profile(ed.doc(), ed.doc().object(miss).unwrap(), &site)
-                    .unwrap()
-                    .z_min,
-                0.0
-            ),
-            (0.0, 0.0)
-        );
+        // One that leaves and comes back is split in three.
         let tin = &site.existing;
-        let runs = sample(
+        let clamp = |_: DVec2| Some(-1.0);
+        let (run, off) = sample(
             tin,
-            DVec2::new(-1000.0, 1000.0),
-            DVec2::new(5000.0, 1000.0),
-            250.0,
+            &clamp,
+            DVec2::new(1000.0, -1000.0),
+            DVec2::new(1000.0, 5000.0),
+            100.0,
         );
-        assert_eq!(runs.len(), 1);
-        let l = [DVec2::new(1000.0, -1000.0), DVec2::new(1000.0, 5000.0)];
-        assert_eq!(sample(tin, l[0], l[1], 100.0).len(), 1);
+        assert_eq!(off.len(), 2);
+        assert!(run.windows(2).all(|w| w[1].0 >= w[0].0));
+    }
+
+    #[test]
+    fn objects_on_other_visible_design_layers_appear_with_their_layer_height() {
+        use cadektor_core::command::Command;
+        let mut ed = Editor::default();
+        let sid = add(&mut ed, grid_site(11, 1000.0, |_, _| 0.0));
+        // A second design layer, 500 mm higher, holds a wall and a plant.
+        ed.execute(&Command::AddLayer {
+            name: "Walls".into(),
+            elevation: 500.0,
+            scale: None,
+            kind: None,
+        })
+        .unwrap();
+        let upper = ed.doc().layers.last().unwrap().id;
+        let on_upper = |ed: &mut Editor, shape: Shape| {
+            let out = ed
+                .execute(&Command::AddObject {
+                    shape,
+                    layer: Some(upper),
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            ObjectId(out.created[0])
+        };
+        let wd = wall::WallData {
+            top: wall::Top::Fixed { elevation: 800.0 },
+            ..wall::WallData::default()
+        };
+        let w = on_upper(&mut ed, path(&[(3000.0, 0.0), (3000.0, 10_000.0)]));
+        ed.execute(&Command::SetData {
+            id: w,
+            set: [(wall::KEY.to_string(), serde_json::to_value(&wd).unwrap())].into(),
+            remove: vec![],
+        })
+        .unwrap();
+        on_upper(
+            &mut ed,
+            Shape::Plant {
+                at: DVec2::new(7000.0, 5200.0),
+                species: "Oak".into(),
+                spread: 2000.0,
+                height: 4000.0,
+            },
+        );
+        let sec = section(&mut ed, (0.0, 5000.0), (10_000.0, 5000.0), json!({}));
+        let site = SiteResult::compute(ed.doc(), sid).unwrap();
+        let p = profile(ed.doc(), ed.doc().object(sec).unwrap(), &site).unwrap();
+        assert_eq!(p.walls.len(), 1);
+        // The wall top is 800 above its layer, which is 500 above the layer of the site model.
+        assert_eq!(p.walls[0].top, 1300.0);
+        assert_eq!(p.plants.len(), 1);
+        // A hidden layer, or a sheet layer, adds nothing.
+        ed.execute(&Command::ModifyLayer {
+            id: upper,
+            name: None,
+            visible: Some(false),
+            locked: None,
+            elevation: None,
+            scale: None,
+        })
+        .unwrap();
+        let hidden = profile(ed.doc(), ed.doc().object(sec).unwrap(), &site).unwrap();
+        assert!(hidden.walls.is_empty() && hidden.plants.is_empty());
     }
 
     #[test]

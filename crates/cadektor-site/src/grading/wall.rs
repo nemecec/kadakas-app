@@ -5,8 +5,6 @@
 //! style is a resource of type `wall_style` (components and coping). The wall solid is made
 //! from stations along the path. A station has a top and a bottom height. Lengths are mm.
 
-use std::fmt::Write;
-
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +14,8 @@ use cadektor_core::mesh::SceneSink;
 use cadektor_core::model::{Document, MAX_COORD, Object, ObjectId, Shape};
 use cadektor_core::resource::{ResourceBody, ResourceId};
 
-use super::{Follow, Ground, esc, finite, meters, read};
+use super::draw::{Drawn, Label, Poly};
+use super::{Follow, Ground, finite, meters, read};
 use crate::modifier::Modifier;
 
 /// The key in `Object::data` that holds the settings.
@@ -29,6 +28,8 @@ pub const STATION_STEP: f64 = 500.0;
 pub const MAX_STATIONS: usize = 4000;
 /// Most pads that one wall makes when it acts as a site modifier.
 pub const MAX_PADS: usize = 120;
+/// How far the retained ground of a retaining wall reaches, without a setting.
+pub const DEFAULT_BACKFILL: f64 = 1500.0;
 const COLOR: [u8; 4] = [168, 160, 150, 255];
 
 /// How the top of the wall is set.
@@ -63,9 +64,24 @@ pub struct WallData {
     pub style: Option<ResourceId>,
     /// The site model to follow. `None`: the first one on the layer.
     pub site: Option<ObjectId>,
-    /// The wall makes a vertical break in the proposed surface. It needs a fixed or sloped top,
+    /// The wall is a retaining edge in the proposed surface. The ground on the retained side is
+    /// raised or lowered to the top of the wall, and the ground on the other side stays. The wall
+    /// itself is a structure: it adds no earth to the cut and fill. It needs a fixed or sloped top,
     /// and then it follows the existing ground.
     pub site_modifier: bool,
+    /// The side of the path (looking from its start to its end) where the ground is at the top of the wall.
+    pub retains: Side,
+    /// How far the retained ground reaches behind the wall, from its face, in mm.
+    pub backfill: f64,
+}
+
+/// A side of a path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    #[default]
+    Left,
+    Right,
 }
 
 impl Default for WallData {
@@ -78,6 +94,8 @@ impl Default for WallData {
             style: None,
             site: None,
             site_modifier: false,
+            retains: Side::Left,
+            backfill: DEFAULT_BACKFILL,
         }
     }
 }
@@ -113,6 +131,10 @@ impl WallData {
         };
         if !ok {
             return Err("a top height is too large".into());
+        }
+        finite("backfill", self.backfill)?;
+        if !(self.backfill > 0.0 && self.backfill <= 50_000.0) {
+            return Err("backfill must be more than 0 and at most 50 000 mm".into());
         }
         if self.site_modifier && matches!(self.top, Top::Terrain { .. }) {
             return Err("a wall that acts as a site modifier needs a fixed or sloped top (mode fixed or slope)".into());
@@ -283,7 +305,8 @@ pub struct Station {
     pub p: DVec2,
     pub top: f64,
     pub bottom: f64,
-    /// False when the site model does not cover the place. The ground counts as 0 there.
+    /// False when the site model does not cover the place. The ground has the height of the
+    /// nearest edge of the model there (0 without a site model).
     pub on_ground: bool,
 }
 
@@ -293,20 +316,28 @@ impl Station {
     }
 }
 
-/// The heights of the wall along its path. `ground` is the site model (or nothing).
-pub fn profile(d: &WallData, path: &[DVec2], step: f64, ground: Ground<'_>) -> Vec<Station> {
+/// The heights of the wall along its path. `ground` is the site model (or nothing). `dz` is added
+/// to the heights that the wall sets itself (a fixed or sloped top): the difference between the
+/// elevation of the layer of the wall and the layer of the site model.
+pub fn profile(
+    d: &WallData,
+    path: &[DVec2],
+    step: f64,
+    ground: Ground<'_>,
+    dz: f64,
+) -> Vec<Station> {
     let st = stations(path, step);
     let total = st.last().map_or(0.0, |s| s.0);
     let follow = d.follow();
     st.into_iter()
         .map(|(s, p)| {
-            let g = ground(p, follow);
-            let base = g.unwrap_or(0.0);
+            let g = ground.exact(p, follow);
+            let base = g.or_else(|| ground.clamped(p, follow)).unwrap_or(0.0);
             let top = match d.top {
-                Top::Fixed { elevation } => elevation,
+                Top::Fixed { elevation } => elevation + dz,
                 Top::Terrain { offset } => base + offset,
                 Top::Slope { start, end } => {
-                    if total > 0.0 {
+                    dz + if total > 0.0 {
                         start + (end - start) * s / total
                     } else {
                         start
@@ -415,6 +446,11 @@ impl Wall {
     pub fn outside(&self) -> usize {
         self.stations.iter().filter(|s| !s.on_ground).count()
     }
+
+    /// True when part of the wall is off the site model (or there is none).
+    pub fn partly_off_model(&self) -> bool {
+        self.outside() > 0
+    }
 }
 
 /// The thickness, coping and color that a wall gets from its style.
@@ -435,10 +471,20 @@ fn look(doc: &Document, d: &WallData) -> (f64, Option<Coping>, Option<String>, [
 
 /// Computes a wall object. `ground` is the site model, or `None` for flat ground at 0.
 pub fn evaluate(doc: &Document, obj: &Object, ground: Option<Ground<'_>>) -> Option<Wall> {
+    evaluate_at(doc, obj, ground, 0.0)
+}
+
+/// Like `evaluate`, with `dz` for the layer difference (see `profile`).
+pub fn evaluate_at(
+    doc: &Document,
+    obj: &Object,
+    ground: Option<Ground<'_>>,
+    dz: f64,
+) -> Option<Wall> {
     let d = data(obj)?;
     let path = centerline(obj)?;
     let none = |_: DVec2, _: Follow| None;
-    let stations = profile(&d, &path, STATION_STEP, ground.unwrap_or(&none));
+    let stations = profile(&d, &path, STATION_STEP, ground.unwrap_or(&none), dz);
     let (thickness, coping, style_name, color) = look(doc, &d);
     let quantities = quantities(&stations, thickness, coping.as_ref());
     let closed = matches!(obj.shape, Shape::Polyline { closed: true, .. });
@@ -509,6 +555,20 @@ pub fn footprint(path: &[DVec2], thickness: f64) -> Vec<Vec<DVec2>> {
         let (mut a, mut b) = (l, r);
         a.pop();
         b.pop();
+        // The edge rings run in opposite directions, so that the nonzero rule leaves the middle empty.
+        let area = |ring: &[DVec2]| {
+            (0..ring.len())
+                .map(|i| ring[i].perp_dot(ring[(i + 1) % ring.len()]))
+                .sum::<f64>()
+                / 2.0
+        };
+        if area(&a) * area(&b) > 0.0 {
+            if area(&a).abs() < area(&b).abs() {
+                a.reverse();
+            } else {
+                b.reverse();
+            }
+        }
         vec![a, b]
     } else {
         let mut ring = l;
@@ -517,9 +577,12 @@ pub fn footprint(path: &[DVec2], thickness: f64) -> Vec<Vec<DVec2>> {
     }
 }
 
-/// Pads that make the wall a site modifier: one flat pad per piece of the wall, at the height of the
-/// top. The ground beside the wall keeps its height, so the wall is a vertical break. Empty unless
-/// the wall asks for it.
+/// Pads that make the wall a retaining edge: one flat pad per piece of the wall, on the retained
+/// side, from the face of the wall back by `backfill`, at the height of the top. The footprint of the
+/// wall gets no pad, so the wall adds no earth, and the ground on the other side keeps its height. The
+/// edge of the pads at the wall is the vertical break. Empty unless the wall asks for it.
+///
+/// The pads must come first in the list of modifiers, so that a pad of the user wins where they overlap.
 pub fn pads_of(doc: &Document, obj: &Object) -> Vec<Modifier> {
     let Some(d) = data(obj).filter(|d| d.site_modifier && d.validate().is_ok()) else {
         return Vec::new();
@@ -529,43 +592,74 @@ pub fn pads_of(doc: &Document, obj: &Object) -> Vec<Modifier> {
     };
     let (thickness, ..) = look(doc, &d);
     let total: f64 = path.windows(2).map(|w| w[0].distance(w[1])).sum();
-    let ground = |_: DVec2, _: Follow| Some(0.0);
+    let flat = |_: DVec2, _: Follow| Some(0.0);
     let st = profile(
         &d,
         &path,
         (total / MAX_PADS as f64).max(STATION_STEP),
-        &ground,
+        &flat,
+        0.0,
     );
-    let (l, r) = offsets(&st.iter().map(|s| s.p).collect::<Vec<_>>(), thickness / 2.0);
+    let pts: Vec<DVec2> = st.iter().map(|s| s.p).collect();
+    let (face_l, _) = offsets(&pts, thickness / 2.0);
+    let (back_l, _) = offsets(&pts, thickness / 2.0 + d.backfill);
+    let (face_r, back_r) = match d.retains {
+        Side::Left => (face_l, back_l),
+        Side::Right => {
+            let (_, fr) = offsets(&pts, thickness / 2.0);
+            let (_, br) = offsets(&pts, thickness / 2.0 + d.backfill);
+            (fr, br)
+        }
+    };
     (0..st.len().saturating_sub(1))
-        .map(|i| Modifier::Pad { boundary: vec![l[i], l[i + 1], r[i + 1], r[i]], elevation: (st[i].top + st[i + 1].top) / 2.0, slope: None })
+        .map(|i| Modifier::Pad {
+            boundary: vec![face_r[i], face_r[i + 1], back_r[i + 1], back_r[i]],
+            elevation: (st[i].top + st[i + 1].top) / 2.0,
+            slope: None,
+        })
         .filter(|m| matches!(m, Modifier::Pad { boundary, .. } if boundary.windows(2).all(|w| w[0].distance(w[1]) > 1e-6)))
         .collect()
 }
 
-struct Mesh {
-    pos: Vec<DVec3>,
-    idx: Vec<u32>,
+/// A triangle mesh whose faces point outward.
+pub struct Mesh {
+    pub pos: Vec<DVec3>,
+    pub idx: Vec<u32>,
 }
 
 impl Mesh {
+    /// A quad, counterclockwise seen from outside.
     fn quad(&mut self, q: [DVec3; 4]) {
         let b = self.pos.len() as u32;
         self.pos.extend(q);
         self.idx.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
     }
+
+    /// The volume that the faces enclose: positive for a closed solid with faces that point outward.
+    pub fn volume(&self) -> f64 {
+        self.idx
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| self.pos[i as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
 }
 
-/// A solid along the path between `lo` and `hi` heights, `half` wide on each side.
-fn ribbon(pts: &[DVec2], half: f64, lo: &[f64], hi: &[f64]) -> Mesh {
+/// A closed solid along the path between `lo` and `hi` heights, `half` wide on each side: both
+/// sides, the top, the bottom, the two ends of an open path, and the step at the seam of a closed
+/// path whose heights at the start and the end differ.
+pub fn ribbon(pts: &[DVec2], half: f64, lo: &[f64], hi: &[f64]) -> Mesh {
     let (l, r) = offsets(pts, half);
-    let closed = pts.len() > 3 && pts[0].distance_squared(pts[pts.len() - 1]) < 1e-9;
+    let n = pts.len();
+    let closed = n > 3 && pts[0].distance_squared(pts[n - 1]) < 1e-9;
     let mut m = Mesh {
         pos: Vec::new(),
         idx: Vec::new(),
     };
     let v = |p: DVec2, z: f64| p.extend(z);
-    for i in 0..pts.len() - 1 {
+    for i in 0..n - 1 {
         let j = i + 1;
         m.quad([
             v(l[i], lo[i]),
@@ -581,13 +675,46 @@ fn ribbon(pts: &[DVec2], half: f64, lo: &[f64], hi: &[f64]) -> Mesh {
         ]);
         m.quad([
             v(l[i], hi[i]),
-            v(l[j], hi[j]),
-            v(r[j], hi[j]),
             v(r[i], hi[i]),
+            v(r[j], hi[j]),
+            v(l[j], hi[j]),
+        ]);
+        m.quad([
+            v(l[i], lo[i]),
+            v(l[j], lo[j]),
+            v(r[j], lo[j]),
+            v(r[i], lo[i]),
         ]);
     }
-    if !closed {
-        let e = pts.len() - 1;
+    if closed {
+        // The start and the end are one place with two heights: close the step between them.
+        let e = n - 1;
+        let (up, down) = (hi[0].max(hi[e]), hi[0].min(hi[e]));
+        if up - down > 1e-9 {
+            let q = [v(l[0], down), v(r[0], down), v(r[0], up), v(l[0], up)];
+            // The face looks backward where the wall steps up, and forward where it steps down.
+            if hi[0] > hi[e] {
+                m.quad(q);
+            } else {
+                m.quad([q[3], q[2], q[1], q[0]]);
+            }
+        }
+        let (lo_up, lo_down) = (lo[0].max(lo[e]), lo[0].min(lo[e]));
+        if lo_up - lo_down > 1e-9 {
+            let q = [
+                v(l[0], lo_down),
+                v(r[0], lo_down),
+                v(r[0], lo_up),
+                v(l[0], lo_up),
+            ];
+            if lo[0] > lo[e] {
+                m.quad([q[3], q[2], q[1], q[0]]);
+            } else {
+                m.quad(q);
+            }
+        }
+    } else {
+        let e = n - 1;
         m.quad([
             v(l[0], lo[0]),
             v(r[0], lo[0]),
@@ -604,66 +731,68 @@ fn ribbon(pts: &[DVec2], half: f64, lo: &[f64], hi: &[f64]) -> Mesh {
     m
 }
 
-/// Adds the solid of the wall (and its coping) to a 3D scene.
-pub fn emit(wall: &Wall, sink: &mut SceneSink<'_>) {
+/// The two solids of a wall: the wall itself and its coping (if any, with its color).
+pub fn solids(wall: &Wall) -> Vec<(Mesh, [u8; 4])> {
     if wall.stations.len() < 2 {
-        return;
+        return Vec::new();
     }
     let pts: Vec<DVec2> = wall.stations.iter().map(|s| s.p).collect();
     let bottom: Vec<f64> = wall.stations.iter().map(|s| s.bottom).collect();
     let top: Vec<f64> = wall.stations.iter().map(|s| s.top.max(s.bottom)).collect();
-    let m = ribbon(&pts, wall.thickness / 2.0, &bottom, &top);
-    sink.mesh(&m.pos, &m.idx, wall.color);
+    let mut out = vec![(
+        ribbon(&pts, wall.thickness / 2.0, &bottom, &top),
+        wall.color,
+    )];
     if let Some(c) = &wall.coping {
         let up: Vec<f64> = top.iter().map(|t| t + c.height).collect();
-        let m = ribbon(&pts, wall.thickness / 2.0 + c.overhang, &top, &up);
         let lighter = [
             wall.color[0].saturating_add(30),
             wall.color[1].saturating_add(30),
             wall.color[2].saturating_add(30),
             255,
         ];
-        sink.mesh(&m.pos, &m.idx, lighter);
+        out.push((
+            ribbon(&pts, wall.thickness / 2.0 + c.overhang, &top, &up),
+            lighter,
+        ));
+    }
+    out
+}
+
+/// Adds the solid of the wall (and its coping) to a 3D scene.
+pub fn emit(wall: &Wall, sink: &mut SceneSink<'_>) {
+    for (m, color) in solids(wall) {
+        sink.mesh(&m.pos, &m.idx, color);
     }
 }
 
-/// SVG of the wall in plan: the footprint and the tags of the top and bottom at both ends.
-/// `scale` is the drawing scale of the layer (paper mm to model mm).
-pub fn svg(wall: &Wall, scale: f64) -> String {
-    let mut out = String::new();
+/// The wall in plan: the footprint and the tags of the top and bottom at the ends. `scale` is the
+/// drawing scale of the layer (paper mm to model mm). A wall that is partly off the site model says so.
+pub fn draw(wall: &Wall, scale: f64) -> Drawn {
+    let mut out = Drawn::default();
     let Some(first) = wall.stations.first() else {
         return out;
     };
     let pts: Vec<DVec2> = wall.stations.iter().map(|s| s.p).collect();
-    let rings = footprint(&pts, wall.thickness);
-    let d: String = rings
-        .iter()
-        .map(|r| {
-            let body: Vec<String> = r.iter().map(|p| format!("{} {}", p.x, -p.y)).collect();
-            format!("M {} Z", body.join(" L "))
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let fill = format!(
-        "rgba({},{},{},0.55)",
-        wall.color[0], wall.color[1], wall.color[2]
-    );
-    let _ = writeln!(
-        out,
-        r#"<path d="{d}" fill="{fill}" fill-rule="evenodd" stroke="none" data-kind="landscape_wall" data-wall="{}"/>"#,
-        wall.id
+    let fill = [wall.color[0], wall.color[1], wall.color[2], 140];
+    out.polys.push(
+        Poly::new(
+            "landscape_wall",
+            wall.id,
+            footprint(&pts, wall.thickness),
+            true,
+        )
+        .filled(fill),
     );
     let height = 2.5 * scale;
     let mut tag = |s: &Station| {
-        let text = format!("TW {} BW {}", meters(s.top, 2), meters(s.bottom, 2));
-        let _ = writeln!(
-            out,
-            r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="black" data-kind="wall-tag" data-wall="{}">{}</text>"#,
-            s.p.x,
-            -s.p.y - wall.thickness / 2.0 - height * 0.4,
-            wall.id,
-            esc(&text)
-        );
+        let mut text = format!("TW {} BW {}", meters(s.top, 2), meters(s.bottom, 2));
+        if !s.on_ground {
+            text.push_str(" (off model)");
+        }
+        let at = DVec2::new(s.p.x, s.p.y + wall.thickness / 2.0 + height * 0.4);
+        out.labels
+            .push(Label::new("wall-tag", wall.id, at, text, height));
     };
     tag(first);
     if let Some(last) = wall.stations.last().filter(|_| !wall.closed) {
@@ -739,7 +868,7 @@ mod tests {
             DVec2::new(4000.0, 0.0),
             DVec2::new(4000.0, 3000.0),
         ];
-        let st = profile(&d, &path, STATION_STEP, &flat);
+        let st = profile(&d, &path, STATION_STEP, &flat, 0.0);
         let q = quantities(&st, 250.0, None);
         assert!((q.length - 7000.0).abs() < 1e-9);
         assert!((q.face_area - 7000.0 * 1200.0).abs() < 1e-6);
@@ -769,7 +898,7 @@ mod tests {
             embed: 50.0,
             ..WallData::default()
         };
-        let st = profile(&terrain, &path, 500.0, &ramp);
+        let st = profile(&terrain, &path, 500.0, &ramp, 0.0);
         assert_eq!(st.len(), 3);
         assert!(st.iter().all(|s| (s.height() - 650.0).abs() < 1e-9));
         let slope = WallData {
@@ -779,23 +908,23 @@ mod tests {
             },
             ..WallData::default()
         };
-        let st = profile(&slope, &path, 500.0, &flat);
+        let st = profile(&slope, &path, 500.0, &flat, 0.0);
         assert_eq!((st[0].top, st[1].top, st[2].top), (100.0, 200.0, 300.0));
         // A top below the bottom has no height.
         let low = WallData {
             top: Top::Fixed { elevation: -5.0 },
             ..WallData::default()
         };
-        assert_eq!(profile(&low, &path, 500.0, &flat)[0].height(), 0.0);
+        assert_eq!(profile(&low, &path, 500.0, &flat, 0.0)[0].height(), 0.0);
         // Outside the site model the ground counts as 0.
         let none = |_: DVec2, _: Follow| None;
-        let st = profile(&terrain, &path, 500.0, &none);
+        let st = profile(&terrain, &path, 500.0, &none, 0.0);
         assert!(
             st.iter()
                 .all(|s| !s.on_ground && (s.top - 600.0).abs() < 1e-9)
         );
         // A zero length path.
-        let one = profile(&slope, &[DVec2::ZERO, DVec2::ZERO], 500.0, &flat);
+        let one = profile(&slope, &[DVec2::ZERO, DVec2::ZERO], 500.0, &flat, 0.0);
         assert_eq!(one[0].top, 100.0);
     }
 
@@ -808,7 +937,13 @@ mod tests {
             },
             ..WallData::default()
         };
-        let st = profile(&d, &[DVec2::ZERO, DVec2::new(1000.0, 0.0)], 500.0, &flat);
+        let st = profile(
+            &d,
+            &[DVec2::ZERO, DVec2::new(1000.0, 0.0)],
+            500.0,
+            &flat,
+            0.0,
+        );
         assert_eq!(at(&st, -5.0).unwrap().top, 0.0);
         assert_eq!(at(&st, 5000.0).unwrap().top, 1000.0);
         let m = at(&st, 250.0).unwrap();
@@ -1124,7 +1259,7 @@ mod tests {
             serde_json::to_value(&d).unwrap(),
         );
         let w = evaluate(ed.doc(), ed.doc().object(id).unwrap(), Some(&flat)).unwrap();
-        let out = svg(&w, 100.0);
+        let out = draw(&w, 100.0).svg();
         assert!(
             out.contains(r#"data-kind="landscape_wall""#)
                 && out.matches("wall-tag").count() == 2
@@ -1143,14 +1278,14 @@ mod tests {
         let rid = add_with(&mut ed, ring, KEY, serde_json::to_value(&d).unwrap());
         let w = evaluate(ed.doc(), ed.doc().object(rid).unwrap(), Some(&flat)).unwrap();
         assert!(w.closed);
-        let out = svg(&w, 100.0);
+        let out = draw(&w, 100.0).svg();
         assert_eq!(out.matches("wall-tag").count(), 1);
         assert_eq!(out.matches('M').count(), 2);
         let empty = Wall {
             stations: vec![],
             ..w.clone()
         };
-        assert!(svg(&empty, 100.0).is_empty());
+        assert!(draw(&empty, 100.0).is_empty());
     }
 
     #[test]
@@ -1196,5 +1331,319 @@ mod tests {
             (hi.y - lo.y - 340.0).abs() < 1e-3,
             "coping is 20 mm wider on each side"
         );
+    }
+
+    fn volume_of(w: &Wall) -> f64 {
+        solids(w).iter().map(|(m, _)| m.volume()).sum()
+    }
+
+    #[test]
+    fn solids_are_closed() {
+        let mut ed = Editor::default();
+        let coping = WallStyle {
+            thickness: 300.0,
+            coping: Some(Coping {
+                height: 50.0,
+                overhang: 20.0,
+                material: String::new(),
+            }),
+            ..WallStyle::default()
+        };
+        ed.execute(&cadektor_core::command::Command::AddResource {
+            name: "C".into(),
+            body: coping.to_body(),
+        })
+        .unwrap();
+        let sid = ed.doc().resources.iter().next().unwrap().id;
+        let square = |x: f64| Shape::Polyline {
+            points: curve::corners(&[
+                DVec2::ZERO,
+                DVec2::new(x, 0.0),
+                DVec2::new(x, x),
+                DVec2::new(0.0, x),
+            ]),
+            closed: true,
+        };
+        let make = |ed: &mut Editor, shape: Shape, d: &WallData| {
+            let id = add_with(ed, shape, KEY, serde_json::to_value(d).unwrap());
+            evaluate(ed.doc(), ed.doc().object(id).unwrap(), Some(&flat)).unwrap()
+        };
+        // An open wall: length times thickness times height, square ends.
+        let fixed = WallData {
+            top: Top::Fixed { elevation: 1000.0 },
+            ..WallData::default()
+        };
+        let open = make(&mut ed, path(&[(0.0, 0.0), (4000.0, 0.0)]), &fixed);
+        assert!((volume_of(&open) - 4000.0 * 300.0 * 1000.0).abs() < 1e-3);
+        // A ring: the area between the two edges times the height.
+        let ring = make(&mut ed, square(4000.0), &fixed);
+        assert!(
+            (volume_of(&ring) - (4300.0f64.powi(2) - 3700.0f64.powi(2)) * 1000.0).abs() < 1.0,
+            "{}",
+            volume_of(&ring)
+        );
+        // A ring with a top that slopes has a step at the seam. The solid stays closed.
+        let sloped = WallData {
+            top: Top::Slope {
+                start: 500.0,
+                end: 1500.0,
+            },
+            ..WallData::default()
+        };
+        let w = make(&mut ed, square(4000.0), &sloped);
+        let area = 4300.0f64.powi(2) - 3700.0f64.powi(2);
+        // The top is the same ramp that the stations hold, so the volume is the footprint times the mean height.
+        let mean: f64 = w
+            .stations
+            .windows(2)
+            .map(|p| (p[0].height() + p[1].height()) / 2.0 * (p[1].s - p[0].s))
+            .sum::<f64>()
+            / w.quantities.length;
+        assert!(
+            (volume_of(&w) - area * mean).abs() < area * mean * 1e-3,
+            "{} vs {}",
+            volume_of(&w),
+            area * mean
+        );
+        // A ring with coping on a stepped top: wall and coping are both closed solids.
+        let styled = WallData {
+            top: Top::Slope {
+                start: 500.0,
+                end: 1500.0,
+            },
+            style: Some(sid),
+            ..WallData::default()
+        };
+        let c = make(&mut ed, square(4000.0), &styled);
+        let parts = solids(&c);
+        assert_eq!(parts.len(), 2);
+        let coping_volume = parts[1].0.volume();
+        let coping_area = 4340.0f64.powi(2) - 3660.0f64.powi(2);
+        assert!(
+            (coping_volume - coping_area * 50.0).abs() < coping_area * 1e-3 * 50.0,
+            "{coping_volume}"
+        );
+        // A wall that steps down at the seam (end lower than start) is closed too.
+        let down = WallData {
+            top: Top::Slope {
+                start: 1500.0,
+                end: 500.0,
+            },
+            ..WallData::default()
+        };
+        let d = make(&mut ed, square(4000.0), &down);
+        assert!(
+            volume_of(&d) > 0.0 && (volume_of(&d) - volume_of(&w)).abs() < 1e-3 * volume_of(&w)
+        );
+    }
+
+    #[test]
+    fn a_wall_off_the_model_takes_the_height_of_the_nearest_edge() {
+        use crate::SiteResult;
+        use crate::grading::SiteGround;
+        use crate::model::tests::grid_site;
+        let mut ed = Editor::default();
+        let sid = add(&mut ed, grid_site(5, 1000.0, |x, _| x / 10.0));
+        let site = SiteResult::compute(ed.doc(), sid).unwrap();
+        let ground = SiteGround::new(&site);
+        // The model spans x 0 to 4000, with ground x / 10. The wall runs from x -2000 to 6000.
+        let d = WallData {
+            top: Top::Terrain { offset: 500.0 },
+            ..WallData::default()
+        };
+        let id = add_with(
+            &mut ed,
+            path(&[(-2000.0, 2000.0), (6000.0, 2000.0)]),
+            KEY,
+            serde_json::to_value(&d).unwrap(),
+        );
+        let w = evaluate(ed.doc(), ed.doc().object(id).unwrap(), Some(&ground)).unwrap();
+        assert!(w.partly_off_model() && w.outside() > 0);
+        let first = w.stations.first().unwrap();
+        let last = w.stations.last().unwrap();
+        assert!(!first.on_ground && !last.on_ground);
+        assert!(
+            (first.bottom - 0.0).abs() < 1e-9 && (first.top - 500.0).abs() < 1e-9,
+            "{first:?}"
+        );
+        assert!(
+            (last.bottom - 400.0).abs() < 1e-9 && (last.top - 900.0).abs() < 1e-9,
+            "{last:?}"
+        );
+        let on = w
+            .stations
+            .iter()
+            .find(|s| (s.p.x - 2000.0).abs() < 1e-9)
+            .unwrap();
+        assert!(on.on_ground && (on.bottom - 200.0).abs() < 1e-9);
+        // The label says so.
+        let labels: Vec<String> = draw(&w, 100.0).labels.into_iter().map(|l| l.text).collect();
+        assert!(
+            labels.iter().all(|t| t.contains("(off model)")),
+            "{labels:?}"
+        );
+        // On the model it does not.
+        let inside = add_with(
+            &mut ed,
+            path(&[(500.0, 2000.0), (3500.0, 2000.0)]),
+            KEY,
+            serde_json::to_value(&d).unwrap(),
+        );
+        let w2 = evaluate(ed.doc(), ed.doc().object(inside).unwrap(), Some(&ground)).unwrap();
+        assert!(!w2.partly_off_model());
+        assert!(
+            draw(&w2, 100.0)
+                .labels
+                .iter()
+                .all(|l| !l.text.contains("off model"))
+        );
+    }
+
+    #[test]
+    fn a_retaining_wall_makes_pads_behind_it_and_none_under_it() {
+        let mut ed = Editor::default();
+        let d = WallData {
+            top: Top::Fixed { elevation: 1500.0 },
+            thickness: 400.0,
+            site_modifier: true,
+            backfill: 1000.0,
+            ..WallData::default()
+        };
+        let id = add_with(
+            &mut ed,
+            path(&[(0.0, 0.0), (6000.0, 0.0)]),
+            KEY,
+            serde_json::to_value(&d).unwrap(),
+        );
+        let pads = pads_of(ed.doc(), ed.doc().object(id).unwrap());
+        assert!(pads.len() >= 6);
+        for p in &pads {
+            let Modifier::Pad {
+                boundary,
+                elevation,
+                ..
+            } = p
+            else {
+                panic!()
+            };
+            assert_eq!(*elevation, 1500.0);
+            // Left of a path that runs along +X is +Y: from the face (y 200) back to y 1200.
+            assert!(
+                boundary
+                    .iter()
+                    .all(|q| q.y >= 200.0 - 1e-9 && q.y <= 1200.0 + 1e-9),
+                "{boundary:?}"
+            );
+        }
+        // Right side: the other way.
+        let right = WallData {
+            retains: Side::Right,
+            ..d.clone()
+        };
+        let rid = add_with(
+            &mut ed,
+            path(&[(0.0, 0.0), (6000.0, 0.0)]),
+            KEY,
+            serde_json::to_value(&right).unwrap(),
+        );
+        for p in pads_of(ed.doc(), ed.doc().object(rid).unwrap()) {
+            let Modifier::Pad { boundary, .. } = p else {
+                panic!()
+            };
+            assert!(
+                boundary
+                    .iter()
+                    .all(|q| q.y <= -200.0 + 1e-9 && q.y >= -1200.0 - 1e-9),
+                "{boundary:?}"
+            );
+        }
+        assert!(
+            WallData {
+                backfill: 0.0,
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WallData {
+                backfill: f64::NAN,
+                ..d.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(WallData { backfill: 1e6, ..d }.validate().is_err());
+    }
+
+    #[test]
+    fn a_retaining_wall_adds_no_earth_and_never_cuts_below_a_pad_of_the_user() {
+        use crate::SiteResult;
+        use crate::model::tests::grid_site;
+        use cadektor_core::model::ModifierKind;
+        let mut ed = Editor::default();
+        let sid = add(&mut ed, grid_site(11, 1000.0, |_, _| 0.0));
+        let d = WallData {
+            top: Top::Fixed { elevation: 1500.0 },
+            thickness: 500.0,
+            site_modifier: true,
+            backfill: 1000.0,
+            ..WallData::default()
+        };
+        add_with(
+            &mut ed,
+            path(&[(2000.0, 5000.0), (8000.0, 5000.0)]),
+            KEY,
+            serde_json::to_value(&d).unwrap(),
+        );
+        let at = |ed: &Editor, x: f64, y: f64| {
+            SiteResult::compute(ed.doc(), sid)
+                .unwrap()
+                .elevation_at(DVec2::new(x, y))
+                .unwrap()
+        };
+        // Behind the wall (to the left of the path, +Y) the ground is at the top. Under the wall and
+        // on the low side it keeps its old height: the wall is a structure.
+        assert!((at(&ed, 3000.0, 5600.0) - 1500.0).abs() < 1e-6);
+        assert!(at(&ed, 3000.0, 5000.0).abs() < 1e-6, "under the wall");
+        assert!(at(&ed, 3000.0, 4600.0).abs() < 1e-6, "low side");
+        assert!(at(&ed, 3000.0, 6500.0).abs() < 1e-6, "beyond the backfill");
+        let site = SiteResult::compute(ed.doc(), sid).unwrap();
+        assert!(site.cut_fill().cut.abs() < 1e-3);
+        let fill_alone = site.cut_fill().fill;
+        assert!(
+            (fill_alone - 6000.0 * 1000.0 * 1500.0).abs() < 1.0,
+            "only the earth behind the wall: {fill_alone}"
+        );
+        // A higher pad of the user, made after the wall, wins where they overlap.
+        let b = curve::corners(&[
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(6000.0, 4000.0),
+            DVec2::new(6000.0, 7000.0),
+            DVec2::new(4000.0, 7000.0),
+        ]);
+        add(
+            &mut ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::Pad {
+                    elevation: 2000.0,
+                    slope: None,
+                },
+                boundary: b,
+            },
+        );
+        assert!(
+            (at(&ed, 5000.0, 5600.0) - 2000.0).abs() < 1e-6,
+            "the wall does not lower the pad"
+        );
+        assert!((at(&ed, 3000.0, 5600.0) - 1500.0).abs() < 1e-6);
+        let c = SiteResult::compute(ed.doc(), sid).unwrap().cut_fill();
+        assert!(c.cut.abs() < 1e-3, "no trench: {c:?}");
+        // The pad of the user, and the earth behind the wall outside it.
+        let expect = 2000.0 * 3000.0 * 2000.0 + (6000.0 * 1000.0 - 2000.0 * 1000.0) * 1500.0;
+        assert!((c.fill - expect).abs() < 1.0, "{} vs {expect}", c.fill);
+        // The wall is listed once as a modifier.
+        let r = SiteResult::compute(ed.doc(), sid).unwrap();
+        assert_eq!(r.modifiers.len(), 2);
     }
 }

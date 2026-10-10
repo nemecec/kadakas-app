@@ -7,15 +7,16 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::fmt::Write;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use cadektor_core::model::{Object, ObjectId, Shape};
 
-use super::{Follow, esc, meters, read};
+use super::draw::{Drawn, Label, Poly};
+use super::{Follow, meters, read};
 use crate::model::SiteResult;
 use crate::tin::Tin;
 
@@ -156,6 +157,9 @@ pub struct AnalysisResult {
     /// The band of each triangle of the surface.
     pub tri_band: Vec<u16>,
     pub bands: Vec<Band>,
+    /// The outline of each band: the triangles of a band merged into rings, to be filled with the
+    /// even-odd rule (a ring inside a ring is a hole). Corners on a straight line are left out.
+    pub rings: Vec<Vec<Vec<DVec2>>>,
 }
 
 fn label(mode: Mode, from: Option<f64>, to: Option<f64>) -> String {
@@ -229,6 +233,7 @@ pub fn analyze(tin: &Tin, mode: Mode, breaks: &[f64], colors: &[[u8; 4]]) -> Ana
         bands[i].area_surface += cross.length() / 2.0;
         tri_band.push(i as u16);
     }
+    let rings = band_rings(tin, &tri_band, n);
     AnalysisResult {
         mode,
         surface: Follow::Proposed,
@@ -236,7 +241,80 @@ pub fn analyze(tin: &Tin, mode: Mode, breaks: &[f64], colors: &[[u8; 4]]) -> Ana
         opacity: 0.8,
         tri_band,
         bands,
+        rings,
     }
+}
+
+/// Merges the triangles of each band into rings. An edge that two triangles of the band share
+/// is inside the band and goes away. The edges that stay are the outline, and they chain into rings.
+fn band_rings(tin: &Tin, tri_band: &[u16], n: usize) -> Vec<Vec<Vec<DVec2>>> {
+    let mut edges: Vec<HashMap<(u32, u32), ()>> = vec![HashMap::new(); n];
+    for (t, band) in tin.triangles.iter().zip(tri_band) {
+        let set = &mut edges[*band as usize];
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            if set.remove(&(b, a)).is_none() {
+                set.insert((a, b), ());
+            }
+        }
+    }
+    edges
+        .into_iter()
+        .map(|set| {
+            let mut list: Vec<(u32, u32)> = set.into_keys().collect();
+            list.sort_unstable();
+            let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+            for (a, b) in list {
+                next.entry(a).or_default().push(b);
+            }
+            let mut starts: Vec<u32> = next.keys().copied().collect();
+            starts.sort_unstable();
+            let mut rings = Vec::new();
+            for start in starts {
+                // A corner where two rings touch has two ways out, so it can start more than one ring.
+                while next.contains_key(&start) {
+                    let mut ring = vec![start];
+                    let mut at = start;
+                    while let Some(outs) = next.get_mut(&at) {
+                        let to = outs.pop().expect("a corner in the map has a way out");
+                        if outs.is_empty() {
+                            next.remove(&at);
+                        }
+                        if to == start {
+                            break;
+                        }
+                        ring.push(to);
+                        at = to;
+                    }
+                    let pts: Vec<DVec2> = ring
+                        .iter()
+                        .map(|i| tin.vertices[*i as usize].truncate())
+                        .collect();
+                    let pts = straighten(pts);
+                    if pts.len() >= 3 {
+                        rings.push(pts);
+                    }
+                }
+            }
+            rings
+        })
+        .collect()
+}
+
+/// Removes the corners of a ring that lie on the line between their neighbors.
+fn straighten(pts: Vec<DVec2>) -> Vec<DVec2> {
+    let n = pts.len();
+    if n < 4 {
+        return pts;
+    }
+    (0..n)
+        .filter(|&i| {
+            let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+            let (u, v) = (b - a, c - b);
+            u.perp_dot(v).abs() > 1e-9 * (u.length() * v.length()).max(1e-12) || u.dot(v) < 0.0
+        })
+        .map(|i| pts[i])
+        .collect()
 }
 
 thread_local! {
@@ -294,34 +372,16 @@ pub fn band_indices(tin: &Tin, a: &AnalysisResult, i: usize) -> Vec<u32> {
         .collect()
 }
 
-/// The css color of a band.
-fn css(c: [u8; 4]) -> String {
-    format!("rgb({},{},{})", c[0], c[1], c[2])
-}
-
-/// SVG of the bands in plan: one path per band.
-pub fn svg(site_id: ObjectId, tin: &Tin, a: &AnalysisResult) -> String {
-    let mut out = String::new();
+/// The bands in plan: one filled shape per band, made of its rings.
+pub fn draw(site_id: ObjectId, a: &AnalysisResult) -> Drawn {
+    let mut out = Drawn::default();
+    let alpha = (a.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     for band in a.bands.iter().filter(|b| b.triangles > 0) {
-        let mut d = String::new();
-        for (t, bi) in tin.triangles.iter().zip(&a.tri_band) {
-            if *bi as usize == band.index {
-                let p = t.map(|i| tin.vertices[i as usize]);
-                let _ = write!(
-                    d,
-                    "M {} {} L {} {} L {} {} Z ",
-                    p[0].x, -p[0].y, p[1].x, -p[1].y, p[2].x, -p[2].y
-                );
-            }
-        }
-        let _ = writeln!(
-            out,
-            r#"<path d="{}" fill="{}" fill-opacity="{}" stroke="none" data-kind="analysis" data-band="{}" data-site="{site_id}"/>"#,
-            d.trim_end(),
-            css(band.color),
-            a.opacity,
-            band.index
-        );
+        let c = band.color;
+        let mut poly = Poly::new("analysis", site_id, a.rings[band.index].clone(), true)
+            .filled([c[0], c[1], c[2], alpha]);
+        poly.band = Some(band.index);
+        out.polys.push(poly);
     }
     out
 }
@@ -344,15 +404,15 @@ pub fn legend_of(obj: &Object) -> Option<LegendData> {
     read(obj, LEGEND_KEY)
 }
 
-/// SVG of a legend inside the rectangle `lo` to `hi`: a title row and a row per band.
-pub fn legend_svg(
+/// A legend inside the rectangle `lo` to `hi`: a title row and a row per band.
+pub fn legend_draw(
     id: ObjectId,
-    lo: glam::DVec2,
-    hi: glam::DVec2,
+    lo: DVec2,
+    hi: DVec2,
     d: &LegendData,
     a: &AnalysisResult,
-) -> String {
-    let mut out = String::new();
+) -> Drawn {
+    let mut out = Drawn::default();
     let rows = a.bands.len() + 1;
     let row = (hi.y - lo.y) / rows as f64;
     let text = row * 0.55;
@@ -365,39 +425,41 @@ pub fn legend_svg(
     } else {
         d.title.clone()
     };
-    let _ = writeln!(
-        out,
-        r#"<text x="{}" y="{}" font-size="{text}" font-family="sans-serif" font-weight="bold" fill="black" data-kind="legend-title" data-legend="{id}">{}</text>"#,
-        lo.x,
-        -(hi.y - row * 0.7),
-        esc(&title)
+    let mut t = Label::new(
+        "legend-title",
+        id,
+        DVec2::new(lo.x, hi.y - row * 0.7),
+        title,
+        text,
     );
+    t.bold = true;
+    out.labels.push(t);
     // The highest band is at the top.
     for (k, band) in a.bands.iter().rev().enumerate() {
         let top = hi.y - row * (k + 1) as f64;
-        let _ = writeln!(
-            out,
-            r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" stroke="black" stroke-width="{}" data-kind="legend-swatch" data-band="{}" data-legend="{id}"/>"#,
-            lo.x,
-            -(top + row * 0.85),
-            row * 1.2,
-            row * 0.7,
-            css(band.color),
-            row * 0.03,
-            band.index
-        );
+        let (x0, y0, x1, y1) = (lo.x, top + row * 0.15, lo.x + row * 1.2, top + row * 0.85);
+        let ring = vec![
+            DVec2::new(x0, y0),
+            DVec2::new(x1, y0),
+            DVec2::new(x1, y1),
+            DVec2::new(x0, y1),
+        ];
+        let mut swatch = Poly::new("legend-swatch", id, vec![ring], true)
+            .filled(band.color)
+            .stroked([0, 0, 0, 255], row * 0.03);
+        swatch.band = Some(band.index);
+        out.polys.push(swatch);
         let mut s = band.label.clone();
         if d.show_areas {
-            let _ = write!(s, "  ({:.1} m2)", band.area_xy / 1e6);
+            s.push_str(&format!("  ({:.1} m2)", band.area_xy / 1e6));
         }
-        let _ = writeln!(
-            out,
-            r#"<text x="{}" y="{}" font-size="{text}" font-family="sans-serif" fill="black" data-kind="legend-label" data-band="{}" data-legend="{id}">{}</text>"#,
-            lo.x + row * 1.5,
-            -(top + row * 0.3),
-            band.index,
-            esc(&s)
-        );
+        out.labels.push(Label::new(
+            "legend-label",
+            id,
+            DVec2::new(lo.x + row * 1.5, top + row * 0.3),
+            s,
+            text,
+        ));
     }
     out
 }
@@ -613,48 +675,124 @@ mod tests {
     fn drawing_and_legend() {
         let tin = tin_of(|x, _| x / 10.0);
         let r = analyze(&tin, Mode::Slope, &SLOPE_BREAKS, &[]);
-        let s = svg(ObjectId(3), &tin, &r);
-        assert_eq!(
-            s.matches("data-kind=\"analysis\"").count(),
-            1,
-            "only bands with triangles are drawn"
+        let d = draw(ObjectId(3), &r);
+        assert_eq!(d.polys.len(), 1, "only bands with triangles are drawn");
+        // A plain slope is one square: the triangles merge into a ring with four corners.
+        assert_eq!(d.polys[0].rings, vec![r.rings[3][0].clone()]);
+        assert_eq!(d.polys[0].rings[0].len(), 4);
+        let s = d.svg();
+        assert!(
+            s.contains("fill-opacity=\"0.8\"")
+                && s.contains("data-band=\"3\"")
+                && s.contains("data-kind=\"analysis\""),
+            "{s}"
         );
-        assert!(s.contains("fill-opacity=\"0.8\"") && s.contains("data-band=\"3\""));
-        let legend = legend_svg(
+        let legend = legend_draw(
             ObjectId(9),
-            glam::DVec2::ZERO,
-            glam::DVec2::new(3000.0, 8000.0),
+            DVec2::ZERO,
+            DVec2::new(3000.0, 8000.0),
             &LegendData {
                 show_areas: true,
                 ..LegendData::default()
             },
             &r,
         );
-        assert_eq!(legend.matches("legend-swatch").count(), 7);
+        assert_eq!(legend.polys.len(), 7);
+        let texts: Vec<&str> = legend.labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts[0], "Slope");
         assert!(
-            legend.contains(">Slope<") && legend.contains("m2)") && legend.contains("below 2 %")
+            texts.iter().any(|t| t.contains("m2)")) && texts.contains(&"50 % and above  (0.0 m2)")
         );
-        let titled = legend_svg(
+        assert_eq!(
+            texts[1], "50 % and above  (0.0 m2)",
+            "the highest band is at the top"
+        );
+        let titled = legend_draw(
             ObjectId(9),
-            glam::DVec2::ZERO,
-            glam::DVec2::new(3000.0, 8000.0),
+            DVec2::ZERO,
+            DVec2::new(3000.0, 8000.0),
             &LegendData {
                 title: "Slope <10%".into(),
                 ..LegendData::default()
             },
             &r,
         );
-        assert!(titled.contains("Slope &lt;10%") && !titled.contains("m2)"));
+        assert!(titled.svg().contains("Slope &lt;10%") && !titled.svg().contains("m2)"));
         let elev = analyze(&tin, Mode::Elevation, &[1.0], &[]);
-        assert!(
-            legend_svg(
-                ObjectId(9),
-                glam::DVec2::ZERO,
-                glam::DVec2::ONE,
-                &LegendData::default(),
-                &elev
-            )
-            .contains(">Elevation<")
+        let e = legend_draw(
+            ObjectId(9),
+            DVec2::ZERO,
+            DVec2::ONE,
+            &LegendData::default(),
+            &elev,
         );
+        assert_eq!(e.labels[0].text, "Elevation");
+    }
+
+    /// The area of rings with the even-odd rule: outer rings add and the rings inside them subtract.
+    fn evenodd_area(rings: &[Vec<DVec2>]) -> f64 {
+        let area = |r: &[DVec2]| cadektor_core::geom::polygon_area(r).abs();
+        // A ring is a hole when an odd number of the other rings contain a point of it.
+        rings
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let depth = rings
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, o)| *j != i && cadektor_core::geom::point_in_polygon(r[0], o))
+                    .count();
+                if depth % 2 == 0 { area(r) } else { -area(r) }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn merged_rings_cover_exactly_the_triangles_of_the_band() {
+        // A bumpy site gives bands with holes and several parts.
+        let tin = tin_of(|x, y| 400.0 * ((x / 800.0).sin() + (y / 900.0).cos()));
+        let r = analyze(&tin, Mode::Slope, &[10.0, 30.0], &[]);
+        for band in &r.bands {
+            let merged = evenodd_area(&r.rings[band.index]);
+            assert!(
+                (merged - band.area_xy).abs() < 1e-3 * (1.0 + band.area_xy),
+                "band {}: {merged} vs {}",
+                band.index,
+                band.area_xy
+            );
+        }
+        assert!(r.bands.iter().filter(|b| b.triangles > 0).count() >= 2);
+    }
+
+    #[test]
+    fn a_large_site_draws_fast_and_small() {
+        // 50 000 points: the bands merge into a few rings, not one path per triangle.
+        let mut ed = Editor::default();
+        let id = add(
+            &mut ed,
+            grid_site(224, 100.0, |x, y| {
+                300.0 * ((x / 900.0).sin() + (y / 1100.0).cos())
+            }),
+        );
+        let site = SiteResult::compute(ed.doc(), id).unwrap();
+        let spec = AnalysisSpec {
+            mode: Mode::Slope,
+            surface: Follow::Existing,
+            ..AnalysisSpec::default()
+        };
+        let start = std::time::Instant::now();
+        let a = for_site(&site, &spec).unwrap();
+        let svg = draw(id, &a).svg();
+        let took = start.elapsed();
+        assert!(took.as_secs_f64() < 1.0, "analysis and svg took {took:?}");
+        assert!(a.tri_band.len() > 90_000);
+        // About a vertex per boundary corner, far fewer than three per triangle.
+        let corners: usize = a.rings.iter().flatten().map(Vec::len).sum();
+        assert!(corners < a.tri_band.len() / 2, "{corners} corners");
+        assert!(svg.len() < 4_000_000, "{} bytes", svg.len());
+        // The second call finds the result in the cache.
+        let before = computed();
+        let again = for_site(&site, &spec).unwrap();
+        assert!(Arc::ptr_eq(&a, &again) && computed() == before);
     }
 }

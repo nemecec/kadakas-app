@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use egui::epaint::{Mesh, PathShape, PathStroke, Vertex as EguiVertex};
-use egui::{Align2, Color32, FontId, Painter, Pos2, Stroke, Ui};
+use std::sync::Arc;
+
+use egui::{Color32, FontId, Painter, Pos2, Stroke, Ui};
 use glam::DVec2;
 use serde_json::Value;
 
@@ -18,7 +20,7 @@ use cadektor_site::grading::{self, analysis, grade, section, spot, wall};
 use crate::view::View;
 
 /// A macro keeps `serde` out of the dependencies of the app.
-macro_rules! json {
+macro_rules! to_json {
     ($v:expr) => {
         serde_json::to_value($v).expect("settings are JSON")
     };
@@ -145,7 +147,7 @@ pub fn command(doc: &Document, s: &GradingSettings, pts: &[DVec2]) -> Option<Com
                     closed: false,
                 },
                 wall::KEY,
-                json!(&d),
+                to_json!(&d),
             ))
         }
         GradingMode::Grade if pts.len() == 2 && pts[0] != pts[1] => {
@@ -169,7 +171,7 @@ pub fn command(doc: &Document, s: &GradingSettings, pts: &[DVec2]) -> Option<Com
                     b: pts[1],
                 },
                 grade::KEY,
-                json!(&d),
+                to_json!(&d),
             ))
         }
         GradingMode::Spot | GradingMode::Stake if pts.len() == 1 => {
@@ -196,7 +198,7 @@ pub fn command(doc: &Document, s: &GradingSettings, pts: &[DVec2]) -> Option<Com
                     radius: spot::MARKER_PAPER_RADIUS * scale,
                 },
                 spot::KEY,
-                json!(&d),
+                to_json!(&d),
             ))
         }
         GradingMode::Section if pts.len() == 2 && pts[0] != pts[1] => {
@@ -211,7 +213,7 @@ pub fn command(doc: &Document, s: &GradingSettings, pts: &[DVec2]) -> Option<Com
                     b: pts[1],
                 },
                 section::KEY,
-                json!(&d),
+                to_json!(&d),
             ))
         }
         _ => None,
@@ -273,16 +275,19 @@ fn color32(c: [u8; 4], opacity: f64) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (c[3] as f64 * opacity).round() as u8)
 }
 
-/// Text size on screen for a height in model units, kept readable.
-fn text_px(view: &View, height_model: f64) -> f32 {
-    ((height_model * view.zoom) as f32).clamp(8.0, 30.0)
+/// What the analysis mesh was made for, so a view that does not change does not make it again.
+struct MeshKey {
+    analysis: usize,
+    view: View,
+    clip: egui::Rect,
 }
 
-fn label(painter: &Painter, at: Pos2, anchor: Align2, text: String, px: f32) {
-    painter.text(at, anchor, text, FontId::proportional(px), Color32::BLACK);
+thread_local! {
+    static ANALYSIS_MESH: std::cell::RefCell<Option<(MeshKey, Arc<Mesh>)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Paints the colors of the slope or elevation analysis of a site model, under its contours.
+/// Only the triangles in view are made, and the mesh stays while the view and the analysis stay.
 pub fn draw_analysis(
     painter: &Painter,
     view: &View,
@@ -300,22 +305,122 @@ pub fn draw_analysis(
     let Some(a) = analysis::for_site(&site, &spec) else {
         return;
     };
+    let key = MeshKey {
+        analysis: Arc::as_ptr(&a) as usize,
+        view: *view,
+        clip: painter.clip_rect(),
+    };
+    let cached = ANALYSIS_MESH.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(k, _)| k.analysis == key.analysis && k.view == key.view && k.clip == key.clip)
+            .map(|(_, m)| m.clone())
+    });
+    let mesh = cached.unwrap_or_else(|| {
+        let mesh = Arc::new(analysis_mesh(view, painter.clip_rect(), &site, &a));
+        ANALYSIS_MESH.with(|c| *c.borrow_mut() = Some((key, mesh.clone())));
+        mesh
+    });
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The triangles of the analysis that touch the clip rectangle, in band colors.
+fn analysis_mesh(
+    view: &View,
+    clip: egui::Rect,
+    site: &cadektor_site::SiteResult,
+    a: &analysis::AnalysisResult,
+) -> Mesh {
     let tin = site.surface(a.surface.surface());
     let mut mesh = Mesh::default();
+    let colors: Vec<Color32> = a
+        .bands
+        .iter()
+        .map(|b| color32(b.color, a.opacity))
+        .collect();
     for (t, band) in tin.triangles.iter().zip(&a.tri_band) {
-        let color = color32(a.bands[*band as usize].color, a.opacity);
+        let p = t.map(|i| view.to_screen(tin.vertices[i as usize].truncate()));
+        let rect = egui::Rect::from_min_max(p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]));
+        if !rect.intersects(clip) {
+            continue;
+        }
         let base = mesh.vertices.len() as u32;
-        for i in t {
-            let p = tin.vertices[*i as usize];
+        for pos in p {
             mesh.vertices.push(EguiVertex {
-                pos: view.to_screen(p.truncate()),
+                pos,
                 uv: egui::epaint::WHITE_UV,
-                color,
+                color: colors[*band as usize],
             });
         }
         mesh.indices.extend([base, base + 1, base + 2]);
     }
-    painter.add(mesh);
+    mesh
+}
+
+/// Paints what a `Drawn` holds: the shapes of the grading objects, as the SVG and the sheet show them.
+pub fn paint_drawn(painter: &Painter, view: &View, d: &grading::draw::Drawn) {
+    for poly in &d.polys {
+        let rings: Vec<Vec<Pos2>> = poly
+            .rings
+            .iter()
+            .map(|r| r.iter().map(|p| view.to_screen(*p)).collect())
+            .collect();
+        if let (Some(fill), true, 1) = (poly.fill, poly.closed, rings.len()) {
+            let mut mesh = Mesh::default();
+            let color = color32(fill, 1.0);
+            for p in &rings[0] {
+                mesh.vertices.push(EguiVertex {
+                    pos: *p,
+                    uv: egui::epaint::WHITE_UV,
+                    color,
+                });
+            }
+            for t in crate::tess::triangulate(&poly.rings[0]) {
+                mesh.indices.extend(t.map(|i| i as u32));
+            }
+            painter.add(mesh);
+        }
+        let stroke = match (poly.stroke, poly.fill) {
+            (Some(c), _) => Some(Stroke::new(
+                ((poly.weight * view.zoom) as f32).max(1.0),
+                color32(c, 1.0),
+            )),
+            // A filled shape without a pen still shows its edge, thin, when it has holes.
+            (None, Some(_)) if rings.len() > 1 => Some(Stroke::new(1.0, Color32::from_gray(80))),
+            _ => None,
+        };
+        if let Some(stroke) = stroke {
+            for r in rings {
+                painter.add(PathShape {
+                    points: r,
+                    closed: poly.closed,
+                    fill: Color32::TRANSPARENT,
+                    stroke: PathStroke::new(stroke.width, stroke.color),
+                });
+            }
+        }
+    }
+    for l in &d.labels {
+        let px = ((l.height * view.zoom) as f32).clamp(8.0, 30.0);
+        let galley =
+            painter.layout_no_wrap(l.text.clone(), FontId::proportional(px), Color32::BLACK);
+        let at = view.to_screen(l.at);
+        let mut pos = at - egui::vec2(if l.center { galley.size().x / 2.0 } else { 0.0 }, px);
+        if l.angle_deg != 0.0 {
+            // The text turns around its start; the model angle counts counterclockwise.
+            let (sin, cos) = (-l.angle_deg.to_radians()).sin_cos();
+            let (sin, cos) = (sin as f32, cos as f32);
+            let off = at - pos;
+            let turned = egui::vec2(off.x * cos - off.y * sin, off.x * sin + off.y * cos);
+            pos = at - turned;
+            painter.add(
+                egui::epaint::TextShape::new(pos, galley, Color32::BLACK)
+                    .with_angle((-l.angle_deg).to_radians() as f32),
+            );
+        } else {
+            painter.galley(pos, galley, Color32::BLACK);
+        }
+    }
 }
 
 /// Paints the extras of a wall, grade, spot elevation, section line or legend: what core does not draw.
@@ -327,207 +432,11 @@ pub fn draw_extras(
     cache: &SiteCache,
     revision: u64,
 ) {
-    let scale = doc.layer(obj.layer).map_or(100.0, |l| l.scale);
-    if let Some(d) = wall::data(obj) {
-        let site = grading::host(doc, cache, revision, obj, d.site);
-        let ground = site.as_ref().map(|s| grading::ground_of(s));
-        let Some(w) = wall::evaluate(doc, obj, ground.as_ref().map(|g| g as grading::Ground<'_>))
-        else {
-            return;
-        };
-        let pts: Vec<DVec2> = w.stations.iter().map(|s| s.p).collect();
-        let fill = color32(w.color, 0.55);
-        for ring in wall::footprint(&pts, w.thickness) {
-            let screen: Vec<Pos2> = ring.iter().map(|p| view.to_screen(*p)).collect();
-            if !w.closed {
-                let mut mesh = Mesh::default();
-                for p in &screen {
-                    mesh.vertices.push(EguiVertex {
-                        pos: *p,
-                        uv: egui::epaint::WHITE_UV,
-                        color: fill,
-                    });
-                }
-                for t in crate::tess::triangulate(&ring) {
-                    mesh.indices.extend(t.map(|i| i as u32));
-                }
-                painter.add(mesh);
-            }
-            painter.add(PathShape {
-                points: screen,
-                closed: true,
-                fill: Color32::TRANSPARENT,
-                stroke: PathStroke::new(1.0, Color32::from_gray(80)),
-            });
-        }
-        let px = text_px(view, 2.5 * scale);
-        let ends = [
-            w.stations.first(),
-            if w.closed { None } else { w.stations.last() },
-        ];
-        for s in ends.into_iter().flatten() {
-            let text = format!(
-                "TW {} BW {}",
-                grading::meters(s.top, 2),
-                grading::meters(s.bottom, 2)
-            );
-            label(
-                painter,
-                view.to_screen(s.p) + egui::vec2(0.0, -px),
-                Align2::LEFT_BOTTOM,
-                text,
-                px,
-            );
-        }
-    } else if let Some(d) = grade::data(obj) {
-        let site = d
-            .snap
-            .and_then(|_| grading::host(doc, cache, revision, obj, d.site));
-        let ground = site.as_ref().map(|s| grading::ground_of(s));
-        let Some((d, g)) = grade::evaluate(obj, ground.as_ref().map(|g| g as grading::Ground<'_>))
-        else {
-            return;
-        };
-        let px = text_px(view, 2.5 * scale);
-        let (a, b) = (view.to_screen(g.a), view.to_screen(g.b));
-        let mid = a.lerp(b, 0.5);
-        let dir = (b - a).normalized();
-        let n = egui::vec2(-dir.y, dir.x);
-        if d.label {
-            // The arrow points downhill.
-            let down = if g.falls() { dir } else { -dir };
-            let size = 9.0;
-            let tip = mid + down * size * 0.5;
-            let base = mid - down * size * 0.5;
-            painter.add(PathShape::convex_polygon(
-                vec![tip, base + n * size * 0.4, base - n * size * 0.4],
-                Color32::BLACK,
-                Stroke::NONE,
-            ));
-            label(
-                painter,
-                mid + n * (px * 1.1),
-                Align2::CENTER_CENTER,
-                g.label(),
-                px,
-            );
-        }
-        if d.end_tags {
-            label(
-                painter,
-                a - dir * (px * 0.5) - n * (px * 1.2),
-                Align2::CENTER_CENTER,
-                grading::meters(g.elevation_a, 2),
-                px,
-            );
-            label(
-                painter,
-                b + dir * (px * 0.5) - n * (px * 1.2),
-                Align2::CENTER_CENTER,
-                grading::meters(g.elevation_b, 2),
-                px,
-            );
-        }
-    } else if let (Some(d), Shape::Circle { center, radius }) = (spot::data(obj), &obj.shape) {
-        let text = match grading::host(doc, cache, revision, obj, d.site) {
-            Some(site) => spot::label(
-                &d,
-                &spot::read_at(&site, *center),
-                *center,
-                doc.georef.as_ref(),
-            ),
-            None => "no site model".to_string(),
-        };
-        let c = view.to_screen(*center);
-        let r = (*radius * view.zoom) as f32;
-        let stroke = Stroke::new(1.0, Color32::BLACK);
-        painter.line_segment([c - egui::vec2(r, 0.0), c + egui::vec2(r, 0.0)], stroke);
-        painter.line_segment([c - egui::vec2(0.0, r), c + egui::vec2(0.0, r)], stroke);
-        let px = text_px(view, d.label_height * scale);
-        label(
-            painter,
-            c + egui::vec2(r * 1.5, -r * 1.2),
-            Align2::LEFT_BOTTOM,
-            text,
-            px,
-        );
-    } else if let (Some(d), Shape::Line { a, b }) = (section::data(obj), &obj.shape) {
-        let (sa, sb) = (view.to_screen(*a), view.to_screen(*b));
-        let dir = (sb - sa).normalized();
-        let n = egui::vec2(-dir.y, dir.x) * 8.0;
-        let px = text_px(view, 3.5 * scale);
-        for p in [sa, sb] {
-            painter.line_segment([p - n, p + n], Stroke::new(1.5, Color32::BLACK));
-            label(
-                painter,
-                p + n * 1.5,
-                Align2::CENTER_CENTER,
-                d.name.clone(),
-                px,
-            );
-        }
-    } else if let (Some(d), Shape::Rect { min, max }) = (analysis::legend_of(obj), &obj.shape) {
-        let site_obj = d.site.and_then(|id| doc.object(id)).or_else(|| {
-            doc.objects.values().find(|o| {
-                o.layer == obj.layer
-                    && analysis::spec_of(o).is_some_and(|s| s.mode != analysis::Mode::Off)
-            })
-        });
-        let Some(a) = site_obj.and_then(|so| {
-            analysis::for_site(
-                cache.get(revision, doc, so.id).ok()?.as_ref(),
-                &analysis::spec_of(so)?,
-            )
-        }) else {
-            return;
-        };
-        let (lo, hi) = (min.min(*max), min.max(*max));
-        let rows = a.bands.len() + 1;
-        let row = (hi.y - lo.y) / rows as f64;
-        let px = text_px(view, row * 0.6);
-        let title = if d.title.is_empty() {
-            if a.mode == analysis::Mode::Slope {
-                "Slope"
-            } else {
-                "Elevation"
-            }
-            .to_string()
-        } else {
-            d.title.clone()
-        };
-        label(
-            painter,
-            view.to_screen(DVec2::new(lo.x, hi.y)),
-            Align2::LEFT_TOP,
-            title,
-            px,
-        );
-        for (k, band) in a.bands.iter().rev().enumerate() {
-            let top = hi.y - row * (k + 1) as f64;
-            let r = egui::Rect::from_two_pos(
-                view.to_screen(DVec2::new(lo.x, top + row * 0.85)),
-                view.to_screen(DVec2::new(lo.x + row * 1.2, top + row * 0.15)),
-            );
-            painter.rect_filled(r, 0.0, color32(band.color, 1.0));
-            painter.rect_stroke(
-                r,
-                0.0,
-                Stroke::new(0.5, Color32::BLACK),
-                egui::StrokeKind::Middle,
-            );
-            let mut text = band.label.clone();
-            if d.show_areas {
-                text.push_str(&format!("  ({:.1} m2)", band.area_xy / 1e6));
-            }
-            label(
-                painter,
-                view.to_screen(DVec2::new(lo.x + row * 1.5, top + row * 0.5)),
-                Align2::LEFT_CENTER,
-                text,
-                px,
-            );
-        }
-    }
+    paint_drawn(
+        painter,
+        view,
+        &grading::hook::extras(doc, cache, revision, obj),
+    );
 }
 
 #[cfg(test)]
@@ -647,5 +556,194 @@ mod tests {
             grade::data(ed.doc().object(g).unwrap()).unwrap().snap,
             Some(grading::Follow::Proposed)
         );
+    }
+
+    fn doc_with_everything() -> (cadektor_core::model::Document, ObjectId) {
+        use cadektor_core::command::Command;
+        let mut ed = Editor::default();
+        let pts: Vec<_> = (0..6)
+            .flat_map(|i| {
+                (0..6).map(move |j| {
+                    glam::DVec3::new(i as f64 * 1000.0, j as f64 * 1000.0, i as f64 * 100.0)
+                })
+            })
+            .collect();
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::SiteModel {
+                    points: pts,
+                    lines: vec![],
+                    settings: Default::default(),
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        let site = ObjectId(out.created[0]);
+        let spec = cadektor_site::grading::analysis::AnalysisSpec {
+            mode: analysis::Mode::Slope,
+            ..Default::default()
+        };
+        let set = |ed: &mut Editor, id: ObjectId, key: &str, v: serde_json::Value| {
+            ed.execute(&Command::SetData {
+                id,
+                set: [(key.to_string(), v)].into(),
+                remove: vec![],
+            })
+            .unwrap();
+        };
+        set(&mut ed, site, analysis::KEY, to_json!(&spec));
+        let p = |x: f64, y: f64| DVec2::new(x, y);
+        for (mode, pts) in [
+            (
+                GradingMode::Wall,
+                vec![p(500.0, 500.0), p(4000.0, 500.0), p(4000.0, 2500.0)],
+            ),
+            (
+                GradingMode::Grade,
+                vec![p(500.0, 1500.0), p(4500.0, 1500.0)],
+            ),
+            (GradingMode::Spot, vec![p(2000.0, 3000.0)]),
+            (GradingMode::Stake, vec![p(2500.0, 3000.0)]),
+            (
+                GradingMode::Section,
+                vec![p(0.0, 4000.0), p(5000.0, 4000.0)],
+            ),
+        ] {
+            let cmd = command(ed.doc(), &at(mode), &pts).unwrap();
+            ed.execute(&cmd).unwrap();
+        }
+        let legend = Shape::Rect {
+            min: p(6000.0, 0.0),
+            max: p(9000.0, 4000.0),
+        };
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: legend,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        set(
+            &mut ed,
+            ObjectId(out.created[0]),
+            analysis::LEGEND_KEY,
+            serde_json::json!({"show_areas": true}),
+        );
+        (ed.doc().clone(), site)
+    }
+
+    #[test]
+    fn the_canvas_paints_the_grading_graphics_and_keeps_the_analysis_mesh() {
+        let (doc, site) = doc_with_everything();
+        let cache = SiteCache::default();
+        let ctx = egui::Context::default();
+        let view = View {
+            origin: DVec2::new(40.0, 400.0),
+            zoom: 0.1,
+        };
+        let paint = |view: &View| {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                for o in doc.objects.values() {
+                    if matches!(o.shape, Shape::SiteModel { .. }) {
+                        draw_analysis(&painter, view, &doc, o, &cache, 1);
+                    }
+                    if cadektor_core::site::carries_extra(o) {
+                        draw_extras(&painter, view, &doc, o, &cache, 1);
+                    }
+                }
+            });
+            out.shapes.len()
+        };
+        let first = paint(&view);
+        assert!(first > 10, "{first} shapes");
+        let key_of = || {
+            ANALYSIS_MESH.with(|c| {
+                c.borrow()
+                    .as_ref()
+                    .map(|(k, m)| (k.analysis, Arc::as_ptr(m) as usize))
+            })
+        };
+        let k1 = key_of().unwrap();
+        // The same view gives the same mesh. Another view makes a new one.
+        paint(&view);
+        assert_eq!(key_of().unwrap(), k1);
+        paint(&View { zoom: 0.2, ..view });
+        assert_ne!(key_of().unwrap().1, k1.1);
+        // Only the triangles in view are made: a view far from the site has none.
+        let tin_site = cache.get(1, &doc, site).unwrap();
+        let spec = analysis::spec_of(doc.object(site).unwrap()).unwrap();
+        let a = analysis::for_site(&tin_site, &spec).unwrap();
+        let far = analysis_mesh(
+            &View {
+                origin: DVec2::new(1.0e6, 1.0e6),
+                zoom: 0.1,
+            },
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0)),
+            &tin_site,
+            &a,
+        );
+        assert!(far.indices.is_empty());
+        let near = analysis_mesh(
+            &view,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0)),
+            &tin_site,
+            &a,
+        );
+        assert_eq!(near.indices.len(), a.tri_band.len() * 3);
+        assert!(color32([10, 20, 30, 200], 0.5).a() == 100);
+    }
+
+    #[test]
+    fn labels_and_polygons_paint_with_holes_angles_and_centers() {
+        use cadektor_site::grading::draw::{Drawn, Label, Poly};
+        let ctx = egui::Context::default();
+        let view = View {
+            origin: DVec2::new(10.0, 300.0),
+            zoom: 0.1,
+        };
+        let ring = |o: f64| {
+            vec![
+                DVec2::new(o, o),
+                DVec2::new(1000.0 - o, o),
+                DVec2::new(1000.0 - o, 1000.0 - o),
+                DVec2::new(o, 1000.0 - o),
+            ]
+        };
+        let mut d = Drawn::default();
+        d.polys
+            .push(Poly::new("a", ObjectId(1), vec![ring(0.0)], true).filled([200, 0, 0, 255]));
+        d.polys.push(
+            Poly::new("b", ObjectId(1), vec![ring(0.0), ring(200.0)], true)
+                .filled([0, 200, 0, 255]),
+        );
+        d.polys.push(
+            Poly::new("c", ObjectId(1), vec![ring(100.0)], false).stroked([0, 0, 0, 255], 5.0),
+        );
+        let mut turned = Label::new(
+            "t",
+            ObjectId(1),
+            DVec2::new(500.0, 500.0),
+            "up".into(),
+            100.0,
+        );
+        turned.angle_deg = 30.0;
+        turned.center = true;
+        d.labels.push(turned);
+        d.labels.push(Label::new(
+            "t",
+            ObjectId(1),
+            DVec2::new(500.0, 100.0),
+            "flat".into(),
+            100.0,
+        ));
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_drawn(ui.painter(), &view, &d)
+        });
+        // A filled ring, a ring with a hole (two outlines), a stroked line and two labels.
+        assert_eq!(out.shapes.len(), 6);
     }
 }
