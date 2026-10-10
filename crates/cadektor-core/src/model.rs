@@ -162,6 +162,8 @@ pub enum Shape {
     Viewport(Box<crate::sheets::Viewport>),
     /// Border, grid reference and title block on a sheet layer.
     TitleBlock(crate::sheets::TitleBlock),
+    /// Dimension, callout, data tag, legend, north arrow, scale bar, revision cloud or styled text.
+    Annotation(Box<crate::annot::Annot>),
 }
 
 /// Default text height of a plant tag, in mm.
@@ -211,6 +213,7 @@ impl Shape {
             Shape::SiteModifier { .. } => "site_modifier",
             Shape::Viewport(_) => "viewport",
             Shape::TitleBlock(_) => "title_block",
+            Shape::Annotation(_) => "annotation",
         }
     }
 
@@ -237,6 +240,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.problem().is_none(),
             Shape::TitleBlock(tb) => tb.problem().is_none(),
+            Shape::Annotation(a) => a.is_finite(),
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
             Shape::SiteModel { points, lines, settings } => {
@@ -276,6 +280,7 @@ impl Shape {
         match self {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
             Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            Shape::Annotation(a) => a.numbers(f),
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
             Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
             Shape::SiteModel { points, lines, settings } => {
@@ -346,6 +351,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.translate(d),
             Shape::TitleBlock(tb) => tb.translate(d),
+            Shape::Annotation(a) => a.translate(d),
             Shape::Locus3d { p } => {
                 p.x += d.x;
                 p.y += d.y;
@@ -392,6 +398,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => (vp.min, vp.max),
             Shape::TitleBlock(tb) => tb.bounds(),
+            Shape::Annotation(a) => a.bounds(),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())

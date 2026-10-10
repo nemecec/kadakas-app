@@ -33,6 +33,8 @@ pub enum ResourceBody {
     Worksheet(serde_json::Value),
     HardscapeStyle(Box<HardscapeStyle>),
     LandscapeAreaStyle(Box<LandscapeAreaStyle>),
+    /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
+    Annot(Box<crate::annot::style::AnnotResource>),
     Unknown(serde_json::Value),
 }
 
@@ -57,6 +59,7 @@ impl Serialize for ResourceBody {
                 v["type"] = "landscape_area_style".into();
                 v.serialize(s)
             }
+            ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -88,7 +91,10 @@ impl<'de> Deserialize<'de> for ResourceBody {
             Some("landscape_area_style") => serde_json::from_value::<LandscapeAreaStyle>(v)
                 .map(|s| ResourceBody::LandscapeAreaStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
-            _ => Ok(ResourceBody::Unknown(v)),
+            _ => match crate::annot::style::AnnotResource::from_json(&v) {
+                Some(r) => r.map(|a| ResourceBody::Annot(Box::new(a))).map_err(serde::de::Error::custom),
+                None => Ok(ResourceBody::Unknown(v)),
+            },
         }
     }
 }
@@ -108,6 +114,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => "worksheet",
             ResourceBody::HardscapeStyle(_) => "hardscape_style",
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
+            ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -122,6 +129,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => Ok(()),
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
+            ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }

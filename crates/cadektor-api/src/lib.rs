@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod annotation_api;
 mod data_api;
 mod hardscape_api;
 mod plants_api;
@@ -199,6 +200,41 @@ pub const METHODS: &[(&str, &str)] = &[
     sheets_api::SAVED_VIEW_SAVE,
     sheets_api::SAVED_VIEW_RESTORE,
     sheets_api::SAVED_VIEW_DELETE,
+    // Annotation (see annotation_api.rs).
+    annotation_api::TEXT_STYLE_LIST,
+    annotation_api::TEXT_STYLE_GET,
+    annotation_api::TEXT_STYLE_CREATE,
+    annotation_api::TEXT_STYLE_UPDATE,
+    annotation_api::TEXT_STYLE_DELETE,
+    annotation_api::DIMENSION_STYLE_LIST,
+    annotation_api::DIMENSION_STYLE_GET,
+    annotation_api::DIMENSION_STYLE_CREATE,
+    annotation_api::DIMENSION_STYLE_UPDATE,
+    annotation_api::DIMENSION_STYLE_DELETE,
+    annotation_api::TAG_STYLE_LIST,
+    annotation_api::TAG_STYLE_GET,
+    annotation_api::TAG_STYLE_CREATE,
+    annotation_api::TAG_STYLE_UPDATE,
+    annotation_api::TAG_STYLE_DELETE,
+    annotation_api::NOTES_DB_LIST,
+    annotation_api::NOTES_DB_GET,
+    annotation_api::NOTES_DB_CREATE,
+    annotation_api::NOTES_DB_UPDATE,
+    annotation_api::NOTES_DB_DELETE,
+    annotation_api::DIMENSION_ADD,
+    annotation_api::CALLOUT_ADD,
+    annotation_api::DATA_TAG_ADD,
+    annotation_api::DATA_TAG_TAG_ALL,
+    annotation_api::LEGEND_ADD,
+    annotation_api::NORTH_ARROW_ADD,
+    annotation_api::SCALE_BAR_ADD,
+    annotation_api::REVISION_CLOUD_ADD,
+    annotation_api::ANNOTATION_TEXT,
+    annotation_api::ANNOTATION_UPDATE,
+    annotation_api::ANNOTATION_LIST,
+    annotation_api::ANNOTATION_EVALUATE,
+    annotation_api::ANNOTATION_APPLY_TEXT_STYLE,
+    annotation_api::REVISION_LIST,
 ];
 
 impl Session {
@@ -277,6 +313,7 @@ impl Session {
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                     "sheets": sheets_api::describe(),
+                    "annotation": annotation_api::describe(),
                 });
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -376,7 +413,11 @@ impl Session {
                     width: Option<u32>,
                 }
                 let P { width } = params(p)?;
-                let ext = cadektor_site::draw::svg_ext(&self.site_cache, self.editor.revision());
+                let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, self.editor.revision());
+                let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
+                    site_ext(d, o, style, out);
+                    cadektor_annot::svg::object_svg(d, o, style, out);
+                };
                 json!({ "svg": cadektor_core::svg::render_with(doc, width.unwrap_or(800).clamp(16, 8192), Some(&ext)) })
             }
             "render.png" => {
@@ -453,6 +494,7 @@ impl Session {
                 }
                 return plants_api::handle(self, method, p.clone())
                     .or_else(|| sheets_api::handle(self, method, p.clone()))
+                    .or_else(|| annotation_api::handle(self, method, p.clone()))
                     .or_else(|| data_api::handle(self, method, p))
                     .unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") }));
             }

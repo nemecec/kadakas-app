@@ -193,6 +193,7 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
                 out.push(path(mapped(&outline, xf), true, &st));
             }
         }
+        Shape::Annotation(a) => crate::annot::push(doc, a, &crate::annot::layer_ctx(xf), &st, xf, out),
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
     }
@@ -230,6 +231,13 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                 let mid = (p2 + q2) / 2.0 + n * 1.0;
                 let at = mid - u * (text_width(&label, h) / 2.0);
                 out.push(text(at, &label, h, ink));
+            }
+        }
+        AnnotationItem::Shape { shape } if matches!(**shape, Shape::Annotation(_)) => {
+            // Positions are paper mm from the frame. Real lengths follow the scale of the viewport.
+            if let Shape::Annotation(an) = &**shape {
+                let xf = Xf { model_center: DVec2::ZERO, paper_center: vp.min, k: 1.0 };
+                crate::annot::push(doc, an, &cadektor_core::annot::draw::Ctx::viewport(vp), &st, &xf, out);
             }
         }
         AnnotationItem::Shape { shape } => {

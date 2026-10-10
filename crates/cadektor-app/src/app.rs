@@ -15,7 +15,7 @@ use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
 use crate::plant_ui::{self, PlantUi};
 use crate::snap::{self, SnapConfig, SnapResult};
-use crate::tools::{Ctx, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
+use crate::tools::{Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes};
 use crate::canvas3d;
 use crate::gpu3d::Gpu3d;
 use crate::view::{View, grid_step};
@@ -313,6 +313,22 @@ impl CadektorApp {
         }
     }
 
+    /// Runs what the buttons of the Annotation part of the tool panel asked for.
+    fn run_annot_requests(&mut self) {
+        for cmd in std::mem::take(&mut self.settings.annot.pending) {
+            self.exec(&cmd);
+        }
+        if std::mem::take(&mut self.settings.annot.legend_requested) {
+            self.add_legend();
+        }
+    }
+
+    /// Adds a graphic legend at the top left of the view.
+    fn add_legend(&mut self) {
+        let at = self.canvas_rect.map_or(DVec2::ZERO, |r| self.view.to_model(r.left_top() + egui::vec2(40.0, 40.0)));
+        self.exec(&crate::annot_ui::legend_command(at));
+    }
+
     fn nudge(&mut self, dir: DVec2) {
         if self.session.selection.is_empty() {
             return;
@@ -323,6 +339,18 @@ impl CadektorApp {
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        // The dimension keys pick the mode too: N is a linear dimension, `.` angular and `,` radial.
+        let linear = |m: crate::tools::DimToolMode| matches!(m, DimToolMode::Horizontal | DimToolMode::Vertical | DimToolMode::Aligned | DimToolMode::Chain | DimToolMode::Baseline | DimToolMode::Ordinate);
+        match action {
+            Action::ToolDimension if !linear(self.settings.annot.dim_mode) => self.settings.annot.dim_mode = DimToolMode::Horizontal,
+            Action::ToolAngularDim => self.settings.annot.dim_mode = DimToolMode::Angular,
+            Action::ToolRadialDim => self.settings.annot.dim_mode = DimToolMode::Radial,
+            Action::CmdGraphicLegend => {
+                self.add_legend();
+                return;
+            }
+            _ => {}
+        }
         if let Some(t) = action.tool() {
             // Drawing happens on the plan. Choosing a drawing tool in 3D goes back to it.
             if t != Tool::Select && !self.plan() {
@@ -449,7 +477,11 @@ impl CadektorApp {
     /// have one group (the vertex modes), so only group 1 does anything for them.
     fn mode_group(&mut self, group: usize) {
         let tool = self.machine.tool();
-        if tool == Tool::Plant && group == 1 {
+        if tool == Tool::Dimension && group == 1 {
+            self.settings.annot.dim_mode = self.settings.annot.dim_mode.next();
+            self.machine.cancel();
+            self.status = format!("Dimension mode: {}", self.settings.annot.dim_mode.label());
+        } else if tool == Tool::Plant && group == 1 {
             self.settings.plant.mode = self.settings.plant.mode.next();
             self.machine.cancel();
             self.status = format!("Placement mode: {}", self.settings.plant.mode.label());
@@ -676,7 +708,7 @@ impl eframe::App for CadektorApp {
                 let d = &self.session.editor.doc();
                 ui.label(&self.status);
                 ui.separator();
-                ui.label(self.machine.hint());
+                ui.label(self.machine.hint_for(&self.settings));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.plan() {
                         ui.label(format!(
@@ -700,7 +732,10 @@ impl eframe::App for CadektorApp {
         if commit {
             self.commit_entry(&ctx);
         }
-        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings, self.session.editor.doc()));
+        egui::Panel::left("tools").resizable(false).exact_size(170.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| panels::tool_panel(ui, &mut self.machine, &self.keys, &mut self.settings, self.session.editor.doc()));
+        });
+        self.run_annot_requests();
         egui::Panel::right("palettes").default_size(280.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);

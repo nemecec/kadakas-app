@@ -543,7 +543,7 @@ impl Builder<'_> {
                 };
                 self.plant(&build, z, edge, id);
             }
-            Shape::Text { .. } | Shape::PlantTag { .. } => {}
+            Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Annotation(_) => {}
             Shape::Locus3d { p } => {
                 let h = crate::model::LOCUS_MARKER_HALF;
                 let c = pen.unwrap_or([0, 0, 0, 255]);

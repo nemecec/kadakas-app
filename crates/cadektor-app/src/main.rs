@@ -1,3 +1,4 @@
+mod annot_ui;
 mod app;
 mod area_ui;
 #[cfg(not(target_arch = "wasm32"))]

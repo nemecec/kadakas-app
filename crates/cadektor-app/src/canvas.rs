@@ -50,7 +50,7 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
     Style { pen, fill, width }
 }
 
-fn fill_polygon(painter: &Painter, model: &[DVec2], screen: &[Pos2], color: Color32) {
+pub(crate) fn fill_polygon(painter: &Painter, model: &[DVec2], screen: &[Pos2], color: Color32) {
     if color.a() == 0 {
         return;
     }
@@ -144,6 +144,8 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         }
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
+        // Annotations need the document (see `draw_object`).
+        Shape::Annotation(_) => {}
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
     }
@@ -177,6 +179,7 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
             plant_draw::draw_tag(painter, view, *at, *anchor, *height, &text, st, offset);
         }
+        Shape::Annotation(_) => crate::annot_ui::draw_object(painter, view, doc, o, st, offset),
         Shape::Hardscape { .. } | Shape::LandscapeArea { .. } => {
             draw_shape(painter, view, &o.shape, st, offset);
             crate::area_ui::draw_extras(painter, view, doc, o, st, offset);
@@ -304,6 +307,7 @@ fn draw_preview(painter: &Painter, view: &View, f: &Frame) {
     let st = Style { pen: PREVIEW_COLOR, fill: PREVIEW_COLOR.gamma_multiply(0.12), width: 1.5 };
     match f.preview {
         Preview::None => {}
+        Preview::Shape(Shape::Annotation(a)) => crate::annot_ui::draw_preview(painter, view, f.doc, a, st),
         Preview::Shape(shape) => draw_shape(painter, view, shape, st, DVec2::ZERO),
         Preview::Path { vertices, closed } => {
             let points = curve::flatten(vertices, *closed, curve_tolerance(view.zoom));

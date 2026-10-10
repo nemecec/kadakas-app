@@ -159,6 +159,13 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 writeln!(s, r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#, points_attr(&points))
             }
             Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
+            // Annotations come from the extension, which has the worksheet code for tags and legends.
+            Shape::Annotation(_) => {
+                if let Some(ext) = ext {
+                    ext(doc, o, &style, &mut s);
+                }
+                Ok(())
+            }
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 let outline = site_outline(&o.shape);
                 let res = writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&outline), o.shape.kind());

@@ -16,6 +16,7 @@ impl Tx<'_> {
     pub(super) fn check_shape_refs(&self, shape: &Shape) -> Result<(), CommandError> {
         match shape {
             Shape::PlantTag { style, .. } if self.doc.resources.plant_style(*style).is_none() => Err(CommandError::NoResource(*style)),
+            Shape::Annotation(a) => a.check_refs(self.doc).map_err(invalid),
             _ => Ok(()),
         }
     }
@@ -77,6 +78,7 @@ impl Tx<'_> {
             .filter(|o| {
                 link::link(o).is_some_and(|l| l.style == id)
                     || matches!(o.shape, Shape::PlantTag { style, .. } if style == id)
+                    || matches!(&o.shape, Shape::Annotation(a) if a.uses_resource(id))
                     || crate::hardscape::style_id(o) == Some(id)
                     || crate::landscape::style_id(o) == Some(id)
             })
@@ -143,6 +145,9 @@ impl Tx<'_> {
                         let o = self.doc.object_mut(uid).expect("exists");
                         if let Shape::PlantTag { style, .. } = &mut o.shape {
                             *style = *to;
+                        }
+                        if let Shape::Annotation(a) = &mut o.shape {
+                            a.replace_resource(*id, *to);
                         }
                         if let Some(mut l) = link::link(o) {
                             l.style = *to;

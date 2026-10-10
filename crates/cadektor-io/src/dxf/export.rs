@@ -674,6 +674,9 @@ fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) 
                 cx.pt3(w, 10, p.x, p.y, p.z);
             }
         }
+        // An annotation is written as lines and text (exploded), because its look comes from styles
+        // and live data. Dimensions, callouts, tags, legends and so on look the same in the CAD program.
+        Shape::Annotation(_) => annotation_entities(w, cx, o, layer, hidden),
         // A plant tag is a label that the drawing makes from a style. There is nothing to write.
         Shape::PlantTag { .. } => return false,
         // Other crates add shape kinds. They are reported as skipped, not guessed.
@@ -681,6 +684,29 @@ fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) 
         _ => return false,
     }
     true
+}
+
+/// The lines and text of an annotation object. A closed outline is a closed polyline. Centered text
+/// starts half its estimated width to the left, because the TEXT entity here is left aligned.
+fn annotation_entities(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) {
+    use cadektor_core::annot::draw::{Prim, text_width};
+    for p in cadektor_annot::prims(cx.doc, o) {
+        match p {
+            Prim::Poly { pts, closed, .. } => {
+                let verts: Vec<(DVec2, f64)> = pts.iter().map(|q| (*q, 0.0)).collect();
+                lwpolyline(w, cx, o, layer, hidden, &verts, closed);
+            }
+            Prim::Text { at, text, height, center, .. } => {
+                let x = if center { at.x - text_width(&text, height) / 2.0 } else { at.x };
+                common(w, "TEXT", layer, o, hidden);
+                w.pair(100, "AcDbText");
+                cx.pt3(w, 10, x, at.y, 0.0);
+                w.num(40, height / cx.unit);
+                w.pair(1, escape_unicode(&text).replace('\r', " "));
+                w.pair(100, "AcDbText");
+            }
+        }
+    }
 }
 
 /// The rotation of a text in degrees (`rotation_deg` in the data of the object), if it has one.

@@ -77,7 +77,7 @@ pub fn shape_snap_points(shape: &Shape, out: &mut Vec<SnapPoint>) {
         Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } => out.push((*at, Center)),
         Shape::PlantTag { at, anchor, .. } => out.extend([(*at, Vertex), (*anchor, Vertex)]),
         Shape::Viewport(vp) => out.extend(rect_corners(vp.min, vp.max).into_iter().map(|p| (p, Vertex))),
-        Shape::TitleBlock(_) => {}
+        Shape::TitleBlock(_) | Shape::Annotation(_) => {}
     }
 }
 

@@ -65,6 +65,8 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let in_label = p.cmpge(*at - tol).all() && p.cmple(label_end + tol).all();
             in_label || dist_to_segment(p, *anchor, *at) <= tol
         }
+        // Annotations need the document (see `hit_test`).
+        Shape::Annotation(_) => false,
         Shape::Text { .. } => {
             let (lo, hi) = shape.bounds();
             p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
@@ -91,7 +93,10 @@ pub fn hit_test(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
         .filter(|o| pickable(doc, o))
         .find(|o| {
             let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
-            shape_hit(&o.shape, filled, p, tol)
+            match o.shape {
+                Shape::Annotation(_) => crate::annot_ui::hit(doc, o, p, tol),
+                _ => shape_hit(&o.shape, filled, p, tol),
+            }
         })
         .map(|o| o.id)
 }
@@ -104,7 +109,7 @@ pub fn box_select(doc: &Document, a: DVec2, b: DVec2, crossing: bool) -> Vec<Obj
         .values()
         .filter(|o| pickable(doc, o))
         .filter(|o| {
-            let (s0, s1) = o.shape.bounds();
+            let (s0, s1) = if matches!(o.shape, Shape::Annotation(_)) { crate::annot_ui::bounds(doc, o) } else { o.shape.bounds() };
             if crossing {
                 s0.cmple(hi).all() && s1.cmpge(lo).all()
             } else {

@@ -9,7 +9,9 @@ use glam::DVec2;
 
 use crate::hit;
 
+mod annot_tool;
 mod plant_tool;
+pub use annot_tool::{AnnotSettings, DimToolMode};
 pub use plant_tool::{By, PlantMode, PlantSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +27,13 @@ pub enum Tool {
     Hardscape,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
+    /// Dimensions: one tool with modes (see `DimToolMode`).
+    Dimension,
+    Callout,
+    DataTag,
+    NorthArrow,
+    ScaleBar,
+    RevisionCloud,
 }
 
 /// What the Site Modifiers tool makes.
@@ -52,6 +61,7 @@ impl Tool {
     pub const BASIC: [Tool; 6] = [Tool::Select, Tool::Line, Tool::Rect, Tool::Circle, Tool::Polyline, Tool::Text];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
     pub const SITE: [Tool; 1] = [Tool::SiteModifier];
+    pub const ANNOTATION: [Tool; 6] = [Tool::Dimension, Tool::Callout, Tool::DataTag, Tool::NorthArrow, Tool::ScaleBar, Tool::RevisionCloud];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -65,6 +75,12 @@ impl Tool {
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
             Tool::SiteModifier => "Site Modifiers",
+            Tool::Dimension => "Dimension",
+            Tool::Callout => "Callout",
+            Tool::DataTag => "Data Tag",
+            Tool::NorthArrow => "North Arrow",
+            Tool::ScaleBar => "Scale Bar",
+            Tool::RevisionCloud => "Revision Cloud",
         }
     }
 }
@@ -176,6 +192,8 @@ pub struct ToolSettings {
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area_ui::AreaToolSettings,
+    /// Style and options of the annotation tools.
+    pub annot: AnnotSettings,
 }
 
 impl Default for ToolSettings {
@@ -196,6 +214,7 @@ impl Default for ToolSettings {
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
             areas: Default::default(),
+            annot: Default::default(),
         }
     }
 }
@@ -388,6 +407,7 @@ impl ToolMachine {
                 _ => vec![],
             },
             Tool::Plant => self.handle_plant(input, cx),
+            Tool::Dimension | Tool::Callout | Tool::DataTag | Tool::NorthArrow | Tool::ScaleBar | Tool::RevisionCloud => self.handle_annot(input, cx),
             Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => match input {
                 Input::Press { p, .. } => {
                     let s = cx.settings;
@@ -501,6 +521,9 @@ impl ToolMachine {
 
     /// What to draw as feedback while the tool is active.
     pub fn preview(&self, cursor: DVec2, cx: &Ctx) -> Preview {
+        if let Some(p) = self.annot_preview(cursor, cx) {
+            return p;
+        }
         match (&self.state, self.tool) {
             (State::Points(pts), Tool::Line | Tool::Rect | Tool::Circle) => {
                 Self::two_click_shape(self.tool, pts[0], cursor).map_or(Preview::None, Preview::Shape)
@@ -557,9 +580,17 @@ impl ToolMachine {
         }
     }
 
+    /// Hint for the status line, with the mode of the annotation tools.
+    pub fn hint_for(&self, settings: &ToolSettings) -> &'static str {
+        if Tool::ANNOTATION.contains(&self.tool) { self.annot_hint(settings) } else { self.hint() }
+    }
+
     /// Hint for the status line.
     pub fn hint(&self) -> &'static str {
         match (self.tool, self.is_busy()) {
+            (Tool::Dimension | Tool::Callout | Tool::DataTag | Tool::NorthArrow | Tool::ScaleBar | Tool::RevisionCloud, _) => {
+                "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
+            }
             (Tool::Select, _) => "Click to select, Shift-click to toggle, drag to move or box select. Delete removes.",
             (Tool::Line | Tool::Rect | Tool::Circle, false) => "Click the first point. Esc returns to Selection.",
             (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",

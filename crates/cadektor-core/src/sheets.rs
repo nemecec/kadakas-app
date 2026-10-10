@@ -345,7 +345,7 @@ impl Annotation {
                 AnnotationItem::Line { a, b } => a.is_finite() && b.is_finite(),
                 AnnotationItem::Text { at, height, .. } => at.is_finite() && height.is_finite() && *height > 0.0,
                 AnnotationItem::Dimension { a, b, offset, .. } => a.is_finite() && b.is_finite() && offset.is_finite(),
-                AnnotationItem::Shape { shape } => shape.is_finite() && shape.is_in_range() && !matches!(**shape, Shape::Viewport(_) | Shape::TitleBlock(_)),
+                AnnotationItem::Shape { shape } => shape.is_finite() && shape.is_in_range() && shape_problem(shape).is_none() && !matches!(**shape, Shape::Viewport(_) | Shape::TitleBlock(_)),
             }
     }
 }
@@ -611,6 +611,7 @@ pub fn shape_problem(shape: &Shape) -> Option<String> {
     match shape {
         Shape::Viewport(v) => v.problem(),
         Shape::TitleBlock(t) => t.problem(),
+        Shape::Annotation(a) => a.problem(),
         _ => None,
     }
 }
@@ -619,7 +620,7 @@ pub fn shape_problem(shape: &Shape) -> Option<String> {
 pub fn allowed_on_sheet(shape: &Shape) -> bool {
     matches!(
         shape,
-        Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::Text { .. } | Shape::Viewport(_) | Shape::TitleBlock(_)
+        Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::Text { .. } | Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_)
     )
 }
 
