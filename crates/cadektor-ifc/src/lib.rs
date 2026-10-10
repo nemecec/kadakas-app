@@ -21,12 +21,15 @@
 //! - Data: the Data Manager map gives IFC classes and `IfcPropertySet`s. Records become `ePset_<record>`.
 //!   Standard sets (`Pset_SlabCommon`) and quantities (`Qto_SlabBaseQuantities`) come with hardscapes.
 //!
+//! `TrueNorth` of the context includes the rotation of the model and the meridian convergence of the CRS at the
+//! site origin (computed with proj4rs). Without a known CRS it is grid north.
+//!
 //! GlobalIds come from the project GUID in the document (`drawing.project.guid`) and the object IDs,
 //! so they stay the same in every export. The output is deterministic.
 
 pub mod geo;
 pub mod geom;
-pub mod guid;
+pub use cadektor_core::guid;
 pub mod options;
 pub mod step;
 
@@ -38,7 +41,6 @@ mod tests;
 use std::io::Write;
 use std::path::Path;
 
-use cadektor_core::command::Command;
 use cadektor_core::model::Document;
 use cadektor_io::Report;
 use cadektor_site::SiteCache;
@@ -62,27 +64,26 @@ impl From<std::io::Error> for IfcError {
     }
 }
 
-/// The project GUID that an export uses: the one in the document, else a stand-in that comes from the
-/// project name (so the same document still gives the same file).
-pub fn project_guid(doc: &Document) -> String {
+/// The project GUID that an export uses, and whether it comes from the document. Documents made or
+/// loaded by the app and the API always have one. For a document that has none, the GUID comes from
+/// the content, so the same document still gives the same file. An export never changes the document.
+pub fn project_guid(doc: &Document) -> (String, bool) {
     let g = doc.drawing.project.guid.trim();
-    if guid::is_valid(g) { g.to_string() } else { guid::derive("", &doc.drawing.project.name, 0) }
-}
-
-/// The command that stores a new project GUID, if the document has none. Run it before the first
-/// export, so the GlobalIds stay the same when the document is saved and exported again.
-pub fn project_guid_command(doc: &Document) -> Option<Command> {
-    (!guid::is_valid(doc.drawing.project.guid.trim())).then(|| Command::SetProjectGuid { guid: guid::random() })
+    if guid::is_valid(g) {
+        return (g.to_string(), true);
+    }
+    (doc.content_guid(), false)
 }
 
 /// Writes the document as IFC4 to `out`. Returns the output and the report.
 pub fn export_to<W: Write>(doc: &Document, opts: &IfcOptions, out: W) -> Result<(W, Report), IfcError> {
     opts.check()?;
     let cache = SiteCache::default();
-    let exporter = export::Exporter::new(doc, opts, project_guid(doc), &cache, out)?;
+    let (project, stored) = project_guid(doc);
+    let exporter = export::Exporter::new(doc, opts, project, &cache, out)?;
     let (out, mut report) = exporter.run()?;
-    if !guid::is_valid(doc.drawing.project.guid.trim()) {
-        report.notes.push("the document has no project GUID yet: GlobalIds follow the project name until one is stored".into());
+    if !stored {
+        report.notes.push("the document has no project GUID: the GlobalIds come from its content and change when it changes. Save the document in the app, or call project.new_guid".into());
     }
     Ok((out, report))
 }

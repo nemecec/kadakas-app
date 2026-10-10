@@ -55,6 +55,7 @@ def main(path):
             "layers": [a.Name for r in p.Representation.Representations for a in (r.LayerAssignments or [])],
         })
 
+    guids = [e.GlobalId for e in model.by_type("IfcRoot")]
     conversion = model.by_type("IfcMapConversion")
     crs = model.by_type("IfcProjectedCRS")
     site = model.by_type("IfcSite")[0]
@@ -63,6 +64,8 @@ def main(path):
         "schema": model.schema,
         "validation": [s["message"] for s in logger.statements],
         "counts": counts,
+        "duplicate_guids": len(guids) - len(set(guids)),
+        "psets": sorted({s.Name for s in model.by_type("IfcPropertySet")}),
         "products": products,
         "tree": spatial_tree(project),
         "unit_scale": unit.calculate_unit_scale(model),

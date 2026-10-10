@@ -2,6 +2,7 @@
 
 use cadektor_core::georef::Georeference;
 use cadektor_io::crs::{Crs, Transformer};
+use glam::DVec2;
 
 /// What the IFC file says about the position on the earth.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +19,9 @@ pub struct GeoInfo {
     pub scale: f64,
     /// Latitude and longitude of the model origin in degrees, if the CRS is known.
     pub lat_lon: Option<(f64, f64)>,
+    /// True north as a direction in the model frame (x, y). It includes the rotation of the model and the
+    /// meridian convergence of the CRS at the origin. Without a known CRS it is grid north.
+    pub true_north: [f64; 2],
 }
 
 impl GeoInfo {
@@ -38,7 +42,21 @@ impl GeoInfo {
             let (lon, lat, _) = Transformer::new(crs, &wgs).apply(g.origin.x, g.origin.y, 0.0).ok()?;
             Some((lat, lon))
         });
+        // True north: move a little north on the earth and see where that goes on the map.
+        let grid_north = DVec2::from_angle(-g.rotation).rotate(DVec2::Y);
+        let true_north = parsed
+            .as_ref()
+            .filter(|crs| !crs.is_geographic())
+            .and_then(|crs| {
+                let wgs = Crs::from_epsg(4326).ok()?;
+                let (lon, lat, _) = Transformer::new(crs, &wgs).apply(g.origin.x, g.origin.y, 0.0).ok()?;
+                let (nx, ny, _) = Transformer::new(&wgs, crs).apply(lon, (lat + 1.0e-4).min(89.9), 0.0).ok()?;
+                let d = DVec2::new(nx - g.origin.x, ny - g.origin.y).normalize_or_zero();
+                (d != DVec2::ZERO).then(|| DVec2::from_angle(-g.rotation).rotate(d))
+            })
+            .unwrap_or(grid_north);
         Some(GeoInfo {
+            true_north: [true_north.x, true_north.y],
             crs_name,
             description,
             eastings: g.origin.x,
@@ -78,8 +96,6 @@ pub fn compound_angle(deg: f64) -> [i64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::DVec2;
-
     fn geo(crs: &str) -> Georeference {
         Georeference { crs: crs.into(), origin: DVec2::new(385000.0, 6672000.0), rotation: 0.0, user_origin: DVec2::ZERO }
     }
@@ -95,6 +111,28 @@ mod tests {
         let (lat, lon) = g.lat_lon.unwrap();
         assert!((lat - 60.2).abs() < 0.3, "{lat}");
         assert!((lon - 24.9).abs() < 0.5, "{lon}");
+    }
+
+    #[test]
+    fn true_north_includes_the_meridian_convergence() {
+        // EPSG:3067 has its central meridian at 27 E. Helsinki is at 24.9 E, so true north leans
+        // about 1.8 degrees away from grid north.
+        let g = GeoInfo::from_georef(&geo("EPSG:3067")).unwrap();
+        let angle = g.true_north[0].atan2(g.true_north[1]).to_degrees();
+        assert!((angle.abs() - 1.8).abs() < 0.3, "{angle}");
+        assert!((g.true_north[0].hypot(g.true_north[1]) - 1.0).abs() < 1e-9);
+        // The rotation of the model turns it the other way.
+        let mut r = geo("EPSG:3067");
+        r.rotation = 0.2;
+        let t = GeoInfo::from_georef(&r).unwrap().true_north;
+        let turned = t[0].atan2(t[1]).to_degrees();
+        assert!((turned - (angle + 0.2f64.to_degrees())).abs() < 0.01, "{turned}");
+        // A CRS that is not known gives grid north.
+        let unknown = GeoInfo::from_georef(&Georeference { rotation: 0.1, ..geo("MYSTERY") }).unwrap().true_north;
+        assert!((unknown[0] - 0.1f64.sin()).abs() < 1e-12 && (unknown[1] - 0.1f64.cos()).abs() < 1e-12);
+        // Longitude and latitude as CRS: grid north.
+        let geographic = GeoInfo::from_georef(&Georeference { origin: DVec2::new(24.9, 60.2), ..geo("EPSG:4326") }).unwrap();
+        assert_eq!(geographic.true_north, [0.0, 1.0]);
     }
 
     #[test]

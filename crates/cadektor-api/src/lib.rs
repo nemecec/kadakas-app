@@ -31,7 +31,6 @@ mod site;
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
 /// An open document with its history and selection.
-#[derive(Default)]
 pub struct Session {
     pub editor: Editor,
     pub selection: Vec<ObjectId>,
@@ -188,6 +187,7 @@ pub const METHODS: &[(&str, &str)] = &[
     sheets_api::SHEET_RENDER,
     sheets_api::PROJECT_GET,
     sheets_api::PROJECT_SET,
+    sheets_api::PROJECT_NEW_GUID,
     sheets_api::VIEWPORT_CREATE,
     sheets_api::VIEWPORT_GET,
     sheets_api::VIEWPORT_LIST,
@@ -203,10 +203,42 @@ pub const METHODS: &[(&str, &str)] = &[
     sheets_api::SAVED_VIEW_DELETE,
 ];
 
+impl Default for Session {
+    /// A session with a new, empty document. The project has a new GUID.
+    fn default() -> Self {
+        let mut doc = Document::default();
+        doc.drawing.project.guid = cadektor_core::guid::random();
+        Session { editor: Editor::new(doc), ..Session::blank() }
+    }
+}
+
 impl Session {
+    /// All fields at their defaults, with an empty document that has no project GUID.
+    fn blank() -> Self {
+        Session {
+            editor: Editor::default(),
+            selection: Vec::new(),
+            view: ViewSettings::default(),
+            replaced: false,
+            view_changed: false,
+            mesh_cache: MeshCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            paths: PathPolicy::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            doc_dir: None,
+            site_cache: cadektor_site::SiteCache::default(),
+            worksheet_cache: cadektor_sheet::SheetCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sheet_cache: cadektor_print::SheetCache::default(),
+            applied_view: None,
+        }
+    }
+
     /// A session for an opened document, with empty history and selection.
-    pub fn with_document(doc: Document) -> Self {
-        Session { editor: Editor::new(doc), ..Session::default() }
+    pub fn with_document(mut doc: Document) -> Self {
+        // An old file has no project GUID. It gets one in memory, and the next save writes it.
+        doc.ensure_project_guid();
+        Session { editor: Editor::new(doc), ..Session::blank() }
     }
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag.

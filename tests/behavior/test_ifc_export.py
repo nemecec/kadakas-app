@@ -2,12 +2,16 @@
 it must validate without errors, have the right spatial tree, property sets and georeference."""
 
 import json
+import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 from pytest import approx
+
+from helpers import BIN
 
 CHECK = Path(__file__).with_name("ifc_check.py")
 SQUARE = [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
@@ -55,7 +59,7 @@ def test_export_is_valid_ifc4_with_tree_data_and_georeference(cad, tmp_path):
     assert r["exported"] == 7
     skipped = {s["entity"] for s in r["report"]["skipped"]}
     assert skipped == {"text", "line"}
-    assert len(r["project_guid"]) == 22
+    assert len(r["project_guid"]) == 22 and r["project_guid"] == cad.result("project.get")["guid"]
     assert out.read_text().startswith("ISO-10303-21;")
     assert "FILE_SCHEMA(('IFC4'))" in out.read_text()
 
@@ -142,3 +146,93 @@ def test_describe_lists_the_ifc_export(cad):
     d = cad.result("describe")
     assert "ifc" in " ".join(d["io"]["export_formats"])
     assert "layers_as_storeys" in d["io"]["ifc"]["options"]
+
+
+def test_export_never_changes_the_document(cad, tmp_path):
+    garden(cad)
+    before = cad.result("document.get")
+    assert len(before["drawing"]["project"]["guid"]) == 22, "a new document has a project GUID"
+    r = cad.result("export.file", {"path": str(tmp_path / "a.ifc"), "format": "ifc"})
+    assert r["project_guid"] == before["drawing"]["project"]["guid"]
+    assert cad.result("document.get") == before
+    # Undo goes back one step of the drawing, not one of the export.
+    count = cad.result("document.summary")["object_count"]
+    cad.result("undo")
+    assert cad.result("document.summary")["object_count"] == count - 1
+
+
+def test_a_loaded_file_without_a_guid_gets_one_in_memory(cad, tmp_path):
+    garden(cad)
+    doc = cad.result("document.get")
+    del doc["drawing"]["project"]["guid"]
+    cad.result("document.load", {"document": doc})
+    guid = cad.result("project.get")["guid"]
+    assert len(guid) == 22
+    # A copy of a template gets a fresh GUID, and so fresh GlobalIds.
+    a = tmp_path / "t.ifc"
+    cad.result("export.file", {"path": str(a), "format": "ifc"})
+    first = a.read_text()
+    fresh = cad.result("project.new_guid")["guid"]
+    assert fresh != guid and cad.result("project.get")["guid"] == fresh
+    cad.result("export.file", {"path": str(a), "format": "ifc", "overwrite": True})
+    assert a.read_text() != first
+    cad.result("undo")
+    assert cad.result("project.get")["guid"] == guid
+
+
+def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
+    garden(cad)
+    src = tmp_path / "garden.cdk.json"
+    cad.result("file.save", {"path": str(src)})
+    doc = json.loads(src.read_text())
+    del doc["drawing"]["project"]["guid"]
+    src.write_text(json.dumps(doc))
+    src.chmod(stat.S_IRUSR)
+    before = src.read_bytes()
+    out = tmp_path / "cli.ifc"
+    run = subprocess.run([str(BIN), "export", str(src), "-o", str(out)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert src.read_bytes() == before
+    assert out.read_text().startswith("ISO-10303-21;")
+    assert "stored a project GUID" not in run.stderr
+    # The same file gives the same bytes again.
+    again = tmp_path / "cli.ifc"
+    first = out.read_bytes()
+    run = subprocess.run([str(BIN), "export", str(src), "-o", str(again)], capture_output=True, text=True)
+    assert run.returncode == 0 and again.read_bytes() == first
+
+
+def test_colliding_property_sets_merge_and_global_ids_stay_unique(cad, tmp_path):
+    garden(cad)
+    cad.result("record_format.create", {"name": "Soil", "fields": [{"name": "Depth", "type": "dimension", "unit": "mm", "default": 300}]})
+    plant = cad.result("objects.list", {"kind": "plant"})[0]["id"]
+    cad.result("record.attach", {"ids": [plant], "record": "Soil"})
+    rules = [
+        {"kinds": ["hardscape"], "source": {"type": "constant", "value": "mine"}, "target": {"type": "ifc_property", "pset": "Pset_SlabCommon", "property": "Reference", "ifc_type": "label"}},
+        {"source": {"type": "constant", "value": "x"}, "target": {"type": "ifc_property", "pset": "ePset_Soil", "property": "FromMap", "ifc_type": "label"}},
+    ]
+    cad.result("data_manager.create", {"name": "Collide", "rules": rules})
+    out = tmp_path / "collide.ifc"
+    cad.result("export.file", {"path": str(out), "format": "ifc"})
+    facts = read_ifc(out)
+    assert facts["validation"] == []
+    assert facts["duplicate_guids"] == 0
+    assert "Pset_SlabCommon" in facts["psets"] and "ePset_Soil" in facts["psets"]
+    slab = next(p for p in facts["products"] if p["type"] == "IfcSlab")
+    assert slab["psets"]["Pset_SlabCommon"]["Reference"] == "mine"
+    assert slab["psets"]["Pset_SlabCommon"]["IsExternal"] is True
+    tree = next(p for p in facts["products"] if p["name"] == "Field maple" and "Depth" in p["psets"].get("ePset_Soil", {}))
+    assert tree["psets"]["ePset_Soil"]["FromMap"] == "x"
+
+
+def test_draped_landscape_area_keeps_its_hole(cad, tmp_path):
+    garden(cad)
+    cad.result("landscape_area.add", {"boundary": [[1000, 1000], [3000, 1000], [3000, 3000], [1000, 3000]], "name": "Lawn", "drape": True,
+                                      "holes": [[[1500, 1500], [2000, 1500], [2000, 2000], [1500, 2000]]]})
+    out = tmp_path / "drape.ifc"
+    cad.result("export.file", {"path": str(out), "format": "ifc"})
+    facts = read_ifc(out)
+    assert facts["validation"] == []
+    lawn = next(p for p in facts["products"] if p["name"] == "Lawn")
+    # A solid without the hole has 2 x 2 top triangles per piece. With the hole there are walls around it as well.
+    assert lawn["triangles"] > 40

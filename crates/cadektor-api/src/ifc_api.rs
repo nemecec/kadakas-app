@@ -37,7 +37,7 @@ pub(crate) fn describe() -> Value {
             "other": "2D objects are skipped and listed in the report"
         },
         "georeference": "IfcMapConversion and IfcProjectedCRS (EPSG name) from the document georeference, and RefLatitude/RefLongitude of the IfcSite when the CRS is known. Needs a CRS in the georeference.",
-        "global_ids": "GlobalIds come from the project GUID (project.get shows it) and the object IDs, so they stay the same in every export. The first export stores a project GUID in the document (one undo step).",
+        "global_ids": "GlobalIds come from the project GUID (project.get shows it) and the object IDs, so they stay the same in every export. Every new or loaded document has one. An export never changes the document. project.new_guid makes a fresh GUID, for a copy of a template.",
         "examples": [
             {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "options": {"layers_as_storeys": false}, "overwrite": true}}
         ]
@@ -58,13 +58,9 @@ impl Session {
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
             return Err(RpcError::app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
         }
-        // The first export stores the project GUID, so GlobalIds stay the same from now on.
-        if let Some(cmd) = cadektor_ifc::project_guid_command(self.editor.doc()) {
-            self.editor.execute(&cmd).map_err(RpcError::app)?;
-        }
         let doc = self.editor.doc();
         let report = cadektor_ifc::export_file(&path, doc, &opts).map_err(rpc)?;
-        Ok(json!({ "path": path, "exported": report.total(), "report": report, "project_guid": doc.drawing.project.guid }))
+        Ok(json!({ "path": path, "exported": report.total(), "report": report, "project_guid": cadektor_ifc::project_guid(doc).0 }))
     }
 }
 

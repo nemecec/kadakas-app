@@ -115,6 +115,9 @@ pub struct Exporter<'a, W: Write> {
     /// The element entity of each exported object.
     elements: BTreeMap<u64, u64>,
     up: Option<u64>,
+    /// Properties of the element being written, by property set name. Sets that come from several
+    /// sources (standard, Data Manager, records) merge here, so one set is written once.
+    pending: BTreeMap<String, Vec<(String, Value)>>,
 }
 
 impl<'a, W: Write> Exporter<'a, W> {
@@ -123,7 +126,7 @@ impl<'a, W: Write> Exporter<'a, W> {
         let p = &doc.drawing.project;
         let time = opts.time_stamp.clone().unwrap_or_else(|| default_time(&p.date));
         let name = opts.file_name.clone().unwrap_or_else(|| "model.ifc".into());
-        let w = StepWriter::begin(out, &name, &time, &p.drawn_by, &p.client, "ReferenceView_V1.2")?;
+        let w = StepWriter::begin(out, &name, &time, &p.drawn_by, &p.client, "ViewDefinition [ReferenceView_V1.2]")?;
         Ok(Exporter {
             doc,
             opts,
@@ -146,6 +149,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             notes: BTreeSet::new(),
             elements: BTreeMap::new(),
             up: None,
+            pending: BTreeMap::new(),
         })
     }
 
@@ -224,13 +228,9 @@ impl<'a, W: Write> Exporter<'a, W> {
         let unit_set = self.ent("IFCUNITASSIGNMENT", vec![Value::refs(units)])?;
 
         let wcs = self.axis3([0.0; 3])?;
-        let north = match (&geo, &doc.georef) {
-            (Some(_), Some(g)) => {
-                // Map north seen from the model axes.
-                let d = self.ent("IFCDIRECTION", vec![Value::reals(&[g.rotation.sin(), g.rotation.cos()])])?;
-                Value::Ref(d)
-            }
-            _ => Value::Null,
+        let north = match &geo {
+            Some(g) => Value::Ref(self.ent("IFCDIRECTION", vec![Value::reals(&g.true_north)])?),
+            None => Value::Null,
         };
         self.context = self.ent("IFCGEOMETRICREPRESENTATIONCONTEXT", vec![Value::Null, Value::s("Model"), Value::Int(3), Value::Real(1.0e-3), Value::Ref(wcs), north])?;
 
@@ -461,16 +461,31 @@ impl<'a, W: Write> Exporter<'a, W> {
         }
     }
 
-    fn pset(&mut self, owner: &Object, name: &str, props: Vec<(String, Value)>) -> R<()> {
+    /// Adds properties to a property set of the current element. A property that is there is replaced.
+    fn pset(&mut self, name: &str, props: Vec<(String, Value)>) {
         if props.is_empty() {
-            return Ok(());
+            return;
         }
-        let mut ids = Vec::new();
+        let set = self.pending.entry(name.to_string()).or_default();
         for (n, v) in props {
-            ids.push(self.ent("IFCPROPERTYSINGLEVALUE", vec![Value::s(n), Value::Null, v, Value::Null])?);
+            match set.iter_mut().find(|(k, _)| *k == n) {
+                Some(slot) => slot.1 = v,
+                None => set.push((n, v)),
+            }
         }
-        let set = self.ent("IFCPROPERTYSET", vec![self.guid(&format!("pset:{name}"), owner.id.0), Value::Null, Value::s(name), Value::Null, Value::refs(ids)])?;
-        self.define_by(owner, name, set)
+    }
+
+    /// Writes the collected property sets of an element, one `IfcPropertySet` per name.
+    fn write_psets(&mut self, owner: &Object) -> R<()> {
+        for (name, props) in std::mem::take(&mut self.pending) {
+            let mut ids = Vec::new();
+            for (n, v) in props {
+                ids.push(self.ent("IFCPROPERTYSINGLEVALUE", vec![Value::s(n), Value::Null, v, Value::Null])?);
+            }
+            let set = self.ent("IFCPROPERTYSET", vec![self.guid(&format!("pset:{name}"), owner.id.0), Value::Null, Value::s(&name), Value::Null, Value::refs(ids)])?;
+            self.define_by(owner, &name, set)?;
+        }
+        Ok(())
     }
 
     fn define_by(&mut self, owner: &Object, name: &str, definition: u64) -> R<()> {

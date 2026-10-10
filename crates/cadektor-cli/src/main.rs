@@ -67,8 +67,8 @@ enum Cmd {
         #[arg(long)]
         options: Option<String>,
     },
-    /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The first IFC export stores a
-    /// project GUID in the document file, so the GlobalIds stay the same in later exports.
+    /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The input file is never
+    /// changed. GlobalIds come from the project GUID of the document.
     Export {
         file: PathBuf,
         #[arg(short, long)]
@@ -174,7 +174,10 @@ fn remote_call(conn: &mut BufReader<TcpStream>, req: &Value) -> Option<String> {
 
 fn load(path: &PathBuf) -> Result<Document, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let mut doc = Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    // An old file has no project GUID. It gets one in memory, and the next save writes it.
+    doc.ensure_project_guid();
+    Ok(doc)
 }
 
 /// The folder of a document file.
@@ -364,13 +367,7 @@ fn import_command(file: &std::path::Path, output: &std::path::Path, base: Option
 
 fn export_command(file: &std::path::Path, output: &std::path::Path, format: Option<String>, options: Option<String>) -> Result<(), String> {
     let mut session = Session::with_document(load(&file.to_path_buf())?);
-    let guid_before = session.editor.doc().drawing.project.guid.clone();
     let result = io_call(&mut session, "export.file", output, format, options)?;
-    // An IFC export stores a project GUID once. Keep it in the file, so the next export has the same GlobalIds.
-    if session.editor.doc().drawing.project.guid != guid_before {
-        save(session.editor.doc(), file)?;
-        eprintln!("cadektor: stored a project GUID in {}", file.display());
-    }
     println!("{}", serde_json::to_string_pretty(&result["report"]).unwrap_or_default());
     Ok(())
 }

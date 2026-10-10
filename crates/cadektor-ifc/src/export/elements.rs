@@ -135,7 +135,7 @@ impl<W: Write> Exporter<'_, W> {
         } else {
             let z = |p: DVec2| surf.z(p);
             let step = surf.is_draped().then_some(geom::STEP);
-            (None, Some(geom::solid_mesh(&ring, &z, thickness, step)))
+            (None, Some(geom::solid_mesh(&ring, &[], &z, thickness, step)))
         };
         Ok(SlabGeometry { ring, thickness, flat_top, mesh, layers, quantities: q, grade: if surf.is_draped() { 0.0 } else { grade } })
     }
@@ -178,9 +178,9 @@ impl<W: Write> Exporter<'_, W> {
             if g.grade > 1.0e-9 {
                 common.push(("PitchAngle".to_string(), Value::typed("IFCPLANEANGLEMEASURE", Value::Real(r4(g.grade.atan())))));
             }
-            self.pset(obj, "Pset_SlabCommon", common)?;
+            self.pset("Pset_SlabCommon", common);
         } else if class == "IFCCOVERING" {
-            self.pset(obj, "Pset_CoveringCommon", common)?;
+            self.pset("Pset_CoveringCommon", common);
         }
 
         let q = &g.quantities;
@@ -218,11 +218,8 @@ impl<W: Write> Exporter<'_, W> {
         // A draped area follows the site model. Its holes are left out of the mesh.
         let covered = data.drape && ring.iter().step_by((ring.len() / 64).max(1)).any(|p| self.ground.covered(obj, *p));
         let mesh = if covered {
-            if !holes.is_empty() {
-                self.note(format!("landscape area {}: the holes are not cut out of a draped solid", obj.id));
-            }
             let z = |p: DVec2| self.ground.elevation(obj, p).unwrap_or(0.0) + surface::LIFT;
-            Some(geom::solid_mesh(&ring, &z, thickness, Some(geom::STEP)))
+            Some(geom::solid_mesh(&ring, &holes, &z, thickness, Some(geom::STEP)))
         } else {
             None
         };
@@ -248,7 +245,7 @@ impl<W: Write> Exporter<'_, W> {
                 mix.push((row.name.trim().to_string(), Value::typed("IFCLABEL", Value::s(format!("{} plants, {}%", row.count, format_real(r4(row.percent)))))));
             }
             self.quantities(obj, "Cadektor_AreaQuantities", &list)?;
-            self.pset(obj, "Cadektor_PlantMix", mix)?;
+            self.pset("Cadektor_PlantMix", mix);
         }
         self.data_psets(obj, &mapped)?;
         Ok(None)
@@ -286,7 +283,7 @@ impl<W: Write> Exporter<'_, W> {
             let canopy_color = self.color_of(obj, fill.unwrap_or(DEFAULT_GREEN));
             let mut items = Vec::new();
             if trunk_height > 0.0 {
-                let radius = if trunk_d > 0.0 { trunk_d / 2.0 } else { (spread * 0.03).max(25.0) }.clamp(10.0, spread / 2.0);
+                let radius = if trunk_d > 0.0 { trunk_d / 2.0 } else { (spread * 0.03).max(25.0) }.min(spread / 2.0).max(1.0);
                 let profile = self.ent("IFCCIRCLEPROFILEDEF", vec![Value::e("AREA"), Value::Null, Value::Null, Value::Real(r4(radius))])?;
                 let trunk = self.extrude(profile, 0.0, trunk_height)?;
                 self.style_items(&[trunk], TRUNK_BROWN)?;
@@ -315,14 +312,13 @@ impl<W: Write> Exporter<'_, W> {
         if let Shape::ExistingTree { condition, action, dbh, rpz_factor, rpz_cap, .. } = &obj.shape {
             let radius = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
             self.pset(
-                obj,
                 "Cadektor_Tree",
                 vec![
                     ("Condition".into(), Value::typed("IFCLABEL", Value::s(condition.id()))),
                     ("Action".into(), Value::typed("IFCLABEL", Value::s(action.id()))),
                     ("RootProtectionRadius".into(), Value::typed("IFCLENGTHMEASURE", Value::Real(r4(radius)))),
                 ],
-            )?;
+            );
         }
         self.data_psets(obj, &mapped)?;
         Ok(None)

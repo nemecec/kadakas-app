@@ -155,5 +155,5 @@ components are an `IfcMaterialLayerSet`), landscape areas and plants `IfcGeograp
 (IFC4 has no VEGETATION type). 2D objects are skipped and listed in the report (option `include_2d` writes `IfcAnnotation`).
 Classes become presentation layers, fill colors become surface styles. Property sets come from the Data Manager map, record
 formats (`ePset_<record>`), `Pset_SlabCommon` and `Qto_SlabBaseQuantities`. GlobalIds come from the project GUID and the
-object IDs and stay the same in every export. Check a file with IfcOpenShell:
+object IDs and stay the same in every export. Every new document has a project GUID. A file from an older version gets one at load, from its content, in memory only. An export never changes the document or the input file. `project.new_guid` gives a copy of a template its own GUID. True north in the context includes the meridian convergence of the CRS at the origin. Check a file with IfcOpenShell:
 `uv run --with pytest --with ezdxf pytest tests/behavior/test_ifc_export.py -q` (it runs `ifcopenshell.validate`).

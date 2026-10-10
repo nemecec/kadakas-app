@@ -254,6 +254,26 @@ impl Drawing {
 }
 
 impl Document {
+    /// A GUID that comes from the content of the document (without its project GUID). The same
+    /// document always gives the same GUID.
+    pub fn content_guid(&self) -> String {
+        let mut copy = self.clone();
+        copy.drawing.project.guid.clear();
+        let text = serde_json::to_string(&copy).unwrap_or_default();
+        crate::guid::derive("", &text, text.len() as u64)
+    }
+
+    /// Gives a loaded document a project GUID if it has none (a file from an older version). The GUID
+    /// comes from the content, so loading the same file twice gives the same GUID. This changes the
+    /// document in memory only, so the next save writes it. Returns true if it set one.
+    pub fn ensure_project_guid(&mut self) -> bool {
+        if crate::guid::is_valid(self.drawing.project.guid.trim()) {
+            return false;
+        }
+        self.drawing.project.guid = self.content_guid();
+        true
+    }
+
     /// Page settings of a sheet layer. A sheet layer without data gets the defaults.
     pub fn sheet(&self, layer: LayerId) -> Option<Sheet> {
         let l = self.layer(layer)?;

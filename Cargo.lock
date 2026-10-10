@@ -610,6 +610,7 @@ dependencies = [
  "cadektor-io",
  "cadektor-site",
  "glam",
+ "i_overlay",
  "proptest",
  "serde",
  "serde_json",

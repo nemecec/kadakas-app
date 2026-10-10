@@ -111,14 +111,14 @@ impl<W: Write> Exporter<'_, W> {
         }
         for (set, props) in &mapped.properties {
             let list: Vec<(String, Value)> = props.iter().map(|(n, v)| (n.clone(), Self::nominal(v))).collect();
-            self.pset(obj, set, list)?;
+            self.pset(set, list);
         }
         for name in obj.data.keys() {
             let Some(rec) = record::values(obj, name) else { continue };
             let list: Vec<(String, Value)> = record::fields_only(rec).iter().map(|(k, v)| (k.clone(), json_nominal(v))).collect();
-            self.pset(obj, &format!("ePset_{name}"), list)?;
+            self.pset(&format!("ePset_{name}"), list);
         }
-        Ok(())
+        self.write_psets(obj)
     }
 
     /// An `IfcElementQuantity`. Each quantity is a kind (`length`, `area`, `volume`, `count`), a name and a value.

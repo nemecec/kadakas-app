@@ -123,11 +123,13 @@ fn restricted_sessions_only_use_allowed_folders() {
 }
 
 #[test]
-fn ifc_export_follows_the_path_policy_and_stores_a_project_guid() {
+fn ifc_export_follows_the_path_policy_and_never_changes_the_document() {
     let (inside, outside) = policy_dirs("ifc");
     let mut s = Session { paths: crate::PathPolicy::restricted([inside.clone()]), ..Session::default() };
     s.handle("execute", json!({"command": {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [1000, 0], [1000, 1000], [0, 1000]], "material": "Stone"}}})).unwrap();
-    assert!(s.editor.doc().drawing.project.guid.is_empty());
+    let guid = s.editor.doc().drawing.project.guid.clone();
+    assert_eq!(guid.len(), 22, "a new session has a project GUID");
+    let before = s.editor.doc().clone();
     // Other folders and extensions fail. Bad options are invalid params.
     assert!(call(&mut s, "export.file", json!({"path": outside.join("x.ifc")})).is_err());
     assert!(call(&mut s, "export.file", json!({"path": inside.join("x.txt"), "format": "ifc"})).is_err());
@@ -136,9 +138,8 @@ fn ifc_export_follows_the_path_policy_and_stores_a_project_guid() {
     let out = inside.join("site.ifc");
     let r = call(&mut s, "export.file", json!({"path": out})).unwrap();
     assert_eq!(r["exported"], 1);
-    let guid = s.editor.doc().drawing.project.guid.clone();
-    assert_eq!(guid.len(), 22);
     assert_eq!(r["project_guid"], guid.as_str());
+    assert_eq!(*s.editor.doc(), before, "no undo step, no change");
     let first = std::fs::read(&out).unwrap();
     assert!(String::from_utf8_lossy(&first).contains("FILE_SCHEMA(('IFC4'))"));
     let e = call(&mut s, "export.file", json!({"path": out, "format": "ifc"})).unwrap_err();

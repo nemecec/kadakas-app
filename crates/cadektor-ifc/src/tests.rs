@@ -273,7 +273,11 @@ fn project_and_site_carry_the_document_data() {
     // True north follows the rotation of the model.
     let ctx = named(&f, "IFCGEOMETRICREPRESENTATIONCONTEXT")[0];
     let north = f.get(ctx.attrs[5].as_ref_id().unwrap()).unwrap();
-    assert_eq!(north.attrs[0], Value::reals(&[0.05f64.sin(), 0.05f64.cos()]));
+    let Value::List(d) = &north.attrs[0] else { panic!() };
+    let (Value::Real(x), Value::Real(y)) = (&d[0], &d[1]) else { panic!() };
+    // Grid north turned by the model rotation, plus the convergence of about 1.8 degrees.
+    let angle = x.atan2(*y).to_degrees();
+    assert!((angle - (0.05f64.to_degrees() + 1.8)).abs() < 0.4, "{angle}");
 }
 
 #[test]
@@ -380,22 +384,13 @@ fn guids_are_stable_and_follow_object_ids() {
 }
 
 #[test]
-fn a_missing_project_guid_is_reported_and_can_be_made() {
-    let mut doc = sample();
-    doc.drawing.project.guid.clear();
-    let (_, report) = export(&doc, &IfcOptions::default());
-    assert!(report.notes.iter().any(|n| n.contains("no project GUID")));
-    let Some(Command::SetProjectGuid { guid }) = crate::project_guid_command(&doc) else { panic!("no command") };
-    assert!(crate::guid::is_valid(&guid));
-    assert_eq!(crate::project_guid(&doc), crate::project_guid(&doc));
-    let mut ed = Editor::new(doc);
-    ed.execute(&Command::SetProjectGuid { guid: guid.clone() }).unwrap();
-    assert!(crate::project_guid_command(ed.doc()).is_none());
-    assert_eq!(crate::project_guid(ed.doc()), guid);
+fn the_project_guid_command_is_checked_and_undoable() {
+    let mut ed = Editor::new(sample());
     assert!(ed.execute(&Command::SetProjectGuid { guid: "nope".into() }).is_err());
-    // Storing the GUID is one undo step.
+    ed.execute(&Command::SetProjectGuid { guid: "2Gx3v0EYX3_fOnxLUh6gRb".into() }).unwrap();
+    assert_eq!(ed.doc().drawing.project.guid, "2Gx3v0EYX3_fOnxLUh6gRb");
     assert!(ed.undo());
-    assert!(ed.doc().drawing.project.guid.is_empty());
+    assert_eq!(ed.doc().drawing.project.guid, "1Gx3v0EYX3_fOnxLUh6gRb");
 }
 
 #[test]
@@ -621,6 +616,89 @@ fn layer_names_and_styles_are_shared() {
     }
 }
 
+#[test]
+fn the_view_definition_is_in_the_header() {
+    let text = export(&sample(), &IfcOptions::default()).0;
+    assert!(text.contains("FILE_DESCRIPTION(('ViewDefinition [ReferenceView_V1.2]'),'2;1');"));
+}
+
+#[test]
+fn tiny_plants_do_not_panic() {
+    let mut ed = Editor::default();
+    for (spread, height) in [(15.0, 15.0), (10.0, 10.0), (11.0, 5000.0), (9.9, 9.9), (1.0e-3, 1.0e-3), (1.0e9, 1.0e9)] {
+        add(&mut ed, Shape::ExistingTree { at: v2(0.0, 0.0), species: String::new(), dbh: 500.0, spread, height, condition: TreeCondition::Good, action: TreeAction::Retain, rpz_factor: None, rpz_cap: None });
+    }
+    let f = parsed(ed.doc(), &IfcOptions::default());
+    assert!(f.dangling().is_empty());
+}
+
+#[test]
+fn every_global_id_is_unique_even_when_property_sets_collide() {
+    let mut ed = Editor::new(sample());
+    // A rule that writes into a set that the exporter writes itself, and a set named like a record set.
+    let mut map = DataMap::landscape_template();
+    let ifc = |pset: &str, property: &str| cadektor_core::datamap::Target::IfcProperty { pset: pset.into(), property: property.into(), ty: Default::default() };
+    let constant = |v: &str| cadektor_core::datamap::Source::Constant { value: json!(v) };
+    let rule = |source, target| cadektor_core::datamap::MapRule { name: String::new(), kinds: vec![], source, target };
+    let slab_rule = |source, target| cadektor_core::datamap::MapRule { kinds: vec!["hardscape".into()], ..rule(source, target) };
+    map.rules.push(slab_rule(constant("mine"), ifc("Pset_SlabCommon", "Reference")));
+    map.rules.push(slab_rule(constant("extra"), ifc("Pset_SlabCommon", "Extra")));
+    map.rules.push(rule(constant("x"), ifc("ePset_Soil", "FromMap")));
+    map.rules.push(rule(constant("t"), ifc("Cadektor_Tree", "Note")));
+    run(&mut ed, Command::AddResource { name: "Collisions".into(), body: ResourceBody::DataMap(Box::new(map)) });
+    let (text, _) = export(ed.doc(), &IfcOptions::default());
+    dump("collisions.ifc", &text);
+    let f = step::parse(&text).unwrap();
+    let guids: Vec<&str> = f.entities.iter().filter_map(|e| match e.attrs.first() {
+        Some(Value::Str(s)) if crate::guid::is_valid(s) => Some(s.as_str()),
+        _ => None,
+    }).collect();
+    assert!(guids.len() > 40);
+    let unique: std::collections::BTreeSet<&&str> = guids.iter().collect();
+    assert_eq!(unique.len(), guids.len(), "GlobalIds are unique");
+    // Each set exists once per element, with the properties merged. The rule wins over the standard value.
+    let sets = named(&f, "IFCPROPERTYSET");
+    let slab_sets: Vec<_> = sets.iter().filter(|s| str_of(&s.attrs[2]) == "Pset_SlabCommon").collect();
+    assert_eq!(slab_sets.len(), 5, "one per slab");
+    let props = |set: &step::Entity| -> Vec<String> {
+        let Value::List(ids) = &set.attrs[4] else { panic!() };
+        ids.iter().map(|r| str_of(&f.get(r.as_ref_id().unwrap()).unwrap().attrs[0]).to_string()).collect()
+    };
+    let names = props(slab_sets[0]);
+    assert_eq!(names.iter().filter(|n| *n == "Reference").count(), 1);
+    assert!(names.contains(&"Extra".to_string()) && names.contains(&"IsExternal".to_string()));
+    let soil: Vec<_> = sets.iter().filter(|s| str_of(&s.attrs[2]) == "ePset_Soil").collect();
+    assert_eq!(soil.len(), 12, "one per element, because the rule applies to all kinds");
+    assert!(props(soil.iter().find(|s| props(s).contains(&"Depth".to_string())).unwrap()).contains(&"FromMap".to_string()));
+}
+
+#[test]
+fn a_document_without_a_project_guid_is_not_changed_and_gets_a_content_guid() {
+    let mut doc = sample();
+    doc.drawing.project.guid.clear();
+    let before = doc.clone();
+    let (a, report) = export(&doc, &IfcOptions::default());
+    assert_eq!(doc, before, "export never changes the document");
+    assert!(report.notes.iter().any(|n| n.contains("no project GUID")));
+    assert_eq!(a, export(&doc, &IfcOptions::default()).0, "deterministic");
+    let (guid, stored) = crate::project_guid(&doc);
+    assert!(!stored && crate::guid::is_valid(&guid));
+    let mut other = doc.clone();
+    other.drawing.project.name.push('x');
+    assert_ne!(crate::project_guid(&other).0, guid);
+    // A document with a GUID reports none missing.
+    let (guid, stored) = crate::project_guid(&sample());
+    assert!(stored);
+    assert_eq!(guid, "1Gx3v0EYX3_fOnxLUh6gRb");
+    assert!(!export(&sample(), &IfcOptions::default()).1.notes.iter().any(|n| n.contains("no project GUID")));
+    // Loading makes a GUID in memory, and a new one can be set by command.
+    let mut loaded = Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert!(loaded.drawing.project.guid.is_empty());
+    assert!(loaded.ensure_project_guid());
+    assert!(!loaded.ensure_project_guid());
+    assert!(crate::guid::is_valid(&loaded.drawing.project.guid));
+}
+
 // ---------------------------------------------------------------- random documents
 
 fn arb_point() -> impl Strategy<Value = DVec2> {
@@ -632,7 +710,7 @@ fn arb_ring() -> impl Strategy<Value = Vec<Vertex>> {
 }
 
 fn arb_shape() -> impl Strategy<Value = Shape> {
-    let size = 0.0..2.0e4f64;
+    let size = prop_oneof![0.0..30.0f64, 0.0..2.0e4f64, 1.0e6..1.0e9f64];
     prop_oneof![
         (arb_point(), arb_point()).prop_map(|(a, b)| Shape::Line { a, b }),
         (arb_point(), arb_point()).prop_map(|(min, max)| Shape::Rect { min, max }),
@@ -657,6 +735,27 @@ fn arb_options() -> impl Strategy<Value = IfcOptions> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// Plants and trees of any size export without panics, and the references resolve.
+    #[test]
+    fn plants_of_any_size_export(
+        spread in prop_oneof![1.0e-3..30.0f64, 1.0..1.0e5f64, 1.0e6..1.0e9f64],
+        height in prop_oneof![1.0e-3..30.0f64, 1.0..1.0e5f64, 1.0e6..1.0e9f64],
+        dbh in prop_oneof![0.0..30.0f64, 0.0..1.0e4f64],
+        tree in any::<bool>(),
+    ) {
+        let mut ed = Editor::default();
+        let shape = if tree {
+            Shape::ExistingTree { at: v2(0.0, 0.0), species: String::new(), dbh, spread, height, condition: TreeCondition::Good, action: TreeAction::Retain, rpz_factor: None, rpz_cap: None }
+        } else {
+            Shape::Plant { at: v2(0.0, 0.0), species: "p".into(), spread, height }
+        };
+        if ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).is_ok() {
+            let f = parsed(ed.doc(), &IfcOptions::default());
+            prop_assert!(f.dangling().is_empty());
+            prop_assert!(!named(&f, "IFCBOUNDINGBOX").is_empty());
+        }
+    }
 
     #[test]
     fn random_documents_export_with_every_reference_resolved(
