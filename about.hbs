@@ -1,0 +1,28 @@
+THIRD-PARTY SOFTWARE NOTICES FOR CADEKTOR
+
+Cadektor is licensed under Apache-2.0 OR MIT (see LICENSE-APACHE and LICENSE-MIT).
+It includes the open source components below. Each one is used under the license
+named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit it by hand.
+
+================================================================================
+SUMMARY
+================================================================================
+{{#each overview}}
+{{count}} crates: {{{name}}}
+{{/each}}
+
+================================================================================
+LICENSE TEXTS
+================================================================================
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}}
+--------------------------------------------------------------------------------
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

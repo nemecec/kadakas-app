@@ -4,7 +4,7 @@ Cadektor is a clean-room, open-source CAD/BIM desktop app. A web build is a bonu
 
 Source of truth for Vectorworks behavior: `docs/research/vectorworks-public-features.md` (public pages only).
 
-Priority: P0 = MVP, P1 = v1, P2 = later. Status: done = exists in `crates/cadektor-core`, planned = not built.
+Priority: P0 = MVP, P1 = v1, P2 = later. Status: done = built and tested (in the core crate, the API crates or the app), planned = not built.
 
 ## 1. Goals and non-goals
 
@@ -36,7 +36,7 @@ Non-goals
    - SVG render so agents can see results.
    - A `describe` method for discovery.
    - Python package and scripts: see section 4.18. Planned: live viewport screenshot.
-6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Core line coverage of 85% or more (cargo-llvm-cov). CI on macOS, Linux, Windows.
+6. Testing: Rust unit and property tests. Python behavior tests over the JSON-RPC API. Line coverage of 95% or more for every library crate (cargo-llvm-cov, enforced in CI by `scripts/coverage.sh`; the CLI crate has a bar of 90%). CI on macOS, Linux, Windows.
 7. License: Apache-2.0 OR MIT.
 
 ## 3. Concept glossary
@@ -87,7 +87,7 @@ Non-goals
 | DOC-07 | Command pattern with Batch and atomic rollback. | P0 | done |
 | DOC-08 | Undo/redo through patches. | P0 | done |
 | DOC-09 | Locked layer rejects edits. | P0 | done |
-| DOC-10 | Native file format (JSON based, versioned). | P0 | planned |
+| DOC-10 | Native file format (JSON based, versioned with `format_version`; older files migrate when they load). | P0 | done |
 | DOC-11 | Layer elevation, stories, 3D height. | P1 | planned |
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
 | DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
@@ -105,8 +105,8 @@ Non-goals
 | DRF-02 | Move objects. | P0 | done |
 | DRF-03 | Shape validation (reject bad geometry). | P0 | done |
 | DRF-04 | Bounds and area calculation. | P0 | done |
-| DRF-05 | Selection tool: click, rectangle, lasso, shift-add. | P0 | planned |
-| DRF-06 | Tools for the shapes above with live preview. | P0 | planned |
+| DRF-05 | Selection tool: click, box select (window and crossing), shift-click to toggle. A lasso is not built. | P0 | done |
+| DRF-06 | Tools for the shapes above with live preview. | P0 | done |
 | DRF-07 | Rotate, scale, mirror, offset, duplicate array. | P0 | planned |
 | DRF-08 | Fillet, chamfer, trim, extend, split. | P1 | planned |
 | DRF-09 | Polyline editing (vertices, smooth, Bezier, spline). | P1 | done |
@@ -121,7 +121,7 @@ Non-goals
 | DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
 | DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
 | DRF-13 | Compose, clip, add/subtract surfaces. | P1 | planned |
-| DRF-14 | Pan, zoom, zoom to fit, view history. | P0 | planned |
+| DRF-14 | Pan, zoom (wheel, zoom in and out keys), zoom to fit. A view history (previous view) is not built. | P0 | done |
 
 ### 4.3 Snapping and data bar
 
@@ -131,27 +131,27 @@ Non-goals
 | SNP-02 | Grid snap. | P0 | planned |
 | SNP-03 | Snapping set (toggle snap categories). | P0 | planned |
 | SNP-04 | Smart cursor cues (labels at the cursor). | P0 | planned |
-| SNP-05 | Data bar: Tab to enter length, angle, coordinates. | P0 | planned |
-| SNP-06 | Tab and Shift+Tab move between fields. Enter commits. | P0 | planned |
+| SNP-05 | Data bar: Tab to enter length, angle, coordinates. | P0 | done |
+| SNP-06 | Tab and Shift+Tab move between fields. Enter commits. | P0 | done |
 | SNP-07 | Angle and distance snap. | P1 | planned |
 | SNP-08 | Smart points and smart edges (alignment lines). | P1 | planned |
 | SNP-09 | Snap loupe. | P2 | planned |
-| SNP-10 | Back-quote key suspends snapping. | P1 | planned |
+| SNP-10 | Back-quote key suspends snapping while held. | P1 | done |
 | SNP-11 | Snap across layers and grey classes (option). | P1 | planned |
 
 ### 4.4 UI palettes
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| UI-01 | App window: menu bar, view bar, tool bar, canvas, status bar. | P0 | planned |
-| UI-02 | Tool palettes grouped as tool sets. | P0 | planned |
-| UI-03 | Object Info palette (Shape, Data, Render tabs). | P0 | planned |
-| UI-04 | Navigation palette (classes, layers, sheets, viewports, views). | P0 | planned |
+| UI-01 | App window: menu bar, view bar, tool panel, canvas, data bar, status bar. | P0 | done |
+| UI-02 | Tool palettes grouped as tool sets (Basic, Landscape, Site, Irrigation, Annotation). | P0 | done |
+| UI-03 | Object Info palette with a Shape tab and a Data tab (records). Materials and render styles are set through the Resource Manager, not in a Render tab. | P0 | done |
+| UI-04 | Navigation palette (design layers, classes, sheet layers, saved views). | P0 | done |
 | UI-05 | Resource Manager palette (plant styles; all other resource types in the section "Resources (all types)", see DRF-20). | P1 | done |
 | UI-06 | Quick search for commands. | P1 | planned |
 | UI-07 | Dockable, saveable layouts. | P1 | planned |
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
-| UI-09 | Keyboard shortcuts compatible with common CAD habits. | P0 | planned |
+| UI-09 | Keyboard shortcuts compatible with common CAD habits (the default keys follow Vectorworks 2026; see `keymap.rs`). | P0 | done |
 | UI-10 | Light and dark themes. | P1 | planned |
 | UI-11 | Tool modes in tool bar. Keys jump between mode groups. Done for the vertex modes of the path tools (group 1, key U). | P1 | done |
 | UI-12 | Undo history list. | P2 | planned |
@@ -391,7 +391,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| API-01 | JSON-RPC 2.0 dispatcher in core. | P0 | done |
+| API-01 | JSON-RPC 2.0 dispatcher in `cadektor-api` (`Session`). The core crate has no API code. | P0 | done |
 | API-02 | `describe` method lists all methods. | P0 | done |
 | API-03 | `execute`, `undo`, `redo`. | P0 | done |
 | API-04 | `document.summary`, `document.get`, `document.load`. | P0 | done |
@@ -404,7 +404,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | API-09 | Serializable Command enum (add/delete/move/modify, set_vertex, set_data, layers, classes, batch). | P0 | done |
 | API-10 | `cadektor serve` (stdio). | P0 | done |
 | API-11 | TCP listener in the live app (`--agent-port` or `CADEKTOR_AGENT_PORT`). A random token is required as the first message. | P0 | done |
-| API-12 | `cadektor mcp` server for Claude Code. | P0 | done |
+| API-12 | `cadektor mcp` server for Claude Code. About 20 domain tools that take `{method, params}` (their descriptions list the methods) with MCP annotations (`readOnlyHint`, `destructiveHint`). `--mcp-flat` lists one tool per method. | P0 | done |
 | API-13 | `render.png`: a CPU render of the 3D model, base64 PNG, also in `cadektor serve`, over `--connect` and in MCP (as an image). | P1 | done |
 | API-14 | Screenshot of the live viewport. | P1 | planned |
 | API-42 | Presentation methods: `material.*` (list, get, create, update, duplicate, delete, add_defaults, import_texture, assign, slots), `render_style.*` (list, get, create, update, duplicate, delete, set_active), `sun.set`, `sun.get`, `render.hidden_line`, and `render.png {render_style, mode, samples}`. Examples in `describe.presentation`. | P1 | done |
@@ -413,9 +413,9 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | API-17 | Event stream: document changed, selection changed. | P2 | planned |
 | API-18 | Import/export methods (`import.file`, `export.file`) for DXF, Shapefile, GeoJSON, IFC and DWG. Options and mappings are in `describe`. | P1 | done |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
-| API-42 | GIS methods: `gis.sources`, `gis.cache.clear`, `gis.georef.set`, `gis.coords`, `gis.reproject`, `gis.wms.capabilities|add|refresh`, `gis.wmts.capabilities|add`, `gis.wfs.capabilities|import`, `gis.geoimage.import`, `gis.job.status|cancel`. Network calls follow the allow list of `--allow-url` (default: none) and the folder list of `--allow-dir` for files. Examples and the policy are in `describe.gis`. `objects.list` and `objects.get` do not send the picture of an underlay. | P0 | done |
+| API-44 | GIS methods: `gis.sources`, `gis.cache.clear`, `gis.georef.set`, `gis.coords`, `gis.reproject`, `gis.wms.capabilities|add|refresh`, `gis.wmts.capabilities|add`, `gis.wfs.capabilities|import`, `gis.geoimage.import`, `gis.job.status|cancel`. Network calls follow the allow list of `--allow-url` (default: none) and the folder list of `--allow-dir` for files. Examples and the policy are in `describe.gis`. `objects.list` and `objects.get` do not send the picture of an underlay. | P0 | done |
 | API-43 | Massing methods: `massing.add`, `massing.set`, `massing.get`, `massing.from_shapes`, `massing.report`. Examples in `describe.massing`. | P1 | done |
-| API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
+| API-45 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
 | API-30 | `group.*` (create, ungroup, enter, exit, context, members, move, rotate, copy) and `selection.click`. | P1 | done |
 | API-31 | `symbol.*` (list, get, create, from_objects, place, set, convert_to_group, edit, edit_end). | P1 | done |
 | API-32 | `resource.*` (list, get, create, update, rename, duplicate, delete, purge_unused, thumbnail, list_file, import_from_file, export_to_file), `pattern.segments`, `library.*` (list, favorites). `describe.resources` has examples. | P1 | done |

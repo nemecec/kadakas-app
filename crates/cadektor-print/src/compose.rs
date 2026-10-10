@@ -38,9 +38,17 @@ pub struct SheetCache {
     pub builds: u64,
     /// The section drawings of the pages. Share them with the API so that a section is computed once.
     pub sections: cadektor_x3d::section::SharedSections,
+    /// Another limit for the pixels of 3D viewport images (`None` is `MAX_RASTER_PIXELS`).
+    /// Tests set a small one, so they need no big rasters.
+    pub raster_limit: Option<u64>,
 }
 
 impl SheetCache {
+    /// The limit for the pixels of 3D viewport images in force for this cache.
+    pub fn raster_pixels(&self) -> u64 {
+        self.raster_limit.unwrap_or(MAX_RASTER_PIXELS)
+    }
+
     /// The page of a sheet layer for this revision of the document.
     pub fn page(
         &mut self,
@@ -70,11 +78,12 @@ impl SheetCache {
             self.used.push_back(layer);
             return Ok(p.clone());
         }
-        let page = Arc::new(compose_page_shared(
+        let page = Arc::new(compose_page_limited(
             doc,
             layer,
             ground,
             Some((self.sections.clone(), revision)),
+            self.raster_pixels(),
         )?);
         self.builds += 1;
         // Pages hold images, so the cache keeps a few of them only.
@@ -112,6 +121,18 @@ pub fn compose_page_shared(
     ground: &dyn TerrainSource,
     sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
 ) -> Result<Page, PrintError> {
+    compose_page_limited(doc, layer, ground, sections, MAX_RASTER_PIXELS)
+}
+
+/// Like `compose_page_shared`, with another limit for the pixels of 3D viewport images on the page.
+/// Tests use a small limit, so they need no big rasters.
+pub fn compose_page_limited(
+    doc: &Document,
+    layer: LayerId,
+    ground: &dyn TerrainSource,
+    sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
+    max_pixels: u64,
+) -> Result<Page, PrintError> {
     let l = doc.layer(layer).ok_or(PrintError::NoSheet(layer))?;
     if l.kind != LayerKind::Sheet {
         return Err(PrintError::NoSheet(layer));
@@ -124,7 +145,7 @@ pub fn compose_page_shared(
         tables = tables.with_sections(store, revision);
     }
     let mut prims = Vec::new();
-    let mut budget = MAX_RASTER_PIXELS;
+    let mut budget = max_pixels;
     let mut rasters = 0;
     for obj in doc
         .objects

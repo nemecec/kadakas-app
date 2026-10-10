@@ -96,8 +96,7 @@ Send the `describe` method first. It lists all methods and example commands.
 
 ### Headless
 
-`cadektor serve` and `cadektor mcp` work on their own document. Use `file.open` and `file.save` (MCP tools
-`file_open` and `file_save`) to load and store it.
+`cadektor serve` and `cadektor mcp` work on their own document. Use `file.open` and `file.save` (in MCP, methods of the `document` tool) to load and store it.
 
 ### The live app
 
@@ -141,8 +140,29 @@ claude mcp add cadektor -- /path/to/cadektor mcp --connect
 claude mcp add cadektor -- /path/to/cadektor mcp
 ```
 
-The MCP tools are the API methods with `.` replaced by `_` (for example `objects_list`), plus `file_open`
-and `file_save`. `execute` is the only tool that changes the drawing.
+The server lists about 20 tools, one per domain: `describe`, `document`, `objects`, `selection_undo`, `reports`,
+`render_view`, `materials_styles`, `plants`, `site`, `grading`, `hardscape_landscape`, `irrigation`, `annotation`,
+`sheets_print`, `data_worksheets`, `resources_symbols`, `io`, `gis` and `scripting`. Every tool takes
+`{method, params}`: `method` is a method of the API (for example `objects.list`) and `params` are its parameters.
+The description of each tool lists its methods. Call `describe` first. For example:
+
+```json
+{"name": "objects", "arguments": {"method": "objects.list", "params": {"kind": "plant"}}}
+{"name": "document", "arguments": {"method": "execute", "params": {"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 500}}}}}
+```
+
+The `document` tool also has the file methods `file.open` and `file.save`. Layers and classes have no methods of
+their own: change them with commands of `execute`. Many methods change the drawing, not only `execute` (for example
+`plants.place`, `hardscape.add` and `import.file`). The tools carry MCP annotations: `describe`, `objects` and
+`reports` are read-only. The others may change or delete data (`destructiveHint`), and `gis` may use the network.
+
+Some clients work better with one tool per method. Start the server with `--mcp-flat` to get the older listing of
+about 280 tools. The tool names are the API methods with `.` replaced by `_` (for example `objects_list`), plus
+`file_open` and `file_save`, and the arguments are the parameters of the method.
+
+```sh
+claude mcp add cadektor -- /path/to/cadektor mcp --mcp-flat
+```
 
 ## Scripting and plug-in objects
 

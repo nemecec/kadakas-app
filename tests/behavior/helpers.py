@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import queue
 import subprocess
-import time
+import sys
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / "cadektor"))
+_EXE = "cadektor.exe" if sys.platform == "win32" else "cadektor"
+BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / _EXE))
 
 
 class StdioClient:
-    """A child `cadektor` process that reads one JSON object per line on stdin."""
+    """A child `cadektor` process that reads one JSON object per line on stdin.
+
+    A reader thread moves the output lines into a queue, so a read can time out on every system
+    (select() works on pipes only on Unix)."""
 
     def __init__(self, args, timeout=10.0):
         self.timeout = timeout
@@ -24,10 +29,44 @@ class StdioClient:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0,  # unbuffered, so select() reflects exactly what the child wrote
+            bufsize=0,
         )
-        self._out = self.proc.stdout.fileno()
+        self._lines: queue.Queue = queue.Queue()
+        self._err = bytearray()
+        self._threads = [
+            threading.Thread(target=self._pump_stdout, daemon=True),
+            threading.Thread(target=self._pump_stderr, daemon=True),
+        ]
+        for t in self._threads:
+            t.start()
         self._next_id = 1
+
+    def _pump_stdout(self) -> None:
+        # Read byte lines. None marks the end of the stream.
+        buf = bytearray()
+        try:
+            while True:
+                chunk = self.proc.stdout.read(1)
+                if not chunk:
+                    break
+                if chunk == b"\n":
+                    self._lines.put(bytes(buf).decode())
+                    buf.clear()
+                else:
+                    buf += chunk
+        except (OSError, ValueError):
+            pass
+        self._lines.put(None)
+
+    def _pump_stderr(self) -> None:
+        try:
+            while True:
+                chunk = self.proc.stderr.read(4096)
+                if not chunk:
+                    break
+                self._err += chunk
+        except (OSError, ValueError):
+            pass
 
     def send_raw(self, text: str) -> None:
         data = memoryview((text + "\n").encode())
@@ -40,22 +79,15 @@ class StdioClient:
 
     def read_line(self, timeout=None) -> str | None:
         """Returns the next output line, or None if nothing arrives in time."""
-        deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
-        buf = bytearray()
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            ready, _, _ = select.select([self._out], [], [], remaining)
-            if not ready:
-                return None
-            chunk = os.read(self._out, 1)
-            if not chunk:
-                err = self.proc.stderr.read().decode(errors="replace")
-                raise AssertionError(f"cadektor exited early. stderr: {err}")
-            if chunk == b"\n":
-                return buf.decode()
-            buf += chunk
+        try:
+            line = self._lines.get(timeout=self.timeout if timeout is None else timeout)
+        except queue.Empty:
+            return None
+        if line is None:
+            self._lines.put(None)  # keep the end mark for later reads
+            self._threads[1].join(timeout=2)
+            raise AssertionError(f"cadektor exited early. stderr: {self._err.decode(errors='replace')}")
+        return line
 
     def expect_silence(self, wait=0.3) -> None:
         line = self.read_line(timeout=wait)
@@ -69,8 +101,13 @@ class StdioClient:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
-        for stream in (self.proc.stdout, self.proc.stderr):
-            stream.close()
+        for t in self._threads:
+            t.join(timeout=2)
+        for stream in (self.proc.stdout, self.proc.stderr, self.proc.stdin):
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 class JsonRpc(StdioClient):
@@ -152,6 +189,15 @@ class McpClient(StdioClient):
 
     def tool_json(self, name, arguments=None):
         result = self.tool(name, arguments)
+        assert result["isError"] is False, result
+        return json.loads(result["content"][0]["text"])
+
+    def method(self, domain, method, params=None) -> dict:
+        """Calls an API method through a domain tool and returns its MCP result object."""
+        return self.tool(domain, {"method": method, **({"params": params} if params is not None else {})})
+
+    def method_json(self, domain, method, params=None):
+        result = self.method(domain, method, params)
         assert result["isError"] is False, result
         return json.loads(result["content"][0]["text"])
 

@@ -880,3 +880,116 @@ proptest! {
         prop_assert!(s.triangles >= stats.triangles);
     }
 }
+
+#[test]
+fn document_materials_give_colors_textures_and_uvs_to_the_exports() {
+    use cadektor_core::model::{Color, ObjectId};
+    use cadektor_core::present::{
+        Material as DocMaterial, Procedural, RenderResource, SlotTarget, Texture as DocTexture,
+    };
+    use cadektor_core::resource::{ResourceBody, ResourceId};
+
+    let mut ed = Editor::default();
+    let mut ids = Vec::new();
+    for shape in [
+        slab(0.0, 0.0, 4000.0, 3000.0, 150.0, 0.0),
+        slab(5000.0, 0.0, 9000.0, 3000.0, 150.0, 0.0),
+        slab(10_000.0, 0.0, 14_000.0, 3000.0, 150.0, 0.0),
+    ] {
+        let out = ed
+            .execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        ids.push(ObjectId(out.created[0]));
+    }
+    let mut add_material = |name: &str, m: DocMaterial| {
+        let out = ed
+            .execute(&Command::AddResource {
+                name: name.into(),
+                body: ResourceBody::Render(Box::new(RenderResource::Material(m))),
+            })
+            .unwrap();
+        ResourceId(out.created[0])
+    };
+    let glass = add_material(
+        "Glass",
+        DocMaterial {
+            base_color: Color([100, 150, 200, 255]),
+            opacity: 0.4,
+            metallic: 0.2,
+            ..Default::default()
+        },
+    );
+    let timber = add_material(
+        "Timber",
+        DocMaterial {
+            base_color: Color([150, 100, 60, 255]),
+            texture: Some(DocTexture::Procedural {
+                kind: Procedural::Timber,
+                seed: 3,
+            }),
+            ..Default::default()
+        },
+    );
+    for (id, m) in [(ids[0], glass), (ids[1], timber)] {
+        ed.execute(&Command::SetMaterialSlot {
+            target: SlotTarget::Object {
+                object: id,
+                slot: None,
+            },
+            material: Some(m),
+        })
+        .unwrap();
+    }
+    let doc = ed.doc().clone();
+    let scene = mesh::build(&doc);
+    let src = DocumentMaterials::new(&doc, &scene);
+    assert!(!src.is_plain());
+    let opts = ExportOptions::default();
+
+    let (bytes, _) = export_glb(&doc, &scene, &opts, &src).unwrap();
+    let (root, bin) = split_glb(&bytes);
+    check_structure(&root, &bin);
+    let materials = root["materials"].as_array().unwrap();
+    assert!(
+        materials
+            .iter()
+            .any(|m| m["name"] == "Glass" && m["alphaMode"] == "BLEND")
+    );
+    assert!(materials.iter().any(|m| m["name"] == "Timber"));
+    assert_eq!(root["images"].as_array().unwrap().len(), 1);
+    assert!(root["textures"].is_array());
+
+    let (text, _) = export_gltf(&doc, &scene, &opts, &src).unwrap();
+    assert!(text.contains("\"Timber\""));
+    let (files, _) = export_obj(&doc, &scene, &opts, &src, "m.mtl").unwrap();
+    assert!(files.mtl.contains("Timber") && files.mtl.contains("Glass"));
+    assert!(files.obj.contains("vt "), "texture coordinates");
+
+    // The trait answers for triangles without a slot, for a vertex outside the scene and for
+    // a group out of range.
+    let obj = doc.object(ids[2]).unwrap();
+    let plain = src.material_for(&doc, obj, 0, [9, 9, 9, 255]);
+    assert!(plain.name.starts_with("color_") || !plain.name.is_empty());
+    assert_eq!(
+        src.material(&doc, obj, [1, 2, 3, 255]),
+        Material::from_color([1, 2, 3, 255])
+    );
+    assert_eq!(src.group(usize::MAX), u32::MAX);
+    assert_eq!(
+        src.material_for(&doc, obj, usize::MAX, [1, 2, 3, 255]),
+        Material::from_color([1, 2, 3, 255])
+    );
+    assert_eq!(src.uv(usize::MAX), None);
+    // The base colors give no uv and one group.
+    assert_eq!(BaseColors.group(3), 0);
+    assert_eq!(BaseColors.uv(3), None);
+    assert_eq!(
+        BaseColors.material_for(&doc, obj, 0, [1, 2, 3, 255]),
+        Material::from_color([1, 2, 3, 255])
+    );
+}

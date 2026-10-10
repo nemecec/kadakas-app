@@ -2,9 +2,11 @@
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::curve::corners;
+use cadektor_core::hardscape::NoTerrain;
 use cadektor_core::model::*;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::sheets::*;
+use cadektor_print::compose::{MAX_RASTER_PIXELS, compose_page_limited};
 use cadektor_print::display::*;
 use cadektor_print::png as sheet_png;
 use cadektor_print::{
@@ -1650,7 +1652,9 @@ fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
         i.width,
         i.height
     );
-    // Eight 3D viewports of 9 megapixels each share 64 megapixels: no page holds more.
+    // Many 3D viewports share one budget: no page holds more. The test uses a budget of 4 megapixels
+    // (the real one is 64), so it needs no big rasters. The code path is the same.
+    let budget = 4_000_000;
     for k in 1..8 {
         vp.min = v(10.0, 10.0 + k as f64);
         add(
@@ -1660,7 +1664,7 @@ fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
             Attributes::default(),
         );
     }
-    let page = compose_page(ed.doc(), sheet).unwrap();
+    let page = compose_page_limited(ed.doc(), sheet, &NoTerrain, None, budget).unwrap();
     let total: u64 = page
         .prims
         .iter()
@@ -1672,13 +1676,13 @@ fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
             }
         })
         .sum();
-    assert!(
-        total <= cadektor_print::compose::MAX_RASTER_PIXELS,
-        "{total}"
-    );
+    assert!(total <= budget, "{total}");
+    assert!(total > budget / 2, "the budget is used: {total}");
+    assert_eq!(SheetCache::default().raster_pixels(), MAX_RASTER_PIXELS);
     // The export refuses a set of sheets with more image pixels than the limit.
     let mut cache = SheetCache::default();
-    let ids: Vec<LayerId> = (0..12)
+    cache.raster_limit = Some(2_000_000);
+    let ids: Vec<LayerId> = (0..3)
         .map(|k| {
             let l = LayerId(
                 run(
@@ -1705,7 +1709,9 @@ fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
         })
         .collect();
     let err = export_pdf(ed.doc(), ed.revision(), &mut cache, &ids).unwrap_err();
-    assert!(matches!(err, PrintError::Invalid(m) if m.contains("megapixels")));
+    assert!(
+        matches!(err, PrintError::Invalid(m) if m.contains("megapixels") && m.contains("limit is 2"))
+    );
 }
 
 #[test]

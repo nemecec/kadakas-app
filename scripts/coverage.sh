@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Line coverage per crate with cargo llvm-cov. The rule of docs/dev-guide.md: every library crate
+# keeps 95% of its lines or more. The command line crate has a lower bar (see below). The app crate
+# (egui and wgpu) is left out: its window code has no headless test.
+#
+#   scripts/coverage.sh             all crates
+#   scripts/coverage.sh print api   only these crates (names without the cadektor- prefix)
+#
+# Needs: cargo install cargo-llvm-cov, and the rustup component llvm-tools-preview.
+set -euo pipefail
+
+LIB_MIN=95
+# The CLI is a thin shell around the API. Its integration tests run the real binary. The bar is
+# lower because some start-up error paths (a broken terminal, a closed stdout) cannot be reached.
+CLI_MIN=90
+
+LIBS=(core render io annot gis ifc x3d irrigation script site sheet print api)
+
+if [ "$#" -gt 0 ]; then
+  CRATES=("$@")
+else
+  CRATES=("${LIBS[@]}" cli)
+fi
+
+failed=0
+for c in "${CRATES[@]}"; do
+  min=$LIB_MIN
+  if [ "$c" = "cli" ]; then min=$CLI_MIN; fi
+  echo "== cadektor-$c (at least ${min}% of lines)"
+  if ! cargo llvm-cov -p "cadektor-$c" --summary-only --fail-under-lines "$min"; then
+    echo "!! cadektor-$c is below ${min}% line coverage"
+    failed=1
+  fi
+done
+exit $failed

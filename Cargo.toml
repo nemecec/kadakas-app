@@ -3,8 +3,10 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.89"
 license = "Apache-2.0 OR MIT"
+repository = "https://github.com/cadektor/cadektor"
 version = "0.1.0"
 
 # Keep build folders small: line tables for our code, no debug info for dependencies.
@@ -13,3 +15,14 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# A little optimization makes the CPU-heavy crates much faster in tests (rasterizer, geometry,
+# section drawings, page composition) at a small cost for the build.
+[profile.dev.package.cadektor-render]
+opt-level = 1
+[profile.dev.package.cadektor-core]
+opt-level = 1
+[profile.dev.package.cadektor-print]
+opt-level = 1
+[profile.dev.package.cadektor-x3d]
+opt-level = 1

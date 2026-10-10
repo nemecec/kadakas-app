@@ -16,7 +16,8 @@ PYTHON_DIR = HERE.parent
 REPO = PYTHON_DIR.parent
 sys.path.insert(0, str(PYTHON_DIR))
 
-BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / "cadektor"))
+_EXE = "cadektor.exe" if sys.platform == "win32" else "cadektor"
+BIN = Path(os.environ.get("CADEKTOR_BIN", REPO / "target" / "debug" / _EXE))
 os.environ["CADEKTOR_BIN"] = str(BIN)
 
 import cadektor  # noqa: E402

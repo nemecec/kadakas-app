@@ -240,19 +240,27 @@ def test_describe_lists_the_new_methods(cad):
 
 
 def test_mcp_lists_the_new_tools_and_returns_the_image_as_an_image(mcp):
-    names = {tool["name"] for tool in mcp.request("tools/list")["result"]["tools"]}
-    assert {"render_png", "view_list", "view_set"} <= names
-    mcp.tool_json("execute", {"command": hardscape(0, 0, 4000, 3000)})
-    result = mcp.tool("render_png", {"view": "right_isometric", "width": 64, "height": 48})
+    tools = {tool["name"]: tool for tool in mcp.request("tools/list")["result"]["tools"]}
+    assert {"render.png", "view.list", "view.set"} <= set(tools["render_view"]["inputSchema"]["properties"]["method"]["enum"])
+    mcp.method_json("document", "execute", {"command": hardscape(0, 0, 4000, 3000)})
+    result = mcp.method("render_view", "render.png", {"view": "right_isometric", "width": 64, "height": 48})
     assert result["isError"] is False
     image, meta = result["content"]
     assert image["type"] == "image" and image["mimeType"] == "image/png"
     assert decode_png(image["data"])[:2] == (64, 48)
     assert json.loads(meta["text"]) == {"width": 64, "height": 48, "view": "right_isometric", "projection": "ortho", "mode": "shaded"}
-    assert mcp.tool_json("view_set", {"view": "back"})["view"] == "back"
-    assert mcp.tool_json("view_list")["current"]["view"] == "back"
-    bad = mcp.tool("render_png", {"view": "nope"})
+    assert mcp.method_json("render_view", "view.set", {"view": "back"})["view"] == "back"
+    assert mcp.method_json("render_view", "view.list")["current"]["view"] == "back"
+    bad = mcp.method("render_view", "render.png", {"view": "nope"})
     assert bad["isError"] is True and "unknown view" in bad["content"][0]["text"]
+
+
+def test_flat_mcp_lists_one_tool_per_method_and_returns_the_image(mcp_flat):
+    names = {tool["name"] for tool in mcp_flat.request("tools/list")["result"]["tools"]}
+    assert {"render_png", "view_list", "view_set"} <= names
+    mcp_flat.tool_json("execute", {"command": hardscape(0, 0, 4000, 3000)})
+    result = mcp_flat.tool("render_png", {"view": "top", "width": 32, "height": 24})
+    assert result["content"][0]["type"] == "image"
 
 
 def test_render_png_and_view_set_are_forwarded_to_the_app_with_connect():

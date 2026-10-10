@@ -1,7 +1,10 @@
 [package]
 name = "cadektor-x3d"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "3D output: glTF, GLB and OBJ writers, and section and elevation drawings from the 3D model. Pure Rust, no file access."
 
 [dependencies]
