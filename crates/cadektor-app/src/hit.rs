@@ -57,6 +57,20 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let flat = curve::flatten(boundary, true, curve_tolerance(tol));
             edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
+        Shape::Massing(m) => {
+            let flat = curve::flatten(&m.footprint, true, curve_tolerance(tol));
+            edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
+        }
+        // A map picks at its frame only, so the objects on it stay pickable.
+        Shape::Underlay(u) => {
+            let corners = [
+                u.min,
+                DVec2::new(u.max.x, u.min.y),
+                u.max,
+                DVec2::new(u.min.x, u.max.y),
+            ];
+            edge_dist(&corners, true, p) <= tol
+        }
         // Only the outline picks a site model, so that objects on the terrain stay pickable.
         Shape::SiteModel { .. } => {
             edge_dist(&cadektor_core::svg::site_outline(shape), true, p) <= tol

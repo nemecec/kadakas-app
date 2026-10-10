@@ -16,6 +16,8 @@ pub struct IfcOptions {
     /// Write a default `IfcBuilding` with one `IfcBuildingStorey` per design layer. Default: off,
     /// all elements belong to the `IfcSite`.
     pub layers_as_storeys: bool,
+    /// Write massing models as `IfcBuilding` (in the site) instead of `IfcBuildingElementProxy`. Default: off.
+    pub massing_as_building: bool,
     /// Skip objects on hidden layers and classes.
     pub visible_only: bool,
     /// Name of the data map (Data Manager) that gives IFC classes and property sets. Default: the
@@ -37,6 +39,7 @@ impl Default for IfcOptions {
             classes_as_layers: true,
             include_2d: false,
             layers_as_storeys: false,
+            massing_as_building: false,
             visible_only: false,
             data_map: None,
             area_thickness: 100.0,

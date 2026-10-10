@@ -772,6 +772,11 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 f.text(ui, "Material", material);
                 f.count(ui, boundary.len());
             }
+            Shape::Massing(m) => {
+                f.commit |= crate::gis_ui::massing_fields(ui, m);
+                f.count(ui, m.footprint.len());
+            }
+            Shape::Underlay(u) => f.commit |= crate::gis_ui::underlay_fields(ui, u),
             Shape::SiteModel {
                 points,
                 lines,

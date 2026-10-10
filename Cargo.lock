@@ -609,6 +609,7 @@ dependencies = [
  "glam",
  "i_overlay",
  "indexmap",
+ "png",
  "proptest",
  "serde",
  "serde_json",

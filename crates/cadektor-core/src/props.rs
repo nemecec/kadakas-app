@@ -118,6 +118,7 @@ pub fn length_m(shape: &Shape) -> Option<f64> {
         Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
             curve_length(boundary, true)
         }
+        Shape::Massing(m) => curve_length(&m.footprint, true),
         Shape::Polyline3d { points, closed } => {
             let mut t: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
             if *closed && points.len() > 1 {
@@ -145,6 +146,7 @@ fn is_closed(shape: &Shape) -> bool {
             | Shape::Circle { .. }
             | Shape::LandscapeArea { .. }
             | Shape::Hardscape { .. }
+            | Shape::Massing(_)
             | Shape::Polyline { closed: true, .. }
             | Shape::Polyline3d { closed: true, .. }
     )
@@ -315,6 +317,7 @@ fn builtin(
         }
         // The volume of all layers, components included.
         "volume" => match shape {
+            Shape::Massing(m) => num(m.quantities().volume / 1e9),
             Shape::Hardscape { .. } => crate::hardscape::report::quantities_on(doc, obj, ground)
                 .map_or(Prop::NotApplicable, |q| num(q.volume_m3)),
             _ => Prop::NotApplicable,
@@ -327,6 +330,7 @@ fn builtin(
             }
             Shape::ExistingTree { species, .. } => text(species.clone()),
             Shape::LandscapeArea { name, .. } => text(name.clone()),
+            Shape::Massing(m) => text(m.name.clone()),
             Shape::Hardscape { material, .. } => text(material.clone()),
             Shape::Text { text: t, .. } => text(t.clone()),
             _ => Prop::NotApplicable,
@@ -353,7 +357,21 @@ fn builtin(
             Shape::Plant { spread, .. } | Shape::ExistingTree { spread, .. } => num(*spread),
             _ => Prop::NotApplicable,
         },
+        // Massing models: the number of floors, the gross floor area (m2) and the roof style.
+        "floors" => match shape {
+            Shape::Massing(m) => num(f64::from(m.floor_count())),
+            _ => Prop::NotApplicable,
+        },
+        "grossfloorarea" => match shape {
+            Shape::Massing(m) => num(m.quantities().gross_floor_area / 1e6),
+            _ => Prop::NotApplicable,
+        },
+        "roof" => match shape {
+            Shape::Massing(m) => text(m.roof.name().to_string()),
+            _ => Prop::NotApplicable,
+        },
         "height" => match shape {
+            Shape::Massing(m) => num(m.eave_height()),
             Shape::Plant { height, .. } | Shape::ExistingTree { height, .. } => num(*height),
             _ => Prop::NotApplicable,
         },

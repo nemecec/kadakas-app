@@ -8,6 +8,7 @@ mod canvas3d;
 mod data_ui;
 mod databar;
 mod file_io;
+mod gis_ui;
 mod gpu3d;
 mod hit;
 #[cfg(not(target_arch = "wasm32"))]

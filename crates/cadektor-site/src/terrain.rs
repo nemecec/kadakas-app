@@ -92,6 +92,36 @@ impl<'a> SiteTerrain<'a> {
     }
 }
 
+impl SiteTerrain<'_> {
+    /// The height of the base of a massing model above its layer, in mm: the lowest ground height
+    /// under the footprint, so the building stands on the ground and never floats. A base that the
+    /// model gives itself wins. Without a site model on the layer the base is 0.
+    pub fn massing_base(&self, obj: &Object, m: &cadektor_core::massing::Massing) -> f64 {
+        if let Some(b) = m.base {
+            return b;
+        }
+        let ring = m.ring();
+        let step = (ring.len() / 64).max(1);
+        let mut samples: Vec<DVec2> = ring.iter().step_by(step).copied().collect();
+        if !ring.is_empty() {
+            samples.push(ring.iter().copied().sum::<DVec2>() / ring.len() as f64);
+        }
+        let on_ground = samples
+            .iter()
+            .filter(|p| self.covered(obj, **p))
+            .filter_map(|p| self.elevation(obj, *p))
+            .reduce(f64::min);
+        on_ground
+            .or_else(|| {
+                samples
+                    .iter()
+                    .filter_map(|p| self.elevation(obj, *p))
+                    .reduce(f64::min)
+            })
+            .unwrap_or(0.0)
+    }
+}
+
 impl TerrainSource for SiteTerrain<'_> {
     /// The height of the ground. Outside every site model on the layer it is the height of the
     /// nearest edge of the nearest model, so a hardscape that reaches over the edge stays level

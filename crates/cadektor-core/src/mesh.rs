@@ -676,7 +676,22 @@ impl Builder<'_> {
                 };
                 self.plant(&build, z, edge, id);
             }
-            Shape::Text { .. } | Shape::PlantTag { .. } => {}
+            Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Underlay(_) => {}
+            Shape::Massing(m) => {
+                let color = fill.unwrap_or(crate::massing::DEFAULT_COLOR);
+                let mut sink = SceneSink {
+                    scene: &mut self.scene,
+                    object: id,
+                    z0: z,
+                };
+                match (m.base, self.ext) {
+                    // On the site model: the extension knows the ground.
+                    (None, Some(ext)) => ext(self.doc, obj, &mut sink),
+                    (base, _) => {
+                        crate::massing::emit(m, base.unwrap_or(0.0), color, edge, &mut sink)
+                    }
+                }
+            }
             Shape::Locus3d { p } => {
                 let h = crate::model::LOCUS_MARKER_HALF;
                 let c = pen.unwrap_or([0, 0, 0, 255]);

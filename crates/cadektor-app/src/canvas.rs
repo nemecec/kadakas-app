@@ -165,6 +165,16 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
             fill_polygon(painter, &flat, &sp, st.fill);
             path(&flat, true);
         }
+        Shape::Massing(m) => {
+            let flat = curve::flatten(&m.footprint, true, curve_tolerance(view.zoom));
+            let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+            fill_polygon(painter, &flat, &sp, st.fill);
+            path(&flat, true);
+            for seg in crate::gis_ui::roof_lines(m, view, offset) {
+                painter.line_segment(seg, stroke);
+            }
+        }
+        Shape::Underlay(u) => crate::gis_ui::draw_underlay(painter, view, u, offset),
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag {
             at, anchor, height, ..
@@ -470,7 +480,13 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     crate::annot_ui::set_revision(f.site.map_or(0, |(_, revision)| revision));
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
-    for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
+    // Map underlays are drawn first, below the vector objects.
+    let visible = || f.doc.objects.values().filter(|o| f.doc.is_visible(o));
+    let is_under = |o: &&Object| matches!(o.shape, Shape::Underlay(_));
+    for o in visible()
+        .filter(is_under)
+        .chain(visible().filter(|o| !is_under(&o)))
+    {
         let st = object_style(f.doc, o, view.zoom);
         let direct = f.selection.contains(&o.id);
         let via_group = !direct
