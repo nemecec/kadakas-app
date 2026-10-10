@@ -24,6 +24,7 @@ pub const SHEET_CREATE: (&str, &str) = ("sheet.create", "Add a sheet layer (pape
 pub const SHEET_SET: (&str, &str) = ("sheet.set", "Change the page of a sheet layer. params: {layer (ID or name), paper?, orientation?, number?, title?}.");
 pub const SHEET_RENDER: (&str, &str) = ("sheet.render", "Draw a sheet. params: {sheet (layer ID or name), format? (svg | png; default svg), dpi? (png, default 100)}. Returns {svg} or {png_base64, width, height}. Viewports are drawn live from the model.");
 pub const PROJECT_GET: (&str, &str) = ("project.get", "Project data for title blocks: name, client, address, drawn_by, date, revision.");
+pub const PROJECT_NEW_GUID: (&str, &str) = ("project.new_guid", "Give the project a new GUID (one undo step). IFC GlobalIds come from it, so use it for a copy of a template. Returns {guid}.");
 pub const PROJECT_SET: (&str, &str) = ("project.set", "Change project data. params: any of name, client, address, drawn_by, date, revision.");
 pub const VIEWPORT_CREATE: (&str, &str) = ("viewport.create", "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe, 3D only), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images. Returns the viewport with its id.");
 pub const VIEWPORT_GET: (&str, &str) = ("viewport.get", "One viewport with all settings, overrides and annotations. params: {id}.");
@@ -70,7 +71,7 @@ fn app(e: impl std::fmt::Display) -> RpcError {
 type Res = Result<Value, RpcError>;
 
 const KNOWN: &[&str] = &[
-    "sheet.list", "sheet.create", "sheet.set", "sheet.render", "project.get", "project.set", "viewport.create", "viewport.get", "viewport.list",
+    "sheet.list", "sheet.create", "sheet.set", "sheet.render", "project.get", "project.set", "project.new_guid", "viewport.create", "viewport.get", "viewport.list",
     "viewport.update", "viewport.set_override", "viewport.annotate", "title_block.create", "title_block.update", "title_block.resolve", "saved_view.list",
     "saved_view.save", "saved_view.restore", "saved_view.delete",
 ];
@@ -91,6 +92,11 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
         "sheet.render" => sheet_render(s, p),
         "project.get" => Ok(serde_json::to_value(&s.editor.doc().drawing.project).unwrap()),
         "project.set" => project_set(s, p),
+        "project.new_guid" => {
+            let guid = cadektor_core::guid::random();
+            s.editor.execute(&Command::SetProjectGuid { guid: guid.clone() }).map_err(app)?;
+            Ok(json!({ "guid": guid }))
+        }
         "viewport.create" => viewport_create(s, p),
         "viewport.get" => {
             let (id, _) = object_id(p)?;

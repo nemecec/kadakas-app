@@ -31,7 +31,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
         None => Ok(None),
         Some(n) => Format::from_name(n)
             .map(Some)
-            .ok_or_else(|| RpcError::invalid_params(format!("unknown format '{n}'. Use dxf, shp or geojson"))),
+            .ok_or_else(|| RpcError::invalid_params(format!("unknown format '{n}'. Use dxf, shp or geojson (export also: ifc)"))),
     }
 }
 
@@ -39,7 +39,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 pub(crate) fn describe() -> Value {
     json!({
         "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson"],
-        "export_formats": ["dxf (ASCII)", "geojson", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "export_formats": ["dxf (ASCII)", "geojson", "ifc (IFC4, see describe.io.ifc)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed)",
@@ -62,10 +62,12 @@ pub(crate) fn describe() -> Value {
             "visible_only": "false (default)",
             "tolerance": "mm, curve approximation. Default 1"
         },
+        "ifc": crate::ifc_api::describe(),
         "examples": [
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
             {"method": "import.file", "params": {"path": "/data/trees.geojson", "options": {"class_field": "species"}}},
-            {"method": "export.file", "params": {"path": "/data/out.dxf", "format": "dxf", "overwrite": true}}
+            {"method": "export.file", "params": {"path": "/data/out.dxf", "format": "dxf", "overwrite": true}},
+            {"method": "export.file", "params": {"path": "/data/site.ifc", "format": "ifc", "overwrite": true}}
         ],
         "paths": "A server for agents only reads and writes inside the folder of the open document and the folders that its owner allows with --allow-dir (default: the folder where it started). The extension must match the format, and export.file needs {overwrite: true} to replace a file.",
         "georeference": "Imports of GIS files set the document georeference: {crs, origin: [x, y] in meters, rotation, user_origin}. Geometry stays near 0. Set it with the command {op: set_georeference, georef: {crs: \"EPSG:3067\", origin: [385000, 6672000]}}. document.summary shows it."
@@ -128,6 +130,9 @@ impl Session {
 
     fn export_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
         let FileParams { path, format, options, overwrite } = params(p)?;
+        if crate::ifc_api::is_ifc(format.as_deref(), &path) {
+            return self.export_ifc_file(path, &options, overwrite, checked);
+        }
         if let Some(f) = format.as_deref().filter(|f| crate::sheets_api::is_sheet_format(f)) {
             return self.export_sheet_file(f, path, &options, overwrite, checked);
         }
