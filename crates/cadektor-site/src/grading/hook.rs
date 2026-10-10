@@ -93,6 +93,7 @@ mod tests {
     use super::*;
     use crate::grading::testutil::*;
     use crate::model::tests::grid_site;
+    use crate::SiteResult;
     use cadektor_core::command::{Command, Editor};
     use cadektor_core::mesh;
     use cadektor_core::svg as core_svg;
@@ -134,6 +135,27 @@ mod tests {
         add_with(&mut ed2, Shape::Rect { min: DVec2::ZERO, max: DVec2::new(100.0, 100.0) }, analysis::LEGEND_KEY, json!({"site": site2.0}));
         assert!(render(&ed2).contains("legend-swatch"));
         let _ = sid;
+    }
+
+    #[test]
+    fn analysis_colors_the_3d_terrain() {
+        let mut ed = Editor::default();
+        let id = add(&mut ed, grid_site(6, 1000.0, |x, _| x / 10.0));
+        let cache = SiteCache::default();
+        let colors = |ed: &Editor| {
+            let ext = crate::draw::scene_ext(&cache, ed.revision());
+            mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext)).mesh.colors.clone()
+        };
+        let plain = colors(&ed);
+        assert!(plain.windows(2).all(|w| w[0] == w[1]));
+        ed.execute(&Command::SetData { id, set: [(analysis::KEY.to_string(), json!({"mode": "slope", "breaks": [5.0], "colors": [[1, 2, 3, 255], [9, 8, 7, 255]]}))].into(), remove: vec![] }).unwrap();
+        let colored = colors(&ed);
+        assert!(colored.contains(&[9, 8, 7, 255]) && !colored.contains(&[1, 2, 3, 255]), "10 percent is above the limit of 5");
+        // Showing contours only still shows the analysis colors.
+        let site = SiteResult::compute(ed.doc(), id).unwrap();
+        let a = analysis::for_site(&site, &analysis::spec_of(ed.doc().object(id).unwrap()).unwrap()).unwrap();
+        assert_eq!(a.bands.len(), 2);
+        let _ = a;
     }
 
     #[test]

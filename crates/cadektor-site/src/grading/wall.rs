@@ -174,10 +174,9 @@ impl WallStyle {
         if !ok(self.total_thickness()) {
             return Err("the components are too thick".into());
         }
-        if let Some(c) = &self.coping {
-            if !(c.height.is_finite() && c.height > 0.0 && c.height <= 5000.0 && c.overhang.is_finite() && (0.0..=2000.0).contains(&c.overhang)) {
-                return Err("coping needs a height of more than 0 (at most 5000) and an overhang from 0 to 2000 mm".into());
-            }
+        let bad_coping = |c: &Coping| !(c.height.is_finite() && c.height > 0.0 && c.height <= 5000.0 && c.overhang.is_finite() && (0.0..=2000.0).contains(&c.overhang));
+        if self.coping.as_ref().is_some_and(bad_coping) {
+            return Err("coping needs a height of more than 0 (at most 5000) and an overhang from 0 to 2000 mm".into());
         }
         Ok(())
     }

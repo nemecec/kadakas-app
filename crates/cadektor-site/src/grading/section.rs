@@ -434,7 +434,7 @@ mod tests {
         // A section object without a length, or a plain line, has no profile.
         let zero = section(&mut ed, (1.0, 1.0), (1.0, 1.0), json!({}));
         assert!(profile(ed.doc(), ed.doc().object(zero).unwrap(), &site).is_none());
-        let plain = add(&mut ed, Shape::Line { a: a, b: b });
+        let plain = add(&mut ed, Shape::Line { a, b });
         assert!(profile(ed.doc(), ed.doc().object(plain).unwrap(), &site).is_none());
         let circle = add(&mut ed, Shape::Circle { center: a, radius: 1.0 });
         assert!(profile(ed.doc(), ed.doc().object(circle).unwrap(), &site).is_none());

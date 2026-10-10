@@ -117,3 +117,38 @@ pub(crate) mod testutil {
         add(ed, crate::model::tests::grid_site(11, 1000.0, f))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::testutil::*;
+    use super::*;
+    use cadektor_core::command::Editor;
+
+    #[test]
+    fn follow_and_small_helpers() {
+        assert_eq!((Follow::Existing.name(), Follow::Proposed.name()), ("existing", "proposed"));
+        assert_eq!((Follow::Existing.surface(), Follow::Proposed.surface()), (Surface::Existing, Surface::Proposed));
+        assert!(finite("x", 1.0).is_ok() && finite("x", f64::NAN).unwrap_err().contains('x'));
+        assert_eq!(meters(1234.0, 1), "1.2");
+        assert_eq!(esc("<a & \"b\">"), "&lt;a &amp; &quot;b&quot;&gt;");
+    }
+
+    #[test]
+    fn the_host_is_named_or_found_on_the_layer() {
+        let mut ed = Editor::default();
+        let circle = add(&mut ed, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
+        let cache = SiteCache::default();
+        let obj = ed.doc().object(circle).unwrap();
+        assert!(host(ed.doc(), &cache, ed.revision(), obj, None).is_none());
+        let s = site(&mut ed, |x, _| x);
+        let obj = ed.doc().object(circle).unwrap();
+        let found = host(ed.doc(), &cache, ed.revision(), obj, None).unwrap();
+        assert_eq!(found.id, s);
+        assert_eq!(host(ed.doc(), &cache, ed.revision(), obj, Some(s)).unwrap().id, s);
+        assert!(host(ed.doc(), &cache, ed.revision(), obj, Some(circle)).is_none());
+        let g = ground_of(&found);
+        assert_eq!(g(DVec2::new(5000.0, 5000.0), Follow::Proposed), Some(5000.0));
+        assert_eq!(g(DVec2::new(-5.0, 0.0), Follow::Existing), None);
+        assert!(read::<wall::WallData>(ed.doc().object(circle).unwrap(), "nothing").is_none());
+    }
+}

@@ -361,7 +361,7 @@ mod tests {
         let g = solve(a(), b(10_000.0), &d, None).unwrap();
         let svg = svg(ObjectId(7), &d, &g, 100.0);
         assert!(svg.contains("grade-arrow") && svg.contains("grade-label") && svg.matches("grade-tag").count() == 2);
-        assert!(svg.contains("2.0% (1:50)") && svg.contains(">1<") == false && svg.contains(">1.2<") == false);
+        assert!(svg.contains("2.0% (1:50)") && !svg.contains(">1<") && !svg.contains(">1.2<"));
         assert!(svg.contains(">1.00<") && svg.contains(">1.20<"));
         // The arrow points downhill: for a rise from a to b it points to a (left).
         let tip: Vec<&str> = svg.lines().next().unwrap().split('"').nth(1).unwrap().split(' ').collect();

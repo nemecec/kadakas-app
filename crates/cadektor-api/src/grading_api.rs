@@ -572,7 +572,7 @@ impl Session {
         if na == nb {
             return Err(bad("the section line needs two different points"));
         }
-        let shape = (a.is_some() || b.is_some()).then(|| Shape::Line { a: na, b: nb });
+        let shape = (a.is_some() || b.is_some()).then_some(Shape::Line { a: na, b: nb });
         self.change_object(id, shape, section::KEY, serde_json::to_value(&d).expect("JSON"))?;
         Ok(json!({ "id": id }))
     }

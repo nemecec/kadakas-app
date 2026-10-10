@@ -61,15 +61,6 @@ impl GradingMode {
             GradingMode::Spot | GradingMode::Stake => Some(1),
         }
     }
-
-    pub fn hint(self) -> &'static str {
-        match self {
-            GradingMode::Wall => "Click the points of the wall path. Double-click or Enter finishes. Esc cancels.",
-            GradingMode::Grade => "Click the start and the end of the grade. With a site model the ends pick up its elevations.",
-            GradingMode::Spot | GradingMode::Stake => "Click to place. The height is read from the site model.",
-            GradingMode::Section => "Click the start and the end of the section line. Place the profile with section.place.",
-        }
-    }
 }
 
 /// The settings of the Grading tool.
@@ -345,7 +336,7 @@ mod tests {
         let bad = GradingSettings { wall_thickness: 0.0, ..at(GradingMode::Wall) };
         assert!(command(ed.doc(), &bad, &[p(0.0, 0.0), p(1.0, 0.0)]).is_none());
         assert_eq!(GradingMode::ALL.map(|m| m.clicks()), [None, Some(2), Some(1), Some(1), Some(2)]);
-        assert!(GradingMode::ALL.iter().all(|m| !m.name().is_empty() && !m.hint().is_empty()));
+        assert!(GradingMode::ALL.iter().all(|m| !m.name().is_empty()));
     }
 
     #[test]
