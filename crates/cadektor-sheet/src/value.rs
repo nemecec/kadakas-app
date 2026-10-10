@@ -61,7 +61,11 @@ pub fn format_number(n: f64) -> String {
     }
     let s = format!("{n:.10}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".to_string() } else { s.to_string() }
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 impl Value {
@@ -92,7 +96,12 @@ impl Value {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(f64::from(u8::from(*b))),
-            Value::Text(s) => s.trim().parse::<f64>().ok().filter(|n| n.is_finite()).ok_or(ErrorKind::Value),
+            Value::Text(s) => s
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .ok_or(ErrorKind::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -173,7 +182,10 @@ mod tests {
         assert_eq!(format_number(f64::NAN), "#NUM!");
         assert_eq!(format_number(-1e-11 + 1e-11), "0");
         assert_eq!(format_number(-0.00000000001), "-0.00000000001");
-        assert_eq!(format_number(-0.000000000001 * 0.0001), "-0.0000000000000001");
+        assert_eq!(
+            format_number(-0.000000000001 * 0.0001),
+            "-0.0000000000000001"
+        );
         assert_eq!(format_number(0.00000000004), "0.00000000004");
     }
 
@@ -184,14 +196,20 @@ mod tests {
         assert_eq!(Value::Text(" 2.5 ".into()).to_number(), Ok(2.5));
         assert_eq!(Value::Text("abc".into()).to_number(), Err(ErrorKind::Value));
         assert_eq!(Value::Text("inf".into()).to_number(), Err(ErrorKind::Value));
-        assert_eq!(Value::Error(ErrorKind::Ref).to_number(), Err(ErrorKind::Ref));
+        assert_eq!(
+            Value::Error(ErrorKind::Ref).to_number(),
+            Err(ErrorKind::Ref)
+        );
         assert_eq!(Value::Empty.to_bool(), Ok(false));
         assert_eq!(Value::Number(2.0).to_bool(), Ok(true));
         assert_eq!(Value::Text("True".into()).to_bool(), Ok(true));
         assert_eq!(Value::Text("false".into()).to_bool(), Ok(false));
         assert_eq!(Value::Text("x".into()).to_bool(), Err(ErrorKind::Value));
         assert_eq!(Value::Bool(false).to_bool(), Ok(false));
-        assert_eq!(Value::Error(ErrorKind::Div0).to_bool(), Err(ErrorKind::Div0));
+        assert_eq!(
+            Value::Error(ErrorKind::Div0).to_bool(),
+            Err(ErrorKind::Div0)
+        );
         assert_eq!(Value::num(f64::INFINITY), Value::Error(ErrorKind::Num));
         assert_eq!(Value::num(1.0), Value::Number(1.0));
         assert!(Value::Error(ErrorKind::Name).is_error() && Value::Empty.is_empty());
@@ -204,7 +222,15 @@ mod tests {
         assert_eq!(Value::Bool(false).to_text(), "FALSE");
         assert_eq!(Value::Number(1.5).to_string(), "1.5");
         assert_eq!(Value::Error(ErrorKind::Cycle).to_text(), "#CYCLE!");
-        for e in [ErrorKind::Div0, ErrorKind::Ref, ErrorKind::Name, ErrorKind::Value, ErrorKind::Cycle, ErrorKind::Parse, ErrorKind::Num] {
+        for e in [
+            ErrorKind::Div0,
+            ErrorKind::Ref,
+            ErrorKind::Name,
+            ErrorKind::Value,
+            ErrorKind::Cycle,
+            ErrorKind::Parse,
+            ErrorKind::Num,
+        ] {
             assert!(e.code().starts_with('#'));
         }
     }
@@ -217,7 +243,10 @@ mod tests {
         assert_eq!(t("a").compare(&t("B")), Less);
         assert_eq!(t("a").compare(&t("A")), Equal);
         assert_eq!(Value::Bool(false).compare(&Value::Bool(true)), Less);
-        assert_eq!(Value::Error(ErrorKind::Div0).compare(&Value::Error(ErrorKind::Div0)), Equal);
+        assert_eq!(
+            Value::Error(ErrorKind::Div0).compare(&Value::Error(ErrorKind::Div0)),
+            Equal
+        );
         assert_eq!(Value::Empty.compare(&Value::Number(-1.0)), Greater);
         assert_eq!(Value::Number(0.0).compare(&Value::Empty), Equal);
         assert_eq!(Value::Empty.compare(&t("x")), Less);
@@ -226,7 +255,10 @@ mod tests {
         assert_eq!(Value::Bool(true).compare(&Value::Empty), Greater);
         assert_eq!(Value::Number(5.0).compare(&t("a")), Less);
         assert_eq!(Value::Bool(false).compare(&t("a")), Greater);
-        assert_eq!(Value::Error(ErrorKind::Num).compare(&Value::Bool(true)), Greater);
+        assert_eq!(
+            Value::Error(ErrorKind::Num).compare(&Value::Bool(true)),
+            Greater
+        );
         assert_eq!(Value::Empty.compare(&Value::Empty), Equal);
         // Negative zero equals zero.
         assert_eq!(Value::Number(-0.0).compare(&Value::Number(0.0)), Equal);

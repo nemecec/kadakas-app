@@ -12,40 +12,73 @@ impl Tx<'_> {
     fn check_hardscape_style(&self, patch: &HardscapePatch) -> Result<(), CommandError> {
         match patch.style {
             Some(id) if self.doc.resources.hardscape_style(id).is_none() => {
-                Err(if self.doc.resources.get(id).is_some() { invalid("the resource is not a hardscape style") } else { CommandError::NoResource(id) })
+                Err(if self.doc.resources.get(id).is_some() {
+                    invalid("the resource is not a hardscape style")
+                } else {
+                    CommandError::NoResource(id)
+                })
             }
             _ => Ok(()),
         }
     }
 
     /// A path hardscape gets its outline from its center line. Its outline must not be edited directly.
-    pub(super) fn guard_path(&self, id: ObjectId, new_shape: Option<&Shape>) -> Result<(), CommandError> {
-        let Some(o) = self.doc.object(id) else { return Ok(()) };
+    pub(super) fn guard_path(
+        &self,
+        id: ObjectId,
+        new_shape: Option<&Shape>,
+    ) -> Result<(), CommandError> {
+        let Some(o) = self.doc.object(id) else {
+            return Ok(());
+        };
         let is_path = hardscape::data(o).is_some_and(|d| d.mode == hardscape::Mode::Path);
         let changes = match (new_shape, &o.shape) {
-            (Some(Shape::Hardscape { boundary: b, .. }), Shape::Hardscape { boundary: old, .. }) => b != old,
+            (
+                Some(Shape::Hardscape { boundary: b, .. }),
+                Shape::Hardscape { boundary: old, .. },
+            ) => b != old,
             (Some(_), _) => true,
             (None, _) => true,
         };
         if is_path && changes {
-            return Err(invalid("a path hardscape gets its outline from its center line. Change the center line or the width with set_hardscape"));
+            return Err(invalid(
+                "a path hardscape gets its outline from its center line. Change the center line or the width with set_hardscape",
+            ));
         }
         Ok(())
     }
 
     /// The holes of a landscape area must stay inside its boundary when the boundary is edited.
-    pub(super) fn check_holes(&self, id: ObjectId, boundary: &[Vertex]) -> Result<(), CommandError> {
-        let Some(d) = self.doc.object(id).and_then(landscape::data) else { return Ok(()) };
+    pub(super) fn check_holes(
+        &self,
+        id: ObjectId,
+        boundary: &[Vertex],
+    ) -> Result<(), CommandError> {
+        let Some(d) = self.doc.object(id).and_then(landscape::data) else {
+            return Ok(());
+        };
         if landscape::holes_fit(boundary, &d.holes) {
             Ok(())
         } else {
-            Err(invalid("the area has holes that would lie outside the new boundary. Move or clear the holes first"))
+            Err(invalid(
+                "the area has holes that would lie outside the new boundary. Move or clear the holes first",
+            ))
         }
     }
 
-    pub(super) fn run_area(&mut self, cmd: &Command, out: &mut Outcome) -> Result<(), CommandError> {
+    pub(super) fn run_area(
+        &mut self,
+        cmd: &Command,
+        out: &mut Outcome,
+    ) -> Result<(), CommandError> {
         match cmd {
-            Command::AddHardscape { boundary, patch, layer, class, attrs } => {
+            Command::AddHardscape {
+                boundary,
+                patch,
+                layer,
+                class,
+                attrs,
+            } => {
                 let layer = layer.unwrap_or(self.doc.active_layer);
                 let class = class.unwrap_or(self.doc.active_class);
                 self.check_layer(layer)?;
@@ -59,8 +92,15 @@ impl Tx<'_> {
                     return Err(invalid("give a boundary or a center line, not both"));
                 }
                 // A path gets its real outline from the patch.
-                let start = boundary.clone().unwrap_or_else(|| crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]));
-                let shape = Shape::Hardscape { boundary: start, material: "Paving".into(), thickness: None, elevation: None };
+                let start = boundary
+                    .clone()
+                    .unwrap_or_else(|| crate::curve::corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]));
+                let shape = Shape::Hardscape {
+                    boundary: start,
+                    material: "Paving".into(),
+                    thickness: None,
+                    elevation: None,
+                };
                 validate_shape(&shape)?;
                 self.check_sheet_rules(layer, &shape, None)?;
                 let id = ObjectId(self.alloc()?);
@@ -73,7 +113,14 @@ impl Tx<'_> {
                 self.doc.objects.insert(id, o);
                 out.created.push(id.0);
             }
-            Command::AddLandscapeArea { boundary, name, patch, layer, class, attrs } => {
+            Command::AddLandscapeArea {
+                boundary,
+                name,
+                patch,
+                layer,
+                class,
+                attrs,
+            } => {
                 let layer = layer.unwrap_or(self.doc.active_layer);
                 let class = class.unwrap_or(self.doc.active_class);
                 self.check_layer(layer)?;
@@ -82,9 +129,16 @@ impl Tx<'_> {
                 if let Some(id) = patch.style
                     && self.doc.resources.landscape_area_style(id).is_none()
                 {
-                    return Err(if self.doc.resources.get(id).is_some() { invalid("the resource is not a landscape area style") } else { CommandError::NoResource(id) });
+                    return Err(if self.doc.resources.get(id).is_some() {
+                        invalid("the resource is not a landscape area style")
+                    } else {
+                        CommandError::NoResource(id)
+                    });
                 }
-                let shape = Shape::LandscapeArea { boundary: boundary.clone(), name: name.clone() };
+                let shape = Shape::LandscapeArea {
+                    boundary: boundary.clone(),
+                    name: name.clone(),
+                };
                 validate_shape(&shape)?;
                 self.check_sheet_rules(layer, &shape, None)?;
                 let id = ObjectId(self.alloc()?);
@@ -126,7 +180,11 @@ impl Tx<'_> {
                 if let Some(id) = patch.style
                     && self.doc.resources.landscape_area_style(id).is_none()
                 {
-                    return Err(if self.doc.resources.get(id).is_some() { invalid("the resource is not a landscape area style") } else { CommandError::NoResource(id) });
+                    return Err(if self.doc.resources.get(id).is_some() {
+                        invalid("the resource is not a landscape area style")
+                    } else {
+                        CommandError::NoResource(id)
+                    });
                 }
                 let ids = unique(ids);
                 let mut plan = Vec::new();

@@ -7,14 +7,14 @@ use cadektor_core::hardscape::{NoTerrain, TerrainSource};
 use cadektor_core::mesh;
 use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
 use cadektor_core::plants::schedule;
-use cadektor_core::sheets::{self, title_block_geometry, Fields, TitleBlock, Viewport};
-use cadektor_render::{render, Camera, Projection, RenderMode, RenderOptions, StandardView, FOV_Y};
+use cadektor_core::sheets::{self, Fields, TitleBlock, Viewport, title_block_geometry};
+use cadektor_render::{Camera, FOV_Y, Projection, RenderMode, RenderOptions, StandardView, render};
 use glam::DVec2;
 
-use crate::display::*;
-use crate::plan::{annotation_prims, shape_prims, Xf};
-use crate::table::Tables;
 use crate::PrintError;
+use crate::display::*;
+use crate::plan::{Xf, annotation_prims, shape_prims};
+use crate::table::Tables;
 
 const INK: Rgba = [0, 0, 0, 255];
 /// Largest side of a 3D viewport image in pixels.
@@ -39,13 +39,24 @@ pub struct SheetCache {
 
 impl SheetCache {
     /// The page of a sheet layer for this revision of the document.
-    pub fn page(&mut self, doc: &Document, revision: u64, layer: LayerId) -> Result<Arc<Page>, PrintError> {
+    pub fn page(
+        &mut self,
+        doc: &Document,
+        revision: u64,
+        layer: LayerId,
+    ) -> Result<Arc<Page>, PrintError> {
         self.page_on(doc, revision, layer, &NoTerrain)
     }
 
     /// Like `page`, with the ground of the site models for the worksheet tables. The ground must
     /// belong to this revision.
-    pub fn page_on(&mut self, doc: &Document, revision: u64, layer: LayerId, ground: &dyn TerrainSource) -> Result<Arc<Page>, PrintError> {
+    pub fn page_on(
+        &mut self,
+        doc: &Document,
+        revision: u64,
+        layer: LayerId,
+        ground: &dyn TerrainSource,
+    ) -> Result<Arc<Page>, PrintError> {
         if self.revision != Some(revision) {
             self.pages.clear();
             self.used.clear();
@@ -78,7 +89,11 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
 
 /// Builds the page of a sheet layer. `ground` gives the heights of the site models, for the
 /// worksheet tables on the page.
-pub fn compose_page_on(doc: &Document, layer: LayerId, ground: &dyn TerrainSource) -> Result<Page, PrintError> {
+pub fn compose_page_on(
+    doc: &Document,
+    layer: LayerId,
+    ground: &dyn TerrainSource,
+) -> Result<Page, PrintError> {
     let l = doc.layer(layer).ok_or(PrintError::NoSheet(layer))?;
     if l.kind != LayerKind::Sheet {
         return Err(PrintError::NoSheet(layer));
@@ -90,14 +105,22 @@ pub fn compose_page_on(doc: &Document, layer: LayerId, ground: &dyn TerrainSourc
     let mut prims = Vec::new();
     let mut budget = MAX_RASTER_PIXELS;
     let mut rasters = 0;
-    for obj in doc.objects.values().filter(|o| o.layer == layer && doc.is_shown(o)) {
+    for obj in doc
+        .objects
+        .values()
+        .filter(|o| o.layer == layer && doc.is_shown(o))
+    {
         match &obj.shape {
             Shape::Viewport(vp) => {
                 // A sheet layer holds a few 3D viewports at most (the commands enforce it too).
                 if !vp.is_plan() {
                     rasters += 1;
                 }
-                let mut left = if rasters > cadektor_core::sheets::MAX_3D_VIEWPORTS { 0 } else { budget };
+                let mut left = if rasters > cadektor_core::sheets::MAX_3D_VIEWPORTS {
+                    0
+                } else {
+                    budget
+                };
                 viewport_prims(doc, vp, &counts, &tables, &mut left, &mut prims);
                 if rasters <= cadektor_core::sheets::MAX_3D_VIEWPORTS {
                     budget = left;
@@ -106,20 +129,50 @@ pub fn compose_page_on(doc: &Document, layer: LayerId, ground: &dyn TerrainSourc
             Shape::TitleBlock(tb) => title_block_prims(doc, layer, tb, size, &mut prims),
             _ => {
                 let attrs = doc.resolved_attrs(obj);
-                shape_prims(doc, obj, &attrs, &Xf::IDENTITY, &counts, &tables, &mut prims);
+                shape_prims(
+                    doc,
+                    obj,
+                    &attrs,
+                    &Xf::IDENTITY,
+                    &counts,
+                    &tables,
+                    &mut prims,
+                );
             }
         }
     }
-    let title = format!("{} {}", sheet.number, sheet.title).trim().to_string();
-    Ok(Page { size, title: if title.is_empty() { l.name.clone() } else { title }, prims })
+    let title = format!("{} {}", sheet.number, sheet.title)
+        .trim()
+        .to_string();
+    Ok(Page {
+        size,
+        title: if title.is_empty() {
+            l.name.clone()
+        } else {
+            title
+        },
+        prims,
+    })
 }
 
 fn rect_prim(lo: DVec2, hi: DVec2, width: f64) -> Prim {
-    Prim::Path(PathPrim::stroked(PathPrim::polyline(&sheets::rect_polygon(lo, hi)), true, INK, width))
+    Prim::Path(PathPrim::stroked(
+        PathPrim::polyline(&sheets::rect_polygon(lo, hi)),
+        true,
+        INK,
+        width,
+    ))
 }
 
 /// The primitives of a viewport: the frame (if shown), the clipped view and the annotations.
-pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, tables: &Tables, budget: &mut u64, out: &mut Vec<Prim>) {
+pub fn viewport_prims(
+    doc: &Document,
+    vp: &Viewport,
+    counts: &schedule::TagCounts,
+    tables: &Tables,
+    budget: &mut u64,
+    out: &mut Vec<Prim>,
+) {
     let clip = vp.clip_polygon();
     if clip.len() >= 3 {
         out.push(Prim::PushClip(clip.clone()));
@@ -130,7 +183,12 @@ pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCount
         }
         out.push(Prim::PopClip);
         if vp.show_frame {
-            out.push(Prim::Path(PathPrim::stroked(PathPrim::polyline(&clip), true, INK, 0.35)));
+            out.push(Prim::Path(PathPrim::stroked(
+                PathPrim::polyline(&clip),
+                true,
+                INK,
+                0.35,
+            )));
         }
     }
     for a in &vp.annotations {
@@ -138,12 +196,19 @@ pub fn viewport_prims(doc: &Document, vp: &Viewport, counts: &schedule::TagCount
     }
 }
 
-fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, tables: &Tables, out: &mut Vec<Prim>) {
+fn plan_view(
+    doc: &Document,
+    vp: &Viewport,
+    counts: &schedule::TagCounts,
+    tables: &Tables,
+    out: &mut Vec<Prim>,
+) {
     let xf = Xf::of(vp);
     let (lo, hi) = vp.model_window();
     for obj in doc.objects.values().filter(|o| vp.shows(doc, o)) {
         let (a, b) = obj.shape.bounds();
-        if !(a.is_finite() && b.is_finite()) || b.x < lo.x || a.x > hi.x || b.y < lo.y || a.y > hi.y {
+        if !(a.is_finite() && b.is_finite()) || b.x < lo.x || a.x > hi.x || b.y < lo.y || a.y > hi.y
+        {
             continue;
         }
         let attrs = vp.resolve(doc, obj);
@@ -156,8 +221,18 @@ fn plan_view(doc: &Document, vp: &Viewport, counts: &schedule::TagCounts, tables
 /// The rest of the document is not copied.
 pub fn viewport_document(doc: &Document, vp: &Viewport) -> Document {
     let mut d = Document::default();
-    d.layers = doc.layers.iter().cloned().map(|l| Layer { visible: true, ..l }).collect();
-    d.classes = doc.classes.iter().cloned().map(|c| Class { visible: true, ..c }).collect();
+    d.layers = doc
+        .layers
+        .iter()
+        .cloned()
+        .map(|l| Layer { visible: true, ..l })
+        .collect();
+    d.classes = doc
+        .classes
+        .iter()
+        .cloned()
+        .map(|c| Class { visible: true, ..c })
+        .collect();
     d.resources = doc.resources.clone();
     d.active_layer = doc.active_layer;
     d.active_class = doc.active_class;
@@ -212,23 +287,63 @@ fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImageP
     // The frame is `size.y` mm tall on paper, so it shows `size.y * scale` mm of the model.
     let half = size.y * vp.scale / 2.0;
     cam.distance = (half / (FOV_Y as f64 / 2.0).tan()) as f32;
-    let mode = if vp.mode == "wireframe" { RenderMode::Wireframe } else { RenderMode::Shaded };
-    let img = render(&scene, &cam, &RenderOptions { width: w, height: h, mode, background: [255, 255, 255, 255] });
-    let rgb: Vec<u8> = img.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-    Some(ImagePrim { min: vp.min, max: vp.max, width: w, height: h, rgb: Arc::new(rgb) })
+    let mode = if vp.mode == "wireframe" {
+        RenderMode::Wireframe
+    } else {
+        RenderMode::Shaded
+    };
+    let img = render(
+        &scene,
+        &cam,
+        &RenderOptions {
+            width: w,
+            height: h,
+            mode,
+            background: [255, 255, 255, 255],
+        },
+    );
+    let rgb: Vec<u8> = img
+        .rgba
+        .chunks_exact(4)
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    Some(ImagePrim {
+        min: vp.min,
+        max: vp.max,
+        width: w,
+        height: h,
+        rgb: Arc::new(rgb),
+    })
 }
 
 /// Border, grid reference and title block.
-pub fn title_block_prims(doc: &Document, layer: LayerId, tb: &TitleBlock, page: DVec2, out: &mut Vec<Prim>) {
+pub fn title_block_prims(
+    doc: &Document,
+    layer: LayerId,
+    tb: &TitleBlock,
+    page: DVec2,
+    out: &mut Vec<Prim>,
+) {
     let fields = Fields::of(doc, layer, tb);
     let g = title_block_geometry(tb, &fields, page);
     out.push(rect_prim(g.border.0, g.border.1, 0.7));
     for (a, b) in &g.grid_lines {
-        out.push(Prim::Path(PathPrim::stroked(PathPrim::polyline(&[*a, *b]), false, INK, 0.25)));
+        out.push(Prim::Path(PathPrim::stroked(
+            PathPrim::polyline(&[*a, *b]),
+            false,
+            INK,
+            0.25,
+        )));
     }
     let h = (tb.margin * 0.4).clamp(1.5, 3.5);
     for (at, label) in &g.grid_labels {
-        out.push(Prim::Text(TextPrim { at: *at - DVec2::new(0.0, h * 0.35), text: label.clone(), height: h, color: INK, align: Align::Center }));
+        out.push(Prim::Text(TextPrim {
+            at: *at - DVec2::new(0.0, h * 0.35),
+            text: label.clone(),
+            height: h,
+            color: INK,
+            align: Align::Center,
+        }));
     }
     if g.block.1.x > g.block.0.x {
         out.push(rect_prim(g.block.0, g.block.1, 0.5));
@@ -236,19 +351,34 @@ pub fn title_block_prims(doc: &Document, layer: LayerId, tb: &TitleBlock, page: 
     for (lo, hi, label, value, size) in &g.cells {
         out.push(rect_prim(*lo, *hi, 0.25));
         if !label.is_empty() {
-            out.push(Prim::Text(TextPrim { at: DVec2::new(lo.x + 1.0, hi.y - 2.6), text: label.clone(), height: 1.8, color: [90, 90, 90, 255], align: Align::Left }));
+            out.push(Prim::Text(TextPrim {
+                at: DVec2::new(lo.x + 1.0, hi.y - 2.6),
+                text: label.clone(),
+                height: 1.8,
+                color: [90, 90, 90, 255],
+                align: Align::Left,
+            }));
         }
         if !value.is_empty() {
             // Shrink the text until it fits the cell.
             let room = (hi.x - lo.x - 2.0).max(1.0);
             let fit = room / (value.chars().count() as f64 * 0.52);
-            out.push(Prim::Text(TextPrim { at: DVec2::new(lo.x + 1.0, lo.y + 2.0), text: value.clone(), height: size.min(fit), color: INK, align: Align::Left }));
+            out.push(Prim::Text(TextPrim {
+                at: DVec2::new(lo.x + 1.0, lo.y + 2.0),
+                text: value.clone(),
+                height: size.min(fit),
+                color: INK,
+                align: Align::Left,
+            }));
         }
     }
 }
 
 /// Finds an object on a sheet layer by ID.
-pub fn find_viewport(doc: &Document, id: cadektor_core::model::ObjectId) -> Option<(&Object, &Viewport)> {
+pub fn find_viewport(
+    doc: &Document,
+    id: cadektor_core::model::ObjectId,
+) -> Option<(&Object, &Viewport)> {
     let o = doc.object(id)?;
     match &o.shape {
         Shape::Viewport(v) => Some((o, &**v)),

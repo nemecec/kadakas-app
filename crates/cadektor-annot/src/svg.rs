@@ -6,7 +6,10 @@ use cadektor_core::annot::draw::{Fill, Prim};
 use cadektor_core::model::{Color, Document, Object, Shape};
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// The value of `name="..."` in an attribute string.
@@ -24,7 +27,12 @@ pub fn prims_svg(prims: &[Prim], stroke: &str, weight: f64, group_attrs: &str) -
     let _ = write!(s, "<g {group_attrs}>");
     for p in prims {
         match p {
-            Prim::Poly { pts, closed, fill, color } => {
+            Prim::Poly {
+                pts,
+                closed,
+                fill,
+                color,
+            } => {
                 let pen = color.map_or_else(|| stroke.to_string(), Color::to_css);
                 let fill = match fill {
                     Fill::None => "none".to_string(),
@@ -33,11 +41,26 @@ pub fn prims_svg(prims: &[Prim], stroke: &str, weight: f64, group_attrs: &str) -
                 };
                 let points: Vec<String> = pts.iter().map(|q| format!("{},{}", q.x, -q.y)).collect();
                 let tag = if *closed { "polygon" } else { "polyline" };
-                let _ = write!(s, r#"<{tag} points="{}" stroke="{pen}" fill="{fill}" stroke-width="{weight}"/>"#, points.join(" "));
+                let _ = write!(
+                    s,
+                    r#"<{tag} points="{}" stroke="{pen}" fill="{fill}" stroke-width="{weight}"/>"#,
+                    points.join(" ")
+                );
             }
-            Prim::Text { at, text, height, center, bold, color } => {
+            Prim::Text {
+                at,
+                text,
+                height,
+                center,
+                bold,
+                color,
+            } => {
                 let fill = color.map_or_else(|| stroke.to_string(), Color::to_css);
-                let anchor = if *center { r#" text-anchor="middle""# } else { "" };
+                let anchor = if *center {
+                    r#" text-anchor="middle""#
+                } else {
+                    ""
+                };
                 let weight = if *bold { r#" font-weight="bold""# } else { "" };
                 let _ = write!(
                     s,
@@ -60,11 +83,26 @@ pub fn object_svg(doc: &Document, obj: &Object, style: &str, out: &mut String) {
 }
 
 /// Like `object_svg`, with the primitives from a cache (see `AnnotCache`).
-pub fn object_svg_with(doc: &Document, obj: &Object, style: &str, out: &mut String, cache: &crate::AnnotCache, revision: u64) {
-    let Shape::Annotation(a) = &obj.shape else { return };
+pub fn object_svg_with(
+    doc: &Document,
+    obj: &Object,
+    style: &str,
+    out: &mut String,
+    cache: &crate::AnnotCache,
+    revision: u64,
+) {
+    let Shape::Annotation(a) = &obj.shape else {
+        return;
+    };
     let stroke = attr(style, "stroke").unwrap_or("rgba(0,0,0,1.000)");
-    let weight: f64 = attr(style, "stroke-width").and_then(|w| w.parse().ok()).unwrap_or(1.0);
+    let weight: f64 = attr(style, "stroke-width")
+        .and_then(|w| w.parse().ok())
+        .unwrap_or(1.0);
     let prims = cache.prims(doc, obj, revision);
-    let group = format!(r#"data-kind="annotation" data-type="{}" data-id="{}""#, a.type_name(), obj.id);
+    let group = format!(
+        r#"data-kind="annotation" data-type="{}" data-id="{}""#,
+        a.type_name(),
+        obj.id
+    );
     out.push_str(&prims_svg(prims.as_slice(), stroke, weight, &group));
 }

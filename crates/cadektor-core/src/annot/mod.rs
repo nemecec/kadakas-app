@@ -40,7 +40,16 @@ pub enum Annot {
 }
 
 /// The JSON names of the annotation types, as `Annot::type_name` gives them.
-pub const TYPE_NAMES: [&str; 8] = ["dimension", "text", "callout", "data_tag", "legend", "north_arrow", "scale_bar", "revision_cloud"];
+pub const TYPE_NAMES: [&str; 8] = [
+    "dimension",
+    "text",
+    "callout",
+    "data_tag",
+    "legend",
+    "north_arrow",
+    "scale_bar",
+    "revision_cloud",
+];
 
 /// Longest text in an annotation, in characters.
 pub const MAX_TEXT_CHARS: usize = 10_000;
@@ -122,7 +131,10 @@ impl Annot {
             Annot::Text(t) => t.at += d,
             Annot::Callout(c) => {
                 c.at += d;
-                c.leaders.iter_mut().flat_map(|l| l.points.iter_mut()).for_each(|p| *p += d);
+                c.leaders
+                    .iter_mut()
+                    .flat_map(|l| l.points.iter_mut())
+                    .for_each(|p| *p += d);
             }
             Annot::DataTag(t) => {
                 t.at += d;
@@ -139,19 +151,29 @@ impl Annot {
     /// depend on the scale (see `draw::prims` for the real extent).
     pub fn bounds(&self) -> (DVec2, DVec2) {
         let boxed = |pts: &mut dyn Iterator<Item = DVec2>| {
-            pts.fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(p), hi.max(p)))
+            pts.fold(
+                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                |(lo, hi), p| (lo.min(p), hi.max(p)),
+            )
         };
         let (lo, hi) = match self {
             Annot::Dimension(d) => boxed(&mut d.points.iter().copied()),
             Annot::Text(t) => boxed(&mut std::iter::once(t.at)),
-            Annot::Callout(c) => boxed(&mut std::iter::once(c.at).chain(c.leaders.iter().flat_map(|l| l.points.iter().copied()))),
+            Annot::Callout(c) => boxed(
+                &mut std::iter::once(c.at)
+                    .chain(c.leaders.iter().flat_map(|l| l.points.iter().copied())),
+            ),
             Annot::DataTag(t) => boxed(&mut [t.at, t.anchor].into_iter()),
             Annot::Legend(l) => boxed(&mut std::iter::once(l.at)),
             Annot::NorthArrow(n) => boxed(&mut std::iter::once(n.at)),
             Annot::ScaleBar(s) => boxed(&mut std::iter::once(s.at)),
             Annot::RevisionCloud(r) => boxed(&mut r.points.iter().copied()),
         };
-        if lo.is_finite() && hi.is_finite() { (lo, hi) } else { (DVec2::ZERO, DVec2::ZERO) }
+        if lo.is_finite() && hi.is_finite() {
+            (lo, hi)
+        } else {
+            (DVec2::ZERO, DVec2::ZERO)
+        }
     }
 
     /// Why the annotation is not valid, or `None`. This checks numbers and counts, not references.
@@ -164,30 +186,42 @@ impl Annot {
             Annot::Dimension(d) => {
                 let (lo, hi) = d.mode.point_range();
                 if d.points.len() < lo || d.points.len() > hi {
-                    return Some(if lo == hi { format!("a {} dimension needs {lo} points", d.mode.name()) } else { format!("a {} dimension needs {lo} to {hi} points", d.mode.name()) });
+                    return Some(if lo == hi {
+                        format!("a {} dimension needs {lo} points", d.mode.name())
+                    } else {
+                        format!("a {} dimension needs {lo} to {hi} points", d.mode.name())
+                    });
                 }
                 if d.anchors.len() > d.points.len() {
                     return Some("a dimension has at most one anchor per point".into());
                 }
-                if matches!(d.mode, DimMode::Radial | DimMode::Diameter) && d.points[0] == d.points[1] {
+                if matches!(d.mode, DimMode::Radial | DimMode::Diameter)
+                    && d.points[0] == d.points[1]
+                {
                     return Some("the radius must be positive".into());
                 }
                 if d.text.as_deref().is_some_and(|t| long(t, 1000)) {
                     return Some("dimension text is too long".into());
                 }
             }
-            Annot::Text(t) if long(&t.text, MAX_TEXT_CHARS) => return Some("text is too long".into()),
+            Annot::Text(t) if long(&t.text, MAX_TEXT_CHARS) => {
+                return Some("text is too long".into());
+            }
             Annot::Callout(c) => {
                 if c.leaders.is_empty() || c.leaders.len() > 20 {
                     return Some("a callout has 1 to 20 leaders".into());
                 }
-                if c.leaders.iter().any(|l| l.points.is_empty() || l.points.len() > 20) {
+                if c.leaders
+                    .iter()
+                    .any(|l| l.points.is_empty() || l.points.len() > 20)
+                {
                     return Some("a leader has 1 to 20 points".into());
                 }
                 if !(0.0..=100.0).contains(&c.shoulder_mm) {
                     return Some("the shoulder is 0 to 100 mm".into());
                 }
-                if long(&c.text, MAX_TEXT_CHARS) || c.note.as_deref().is_some_and(|n| long(n, 200)) {
+                if long(&c.text, MAX_TEXT_CHARS) || c.note.as_deref().is_some_and(|n| long(n, 200))
+                {
                     return Some("text is too long".into());
                 }
             }
@@ -199,10 +233,14 @@ impl Annot {
                     return Some("legend text is too long".into());
                 }
             }
-            Annot::NorthArrow(n) if !(2.0..=300.0).contains(&n.size_mm) => return Some("the north arrow size is 2 to 300 mm".into()),
+            Annot::NorthArrow(n) if !(2.0..=300.0).contains(&n.size_mm) => {
+                return Some("the north arrow size is 2 to 300 mm".into());
+            }
             Annot::ScaleBar(s) => {
                 if s.segment <= 0.0 || s.segments == 0 || s.segments > 20 {
-                    return Some("a scale bar needs a segment length above zero and 1 to 20 segments".into());
+                    return Some(
+                        "a scale bar needs a segment length above zero and 1 to 20 segments".into(),
+                    );
                 }
                 if !(0.5..=50.0).contains(&s.height_mm) {
                     return Some("the scale bar height is 0.5 to 50 mm".into());
@@ -218,7 +256,10 @@ impl Annot {
                 if !(1.0..=100.0).contains(&r.bump_mm) {
                     return Some("the bump size is 1 to 100 mm".into());
                 }
-                if [&r.revision, &r.date, &r.description, &r.author].iter().any(|s| long(s, 500)) {
+                if [&r.revision, &r.date, &r.description, &r.author]
+                    .iter()
+                    .any(|s| long(s, 500))
+                {
                     return Some("revision text is too long".into());
                 }
             }
@@ -231,7 +272,12 @@ impl Annot {
     pub fn depends_on(&self) -> Vec<ObjectId> {
         match self {
             Annot::Dimension(d) => d.anchors.iter().flatten().map(|a| a.object).collect(),
-            Annot::Callout(c) => c.leaders.iter().filter_map(|l| l.anchor).map(|a| a.object).collect(),
+            Annot::Callout(c) => c
+                .leaders
+                .iter()
+                .filter_map(|l| l.anchor)
+                .map(|a| a.object)
+                .collect(),
             Annot::DataTag(t) => vec![t.object],
             _ => Vec::new(),
         }
@@ -276,7 +322,15 @@ impl Annot {
     /// resources have the right type.
     pub fn check_refs(&self, doc: &Document) -> Result<(), String> {
         let res = &doc.resources;
-        let need = |ok: bool, id: ResourceId, what: &str| if ok { Ok(()) } else if res.get(id).is_some() { Err(format!("resource {id} is not a {what}")) } else { Err(format!("resource {id} does not exist")) };
+        let need = |ok: bool, id: ResourceId, what: &str| {
+            if ok {
+                Ok(())
+            } else if res.get(id).is_some() {
+                Err(format!("resource {id} is not a {what}"))
+            } else {
+                Err(format!("resource {id} does not exist"))
+            }
+        };
         match self {
             Annot::Dimension(d) => {
                 if let Some(s) = d.style {
@@ -303,7 +357,14 @@ impl Annot {
                 need(res.tag_style(t.style).is_some(), t.style, "tag style")?;
                 match doc.object(t.object) {
                     None => return Err(format!("object {} does not exist", t.object)),
-                    Some(o) if matches!(o.shape, Shape::Annotation(_) | Shape::Viewport(_) | Shape::TitleBlock(_)) => return Err("this object cannot be tagged".into()),
+                    Some(o)
+                        if matches!(
+                            o.shape,
+                            Shape::Annotation(_) | Shape::Viewport(_) | Shape::TitleBlock(_)
+                        ) =>
+                    {
+                        return Err("this object cannot be tagged".into());
+                    }
                     Some(_) => {}
                 }
             }
@@ -343,8 +404,18 @@ pub fn shape_vertices(shape: &Shape) -> Vec<DVec2> {
             let (lo, hi) = (min.min(*max), min.max(*max));
             vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)]
         }
-        Shape::Circle { center, radius } => vec![*center + DVec2::X * *radius, *center + DVec2::Y * *radius, *center - DVec2::X * *radius, *center - DVec2::Y * *radius],
-        Shape::Arc { center, radius, start, end } => {
+        Shape::Circle { center, radius } => vec![
+            *center + DVec2::X * *radius,
+            *center + DVec2::Y * *radius,
+            *center - DVec2::X * *radius,
+            *center - DVec2::Y * *radius,
+        ],
+        Shape::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => {
             let sweep = crate::model::arc_sweep(*start, *end);
             vec![
                 *center + DVec2::from_angle(*start) * *radius,
@@ -353,9 +424,13 @@ pub fn shape_vertices(shape: &Shape) -> Vec<DVec2> {
             ]
         }
         Shape::Polyline { points, .. } => curve::positions(points),
-        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } | Shape::SiteModifier { boundary, .. } => curve::positions(boundary),
+        Shape::LandscapeArea { boundary, .. }
+        | Shape::Hardscape { boundary, .. }
+        | Shape::SiteModifier { boundary, .. } => curve::positions(boundary),
         Shape::Polyline3d { points, .. } => points.iter().map(|p| p.truncate()).collect(),
-        Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } | Shape::Text { at, .. } => vec![*at],
+        Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } | Shape::Text { at, .. } => {
+            vec![*at]
+        }
         Shape::Locus3d { p } => vec![p.truncate()],
         _ => Vec::new(),
     }
@@ -365,7 +440,12 @@ pub fn shape_vertices(shape: &Shape) -> Vec<DVec2> {
 pub fn shape_edges(shape: &Shape) -> Vec<(DVec2, DVec2)> {
     let closed = matches!(
         shape,
-        Shape::Rect { .. } | Shape::LandscapeArea { .. } | Shape::Hardscape { .. } | Shape::SiteModifier { .. } | Shape::Polyline { closed: true, .. } | Shape::Polyline3d { closed: true, .. }
+        Shape::Rect { .. }
+            | Shape::LandscapeArea { .. }
+            | Shape::Hardscape { .. }
+            | Shape::SiteModifier { .. }
+            | Shape::Polyline { closed: true, .. }
+            | Shape::Polyline3d { closed: true, .. }
     );
     if matches!(shape, Shape::Circle { .. } | Shape::Arc { .. }) {
         return Vec::new();
@@ -386,15 +466,26 @@ pub fn ref_point(shape: &Shape) -> Option<DVec2> {
         Shape::Circle { center, .. } | Shape::Arc { center, .. } => Some(*center),
         Shape::Rect { min, max } => Some((*min + *max) / 2.0),
         Shape::Line { a, b } => Some((*a + *b) / 2.0),
-        Shape::Plant { at, .. } | Shape::ExistingTree { at, .. } | Shape::Text { at, .. } | Shape::PlantTag { at, .. } => Some(*at),
+        Shape::Plant { at, .. }
+        | Shape::ExistingTree { at, .. }
+        | Shape::Text { at, .. }
+        | Shape::PlantTag { at, .. } => Some(*at),
         Shape::Locus3d { p } => Some(p.truncate()),
-        Shape::Polyline { .. } | Shape::LandscapeArea { .. } | Shape::Hardscape { .. } | Shape::SiteModifier { .. } | Shape::Polyline3d { .. } => {
+        Shape::Polyline { .. }
+        | Shape::LandscapeArea { .. }
+        | Shape::Hardscape { .. }
+        | Shape::SiteModifier { .. }
+        | Shape::Polyline3d { .. } => {
             let v = shape_vertices(shape);
             if v.is_empty() {
                 return None;
             }
             let closed = shape.area().is_some();
-            Some(if closed { centroid(&v) } else { v.iter().copied().sum::<DVec2>() / v.len() as f64 })
+            Some(if closed {
+                centroid(&v)
+            } else {
+                v.iter().copied().sum::<DVec2>() / v.len() as f64
+            })
         }
         Shape::Annotation(a) => Some(a.bounds().0),
         _ => None,
@@ -412,7 +503,11 @@ pub fn centroid(p: &[DVec2]) -> DVec2 {
         a2 += cross;
         c += (s + t) * cross;
     }
-    if a2.abs() < 1e-9 { p.iter().copied().sum::<DVec2>() / n.max(1) as f64 } else { c / (3.0 * a2) }
+    if a2.abs() < 1e-9 {
+        p.iter().copied().sum::<DVec2>() / n.max(1) as f64
+    } else {
+        c / (3.0 * a2)
+    }
 }
 
 /// The position of an anchor in the document, if the object and the part still exist.
@@ -420,7 +515,9 @@ pub fn anchor_point(doc: &Document, a: &Anchor) -> Option<DVec2> {
     let shape = &doc.object(a.object)?.shape;
     match a.target {
         AnchorTarget::Vertex { index } => shape_vertices(shape).get(index).copied(),
-        AnchorTarget::Edge { index, t } => shape_edges(shape).get(index).map(|(p, q)| *p + (*q - *p) * t.clamp(0.0, 1.0)),
+        AnchorTarget::Edge { index, t } => shape_edges(shape)
+            .get(index)
+            .map(|(p, q)| *p + (*q - *p) * t.clamp(0.0, 1.0)),
         AnchorTarget::Center => ref_point(shape),
     }
 }

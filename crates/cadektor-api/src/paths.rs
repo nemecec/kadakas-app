@@ -20,7 +20,14 @@ impl PathPolicy {
 
     /// Allows these folders (and the folder of the document). Folders that do not exist are dropped.
     pub fn restricted(roots: impl IntoIterator<Item = PathBuf>) -> Self {
-        PathPolicy { roots: Some(roots.into_iter().filter_map(|r| std::fs::canonicalize(r).ok()).collect()) }
+        PathPolicy {
+            roots: Some(
+                roots
+                    .into_iter()
+                    .filter_map(|r| std::fs::canonicalize(r).ok())
+                    .collect(),
+            ),
+        }
     }
 
     pub fn is_restricted(&self) -> bool {
@@ -34,18 +41,42 @@ impl PathPolicy {
 
     /// The canonical form of `path` if the policy allows it. `doc_dir` is the folder of the open document.
     /// For a write, the file may be new, but its folder must exist.
-    pub fn resolve(&self, path: &Path, doc_dir: Option<&Path>, write: bool) -> Result<PathBuf, String> {
-        let canonical = if write { canonical_for_write(path)? } else { std::fs::canonicalize(path).map_err(|e| format!("cannot read {}: {e}", path.display()))? };
-        let Some(roots) = &self.roots else { return Ok(canonical) };
+    pub fn resolve(
+        &self,
+        path: &Path,
+        doc_dir: Option<&Path>,
+        write: bool,
+    ) -> Result<PathBuf, String> {
+        let canonical = if write {
+            canonical_for_write(path)?
+        } else {
+            std::fs::canonicalize(path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        };
+        let Some(roots) = &self.roots else {
+            return Ok(canonical);
+        };
         let doc_dir = doc_dir.and_then(|d| std::fs::canonicalize(d).ok());
-        if roots.iter().chain(doc_dir.iter()).any(|r| canonical.starts_with(r)) {
+        if roots
+            .iter()
+            .chain(doc_dir.iter())
+            .any(|r| canonical.starts_with(r))
+        {
             return Ok(canonical);
         }
-        let list: Vec<String> = roots.iter().chain(doc_dir.iter()).map(|r| r.display().to_string()).collect();
+        let list: Vec<String> = roots
+            .iter()
+            .chain(doc_dir.iter())
+            .map(|r| r.display().to_string())
+            .collect();
         Err(format!(
             "{} is outside the folders that agents may use ({}). The owner can allow a folder with --allow-dir",
             path.display(),
-            if list.is_empty() { "none".to_string() } else { list.join(", ") }
+            if list.is_empty() {
+                "none".to_string()
+            } else {
+                list.join(", ")
+            }
         ))
     }
 }
@@ -54,14 +85,18 @@ impl PathPolicy {
 fn canonical_for_write(path: &Path) -> Result<PathBuf, String> {
     // A link, also a broken one, must be followed to its target: never write "through" a name that escapes.
     if std::fs::symlink_metadata(path).is_ok() {
-        return std::fs::canonicalize(path).map_err(|e| format!("cannot use {}: {e}", path.display()));
+        return std::fs::canonicalize(path)
+            .map_err(|e| format!("cannot use {}: {e}", path.display()));
     }
-    let name = path.file_name().ok_or_else(|| format!("{} is not a file name", path.display()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{} is not a file name", path.display()))?;
     let dir = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let dir = std::fs::canonicalize(&dir).map_err(|e| format!("the folder of {} does not exist: {e}", path.display()))?;
+    let dir = std::fs::canonicalize(&dir)
+        .map_err(|e| format!("the folder of {} does not exist: {e}", path.display()))?;
     Ok(dir.join(name))
 }
 
@@ -86,7 +121,10 @@ mod tests {
         assert!(p.resolve(&d.join("a.txt"), None, false).is_ok());
         assert!(p.resolve(&d.join("missing.txt"), None, false).is_err());
         assert!(p.resolve(&d.join("new.txt"), None, true).is_ok());
-        assert!(p.resolve(&d.join("nodir").join("new.txt"), None, true).is_err());
+        assert!(
+            p.resolve(&d.join("nodir").join("new.txt"), None, true)
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -101,27 +139,53 @@ mod tests {
         assert!(p.is_restricted());
         assert_eq!(p.roots().len(), 1);
         assert!(p.resolve(&root.join("a.dxf"), None, false).is_ok());
-        assert!(p.resolve(&root.join("sub").join("new.dxf"), None, true).is_ok());
+        assert!(
+            p.resolve(&root.join("sub").join("new.dxf"), None, true)
+                .is_ok()
+        );
         // Outside, also with `..`.
-        let e = p.resolve(&other.join("secret.dxf"), None, false).unwrap_err();
+        let e = p
+            .resolve(&other.join("secret.dxf"), None, false)
+            .unwrap_err();
         assert!(e.contains("--allow-dir"), "{e}");
-        assert!(p.resolve(&root.join("..").join(other.file_name().unwrap()).join("secret.dxf"), None, false).is_err());
+        assert!(
+            p.resolve(
+                &root
+                    .join("..")
+                    .join(other.file_name().unwrap())
+                    .join("secret.dxf"),
+                None,
+                false
+            )
+            .is_err()
+        );
         assert!(p.resolve(&other.join("new.dxf"), None, true).is_err());
         // The folder of the document is allowed too.
-        assert!(p.resolve(&other.join("secret.dxf"), Some(&other), false).is_ok());
+        assert!(
+            p.resolve(&other.join("secret.dxf"), Some(&other), false)
+                .is_ok()
+        );
         // A symlink inside the root that points out is outside.
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&other, root.join("link")).unwrap();
-            assert!(p.resolve(&root.join("link").join("secret.dxf"), None, false).is_err());
+            assert!(
+                p.resolve(&root.join("link").join("secret.dxf"), None, false)
+                    .is_err()
+            );
             std::os::unix::fs::symlink(other.join("secret.dxf"), root.join("out.dxf")).unwrap();
             assert!(p.resolve(&root.join("out.dxf"), None, true).is_err());
-            std::os::unix::fs::symlink(other.join("not-there.dxf"), root.join("dangling.dxf")).unwrap();
+            std::os::unix::fs::symlink(other.join("not-there.dxf"), root.join("dangling.dxf"))
+                .unwrap();
             assert!(p.resolve(&root.join("dangling.dxf"), None, true).is_err());
         }
         // No allowed folder at all.
         let none = PathPolicy::restricted([PathBuf::from("/nonexistent-folder")]);
-        assert!(none.resolve(&root.join("a.dxf"), None, false).unwrap_err().contains("none"));
+        assert!(
+            none.resolve(&root.join("a.dxf"), None, false)
+                .unwrap_err()
+                .contains("none")
+        );
         assert!(p.resolve(Path::new(".."), None, true).is_err());
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(other);

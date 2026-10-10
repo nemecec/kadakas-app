@@ -52,23 +52,37 @@ impl IfcOptions {
         if v.is_null() {
             return Ok(IfcOptions::default());
         }
-        let o: IfcOptions = serde_json::from_value(v.clone()).map_err(|e| IfcError::Option(format!("bad IFC options: {e}")))?;
+        let o: IfcOptions = serde_json::from_value(v.clone())
+            .map_err(|e| IfcError::Option(format!("bad IFC options: {e}")))?;
         o.check()?;
         Ok(o)
     }
 
     /// Checks the values.
     pub fn check(&self) -> Result<(), IfcError> {
-        if !matches!(self.version.trim().to_ascii_uppercase().as_str(), "IFC4" | "4") {
-            return Err(IfcError::Option(format!("IFC version '{}' is not supported: only IFC4 can be written", self.version)));
+        if !matches!(
+            self.version.trim().to_ascii_uppercase().as_str(),
+            "IFC4" | "4"
+        ) {
+            return Err(IfcError::Option(format!(
+                "IFC version '{}' is not supported: only IFC4 can be written",
+                self.version
+            )));
         }
-        if !(self.area_thickness.is_finite() && self.area_thickness > 0.0 && self.area_thickness <= 1.0e6) {
-            return Err(IfcError::Option("area_thickness must be a positive number of mm".into()));
+        if !(self.area_thickness.is_finite()
+            && self.area_thickness > 0.0
+            && self.area_thickness <= 1.0e6)
+        {
+            return Err(IfcError::Option(
+                "area_thickness must be a positive number of mm".into(),
+            ));
         }
         if let Some(t) = &self.time_stamp
             && !valid_time_stamp(t)
         {
-            return Err(IfcError::Option("time_stamp must look like 2026-10-10T12:00:00".into()));
+            return Err(IfcError::Option(
+                "time_stamp must look like 2026-10-10T12:00:00".into(),
+            ));
         }
         Ok(())
     }
@@ -76,12 +90,13 @@ impl IfcOptions {
 
 fn valid_time_stamp(t: &str) -> bool {
     let b = t.as_bytes();
-    b.len() == 19 && b.iter().enumerate().all(|(i, c)| match i {
-        4 | 7 => *c == b'-',
-        10 => *c == b'T',
-        13 | 16 => *c == b':',
-        _ => c.is_ascii_digit(),
-    })
+    b.len() == 19
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            _ => c.is_ascii_digit(),
+        })
 }
 
 #[cfg(test)]
@@ -91,7 +106,10 @@ mod tests {
 
     #[test]
     fn defaults_and_json() {
-        assert_eq!(IfcOptions::from_json(&json!(null)).unwrap(), IfcOptions::default());
+        assert_eq!(
+            IfcOptions::from_json(&json!(null)).unwrap(),
+            IfcOptions::default()
+        );
         let o = IfcOptions::from_json(&json!({"classes_as_layers": false, "include_2d": true, "version": "ifc4", "time_stamp": "2026-10-10T12:00:00"})).unwrap();
         assert!(!o.classes_as_layers && o.include_2d);
         assert!(IfcOptions::default().classes_as_layers);
@@ -109,7 +127,10 @@ mod tests {
             json!({"colour": 1}),
             json!({"include_2d": "yes"}),
         ] {
-            assert!(matches!(IfcOptions::from_json(&bad), Err(IfcError::Option(_))), "{bad}");
+            assert!(
+                matches!(IfcOptions::from_json(&bad), Err(IfcError::Option(_))),
+                "{bad}"
+            );
         }
     }
 }

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use cadektor_api::Session;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
 
@@ -18,7 +18,12 @@ enum Kind {
 }
 
 fn kind_of(path: &Path) -> Kind {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("dxf") => Kind::Dxf,
         _ => Kind::Gis,
     }
@@ -111,18 +116,31 @@ pub struct ExportForm {
 }
 
 fn is_ifc(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ifc"))
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("ifc"))
 }
 
 impl ExportForm {
     pub fn new(path: PathBuf) -> Self {
-        ExportForm { path, layers_as_layers: false, unit: 0, visible_only: false, ifc_classes_as_layers: true, ifc_include_2d: false, ifc_storeys: false }
+        ExportForm {
+            path,
+            layers_as_layers: false,
+            unit: 0,
+            visible_only: false,
+            ifc_classes_as_layers: true,
+            ifc_include_2d: false,
+            ifc_storeys: false,
+        }
     }
 
     pub fn params(&self) -> Value {
         let mut o = Map::new();
         if is_ifc(&self.path) {
-            o.insert("classes_as_layers".into(), json!(self.ifc_classes_as_layers));
+            o.insert(
+                "classes_as_layers".into(),
+                json!(self.ifc_classes_as_layers),
+            );
             o.insert("include_2d".into(), json!(self.ifc_include_2d));
             o.insert("layers_as_storeys".into(), json!(self.ifc_storeys));
             o.insert("visible_only".into(), json!(self.visible_only));
@@ -156,7 +174,10 @@ impl IoUi {
     /// File > Import...: asks for a file, then shows the options.
     pub fn start_import(&mut self) {
         let picked = rfd::FileDialog::new()
-            .add_filter("DXF, Shapefile, GeoJSON", &["dxf", "shp", "geojson", "json"])
+            .add_filter(
+                "DXF, Shapefile, GeoJSON",
+                &["dxf", "shp", "geojson", "json"],
+            )
             .add_filter("DXF", &["dxf"])
             .add_filter("Shapefile", &["shp"])
             .add_filter("GeoJSON", &["geojson", "json"])
@@ -180,59 +201,78 @@ impl IoUi {
     }
 
     /// Draws the open dialogs. Runs the method when the user presses the button.
-    pub fn show(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) -> IoEvent {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+    ) -> IoEvent {
         let mut event = IoEvent::None;
         if let Some(form) = self.import.as_mut() {
             let mut run = false;
             let mut close = false;
-            egui::Window::new("Import").collapsible(false).resizable(false).show(ctx, |ui| {
-                ui.label(form.path.display().to_string());
-                ui.separator();
-                match kind_of(&form.path) {
-                    Kind::Dxf => {
-                        ui.checkbox(&mut form.layers_as_layers, "DXF layers become design layers (default: classes)");
-                        ui.horizontal(|ui| {
-                            ui.label("Unit");
-                            let label = form.unit.map_or("From file", |u| UNITS[u]);
-                            egui::ComboBox::from_id_salt("import_unit").selected_text(label).show_ui(ui, |ui| {
-                                ui.selectable_value(&mut form.unit, None, "From file");
-                                for (i, u) in UNITS.iter().enumerate() {
-                                    ui.selectable_value(&mut form.unit, Some(i), *u);
-                                }
-                            });
-                        });
-                        ui.checkbox(&mut form.explode_blocks, "Explode blocks");
-                        ui.checkbox(&mut form.hatches, "Import hatch boundaries");
-                        ui.checkbox(&mut form.only_points_with_z, "Only points with a Z value");
-                    }
-                    Kind::Gis => {
-                        for (label, value) in [
-                            ("File CRS (if the file has none)", &mut form.source_crs),
-                            ("Document CRS (default: UTM zone)", &mut form.target_crs),
-                            ("Class from attribute", &mut form.class_field),
-                        ] {
+            egui::Window::new("Import")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(form.path.display().to_string());
+                    ui.separator();
+                    match kind_of(&form.path) {
+                        Kind::Dxf => {
+                            ui.checkbox(
+                                &mut form.layers_as_layers,
+                                "DXF layers become design layers (default: classes)",
+                            );
                             ui.horizontal(|ui| {
-                                ui.label(label);
-                                ui.text_edit_singleline(value);
+                                ui.label("Unit");
+                                let label = form.unit.map_or("From file", |u| UNITS[u]);
+                                egui::ComboBox::from_id_salt("import_unit")
+                                    .selected_text(label)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut form.unit, None, "From file");
+                                        for (i, u) in UNITS.iter().enumerate() {
+                                            ui.selectable_value(&mut form.unit, Some(i), *u);
+                                        }
+                                    });
                             });
+                            ui.checkbox(&mut form.explode_blocks, "Explode blocks");
+                            ui.checkbox(&mut form.hatches, "Import hatch boundaries");
+                            ui.checkbox(&mut form.only_points_with_z, "Only points with a Z value");
+                        }
+                        Kind::Gis => {
+                            for (label, value) in [
+                                ("File CRS (if the file has none)", &mut form.source_crs),
+                                ("Document CRS (default: UTM zone)", &mut form.target_crs),
+                                ("Class from attribute", &mut form.class_field),
+                            ] {
+                                ui.horizontal(|ui| {
+                                    ui.label(label);
+                                    ui.text_edit_singleline(value);
+                                });
+                            }
                         }
                     }
-                }
-                ui.checkbox(&mut form.keep_origin, "Keep the coordinates of the file (default: center the drawing)");
-                ui.horizontal(|ui| {
-                    ui.label("Design layer");
-                    ui.text_edit_singleline(&mut form.layer);
+                    ui.checkbox(
+                        &mut form.keep_origin,
+                        "Keep the coordinates of the file (default: center the drawing)",
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("Design layer");
+                        ui.text_edit_singleline(&mut form.layer);
+                    });
+                    ui.horizontal(|ui| {
+                        run = ui.button("Import").clicked();
+                        close = ui.button("Cancel").clicked();
+                    });
                 });
-                ui.horizontal(|ui| {
-                    run = ui.button("Import").clicked();
-                    close = ui.button("Cancel").clicked();
-                });
-            });
             if run {
                 let params = form.params();
                 match session.import_file_trusted(params) {
                     Ok(r) => {
-                        *status = format!("Imported {} objects, skipped {}", r["imported"], r["skipped"]);
+                        *status = format!(
+                            "Imported {} objects, skipped {}",
+                            r["imported"], r["skipped"]
+                        );
                         event = IoEvent::Imported;
                     }
                     Err(e) => *status = format!("Import failed: {}", e.message),
@@ -273,7 +313,11 @@ impl IoUi {
             if run {
                 let params = form.params();
                 *status = match session.export_file_trusted(params) {
-                    Ok(r) => format!("Exported {} objects to {}", r["exported"], form.path.display()),
+                    Ok(r) => format!(
+                        "Exported {} objects to {}",
+                        r["exported"],
+                        form.path.display()
+                    ),
                     Err(e) => format!("Export failed: {}", e.message),
                 };
             }
@@ -292,7 +336,10 @@ mod tests {
     #[test]
     fn dxf_import_params() {
         let mut f = ImportForm::new("/a/site.DXF".into());
-        assert_eq!(f.params()["options"], json!({"explode_blocks": true, "hatches": true}));
+        assert_eq!(
+            f.params()["options"],
+            json!({"explode_blocks": true, "hatches": true})
+        );
         f.layers_as_layers = true;
         f.unit = Some(2);
         f.layer = " Site ".into();
@@ -326,12 +373,18 @@ mod tests {
         let mut f = ExportForm::new("/a/site.IFC".into());
         let p = f.params();
         assert_eq!(p["format"], "ifc");
-        assert_eq!(p["options"], json!({"classes_as_layers": true, "include_2d": false, "layers_as_storeys": false, "visible_only": false}));
+        assert_eq!(
+            p["options"],
+            json!({"classes_as_layers": true, "include_2d": false, "layers_as_storeys": false, "visible_only": false})
+        );
         f.ifc_storeys = true;
         f.ifc_include_2d = true;
         f.ifc_classes_as_layers = false;
         f.visible_only = true;
-        assert_eq!(f.params()["options"], json!({"classes_as_layers": false, "include_2d": true, "layers_as_storeys": true, "visible_only": true}));
+        assert_eq!(
+            f.params()["options"],
+            json!({"classes_as_layers": false, "include_2d": true, "layers_as_storeys": true, "visible_only": true})
+        );
         assert!(!is_ifc(Path::new("/a/site.dxf")));
     }
 
@@ -342,7 +395,10 @@ mod tests {
         f.layers_as_layers = true;
         f.visible_only = true;
         let p = f.params();
-        assert_eq!(p["options"], json!({"layer_mode": "layers", "unit": "m", "visible_only": true}));
+        assert_eq!(
+            p["options"],
+            json!({"layer_mode": "layers", "unit": "m", "visible_only": true})
+        );
         // Without open dialogs, nothing happens.
         let ctx = egui::Context::default();
         let mut ui = IoUi::default();

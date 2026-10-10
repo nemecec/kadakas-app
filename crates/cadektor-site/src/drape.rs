@@ -35,9 +35,17 @@ fn edge_crossings(tin: &Tin, a: DVec2, b: DVec2) -> Vec<f64> {
 /// A closed polyline does not repeat its first point. Fails if a point is off the surface.
 pub fn drape(tin: &Tin, points: &[DVec2], closed: bool) -> Result<Vec<DVec3>, SiteError> {
     let n = points.len();
-    let at = |p: DVec2, index: usize| tin.elevation_at(p).map(|z| p.extend(z)).ok_or(SiteError::Outside(index));
+    let at = |p: DVec2, index: usize| {
+        tin.elevation_at(p)
+            .map(|z| p.extend(z))
+            .ok_or(SiteError::Outside(index))
+    };
     let mut out = Vec::with_capacity(n);
-    let segs = if closed && n > 2 { n } else { n.saturating_sub(1) };
+    let segs = if closed && n > 2 {
+        n
+    } else {
+        n.saturating_sub(1)
+    };
     for i in 0..n {
         out.push(at(points[i], i)?);
         if i < segs {
@@ -60,10 +68,18 @@ mod tests {
         let mut points = Vec::new();
         for i in 0..4 {
             for j in 0..4 {
-                points.push(DVec3::new(i as f64 * 10.0, j as f64 * 10.0, (i as f64 * 10.0).min(20.0)));
+                points.push(DVec3::new(
+                    i as f64 * 10.0,
+                    j as f64 * 10.0,
+                    (i as f64 * 10.0).min(20.0),
+                ));
             }
         }
-        Tin::build(&SourceData { points, lines: vec![] }).unwrap()
+        Tin::build(&SourceData {
+            points,
+            lines: vec![],
+        })
+        .unwrap()
     }
 
     #[test]
@@ -74,21 +90,34 @@ mod tests {
         assert!(line.len() >= 4);
         assert_eq!(line[0], DVec3::new(5.0, 5.0, 5.0));
         assert_eq!(*line.last().unwrap(), DVec3::new(25.0, 5.0, 20.0));
-        assert!(line.iter().any(|p| (p.x - 20.0).abs() < 1e-9 && (p.z - 20.0).abs() < 1e-9));
+        assert!(
+            line.iter()
+                .any(|p| (p.x - 20.0).abs() < 1e-9 && (p.z - 20.0).abs() < 1e-9)
+        );
         assert!(line.windows(2).all(|w| w[0].x <= w[1].x));
         // Every added point lies on the surface.
-        assert!(line.iter().all(|p| (tin.elevation_at(p.truncate()).unwrap() - p.z).abs() < 1e-9));
+        assert!(
+            line.iter()
+                .all(|p| (tin.elevation_at(p.truncate()).unwrap() - p.z).abs() < 1e-9)
+        );
     }
 
     #[test]
     fn closed_lines_close_and_off_surface_points_fail() {
         let tin = bumpy();
-        let ring = [DVec2::new(2.0, 2.0), DVec2::new(28.0, 2.0), DVec2::new(15.0, 28.0)];
+        let ring = [
+            DVec2::new(2.0, 2.0),
+            DVec2::new(28.0, 2.0),
+            DVec2::new(15.0, 28.0),
+        ];
         let line = drape(&tin, &ring, true).unwrap();
         assert!(line.len() > 3);
         assert_eq!(line[0].truncate(), ring[0]);
         assert_ne!(line.last().unwrap().truncate(), ring[0]);
-        assert_eq!(drape(&tin, &[DVec2::new(5.0, 5.0), DVec2::new(50.0, 5.0)], false).unwrap_err(), SiteError::Outside(1));
+        assert_eq!(
+            drape(&tin, &[DVec2::new(5.0, 5.0), DVec2::new(50.0, 5.0)], false).unwrap_err(),
+            SiteError::Outside(1)
+        );
         assert_eq!(drape(&tin, &[], false).unwrap(), Vec::<DVec3>::new());
         assert_eq!(drape(&tin, &[DVec2::new(1.0, 1.0)], true).unwrap().len(), 1);
     }

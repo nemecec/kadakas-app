@@ -59,7 +59,9 @@ pub struct PlantList {
 pub fn plant_list(doc: &Document) -> PlantList {
     let mut rows: Vec<PlantListRow> = Vec::new();
     for r in schedule(doc).rows {
-        let existing = r.style.and_then(|id| rows.iter().position(|x| x.style == Some(id)));
+        let existing = r
+            .style
+            .and_then(|id| rows.iter().position(|x| x.style == Some(id)));
         match existing {
             Some(i) => {
                 let x = &mut rows[i];
@@ -90,14 +92,24 @@ pub fn plant_list(doc: &Document) -> PlantList {
         }
     }
     for obj in doc.objects.values() {
-        let Shape::LandscapeArea { name, .. } = &obj.shape else { continue };
-        let Some(q) = super::quantities(doc, obj) else { continue };
-        let area_name = if name.trim().is_empty() { format!("Landscape area {}", obj.id) } else { name.clone() };
+        let Shape::LandscapeArea { name, .. } = &obj.shape else {
+            continue;
+        };
+        let Some(q) = super::quantities(doc, obj) else {
+            continue;
+        };
+        let area_name = if name.trim().is_empty() {
+            format!("Landscape area {}", obj.id)
+        } else {
+            name.clone()
+        };
         for p in q.rows {
             let i = match rows.iter().position(|x| x.style == Some(p.plant)) {
                 Some(i) => i,
                 None => {
-                    let Some(s) = doc.resources.plant_style(p.plant) else { continue };
+                    let Some(s) = doc.resources.plant_style(p.plant) else {
+                        continue;
+                    };
                     rows.push(PlantListRow {
                         style: Some(p.plant),
                         name: p.name.clone(),
@@ -127,13 +139,27 @@ pub fn plant_list(doc: &Document) -> PlantList {
             if p.quantity == QuantityType::Area {
                 x.area_m2 += p.covered_area_m2;
             }
-            x.areas.push(AreaShare { area: obj.id, name: area_name.clone(), count: p.count, area_m2: p.covered_area_m2 });
+            x.areas.push(AreaShare {
+                area: obj.id,
+                name: area_name.clone(),
+                count: p.count,
+                area_m2: p.covered_area_m2,
+            });
         }
     }
     for r in &mut rows {
-        r.unit_price = if r.count == 0 { 0.0 } else { r.total_price / r.count as f64 };
+        r.unit_price = if r.count == 0 {
+            0.0
+        } else {
+            r.total_price / r.count as f64
+        };
     }
-    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.style.cmp(&b.style)));
+    rows.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.style.cmp(&b.style))
+    });
     PlantList {
         total_count: rows.iter().map(|r| r.count).sum(),
         total_plants: rows.iter().map(|r| r.plants).sum(),
@@ -147,8 +173,21 @@ pub fn plant_list(doc: &Document) -> PlantList {
 /// The plant list as CSV text, with a total line.
 pub fn plant_list_csv(list: &PlantList) -> String {
     let head = [
-        "Name", "ID", "Botanical name", "Common name", "Category", "Size", "Container", "Root", "Plants", "In areas", "Count", "Unit price",
-        "Total price", "Quantity", "Area (m2)",
+        "Name",
+        "ID",
+        "Botanical name",
+        "Common name",
+        "Category",
+        "Size",
+        "Container",
+        "Root",
+        "Plants",
+        "In areas",
+        "Count",
+        "Unit price",
+        "Total price",
+        "Quantity",
+        "Area (m2)",
     ];
     let mut out = vec![head.iter().map(|h| h.to_string()).collect::<Vec<_>>()];
     for r in &list.rows {
@@ -167,7 +206,11 @@ pub fn plant_list_csv(list: &PlantList) -> String {
             format!("{:.2}", r.unit_price),
             format!("{:.2}", r.total_price),
             r.quantity.id().into(),
-            if r.quantity == QuantityType::Area { format!("{:.2}", r.area_m2) } else { String::new() },
+            if r.quantity == QuantityType::Area {
+                format!("{:.2}", r.area_m2)
+            } else {
+                String::new()
+            },
         ]);
     }
     let mut total = vec![String::new(); head.len()];

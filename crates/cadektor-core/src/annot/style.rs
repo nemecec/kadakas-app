@@ -13,7 +13,11 @@ pub const MAX_NOTES: usize = 2000;
 pub const MAX_TEXT_MM: f64 = 200.0;
 
 fn fin(name: &str, x: f64, lo: f64, hi: f64) -> Result<(), String> {
-    if x.is_finite() && (lo..=hi).contains(&x) { Ok(()) } else { Err(format!("{name} must be a number from {lo} to {hi}")) }
+    if x.is_finite() && (lo..=hi).contains(&x) {
+        Ok(())
+    } else {
+        Err(format!("{name} must be a number from {lo} to {hi}"))
+    }
 }
 
 /// Where the lines of a text sit against its position.
@@ -57,7 +61,15 @@ pub struct TextStyle {
 
 impl Default for TextStyle {
     fn default() -> Self {
-        TextStyle { font: "sans-serif".into(), size_mm: 3.0, bold: false, italic: false, color: None, justify: Justify::Left, line_spacing: 1.3 }
+        TextStyle {
+            font: "sans-serif".into(),
+            size_mm: 3.0,
+            bold: false,
+            italic: false,
+            color: None,
+            justify: Justify::Left,
+            line_spacing: 1.3,
+        }
     }
 }
 
@@ -182,10 +194,15 @@ impl DimensionStyle {
         if self.font.trim().is_empty() {
             return Err("a dimension style needs a font".into());
         }
-        if self.prefix.chars().count() > super::MAX_TEXT_CHARS || self.suffix.chars().count() > super::MAX_TEXT_CHARS {
+        if self.prefix.chars().count() > super::MAX_TEXT_CHARS
+            || self.suffix.chars().count() > super::MAX_TEXT_CHARS
+        {
             return Err("the prefix and suffix are too long".into());
         }
-        if self.round_to.is_some_and(|r| !r.is_finite() || r <= 0.0 || r > 1.0e6) {
+        if self
+            .round_to
+            .is_some_and(|r| !r.is_finite() || r <= 0.0 || r > 1.0e6)
+        {
             return Err("round_to must be a positive number of mm".into());
         }
         Ok(())
@@ -285,7 +302,9 @@ pub struct NotesDb {
 
 impl NotesDb {
     pub fn get(&self, key: &str) -> Option<&Note> {
-        self.notes.iter().find(|n| n.key.eq_ignore_ascii_case(key.trim()))
+        self.notes
+            .iter()
+            .find(|n| n.key.eq_ignore_ascii_case(key.trim()))
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -298,7 +317,10 @@ impl NotesDb {
                 return Err("a note needs a key".into());
             }
             if n.key.chars().count() > 200 || n.text.chars().count() > super::MAX_TEXT_CHARS {
-                return Err(format!("note '{}' is too long", n.key.chars().take(20).collect::<String>()));
+                return Err(format!(
+                    "note '{}' is too long",
+                    n.key.chars().take(20).collect::<String>()
+                ));
             }
             if !seen.insert(n.key.trim().to_lowercase()) {
                 return Err(format!("two notes have the key '{}'", n.key.trim()));
@@ -319,7 +341,12 @@ pub enum AnnotResource {
 }
 
 /// The JSON type names of the annotation resources.
-pub const TYPE_NAMES: [&str; 4] = ["text_style", "dimension_style", "tag_style", "notes_database"];
+pub const TYPE_NAMES: [&str; 4] = [
+    "text_style",
+    "dimension_style",
+    "tag_style",
+    "notes_database",
+];
 
 impl AnnotResource {
     pub fn type_name(&self) -> &'static str {
@@ -343,7 +370,9 @@ impl AnnotResource {
     /// Reads the JSON of a resource body of an annotation type. `None` for other types.
     pub fn from_json(v: &serde_json::Value) -> Option<Result<AnnotResource, String>> {
         let t = v.get("type")?.as_str()?;
-        TYPE_NAMES.contains(&t).then(|| serde_json::from_value(v.clone()).map_err(|e| e.to_string()))
+        TYPE_NAMES
+            .contains(&t)
+            .then(|| serde_json::from_value(v.clone()).map_err(|e| e.to_string()))
     }
 }
 
@@ -392,6 +421,8 @@ impl Resources {
 
     /// The ID of the annotation resource of this type name (`text_style`, ...) and name (case ignored).
     pub fn find_annot(&self, type_name: &str, name: &str) -> Option<ResourceId> {
-        self.iter().find(|r| r.body.type_name() == type_name && r.name.eq_ignore_ascii_case(name.trim())).map(|r| r.id)
+        self.iter()
+            .find(|r| r.body.type_name() == type_name && r.name.eq_ignore_ascii_case(name.trim()))
+            .map(|r| r.id)
     }
 }

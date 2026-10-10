@@ -8,7 +8,10 @@ use glam::DVec2;
 use crate::display::*;
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn css(c: Rgba) -> String {
@@ -43,7 +46,11 @@ pub fn page_svg(page: &Page) -> String {
         page.size.x, page.size.y, page.size.x, page.size.y
     );
     let _ = writeln!(s, "<title>{}</title>", esc(&page.title));
-    let _ = writeln!(s, r#"<rect width="{}" height="{}" fill="white"/>"#, page.size.x, page.size.y);
+    let _ = writeln!(
+        s,
+        r#"<rect width="{}" height="{}" fill="white"/>"#,
+        page.size.x, page.size.y
+    );
     let mut clips = 0;
     let mut open = 0;
     for prim in &page.prims {
@@ -51,8 +58,16 @@ pub fn page_svg(page: &Page) -> String {
             Prim::PushClip(poly) => {
                 clips += 1;
                 open += 1;
-                let d = poly.iter().enumerate().map(|(i, p)| format!("{}{}", if i == 0 { "M " } else { "L " }, pt(*p))).collect::<Vec<_>>().join(" ");
-                let _ = writeln!(s, r#"<clipPath id="c{clips}"><path d="{d} Z"/></clipPath><g clip-path="url(#c{clips})">"#);
+                let d = poly
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("{}{}", if i == 0 { "M " } else { "L " }, pt(*p)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let _ = writeln!(
+                    s,
+                    r#"<clipPath id="c{clips}"><path d="{d} Z"/></clipPath><g clip-path="url(#c{clips})">"#
+                );
             }
             Prim::PopClip => {
                 if open > 0 {
@@ -76,9 +91,13 @@ pub fn page_svg(page: &Page) -> String {
                     d.push('Z');
                 }
                 let fill = p.fill.map_or("none".to_string(), css);
-                let (stroke, so) = p.stroke.map_or(("none".to_string(), 1.0), |c| (css(c), opacity(c)));
+                let (stroke, so) = p
+                    .stroke
+                    .map_or(("none".to_string(), 1.0), |c| (css(c), opacity(c)));
                 let fo = p.fill.map_or(1.0, opacity);
-                let dash = p.dash.map_or(String::new(), |[a, b]| format!(r#" stroke-dasharray="{a} {b}""#));
+                let dash = p.dash.map_or(String::new(), |[a, b]| {
+                    format!(r#" stroke-dasharray="{a} {b}""#)
+                });
                 let _ = writeln!(
                     s,
                     r#"<path d="{}" fill="{fill}" fill-opacity="{fo:.3}" stroke="{stroke}" stroke-opacity="{so:.3}" stroke-width="{}"{dash}/>"#,
@@ -87,7 +106,11 @@ pub fn page_svg(page: &Page) -> String {
                 );
             }
             Prim::Text(t) => {
-                let anchor = if t.align == Align::Center { "middle" } else { "start" };
+                let anchor = if t.align == Align::Center {
+                    "middle"
+                } else {
+                    "start"
+                };
                 let _ = writeln!(
                     s,
                     r#"<text x="{:.3}" y="{:.3}" font-size="{}" font-family="Helvetica, Arial, sans-serif" text-anchor="{anchor}" fill="{}">{}</text>"#,
@@ -99,7 +122,8 @@ pub fn page_svg(page: &Page) -> String {
                 );
             }
             Prim::Image(i) => {
-                let data = base64::engine::general_purpose::STANDARD.encode(rgb_png(i.width, i.height, &i.rgb));
+                let data = base64::engine::general_purpose::STANDARD
+                    .encode(rgb_png(i.width, i.height, &i.rgb));
                 let _ = writeln!(
                     s,
                     r#"<image x="{}" y="{}" width="{}" height="{}" preserveAspectRatio="none" href="data:image/png;base64,{data}"/>"#,

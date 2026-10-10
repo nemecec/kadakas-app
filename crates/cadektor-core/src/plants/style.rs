@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Color, MAX_COORD};
 
 /// The plant group, for filters and schedules.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PlantCategory {
     Tree,
@@ -19,8 +21,13 @@ pub enum PlantCategory {
 }
 
 impl PlantCategory {
-    pub const ALL: [PlantCategory; 5] =
-        [PlantCategory::Tree, PlantCategory::Shrub, PlantCategory::Perennial, PlantCategory::Grass, PlantCategory::Groundcover];
+    pub const ALL: [PlantCategory; 5] = [
+        PlantCategory::Tree,
+        PlantCategory::Shrub,
+        PlantCategory::Perennial,
+        PlantCategory::Grass,
+        PlantCategory::Groundcover,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -34,7 +41,11 @@ impl PlantCategory {
 
     /// Reads an ID such as `tree`, in any case. Also accepts `ground cover` and plural forms.
     pub fn from_name(s: &str) -> Option<Self> {
-        let key: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
+        let key: String = s
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .collect::<String>()
+            .to_ascii_lowercase();
         Self::ALL.into_iter().find(|c| {
             let id = c.id();
             key == id || key.strip_suffix('s') == Some(id) || key.strip_suffix("es") == Some(id)
@@ -62,8 +73,14 @@ pub enum PlantGraphic {
 }
 
 impl PlantGraphic {
-    pub const ALL: [PlantGraphic; 6] =
-        [PlantGraphic::Circle, PlantGraphic::Cloud, PlantGraphic::Star, PlantGraphic::Spokes, PlantGraphic::Rosette, PlantGraphic::Clover];
+    pub const ALL: [PlantGraphic; 6] = [
+        PlantGraphic::Circle,
+        PlantGraphic::Cloud,
+        PlantGraphic::Star,
+        PlantGraphic::Spokes,
+        PlantGraphic::Rosette,
+        PlantGraphic::Clover,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -77,7 +94,9 @@ impl PlantGraphic {
     }
 
     pub fn from_name(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|g| g.id().eq_ignore_ascii_case(s.trim()))
+        Self::ALL
+            .into_iter()
+            .find(|g| g.id().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -99,8 +118,13 @@ pub enum PlantForm {
 }
 
 impl PlantForm {
-    pub const ALL: [PlantForm; 5] =
-        [PlantForm::Tree, PlantForm::Columnar, PlantForm::Conical, PlantForm::Spreading, PlantForm::ShrubMound];
+    pub const ALL: [PlantForm; 5] = [
+        PlantForm::Tree,
+        PlantForm::Columnar,
+        PlantForm::Conical,
+        PlantForm::Spreading,
+        PlantForm::ShrubMound,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -114,7 +138,9 @@ impl PlantForm {
 
     pub fn from_name(s: &str) -> Option<Self> {
         let key = s.trim().replace([' ', '-'], "_");
-        Self::ALL.into_iter().find(|f| f.id().eq_ignore_ascii_case(&key))
+        Self::ALL
+            .into_iter()
+            .find(|f| f.id().eq_ignore_ascii_case(&key))
     }
 }
 
@@ -223,21 +249,38 @@ impl PlantStyle {
         if !self.price.is_finite() || self.price < 0.0 || self.price > MAX_COORD {
             return Err("price must be a finite number of zero or more".into());
         }
-        for (name, v) in [("trunk_diameter", Some(self.trunk_diameter)), ("rpz_factor", self.rpz_factor), ("rpz_cap", self.rpz_cap)] {
+        for (name, v) in [
+            ("trunk_diameter", Some(self.trunk_diameter)),
+            ("rpz_factor", self.rpz_factor),
+            ("rpz_cap", self.rpz_cap),
+        ] {
             if v.is_some_and(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(&v)) {
                 return Err(format!("{name} must be a finite number of zero or more"));
             }
         }
         let names = Self::field_names();
-        if let Some(bad) = self.locked.iter().find(|f| !names.contains(f) || *f == "locked") {
-            return Err(format!("'{bad}' cannot be locked. Fields: {}", names.join(", ")));
+        if let Some(bad) = self
+            .locked
+            .iter()
+            .find(|f| !names.contains(f) || *f == "locked")
+        {
+            return Err(format!(
+                "'{bad}' cannot be locked. Fields: {}",
+                names.join(", ")
+            ));
         }
         Ok(())
     }
 
     /// The names of all fields, as used in JSON, overrides and `locked`.
     pub fn field_names() -> Vec<String> {
-        serde_json::to_value(PlantStyle::default()).expect("a style is JSON").as_object().expect("an object").keys().cloned().collect()
+        serde_json::to_value(PlantStyle::default())
+            .expect("a style is JSON")
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// True if plants cannot override this field.
@@ -270,9 +313,15 @@ mod tests {
             assert_eq!(PlantCategory::from_name(c.id()), Some(c));
             assert_eq!(serde_json::to_value(c).unwrap(), c.id());
         }
-        assert_eq!(PlantCategory::from_name("Ground Cover"), Some(PlantCategory::Groundcover));
+        assert_eq!(
+            PlantCategory::from_name("Ground Cover"),
+            Some(PlantCategory::Groundcover)
+        );
         assert_eq!(PlantCategory::from_name("Trees"), Some(PlantCategory::Tree));
-        assert_eq!(PlantCategory::from_name("Grasses"), Some(PlantCategory::Grass));
+        assert_eq!(
+            PlantCategory::from_name("Grasses"),
+            Some(PlantCategory::Grass)
+        );
         assert_eq!(PlantCategory::from_name("cactus"), None);
         for g in PlantGraphic::ALL {
             assert_eq!(PlantGraphic::from_name(g.id()), Some(g));
@@ -284,7 +333,10 @@ mod tests {
             assert_eq!(PlantForm::from_name(f.id()), Some(f));
             assert_eq!(serde_json::to_value(f).unwrap(), f.id());
         }
-        assert_eq!(PlantForm::from_name("Shrub mound"), Some(PlantForm::ShrubMound));
+        assert_eq!(
+            PlantForm::from_name("Shrub mound"),
+            Some(PlantForm::ShrubMound)
+        );
         assert_eq!(PlantForm::from_name("x"), None);
     }
 
@@ -306,7 +358,8 @@ mod tests {
 
     #[test]
     fn partial_json_uses_defaults() {
-        let s: PlantStyle = serde_json::from_str(r#"{"botanical_name": "Acer", "spread": 5000}"#).unwrap();
+        let s: PlantStyle =
+            serde_json::from_str(r#"{"botanical_name": "Acer", "spread": 5000}"#).unwrap();
         assert_eq!(s.spread, 5000.0);
         assert_eq!(s.height, 4000.0);
         assert_eq!(s.species("x"), "Acer");
@@ -314,30 +367,50 @@ mod tests {
 
     #[test]
     fn locked_fields_and_zone_settings_are_checked() {
-        let mut s = PlantStyle { locked: vec!["price".into(), "spread".into()], ..PlantStyle::default() };
+        let mut s = PlantStyle {
+            locked: vec!["price".into(), "spread".into()],
+            ..PlantStyle::default()
+        };
         assert!(s.validate().is_ok());
         assert!(s.is_locked("price") && !s.is_locked("height"));
         s.locked.push("nope".into());
         assert!(s.validate().unwrap_err().contains("cannot be locked"));
         s.locked = vec!["locked".into()];
         assert!(s.validate().is_err());
-        let mut t = PlantStyle { trunk_diameter: -1.0, ..PlantStyle::default() };
+        let mut t = PlantStyle {
+            trunk_diameter: -1.0,
+            ..PlantStyle::default()
+        };
         assert!(t.validate().is_err());
-        t = PlantStyle { rpz_factor: Some(f64::NAN), ..PlantStyle::default() };
+        t = PlantStyle {
+            rpz_factor: Some(f64::NAN),
+            ..PlantStyle::default()
+        };
         assert!(t.validate().is_err());
-        t = PlantStyle { rpz_cap: Some(-5.0), ..PlantStyle::default() };
+        t = PlantStyle {
+            rpz_cap: Some(-5.0),
+            ..PlantStyle::default()
+        };
         assert!(t.validate().is_err());
         assert!(PlantStyle::field_names().contains(&"locked".to_string()));
     }
 
     #[test]
     fn protection_zone_needs_a_tree_a_switch_and_a_trunk() {
-        let mut s = PlantStyle { category: PlantCategory::Tree, trunk_diameter: 400.0, ..PlantStyle::default() };
+        let mut s = PlantStyle {
+            category: PlantCategory::Tree,
+            trunk_diameter: 400.0,
+            ..PlantStyle::default()
+        };
         assert_eq!(s.protection_radius(), None, "off by default");
         s.protection_zone = true;
         assert_eq!(s.protection_radius(), Some(4800.0));
         s.trunk_diameter = 1500.0;
-        assert_eq!(s.protection_radius(), Some(15_000.0), "capped like existing trees");
+        assert_eq!(
+            s.protection_radius(),
+            Some(15_000.0),
+            "capped like existing trees"
+        );
         s.rpz_cap = Some(20_000.0);
         s.rpz_factor = Some(10.0);
         assert_eq!(s.protection_radius(), Some(15_000.0));

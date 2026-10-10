@@ -14,10 +14,33 @@ pub const PT: f64 = 72.0 / 25.4;
 
 /// Characters of Windows-1252 (WinAnsi) at the codes 0x80 to 0x9F. The standard font has all of them.
 const CP1252_HIGH: [(char, u8); 27] = [
-    ('\u{20AC}', 0x80), ('\u{201A}', 0x82), ('\u{0192}', 0x83), ('\u{201E}', 0x84), ('\u{2026}', 0x85), ('\u{2020}', 0x86), ('\u{2021}', 0x87),
-    ('\u{02C6}', 0x88), ('\u{2030}', 0x89), ('\u{0160}', 0x8A), ('\u{2039}', 0x8B), ('\u{0152}', 0x8C), ('\u{017D}', 0x8E), ('\u{2018}', 0x91),
-    ('\u{2019}', 0x92), ('\u{201C}', 0x93), ('\u{201D}', 0x94), ('\u{2022}', 0x95), ('\u{2013}', 0x96), ('\u{2014}', 0x97), ('\u{02DC}', 0x98),
-    ('\u{2122}', 0x99), ('\u{0161}', 0x9A), ('\u{203A}', 0x9B), ('\u{0153}', 0x9C), ('\u{017E}', 0x9E), ('\u{0178}', 0x9F),
+    ('\u{20AC}', 0x80),
+    ('\u{201A}', 0x82),
+    ('\u{0192}', 0x83),
+    ('\u{201E}', 0x84),
+    ('\u{2026}', 0x85),
+    ('\u{2020}', 0x86),
+    ('\u{2021}', 0x87),
+    ('\u{02C6}', 0x88),
+    ('\u{2030}', 0x89),
+    ('\u{0160}', 0x8A),
+    ('\u{2039}', 0x8B),
+    ('\u{0152}', 0x8C),
+    ('\u{017D}', 0x8E),
+    ('\u{2018}', 0x91),
+    ('\u{2019}', 0x92),
+    ('\u{201C}', 0x93),
+    ('\u{201D}', 0x94),
+    ('\u{2022}', 0x95),
+    ('\u{2013}', 0x96),
+    ('\u{2014}', 0x97),
+    ('\u{02DC}', 0x98),
+    ('\u{2122}', 0x99),
+    ('\u{0161}', 0x9A),
+    ('\u{203A}', 0x9B),
+    ('\u{0153}', 0x9C),
+    ('\u{017E}', 0x9E),
+    ('\u{0178}', 0x9F),
 ];
 
 /// Text for the standard font: Windows-1252 (WinAnsi) bytes. Characters that the encoding does not have become `?`.
@@ -25,7 +48,10 @@ pub fn winansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|c| match c {
             c if (c as u32) < 0x80 || ((0xA0..0x100).contains(&(c as u32))) => c as u32 as u8,
-            c => CP1252_HIGH.iter().find(|(x, _)| *x == c).map_or(b'?', |(_, b)| *b),
+            c => CP1252_HIGH
+                .iter()
+                .find(|(x, _)| *x == c)
+                .map_or(b'?', |(_, b)| *b),
         })
         .collect()
 }
@@ -53,7 +79,11 @@ struct Used {
 }
 
 fn rgb(c: Rgba) -> [f32; 3] {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]
 }
 
 fn pt(p: DVec2) -> (f32, f32) {
@@ -91,18 +121,30 @@ pub fn write_pdf(pages: &[&Page], title: &str) -> Vec<u8> {
     let font = ids.alloc();
     let info = ids.alloc();
     pdf.catalog(catalog).pages(tree);
-    pdf.type1_font(font).base_font(Name(b"Helvetica")).encoding_predefined(Name(b"WinAnsiEncoding"));
-    pdf.document_info(info).title(TextStr(title)).producer(TextStr("Cadektor"));
+    pdf.type1_font(font)
+        .base_font(Name(b"Helvetica"))
+        .encoding_predefined(Name(b"WinAnsiEncoding"));
+    pdf.document_info(info)
+        .title(TextStr(title))
+        .producer(TextStr("Cadektor"));
     let page_ids: Vec<Ref> = pages.iter().map(|_| ids.alloc()).collect();
-    pdf.pages(tree).kids(page_ids.iter().copied()).count(pages.len() as i32);
+    pdf.pages(tree)
+        .kids(page_ids.iter().copied())
+        .count(pages.len() as i32);
     for (page, page_id) in pages.iter().zip(&page_ids) {
         let content_id = ids.alloc();
         let mut used = Used::default();
         let content = page_content(&mut pdf, &mut ids, page, &mut used);
         let compressed = deflate(&content.finish());
-        pdf.stream(content_id, &compressed).filter(Filter::FlateDecode);
+        pdf.stream(content_id, &compressed)
+            .filter(Filter::FlateDecode);
         let mut p = pdf.page(*page_id);
-        p.media_box(Rect::new(0.0, 0.0, (page.size.x * PT) as f32, (page.size.y * PT) as f32));
+        p.media_box(Rect::new(
+            0.0,
+            0.0,
+            (page.size.x * PT) as f32,
+            (page.size.y * PT) as f32,
+        ));
         p.parent(tree);
         p.contents(content_id);
         let mut res = p.resources();
@@ -155,7 +197,14 @@ fn page_content(pdf: &mut Pdf, ids: &mut Ids, page: &Page, used: &mut Used) -> C
                 x.finish();
                 let (w, h) = ((i.max.x - i.min.x) * PT, (i.max.y - i.min.y) * PT);
                 c.save_state();
-                c.transform([w as f32, 0.0, 0.0, h as f32, (i.min.x * PT) as f32, (i.min.y * PT) as f32]);
+                c.transform([
+                    w as f32,
+                    0.0,
+                    0.0,
+                    h as f32,
+                    (i.min.x * PT) as f32,
+                    (i.min.y * PT) as f32,
+                ]);
                 c.x_object(Name(name.as_bytes()));
                 c.restore_state();
                 used.images.push((name, id));
@@ -172,7 +221,9 @@ fn alpha(c: &mut Content, ids: &mut Ids, used: &mut Used, a: u8, pdf: &mut Pdf) 
     }
     let id = *used.alphas.entry(a).or_insert_with(|| {
         let id = ids.alloc();
-        pdf.ext_graphics(id).non_stroking_alpha(a as f32 / 255.0).stroking_alpha(a as f32 / 255.0);
+        pdf.ext_graphics(id)
+            .non_stroking_alpha(a as f32 / 255.0)
+            .stroking_alpha(a as f32 / 255.0);
         id
     });
     let _ = id;
@@ -195,7 +246,14 @@ fn path(c: &mut Content, ids: &mut Ids, used: &mut Used, p: &PathPrim, pdf: &mut
         c.set_fill_rgb(r, g, b);
     }
     // One transparency for the fill and the stroke: the fill's, else the stroke's.
-    alpha(c, ids, used, p.fill.map_or_else(|| p.stroke.map_or(255, |s| s[3]), |f| f[3]), pdf);
+    alpha(
+        c,
+        ids,
+        used,
+        p.fill
+            .map_or_else(|| p.stroke.map_or(255, |s| s[3]), |f| f[3]),
+        pdf,
+    );
     if let Some([d, g]) = p.dash {
         c.set_dash_pattern([(d * PT) as f32, (g * PT) as f32], 0.0);
     }

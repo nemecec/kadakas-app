@@ -1,6 +1,7 @@
 //! Property tests for hardscapes and landscape areas: path outlines, exact areas of straight
 //! paths, scatter positions, and undo of any mix of the new commands.
 
+use cadektor_core::DVec2;
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::curve;
 use cadektor_core::geom;
@@ -10,7 +11,6 @@ use cadektor_core::landscape::{self, LandscapePatch, MixEntry};
 use cadektor_core::model::{Attributes, Document, ObjectId, Shape};
 use cadektor_core::plants::style::PlantStyle;
 use cadektor_core::resource::{ResourceBody, ResourceId};
-use cadektor_core::DVec2;
 use proptest::prelude::*;
 
 fn join() -> impl Strategy<Value = Join> {
@@ -19,16 +19,22 @@ fn join() -> impl Strategy<Value = Join> {
 
 /// Any path: legs from a fraction of the width to several widths, turns up to a U-turn.
 fn any_path() -> impl Strategy<Value = (Vec<DVec2>, f64)> {
-    (100.0..1500.0f64, prop::collection::vec((0.2..6.0f64, -170.0..170.0f64), 1..8), -1.0e5..1.0e5f64, -1.0e5..1.0e5f64).prop_map(|(width, steps, x, y)| {
-        let mut pts = vec![DVec2::new(x, y)];
-        let mut heading = 0.0f64;
-        for (len, turn) in steps {
-            heading += turn;
-            let last = *pts.last().unwrap();
-            pts.push(last + DVec2::from_angle(heading.to_radians()) * len * width);
-        }
-        (pts, width)
-    })
+    (
+        100.0..1500.0f64,
+        prop::collection::vec((0.2..6.0f64, -170.0..170.0f64), 1..8),
+        -1.0e5..1.0e5f64,
+        -1.0e5..1.0e5f64,
+    )
+        .prop_map(|(width, steps, x, y)| {
+            let mut pts = vec![DVec2::new(x, y)];
+            let mut heading = 0.0f64;
+            for (len, turn) in steps {
+                heading += turn;
+                let last = *pts.last().unwrap();
+                pts.push(last + DVec2::from_angle(heading.to_radians()) * len * width);
+            }
+            (pts, width)
+        })
 }
 
 /// Area of the points within `h` of the path, without the parts behind the two ends. This is the
@@ -59,8 +65,15 @@ fn swept_reference(pts: &[DVec2], h: f64) -> f64 {
                     return false;
                 }
                 let side = if turn > 0.0 { -1.0 } else { 1.0 };
-                let (n0, n1) = (DVec2::new(-d0.y, d0.x) * side, DVec2::new(-d1.y, d1.x) * side);
-                if turn > 0.0 { n0.perp_dot(v) >= 0.0 && v.perp_dot(n1) >= 0.0 } else { n0.perp_dot(v) <= 0.0 && v.perp_dot(n1) <= 0.0 }
+                let (n0, n1) = (
+                    DVec2::new(-d0.y, d0.x) * side,
+                    DVec2::new(-d1.y, d1.x) * side,
+                );
+                if turn > 0.0 {
+                    n0.perp_dot(v) >= 0.0 && v.perp_dot(n1) >= 0.0
+                } else {
+                    n0.perp_dot(v) <= 0.0 && v.perp_dot(n1) <= 0.0
+                }
             });
             if in_leg || in_bend {
                 count += 1;
@@ -169,14 +182,33 @@ proptest! {
 
 #[derive(Clone, Debug)]
 enum Op {
-    Path { len: f64, width: f64 },
-    Slab { w: f64 },
+    Path {
+        len: f64,
+        width: f64,
+    },
+    Slab {
+        w: f64,
+    },
     Style(f64),
-    Apply { target: u8, with_style: bool, drape: bool, percent: f64 },
-    Width { target: u8, width: f64 },
-    Move { target: u8 },
-    Area { w: f64 },
-    Holes { target: u8 },
+    Apply {
+        target: u8,
+        with_style: bool,
+        drape: bool,
+        percent: f64,
+    },
+    Width {
+        target: u8,
+        width: f64,
+    },
+    Move {
+        target: u8,
+    },
+    Area {
+        w: f64,
+    },
+    Holes {
+        target: u8,
+    },
     Undo,
     Redo,
 }
@@ -197,7 +229,12 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 fn ids_of(ed: &Editor, f: impl Fn(&Shape) -> bool) -> Vec<ObjectId> {
-    ed.doc().objects.values().filter(|o| f(&o.shape)).map(|o| o.id).collect()
+    ed.doc()
+        .objects
+        .values()
+        .filter(|o| f(&o.shape))
+        .map(|o| o.id)
+        .collect()
 }
 
 fn check(doc: &Document) {
@@ -208,19 +245,36 @@ fn check(doc: &Document) {
         if let Some(d) = hardscape::data(o) {
             assert!(d.validate().is_ok());
             if d.mode == Mode::Path {
-                assert_eq!(o.shape.vertices().unwrap(), &d.outline(), "the outline follows the center line");
+                assert_eq!(
+                    o.shape.vertices().unwrap(),
+                    &d.outline(),
+                    "the outline follows the center line"
+                );
             }
             if let Some(id) = d.style {
-                let Shape::Hardscape { thickness, .. } = &o.shape else { panic!() };
-                assert_eq!(*thickness, Some(doc.resources.hardscape_style(id).unwrap().total_thickness()));
+                let Shape::Hardscape { thickness, .. } = &o.shape else {
+                    panic!()
+                };
+                assert_eq!(
+                    *thickness,
+                    Some(doc.resources.hardscape_style(id).unwrap().total_thickness())
+                );
             }
         }
         if let Shape::Hardscape { .. } = o.shape {
             let q = hardscape::report::quantities(doc, o, None).unwrap();
-            assert!(q.plan_area_m2.is_finite() && q.volume_m3.is_finite() && q.surface_area_m2 >= q.plan_area_m2 - 1e-9);
+            assert!(
+                q.plan_area_m2.is_finite()
+                    && q.volume_m3.is_finite()
+                    && q.surface_area_m2 >= q.plan_area_m2 - 1e-9
+            );
         }
     }
-    assert!(hardscape::report::report(doc, &NoTerrain).total_plan_area_m2.is_finite());
+    assert!(
+        hardscape::report::report(doc, &NoTerrain)
+            .total_plan_area_m2
+            .is_finite()
+    );
     assert!(landscape::plant_list(doc).total_count < usize::MAX);
 }
 

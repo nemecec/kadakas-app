@@ -17,17 +17,26 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        View { origin: DVec2::new(400.0, 300.0), zoom: 0.05 }
+        View {
+            origin: DVec2::new(400.0, 300.0),
+            zoom: 0.05,
+        }
     }
 }
 
 impl View {
     pub fn to_screen(self, p: DVec2) -> Pos2 {
-        pos2((self.origin.x + p.x * self.zoom) as f32, (self.origin.y - p.y * self.zoom) as f32)
+        pos2(
+            (self.origin.x + p.x * self.zoom) as f32,
+            (self.origin.y - p.y * self.zoom) as f32,
+        )
     }
 
     pub fn to_model(self, s: Pos2) -> DVec2 {
-        DVec2::new((s.x as f64 - self.origin.x) / self.zoom, (self.origin.y - s.y as f64) / self.zoom)
+        DVec2::new(
+            (s.x as f64 - self.origin.x) / self.zoom,
+            (self.origin.y - s.y as f64) / self.zoom,
+        )
     }
 
     pub fn pan(&mut self, delta: Vec2) {
@@ -46,10 +55,15 @@ impl View {
     pub fn fit(&mut self, min: DVec2, max: DVec2, rect: Rect) {
         let size = (max - min).max(DVec2::splat(1.0));
         let avail = DVec2::new(rect.width() as f64, rect.height() as f64) * 0.9;
-        self.zoom = (avail.x / size.x).min(avail.y / size.y).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.zoom = (avail.x / size.x)
+            .min(avail.y / size.y)
+            .clamp(MIN_ZOOM, MAX_ZOOM);
         let center = (min + max) / 2.0;
         let c = rect.center();
-        self.origin = DVec2::new(c.x as f64 - center.x * self.zoom, c.y as f64 + center.y * self.zoom);
+        self.origin = DVec2::new(
+            c.x as f64 - center.x * self.zoom,
+            c.y as f64 + center.y * self.zoom,
+        );
     }
 
     /// Model box that is visible in `rect`, as (min, max).
@@ -64,7 +78,11 @@ impl View {
 pub fn grid_step(zoom: f64, min_px: f64) -> f64 {
     let raw = min_px / zoom;
     let mag = 10f64.powf(raw.log10().floor());
-    [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(10.0 * mag)
+    [1.0, 2.0, 5.0, 10.0]
+        .iter()
+        .map(|m| m * mag)
+        .find(|s| *s >= raw)
+        .unwrap_or(10.0 * mag)
 }
 
 #[cfg(test)]
@@ -73,7 +91,10 @@ mod tests {
 
     #[test]
     fn roundtrip_and_y_flip() {
-        let v = View { origin: DVec2::new(100.0, 200.0), zoom: 0.5 };
+        let v = View {
+            origin: DVec2::new(100.0, 200.0),
+            zoom: 0.5,
+        };
         let p = DVec2::new(40.0, 60.0);
         let s = v.to_screen(p);
         assert_eq!((s.x, s.y), (120.0, 170.0)); // model Y up is screen Y down
@@ -101,7 +122,11 @@ mod tests {
     fn fit_contains_box() {
         let mut v = View::default();
         let rect = Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(800.0, 600.0));
-        v.fit(DVec2::new(-1000.0, -500.0), DVec2::new(3000.0, 1500.0), rect);
+        v.fit(
+            DVec2::new(-1000.0, -500.0),
+            DVec2::new(3000.0, 1500.0),
+            rect,
+        );
         let a = v.to_screen(DVec2::new(-1000.0, -500.0));
         let b = v.to_screen(DVec2::new(3000.0, 1500.0));
         assert!(rect.contains(a) && rect.contains(b));

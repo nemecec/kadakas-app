@@ -18,16 +18,36 @@ pub fn resync(doc: &Document, a: &Annot, paper: f64, rederive_offset: bool) -> O
     let mut out = a.clone();
     match &mut out {
         Annot::Dimension(d) => {
-            if let Some(Some(Anchor { object, target: AnchorTarget::Center, .. })) = d.anchors.first().copied() {
+            if let Some(Some(Anchor {
+                object,
+                target: AnchorTarget::Center,
+                ..
+            })) = d.anchors.first().copied()
+            {
                 match (d.mode, doc.object(object).map(|o| &o.shape)) {
-                    (DimMode::Radial | DimMode::Diameter, Some(Shape::Circle { center, radius } | Shape::Arc { center, radius, .. })) => {
+                    (
+                        DimMode::Radial | DimMode::Diameter,
+                        Some(Shape::Circle { center, radius } | Shape::Arc { center, radius, .. }),
+                    ) => {
                         let dir = (d.points[1] - d.points[0]).normalize_or(DVec2::X);
                         d.points[0] = *center;
                         d.points[1] = *center + dir * *radius;
                     }
-                    (DimMode::ArcLength, Some(Shape::Arc { center, radius, start, end })) => {
+                    (
+                        DimMode::ArcLength,
+                        Some(Shape::Arc {
+                            center,
+                            radius,
+                            start,
+                            end,
+                        }),
+                    ) => {
                         let sweep = crate::model::arc_sweep(*start, *end);
-                        d.points = vec![*center, *center + DVec2::from_angle(*start) * *radius, *center + DVec2::from_angle(*start + sweep) * *radius];
+                        d.points = vec![
+                            *center,
+                            *center + DVec2::from_angle(*start) * *radius,
+                            *center + DVec2::from_angle(*start + sweep) * *radius,
+                        ];
                     }
                     _ => {}
                 }
@@ -110,26 +130,56 @@ fn rebind(doc: &Document, a: &Anchor, last: DVec2) -> Option<(Anchor, DVec2)> {
     let verts = shape_vertices(shape);
     let n = verts.len();
     let same = a.count.is_none_or(|c| c == n);
-    let bound = |target, p| Some((Anchor { object: a.object, target, count: Some(n) }, p));
+    let bound = |target, p| {
+        Some((
+            Anchor {
+                object: a.object,
+                target,
+                count: Some(n),
+            },
+            p,
+        ))
+    };
     match a.target {
         AnchorTarget::Center => bound(AnchorTarget::Center, ref_point(shape)?),
         AnchorTarget::Vertex { index } if same => bound(a.target, *verts.get(index)?),
         AnchorTarget::Vertex { .. } => {
-            let (i, p) = verts.iter().copied().enumerate().find(|(_, p)| p.distance(last) <= REBIND_TOLERANCE)?;
+            let (i, p) = verts
+                .iter()
+                .copied()
+                .enumerate()
+                .find(|(_, p)| p.distance(last) <= REBIND_TOLERANCE)?;
             bound(AnchorTarget::Vertex { index: i }, p)
         }
         AnchorTarget::Edge { index, t } if same => {
             let (p, q) = *shape_edges(shape).get(index)?;
-            bound(AnchorTarget::Edge { index, t }, p + (q - p) * t.clamp(0.0, 1.0))
+            bound(
+                AnchorTarget::Edge { index, t },
+                p + (q - p) * t.clamp(0.0, 1.0),
+            )
         }
         AnchorTarget::Edge { .. } => {
-            shape_edges(shape).iter().enumerate().find_map(|(i, (p, q))| {
-                let d = q - p;
-                let len2 = d.length_squared();
-                let t = if len2 > 0.0 { ((last - p).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                let at = p + d * t;
-                (at.distance(last) <= REBIND_TOLERANCE).then_some((Anchor { object: a.object, target: AnchorTarget::Edge { index: i, t }, count: Some(n) }, at))
-            })
+            shape_edges(shape)
+                .iter()
+                .enumerate()
+                .find_map(|(i, (p, q))| {
+                    let d = q - p;
+                    let len2 = d.length_squared();
+                    let t = if len2 > 0.0 {
+                        ((last - p).dot(d) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let at = p + d * t;
+                    (at.distance(last) <= REBIND_TOLERANCE).then_some((
+                        Anchor {
+                            object: a.object,
+                            target: AnchorTarget::Edge { index: i, t },
+                            count: Some(n),
+                        },
+                        at,
+                    ))
+                })
         }
     }
 }

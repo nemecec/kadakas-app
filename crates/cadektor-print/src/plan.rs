@@ -24,10 +24,18 @@ pub struct Xf {
 
 impl Xf {
     /// Paper space: nothing changes.
-    pub const IDENTITY: Xf = Xf { model_center: DVec2::ZERO, paper_center: DVec2::ZERO, k: 1.0 };
+    pub const IDENTITY: Xf = Xf {
+        model_center: DVec2::ZERO,
+        paper_center: DVec2::ZERO,
+        k: 1.0,
+    };
 
     pub fn of(vp: &Viewport) -> Xf {
-        Xf { model_center: vp.center, paper_center: vp.frame_center(), k: 1.0 / vp.scale }
+        Xf {
+            model_center: vp.center,
+            paper_center: vp.frame_center(),
+            k: 1.0 / vp.scale,
+        }
     }
 
     pub fn p(&self, m: DVec2) -> DVec2 {
@@ -50,7 +58,11 @@ pub struct Style {
 impl Style {
     pub fn of(a: &Attributes) -> Style {
         let some = |c: Option<Color>| c.filter(|c| c.0[3] > 0).map(|c| c.0);
-        Style { stroke: some(a.pen.or(Some(Color::BLACK))), fill: some(a.fill), width: a.line_weight.unwrap_or(0.25).max(0.0) }
+        Style {
+            stroke: some(a.pen.or(Some(Color::BLACK))),
+            fill: some(a.fill),
+            width: a.line_weight.unwrap_or(0.25).max(0.0),
+        }
     }
 }
 
@@ -59,7 +71,14 @@ fn with_alpha(c: Option<Rgba>, factor: f64) -> Option<Rgba> {
 }
 
 fn path(segs: Vec<PSeg>, closed: bool, s: &Style) -> Prim {
-    Prim::Path(PathPrim { segs, closed, stroke: s.stroke, fill: if closed { s.fill } else { None }, width: s.width, dash: None })
+    Prim::Path(PathPrim {
+        segs,
+        closed,
+        stroke: s.stroke,
+        fill: if closed { s.fill } else { None },
+        width: s.width,
+        dash: None,
+    })
 }
 
 /// The pieces of an exact curve path, mapped to paper.
@@ -68,7 +87,13 @@ pub fn curve_segs(p: &curve::Path, xf: &Xf) -> Vec<PSeg> {
     for s in &p.segs {
         match *s {
             Seg::Line { to, .. } => out.push(PSeg::Line(xf.p(to))),
-            Seg::Arc { center, radius, start, sweep, .. } => out.extend(arc_segs(xf.p(center), xf.len(radius), start, sweep, false)),
+            Seg::Arc {
+                center,
+                radius,
+                start,
+                sweep,
+                ..
+            } => out.extend(arc_segs(xf.p(center), xf.len(radius), start, sweep, false)),
             Seg::Quad { from, c, to } => {
                 let (c1, c2) = (from + (c - from) * (2.0 / 3.0), to + (c - to) * (2.0 / 3.0));
                 out.push(PSeg::Cubic(xf.p(c1), xf.p(c2), xf.p(to)));
@@ -91,67 +116,161 @@ fn dashed(mut p: Prim, dash: [f64; 2]) -> Prim {
 }
 
 fn text(at: DVec2, t: &str, height: f64, color: Rgba) -> Prim {
-    Prim::Text(TextPrim { at, text: t.to_string(), height, color, align: Align::Left })
+    Prim::Text(TextPrim {
+        at,
+        text: t.to_string(),
+        height,
+        color,
+        align: Align::Left,
+    })
 }
 
 /// Draws one shape. `attrs` are the final attributes (with viewport overrides applied).
-pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>) {
+pub fn shape_prims(
+    doc: &Document,
+    obj: &Object,
+    attrs: &Attributes,
+    xf: &Xf,
+    counts: &TagCounts,
+    tables: &crate::table::Tables,
+    out: &mut Vec<Prim>,
+) {
     let st = Style::of(attrs);
     let ink = st.stroke.unwrap_or([0, 0, 0, 255]);
     match &obj.shape {
         Shape::Line { a, b } => out.push(path(mapped(&[*a, *b], xf), false, &st)),
         Shape::Rect { min, max } => {
             let (lo, hi) = (min.min(*max), min.max(*max));
-            out.push(path(mapped(&[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)], xf), true, &st));
+            out.push(path(
+                mapped(
+                    &[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
+                    xf,
+                ),
+                true,
+                &st,
+            ));
             if let Some(t) = cadektor_core::worksheet_table::data(obj) {
                 crate::table::table_prims(tables, lo, hi, &t, xf, ink, out);
             }
         }
-        Shape::Circle { center, radius } => out.push(path(circle_segs(xf.p(*center), xf.len(*radius)), true, &st)),
-        Shape::Arc { center, radius, start, end } => {
+        Shape::Circle { center, radius } => {
+            out.push(path(circle_segs(xf.p(*center), xf.len(*radius)), true, &st))
+        }
+        Shape::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => {
             let sweep = cadektor_core::model::arc_sweep(*start, *end);
-            out.push(path(arc_segs(xf.p(*center), xf.len(*radius), *start, sweep, true), false, &st));
+            out.push(path(
+                arc_segs(xf.p(*center), xf.len(*radius), *start, sweep, true),
+                false,
+                &st,
+            ));
         }
         Shape::Polyline { points, closed } => {
-            let segs = if curve::all_straight(points) { mapped(&curve::positions(points), xf) } else { curve_segs(&curve::path(points, *closed), xf) };
+            let segs = if curve::all_straight(points) {
+                mapped(&curve::positions(points), xf)
+            } else {
+                curve_segs(&curve::path(points, *closed), xf)
+            };
             out.push(path(segs, *closed, &st));
         }
-        Shape::Text { at, text: t, height } => out.push(text(xf.p(*at), t, xf.len(*height), ink)),
+        Shape::Text {
+            at,
+            text: t,
+            height,
+        } => out.push(text(xf.p(*at), t, xf.len(*height), ink)),
         Shape::Plant { at, spread, .. } => {
             let look = link::look(doc, obj);
             let own = attrs_set(obj);
-            let (pen, fill) = if own { (st.stroke, st.fill) } else { (look.pen.map(|c| c.0).or(st.stroke), look.fill.map(|c| c.0).or(st.fill)) };
-            let s = Style { stroke: pen, fill: with_alpha(fill, 0.3), width: st.width };
+            let (pen, fill) = if own {
+                (st.stroke, st.fill)
+            } else {
+                (
+                    look.pen.map(|c| c.0).or(st.stroke),
+                    look.fill.map(|c| c.0).or(st.fill),
+                )
+            };
+            let s = Style {
+                stroke: pen,
+                fill: with_alpha(fill, 0.3),
+                width: st.width,
+            };
             if let Some(zone) = look.zone {
-                out.push(dashed(path(circle_segs(xf.p(*at), xf.len(zone)), true, &Style { fill: None, ..st }), [2.0, 1.0]));
+                out.push(dashed(
+                    path(
+                        circle_segs(xf.p(*at), xf.len(zone)),
+                        true,
+                        &Style { fill: None, ..st },
+                    ),
+                    [2.0, 1.0],
+                ));
             }
             if look.graphic == PlantGraphic::Circle {
                 out.push(path(circle_segs(xf.p(*at), xf.len(spread / 2.0)), true, &s));
             } else {
-                for (i, gp) in graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation).iter().enumerate() {
+                for (i, gp) in
+                    graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation)
+                        .iter()
+                        .enumerate()
+                {
                     let sty = if i == 0 { s } else { Style { fill: None, ..s } };
                     out.push(path(mapped(&gp.points, xf), gp.closed, &sty));
                 }
             }
         }
-        Shape::ExistingTree { at, dbh, spread, rpz_factor, rpz_cap, action, .. } => {
+        Shape::ExistingTree {
+            at,
+            dbh,
+            spread,
+            rpz_factor,
+            rpz_cap,
+            action,
+            ..
+        } => {
             let rpz = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
             let outline = Style { fill: None, ..st };
-            out.push(dashed(path(circle_segs(xf.p(*at), xf.len(rpz)), true, &outline), [2.0, 1.0]));
+            out.push(dashed(
+                path(circle_segs(xf.p(*at), xf.len(rpz)), true, &outline),
+                [2.0, 1.0],
+            ));
             let removed = *action == TreeAction::Remove;
-            let canopy = path(circle_segs(xf.p(*at), xf.len(spread / 2.0)), true, &Style { fill: with_alpha(st.fill, 0.2), ..st });
-            out.push(if removed { dashed(canopy, [2.0, 1.0]) } else { canopy });
-            out.push(path(circle_segs(xf.p(*at), xf.len(dbh / 2.0)), true, &outline));
+            let canopy = path(
+                circle_segs(xf.p(*at), xf.len(spread / 2.0)),
+                true,
+                &Style {
+                    fill: with_alpha(st.fill, 0.2),
+                    ..st
+                },
+            );
+            out.push(if removed {
+                dashed(canopy, [2.0, 1.0])
+            } else {
+                canopy
+            });
+            out.push(path(
+                circle_segs(xf.p(*at), xf.len(dbh / 2.0)),
+                true,
+                &outline,
+            ));
             if removed {
                 let r = spread / 2.0;
-                let cross = [[*at + DVec2::new(-r, -r), *at + DVec2::new(r, r)], [*at + DVec2::new(-r, r), *at + DVec2::new(r, -r)]];
+                let cross = [
+                    [*at + DVec2::new(-r, -r), *at + DVec2::new(r, r)],
+                    [*at + DVec2::new(-r, r), *at + DVec2::new(r, -r)],
+                ];
                 for c in cross {
                     out.push(dashed(path(mapped(&c, xf), false, &outline), [2.0, 1.0]));
                 }
             }
         }
-        Shape::PlantTag { at, anchor, height, .. } => {
-            let t = schedule::tag_info_with(doc, obj.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
+        Shape::PlantTag {
+            at, anchor, height, ..
+        } => {
+            let t = schedule::tag_info_with(doc, obj.id, counts)
+                .map_or_else(|| "?".to_string(), |t| t.text());
             out.push(path(mapped(&[*anchor, *at], xf), false, &st));
             out.push(text(xf.p(*at), &t, xf.len(*height), ink));
         }
@@ -173,15 +292,27 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
                 a.line_weight = styled.line_weight;
             }
             let st = Style::of(&a);
-            let segs = if curve::all_straight(boundary) { mapped(&curve::positions(boundary), xf) } else { curve_segs(&curve::path(boundary, true), xf) };
+            let segs = if curve::all_straight(boundary) {
+                mapped(&curve::positions(boundary), xf)
+            } else {
+                curve_segs(&curve::path(boundary, true), xf)
+            };
             out.push(path(segs, true, &st));
             crate::areas::extras(doc, obj, &st, xf, out);
         }
         Shape::Locus3d { p } => {
             let h = cadektor_core::model::LOCUS_MARKER_HALF;
             let q = p.truncate();
-            out.push(path(mapped(&[q - DVec2::new(h, 0.0), q + DVec2::new(h, 0.0)], xf), false, &st));
-            out.push(path(mapped(&[q - DVec2::new(0.0, h), q + DVec2::new(0.0, h)], xf), false, &st));
+            out.push(path(
+                mapped(&[q - DVec2::new(h, 0.0), q + DVec2::new(h, 0.0)], xf),
+                false,
+                &st,
+            ));
+            out.push(path(
+                mapped(&[q - DVec2::new(0.0, h), q + DVec2::new(0.0, h)], xf),
+                false,
+                &st,
+            ));
         }
         Shape::Polyline3d { points, closed } => {
             let pts: Vec<DVec2> = points.iter().map(|p| p.truncate()).collect();
@@ -193,7 +324,9 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
                 out.push(path(mapped(&outline, xf), true, &st));
             }
         }
-        Shape::Annotation(a) => crate::annot::push(doc, a, &crate::annot::layer_ctx(xf), &st, xf, out),
+        Shape::Annotation(a) => {
+            crate::annot::push(doc, a, &crate::annot::layer_ctx(xf), &st, xf, out)
+        }
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
     }
@@ -210,9 +343,20 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
     let ink = st.stroke.unwrap_or([0, 0, 0, 255]);
     let to = |p: DVec2| vp.annotation_to_paper(p);
     match &a.item {
-        AnnotationItem::Line { a, b } => out.push(path(PathPrim::polyline(&[to(*a), to(*b)]), false, &st)),
-        AnnotationItem::Text { at, text: t, height } => out.push(text(to(*at), t, *height, ink)),
-        AnnotationItem::Dimension { a, b, offset, text: label } => {
+        AnnotationItem::Line { a, b } => {
+            out.push(path(PathPrim::polyline(&[to(*a), to(*b)]), false, &st))
+        }
+        AnnotationItem::Text {
+            at,
+            text: t,
+            height,
+        } => out.push(text(to(*at), t, *height, ink)),
+        AnnotationItem::Dimension {
+            a,
+            b,
+            offset,
+            text: label,
+        } => {
             let (p, q) = (to(*a), to(*b));
             let d = q - p;
             if d.length() > 0.0 {
@@ -224,9 +368,15 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                 out.push(path(PathPrim::polyline(&[p2, q2]), false, &st));
                 let u = d.normalize();
                 for e in [p2, q2] {
-                    out.push(path(PathPrim::polyline(&[e - (u + n) * 1.0, e + (u + n) * 1.0]), false, &st));
+                    out.push(path(
+                        PathPrim::polyline(&[e - (u + n) * 1.0, e + (u + n) * 1.0]),
+                        false,
+                        &st,
+                    ));
                 }
-                let label = label.clone().unwrap_or_else(|| format!("{}", (d.length() * vp.scale).round()));
+                let label = label
+                    .clone()
+                    .unwrap_or_else(|| format!("{}", (d.length() * vp.scale).round()));
                 let h = 2.5;
                 let mid = (p2 + q2) / 2.0 + n * 1.0;
                 let at = mid - u * (text_width(&label, h) / 2.0);
@@ -236,14 +386,42 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
         AnnotationItem::Shape { shape } if matches!(**shape, Shape::Annotation(_)) => {
             // Positions are paper mm from the frame. Real lengths follow the scale of the viewport.
             if let Shape::Annotation(an) = &**shape {
-                let xf = Xf { model_center: DVec2::ZERO, paper_center: vp.min, k: 1.0 };
-                crate::annot::push(doc, an, &cadektor_core::annot::draw::Ctx::viewport(vp), &st, &xf, out);
+                let xf = Xf {
+                    model_center: DVec2::ZERO,
+                    paper_center: vp.min,
+                    k: 1.0,
+                };
+                crate::annot::push(
+                    doc,
+                    an,
+                    &cadektor_core::annot::draw::Ctx::viewport(vp),
+                    &st,
+                    &xf,
+                    out,
+                );
             }
         }
         AnnotationItem::Shape { shape } => {
-            let obj = Object::new(cadektor_core::model::ObjectId(0), cadektor_core::model::FIRST_LAYER, a.class, (**shape).clone());
-            let xf = Xf { model_center: DVec2::ZERO, paper_center: vp.min, k: 1.0 };
-            shape_prims(doc, &obj, &attrs, &xf, &TagCounts::new(), &crate::table::Tables::default(), out);
+            let obj = Object::new(
+                cadektor_core::model::ObjectId(0),
+                cadektor_core::model::FIRST_LAYER,
+                a.class,
+                (**shape).clone(),
+            );
+            let xf = Xf {
+                model_center: DVec2::ZERO,
+                paper_center: vp.min,
+                k: 1.0,
+            };
+            shape_prims(
+                doc,
+                &obj,
+                &attrs,
+                &xf,
+                &TagCounts::new(),
+                &crate::table::Tables::default(),
+                out,
+            );
         }
     }
 }

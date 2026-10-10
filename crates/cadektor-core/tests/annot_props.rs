@@ -1,15 +1,24 @@
 //! Property tests: dimension values match the geometry after any moves, and scale bars are right at any scale.
 
 use cadektor_core::annot::draw::{Ctx, scale_bar_length};
-use cadektor_core::curve::{Vertex, VertexKind};
 use cadektor_core::annot::*;
 use cadektor_core::command::{Command, Editor};
+use cadektor_core::curve::{Vertex, VertexKind};
 use cadektor_core::model::{Attributes, ObjectId, Shape};
 use glam::DVec2;
 use proptest::prelude::*;
 
 fn add(ed: &mut Editor, shape: Shape) -> ObjectId {
-    ObjectId(ed.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0])
+    ObjectId(
+        ed.execute(&Command::AddObject {
+            shape,
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    )
 }
 
 proptest! {

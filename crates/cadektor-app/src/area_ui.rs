@@ -38,7 +38,13 @@ pub struct AreaToolSettings {
 
 impl Default for AreaToolSettings {
     fn default() -> Self {
-        AreaToolSettings { hardscape_style: None, path: false, width: 1200.0, join: Join::Miter, landscape_style: None }
+        AreaToolSettings {
+            hardscape_style: None,
+            path: false,
+            width: 1200.0,
+            join: Join::Miter,
+            landscape_style: None,
+        }
     }
 }
 
@@ -49,7 +55,10 @@ impl AreaToolSettings {
         if !self.path && self.hardscape_style.is_none() {
             return None;
         }
-        let mut patch = HardscapePatch { style: self.hardscape_style, ..Default::default() };
+        let mut patch = HardscapePatch {
+            style: self.hardscape_style,
+            ..Default::default()
+        };
         let boundary = if self.path {
             patch.center = Some(points.to_vec());
             patch.width = Some(self.width);
@@ -58,35 +67,71 @@ impl AreaToolSettings {
         } else {
             Some(points.to_vec())
         };
-        Some(Command::AddHardscape { boundary, patch: Box::new(patch), layer: None, class: None, attrs: Default::default() })
+        Some(Command::AddHardscape {
+            boundary,
+            patch: Box::new(patch),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
     }
 
     /// The command that adds a landscape area drawn with these settings, or `None` for a plain area.
-    pub fn landscape_command(&self, points: &[cadektor_core::curve::Vertex], name: &str) -> Option<Command> {
+    pub fn landscape_command(
+        &self,
+        points: &[cadektor_core::curve::Vertex],
+        name: &str,
+    ) -> Option<Command> {
         let style = self.landscape_style?;
-        let patch = LandscapePatch { style: Some(style), ..Default::default() };
-        Some(Command::AddLandscapeArea { boundary: points.to_vec(), name: name.into(), patch: Box::new(patch), layer: None, class: None, attrs: Default::default() })
+        let patch = LandscapePatch {
+            style: Some(style),
+            ..Default::default()
+        };
+        Some(Command::AddLandscapeArea {
+            boundary: points.to_vec(),
+            name: name.into(),
+            patch: Box::new(patch),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
     }
 }
 
-fn style_combo(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, current: Option<ResourceId>, styles: &[(ResourceId, String)], none_label: &str) -> Option<Option<ResourceId>> {
+fn style_combo(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    current: Option<ResourceId>,
+    styles: &[(ResourceId, String)],
+    none_label: &str,
+) -> Option<Option<ResourceId>> {
     let mut chosen = current;
-    let text = current.and_then(|c| styles.iter().find(|(i, _)| *i == c)).map_or(none_label.to_string(), |(_, n)| n.clone());
-    egui::ComboBox::from_id_salt(salt).selected_text(text).show_ui(ui, |ui| {
-        ui.selectable_value(&mut chosen, None, none_label);
-        for (id, name) in styles {
-            ui.selectable_value(&mut chosen, Some(*id), name);
-        }
-    });
+    let text = current
+        .and_then(|c| styles.iter().find(|(i, _)| *i == c))
+        .map_or(none_label.to_string(), |(_, n)| n.clone());
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut chosen, None, none_label);
+            for (id, name) in styles {
+                ui.selectable_value(&mut chosen, Some(*id), name);
+            }
+        });
     (chosen != current).then_some(chosen)
 }
 
 fn hardscape_styles(doc: &Document) -> Vec<(ResourceId, String)> {
-    doc.resources.hardscape_styles().map(|(i, n, _)| (i, n.to_string())).collect()
+    doc.resources
+        .hardscape_styles()
+        .map(|(i, n, _)| (i, n.to_string()))
+        .collect()
 }
 
 fn landscape_styles(doc: &Document) -> Vec<(ResourceId, String)> {
-    doc.resources.landscape_area_styles().map(|(i, n, _)| (i, n.to_string())).collect()
+    doc.resources
+        .landscape_area_styles()
+        .map(|(i, n, _)| (i, n.to_string()))
+        .collect()
 }
 
 /// The style pickers in the Tool bar for the Hardscape and Landscape Area tools.
@@ -96,7 +141,13 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
     match tool {
         Tool::Hardscape => {
             ui.label("Hardscape style");
-            if let Some(c) = style_combo(ui, "hardscape_tool_style", s.hardscape_style, &hardscape_styles(doc), "(none: plain slab)") {
+            if let Some(c) = style_combo(
+                ui,
+                "hardscape_tool_style",
+                s.hardscape_style,
+                &hardscape_styles(doc),
+                "(none: plain slab)",
+            ) {
                 s.hardscape_style = c;
             }
             ui.horizontal(|ui| {
@@ -106,18 +157,31 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             if s.path {
                 ui.horizontal(|ui| {
                     ui.label("Width");
-                    ui.add(DragValue::new(&mut s.width).speed(10.0).range(1.0..=1.0e6).suffix(" mm"));
+                    ui.add(
+                        DragValue::new(&mut s.width)
+                            .speed(10.0)
+                            .range(1.0..=1.0e6)
+                            .suffix(" mm"),
+                    );
                 });
-                egui::ComboBox::from_id_salt("hardscape_tool_join").selected_text(format!("{} join", s.join.id())).show_ui(ui, |ui| {
-                    for j in Join::ALL {
-                        ui.selectable_value(&mut s.join, j, j.id());
-                    }
-                });
+                egui::ComboBox::from_id_salt("hardscape_tool_join")
+                    .selected_text(format!("{} join", s.join.id()))
+                    .show_ui(ui, |ui| {
+                        for j in Join::ALL {
+                            ui.selectable_value(&mut s.join, j, j.id());
+                        }
+                    });
             }
         }
         Tool::LandscapeArea => {
             ui.label("Landscape area style");
-            if let Some(c) = style_combo(ui, "landscape_tool_style", s.landscape_style, &landscape_styles(doc), "(none)") {
+            if let Some(c) = style_combo(
+                ui,
+                "landscape_tool_style",
+                s.landscape_style,
+                &landscape_styles(doc),
+                "(none)",
+            ) {
                 s.landscape_style = c;
             }
         }
@@ -127,7 +191,9 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
 
 /// The 3D-aware quantity readout and edit modes of a hardscape or landscape area in Object Info.
 pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
-    let Some(obj) = session.editor.doc().object(id).cloned() else { return };
+    let Some(obj) = session.editor.doc().object(id).cloned() else {
+        return;
+    };
     match obj.shape {
         Shape::Hardscape { .. } => hardscape_info(ui, session, &obj, status),
         Shape::LandscapeArea { .. } => landscape_info(ui, session, &obj, status),
@@ -136,7 +202,14 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mu
 }
 
 fn apply(session: &mut Session, id: ObjectId, patch: HardscapePatch, status: &mut String) {
-    run_command(session, &Command::SetHardscape { ids: vec![id], patch }, status);
+    run_command(
+        session,
+        &Command::SetHardscape {
+            ids: vec![id],
+            patch,
+        },
+        status,
+    );
 }
 
 fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut String) {
@@ -162,7 +235,15 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         if ui.selectable_label(d.mode == Mode::Slab, "Slab").clicked() && d.mode != Mode::Slab {
             patch.mode = Some(Mode::Slab);
         }
-        if ui.add_enabled(can_path, egui::Button::selectable(d.mode == Mode::Path, "Path")).on_disabled_hover_text("Draw a path with the Hardscape tool in Path mode").clicked() && d.mode != Mode::Path {
+        if ui
+            .add_enabled(
+                can_path,
+                egui::Button::selectable(d.mode == Mode::Path, "Path"),
+            )
+            .on_disabled_hover_text("Draw a path with the Hardscape tool in Path mode")
+            .clicked()
+            && d.mode != Mode::Path
+        {
             patch.mode = Some(Mode::Path);
         }
     });
@@ -170,17 +251,24 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         let mut width = d.width;
         let r = ui.horizontal(|ui| {
             ui.label("Width");
-            ui.add(DragValue::new(&mut width).speed(10.0).range(1.0..=1.0e6).suffix(" mm"))
+            ui.add(
+                DragValue::new(&mut width)
+                    .speed(10.0)
+                    .range(1.0..=1.0e6)
+                    .suffix(" mm"),
+            )
         });
         if (r.inner.drag_stopped() || r.inner.lost_focus()) && width != d.width {
             patch.width = Some(width);
         }
         let mut join = d.join;
-        egui::ComboBox::from_id_salt(("hardscape_join", id)).selected_text(format!("{} join", join.id())).show_ui(ui, |ui| {
-            for j in Join::ALL {
-                ui.selectable_value(&mut join, j, j.id());
-            }
-        });
+        egui::ComboBox::from_id_salt(("hardscape_join", id))
+            .selected_text(format!("{} join", join.id()))
+            .show_ui(ui, |ui| {
+                for j in Join::ALL {
+                    ui.selectable_value(&mut join, j, j.id());
+                }
+            });
         if join != d.join {
             patch.join = Some(join);
         }
@@ -189,27 +277,52 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     let mut kind = d.slope.id();
     ui.horizontal(|ui| {
         ui.label("Slope");
-        egui::ComboBox::from_id_salt(("hardscape_slope", id)).selected_text(kind).show_ui(ui, |ui| {
-            ui.selectable_value(&mut kind, "none", "none");
-            ui.selectable_value(&mut kind, "cross", "cross slope");
-            if matches!(d.slope, Slope::Edges { .. }) {
-                ui.label("edges (set by the API)");
-            }
-        });
+        egui::ComboBox::from_id_salt(("hardscape_slope", id))
+            .selected_text(kind)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut kind, "none", "none");
+                ui.selectable_value(&mut kind, "cross", "cross slope");
+                if matches!(d.slope, Slope::Edges { .. }) {
+                    ui.label("edges (set by the API)");
+                }
+            });
     });
     if kind != d.slope.id() {
-        patch.slope = Some(if kind == "cross" { Slope::Cross { percent: 2.0, angle_deg: 0.0 } } else { Slope::None });
+        patch.slope = Some(if kind == "cross" {
+            Slope::Cross {
+                percent: 2.0,
+                angle_deg: 0.0,
+            }
+        } else {
+            Slope::None
+        });
     }
     if let Slope::Cross { percent, angle_deg } = &d.slope {
         let (mut p, mut a) = (*percent, *angle_deg);
         let r = ui.horizontal(|ui| {
-            let r1 = ui.add(DragValue::new(&mut p).speed(0.1).range(-100.0..=100.0).suffix(" %"));
-            let r2 = if d.mode == Mode::Slab { Some(ui.add(DragValue::new(&mut a).speed(1.0).suffix("\u{b0}"))) } else { None };
+            let r1 = ui.add(
+                DragValue::new(&mut p)
+                    .speed(0.1)
+                    .range(-100.0..=100.0)
+                    .suffix(" %"),
+            );
+            let r2 = if d.mode == Mode::Slab {
+                Some(ui.add(DragValue::new(&mut a).speed(1.0).suffix("\u{b0}")))
+            } else {
+                None
+            };
             (r1, r2)
         });
-        let done = r.inner.0.drag_stopped() || r.inner.0.lost_focus() || r.inner.1.is_some_and(|r| r.drag_stopped() || r.lost_focus());
+        let done = r.inner.0.drag_stopped()
+            || r.inner.0.lost_focus()
+            || r.inner
+                .1
+                .is_some_and(|r| r.drag_stopped() || r.lost_focus());
         if done && (p != *percent || a != *angle_deg) {
-            patch.slope = Some(Slope::Cross { percent: p, angle_deg: a });
+            patch.slope = Some(Slope::Cross {
+                percent: p,
+                angle_deg: a,
+            });
         }
     }
     let elevation = match &obj.shape {
@@ -218,8 +331,17 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     };
     let mut e = elevation;
     let r = ui.horizontal(|ui| {
-        ui.label(if d.drape { "Height above ground" } else { "Elevation" });
-        ui.add(DragValue::new(&mut e).speed(5.0).range(-1.0e8..=1.0e8).suffix(" mm"))
+        ui.label(if d.drape {
+            "Height above ground"
+        } else {
+            "Elevation"
+        });
+        ui.add(
+            DragValue::new(&mut e)
+                .speed(5.0)
+                .range(-1.0e8..=1.0e8)
+                .suffix(" mm"),
+        )
     });
     if (r.inner.drag_stopped() || r.inner.lost_focus()) && e != elevation {
         patch.elevation = Some(e);
@@ -237,34 +359,45 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     use cadektor_core::hardscape::TerrainSource;
     let at = |p: DVec2| terrain.elevation(obj, p);
     let rev = session.editor.revision();
-    let cached = QUANTITIES.with(|c| c.borrow().as_ref().filter(|(r, i, h, _)| *r == rev && *i == id && h.is_some()).and_then(|(_, _, h, _)| h.clone()));
+    let cached = QUANTITIES.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(r, i, h, _)| *r == rev && *i == id && h.is_some())
+            .and_then(|(_, _, h, _)| h.clone())
+    });
     let computed = cached.or_else(|| {
         let q = hardscape::report::quantities(doc, obj, Some(&at));
         QUANTITIES.with(|c| *c.borrow_mut() = Some((rev, id, q.clone(), None)));
         q
     });
     if let Some(q) = computed {
-        egui::Grid::new(("hardscape_qty", id)).num_columns(2).show(ui, |ui| {
-            ui.label("Plan area");
-            ui.label(format!("{:.2} m\u{b2}", q.plan_area_m2));
-            ui.end_row();
-            if (q.surface_area_m2 - q.plan_area_m2).abs() > 1e-6 {
-                ui.label(if q.draped { "Draped area" } else { "Surface area" });
-                ui.label(format!("{:.2} m\u{b2}", q.surface_area_m2));
+        egui::Grid::new(("hardscape_qty", id))
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Plan area");
+                ui.label(format!("{:.2} m\u{b2}", q.plan_area_m2));
                 ui.end_row();
-            }
-            ui.label("Perimeter");
-            ui.label(format!("{:.2} m", q.perimeter_m));
-            ui.end_row();
-            for l in &q.layers {
-                ui.label(format!("{} {}", l.kind, l.material));
-                ui.label(format!("{:.3} m\u{b3}", l.volume_m3));
+                if (q.surface_area_m2 - q.plan_area_m2).abs() > 1e-6 {
+                    ui.label(if q.draped {
+                        "Draped area"
+                    } else {
+                        "Surface area"
+                    });
+                    ui.label(format!("{:.2} m\u{b2}", q.surface_area_m2));
+                    ui.end_row();
+                }
+                ui.label("Perimeter");
+                ui.label(format!("{:.2} m", q.perimeter_m));
                 ui.end_row();
-            }
-            ui.label("Volume");
-            ui.label(format!("{:.3} m\u{b3}", q.volume_m3));
-            ui.end_row();
-        });
+                for l in &q.layers {
+                    ui.label(format!("{} {}", l.kind, l.material));
+                    ui.label(format!("{:.3} m\u{b3}", l.volume_m3));
+                    ui.end_row();
+                }
+                ui.label("Volume");
+                ui.label(format!("{:.3} m\u{b3}", q.volume_m3));
+                ui.end_row();
+            });
     }
     if !patch.is_empty() {
         apply(session, id, patch, status);
@@ -305,26 +438,46 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         });
     }
     let rev = session.editor.revision();
-    let cached = QUANTITIES.with(|c| c.borrow().as_ref().filter(|(r, i, _, l)| *r == rev && *i == id && l.is_some()).and_then(|(_, _, _, l)| l.clone()));
+    let cached = QUANTITIES.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(r, i, _, l)| *r == rev && *i == id && l.is_some())
+            .and_then(|(_, _, _, l)| l.clone())
+    });
     let computed = cached.or_else(|| {
         let q = landscape::quantities(doc, obj);
         QUANTITIES.with(|c| *c.borrow_mut() = Some((rev, id, None, q.clone())));
         q
     });
     if let Some(q) = computed {
-        egui::Grid::new(("landscape_qty", id)).num_columns(2).show(ui, |ui| {
-            ui.label("Net area");
-            ui.label(format!("{:.2} m\u{b2}  (holes {:.2})", q.net_area_m2, q.holes_area_m2));
-            ui.end_row();
-            for r in &q.rows {
-                ui.label(&r.name);
-                ui.label(format!("{} plants  ({:.1} %, {:.1} per m\u{b2})", r.count, r.percent, r.density_per_m2));
+        egui::Grid::new(("landscape_qty", id))
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Net area");
+                ui.label(format!(
+                    "{:.2} m\u{b2}  (holes {:.2})",
+                    q.net_area_m2, q.holes_area_m2
+                ));
                 ui.end_row();
-            }
-        });
+                for r in &q.rows {
+                    ui.label(&r.name);
+                    ui.label(format!(
+                        "{} plants  ({:.1} %, {:.1} per m\u{b2})",
+                        r.count, r.percent, r.density_per_m2
+                    ));
+                    ui.end_row();
+                }
+            });
     }
     if patch != LandscapePatch::default() {
-        run_command(session, &Command::SetLandscapeArea { ids: vec![id], patch }, status);
+        run_command(
+            session,
+            &Command::SetLandscapeArea {
+                ids: vec![id],
+                patch,
+            },
+            status,
+        );
     }
 }
 
@@ -339,7 +492,12 @@ struct Extras {
     plants: Vec<(DVec2, f64, Option<cadektor_core::model::Color>, Option<f64>)>,
 }
 
-type QuantityCache = Option<(u64, ObjectId, Option<hardscape::report::Quantities>, Option<landscape::AreaQuantities>)>;
+type QuantityCache = Option<(
+    u64,
+    ObjectId,
+    Option<hardscape::report::Quantities>,
+    Option<landscape::AreaQuantities>,
+)>;
 
 thread_local! {
     static CACHE: RefCell<HashMap<ObjectId, (u64, Rc<Extras>)>> = RefCell::new(HashMap::new());
@@ -364,20 +522,27 @@ fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
             h.finish()
         }
     };
-    if let Some(found) = CACHE.with(|c| c.borrow().get(&o.id).filter(|(k, _)| *k == key).map(|(_, e)| e.clone())) {
+    if let Some(found) = CACHE.with(|c| {
+        c.borrow()
+            .get(&o.id)
+            .filter(|(k, _)| *k == key)
+            .map(|(_, e)| e.clone())
+    }) {
         return found;
     }
     let mut e = Extras::default();
     match &o.shape {
         Shape::Hardscape { boundary, .. } => {
             if let Some(j) = hardscape::data::style_of(doc, o).and_then(|(_, s)| s.joints) {
-                e.joints = hardscape::joints::joint_lines(&curve::flatten(boundary, true, 2.0), &j).segments;
+                e.joints = hardscape::joints::joint_lines(&curve::flatten(boundary, true, 2.0), &j)
+                    .segments;
             }
         }
         Shape::LandscapeArea { .. } if landscape::shows_plants(doc, o) => {
             for p in landscape::scatter(doc, o) {
                 if let Some(s) = doc.resources.plant_style(p.plant) {
-                    e.plants.push((p.at, s.spread / 2.0, s.fill, s.protection_radius()));
+                    e.plants
+                        .push((p.at, s.spread / 2.0, s.fill, s.protection_radius()));
                 }
             }
         }
@@ -395,11 +560,20 @@ fn extras(doc: &Document, o: &Object) -> Rc<Extras> {
 }
 
 /// Draws the joint pattern, the border, the holes and the plants of a hardscape or a landscape area.
-pub fn draw_extras(painter: &Painter, view: &View, doc: &Document, o: &Object, st: Style, offset: DVec2) {
+pub fn draw_extras(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    o: &Object,
+    st: Style,
+    offset: DVec2,
+) {
     let s = |p: DVec2| view.to_screen(p + offset);
     match &o.shape {
         Shape::Hardscape { boundary, .. } => {
-            let Some((_, style)) = hardscape::data::style_of(doc, o) else { return };
+            let Some((_, style)) = hardscape::data::style_of(doc, o) else {
+                return;
+            };
             if let Some(j) = &style.joints
                 && j.unit_width.min(j.unit_length) * view.zoom >= 3.0
             {
@@ -415,7 +589,12 @@ pub fn draw_extras(painter: &Painter, view: &View, doc: &Document, o: &Object, s
                 let stroke = egui::epaint::PathStroke::new(w, color.gamma_multiply(0.6));
                 let d = hardscape::data(o).unwrap_or_default();
                 let line = |pts: Vec<DVec2>, closed: bool| {
-                    painter.add(egui::epaint::PathShape { points: pts.iter().map(|p| s(*p)).collect(), closed, fill: Color32::TRANSPARENT, stroke: stroke.clone() });
+                    painter.add(egui::epaint::PathShape {
+                        points: pts.iter().map(|p| s(*p)).collect(),
+                        closed,
+                        fill: Color32::TRANSPARENT,
+                        stroke: stroke.clone(),
+                    });
                 };
                 if d.mode == Mode::Path && !d.closed {
                     // A path has the border along the chosen edges only.
@@ -429,23 +608,41 @@ pub fn draw_extras(painter: &Painter, view: &View, doc: &Document, o: &Object, s
                         hardscape::Sides::Right => line(right, false),
                     }
                 } else {
-                    line(curve::flatten(boundary, true, (0.25 / view.zoom).max(1e-3)), true);
+                    line(
+                        curve::flatten(boundary, true, (0.25 / view.zoom).max(1e-3)),
+                        true,
+                    );
                 }
             }
         }
         Shape::LandscapeArea { .. } => {
             let Some(d) = landscape::data(o) else { return };
             for hole in &d.holes {
-                let ring: Vec<egui::Pos2> = curve::flatten(hole, true, (0.25 / view.zoom).max(1e-3)).iter().map(|p| s(*p)).collect();
-                painter.add(egui::epaint::PathShape { points: ring, closed: true, fill: Color32::from_white_alpha(200), stroke: egui::epaint::PathStroke::new(1.0, st.pen) });
+                let ring: Vec<egui::Pos2> =
+                    curve::flatten(hole, true, (0.25 / view.zoom).max(1e-3))
+                        .iter()
+                        .map(|p| s(*p))
+                        .collect();
+                painter.add(egui::epaint::PathShape {
+                    points: ring,
+                    closed: true,
+                    fill: Color32::from_white_alpha(200),
+                    stroke: egui::epaint::PathStroke::new(1.0, st.pen),
+                });
             }
             let e = extras(doc, o);
             let stroke = Stroke::new(1.0, st.pen.gamma_multiply(0.8));
             for (at, r, fill, zone) in e.plants.iter().take(landscape::MAX_SCATTER) {
-                let fill = fill.map_or(Color32::from_rgba_unmultiplied(80, 150, 70, 90), |c| color32(c).gamma_multiply(0.5));
+                let fill = fill.map_or(Color32::from_rgba_unmultiplied(80, 150, 70, 90), |c| {
+                    color32(c).gamma_multiply(0.5)
+                });
                 painter.circle(s(*at), (*r * view.zoom) as f32, fill, stroke);
                 if let Some(z) = zone {
-                    painter.circle_stroke(s(*at), (*z * view.zoom) as f32, Stroke::new(1.0, st.pen.gamma_multiply(0.5)));
+                    painter.circle_stroke(
+                        s(*at),
+                        (*z * view.zoom) as f32,
+                        Stroke::new(1.0, st.pen.gamma_multiply(0.5)),
+                    );
                 }
             }
         }

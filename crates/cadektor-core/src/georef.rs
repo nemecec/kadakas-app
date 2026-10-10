@@ -55,8 +55,20 @@ mod tests {
         let m = DVec2::new(1234.5, -987.0);
         assert!(g.to_model(g.to_map(m)).distance(m) < 1e-6);
         assert!(g.is_finite());
-        let plain = Georeference { rotation: 0.0, ..g.clone() };
-        assert_eq!(plain.to_model(DVec2::new(385_001.0, 6_672_002.0)), DVec2::new(1000.0, 2000.0));
-        assert!(!Georeference { rotation: f64::NAN, ..g }.is_finite());
+        let plain = Georeference {
+            rotation: 0.0,
+            ..g.clone()
+        };
+        assert_eq!(
+            plain.to_model(DVec2::new(385_001.0, 6_672_002.0)),
+            DVec2::new(1000.0, 2000.0)
+        );
+        assert!(
+            !Georeference {
+                rotation: f64::NAN,
+                ..g
+            }
+            .is_finite()
+        );
     }
 }

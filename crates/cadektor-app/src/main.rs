@@ -1,12 +1,12 @@
+#[cfg(not(target_arch = "wasm32"))]
+mod agent;
 mod annot_ui;
 mod app;
 mod area_ui;
-#[cfg(not(target_arch = "wasm32"))]
-mod agent;
 mod canvas;
 mod canvas3d;
-mod databar;
 mod data_ui;
+mod databar;
 mod file_io;
 mod gpu3d;
 mod hit;
@@ -32,10 +32,22 @@ fn main() -> eframe::Result {
     let port = agent::parse_agent_port(&args, env.as_deref());
     let allow_dirs = agent::parse_allow_dirs(&args);
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]).with_title("Cadektor"),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1400.0, 900.0])
+            .with_title("Cadektor"),
         ..Default::default()
     };
-    eframe::run_native("Cadektor", options, Box::new(move |cc| Ok(Box::new(app::CadektorApp::new(cc, port, allow_dirs.clone())))))
+    eframe::run_native(
+        "Cadektor",
+        options,
+        Box::new(move |cc| {
+            Ok(Box::new(app::CadektorApp::new(
+                cc,
+                port,
+                allow_dirs.clone(),
+            )))
+        }),
+    )
 }
 
 // The web entry point is not set up yet. The modules above are wasm compatible.

@@ -7,7 +7,7 @@ use crate::model::{Color, Document};
 use crate::sheets::Viewport;
 
 use super::dim;
-use super::style::{DimensionStyle, Justify, TagFrame, TagStyle, TextStyle, Terminator};
+use super::style::{DimensionStyle, Justify, TagFrame, TagStyle, Terminator, TextStyle};
 use super::{Annot, Callout, DataTag, Legend, NorthArrow, RevisionCloud, ScaleBar, StyledText};
 
 /// How a closed outline is filled.
@@ -22,32 +22,73 @@ pub enum Fill {
 /// One drawing primitive, in the coordinates of the layer (or paper mm in a viewport).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
-    Poly { pts: Vec<DVec2>, closed: bool, fill: Fill, color: Option<Color> },
+    Poly {
+        pts: Vec<DVec2>,
+        closed: bool,
+        fill: Fill,
+        color: Option<Color>,
+    },
     /// `at` is the start of the baseline, or the middle of it when `center` is set. `height` is the font size.
-    Text { at: DVec2, text: String, height: f64, center: bool, bold: bool, color: Option<Color> },
+    Text {
+        at: DVec2,
+        text: String,
+        height: f64,
+        center: bool,
+        bold: bool,
+        color: Option<Color>,
+    },
 }
 
 impl Prim {
     pub fn line(a: DVec2, b: DVec2) -> Prim {
-        Prim::Poly { pts: vec![a, b], closed: false, fill: Fill::None, color: None }
+        Prim::Poly {
+            pts: vec![a, b],
+            closed: false,
+            fill: Fill::None,
+            color: None,
+        }
     }
 
     pub fn poly(pts: Vec<DVec2>, closed: bool, fill: Fill) -> Prim {
-        Prim::Poly { pts, closed, fill, color: None }
+        Prim::Poly {
+            pts,
+            closed,
+            fill,
+            color: None,
+        }
     }
 
     pub fn text(at: DVec2, text: &str, height: f64, center: bool, color: Option<Color>) -> Prim {
-        Prim::Text { at, text: text.to_string(), height, center, bold: false, color }
+        Prim::Text {
+            at,
+            text: text.to_string(),
+            height,
+            center,
+            bold: false,
+            color,
+        }
     }
 
     /// Box around the primitive. Text counts with the width estimate `text_width`.
     pub fn bounds(&self) -> (DVec2, DVec2) {
         match self {
-            Prim::Poly { pts, .. } => pts.iter().fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(lo, hi), p| (lo.min(*p), hi.max(*p))),
-            Prim::Text { at, text, height, center, .. } => {
+            Prim::Poly { pts, .. } => pts.iter().fold(
+                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+            ),
+            Prim::Text {
+                at,
+                text,
+                height,
+                center,
+                ..
+            } => {
                 let w = text_width(text, *height);
                 let x0 = if *center { at.x - w / 2.0 } else { at.x };
-                (DVec2::new(x0, at.y - height * 0.2), DVec2::new(x0 + w, at.y + height * 0.8))
+                (
+                    DVec2::new(x0, at.y - height * 0.2),
+                    DVec2::new(x0 + w, at.y + height * 0.8),
+                )
             }
         }
     }
@@ -55,7 +96,11 @@ impl Prim {
 
 /// Box around primitives, or `None` for none.
 pub fn prims_bounds(prims: &[Prim]) -> Option<(DVec2, DVec2)> {
-    prims.iter().map(Prim::bounds).filter(|(a, b)| a.is_finite() && b.is_finite()).reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+    prims
+        .iter()
+        .map(Prim::bounds)
+        .filter(|(a, b)| a.is_finite() && b.is_finite())
+        .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
 }
 
 /// A rough width of a text, the same estimate that the sheet output uses.
@@ -65,7 +110,9 @@ pub fn text_width(text: &str, height: f64) -> f64 {
 
 /// A regular polygon that approximates a circle.
 pub fn circle_points(center: DVec2, r: f64, n: usize) -> Vec<DVec2> {
-    (0..n).map(|i| center + DVec2::from_angle(std::f64::consts::TAU * i as f64 / n as f64) * r).collect()
+    (0..n)
+        .map(|i| center + DVec2::from_angle(std::f64::consts::TAU * i as f64 / n as f64) * r)
+        .collect()
 }
 
 /// Where an annotation is drawn: the factors between paper and the coordinates of the drawing.
@@ -90,12 +137,24 @@ pub struct ViewMap {
 impl Ctx {
     /// For an object on a layer. A sheet layer has the scale 1, so its sizes are paper mm.
     pub fn layer(doc: &Document, layer: crate::model::LayerId) -> Ctx {
-        Ctx { paper: doc.layer(layer).map_or(1.0, |l| l.scale), real: 1.0, view: None }
+        Ctx {
+            paper: doc.layer(layer).map_or(1.0, |l| l.scale),
+            real: 1.0,
+            view: None,
+        }
     }
 
     /// For the annotation space of a viewport.
     pub fn viewport(vp: &Viewport) -> Ctx {
-        Ctx { paper: 1.0, real: 1.0 / vp.scale, view: Some(ViewMap { center: vp.center, frame_half: (vp.max - vp.min) / 2.0, scale: vp.scale }) }
+        Ctx {
+            paper: 1.0,
+            real: 1.0 / vp.scale,
+            view: Some(ViewMap {
+                center: vp.center,
+                frame_half: (vp.max - vp.min) / 2.0,
+                scale: vp.scale,
+            }),
+        }
     }
 
     /// The position of a model point in the coordinates that the annotation uses.
@@ -141,7 +200,11 @@ impl TextSource for PlainSource {
 pub fn prims(doc: &Document, a: &Annot, ctx: &Ctx, src: &dyn TextSource) -> Vec<Prim> {
     match a {
         Annot::Dimension(d) => {
-            let style = d.style.and_then(|s| doc.resources.dimension_style(s)).cloned().unwrap_or_default();
+            let style = d
+                .style
+                .and_then(|s| doc.resources.dimension_style(s))
+                .cloned()
+                .unwrap_or_default();
             dim::prims(d, &style, ctx)
         }
         Annot::Text(t) => styled_text(doc, t, ctx),
@@ -155,7 +218,9 @@ pub fn prims(doc: &Document, a: &Annot, ctx: &Ctx, src: &dyn TextSource) -> Vec<
 }
 
 fn text_style(doc: &Document, id: Option<crate::resource::ResourceId>) -> TextStyle {
-    id.and_then(|s| doc.resources.text_style(s)).cloned().unwrap_or_default()
+    id.and_then(|s| doc.resources.text_style(s))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Lines of text from `at` (the baseline of the first line) downward.
@@ -169,7 +234,14 @@ fn text_lines(out: &mut Vec<Prim>, text: &str, at: DVec2, st: &TextStyle, ctx: &
             Justify::Center => (at.x, true),
             Justify::Right => (at.x - w, false),
         };
-        out.push(Prim::Text { at: DVec2::new(x, y), text: line.to_string(), height: h, center, bold: st.bold, color: st.color });
+        out.push(Prim::Text {
+            at: DVec2::new(x, y),
+            text: line.to_string(),
+            height: h,
+            center,
+            bold: st.bold,
+            color: st.color,
+        });
     }
 }
 
@@ -204,7 +276,11 @@ fn callout(doc: &Document, c: &Callout, ctx: &Ctx) -> Vec<Prim> {
         }
     }
     // The text sits on the side that the first leader does not come from.
-    let right = c.leaders.first().and_then(|l| l.points.first()).is_none_or(|tip| tip.x <= c.at.x);
+    let right = c
+        .leaders
+        .first()
+        .and_then(|l| l.points.first())
+        .is_none_or(|tip| tip.x <= c.at.x);
     let side = if right { 1.0 } else { -1.0 };
     let shoulder = c.shoulder_mm * ctx.paper;
     let end = c.at + DVec2::X * side * shoulder;
@@ -215,7 +291,10 @@ fn callout(doc: &Document, c: &Callout, ctx: &Ctx) -> Vec<Prim> {
     let text = callout_text(doc, c);
     let lines = text.split('\n').count().max(1) as f64;
     // The first line is centered on the shoulder line when there is one line.
-    let first = DVec2::new(0.0, end.y - h * 0.35 + (lines - 1.0) * h * st.line_spacing / 2.0);
+    let first = DVec2::new(
+        0.0,
+        end.y - h * 0.35 + (lines - 1.0) * h * st.line_spacing / 2.0,
+    );
     let x = if right { end.x + gap } else { end.x - gap };
     let mut st2 = st.clone();
     st2.justify = if right { Justify::Left } else { Justify::Right };
@@ -229,29 +308,54 @@ fn terminator_prims(out: &mut Vec<Prim>, kind: Terminator, size: f64, at: DVec2,
 
 /// The live position of the reference point of a tagged object, in annotation coordinates.
 pub fn tag_anchor(doc: &Document, t: &DataTag, ctx: &Ctx) -> DVec2 {
-    doc.object(t.object).and_then(|o| super::ref_point(&o.shape)).map_or(t.anchor, |p| ctx.local(p))
+    doc.object(t.object)
+        .and_then(|o| super::ref_point(&o.shape))
+        .map_or(t.anchor, |p| ctx.local(p))
 }
 
 fn data_tag(doc: &Document, t: &DataTag, ctx: &Ctx, src: &dyn TextSource) -> Vec<Prim> {
-    let Some(style) = doc.resources.tag_style(t.style) else { return Vec::new() };
+    let Some(style) = doc.resources.tag_style(t.style) else {
+        return Vec::new();
+    };
     let alive = doc.object(t.object).is_some();
-    let lines = if alive { src.tag_lines(doc, t, style) } else { vec!["?".to_string()] };
+    let lines = if alive {
+        src.tag_lines(doc, t, style)
+    } else {
+        vec!["?".to_string()]
+    };
     let anchor = tag_anchor(doc, t, ctx);
     let at = anchor + t.offset * ctx.paper;
     let h = style.size_mm * ctx.paper;
     let pad = style.pad_mm * ctx.paper;
     let lh = h * 1.3;
     let w = lines.iter().map(|l| text_width(l, h)).fold(0.0, f64::max);
-    let (bw, bh) = (w + 2.0 * pad, lines.len() as f64 * lh + 2.0 * pad - (lh - h));
-    let (lo, hi) = (at - DVec2::new(bw / 2.0, bh / 2.0), at + DVec2::new(bw / 2.0, bh / 2.0));
+    let (bw, bh) = (
+        w + 2.0 * pad,
+        lines.len() as f64 * lh + 2.0 * pad - (lh - h),
+    );
+    let (lo, hi) = (
+        at - DVec2::new(bw / 2.0, bh / 2.0),
+        at + DVec2::new(bw / 2.0, bh / 2.0),
+    );
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let y = hi.y - pad - h * 0.8 - i as f64 * lh;
-        out.push(Prim::Text { at: DVec2::new(at.x, y), text: line.clone(), height: h, center: true, bold: false, color: style.color });
+        out.push(Prim::Text {
+            at: DVec2::new(at.x, y),
+            text: line.clone(),
+            height: h,
+            center: true,
+            bold: false,
+            color: style.color,
+        });
     }
     let edge = match style.frame {
         TagFrame::Box => {
-            out.push(Prim::poly(vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)], true, Fill::None));
+            out.push(Prim::poly(
+                vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
+                true,
+                Fill::None,
+            ));
             let q = anchor.clamp(lo, hi);
             (q != anchor).then_some(q)
         }
@@ -262,7 +366,10 @@ fn data_tag(doc: &Document, t: &DataTag, ctx: &Ctx, src: &dyn TextSource) -> Vec
             (d.length() > r).then(|| at + d.normalize() * r)
         }
         TagFrame::Underline => {
-            out.push(Prim::line(DVec2::new(lo.x, lo.y + pad * 0.5), DVec2::new(hi.x, lo.y + pad * 0.5)));
+            out.push(Prim::line(
+                DVec2::new(lo.x, lo.y + pad * 0.5),
+                DVec2::new(hi.x, lo.y + pad * 0.5),
+            ));
             Some(DVec2::new(anchor.x.clamp(lo.x, hi.x), lo.y + pad * 0.5)).filter(|q| *q != anchor)
         }
         TagFrame::None => {
@@ -272,7 +379,13 @@ fn data_tag(doc: &Document, t: &DataTag, ctx: &Ctx, src: &dyn TextSource) -> Vec
     };
     if let (true, Some(q)) = (style.leader, edge) {
         out.push(Prim::line(q, anchor));
-        terminator_prims(&mut out, style.terminator, 2.5 * ctx.paper, anchor, (anchor - q).normalize_or_zero());
+        terminator_prims(
+            &mut out,
+            style.terminator,
+            2.5 * ctx.paper,
+            anchor,
+            (anchor - q).normalize_or_zero(),
+        );
     }
     out
 }
@@ -288,24 +401,53 @@ fn legend(doc: &Document, l: &Legend, ctx: &Ctx, src: &dyn TextSource) -> Vec<Pr
     let mut y = l.at.y;
     if !l.title.is_empty() {
         y -= h * 1.2;
-        out.push(Prim::Text { at: DVec2::new(l.at.x, y), text: l.title.clone(), height: h * 1.2, center: false, bold: true, color: st.color });
+        out.push(Prim::Text {
+            at: DVec2::new(l.at.x, y),
+            text: l.title.clone(),
+            height: h * 1.2,
+            center: false,
+            bold: true,
+            color: st.color,
+        });
         y -= h * 0.6;
     }
-    let label_w = rows.iter().map(|r| text_width(&r.label, h)).fold(0.0, f64::max);
+    let label_w = rows
+        .iter()
+        .map(|r| text_width(&r.label, h))
+        .fold(0.0, f64::max);
     for r in &rows {
         let top = y;
         let bottom = top - sw;
         let x0 = l.at.x;
         out.push(Prim::Poly {
-            pts: vec![DVec2::new(x0, bottom), DVec2::new(x0 + sw, bottom), DVec2::new(x0 + sw, top), DVec2::new(x0, top)],
+            pts: vec![
+                DVec2::new(x0, bottom),
+                DVec2::new(x0 + sw, bottom),
+                DVec2::new(x0 + sw, top),
+                DVec2::new(x0, top),
+            ],
             closed: true,
             fill: r.fill.map_or(Fill::None, Fill::Color),
             color: r.stroke,
         });
         let base = (top + bottom) / 2.0 - h * 0.35;
-        out.push(Prim::Text { at: DVec2::new(x0 + sw + gap, base), text: r.label.clone(), height: h, center: false, bold: false, color: st.color });
+        out.push(Prim::Text {
+            at: DVec2::new(x0 + sw + gap, base),
+            text: r.label.clone(),
+            height: h,
+            center: false,
+            bold: false,
+            color: st.color,
+        });
         if l.show_count {
-            out.push(Prim::Text { at: DVec2::new(x0 + sw + gap * 2.0 + label_w, base), text: r.count.to_string(), height: h, center: false, bold: false, color: st.color });
+            out.push(Prim::Text {
+                at: DVec2::new(x0 + sw + gap * 2.0 + label_w, base),
+                text: r.count.to_string(),
+                height: h,
+                center: false,
+                bold: false,
+                color: st.color,
+            });
         }
         y -= row_h;
     }
@@ -319,7 +461,12 @@ fn rotate(p: DVec2, deg: f64) -> DVec2 {
 /// The counterclockwise angle of the north arrow on the page. The georeference maps the model to
 /// the map by a turn of `rotation`, so true north lies at minus that angle in the model.
 pub fn north_rotation_deg(doc: &Document, n: &NorthArrow) -> f64 {
-    n.rotation_deg - if n.use_georef { doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees()) } else { 0.0 }
+    n.rotation_deg
+        - if n.use_georef {
+            doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees())
+        } else {
+            0.0
+        }
 }
 
 fn north_arrow(doc: &Document, n: &NorthArrow, ctx: &Ctx) -> Vec<Prim> {
@@ -329,23 +476,55 @@ fn north_arrow(doc: &Document, n: &NorthArrow, ctx: &Ctx) -> Vec<Prim> {
     let mut out = Vec::new();
     match n.style {
         super::NorthStyle::Arrow => {
-            out.push(Prim::poly(vec![at(0.0, 0.4), at(-0.15, -0.4), at(0.0, -0.2)], true, Fill::None));
-            out.push(Prim::poly(vec![at(0.0, 0.4), at(0.0, -0.2), at(0.15, -0.4)], true, Fill::Ink));
+            out.push(Prim::poly(
+                vec![at(0.0, 0.4), at(-0.15, -0.4), at(0.0, -0.2)],
+                true,
+                Fill::None,
+            ));
+            out.push(Prim::poly(
+                vec![at(0.0, 0.4), at(0.0, -0.2), at(0.15, -0.4)],
+                true,
+                Fill::Ink,
+            ));
         }
         super::NorthStyle::Simple => {
             out.push(Prim::line(at(0.0, -0.4), at(0.0, 0.4)));
-            out.push(Prim::poly(vec![at(-0.12, 0.2), at(0.0, 0.4), at(0.12, 0.2)], false, Fill::None));
+            out.push(Prim::poly(
+                vec![at(-0.12, 0.2), at(0.0, 0.4), at(0.12, 0.2)],
+                false,
+                Fill::None,
+            ));
         }
         super::NorthStyle::Compass => {
-            out.push(Prim::poly((0..48).map(|i| n.at + DVec2::from_angle(std::f64::consts::TAU * i as f64 / 48.0) * (0.3 * s)).collect(), true, Fill::None));
+            out.push(Prim::poly(
+                (0..48)
+                    .map(|i| {
+                        n.at + DVec2::from_angle(std::f64::consts::TAU * i as f64 / 48.0)
+                            * (0.3 * s)
+                    })
+                    .collect(),
+                true,
+                Fill::None,
+            ));
             out.push(Prim::line(at(0.0, -0.4), at(0.0, 0.4)));
             out.push(Prim::line(at(-0.4, 0.0), at(0.4, 0.0)));
-            out.push(Prim::poly(vec![at(0.0, 0.4), at(-0.08, 0.1), at(0.08, 0.1)], true, Fill::Ink));
+            out.push(Prim::poly(
+                vec![at(0.0, 0.4), at(-0.08, 0.1), at(0.08, 0.1)],
+                true,
+                Fill::Ink,
+            ));
         }
     }
     let th = 0.28 * s;
     let label = at(0.0, 0.5) + rotate(DVec2::new(0.0, th * 0.5), rot);
-    out.push(Prim::Text { at: label - DVec2::new(0.0, th * 0.35), text: "N".into(), height: th, center: true, bold: true, color: None });
+    out.push(Prim::Text {
+        at: label - DVec2::new(0.0, th * 0.35),
+        text: "N".into(),
+        height: th,
+        center: true,
+        bold: true,
+        color: None,
+    });
     out
 }
 
@@ -372,7 +551,12 @@ fn scale_bar(doc: &Document, b: &ScaleBar, ctx: &Ctx) -> Vec<Prim> {
     for i in 0..b.segments {
         let x0 = b.at.x + seg * i as f64;
         out.push(Prim::poly(
-            vec![DVec2::new(x0, b.at.y), DVec2::new(x0 + seg, b.at.y), DVec2::new(x0 + seg, b.at.y + h), DVec2::new(x0, b.at.y + h)],
+            vec![
+                DVec2::new(x0, b.at.y),
+                DVec2::new(x0 + seg, b.at.y),
+                DVec2::new(x0 + seg, b.at.y + h),
+                DVec2::new(x0, b.at.y + h),
+            ],
             true,
             if i % 2 == 0 { Fill::Ink } else { Fill::None },
         ));
@@ -384,7 +568,14 @@ fn scale_bar(doc: &Document, b: &ScaleBar, ctx: &Ctx) -> Vec<Prim> {
             label.push(' ');
             label.push_str(b.unit.label());
         }
-        out.push(Prim::Text { at: DVec2::new(x, b.at.y + h + th * 0.5), text: label, height: th, center: true, bold: false, color: st.color });
+        out.push(Prim::Text {
+            at: DVec2::new(x, b.at.y + h + th * 0.5),
+            text: label,
+            height: th,
+            center: true,
+            bold: false,
+            color: st.color,
+        });
     }
     out
 }
@@ -418,18 +609,43 @@ pub fn cloud_outline(points: &[DVec2], bump: f64) -> Vec<DVec2> {
 }
 
 fn revision_cloud(r: &RevisionCloud, ctx: &Ctx) -> Vec<Prim> {
-    let mut out = vec![Prim::poly(cloud_outline(&r.points, r.bump_mm * ctx.paper), true, Fill::None)];
+    let mut out = vec![Prim::poly(
+        cloud_outline(&r.points, r.bump_mm * ctx.paper),
+        true,
+        Fill::None,
+    )];
     if r.mark {
-        let hi = r.points.iter().fold(DVec2::splat(f64::NEG_INFINITY), |m, p| m.max(*p));
+        let hi = r
+            .points
+            .iter()
+            .fold(DVec2::splat(f64::NEG_INFINITY), |m, p| m.max(*p));
         let c = hi + DVec2::splat(4.0 * ctx.paper);
         let s = 5.0 * ctx.paper;
-        out.push(Prim::poly(vec![c + DVec2::new(0.0, s), c + DVec2::new(-s * 0.87, -s * 0.5), c + DVec2::new(s * 0.87, -s * 0.5)], true, Fill::None));
-        out.push(Prim::Text { at: c - DVec2::new(0.0, s * 0.25), text: r.revision.clone(), height: s * 0.7, center: true, bold: true, color: None });
+        out.push(Prim::poly(
+            vec![
+                c + DVec2::new(0.0, s),
+                c + DVec2::new(-s * 0.87, -s * 0.5),
+                c + DVec2::new(s * 0.87, -s * 0.5),
+            ],
+            true,
+            Fill::None,
+        ));
+        out.push(Prim::Text {
+            at: c - DVec2::new(0.0, s * 0.25),
+            text: r.revision.clone(),
+            height: s * 0.7,
+            center: true,
+            bold: true,
+            color: None,
+        });
     }
     out
 }
 
 /// The dimension style that a dimension uses.
 pub fn dimension_style(doc: &Document, d: &super::Dimension) -> DimensionStyle {
-    d.style.and_then(|s| doc.resources.dimension_style(s)).cloned().unwrap_or_default()
+    d.style
+        .and_then(|s| doc.resources.dimension_style(s))
+        .cloned()
+        .unwrap_or_default()
 }

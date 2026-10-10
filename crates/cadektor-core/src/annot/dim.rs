@@ -50,7 +50,11 @@ fn direction(axis: Axis, p: &[DVec2]) -> DVec2 {
         Axis::Vertical => DVec2::Y,
         Axis::Aligned => {
             let d = p[p.len() - 1] - p[0];
-            if d.length() > 0.0 { d.normalize() } else { DVec2::X }
+            if d.length() > 0.0 {
+                d.normalize()
+            } else {
+                DVec2::X
+            }
         }
     }
 }
@@ -58,7 +62,13 @@ fn direction(axis: Axis, p: &[DVec2]) -> DVec2 {
 /// The offset in paper mm that puts the dimension line of a linear, chain, baseline or ordinate
 /// dimension through the point `through`. `p` are the points that are known so far. Other modes give 0.
 pub fn offset_for(mode: DimMode, p: &[DVec2], through: DVec2, paper: f64) -> f64 {
-    let (DimMode::Linear { axis } | DimMode::Chain { axis } | DimMode::Baseline { axis } | DimMode::Ordinate { axis }) = mode else { return 0.0 };
+    let (DimMode::Linear { axis }
+    | DimMode::Chain { axis }
+    | DimMode::Baseline { axis }
+    | DimMode::Ordinate { axis }) = mode
+    else {
+        return 0.0;
+    };
     if p.is_empty() || paper <= 0.0 {
         return 0.0;
     }
@@ -77,11 +87,19 @@ pub fn round_half_away(x: f64, decimals: usize) -> f64 {
 /// same (smaller) angle as clicks that turn counterclockwise. The angle is at most 180 degrees.
 pub fn angular_order(vertex: DVec2, p1: DVec2, p2: DVec2) -> (DVec2, DVec2) {
     let sweep = ((p2 - vertex).to_angle() - (p1 - vertex).to_angle()).rem_euclid(TAU);
-    if sweep > std::f64::consts::PI { (p2, p1) } else { (p1, p2) }
+    if sweep > std::f64::consts::PI {
+        (p2, p1)
+    } else {
+        (p1, p2)
+    }
 }
 
 fn trim_number(s: String) -> String {
-    if s.starts_with('-') && s[1..].chars().all(|c| c == '0' || c == '.') { s[1..].to_string() } else { s }
+    if s.starts_with('-') && s[1..].chars().all(|c| c == '0' || c == '.') {
+        s[1..].to_string()
+    } else {
+        s
+    }
 }
 
 /// A length in real mm as text in the units of the style.
@@ -103,7 +121,11 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
                 feet += 1.0;
                 inches -= 12.0;
             }
-            if feet == 0.0 { format!("{sign}{inches:.p$}\"") } else { format!("{sign}{feet:.0}'-{inches:.p$}\"") }
+            if feet == 0.0 {
+                format!("{sign}{inches:.p$}\"")
+            } else {
+                format!("{sign}{feet:.0}'-{inches:.p$}\"")
+            }
         }
         unit => {
             let k = match unit {
@@ -114,20 +136,43 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
                 _ => 304.8,
             };
             let n = trim_number(format!("{:.p$}", round_half_away(mm / k, p)));
-            if style.show_unit { format!("{n}{}", unit.suffix()) } else { n }
+            if style.show_unit {
+                format!("{n}{}", unit.suffix())
+            } else {
+                n
+            }
         }
     }
 }
 
 /// An angle in degrees as text.
 pub fn format_angle(deg: f64, style: &DimensionStyle) -> String {
-    format!("{}\u{b0}", trim_number(format!("{:.*}", style.angle_precision as usize, round_half_away(deg, style.angle_precision as usize))))
+    format!(
+        "{}\u{b0}",
+        trim_number(format!(
+            "{:.*}",
+            style.angle_precision as usize,
+            round_half_away(deg, style.angle_precision as usize)
+        ))
+    )
 }
 
 fn tolerance_text(style: &DimensionStyle) -> String {
-    let Some(t) = style.tolerance else { return String::new() };
-    let num = |x: f64| trim_number(format!("{:.*}", style.precision as usize, round_half_away(x, style.precision as usize)));
-    if t.plus == t.minus { format!(" \u{b1}{}", num(t.plus)) } else { format!(" +{}/-{}", num(t.plus), num(t.minus)) }
+    let Some(t) = style.tolerance else {
+        return String::new();
+    };
+    let num = |x: f64| {
+        trim_number(format!(
+            "{:.*}",
+            style.precision as usize,
+            round_half_away(x, style.precision as usize)
+        ))
+    };
+    if t.plus == t.minus {
+        format!(" \u{b1}{}", num(t.plus))
+    } else {
+        format!(" +{}/-{}", num(t.plus), num(t.minus))
+    }
 }
 
 /// The text of each dimension line. `ctx.real` turns layer units into real mm. The text of the
@@ -167,35 +212,81 @@ pub fn terminator(out: &mut Vec<Prim>, kind: Terminator, size: f64, at: DVec2, d
     let n = dir.perp();
     match kind {
         Terminator::None => {}
-        Terminator::Arrow => out.push(Prim::poly(vec![at, at - dir * size + n * size * 0.17, at - dir * size - n * size * 0.17], true, Fill::Ink)),
-        Terminator::OpenArrow => out.push(Prim::poly(vec![at - dir * size + n * size * 0.25, at, at - dir * size - n * size * 0.25], false, Fill::None)),
+        Terminator::Arrow => out.push(Prim::poly(
+            vec![
+                at,
+                at - dir * size + n * size * 0.17,
+                at - dir * size - n * size * 0.17,
+            ],
+            true,
+            Fill::Ink,
+        )),
+        Terminator::OpenArrow => out.push(Prim::poly(
+            vec![
+                at - dir * size + n * size * 0.25,
+                at,
+                at - dir * size - n * size * 0.25,
+            ],
+            false,
+            Fill::None,
+        )),
         Terminator::Tick => {
             let t = (dir + n).normalize() * size * 0.5;
             out.push(Prim::line(at - t, at + t));
         }
-        Terminator::Dot => out.push(Prim::poly(circle_points(at, size * 0.25, 12), true, Fill::Ink)),
+        Terminator::Dot => out.push(Prim::poly(
+            circle_points(at, size * 0.25, 12),
+            true,
+            Fill::Ink,
+        )),
     }
 }
 
 /// The side of a line on which text sits: the normal that points up, or right for a vertical line.
 fn text_side(n: DVec2) -> DVec2 {
-    if n.y > 1e-9 || (n.y.abs() <= 1e-9 && n.x > 0.0) { n } else { -n }
+    if n.y > 1e-9 || (n.y.abs() <= 1e-9 && n.x > 0.0) {
+        n
+    } else {
+        -n
+    }
 }
 
 /// Text next to a line: the middle `m` of the line and its unit normal.
-fn text_beside(out: &mut Vec<Prim>, text: &str, style: &DimensionStyle, ctx: &Ctx, m: DVec2, normal: DVec2) {
+fn text_beside(
+    out: &mut Vec<Prim>,
+    text: &str,
+    style: &DimensionStyle,
+    ctx: &Ctx,
+    m: DVec2,
+    normal: DVec2,
+) {
     let h = style.text_size_mm * ctx.paper;
     let w = text_width(text, h);
     let s = text_side(normal);
     let ext = s.x.abs() * w / 2.0 + s.y.abs() * h / 2.0;
     let center = m + s * (style.text_gap_mm * ctx.paper + ext);
-    out.push(Prim::text(center - DVec2::new(0.0, h * 0.35), text, h, true, style.color));
+    out.push(Prim::text(
+        center - DVec2::new(0.0, h * 0.35),
+        text,
+        h,
+        true,
+        style.color,
+    ));
 }
 
 /// One dimension line between two measured points `p` and `q`, on the line `c` (the coordinate
 /// along the normal `n`).
 #[allow(clippy::too_many_arguments)]
-fn linear(out: &mut Vec<Prim>, p: DVec2, q: DVec2, u: DVec2, c: f64, text: &str, style: &DimensionStyle, ctx: &Ctx) {
+fn linear(
+    out: &mut Vec<Prim>,
+    p: DVec2,
+    q: DVec2,
+    u: DVec2,
+    c: f64,
+    text: &str,
+    style: &DimensionStyle,
+    ctx: &Ctx,
+) {
     let n = u.perp();
     let (sp, sq) = (p.dot(u), q.dot(u));
     let (lp, lq) = (u * sp + n * c, u * sq + n * c);
@@ -229,7 +320,9 @@ fn linear(out: &mut Vec<Prim>, p: DVec2, q: DVec2, u: DVec2, c: f64, text: &str,
 
 fn arc_points(center: DVec2, r: f64, start: f64, sweep: f64) -> Vec<DVec2> {
     let n = ((sweep.abs() / 0.1).ceil() as usize).clamp(4, 400);
-    (0..=n).map(|i| center + DVec2::from_angle(start + sweep * i as f64 / n as f64) * r).collect()
+    (0..=n)
+        .map(|i| center + DVec2::from_angle(start + sweep * i as f64 / n as f64) * r)
+        .collect()
 }
 
 /// The lines, terminators and text of a dimension. `style` is the dimension style or the default.
@@ -245,16 +338,28 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
             let n = u.perp();
             let c0 = p[0].dot(n) + off;
             match d.mode {
-                DimMode::Linear { .. } => linear(&mut out, p[0], p[1], u, c0, &texts[0], style, ctx),
+                DimMode::Linear { .. } => {
+                    linear(&mut out, p[0], p[1], u, c0, &texts[0], style, ctx)
+                }
                 DimMode::Chain { .. } => {
                     for (i, w) in p.windows(2).enumerate() {
                         linear(&mut out, w[0], w[1], u, c0, &texts[i], style, ctx);
                     }
                 }
                 _ => {
-                    let step = style.baseline_spacing_mm * ctx.paper * if off < 0.0 { -1.0 } else { 1.0 };
+                    let step =
+                        style.baseline_spacing_mm * ctx.paper * if off < 0.0 { -1.0 } else { 1.0 };
                     for (i, q) in p[1..].iter().enumerate() {
-                        linear(&mut out, p[0], *q, u, c0 + step * i as f64, &texts[i], style, ctx);
+                        linear(
+                            &mut out,
+                            p[0],
+                            *q,
+                            u,
+                            c0 + step * i as f64,
+                            &texts[i],
+                            style,
+                            ctx,
+                        );
                     }
                 }
             }
@@ -271,17 +376,37 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
                 if along_x {
                     // A leader goes up (or down) from the point to the text.
                     let y = p[0].y + off;
-                    thin_line(&mut out, *q + DVec2::new(0.0, gap * sign), DVec2::new(q.x, y));
+                    thin_line(
+                        &mut out,
+                        *q + DVec2::new(0.0, gap * sign),
+                        DVec2::new(q.x, y),
+                    );
                     let hh = style.text_size_mm * ctx.paper;
                     let yc = y + sign * (style.text_gap_mm * ctx.paper + hh / 2.0);
-                    out.push(Prim::text(DVec2::new(q.x, yc - hh * 0.35), &texts[i], hh, true, style.color));
+                    out.push(Prim::text(
+                        DVec2::new(q.x, yc - hh * 0.35),
+                        &texts[i],
+                        hh,
+                        true,
+                        style.color,
+                    ));
                 } else {
                     let x = p[0].x + off;
-                    thin_line(&mut out, *q + DVec2::new(gap * sign, 0.0), DVec2::new(x, q.y));
+                    thin_line(
+                        &mut out,
+                        *q + DVec2::new(gap * sign, 0.0),
+                        DVec2::new(x, q.y),
+                    );
                     let hh = style.text_size_mm * ctx.paper;
                     let w = text_width(&texts[i], hh);
                     let xc = x + sign * (style.text_gap_mm * ctx.paper + w / 2.0);
-                    out.push(Prim::text(DVec2::new(xc, q.y - hh * 0.35), &texts[i], hh, true, style.color));
+                    out.push(Prim::text(
+                        DVec2::new(xc, q.y - hh * 0.35),
+                        &texts[i],
+                        hh,
+                        true,
+                        style.color,
+                    ));
                 }
             }
         }
@@ -289,7 +414,11 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
             let v = p[0];
             let (a1, a2) = ((p[1] - v).to_angle(), (p[2] - v).to_angle());
             let sweep = (a2 - a1).rem_euclid(TAU);
-            let r = if d.offset.abs() > 0.0 { d.offset.abs() * ctx.paper } else { 0.6 * (p[1] - v).length().min((p[2] - v).length()) };
+            let r = if d.offset.abs() > 0.0 {
+                d.offset.abs() * ctx.paper
+            } else {
+                0.6 * (p[1] - v).length().min((p[2] - v).length())
+            };
             if r > 0.0 && sweep > 1e-9 {
                 let gap = style.ext_gap_mm * ctx.paper;
                 let over = style.ext_overshoot_mm * ctx.paper;
@@ -297,13 +426,29 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
                     let dir = DVec2::from_angle(a);
                     let reach = r.max((q - v).length());
                     if reach + over > gap {
-                        thin_line(&mut out, v + dir * gap.min(reach), v + dir * (reach.max(r) + over));
+                        thin_line(
+                            &mut out,
+                            v + dir * gap.min(reach),
+                            v + dir * (reach.max(r) + over),
+                        );
                     }
                 }
                 out.push(Prim::poly(arc_points(v, r, a1, sweep), false, Fill::None));
                 let tip = |a: f64, sign: f64| DVec2::from_angle(a).perp() * sign;
-                terminator(&mut out, style.terminator, size, v + DVec2::from_angle(a1) * r, -tip(a1, 1.0));
-                terminator(&mut out, style.terminator, size, v + DVec2::from_angle(a2) * r, tip(a2, 1.0));
+                terminator(
+                    &mut out,
+                    style.terminator,
+                    size,
+                    v + DVec2::from_angle(a1) * r,
+                    -tip(a1, 1.0),
+                );
+                terminator(
+                    &mut out,
+                    style.terminator,
+                    size,
+                    v + DVec2::from_angle(a2) * r,
+                    tip(a2, 1.0),
+                );
                 let mid = DVec2::from_angle(a1 + sweep / 2.0);
                 text_beside(&mut out, &texts[0], style, ctx, v + mid * r, mid);
             }
@@ -315,8 +460,15 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
             terminator(&mut out, style.terminator, size, e, dir);
             let h = style.text_size_mm * ctx.paper;
             let w = text_width(&texts[0], h);
-            let mid = e + dir * (style.text_gap_mm * ctx.paper + (dir.x.abs() * w + dir.y.abs() * h) / 2.0);
-            out.push(Prim::text(mid - DVec2::new(0.0, h * 0.35), &texts[0], h, true, style.color));
+            let mid = e + dir
+                * (style.text_gap_mm * ctx.paper + (dir.x.abs() * w + dir.y.abs() * h) / 2.0);
+            out.push(Prim::text(
+                mid - DVec2::new(0.0, h * 0.35),
+                &texts[0],
+                h,
+                true,
+                style.color,
+            ));
         }
         DimMode::Diameter => {
             let (c, e) = (p[0], p[1]);
@@ -327,15 +479,27 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
             terminator(&mut out, style.terminator, size, f, -dir);
             let h = style.text_size_mm * ctx.paper;
             let w = text_width(&texts[0], h);
-            let mid = e + dir * (style.text_gap_mm * ctx.paper + (dir.x.abs() * w + dir.y.abs() * h) / 2.0);
-            out.push(Prim::text(mid - DVec2::new(0.0, h * 0.35), &texts[0], h, true, style.color));
+            let mid = e + dir
+                * (style.text_gap_mm * ctx.paper + (dir.x.abs() * w + dir.y.abs() * h) / 2.0);
+            out.push(Prim::text(
+                mid - DVec2::new(0.0, h * 0.35),
+                &texts[0],
+                h,
+                true,
+                style.color,
+            ));
         }
         DimMode::ArcLength => {
             let c = p[0];
             let r0 = c.distance(p[1]);
             let a1 = (p[1] - c).to_angle();
             let sweep = ((p[2] - c).to_angle() - a1).rem_euclid(TAU);
-            let r = r0 + if d.offset.abs() > 0.0 { d.offset * ctx.paper } else { 6.0 * ctx.paper };
+            let r = r0
+                + if d.offset.abs() > 0.0 {
+                    d.offset * ctx.paper
+                } else {
+                    6.0 * ctx.paper
+                };
             let over = style.ext_overshoot_mm * ctx.paper;
             let gap = style.ext_gap_mm * ctx.paper;
             if r > 0.0 && sweep > 1e-9 {
@@ -348,8 +512,20 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
                 }
                 out.push(Prim::poly(arc_points(c, r, a1, sweep), false, Fill::None));
                 let tangent = |a: f64| DVec2::from_angle(a).perp();
-                terminator(&mut out, style.terminator, size, c + DVec2::from_angle(a1) * r, -tangent(a1));
-                terminator(&mut out, style.terminator, size, c + DVec2::from_angle(a1 + sweep) * r, tangent(a1 + sweep));
+                terminator(
+                    &mut out,
+                    style.terminator,
+                    size,
+                    c + DVec2::from_angle(a1) * r,
+                    -tangent(a1),
+                );
+                terminator(
+                    &mut out,
+                    style.terminator,
+                    size,
+                    c + DVec2::from_angle(a1 + sweep) * r,
+                    tangent(a1 + sweep),
+                );
                 let mid = DVec2::from_angle(a1 + sweep / 2.0);
                 text_beside(&mut out, &texts[0], style, ctx, c + mid * r, mid);
             }

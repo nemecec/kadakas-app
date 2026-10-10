@@ -12,7 +12,9 @@ use cadektor_core::command::Command;
 use cadektor_core::model::{Document, ObjectId};
 use cadektor_core::record::{self, FieldDef, FieldType, RecordFormat};
 use cadektor_core::resource::{ResourceBody, ResourceId};
-use cadektor_sheet::def::{CellFormat, ColumnDef, DatabaseDef, GroupMode, SortKey, Summary, WorksheetDef};
+use cadektor_sheet::def::{
+    CellFormat, ColumnDef, DatabaseDef, GroupMode, SortKey, Summary, WorksheetDef,
+};
 use cadektor_sheet::formula::CellRef;
 use cadektor_sheet::templates;
 use egui::{Color32, DragValue, Id, Ui};
@@ -21,7 +23,8 @@ use serde_json::{Map, Value};
 use crate::panels::run_command;
 
 fn load<T: Default + Clone + Send + Sync + 'static>(ui: &Ui, key: &str) -> T {
-    ui.data_mut(|d| d.get_temp::<T>(Id::new(key))).unwrap_or_default()
+    ui.data_mut(|d| d.get_temp::<T>(Id::new(key)))
+        .unwrap_or_default()
 }
 
 fn store<T: Clone + Send + Sync + 'static>(ui: &Ui, key: &str, v: T) {
@@ -31,11 +34,18 @@ fn store<T: Clone + Send + Sync + 'static>(ui: &Ui, key: &str, v: T) {
 const ERROR_COLOR: Color32 = Color32::from_rgb(200, 60, 40);
 
 fn unique_name(doc: &Document, ty: &str, base: &str) -> String {
-    let taken = |n: &str| doc.resources.iter().any(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(n));
+    let taken = |n: &str| {
+        doc.resources
+            .iter()
+            .any(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(n))
+    };
     if !taken(base) {
         return base.to_string();
     }
-    (2..).map(|n| format!("{base} {n}")).find(|n| !taken(n)).expect("a free name")
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|n| !taken(n))
+        .expect("a free name")
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +62,11 @@ pub fn info_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &m
         if ui.selectable_label(!data, "Shape").clicked() {
             data = false;
         }
-        if ui.selectable_label(data, "Data").on_hover_text("Records attached to the object").clicked() {
+        if ui
+            .selectable_label(data, "Data")
+            .on_hover_text("Records attached to the object")
+            .clicked()
+        {
             data = true;
         }
     });
@@ -66,7 +80,9 @@ pub fn info_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &m
 
 fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut String) {
     let doc = session.editor.doc();
-    let Some(first) = sel.first().and_then(|id| doc.object(*id)) else { return };
+    let Some(first) = sel.first().and_then(|id| doc.object(*id)) else {
+        return;
+    };
     let first_id = first.id;
     let formats: Vec<(ResourceId, String, RecordFormat)> = doc
         .resources
@@ -78,63 +94,117 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
         .collect();
     let attached: Vec<(ResourceId, String, RecordFormat, Map<String, Value>)> = formats
         .iter()
-        .filter_map(|(id, name, f)| record::values(first, name).map(|v| (*id, name.clone(), f.clone(), v.clone())))
+        .filter_map(|(id, name, f)| {
+            record::values(first, name).map(|v| (*id, name.clone(), f.clone(), v.clone()))
+        })
         .collect();
-    let free: Vec<(ResourceId, String)> = formats.iter().filter(|(_, n, _)| record::values(first, n).is_none()).map(|(i, n, _)| (*i, n.clone())).collect();
-    let lacking = |name: &str| sel.iter().copied().filter(|id| doc.object(*id).is_some_and(|o| record::values(o, name).is_none())).collect::<Vec<_>>();
-    let free_ids: Vec<(ResourceId, String, Vec<ObjectId>)> = free.iter().map(|(i, n)| (*i, n.clone(), lacking(n))).collect();
+    let free: Vec<(ResourceId, String)> = formats
+        .iter()
+        .filter(|(_, n, _)| record::values(first, n).is_none())
+        .map(|(i, n, _)| (*i, n.clone()))
+        .collect();
+    let lacking = |name: &str| {
+        sel.iter()
+            .copied()
+            .filter(|id| {
+                doc.object(*id)
+                    .is_some_and(|o| record::values(o, name).is_none())
+            })
+            .collect::<Vec<_>>()
+    };
+    let free_ids: Vec<(ResourceId, String, Vec<ObjectId>)> = free
+        .iter()
+        .map(|(i, n)| (*i, n.clone(), lacking(n)))
+        .collect();
 
     let mut pending: Pending = load(ui, "data_tab_pending");
     let mut commands: Vec<Command> = Vec::new();
     if sel.len() > 1 {
-        ui.weak(format!("{} objects selected. Values of the first are shown, and edits go to all.", sel.len()));
+        ui.weak(format!(
+            "{} objects selected. Values of the first are shown, and edits go to all.",
+            sel.len()
+        ));
     }
     if formats.is_empty() {
         ui.weak("No record formats yet. Create one in the Resource Manager.");
     }
     for (rid, name, fmt, values) in &attached {
-        egui::CollapsingHeader::new(name).id_salt(("record", rid.0)).default_open(true).show(ui, |ui| {
-            egui::Grid::new(("record_grid", rid.0)).num_columns(2).show(ui, |ui| {
-                for f in &fmt.fields {
-                    ui.label(&f.name);
-                    let stored = values.get(&f.name).cloned().unwrap_or_else(|| f.default_value());
-                    let key = (first_id, name.clone(), f.name.clone());
-                    let shown = pending.0.get(&key).cloned().unwrap_or_else(|| stored.clone());
-                    let (new, done) = field_editor(ui, f, shown);
-                    if new != stored || pending.0.contains_key(&key) {
-                        pending.0.insert(key.clone(), new.clone());
-                    }
-                    if done {
-                        pending.0.remove(&key);
-                        if new != stored {
-                            commands.push(Command::SetRecordFields { ids: sel.to_vec(), record: *rid, values: [(f.name.clone(), new)].into_iter().collect() });
+        egui::CollapsingHeader::new(name)
+            .id_salt(("record", rid.0))
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::Grid::new(("record_grid", rid.0))
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for f in &fmt.fields {
+                            ui.label(&f.name);
+                            let stored = values
+                                .get(&f.name)
+                                .cloned()
+                                .unwrap_or_else(|| f.default_value());
+                            let key = (first_id, name.clone(), f.name.clone());
+                            let shown = pending
+                                .0
+                                .get(&key)
+                                .cloned()
+                                .unwrap_or_else(|| stored.clone());
+                            let (new, done) = field_editor(ui, f, shown);
+                            if new != stored || pending.0.contains_key(&key) {
+                                pending.0.insert(key.clone(), new.clone());
+                            }
+                            if done {
+                                pending.0.remove(&key);
+                                if new != stored {
+                                    commands.push(Command::SetRecordFields {
+                                        ids: sel.to_vec(),
+                                        record: *rid,
+                                        values: [(f.name.clone(), new)].into_iter().collect(),
+                                    });
+                                }
+                            }
+                            ui.end_row();
                         }
-                    }
-                    ui.end_row();
+                    });
+                if ui
+                    .button("Remove record")
+                    .on_hover_text("Detach the record and its values")
+                    .clicked()
+                {
+                    commands.push(Command::DetachRecord {
+                        ids: sel.to_vec(),
+                        record: *rid,
+                    });
                 }
             });
-            if ui.button("Remove record").on_hover_text("Detach the record and its values").clicked() {
-                commands.push(Command::DetachRecord { ids: sel.to_vec(), record: *rid });
-            }
-        });
     }
     if !free_ids.is_empty() {
         ui.separator();
-        let mut choice: Option<ResourceId> = load::<Option<u64>>(ui, "data_tab_attach").map(ResourceId);
+        let mut choice: Option<ResourceId> =
+            load::<Option<u64>>(ui, "data_tab_attach").map(ResourceId);
         if choice.is_none_or(|c| !free_ids.iter().any(|(i, ..)| *i == c)) {
             choice = Some(free_ids[0].0);
         }
         ui.horizontal(|ui| {
-            let current = free_ids.iter().find(|(i, ..)| Some(*i) == choice).map(|(_, n, _)| n.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("attach_record").selected_text(current).show_ui(ui, |ui| {
-                for (i, n, _) in &free_ids {
-                    ui.selectable_value(&mut choice, Some(*i), n);
-                }
-            });
+            let current = free_ids
+                .iter()
+                .find(|(i, ..)| Some(*i) == choice)
+                .map(|(_, n, _)| n.clone())
+                .unwrap_or_default();
+            egui::ComboBox::from_id_salt("attach_record")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (i, n, _) in &free_ids {
+                        ui.selectable_value(&mut choice, Some(*i), n);
+                    }
+                });
             if ui.button("Attach record").clicked()
                 && let Some((i, _, ids)) = free_ids.iter().find(|(i, ..)| Some(*i) == choice)
             {
-                commands.push(Command::AttachRecord { ids: ids.clone(), record: *i, values: Map::new() });
+                commands.push(Command::AttachRecord {
+                    ids: ids.clone(),
+                    record: *i,
+                    values: Map::new(),
+                });
             }
         });
         store(ui, "data_tab_attach", choice.map(|c| c.0));
@@ -149,7 +219,10 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
 fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
     match f.ty {
         FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => {
-            let mut s = shown.as_str().map(str::to_string).unwrap_or_else(|| shown.to_string());
+            let mut s = shown
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| shown.to_string());
             let r = ui.text_edit_singleline(&mut s);
             (Value::String(s), r.lost_focus())
         }
@@ -158,7 +231,11 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
             let r = ui.add(DragValue::new(&mut n).speed(0.2));
             (Value::from(n), r.drag_stopped() || r.lost_focus())
         }
-        FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => {
+        FieldType::Number
+        | FieldType::Dimension
+        | FieldType::Area
+        | FieldType::Volume
+        | FieldType::Angle => {
             let mut n = shown.as_f64().unwrap_or(0.0);
             let suffix = match f.ty {
                 FieldType::Dimension => " mm".to_string(),
@@ -168,8 +245,17 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
                 _ if f.unit.is_empty() => String::new(),
                 _ => format!(" {}", f.unit),
             };
-            let speed = if f.ty == FieldType::Dimension { 10.0 } else { 0.1 };
-            let r = ui.add(DragValue::new(&mut n).speed(speed).range(-record::MAX_FIELD..=record::MAX_FIELD).suffix(suffix));
+            let speed = if f.ty == FieldType::Dimension {
+                10.0
+            } else {
+                0.1
+            };
+            let r = ui.add(
+                DragValue::new(&mut n)
+                    .speed(speed)
+                    .range(-record::MAX_FIELD..=record::MAX_FIELD)
+                    .suffix(suffix),
+            );
             (Value::from(n), r.drag_stopped() || r.lost_focus())
         }
         FieldType::Boolean => {
@@ -180,11 +266,13 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
         FieldType::Choice => {
             let mut current = shown.as_str().unwrap_or_default().to_string();
             let before = current.clone();
-            egui::ComboBox::from_id_salt(("choice", &f.name)).selected_text(current.clone()).show_ui(ui, |ui| {
-                for c in &f.choices {
-                    ui.selectable_value(&mut current, c.clone(), c);
-                }
-            });
+            egui::ComboBox::from_id_salt(("choice", &f.name))
+                .selected_text(current.clone())
+                .show_ui(ui, |ui| {
+                    for c in &f.choices {
+                        ui.selectable_value(&mut current, c.clone(), c);
+                    }
+                });
             let changed = current != before;
             (Value::String(current), changed)
         }
@@ -256,7 +344,26 @@ fn set_default(f: &mut FieldDef, text: &str) {
         Some(match f.ty {
             FieldType::Boolean if text.trim().eq_ignore_ascii_case("true") => Value::Bool(true),
             FieldType::Boolean if text.trim().eq_ignore_ascii_case("false") => Value::Bool(false),
-            FieldType::Integer | FieldType::Number | FieldType::Dimension | FieldType::Area | FieldType::Volume | FieldType::Angle => text.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map_or_else(|| Value::String(text.into()), |n| if f.ty == FieldType::Integer && n.fract() == 0.0 { Value::from(n as i64) } else { Value::from(n) }),
+            FieldType::Integer
+            | FieldType::Number
+            | FieldType::Dimension
+            | FieldType::Area
+            | FieldType::Volume
+            | FieldType::Angle => text
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .map_or_else(
+                    || Value::String(text.into()),
+                    |n| {
+                        if f.ty == FieldType::Integer && n.fract() == 0.0 {
+                            Value::from(n as i64)
+                        } else {
+                            Value::from(n)
+                        }
+                    },
+                ),
             _ => Value::String(text.into()),
         })
     };
@@ -273,13 +380,18 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
     for (i, f) in fmt.fields.iter_mut().enumerate() {
         ui.separator();
         ui.horizontal(|ui| {
-            commit |= ui.add(egui::TextEdit::singleline(&mut f.name).desired_width(90.0)).lost_focus();
+            commit |= ui
+                .add(egui::TextEdit::singleline(&mut f.name).desired_width(90.0))
+                .lost_focus();
             let before = f.ty;
-            egui::ComboBox::from_id_salt(("field_type", i)).selected_text(type_label(f.ty)).width(90.0).show_ui(ui, |ui| {
-                for t in FieldType::ALL {
-                    ui.selectable_value(&mut f.ty, t, type_label(t));
-                }
-            });
+            egui::ComboBox::from_id_salt(("field_type", i))
+                .selected_text(type_label(f.ty))
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for t in FieldType::ALL {
+                        ui.selectable_value(&mut f.ty, t, type_label(t));
+                    }
+                });
             if f.ty != before {
                 if f.ty == FieldType::Choice && f.choices.is_empty() {
                     f.choices = vec!["Option 1".into()];
@@ -290,26 +402,43 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
                 f.default = None;
                 commit = true;
             }
-            if ui.small_button("x").on_hover_text("Remove the field").clicked() {
+            if ui
+                .small_button("x")
+                .on_hover_text("Remove the field")
+                .clicked()
+            {
                 remove = Some(i);
             }
         });
         ui.horizontal(|ui| {
             ui.label("Default");
             let mut d = default_text(f);
-            if ui.add(egui::TextEdit::singleline(&mut d).desired_width(70.0)).changed() {
+            if ui
+                .add(egui::TextEdit::singleline(&mut d).desired_width(70.0))
+                .changed()
+            {
                 set_default(f, &d);
             }
             ui.label("Unit");
-            commit |= ui.add(egui::TextEdit::singleline(&mut f.unit).desired_width(40.0)).lost_focus();
+            commit |= ui
+                .add(egui::TextEdit::singleline(&mut f.unit).desired_width(40.0))
+                .lost_focus();
         });
         if f.ty == FieldType::Choice {
             ui.horizontal(|ui| {
                 ui.label("Choices");
                 let mut text = f.choices.join(", ");
-                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).hint_text("A, B, C"));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .desired_width(160.0)
+                        .hint_text("A, B, C"),
+                );
                 if r.changed() {
-                    f.choices = text.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
+                    f.choices = text
+                        .split(',')
+                        .map(|c| c.trim().to_string())
+                        .filter(|c| !c.is_empty())
+                        .collect();
                 }
                 commit |= r.lost_focus();
             });
@@ -321,7 +450,8 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
     }
     if ui.button("Add field").clicked() {
         let n = fmt.fields.len() + 1;
-        fmt.fields.push(FieldDef::new(&format!("Field {n}"), FieldType::Text));
+        fmt.fields
+            .push(FieldDef::new(&format!("Field {n}"), FieldType::Text));
         commit = true;
     }
     commit
@@ -331,65 +461,109 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut selected: Option<u64> = load(ui, "record_format_selected");
     let mut buf: FormatBuffer = load(ui, "record_format_buffer");
     let mut commands: Vec<Command> = Vec::new();
-    egui::CollapsingHeader::new("Record formats").default_open(false).show(ui, |ui| {
-        let doc = session.editor.doc();
-        let rows: Vec<(ResourceId, String, usize)> = doc
-            .resources
-            .iter()
-            .filter_map(|r| match &r.body {
-                ResourceBody::RecordFormat(_) => Some((r.id, r.name.clone(), doc.objects.values().filter(|o| record::values(o, &r.name).is_some()).count())),
-                _ => None,
-            })
-            .collect();
-        if selected.is_some_and(|id| !rows.iter().any(|r| r.0.0 == id)) {
-            selected = None;
-        }
-        if ui.button("New").on_hover_text("Create a record format").clicked() {
-            let mut f = RecordFormat::default();
-            f.fields.push(FieldDef::new("Field 1", FieldType::Text));
-            commands.push(Command::AddResource { name: unique_name(doc, "record_format", "Record"), body: ResourceBody::RecordFormat(Box::new(f)) });
-        }
-        if rows.is_empty() {
-            ui.weak("No record formats yet.");
-        }
-        for (id, name, used) in &rows {
-            if ui.selectable_label(selected == Some(id.0), format!("{name}  ({used})")).on_hover_text("Objects that have the record are in brackets").clicked() {
-                selected = Some(id.0);
+    egui::CollapsingHeader::new("Record formats")
+        .default_open(false)
+        .show(ui, |ui| {
+            let doc = session.editor.doc();
+            let rows: Vec<(ResourceId, String, usize)> = doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    ResourceBody::RecordFormat(_) => Some((
+                        r.id,
+                        r.name.clone(),
+                        doc.objects
+                            .values()
+                            .filter(|o| record::values(o, &r.name).is_some())
+                            .count(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            if selected.is_some_and(|id| !rows.iter().any(|r| r.0.0 == id)) {
+                selected = None;
             }
-        }
-        let Some(id) = selected.map(ResourceId) else { return };
-        let (name, fmt) = match doc.resources.get(id) {
-            Some(r) => match &r.body {
-                ResourceBody::RecordFormat(f) => (r.name.clone(), f.as_ref().clone()),
-                _ => return,
-            },
-            None => return,
-        };
-        if buf.id != Some(id) || buf.base != fmt || buf.base_name != name {
-            buf = FormatBuffer { id: Some(id), base_name: name.clone(), base: fmt.clone(), name, format: fmt, message: String::new() };
-        }
-        ui.separator();
-        if format_form(ui, &mut buf.name, &mut buf.format) && (buf.format != buf.base || buf.name != buf.base_name) {
-            match buf.format.validate().and_then(|_| record::check_name("record", &buf.name)) {
-                Ok(()) => {
-                    commands.push(Command::ModifyResource { id, name: (buf.name != buf.base_name).then(|| buf.name.clone()), body: Some(ResourceBody::RecordFormat(Box::new(buf.format.clone()))) });
-                    buf.message.clear();
+            if ui
+                .button("New")
+                .on_hover_text("Create a record format")
+                .clicked()
+            {
+                let mut f = RecordFormat::default();
+                f.fields.push(FieldDef::new("Field 1", FieldType::Text));
+                commands.push(Command::AddResource {
+                    name: unique_name(doc, "record_format", "Record"),
+                    body: ResourceBody::RecordFormat(Box::new(f)),
+                });
+            }
+            if rows.is_empty() {
+                ui.weak("No record formats yet.");
+            }
+            for (id, name, used) in &rows {
+                if ui
+                    .selectable_label(selected == Some(id.0), format!("{name}  ({used})"))
+                    .on_hover_text("Objects that have the record are in brackets")
+                    .clicked()
+                {
+                    selected = Some(id.0);
                 }
-                Err(e) => buf.message = e,
             }
-        }
-        if !buf.message.is_empty() {
-            ui.colored_label(ERROR_COLOR, &buf.message);
-        }
-        ui.separator();
-        let used = rows.iter().find(|r| r.0 == id).map_or(0, |r| r.2);
-        if used > 0 {
-            ui.weak(format!("{used} object(s) have this record. Remove it from them to delete the format."));
-        }
-        if ui.add_enabled(used == 0, egui::Button::new("Delete format")).clicked() {
-            commands.push(Command::DeleteResource { id, reassign: None });
-        }
-    });
+            let Some(id) = selected.map(ResourceId) else {
+                return;
+            };
+            let (name, fmt) = match doc.resources.get(id) {
+                Some(r) => match &r.body {
+                    ResourceBody::RecordFormat(f) => (r.name.clone(), f.as_ref().clone()),
+                    _ => return,
+                },
+                None => return,
+            };
+            if buf.id != Some(id) || buf.base != fmt || buf.base_name != name {
+                buf = FormatBuffer {
+                    id: Some(id),
+                    base_name: name.clone(),
+                    base: fmt.clone(),
+                    name,
+                    format: fmt,
+                    message: String::new(),
+                };
+            }
+            ui.separator();
+            if format_form(ui, &mut buf.name, &mut buf.format)
+                && (buf.format != buf.base || buf.name != buf.base_name)
+            {
+                match buf
+                    .format
+                    .validate()
+                    .and_then(|_| record::check_name("record", &buf.name))
+                {
+                    Ok(()) => {
+                        commands.push(Command::ModifyResource {
+                            id,
+                            name: (buf.name != buf.base_name).then(|| buf.name.clone()),
+                            body: Some(ResourceBody::RecordFormat(Box::new(buf.format.clone()))),
+                        });
+                        buf.message.clear();
+                    }
+                    Err(e) => buf.message = e,
+                }
+            }
+            if !buf.message.is_empty() {
+                ui.colored_label(ERROR_COLOR, &buf.message);
+            }
+            ui.separator();
+            let used = rows.iter().find(|r| r.0 == id).map_or(0, |r| r.2);
+            if used > 0 {
+                ui.weak(format!(
+                    "{used} object(s) have this record. Remove it from them to delete the format."
+                ));
+            }
+            if ui
+                .add_enabled(used == 0, egui::Button::new("Delete format"))
+                .clicked()
+            {
+                commands.push(Command::DeleteResource { id, reassign: None });
+            }
+        });
     for c in commands {
         let out = run_command(session, &c, status);
         match (&c, out) {
@@ -408,38 +582,66 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
 fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut st: SheetState = load(ui, "sheet_state");
     let mut commands: Vec<Command> = Vec::new();
-    egui::CollapsingHeader::new("Worksheets").default_open(false).show(ui, |ui| {
-        let doc = session.editor.doc();
-        let rows: Vec<(ResourceId, String)> = doc.resources.iter().filter(|r| matches!(r.body, ResourceBody::Worksheet(_))).map(|r| (r.id, r.name.clone())).collect();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("New").on_hover_text("Create an empty worksheet").clicked() {
-                commands.push(Command::AddResource { name: unique_name(doc, "worksheet", "Worksheet"), body: ResourceBody::Worksheet(WorksheetDef::default().to_value()) });
+    egui::CollapsingHeader::new("Worksheets")
+        .default_open(false)
+        .show(ui, |ui| {
+            let doc = session.editor.doc();
+            let rows: Vec<(ResourceId, String)> = doc
+                .resources
+                .iter()
+                .filter(|r| matches!(r.body, ResourceBody::Worksheet(_)))
+                .map(|r| (r.id, r.name.clone()))
+                .collect();
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button("New")
+                    .on_hover_text("Create an empty worksheet")
+                    .clicked()
+                {
+                    commands.push(Command::AddResource {
+                        name: unique_name(doc, "worksheet", "Worksheet"),
+                        body: ResourceBody::Worksheet(WorksheetDef::default().to_value()),
+                    });
+                }
+                egui::ComboBox::from_id_salt("sheet_template")
+                    .selected_text("New report")
+                    .show_ui(ui, |ui| {
+                        for t in templates::TEMPLATES {
+                            if ui
+                                .selectable_label(false, t.title)
+                                .on_hover_text(t.description)
+                                .clicked()
+                                && let Some(def) = templates::template(t.id)
+                            {
+                                commands.push(Command::AddResource {
+                                    name: unique_name(doc, "worksheet", t.title),
+                                    body: ResourceBody::Worksheet(def.to_value()),
+                                });
+                            }
+                        }
+                    });
+            });
+            if rows.is_empty() {
+                ui.weak("No worksheets yet. Start from a report.");
             }
-            egui::ComboBox::from_id_salt("sheet_template").selected_text("New report").show_ui(ui, |ui| {
-                for t in templates::TEMPLATES {
-                    if ui.selectable_label(false, t.title).on_hover_text(t.description).clicked()
-                        && let Some(def) = templates::template(t.id)
+            for (id, name) in &rows {
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(st.selected == Some(*id) && st.open, name)
+                        .clicked()
                     {
-                        commands.push(Command::AddResource { name: unique_name(doc, "worksheet", t.title), body: ResourceBody::Worksheet(def.to_value()) });
+                        st.selected = Some(*id);
+                        st.open = true;
                     }
-                }
-            });
+                    if ui.small_button("Delete").clicked() {
+                        commands.push(Command::DeleteResource {
+                            id: *id,
+                            reassign: None,
+                        });
+                    }
+                });
+            }
         });
-        if rows.is_empty() {
-            ui.weak("No worksheets yet. Start from a report.");
-        }
-        for (id, name) in &rows {
-            ui.horizontal(|ui| {
-                if ui.selectable_label(st.selected == Some(*id) && st.open, name).clicked() {
-                    st.selected = Some(*id);
-                    st.open = true;
-                }
-                if ui.small_button("Delete").clicked() {
-                    commands.push(Command::DeleteResource { id: *id, reassign: None });
-                }
-            });
-        }
-    });
     for c in commands {
         let out = run_command(session, &c, status);
         match (&c, out) {
@@ -465,30 +667,56 @@ thread_local! {
     static TABLES: std::cell::RefCell<(u64, HashMap<ResourceId, std::sync::Arc<cadektor_sheet::Computed>>)> = std::cell::RefCell::new((0, HashMap::new()));
 }
 
-fn calculated(doc: &Document, id: ResourceId, site: Option<(&cadektor_site::SiteCache, u64)>) -> Option<std::sync::Arc<cadektor_sheet::Computed>> {
+fn calculated(
+    doc: &Document,
+    id: ResourceId,
+    site: Option<(&cadektor_site::SiteCache, u64)>,
+) -> Option<std::sync::Arc<cadektor_sheet::Computed>> {
     let def = match &doc.resources.get(id)?.body {
         ResourceBody::Worksheet(v) => WorksheetDef::from_value(v).ok()?,
         _ => return None,
     };
     let run = || match site {
-        Some((cache, revision)) => cadektor_sheet::compute_with(&def, doc, &cadektor_site::SiteTerrain::new(cache, revision, doc)),
+        Some((cache, revision)) => cadektor_sheet::compute_with(
+            &def,
+            doc,
+            &cadektor_site::SiteTerrain::new(cache, revision, doc),
+        ),
         None => cadektor_sheet::compute(&def, doc),
     };
-    let Some((_, revision)) = site else { return Some(std::sync::Arc::new(run())) };
+    let Some((_, revision)) = site else {
+        return Some(std::sync::Arc::new(run()));
+    };
     TABLES.with(|t| {
         let mut t = t.borrow_mut();
         if t.0 != revision {
             *t = (revision, HashMap::new());
         }
-        Some(t.1.entry(id).or_insert_with(|| std::sync::Arc::new(run())).clone())
+        Some(
+            t.1.entry(id)
+                .or_insert_with(|| std::sync::Arc::new(run()))
+                .clone(),
+        )
     })
 }
 
 /// Draws the cells of a worksheet table inside its frame (a rectangle) on a design layer. Tables on
 /// sheet layers are drawn by the sheet display list, which has the same layout.
-pub fn draw_table(painter: &egui::Painter, view: &crate::view::View, doc: &Document, o: &cadektor_core::model::Object, d: &cadektor_core::worksheet_table::TableData, ink: Color32, site: Option<(&cadektor_site::SiteCache, u64)>) {
-    let cadektor_core::model::Shape::Rect { min, max } = &o.shape else { return };
-    let Some(c) = calculated(doc, d.worksheet, site) else { return };
+pub fn draw_table(
+    painter: &egui::Painter,
+    view: &crate::view::View,
+    doc: &Document,
+    o: &cadektor_core::model::Object,
+    d: &cadektor_core::worksheet_table::TableData,
+    ink: Color32,
+    site: Option<(&cadektor_site::SiteCache, u64)>,
+) {
+    let cadektor_core::model::Shape::Rect { min, max } = &o.shape else {
+        return;
+    };
+    let Some(c) = calculated(doc, d.worksheet, site) else {
+        return;
+    };
     let l = cadektor_sheet::layout(&c, d.text_height);
     let (lo, hi) = (min.min(*max), min.max(*max));
     let frame = egui::Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi));
@@ -505,11 +733,23 @@ pub fn draw_table(painter: &egui::Painter, view: &crate::view::View, doc: &Docum
     for r in 0..=l.rows {
         let y = top + row_h * r as f32;
         if y >= clip.min.y - 1.0 && y <= clip.max.y + 1.0 {
-            painter.line_segment([egui::pos2(frame.min.x, y), egui::pos2(*xs.last().unwrap_or(&frame.min.x), y)], grid);
+            painter.line_segment(
+                [
+                    egui::pos2(frame.min.x, y),
+                    egui::pos2(*xs.last().unwrap_or(&frame.min.x), y),
+                ],
+                grid,
+            );
         }
     }
     for x in &xs {
-        painter.line_segment([egui::pos2(*x, top), egui::pos2(*x, top + row_h * l.rows as f32)], grid);
+        painter.line_segment(
+            [
+                egui::pos2(*x, top),
+                egui::pos2(*x, top + row_h * l.rows as f32),
+            ],
+            grid,
+        );
     }
     let size = (d.text_height * z) as f32;
     if size < 3.0 {
@@ -531,11 +771,27 @@ pub fn draw_table(painter: &egui::Painter, view: &crate::view::View, doc: &Docum
             if right < clip.min.x || left > clip.max.x {
                 continue;
             }
-            let color = if c.value(r, col).is_error() { ERROR_COLOR } else { ink };
-            if cadektor_sheet::layout::is_number(&c, r, col) {
-                painter.text(egui::pos2(right - pad, y + row_h / 2.0), egui::Align2::RIGHT_CENTER, text, font.clone(), color);
+            let color = if c.value(r, col).is_error() {
+                ERROR_COLOR
             } else {
-                painter.text(egui::pos2(left + pad, y + row_h / 2.0), egui::Align2::LEFT_CENTER, text, font.clone(), color);
+                ink
+            };
+            if cadektor_sheet::layout::is_number(&c, r, col) {
+                painter.text(
+                    egui::pos2(right - pad, y + row_h / 2.0),
+                    egui::Align2::RIGHT_CENTER,
+                    text,
+                    font.clone(),
+                    color,
+                );
+            } else {
+                painter.text(
+                    egui::pos2(left + pad, y + row_h / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    text,
+                    font.clone(),
+                    color,
+                );
             }
         }
     }
@@ -543,23 +799,62 @@ pub fn draw_table(painter: &egui::Painter, view: &crate::view::View, doc: &Docum
 
 /// Object Info for a worksheet table: fit the frame to the table, and change the text height.
 pub fn table_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
-    let Some(d) = session.editor.doc().object(id).and_then(cadektor_core::worksheet_table::data) else { return };
-    let name = session.editor.doc().resources.get(d.worksheet).map(|r| r.name.clone()).unwrap_or_default();
+    let Some(d) = session
+        .editor
+        .doc()
+        .object(id)
+        .and_then(cadektor_core::worksheet_table::data)
+    else {
+        return;
+    };
+    let name = session
+        .editor
+        .doc()
+        .resources
+        .get(d.worksheet)
+        .map(|r| r.name.clone())
+        .unwrap_or_default();
     ui.separator();
     ui.strong(format!("Worksheet table: {name}"));
     let mut h = d.text_height;
     let r = ui.horizontal(|ui| {
         ui.label("Text height");
-        ui.add(DragValue::new(&mut h).speed(0.1).range(0.1..=10_000.0).suffix(" mm"))
+        ui.add(
+            DragValue::new(&mut h)
+                .speed(0.1)
+                .range(0.1..=10_000.0)
+                .suffix(" mm"),
+        )
     });
     if (r.inner.drag_stopped() || r.inner.lost_focus()) && h != d.text_height {
-        run_command(session, &Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: Some(h), size: None }, status);
+        run_command(
+            session,
+            &Command::SetWorksheetTable {
+                ids: vec![id],
+                worksheet: None,
+                text_height: Some(h),
+                size: None,
+            },
+            status,
+        );
     }
-    if ui.button("Fit frame to table").on_hover_text("Resize the frame to the calculated table. The top left corner stays.").clicked()
+    if ui
+        .button("Fit frame to table")
+        .on_hover_text("Resize the frame to the calculated table. The top left corner stays.")
+        .clicked()
         && let Some((_, c)) = session.worksheet_result(d.worksheet)
     {
         let l = cadektor_sheet::layout(&c, d.text_height);
-        run_command(session, &Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) }, status);
+        run_command(
+            session,
+            &Command::SetWorksheetTable {
+                ids: vec![id],
+                worksheet: None,
+                text_height: None,
+                size: Some(cadektor_core::DVec2::new(l.width, l.height)),
+            },
+            status,
+        );
     }
 }
 
@@ -581,26 +876,56 @@ fn summary_label(s: Option<Summary>) -> &'static str {
     }
 }
 
-fn save_def(session: &mut Session, id: ResourceId, def: &WorksheetDef, status: &mut String) -> Result<(), String> {
+fn save_def(
+    session: &mut Session,
+    id: ResourceId,
+    def: &WorksheetDef,
+    status: &mut String,
+) -> Result<(), String> {
     def.validate()?;
-    run_command(session, &Command::ModifyResource { id, name: None, body: Some(ResourceBody::Worksheet(def.to_value())) }, status).map(|_| ()).ok_or_else(|| status.clone())
+    run_command(
+        session,
+        &Command::ModifyResource {
+            id,
+            name: None,
+            body: Some(ResourceBody::Worksheet(def.to_value())),
+        },
+        status,
+    )
+    .map(|_| ())
+    .ok_or_else(|| status.clone())
 }
 
 /// The worksheet window. Call once per frame.
 pub fn windows(ctx: &egui::Context, session: &mut Session, status: &mut String) {
-    let mut st: SheetState = ctx.data_mut(|d| d.get_temp(Id::new("sheet_state"))).unwrap_or_default();
+    let mut st: SheetState = ctx
+        .data_mut(|d| d.get_temp(Id::new("sheet_state")))
+        .unwrap_or_default();
     if !st.open {
         return;
     }
     let mut open = true;
-    egui::Window::new("Worksheet").open(&mut open).default_size([760.0, 520.0]).show(ctx, |ui| sheet_window(ui, session, &mut st, status));
+    egui::Window::new("Worksheet")
+        .open(&mut open)
+        .default_size([760.0, 520.0])
+        .show(ctx, |ui| sheet_window(ui, session, &mut st, status));
     st.open = open;
     ctx.data_mut(|d| d.insert_temp(Id::new("sheet_state"), st));
 }
 
 fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status: &mut String) {
-    let sheets: Vec<(ResourceId, String)> = session.editor.doc().resources.iter().filter(|r| matches!(r.body, ResourceBody::Worksheet(_))).map(|r| (r.id, r.name.clone())).collect();
-    if st.selected.is_none_or(|id| !sheets.iter().any(|s| s.0 == id)) {
+    let sheets: Vec<(ResourceId, String)> = session
+        .editor
+        .doc()
+        .resources
+        .iter()
+        .filter(|r| matches!(r.body, ResourceBody::Worksheet(_)))
+        .map(|r| (r.id, r.name.clone()))
+        .collect();
+    if st
+        .selected
+        .is_none_or(|id| !sheets.iter().any(|s| s.0 == id))
+    {
         st.selected = sheets.first().map(|s| s.0);
     }
     let Some(id) = st.selected else {
@@ -608,35 +933,86 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
         return;
     };
     ui.horizontal(|ui| {
-        let current = sheets.iter().find(|s| s.0 == id).map(|s| s.1.clone()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("sheet_pick").selected_text(current).show_ui(ui, |ui| {
-            for (i, n) in &sheets {
-                ui.selectable_value(&mut st.selected, Some(*i), n);
-            }
-        });
+        let current = sheets
+            .iter()
+            .find(|s| s.0 == id)
+            .map(|s| s.1.clone())
+            .unwrap_or_default();
+        egui::ComboBox::from_id_salt("sheet_pick")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (i, n) in &sheets {
+                    ui.selectable_value(&mut st.selected, Some(*i), n);
+                }
+            });
         if let Some((_, computed)) = session.worksheet_result(id) {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let name = sheets.iter().find(|s| s.0 == id).map(|s| s.1.clone()).unwrap_or_default();
+                let name = sheets
+                    .iter()
+                    .find(|s| s.0 == id)
+                    .map(|s| s.1.clone())
+                    .unwrap_or_default();
                 if ui.button("Export CSV...").clicked() {
-                    *status = export_file(&name, "csv", "CSV", cadektor_sheet::export::csv(&computed).into_bytes());
+                    *status = export_file(
+                        &name,
+                        "csv",
+                        "CSV",
+                        cadektor_sheet::export::csv(&computed).into_bytes(),
+                    );
                 }
-                if ui.button("Export XLSX...").on_hover_text("Values, not formulas").clicked() {
-                    *status = export_file(&name, "xlsx", "Excel", cadektor_sheet::export::xlsx(&computed, &name));
+                if ui
+                    .button("Export XLSX...")
+                    .on_hover_text("Values, not formulas")
+                    .clicked()
+                {
+                    *status = export_file(
+                        &name,
+                        "xlsx",
+                        "Excel",
+                        cadektor_sheet::export::xlsx(&computed, &name),
+                    );
                 }
             }
             #[cfg(target_arch = "wasm32")]
             let _ = (&computed, &status);
             ui.weak(format!("{} errors", computed.error_count()));
-            if ui.button("Place in drawing").on_hover_text("Add the worksheet as a table on the active layer").clicked() {
-                let l = cadektor_sheet::layout(&computed, cadektor_core::worksheet_table::DEFAULT_TEXT_HEIGHT);
-                let at = session.editor.doc().layer(session.editor.doc().active_layer).map_or(cadektor_core::DVec2::ZERO, |layer| if layer.kind == cadektor_core::model::LayerKind::Sheet { cadektor_core::DVec2::new(20.0, 200.0) } else { cadektor_core::DVec2::ZERO });
-                let cmd = Command::AddWorksheetTable { worksheet: id, at, size: cadektor_core::DVec2::new(l.width, l.height), text_height: None, layer: None, class: None, attrs: Default::default() };
+            if ui
+                .button("Place in drawing")
+                .on_hover_text("Add the worksheet as a table on the active layer")
+                .clicked()
+            {
+                let l = cadektor_sheet::layout(
+                    &computed,
+                    cadektor_core::worksheet_table::DEFAULT_TEXT_HEIGHT,
+                );
+                let at = session
+                    .editor
+                    .doc()
+                    .layer(session.editor.doc().active_layer)
+                    .map_or(cadektor_core::DVec2::ZERO, |layer| {
+                        if layer.kind == cadektor_core::model::LayerKind::Sheet {
+                            cadektor_core::DVec2::new(20.0, 200.0)
+                        } else {
+                            cadektor_core::DVec2::ZERO
+                        }
+                    });
+                let cmd = Command::AddWorksheetTable {
+                    worksheet: id,
+                    at,
+                    size: cadektor_core::DVec2::new(l.width, l.height),
+                    text_height: None,
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                };
                 run_command(session, &cmd, status);
             }
         }
     });
-    let Some((def, computed)) = session.worksheet_result(id) else { return };
+    let Some((def, computed)) = session.worksheet_result(id) else {
+        return;
+    };
     if st.selected != Some(id) {
         return;
     }
@@ -644,7 +1020,11 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
     // Formula bar.
     let (row, col) = (st.cell.0.max(1), st.cell.1.max(1));
     let address = cell_ref(row, col);
-    let input = def.cells.get(&address).map(|c| c.input.clone()).unwrap_or_default();
+    let input = def
+        .cells
+        .get(&address)
+        .map(|c| c.input.clone())
+        .unwrap_or_default();
     if st.cell_base.as_ref() != Some(&((row, col), input.clone())) {
         st.cell_text = input.clone();
         st.cell_base = Some(((row, col), input.clone()));
@@ -652,17 +1032,48 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
     let mut commit = false;
     ui.horizontal(|ui| {
         ui.strong(&address);
-        let r = ui.add(egui::TextEdit::singleline(&mut st.cell_text).desired_width(ui.available_width() - 200.0).hint_text("Value or =formula"));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut st.cell_text)
+                .desired_width(ui.available_width() - 200.0)
+                .hint_text("Value or =formula"),
+        );
         commit |= r.lost_focus();
-        let fmt = def.cells.get(&address).map(|c| c.format.clone()).unwrap_or_default();
+        let fmt = def
+            .cells
+            .get(&address)
+            .map(|c| c.format.clone())
+            .unwrap_or_default();
         let mut decimals = fmt.decimals.map_or(-1, i32::from);
-        let d = ui.add(DragValue::new(&mut decimals).range(-1..=10).speed(0.1).custom_formatter(|v, _| if v < 0.0 { "auto".into() } else { format!("{v:.0}") })).on_hover_text("Decimals");
+        let d = ui
+            .add(
+                DragValue::new(&mut decimals)
+                    .range(-1..=10)
+                    .speed(0.1)
+                    .custom_formatter(|v, _| {
+                        if v < 0.0 {
+                            "auto".into()
+                        } else {
+                            format!("{v:.0}")
+                        }
+                    }),
+            )
+            .on_hover_text("Decimals");
         let mut unit = fmt.unit.clone();
-        let u = ui.add(egui::TextEdit::singleline(&mut unit).desired_width(40.0).hint_text("unit"));
+        let u = ui.add(
+            egui::TextEdit::singleline(&mut unit)
+                .desired_width(40.0)
+                .hint_text("unit"),
+        );
         if d.changed() || u.lost_focus() {
-            let new = CellFormat { decimals: u8::try_from(decimals).ok(), unit };
+            let new = CellFormat {
+                decimals: u8::try_from(decimals).ok(),
+                unit,
+            };
             let mut next = def.clone();
-            match next.set_cell(&address, &input, Some(new)).and_then(|_| save_def(session, id, &next, status)) {
+            match next
+                .set_cell(&address, &input, Some(new))
+                .and_then(|_| save_def(session, id, &next, status))
+            {
                 Ok(()) => st.message.clear(),
                 Err(e) => st.message = e,
             }
@@ -670,7 +1081,10 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
     });
     if commit && st.cell_text != input {
         let mut next = def.clone();
-        match next.set_cell(&address, &st.cell_text, None).and_then(|_| save_def(session, id, &next, status)) {
+        match next
+            .set_cell(&address, &st.cell_text, None)
+            .and_then(|_| save_def(session, id, &next, status))
+        {
             Ok(()) => {
                 st.message.clear();
                 st.cell.0 = row + 1;
@@ -688,35 +1102,59 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
     // Grid.
     let cols = (computed.cols + 2).clamp(8, 40);
     let rows = (computed.rows + 5).clamp(18, 300);
-    egui::ScrollArea::both().max_height(ui.available_height() - 220.0).auto_shrink([false, false]).show(ui, |ui| {
-        egui::Grid::new("sheet_grid").spacing([2.0, 1.0]).min_col_width(70.0).show(ui, |ui| {
-            ui.label("");
-            for c in 1..=cols {
-                ui.strong(CellRef::col_name(c));
-            }
-            ui.end_row();
-            for r in 1..=rows {
-                ui.strong(r.to_string());
-                for c in 1..=cols {
-                    let text = computed.display(r, c);
-                    let is_error = computed.value(r, c).is_error();
-                    let selected = (r, c) == (row, col);
-                    let rich = if is_error { egui::RichText::new(&text).color(ERROR_COLOR) } else { egui::RichText::new(&text) };
-                    let resp = ui.add_sized([70.0, 18.0], egui::Button::selectable(selected, rich).frame_when_inactive(false));
-                    if resp.clicked() {
-                        st.cell = (r, c);
+    egui::ScrollArea::both()
+        .max_height(ui.available_height() - 220.0)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Grid::new("sheet_grid")
+                .spacing([2.0, 1.0])
+                .min_col_width(70.0)
+                .show(ui, |ui| {
+                    ui.label("");
+                    for c in 1..=cols {
+                        ui.strong(CellRef::col_name(c));
                     }
-                }
-                ui.end_row();
-            }
+                    ui.end_row();
+                    for r in 1..=rows {
+                        ui.strong(r.to_string());
+                        for c in 1..=cols {
+                            let text = computed.display(r, c);
+                            let is_error = computed.value(r, c).is_error();
+                            let selected = (r, c) == (row, col);
+                            let rich = if is_error {
+                                egui::RichText::new(&text).color(ERROR_COLOR)
+                            } else {
+                                egui::RichText::new(&text)
+                            };
+                            let resp = ui.add_sized(
+                                [70.0, 18.0],
+                                egui::Button::selectable(selected, rich).frame_when_inactive(false),
+                            );
+                            if resp.clicked() {
+                                st.cell = (r, c);
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
         });
-    });
 
     database_setup(ui, session, st, status, id, &def);
 }
 
-fn database_setup(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status: &mut String, id: ResourceId, def: &WorksheetDef) {
-    if st.db.as_ref().is_none_or(|(i, base, _)| *i != id || base != def) {
+fn database_setup(
+    ui: &mut Ui,
+    session: &mut Session,
+    st: &mut SheetState,
+    status: &mut String,
+    id: ResourceId,
+    def: &WorksheetDef,
+) {
+    if st
+        .db
+        .as_ref()
+        .is_none_or(|(i, base, _)| *i != id || base != def)
+    {
         st.db = Some((id, def.clone(), def.clone()));
     }
     let (_, base, edit) = st.db.as_mut().expect("buffer");
@@ -766,24 +1204,43 @@ fn database_setup(ui: &mut Ui, session: &mut Session, st: &mut SheetState, statu
     }
 }
 
-fn column_combo(ui: &mut Ui, salt: &'static str, value: &mut Option<usize>, columns: &[ColumnDef], none: &str) -> bool {
+fn column_combo(
+    ui: &mut Ui,
+    salt: &'static str,
+    value: &mut Option<usize>,
+    columns: &[ColumnDef],
+    none: &str,
+) -> bool {
     let before = *value;
-    let text = value.and_then(|i| columns.get(i)).map_or(none.to_string(), |c| c.header.clone());
-    egui::ComboBox::from_id_salt(salt).selected_text(text).show_ui(ui, |ui| {
-        ui.selectable_value(value, None, none);
-        for (i, c) in columns.iter().enumerate() {
-            ui.selectable_value(value, Some(i), &c.header);
-        }
-    });
+    let text = value
+        .and_then(|i| columns.get(i))
+        .map_or(none.to_string(), |c| c.header.clone());
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, none);
+            for (i, c) in columns.iter().enumerate() {
+                ui.selectable_value(value, Some(i), &c.header);
+            }
+        });
     *value != before
 }
 
 /// The names that the criteria builder offers: built-in properties and the fields of record formats.
 fn criteria_fields(doc: &Document) -> Vec<String> {
-    let mut out: Vec<String> = cadektor_core::props::NAMES.iter().map(|n| n.to_string()).collect();
+    let mut out: Vec<String> = cadektor_core::props::NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
     for r in doc.resources.iter() {
         if let ResourceBody::RecordFormat(f) = &r.body {
-            out.extend(f.fields.iter().map(|f| format!("'{}'.'{}'", r.name.replace('\'', "''"), f.name.replace('\'', "''"))));
+            out.extend(f.fields.iter().map(|f| {
+                format!(
+                    "'{}'.'{}'",
+                    r.name.replace('\'', "''"),
+                    f.name.replace('\'', "''")
+                )
+            }));
         }
     }
     out
@@ -795,13 +1252,28 @@ const OPERATORS: [&str; 6] = ["=", "<>", "<", "<=", ">", ">="];
 /// One clause for the criteria: `Area > 20` or `Kind = "plant"`. A number stays a number, anything else is text.
 pub fn criteria_clause(name: &str, op: &str, value: &str) -> String {
     let v = value.trim();
-    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite) || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") { v.to_string() } else { format!("\"{}\"", v.replace('"', "\"\"")) };
+    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite)
+        || v.eq_ignore_ascii_case("true")
+        || v.eq_ignore_ascii_case("false")
+    {
+        v.to_string()
+    } else {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    };
     format!("{name} {op} {literal}")
 }
 
 /// Adds a clause to the criteria with AND or OR.
 pub fn add_clause(criteria: &str, clause: &str, or: bool) -> String {
-    if criteria.trim().is_empty() { clause.to_string() } else { format!("{} {} {clause}", criteria.trim(), if or { "OR" } else { "AND" }) }
+    if criteria.trim().is_empty() {
+        clause.to_string()
+    } else {
+        format!(
+            "{} {} {clause}",
+            criteria.trim(),
+            if or { "OR" } else { "AND" }
+        )
+    }
 }
 
 #[derive(Clone, Default)]
@@ -822,23 +1294,45 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
     let mut added = false;
     ui.horizontal_wrapped(|ui| {
         ui.label("Add");
-        egui::ComboBox::from_id_salt("clause_name").width(90.0).selected_text(b.name.clone()).show_ui(ui, |ui| {
-            for f in fields {
-                ui.selectable_value(&mut b.name, f.clone(), f);
-            }
-        });
-        egui::ComboBox::from_id_salt("clause_op").width(40.0).selected_text(OPERATORS[b.op.min(5)]).show_ui(ui, |ui| {
-            for (i, o) in OPERATORS.iter().enumerate() {
-                ui.selectable_value(&mut b.op, i, *o);
-            }
-        });
-        ui.add(egui::TextEdit::singleline(&mut b.value).desired_width(80.0).hint_text("value"));
-        egui::ComboBox::from_id_salt("clause_join").width(50.0).selected_text(if b.or { "OR" } else { "AND" }).show_ui(ui, |ui| {
-            ui.selectable_value(&mut b.or, false, "AND");
-            ui.selectable_value(&mut b.or, true, "OR");
-        });
-        if ui.button("Add").on_hover_text("Add this test to the criteria").clicked() && !b.value.trim().is_empty() {
-            *criteria = add_clause(criteria, &criteria_clause(&b.name, OPERATORS[b.op.min(5)], &b.value), b.or);
+        egui::ComboBox::from_id_salt("clause_name")
+            .width(90.0)
+            .selected_text(b.name.clone())
+            .show_ui(ui, |ui| {
+                for f in fields {
+                    ui.selectable_value(&mut b.name, f.clone(), f);
+                }
+            });
+        egui::ComboBox::from_id_salt("clause_op")
+            .width(40.0)
+            .selected_text(OPERATORS[b.op.min(5)])
+            .show_ui(ui, |ui| {
+                for (i, o) in OPERATORS.iter().enumerate() {
+                    ui.selectable_value(&mut b.op, i, *o);
+                }
+            });
+        ui.add(
+            egui::TextEdit::singleline(&mut b.value)
+                .desired_width(80.0)
+                .hint_text("value"),
+        );
+        egui::ComboBox::from_id_salt("clause_join")
+            .width(50.0)
+            .selected_text(if b.or { "OR" } else { "AND" })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut b.or, false, "AND");
+                ui.selectable_value(&mut b.or, true, "OR");
+            });
+        if ui
+            .button("Add")
+            .on_hover_text("Add this test to the criteria")
+            .clicked()
+            && !b.value.trim().is_empty()
+        {
+            *criteria = add_clause(
+                criteria,
+                &criteria_clause(&b.name, OPERATORS[b.op.min(5)], &b.value),
+                b.or,
+            );
             added = true;
         }
         if ui.button("Clear").clicked() {
@@ -855,37 +1349,98 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
     ui.horizontal(|ui| {
         ui.label("Rows");
         let before = db.source;
-        egui::ComboBox::from_id_salt("db_source").selected_text(if db.source == cadektor_sheet::RowSource::Objects { "objects" } else { "plant list" }).show_ui(ui, |ui| {
-            ui.selectable_value(&mut db.source, cadektor_sheet::RowSource::Objects, "objects").on_hover_text("One row per object");
-            ui.selectable_value(&mut db.source, cadektor_sheet::RowSource::PlantList, "plant list").on_hover_text("One row per plant style, with the plants of landscape area mixes");
-        });
+        egui::ComboBox::from_id_salt("db_source")
+            .selected_text(if db.source == cadektor_sheet::RowSource::Objects {
+                "objects"
+            } else {
+                "plant list"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut db.source,
+                    cadektor_sheet::RowSource::Objects,
+                    "objects",
+                )
+                .on_hover_text("One row per object");
+                ui.selectable_value(
+                    &mut db.source,
+                    cadektor_sheet::RowSource::PlantList,
+                    "plant list",
+                )
+                .on_hover_text("One row per plant style, with the plants of landscape area mixes");
+            });
         commit |= db.source != before;
     });
     ui.horizontal(|ui| {
         ui.label("Name");
-        commit |= ui.add(egui::TextEdit::singleline(&mut db.name).desired_width(110.0)).lost_focus();
+        commit |= ui
+            .add(egui::TextEdit::singleline(&mut db.name).desired_width(110.0))
+            .lost_focus();
         ui.label("Top left");
-        commit |= ui.add(egui::TextEdit::singleline(&mut db.anchor).desired_width(40.0)).lost_focus();
+        commit |= ui
+            .add(egui::TextEdit::singleline(&mut db.anchor).desired_width(40.0))
+            .lost_focus();
     });
     ui.label("Criteria");
     commit |= criteria_builder(ui, &mut db.criteria, fields);
-    commit |= ui.add(egui::TextEdit::multiline(&mut db.criteria).desired_rows(2).desired_width(f32::INFINITY).hint_text("Kind = \"plant\" AND Layer = \"Planting\"")).lost_focus();
+    commit |= ui
+        .add(
+            egui::TextEdit::multiline(&mut db.criteria)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY)
+                .hint_text("Kind = \"plant\" AND Layer = \"Planting\""),
+        )
+        .lost_focus();
     ui.label("Columns");
     let mut remove = None;
     for (i, c) in db.columns.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            commit |= ui.add(egui::TextEdit::singleline(&mut c.header).desired_width(80.0).hint_text("Header")).lost_focus();
-            commit |= ui.add(egui::TextEdit::singleline(&mut c.expr).desired_width(110.0).hint_text("Expression")).lost_focus();
+            commit |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut c.header)
+                        .desired_width(80.0)
+                        .hint_text("Header"),
+                )
+                .lost_focus();
+            commit |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut c.expr)
+                        .desired_width(110.0)
+                        .hint_text("Expression"),
+                )
+                .lost_focus();
             let before = c.summary;
-            egui::ComboBox::from_id_salt(("summary", i)).width(70.0).selected_text(summary_label(c.summary)).show_ui(ui, |ui| {
-                ui.selectable_value(&mut c.summary, None, "none");
-                for s in [Summary::Sum, Summary::Average, Summary::Min, Summary::Max, Summary::Count] {
-                    ui.selectable_value(&mut c.summary, Some(s), summary_label(Some(s)));
-                }
-            });
+            egui::ComboBox::from_id_salt(("summary", i))
+                .width(70.0)
+                .selected_text(summary_label(c.summary))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut c.summary, None, "none");
+                    for s in [
+                        Summary::Sum,
+                        Summary::Average,
+                        Summary::Min,
+                        Summary::Max,
+                        Summary::Count,
+                    ] {
+                        ui.selectable_value(&mut c.summary, Some(s), summary_label(Some(s)));
+                    }
+                });
             commit |= c.summary != before;
             let mut d = c.decimals.map_or(-1, i32::from);
-            let r = ui.add(DragValue::new(&mut d).range(-1..=10).speed(0.1).custom_formatter(|v, _| if v < 0.0 { "auto".into() } else { format!("{v:.0}") })).on_hover_text("Decimals");
+            let r = ui
+                .add(
+                    DragValue::new(&mut d)
+                        .range(-1..=10)
+                        .speed(0.1)
+                        .custom_formatter(|v, _| {
+                            if v < 0.0 {
+                                "auto".into()
+                            } else {
+                                format!("{v:.0}")
+                            }
+                        }),
+                )
+                .on_hover_text("Decimals");
             c.decimals = u8::try_from(d).ok();
             commit |= r.drag_stopped() || r.lost_focus();
             if ui.small_button("x").clicked() {
@@ -910,7 +1465,11 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
         commit = true;
     }
     if ui.button("Add column").clicked() {
-        db.columns.push(ColumnDef { header: format!("Column {}", db.columns.len() + 1), expr: "Id".into(), ..Default::default() });
+        db.columns.push(ColumnDef {
+            header: format!("Column {}", db.columns.len() + 1),
+            expr: "Id".into(),
+            ..Default::default()
+        });
         commit = true;
     }
     ui.horizontal(|ui| {
@@ -918,7 +1477,13 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
         let mut first = db.sort.first().map(|k| k.column);
         if column_combo(ui, "sort_by", &mut first, &db.columns, "(none)") {
             let desc = db.sort.first().is_some_and(|k| k.descending);
-            db.sort = first.map(|column| SortKey { column, descending: desc }).into_iter().collect();
+            db.sort = first
+                .map(|column| SortKey {
+                    column,
+                    descending: desc,
+                })
+                .into_iter()
+                .collect();
             commit = true;
         }
         if let Some(k) = db.sort.first_mut()
@@ -932,10 +1497,24 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
         commit |= column_combo(ui, "group_by", &mut db.group_by, &db.columns, "(none)");
         if db.group_by.is_some() {
             let before = db.group_mode;
-            egui::ComboBox::from_id_salt("group_mode").selected_text(if db.group_mode == GroupMode::Detail { "details and subtotals" } else { "one row per group" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut db.group_mode, GroupMode::Detail, "details and subtotals");
-                ui.selectable_value(&mut db.group_mode, GroupMode::Summary, "one row per group");
-            });
+            egui::ComboBox::from_id_salt("group_mode")
+                .selected_text(if db.group_mode == GroupMode::Detail {
+                    "details and subtotals"
+                } else {
+                    "one row per group"
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut db.group_mode,
+                        GroupMode::Detail,
+                        "details and subtotals",
+                    );
+                    ui.selectable_value(
+                        &mut db.group_mode,
+                        GroupMode::Summary,
+                        "one row per group",
+                    );
+                });
             commit |= db.group_mode != before;
         }
     });
@@ -949,7 +1528,13 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn export_file(name: &str, ext: &str, label: &str, bytes: Vec<u8>) -> String {
     let file = format!("{}.{ext}", name.replace(['/', '\\', ':'], "-"));
-    let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(file).save_file() else { return String::new() };
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter(label, &[ext])
+        .set_file_name(file)
+        .save_file()
+    else {
+        return String::new();
+    };
     match std::fs::write(&path, bytes) {
         Ok(()) => format!("Exported {}", path.display()),
         Err(e) => format!("Cannot write {}: {e}", path.display()),
@@ -971,14 +1556,36 @@ mod tests {
         let mut fmt = RecordFormat::default();
         fmt.fields.push(FieldDef::new("Note", FieldType::Text));
         fmt.fields.push(FieldDef::new("Qty", FieldType::Integer));
-        fmt.fields.push(FieldDef::new("Depth", FieldType::Dimension));
+        fmt.fields
+            .push(FieldDef::new("Depth", FieldType::Dimension));
         fmt.fields.push(FieldDef::new("Ratio", FieldType::Number));
         fmt.fields.push(FieldDef::new("Wet", FieldType::Boolean));
         let mut grade = FieldDef::new("Grade", FieldType::Choice);
         grade.choices = vec!["A".into(), "B".into()];
         fmt.fields.push(grade);
-        let rid = ResourceId(s.editor.execute(&Command::AddResource { name: "Soil".into(), body: ResourceBody::RecordFormat(Box::new(fmt)) }).unwrap().created[0]);
-        let oid = ObjectId(s.editor.execute(&Command::AddObject { shape: Shape::Circle { center: cadektor_core::DVec2::ZERO, radius: 1.0 }, layer: None, class: None, attrs: Attributes::default() }).unwrap().created[0]);
+        let rid = ResourceId(
+            s.editor
+                .execute(&Command::AddResource {
+                    name: "Soil".into(),
+                    body: ResourceBody::RecordFormat(Box::new(fmt)),
+                })
+                .unwrap()
+                .created[0],
+        );
+        let oid = ObjectId(
+            s.editor
+                .execute(&Command::AddObject {
+                    shape: Shape::Circle {
+                        center: cadektor_core::DVec2::ZERO,
+                        radius: 1.0,
+                    },
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap()
+                .created[0],
+        );
         s.selection = vec![oid];
         (s, oid, rid)
     }
@@ -989,11 +1596,21 @@ mod tests {
         let (mut s, oid, rid) = session_with_record();
         let mut status = String::new();
         // The Shape tab is shown first.
-        run_ui(&ctx, |ui| assert!(!info_tab(ui, &mut s, &[oid], &mut status)));
+        run_ui(&ctx, |ui| {
+            assert!(!info_tab(ui, &mut s, &[oid], &mut status))
+        });
         ctx.data_mut(|d| d.insert_temp(Id::new("info_tab_is_data"), true));
-        run_ui(&ctx, |ui| assert!(info_tab(ui, &mut s, &[oid], &mut status)));
+        run_ui(&ctx, |ui| {
+            assert!(info_tab(ui, &mut s, &[oid], &mut status))
+        });
         // Attach through a command like the button does, then draw all field editors.
-        s.editor.execute(&Command::AttachRecord { ids: vec![oid], record: rid, values: Map::new() }).unwrap();
+        s.editor
+            .execute(&Command::AttachRecord {
+                ids: vec![oid],
+                record: rid,
+                values: Map::new(),
+            })
+            .unwrap();
         run_ui(&ctx, |ui| {
             info_tab(ui, &mut s, &[oid], &mut status);
         });
@@ -1011,15 +1628,39 @@ mod tests {
         for (f, v) in [
             (FieldDef::new("T", FieldType::Text), serde_json::json!("x")),
             (FieldDef::new("I", FieldType::Integer), serde_json::json!(3)),
-            (FieldDef::new("D", FieldType::Dimension), serde_json::json!(5.5)),
+            (
+                FieldDef::new("D", FieldType::Dimension),
+                serde_json::json!(5.5),
+            ),
             (FieldDef::new("A", FieldType::Area), serde_json::json!(5.5)),
-            (FieldDef::new("N", FieldType::Number), serde_json::json!(1.5)),
-            (FieldDef::new("B", FieldType::Boolean), serde_json::json!(true)),
-            (FieldDef::new("V", FieldType::Volume), serde_json::json!(2.5)),
-            (FieldDef::new("G", FieldType::Angle), serde_json::json!(45.0)),
-            (FieldDef::new("W", FieldType::Date), serde_json::json!("2026-03-27")),
-            (FieldDef::new("X", FieldType::Time), serde_json::json!("14:30")),
-            (FieldDef::new("U", FieldType::Unknown), serde_json::json!("x")),
+            (
+                FieldDef::new("N", FieldType::Number),
+                serde_json::json!(1.5),
+            ),
+            (
+                FieldDef::new("B", FieldType::Boolean),
+                serde_json::json!(true),
+            ),
+            (
+                FieldDef::new("V", FieldType::Volume),
+                serde_json::json!(2.5),
+            ),
+            (
+                FieldDef::new("G", FieldType::Angle),
+                serde_json::json!(45.0),
+            ),
+            (
+                FieldDef::new("W", FieldType::Date),
+                serde_json::json!("2026-03-27"),
+            ),
+            (
+                FieldDef::new("X", FieldType::Time),
+                serde_json::json!("14:30"),
+            ),
+            (
+                FieldDef::new("U", FieldType::Unknown),
+                serde_json::json!("x"),
+            ),
             (choice, serde_json::json!("A")),
         ] {
             run_ui(&ctx, |ui| {
@@ -1061,10 +1702,23 @@ mod tests {
         let mut status = String::new();
         // Create a worksheet from a template the way the list does, then open its window.
         let def = templates::template("area_schedule").unwrap();
-        let out = s.editor.execute(&Command::AddResource { name: "Areas".into(), body: ResourceBody::Worksheet(def.to_value()) }).unwrap();
+        let out = s
+            .editor
+            .execute(&Command::AddResource {
+                name: "Areas".into(),
+                body: ResourceBody::Worksheet(def.to_value()),
+            })
+            .unwrap();
         let sid = ResourceId(out.created[0]);
         ctx.data_mut(|d| {
-            d.insert_temp(Id::new("sheet_state"), SheetState { open: true, selected: Some(sid), ..Default::default() });
+            d.insert_temp(
+                Id::new("sheet_state"),
+                SheetState {
+                    open: true,
+                    selected: Some(sid),
+                    ..Default::default()
+                },
+            );
             d.insert_temp(Id::new("record_format_selected"), Some(2u64));
         });
         for _ in 0..3 {
@@ -1082,13 +1736,29 @@ mod tests {
     fn criteria_clauses_are_built_and_parse() {
         assert_eq!(criteria_clause("Area", ">", " 20 "), "Area > 20");
         assert_eq!(criteria_clause("Kind", "=", "plant"), "Kind = \"plant\"");
-        assert_eq!(criteria_clause("Style", "=", "6\" pot"), "Style = \"6\"\" pot\"");
-        assert_eq!(criteria_clause("'Soil'.'Wet'", "=", "TRUE"), "'Soil'.'Wet' = TRUE");
+        assert_eq!(
+            criteria_clause("Style", "=", "6\" pot"),
+            "Style = \"6\"\" pot\""
+        );
+        assert_eq!(
+            criteria_clause("'Soil'.'Wet'", "=", "TRUE"),
+            "'Soil'.'Wet' = TRUE"
+        );
         assert_eq!(add_clause("", "Area > 1", false), "Area > 1");
-        assert_eq!(add_clause(" Area > 1 ", "Kind = \"plant\"", false), "Area > 1 AND Kind = \"plant\"");
-        assert_eq!(add_clause("Area > 1", "Layer = \"A\"", true), "Area > 1 OR Layer = \"A\"");
+        assert_eq!(
+            add_clause(" Area > 1 ", "Kind = \"plant\"", false),
+            "Area > 1 AND Kind = \"plant\""
+        );
+        assert_eq!(
+            add_clause("Area > 1", "Layer = \"A\"", true),
+            "Area > 1 OR Layer = \"A\""
+        );
         let mut c = String::new();
-        for (n, o, v) in [("Kind", "=", "hardscape"), ("Area", ">=", "2.5"), ("Style", "<>", "it's \"x\"")] {
+        for (n, o, v) in [
+            ("Kind", "=", "hardscape"),
+            ("Area", ">=", "2.5"),
+            ("Style", "<>", "it's \"x\""),
+        ] {
             c = add_clause(&c, &criteria_clause(n, o, v), false);
         }
         cadektor_sheet::formula::parse(&c).unwrap();
@@ -1098,7 +1768,9 @@ mod tests {
         // Record fields are offered with quoted names.
         let (s, _, _) = session_with_record();
         let fields = criteria_fields(s.editor.doc());
-        assert!(fields.contains(&"Area".to_string()) && fields.contains(&"'Soil'.'Depth'".to_string()));
+        assert!(
+            fields.contains(&"Area".to_string()) && fields.contains(&"'Soil'.'Depth'".to_string())
+        );
         cadektor_sheet::formula::parse(&criteria_clause("'Soil'.'Depth'", ">", "300")).unwrap();
     }
 
@@ -1120,8 +1792,29 @@ mod tests {
         def.set_cell("A1", "Item", None).unwrap();
         def.set_cell("B1", "7", None).unwrap();
         def.set_cell("B2", "=1/0", None).unwrap();
-        let ws = ResourceId(s.editor.execute(&Command::AddResource { name: "T".into(), body: ResourceBody::Worksheet(def.to_value()) }).unwrap().created[0]);
-        let id = ObjectId(s.editor.execute(&Command::AddWorksheetTable { worksheet: ws, at: cadektor_core::DVec2::new(0.0, 100.0), size: cadektor_core::DVec2::new(40.0, 10.0), text_height: Some(3.0), layer: None, class: None, attrs: Default::default() }).unwrap().created[0]);
+        let ws = ResourceId(
+            s.editor
+                .execute(&Command::AddResource {
+                    name: "T".into(),
+                    body: ResourceBody::Worksheet(def.to_value()),
+                })
+                .unwrap()
+                .created[0],
+        );
+        let id = ObjectId(
+            s.editor
+                .execute(&Command::AddWorksheetTable {
+                    worksheet: ws,
+                    at: cadektor_core::DVec2::new(0.0, 100.0),
+                    size: cadektor_core::DVec2::new(40.0, 10.0),
+                    text_height: Some(3.0),
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap()
+                .created[0],
+        );
         let cache = cadektor_site::SiteCache::default();
         let rev = s.editor.revision();
         let a = calculated(s.editor.doc(), ws, Some((&cache, rev))).unwrap();
@@ -1132,29 +1825,72 @@ mod tests {
         assert!(calculated(s.editor.doc(), ws, None).is_some());
         let mut status = String::new();
         for zoom in [0.001, 5.0] {
-            let view = crate::view::View { zoom, ..Default::default() };
+            let view = crate::view::View {
+                zoom,
+                ..Default::default()
+            };
             let doc = s.editor.doc().clone();
             let o = doc.object(id).unwrap().clone();
             let d = cadektor_core::worksheet_table::data(&o).unwrap();
             run_ui(&ctx, |ui| {
-                draw_table(ui.painter(), &view, &doc, &o, &d, Color32::BLACK, Some((&cache, rev)));
+                draw_table(
+                    ui.painter(),
+                    &view,
+                    &doc,
+                    &o,
+                    &d,
+                    Color32::BLACK,
+                    Some((&cache, rev)),
+                );
                 table_info(ui, &mut s, id, &mut status);
             });
         }
         // Fit resizes the frame through the same command as the button.
         let l = cadektor_sheet::layout(&a, 3.0);
-        s.editor.execute(&Command::SetWorksheetTable { ids: vec![id], worksheet: None, text_height: None, size: Some(cadektor_core::DVec2::new(l.width, l.height)) }).unwrap();
+        s.editor
+            .execute(&Command::SetWorksheetTable {
+                ids: vec![id],
+                worksheet: None,
+                text_height: None,
+                size: Some(cadektor_core::DVec2::new(l.width, l.height)),
+            })
+            .unwrap();
         // A window with the place button draws too.
-        ctx.data_mut(|d| d.insert_temp(Id::new("sheet_state"), SheetState { open: true, selected: Some(ws), ..Default::default() }));
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| windows(&ui.ctx().clone(), &mut s, &mut status));
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                Id::new("sheet_state"),
+                SheetState {
+                    open: true,
+                    selected: Some(ws),
+                    ..Default::default()
+                },
+            )
+        });
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            windows(&ui.ctx().clone(), &mut s, &mut status)
+        });
     }
 
     #[test]
     fn database_form_edits_keep_indexes_in_line() {
         let ctx = egui::Context::default();
         let mut db = DatabaseDef {
-            columns: vec![ColumnDef { header: "A".into(), expr: "Id".into(), ..Default::default() }, ColumnDef { header: "B".into(), expr: "Area".into(), ..Default::default() }],
-            sort: vec![SortKey { column: 1, descending: false }],
+            columns: vec![
+                ColumnDef {
+                    header: "A".into(),
+                    expr: "Id".into(),
+                    ..Default::default()
+                },
+                ColumnDef {
+                    header: "B".into(),
+                    expr: "Area".into(),
+                    ..Default::default()
+                },
+            ],
+            sort: vec![SortKey {
+                column: 1,
+                descending: false,
+            }],
             group_by: Some(1),
             ..Default::default()
         };

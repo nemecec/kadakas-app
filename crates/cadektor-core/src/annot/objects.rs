@@ -47,7 +47,11 @@ pub struct Anchor {
 
 impl Anchor {
     pub fn new(object: ObjectId, target: AnchorTarget) -> Anchor {
-        Anchor { object, target, count: None }
+        Anchor {
+            object,
+            target,
+            count: None,
+        }
     }
 }
 
@@ -92,16 +96,36 @@ impl DimMode {
     /// The name that the API uses (`horizontal`, `chain_vertical`, ...).
     pub fn name(self) -> &'static str {
         match self {
-            DimMode::Linear { axis: Axis::Horizontal } => "horizontal",
-            DimMode::Linear { axis: Axis::Vertical } => "vertical",
-            DimMode::Linear { axis: Axis::Aligned } => "aligned",
-            DimMode::Chain { axis: Axis::Horizontal } => "chain_horizontal",
-            DimMode::Chain { axis: Axis::Vertical } => "chain_vertical",
-            DimMode::Chain { axis: Axis::Aligned } => "chain_aligned",
-            DimMode::Baseline { axis: Axis::Horizontal } => "baseline_horizontal",
-            DimMode::Baseline { axis: Axis::Vertical } => "baseline_vertical",
-            DimMode::Baseline { axis: Axis::Aligned } => "baseline_aligned",
-            DimMode::Ordinate { axis: Axis::Vertical } => "ordinate_vertical",
+            DimMode::Linear {
+                axis: Axis::Horizontal,
+            } => "horizontal",
+            DimMode::Linear {
+                axis: Axis::Vertical,
+            } => "vertical",
+            DimMode::Linear {
+                axis: Axis::Aligned,
+            } => "aligned",
+            DimMode::Chain {
+                axis: Axis::Horizontal,
+            } => "chain_horizontal",
+            DimMode::Chain {
+                axis: Axis::Vertical,
+            } => "chain_vertical",
+            DimMode::Chain {
+                axis: Axis::Aligned,
+            } => "chain_aligned",
+            DimMode::Baseline {
+                axis: Axis::Horizontal,
+            } => "baseline_horizontal",
+            DimMode::Baseline {
+                axis: Axis::Vertical,
+            } => "baseline_vertical",
+            DimMode::Baseline {
+                axis: Axis::Aligned,
+            } => "baseline_aligned",
+            DimMode::Ordinate {
+                axis: Axis::Vertical,
+            } => "ordinate_vertical",
             DimMode::Ordinate { .. } => "ordinate_horizontal",
             DimMode::Angular => "angular",
             DimMode::Radial => "radial",
@@ -141,7 +165,9 @@ impl DimMode {
             "radial" | "radius" => DimMode::Radial,
             "diameter" => DimMode::Diameter,
             "arc_length" | "arc" => DimMode::ArcLength,
-            "linear" => DimMode::Linear { axis: Axis::Aligned },
+            "linear" => DimMode::Linear {
+                axis: Axis::Aligned,
+            },
             s => {
                 if let Some(a) = axis_of(s) {
                     DimMode::Linear { axis: a }

@@ -5,10 +5,12 @@
 use std::collections::BTreeMap;
 
 use cadektor_core::command::{Command, Editor};
-use cadektor_core::model::{Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape, Vertex, VertexKind};
+use cadektor_core::model::{
+    Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape, Vertex, VertexKind,
+};
 use cadektor_core::{DVec2, DVec3};
 use proptest::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A coordinate: usually small, sometimes huge, sometimes not a number.
 fn coord() -> impl Strategy<Value = f64> {
@@ -41,7 +43,8 @@ fn vertex() -> impl Strategy<Value = Vertex> {
 
 fn shape() -> impl Strategy<Value = Shape> {
     let p = || (-1e4..1e4f64, -1e4..1e4f64).prop_map(|(x, y)| DVec2::new(x, y));
-    let p3 = || (-1e4..1e4f64, -1e4..1e4f64, -1e3..1e3f64).prop_map(|(x, y, z)| DVec3::new(x, y, z));
+    let p3 =
+        || (-1e4..1e4f64, -1e4..1e4f64, -1e3..1e3f64).prop_map(|(x, y, z)| DVec3::new(x, y, z));
     prop_oneof![
         2 => p3().prop_map(|p| Shape::Locus3d { p }),
         2 => (prop::collection::vec(p3(), 0..6), any::<bool>()).prop_map(|(points, closed)| Shape::Polyline3d { points, closed }),
@@ -67,7 +70,11 @@ fn attrs() -> impl Strategy<Value = Attributes> {
         prop::option::of(any::<[u8; 4]>().prop_map(Color)),
         prop::option::of(prop_oneof![0.0..5.0f64, Just(f64::NAN)]),
     )
-        .prop_map(|(pen, line_weight)| Attributes { pen, fill: None, line_weight })
+        .prop_map(|(pen, line_weight)| Attributes {
+            pen,
+            fill: None,
+            line_weight,
+        })
 }
 
 fn data() -> impl Strategy<Value = BTreeMap<String, Value>> {
@@ -108,7 +115,9 @@ fn command() -> impl Strategy<Value = Command> {
         1 => lid().prop_map(|id| Command::SetActive { layer: Some(id), class: None }),
         1 => cid().prop_map(|id| Command::SetActive { layer: None, class: Some(id) }),
     ];
-    leaf.prop_recursive(2, 8, 4, |inner| prop::collection::vec(inner, 0..4).prop_map(|commands| Command::Batch { commands }))
+    leaf.prop_recursive(2, 8, 4, |inner| {
+        prop::collection::vec(inner, 0..4).prop_map(|commands| Command::Batch { commands })
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -139,7 +148,11 @@ fn content(doc: &Document) -> Value {
 fn assert_saveable(doc: &Document) -> Result<(), TestCaseError> {
     let json = serde_json::to_string(doc).unwrap();
     let back = Document::from_json(&json);
-    prop_assert!(back.is_ok(), "saved document does not reopen: {:?}", back.err());
+    prop_assert!(
+        back.is_ok(),
+        "saved document does not reopen: {:?}",
+        back.err()
+    );
     prop_assert_eq!(&back.unwrap(), doc);
     Ok(())
 }
@@ -151,13 +164,25 @@ fn assert_curves_are_sane(doc: &Document) -> Result<(), TestCaseError> {
         let area = o.shape.area();
         if let Some(vs) = o.shape.vertices()
             && !vs.is_empty()
-            && vs.iter().all(|v| v.p.abs().max_element() < 1e5 && !matches!(v.kind, VertexKind::Arc { radius } if radius > 1e6))
+            && vs.iter().all(|v| {
+                v.p.abs().max_element() < 1e5
+                    && !matches!(v.kind, VertexKind::Arc { radius } if radius > 1e6)
+            })
         {
             prop_assert!(lo.is_finite() && hi.is_finite(), "bounds {lo:?} {hi:?}");
-            prop_assert!(area.is_none_or(|a| a.is_finite() && a >= 0.0), "area {area:?} of {:?}", o.shape);
+            prop_assert!(
+                area.is_none_or(|a| a.is_finite() && a >= 0.0),
+                "area {area:?} of {:?}",
+                o.shape
+            );
             // The drawing in SVG has only finite numbers.
             let mut ed = Editor::default();
-            let add = Command::AddObject { shape: o.shape.clone(), layer: None, class: None, attrs: Attributes::default() };
+            let add = Command::AddObject {
+                shape: o.shape.clone(),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            };
             if ed.execute(&add).is_ok() {
                 let svg = cadektor_core::svg::render(ed.doc(), 200);
                 prop_assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");

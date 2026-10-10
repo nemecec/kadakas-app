@@ -80,7 +80,10 @@ impl PaperSize {
             PaperSize::ArchC => (457.2, 609.6),
             PaperSize::ArchD => (609.6, 914.4),
             PaperSize::ArchE => (914.4, 1219.2),
-            PaperSize::Custom { width_mm, height_mm } => (width_mm, height_mm),
+            PaperSize::Custom {
+                width_mm,
+                height_mm,
+            } => (width_mm, height_mm),
         };
         DVec2::new(w, h)
     }
@@ -142,7 +145,12 @@ pub struct Sheet {
 
 impl Sheet {
     pub fn new(number: impl Into<String>, title: impl Into<String>) -> Sheet {
-        Sheet { paper: PaperSize::A3, orientation: Orientation::Landscape, number: number.into(), title: title.into() }
+        Sheet {
+            paper: PaperSize::A3,
+            orientation: Orientation::Landscape,
+            number: number.into(),
+            title: title.into(),
+        }
     }
 
     /// Page size in mm, with the orientation applied.
@@ -223,11 +231,21 @@ pub mod id_map {
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<K: Serialize + Ord, V: Serialize, S: Serializer>(m: &BTreeMap<K, V>, s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<K: Serialize + Ord, V: Serialize, S: Serializer>(
+        m: &BTreeMap<K, V>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
         s.collect_seq(m.iter())
     }
 
-    pub fn deserialize<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<K, V>, D::Error> {
+    pub fn deserialize<
+        'de,
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    >(
+        d: D,
+    ) -> Result<BTreeMap<K, V>, D::Error> {
         Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
     }
 }
@@ -249,7 +267,9 @@ impl Drawing {
     }
 
     pub fn saved_view(&self, name: &str) -> Option<&SavedView> {
-        self.saved_views.iter().find(|v| v.name.eq_ignore_ascii_case(name.trim()))
+        self.saved_views
+            .iter()
+            .find(|v| v.name.eq_ignore_ascii_case(name.trim()))
     }
 }
 
@@ -280,7 +300,13 @@ impl Document {
         if l.kind != LayerKind::Sheet {
             return None;
         }
-        Some(self.drawing.sheets.get(&layer).cloned().unwrap_or_else(|| Sheet::new("", l.name.clone())))
+        Some(
+            self.drawing
+                .sheets
+                .get(&layer)
+                .cloned()
+                .unwrap_or_else(|| Sheet::new("", l.name.clone())),
+        )
     }
 
     /// The sheet layers in document order.
@@ -290,10 +316,13 @@ impl Document {
 
     /// The viewports of a sheet layer, in z-order.
     pub fn viewports_of(&self, layer: LayerId) -> impl Iterator<Item = (&Object, &Viewport)> {
-        self.objects.values().filter(move |o| o.layer == layer).filter_map(|o| match &o.shape {
-            Shape::Viewport(v) => Some((o, &**v)),
-            _ => None,
-        })
+        self.objects
+            .values()
+            .filter(move |o| o.layer == layer)
+            .filter_map(|o| match &o.shape {
+                Shape::Viewport(v) => Some((o, &**v)),
+                _ => None,
+            })
     }
 }
 
@@ -347,8 +376,15 @@ pub struct Annotation {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AnnotationItem {
-    Line { a: DVec2, b: DVec2 },
-    Text { at: DVec2, text: String, height: f64 },
+    Line {
+        a: DVec2,
+        b: DVec2,
+    },
+    Text {
+        at: DVec2,
+        text: String,
+        height: f64,
+    },
     /// A linear dimension between `a` and `b`. The dimension line is `offset` mm to the left of a to b.
     /// The text is the distance in model mm (paper length times the viewport scale) unless `text` is set.
     Dimension {
@@ -359,7 +395,9 @@ pub enum AnnotationItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
     },
-    Shape { shape: Box<Shape> },
+    Shape {
+        shape: Box<Shape>,
+    },
 }
 
 impl Annotation {
@@ -367,9 +405,18 @@ impl Annotation {
         self.attrs.is_finite()
             && match &self.item {
                 AnnotationItem::Line { a, b } => a.is_finite() && b.is_finite(),
-                AnnotationItem::Text { at, height, .. } => at.is_finite() && height.is_finite() && *height > 0.0,
-                AnnotationItem::Dimension { a, b, offset, .. } => a.is_finite() && b.is_finite() && offset.is_finite(),
-                AnnotationItem::Shape { shape } => shape.is_finite() && shape.is_in_range() && shape_problem(shape).is_none() && !matches!(**shape, Shape::Viewport(_) | Shape::TitleBlock(_)),
+                AnnotationItem::Text { at, height, .. } => {
+                    at.is_finite() && height.is_finite() && *height > 0.0
+                }
+                AnnotationItem::Dimension { a, b, offset, .. } => {
+                    a.is_finite() && b.is_finite() && offset.is_finite()
+                }
+                AnnotationItem::Shape { shape } => {
+                    shape.is_finite()
+                        && shape.is_in_range()
+                        && shape_problem(shape).is_none()
+                        && !matches!(**shape, Shape::Viewport(_) | Shape::TitleBlock(_))
+                }
             }
     }
 }
@@ -432,7 +479,13 @@ fn default_dpi() -> f64 {
 
 impl Viewport {
     /// A plan viewport with a frame, a scale and layers.
-    pub fn new(min: DVec2, max: DVec2, center: DVec2, scale: f64, layers: Vec<LayerId>) -> Viewport {
+    pub fn new(
+        min: DVec2,
+        max: DVec2,
+        center: DVec2,
+        scale: f64,
+        layers: Vec<LayerId>,
+    ) -> Viewport {
         Viewport {
             name: String::new(),
             min,
@@ -457,7 +510,11 @@ impl Viewport {
 
     /// Why the viewport is not valid, or `None`.
     pub fn problem(&self) -> Option<String> {
-        let finite = self.min.is_finite() && self.max.is_finite() && self.center.is_finite() && self.scale.is_finite() && self.dpi.is_finite();
+        let finite = self.min.is_finite()
+            && self.max.is_finite()
+            && self.center.is_finite()
+            && self.scale.is_finite()
+            && self.dpi.is_finite();
         if !finite || !self.annotations.iter().all(Annotation::is_finite) {
             return Some("numbers must be finite".into());
         }
@@ -483,9 +540,15 @@ impl Viewport {
             return Some("view must not be empty".into());
         }
         match &self.crop {
-            Some(Crop::Polygon { points }) if points.len() < 3 => return Some("a polygon crop needs 3 or more points".into()),
-            Some(Crop::Polygon { points }) if !points.iter().all(|p| p.is_finite()) => return Some("numbers must be finite".into()),
-            Some(Crop::Rect { min, max }) if !(min.is_finite() && max.is_finite()) => return Some("numbers must be finite".into()),
+            Some(Crop::Polygon { points }) if points.len() < 3 => {
+                return Some("a polygon crop needs 3 or more points".into());
+            }
+            Some(Crop::Polygon { points }) if !points.iter().all(|p| p.is_finite()) => {
+                return Some("numbers must be finite".into());
+            }
+            Some(Crop::Rect { min, max }) if !(min.is_finite() && max.is_finite()) => {
+                return Some("numbers must be finite".into());
+            }
             _ => {}
         }
         if self.class_overrides.values().any(|c| !c.is_finite()) {
@@ -528,9 +591,15 @@ impl Viewport {
             None => rect_polygon(self.min, self.max),
             Some(Crop::Rect { min, max }) => {
                 let (lo, hi) = (min.min(*max).max(self.min), min.max(*max).min(self.max));
-                if lo.x >= hi.x || lo.y >= hi.y { Vec::new() } else { rect_polygon(lo, hi) }
+                if lo.x >= hi.x || lo.y >= hi.y {
+                    Vec::new()
+                } else {
+                    rect_polygon(lo, hi)
+                }
             }
-            Some(Crop::Polygon { points }) => clip_polygon_to_rect(&ccw(points), self.min, self.max),
+            Some(Crop::Polygon { points }) => {
+                clip_polygon_to_rect(&ccw(points), self.min, self.max)
+            }
         }
     }
 
@@ -552,11 +621,20 @@ impl Viewport {
 
     /// Whether this viewport draws the design layer `layer`. The document visibility does not count.
     pub fn layer_visible(&self, doc: &Document, layer: LayerId) -> bool {
-        self.layers.contains(&layer) && doc.layer(layer).is_some_and(|l| l.kind == LayerKind::Design) && self.layer_overrides.get(&layer).copied().unwrap_or(true)
+        self.layers.contains(&layer)
+            && doc
+                .layer(layer)
+                .is_some_and(|l| l.kind == LayerKind::Design)
+            && self.layer_overrides.get(&layer).copied().unwrap_or(true)
     }
 
     pub fn class_visible(&self, doc: &Document, class: ClassId) -> bool {
-        doc.class(class).is_some() && self.class_overrides.get(&class).and_then(|o| o.visible).unwrap_or(true)
+        doc.class(class).is_some()
+            && self
+                .class_overrides
+                .get(&class)
+                .and_then(|o| o.visible)
+                .unwrap_or(true)
     }
 
     /// Whether the object shows in this viewport.
@@ -570,9 +648,24 @@ impl Viewport {
         let class = doc.class(obj.class).map(|c| &c.attrs);
         let ov = self.class_overrides.get(&obj.class);
         Attributes {
-            pen: obj.attrs.pen.or(ov.and_then(|o| o.pen)).or(class.and_then(|c| c.pen)).or(Some(crate::model::Color::BLACK)),
-            fill: obj.attrs.fill.or(ov.and_then(|o| o.fill)).or(class.and_then(|c| c.fill)).or(Some(crate::model::Color::NONE)),
-            line_weight: obj.attrs.line_weight.or(ov.and_then(|o| o.line_weight)).or(class.and_then(|c| c.line_weight)).or(Some(DEFAULT_WEIGHT)),
+            pen: obj
+                .attrs
+                .pen
+                .or(ov.and_then(|o| o.pen))
+                .or(class.and_then(|c| c.pen))
+                .or(Some(crate::model::Color::BLACK)),
+            fill: obj
+                .attrs
+                .fill
+                .or(ov.and_then(|o| o.fill))
+                .or(class.and_then(|c| c.fill))
+                .or(Some(crate::model::Color::NONE)),
+            line_weight: obj
+                .attrs
+                .line_weight
+                .or(ov.and_then(|o| o.line_weight))
+                .or(class.and_then(|c| c.line_weight))
+                .or(Some(DEFAULT_WEIGHT)),
         }
     }
 
@@ -580,9 +673,21 @@ impl Viewport {
     pub fn resolve_annotation(&self, doc: &Document, a: &Annotation) -> Attributes {
         let class = doc.class(a.class).map(|c| &c.attrs);
         Attributes {
-            pen: a.attrs.pen.or(class.and_then(|c| c.pen)).or(Some(crate::model::Color::BLACK)),
-            fill: a.attrs.fill.or(class.and_then(|c| c.fill)).or(Some(crate::model::Color::NONE)),
-            line_weight: a.attrs.line_weight.or(class.and_then(|c| c.line_weight)).or(Some(DEFAULT_WEIGHT)),
+            pen: a
+                .attrs
+                .pen
+                .or(class.and_then(|c| c.pen))
+                .or(Some(crate::model::Color::BLACK)),
+            fill: a
+                .attrs
+                .fill
+                .or(class.and_then(|c| c.fill))
+                .or(Some(crate::model::Color::NONE)),
+            line_weight: a
+                .attrs
+                .line_weight
+                .or(class.and_then(|c| c.line_weight))
+                .or(Some(DEFAULT_WEIGHT)),
         }
     }
 
@@ -607,7 +712,11 @@ impl Viewport {
 
     /// The next free annotation id.
     pub fn next_annotation_id(&self) -> u32 {
-        self.annotations.iter().map(|a| a.id).max().map_or(1, |m| m.saturating_add(1))
+        self.annotations
+            .iter()
+            .map(|a| a.id)
+            .max()
+            .map_or(1, |m| m.saturating_add(1))
     }
 
     /// Moves the frame, the crop and nothing else (annotations are relative to the frame).
@@ -644,7 +753,15 @@ pub fn shape_problem(shape: &Shape) -> Option<String> {
 pub fn allowed_on_sheet(shape: &Shape) -> bool {
     matches!(
         shape,
-        Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::Text { .. } | Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_)
+        Shape::Line { .. }
+            | Shape::Rect { .. }
+            | Shape::Circle { .. }
+            | Shape::Arc { .. }
+            | Shape::Polyline { .. }
+            | Shape::Text { .. }
+            | Shape::Viewport(_)
+            | Shape::TitleBlock(_)
+            | Shape::Annotation(_)
     )
 }
 
@@ -652,7 +769,8 @@ pub fn allowed_on_sheet(shape: &Shape) -> bool {
 
 /// Standard drawing scales (denominators), small to large.
 pub const STANDARD_SCALES: [f64; 24] = [
-    1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0, 750.0, 1000.0, 1250.0, 1500.0, 2000.0, 2500.0, 5000.0, 10000.0,
+    1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 250.0, 300.0, 400.0,
+    500.0, 750.0, 1000.0, 1250.0, 1500.0, 2000.0, 2500.0, 5000.0, 10000.0,
 ];
 
 /// The largest standard scale (smallest denominator) at which `model` mm fit in `frame` mm of paper,
@@ -662,7 +780,10 @@ pub fn fit_scale(model: DVec2, frame: DVec2) -> f64 {
     if !need.is_finite() || need <= 0.0 {
         return 100.0;
     }
-    STANDARD_SCALES.into_iter().find(|s| *s >= need).unwrap_or_else(|| need.ceil())
+    STANDARD_SCALES
+        .into_iter()
+        .find(|s| *s >= need)
+        .unwrap_or_else(|| need.ceil())
 }
 
 pub fn rect_polygon(min: DVec2, max: DVec2) -> Vec<DVec2> {
@@ -687,7 +808,12 @@ pub fn ccw(p: &[DVec2]) -> Vec<DVec2> {
 /// Cuts a polygon at a rectangle (Sutherland-Hodgman). The result is empty when nothing is left.
 pub fn clip_polygon_to_rect(poly: &[DVec2], min: DVec2, max: DVec2) -> Vec<DVec2> {
     // Each edge keeps the points with `dot(p, n) <= c`.
-    let edges = [(DVec2::NEG_X, -min.x), (DVec2::X, max.x), (DVec2::NEG_Y, -min.y), (DVec2::Y, max.y)];
+    let edges = [
+        (DVec2::NEG_X, -min.x),
+        (DVec2::X, max.x),
+        (DVec2::NEG_Y, -min.y),
+        (DVec2::Y, max.y),
+    ];
     let mut out = poly.to_vec();
     for (n, c) in edges {
         let input = std::mem::take(&mut out);
@@ -715,7 +841,11 @@ pub fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
     for i in 0..n {
         let (a, b) = (poly[i], poly[(i + 1) % n]);
         let d = b - a;
-        let t = if d.length_squared() > 0.0 { ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        let t = if d.length_squared() > 0.0 {
+            ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if (a + d * t).distance(p) < 1e-9 {
             return true;
         }
@@ -761,7 +891,15 @@ pub struct TitleLayout {
 impl TitleLayout {
     /// The simple layout: project, sheet title, sheet number, scale, date and drawn by.
     pub fn standard() -> TitleLayout {
-        let c = |x, y, w, h, label: &str, text: &str, size| Cell { x, y, w, h, label: label.into(), text: text.into(), size };
+        let c = |x, y, w, h, label: &str, text: &str, size| Cell {
+            x,
+            y,
+            w,
+            h,
+            label: label.into(),
+            text: text.into(),
+            size,
+        };
         TitleLayout {
             width: 180.0,
             height: 40.0,
@@ -771,20 +909,36 @@ impl TitleLayout {
                 c(90.0, 0.0, 30.0, 20.0, "Sheet no.", "{sheet.number}", 6.0),
                 c(120.0, 10.0, 30.0, 10.0, "Scale", "{sheet.scale}", 3.5),
                 c(150.0, 10.0, 30.0, 10.0, "Date", "{project.date}", 3.5),
-                c(120.0, 0.0, 60.0, 10.0, "Drawn by", "{project.drawn_by}", 3.5),
+                c(
+                    120.0,
+                    0.0,
+                    60.0,
+                    10.0,
+                    "Drawn by",
+                    "{project.drawn_by}",
+                    3.5,
+                ),
             ],
         }
     }
 
     pub fn problem(&self) -> Option<String> {
         let nums = [self.width, self.height];
-        if !nums.iter().all(|n| n.is_finite() && *n > 0.0 && *n <= MAX_PAPER) {
+        if !nums
+            .iter()
+            .all(|n| n.is_finite() && *n > 0.0 && *n <= MAX_PAPER)
+        {
             return Some("title block width and height must be positive".into());
         }
         if self.cells.len() > 200 {
             return Some("a title block has at most 200 cells".into());
         }
-        let bad = self.cells.iter().any(|c| ![c.x, c.y, c.w, c.h, c.size].iter().all(|n| n.is_finite()) || c.w <= 0.0 || c.h <= 0.0 || c.size <= 0.0);
+        let bad = self.cells.iter().any(|c| {
+            ![c.x, c.y, c.w, c.h, c.size].iter().all(|n| n.is_finite())
+                || c.w <= 0.0
+                || c.h <= 0.0
+                || c.size <= 0.0
+        });
         bad.then(|| "title block cells need finite numbers and a positive size".into())
     }
 }
@@ -827,16 +981,30 @@ fn default_margin() -> f64 {
 
 impl Default for TitleBlock {
     fn default() -> Self {
-        TitleBlock { margin: 10.0, grid_columns: 0, grid_rows: 0, layout: None, fields: BTreeMap::new(), offset: DVec2::ZERO, page: default_page() }
+        TitleBlock {
+            margin: 10.0,
+            grid_columns: 0,
+            grid_rows: 0,
+            layout: None,
+            fields: BTreeMap::new(),
+            offset: DVec2::ZERO,
+            page: default_page(),
+        }
     }
 }
 
 impl TitleBlock {
     pub fn problem(&self) -> Option<String> {
-        if !(self.page.is_finite() && self.page.min_element() > 0.0 && self.page.max_element() <= MAX_PAPER) {
+        if !(self.page.is_finite()
+            && self.page.min_element() > 0.0
+            && self.page.max_element() <= MAX_PAPER)
+        {
             return Some("the page size of a title block must be positive".into());
         }
-        if !self.margin.is_finite() || !(0.0..=100.0).contains(&self.margin) || !self.offset.is_finite() {
+        if !self.margin.is_finite()
+            || !(0.0..=100.0).contains(&self.margin)
+            || !self.offset.is_finite()
+        {
             return Some("margin must be 0 to 100 mm".into());
         }
         if self.grid_columns > 26 || self.grid_rows > 99 {
@@ -851,7 +1019,10 @@ impl TitleBlock {
 
     /// The border rectangle on a page of this size.
     pub fn border(&self, page: DVec2) -> (DVec2, DVec2) {
-        (DVec2::splat(self.margin) + self.offset, page - DVec2::splat(self.margin) + self.offset)
+        (
+            DVec2::splat(self.margin) + self.offset,
+            page - DVec2::splat(self.margin) + self.offset,
+        )
     }
 
     /// Bounds on the sheet for selection: the whole border.
@@ -883,7 +1054,18 @@ impl Fields {
         if let Some(s) = doc.sheet(layer) {
             m.insert("sheet.number".into(), s.number);
             m.insert("sheet.title".into(), s.title);
-            m.insert("sheet.paper".into(), format!("{} {}", s.paper.id().to_uppercase(), if s.orientation == Orientation::Landscape { "landscape" } else { "portrait" }));
+            m.insert(
+                "sheet.paper".into(),
+                format!(
+                    "{} {}",
+                    s.paper.id().to_uppercase(),
+                    if s.orientation == Orientation::Landscape {
+                        "landscape"
+                    } else {
+                        "portrait"
+                    }
+                ),
+            );
         }
         let mut scales: Vec<f64> = doc.viewports_of(layer).map(|(_, v)| v.scale).collect();
         scales.dedup();
@@ -894,7 +1076,10 @@ impl Fields {
         };
         m.insert("sheet.scale".into(), scale);
         let sheets: Vec<LayerId> = doc.sheet_layers().map(|l| l.id).collect();
-        m.insert("sheet.index".into(), (sheets.iter().position(|l| *l == layer).unwrap_or(0) + 1).to_string());
+        m.insert(
+            "sheet.index".into(),
+            (sheets.iter().position(|l| *l == layer).unwrap_or(0) + 1).to_string(),
+        );
         m.insert("sheet.count".into(), sheets.len().to_string());
         for (k, v) in &tb.fields {
             m.insert(format!("field.{k}"), v.clone());
@@ -910,7 +1095,11 @@ impl Fields {
             out.push_str(&rest[..i]);
             match rest[i..].find('}') {
                 Some(j) => {
-                    out.push_str(self.0.get(rest[i + 1..i + j].trim()).map_or("", String::as_str));
+                    out.push_str(
+                        self.0
+                            .get(rest[i + 1..i + j].trim())
+                            .map_or("", String::as_str),
+                    );
                     rest = &rest[i + j + 1..];
                 }
                 None => {
@@ -926,7 +1115,11 @@ impl Fields {
 
 /// "1:100" for a scale denominator of 100.
 pub fn format_scale(s: f64) -> String {
-    if (s - s.round()).abs() < 1e-9 { format!("1:{}", s.round()) } else { format!("1:{s}") }
+    if (s - s.round()).abs() < 1e-9 {
+        format!("1:{}", s.round())
+    } else {
+        format!("1:{s}")
+    }
 }
 
 /// A title block, worked out for a page: everything a renderer needs.
@@ -951,17 +1144,26 @@ pub fn title_block_geometry(tb: &TitleBlock, fields: &Fields, page: DVec2) -> Ti
     let band = (tb.margin * 0.6).clamp(0.0, 6.0);
     if band > 0.0 {
         for i in 0..tb.grid_columns {
-            let (x0, x1) = (lo.x + (hi.x - lo.x) * i as f64 / tb.grid_columns as f64, lo.x + (hi.x - lo.x) * (i + 1) as f64 / tb.grid_columns as f64);
+            let (x0, x1) = (
+                lo.x + (hi.x - lo.x) * i as f64 / tb.grid_columns as f64,
+                lo.x + (hi.x - lo.x) * (i + 1) as f64 / tb.grid_columns as f64,
+            );
             let letter = ((b'A' + i as u8) as char).to_string();
             if i > 0 {
                 grid_lines.push((DVec2::new(x0, lo.y), DVec2::new(x0, lo.y - band)));
                 grid_lines.push((DVec2::new(x0, hi.y), DVec2::new(x0, hi.y + band)));
             }
-            grid_labels.push((DVec2::new((x0 + x1) / 2.0, lo.y - band / 2.0), letter.clone()));
+            grid_labels.push((
+                DVec2::new((x0 + x1) / 2.0, lo.y - band / 2.0),
+                letter.clone(),
+            ));
             grid_labels.push((DVec2::new((x0 + x1) / 2.0, hi.y + band / 2.0), letter));
         }
         for j in 0..tb.grid_rows {
-            let (y0, y1) = (lo.y + (hi.y - lo.y) * j as f64 / tb.grid_rows as f64, lo.y + (hi.y - lo.y) * (j + 1) as f64 / tb.grid_rows as f64);
+            let (y0, y1) = (
+                lo.y + (hi.y - lo.y) * j as f64 / tb.grid_rows as f64,
+                lo.y + (hi.y - lo.y) * (j + 1) as f64 / tb.grid_rows as f64,
+            );
             let num = (tb.grid_rows - j).to_string();
             let _ = (y0, y1);
             let ymid = (y0 + y1) / 2.0;
@@ -976,13 +1178,30 @@ pub fn title_block_geometry(tb: &TitleBlock, fields: &Fields, page: DVec2) -> Ti
     }
     let layout = tb.layout.clone().unwrap_or_else(TitleLayout::standard);
     let origin = DVec2::new(hi.x - layout.width, lo.y);
-    let block = (origin.max(lo), DVec2::new(hi.x, lo.y + layout.height).min(hi));
+    let block = (
+        origin.max(lo),
+        DVec2::new(hi.x, lo.y + layout.height).min(hi),
+    );
     let cells = layout
         .cells
         .iter()
-        .map(|c| (origin + DVec2::new(c.x, c.y), origin + DVec2::new(c.x + c.w, c.y + c.h), c.label.clone(), fields.fill(&c.text), c.size))
+        .map(|c| {
+            (
+                origin + DVec2::new(c.x, c.y),
+                origin + DVec2::new(c.x + c.w, c.y + c.h),
+                c.label.clone(),
+                fields.fill(&c.text),
+                c.size,
+            )
+        })
         .collect();
-    TitleBlockGeometry { border: (lo, hi), grid_lines, grid_labels, block, cells }
+    TitleBlockGeometry {
+        border: (lo, hi),
+        grid_lines,
+        grid_labels,
+        block,
+        cells,
+    }
 }
 
 // ---------------------------------------------------------------- tests
@@ -997,7 +1216,13 @@ mod tests {
     }
 
     fn vp() -> Viewport {
-        Viewport::new(v(20.0, 30.0), v(220.0, 180.0), v(5000.0, 7000.0), 50.0, vec![FIRST_LAYER])
+        Viewport::new(
+            v(20.0, 30.0),
+            v(220.0, 180.0),
+            v(5000.0, 7000.0),
+            50.0,
+            vec![FIRST_LAYER],
+        )
     }
 
     #[test]
@@ -1006,10 +1231,16 @@ mod tests {
         assert_eq!(s.size_mm(), v(420.0, 297.0));
         s.orientation = Orientation::Portrait;
         assert_eq!(s.size_mm(), v(297.0, 420.0));
-        s.paper = PaperSize::Custom { width_mm: 500.0, height_mm: 300.0 };
+        s.paper = PaperSize::Custom {
+            width_mm: 500.0,
+            height_mm: 300.0,
+        };
         assert_eq!(s.size_mm(), v(300.0, 500.0));
         assert!(s.is_valid());
-        s.paper = PaperSize::Custom { width_mm: 5.0, height_mm: 300.0 };
+        s.paper = PaperSize::Custom {
+            width_mm: 5.0,
+            height_mm: 300.0,
+        };
         assert!(!s.is_valid());
         for p in PaperSize::NAMED {
             assert_eq!(PaperSize::from_id(p.id()), Some(p));
@@ -1017,8 +1248,18 @@ mod tests {
         }
         assert_eq!(PaperSize::from_id(" Arch-D "), Some(PaperSize::ArchD));
         assert_eq!(PaperSize::from_id("b7"), None);
-        assert_eq!(PaperSize::Custom { width_mm: 1.0, height_mm: 1.0 }.id(), "custom");
-        assert_eq!(Orientation::from_id("Portrait"), Some(Orientation::Portrait));
+        assert_eq!(
+            PaperSize::Custom {
+                width_mm: 1.0,
+                height_mm: 1.0
+            }
+            .id(),
+            "custom"
+        );
+        assert_eq!(
+            Orientation::from_id("Portrait"),
+            Some(Orientation::Portrait)
+        );
         assert_eq!(Orientation::from_id("x"), None);
     }
 
@@ -1037,18 +1278,34 @@ mod tests {
         let mut p = vp();
         assert_eq!(p.clip_polygon().len(), 4);
         assert!(p.shows_paper(v(100.0, 100.0)) && !p.shows_paper(v(10.0, 100.0)));
-        p.crop = Some(Crop::Rect { min: v(0.0, 0.0), max: v(100.0, 100.0) });
-        assert_eq!(p.clip_polygon(), rect_polygon(v(20.0, 30.0), v(100.0, 100.0)));
-        p.crop = Some(Crop::Rect { min: v(500.0, 500.0), max: v(600.0, 600.0) });
+        p.crop = Some(Crop::Rect {
+            min: v(0.0, 0.0),
+            max: v(100.0, 100.0),
+        });
+        assert_eq!(
+            p.clip_polygon(),
+            rect_polygon(v(20.0, 30.0), v(100.0, 100.0))
+        );
+        p.crop = Some(Crop::Rect {
+            min: v(500.0, 500.0),
+            max: v(600.0, 600.0),
+        });
         assert!(p.clip_polygon().is_empty() && !p.shows_paper(v(100.0, 100.0)));
         // A triangle that sticks out of the frame is cut at the frame.
-        p.crop = Some(Crop::Polygon { points: vec![v(0.0, 0.0), v(120.0, 0.0), v(0.0, 120.0)] });
+        p.crop = Some(Crop::Polygon {
+            points: vec![v(0.0, 0.0), v(120.0, 0.0), v(0.0, 120.0)],
+        });
         let poly = p.clip_polygon();
         assert!(poly.len() >= 3);
-        assert!(poly.iter().all(|q| q.x >= 20.0 - 1e-9 && q.y >= 30.0 - 1e-9));
+        assert!(
+            poly.iter()
+                .all(|q| q.x >= 20.0 - 1e-9 && q.y >= 30.0 - 1e-9)
+        );
         assert!(p.shows_paper(v(40.0, 40.0)) && !p.shows_paper(v(100.0, 100.0)));
         // A clockwise polygon works too.
-        p.crop = Some(Crop::Polygon { points: vec![v(30.0, 40.0), v(30.0, 100.0), v(100.0, 100.0)] });
+        p.crop = Some(Crop::Polygon {
+            points: vec![v(30.0, 40.0), v(30.0, 100.0), v(100.0, 100.0)],
+        });
         assert!(p.shows_paper(v(40.0, 90.0)));
     }
 
@@ -1057,16 +1314,33 @@ mod tests {
         // 20 m by 10 m on a 200 mm by 150 mm frame needs 1:105, so the standard scale is 1:125.
         assert_eq!(fit_scale(v(20_000.0, 10_000.0), v(200.0, 150.0)), 125.0);
         assert_eq!(fit_scale(v(10.0, 10.0), v(200.0, 150.0)), 1.0);
-        assert_eq!(fit_scale(v(1.0e9, 1.0e9), v(200.0, 150.0)), (1.0e9_f64 / 142.5).ceil());
+        assert_eq!(
+            fit_scale(v(1.0e9, 1.0e9), v(200.0, 150.0)),
+            (1.0e9_f64 / 142.5).ceil()
+        );
         assert_eq!(fit_scale(v(0.0, 0.0), v(200.0, 150.0)), 100.0);
         let mut doc = Document::default();
-        doc.objects.insert(crate::model::ObjectId(5), Object::new(crate::model::ObjectId(5), FIRST_LAYER, NONE_CLASS, Shape::Rect { min: v(0.0, 0.0), max: v(20_000.0, 10_000.0) }));
+        doc.objects.insert(
+            crate::model::ObjectId(5),
+            Object::new(
+                crate::model::ObjectId(5),
+                FIRST_LAYER,
+                NONE_CLASS,
+                Shape::Rect {
+                    min: v(0.0, 0.0),
+                    max: v(20_000.0, 10_000.0),
+                },
+            ),
+        );
         let mut p = vp();
         p.min = v(0.0, 0.0);
         p.max = v(200.0, 150.0);
         p.fit(&doc);
         assert_eq!((p.scale, p.center), (125.0, v(10_000.0, 5000.0)));
-        assert_eq!(p.content_bounds(&doc), Some((v(0.0, 0.0), v(20_000.0, 10_000.0))));
+        assert_eq!(
+            p.content_bounds(&doc),
+            Some((v(0.0, 0.0), v(20_000.0, 10_000.0)))
+        );
         p.layers.clear();
         p.scale = 7.0;
         p.fit(&doc);
@@ -1080,7 +1354,11 @@ mod tests {
         let mut cw = sq.clone();
         cw.reverse();
         assert_eq!(signed_area(&ccw(&cw)), 4.0);
-        assert!(point_in_polygon(v(1.0, 1.0), &sq) && point_in_polygon(v(2.0, 1.0), &sq) && !point_in_polygon(v(3.0, 1.0), &sq));
+        assert!(
+            point_in_polygon(v(1.0, 1.0), &sq)
+                && point_in_polygon(v(2.0, 1.0), &sq)
+                && !point_in_polygon(v(3.0, 1.0), &sq)
+        );
         assert!(!point_in_polygon(v(1.0, 1.0), &sq[..2]));
         assert!(clip_polygon_to_rect(&sq, v(5.0, 5.0), v(6.0, 6.0)).is_empty());
         let degenerate = [v(0.0, 0.0), v(0.0, 0.0), v(0.0, 0.0)];
@@ -1103,20 +1381,61 @@ mod tests {
         assert!(bad(&|p| p.dpi = 5.0));
         assert!(bad(&|p| p.mode = "x".into()));
         assert!(bad(&|p| p.view = " ".into()));
-        assert!(bad(&|p| p.crop = Some(Crop::Polygon { points: vec![v(0.0, 0.0)] })));
-        assert!(bad(&|p| p.crop = Some(Crop::Polygon { points: vec![v(0.0, 0.0), v(1.0, 0.0), v(f64::NAN, 1.0)] })));
-        assert!(bad(&|p| p.crop = Some(Crop::Rect { min: v(f64::NAN, 0.0), max: v(1.0, 1.0) })));
+        assert!(bad(&|p| p.crop = Some(Crop::Polygon {
+            points: vec![v(0.0, 0.0)]
+        })));
+        assert!(bad(&|p| p.crop = Some(Crop::Polygon {
+            points: vec![v(0.0, 0.0), v(1.0, 0.0), v(f64::NAN, 1.0)]
+        })));
+        assert!(bad(&|p| p.crop = Some(Crop::Rect {
+            min: v(f64::NAN, 0.0),
+            max: v(1.0, 1.0)
+        })));
         assert!(bad(&|p| {
-            p.class_overrides.insert(NONE_CLASS, ClassOverride { line_weight: Some(-1.0), ..Default::default() });
+            p.class_overrides.insert(
+                NONE_CLASS,
+                ClassOverride {
+                    line_weight: Some(-1.0),
+                    ..Default::default()
+                },
+            );
         }));
-        let ann = |id| Annotation { id, class: NONE_CLASS, attrs: Attributes::default(), item: AnnotationItem::Line { a: v(0.0, 0.0), b: v(1.0, 1.0) } };
+        let ann = |id| Annotation {
+            id,
+            class: NONE_CLASS,
+            attrs: Attributes::default(),
+            item: AnnotationItem::Line {
+                a: v(0.0, 0.0),
+                b: v(1.0, 1.0),
+            },
+        };
         assert!(bad(&|p| p.annotations = vec![ann(1), ann(1)]));
         assert!(!bad(&|p| p.annotations = vec![ann(1), ann(2)]));
-        assert!(bad(&|p| p.annotations = vec![Annotation { item: AnnotationItem::Text { at: v(0.0, 0.0), text: "x".into(), height: 0.0 }, ..ann(1) }]));
-        assert!(bad(&|p| p.annotations = vec![Annotation { item: AnnotationItem::Dimension { a: v(0.0, 0.0), b: v(1.0, f64::INFINITY), offset: 0.0, text: None }, ..ann(1) }]));
+        assert!(bad(&|p| p.annotations = vec![Annotation {
+            item: AnnotationItem::Text {
+                at: v(0.0, 0.0),
+                text: "x".into(),
+                height: 0.0
+            },
+            ..ann(1)
+        }]));
+        assert!(bad(&|p| p.annotations = vec![Annotation {
+            item: AnnotationItem::Dimension {
+                a: v(0.0, 0.0),
+                b: v(1.0, f64::INFINITY),
+                offset: 0.0,
+                text: None
+            },
+            ..ann(1)
+        }]));
         assert!(bad(&|p| {
             let inner = Shape::Viewport(Box::new(vp()));
-            p.annotations = vec![Annotation { item: AnnotationItem::Shape { shape: Box::new(inner) }, ..ann(1) }];
+            p.annotations = vec![Annotation {
+                item: AnnotationItem::Shape {
+                    shape: Box::new(inner),
+                },
+                ..ann(1)
+            }];
         }));
         let mut p = vp();
         p.annotations = vec![ann(4), ann(9)];
@@ -1126,8 +1445,25 @@ mod tests {
 
     fn doc_with_overrides() -> (Document, Object) {
         let mut doc = Document::default();
-        doc.classes.push(Class { id: ClassId(9), name: "Trees".into(), visible: true, attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([0, 255, 0, 255])), line_weight: Some(0.5) } });
-        let mut o = Object::new(crate::model::ObjectId(50), FIRST_LAYER, ClassId(9), Shape::Circle { center: v(0.0, 0.0), radius: 10.0 });
+        doc.classes.push(Class {
+            id: ClassId(9),
+            name: "Trees".into(),
+            visible: true,
+            attrs: Attributes {
+                pen: Some(Color([0, 128, 0, 255])),
+                fill: Some(Color([0, 255, 0, 255])),
+                line_weight: Some(0.5),
+            },
+        });
+        let mut o = Object::new(
+            crate::model::ObjectId(50),
+            FIRST_LAYER,
+            ClassId(9),
+            Shape::Circle {
+                center: v(0.0, 0.0),
+                radius: 10.0,
+            },
+        );
         o.attrs.pen = Some(Color([1, 2, 3, 255]));
         (doc, o)
     }
@@ -1142,17 +1478,36 @@ mod tests {
         assert_eq!(a.fill, Some(Color([0, 255, 0, 255])));
         assert_eq!(a.line_weight, Some(0.5));
         // A viewport override beats the class but not the attributes that the object sets itself.
-        p.class_overrides.insert(ClassId(9), ClassOverride { pen: Some(Color([9, 9, 9, 255])), line_weight: Some(0.1), ..Default::default() });
+        p.class_overrides.insert(
+            ClassId(9),
+            ClassOverride {
+                pen: Some(Color([9, 9, 9, 255])),
+                line_weight: Some(0.1),
+                ..Default::default()
+            },
+        );
         let a = p.resolve(&doc, &o);
-        assert_eq!(a.pen, Some(Color([1, 2, 3, 255])), "the object has its own pen");
+        assert_eq!(
+            a.pen,
+            Some(Color([1, 2, 3, 255])),
+            "the object has its own pen"
+        );
         assert_eq!(a.fill, Some(Color([0, 255, 0, 255])));
         assert_eq!(a.line_weight, Some(0.1));
         // Defaults when nothing sets a field.
-        let plain = Object::new(crate::model::ObjectId(51), FIRST_LAYER, NONE_CLASS, o.shape.clone());
+        let plain = Object::new(
+            crate::model::ObjectId(51),
+            FIRST_LAYER,
+            NONE_CLASS,
+            o.shape.clone(),
+        );
         let mut doc2 = doc.clone();
         doc2.classes[0].attrs = Attributes::default();
         let a = vp().resolve(&doc2, &plain);
-        assert_eq!((a.pen, a.fill, a.line_weight), (Some(Color::BLACK), Some(Color::NONE), Some(DEFAULT_WEIGHT)));
+        assert_eq!(
+            (a.pen, a.fill, a.line_weight),
+            (Some(Color::BLACK), Some(Color::NONE), Some(DEFAULT_WEIGHT))
+        );
     }
 
     #[test]
@@ -1176,9 +1531,21 @@ mod tests {
         assert!(!p.shows(&doc, &o), "the viewport keeps what it stored");
         p.layer_overrides.insert(FIRST_LAYER, true);
         assert!(!p.shows(&doc, &o), "the class is still off");
-        p.class_overrides.insert(ClassId(9), ClassOverride { visible: Some(true), ..Default::default() });
+        p.class_overrides.insert(
+            ClassId(9),
+            ClassOverride {
+                visible: Some(true),
+                ..Default::default()
+            },
+        );
         assert!(p.shows(&doc, &o));
-        p.class_overrides.insert(ClassId(9), ClassOverride { visible: Some(false), ..Default::default() });
+        p.class_overrides.insert(
+            ClassId(9),
+            ClassOverride {
+                visible: Some(false),
+                ..Default::default()
+            },
+        );
         assert!(!p.shows(&doc, &o));
         p.class_overrides.clear();
         p.layer_overrides.insert(FIRST_LAYER, false);
@@ -1197,14 +1564,39 @@ mod tests {
     fn annotation_attributes_and_translate() {
         let (doc, _) = doc_with_overrides();
         let mut p = vp();
-        let a = Annotation { id: 1, class: ClassId(9), attrs: Attributes { fill: Some(Color::NONE), ..Default::default() }, item: AnnotationItem::Line { a: v(1.0, 1.0), b: v(2.0, 2.0) } };
+        let a = Annotation {
+            id: 1,
+            class: ClassId(9),
+            attrs: Attributes {
+                fill: Some(Color::NONE),
+                ..Default::default()
+            },
+            item: AnnotationItem::Line {
+                a: v(1.0, 1.0),
+                b: v(2.0, 2.0),
+            },
+        };
         let r = p.resolve_annotation(&doc, &a);
-        assert_eq!((r.pen, r.fill, r.line_weight), (Some(Color([0, 128, 0, 255])), Some(Color::NONE), Some(0.5)));
-        p.crop = Some(Crop::Rect { min: v(30.0, 40.0), max: v(60.0, 70.0) });
+        assert_eq!(
+            (r.pen, r.fill, r.line_weight),
+            (Some(Color([0, 128, 0, 255])), Some(Color::NONE), Some(0.5))
+        );
+        p.crop = Some(Crop::Rect {
+            min: v(30.0, 40.0),
+            max: v(60.0, 70.0),
+        });
         p.translate(v(10.0, 5.0));
         assert_eq!(p.min, v(30.0, 35.0));
-        assert_eq!(p.crop, Some(Crop::Rect { min: v(40.0, 45.0), max: v(70.0, 75.0) }));
-        p.crop = Some(Crop::Polygon { points: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)] });
+        assert_eq!(
+            p.crop,
+            Some(Crop::Rect {
+                min: v(40.0, 45.0),
+                max: v(70.0, 75.0)
+            })
+        );
+        p.crop = Some(Crop::Polygon {
+            points: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)],
+        });
         p.translate(v(1.0, 1.0));
         assert!(matches!(&p.crop, Some(Crop::Polygon { points }) if points[0] == v(1.0, 1.0)));
         assert_eq!(p.annotation_to_paper(v(1.0, 2.0)), p.min + v(1.0, 2.0));
@@ -1213,12 +1605,32 @@ mod tests {
     #[test]
     fn title_fields_and_geometry() {
         let mut doc = Document::default();
-        doc.layers.push(crate::model::Layer { id: LayerId(5), name: "Plan sheet".into(), kind: LayerKind::Sheet, visible: true, locked: false, elevation: 0.0, scale: 1.0 });
+        doc.layers.push(crate::model::Layer {
+            id: LayerId(5),
+            name: "Plan sheet".into(),
+            kind: LayerKind::Sheet,
+            visible: true,
+            locked: false,
+            elevation: 0.0,
+            scale: 1.0,
+        });
         doc.drawing.project.name = "Garden {1}".into();
-        doc.drawing.sheets.insert(LayerId(5), Sheet::new("L-101", "Planting plan"));
-        let tb = TitleBlock { grid_columns: 4, grid_rows: 3, fields: [("zone".to_string(), "7".to_string())].into(), ..Default::default() };
+        doc.drawing
+            .sheets
+            .insert(LayerId(5), Sheet::new("L-101", "Planting plan"));
+        let tb = TitleBlock {
+            grid_columns: 4,
+            grid_rows: 3,
+            fields: [("zone".to_string(), "7".to_string())].into(),
+            ..Default::default()
+        };
         let f = Fields::of(&doc, LayerId(5), &tb);
-        assert_eq!(f.fill("{project.name} / {sheet.number} / {sheet.scale} / {field.zone} / {nothing} / {open"), "Garden {1} / L-101 /  / 7 /  / {open");
+        assert_eq!(
+            f.fill(
+                "{project.name} / {sheet.number} / {sheet.scale} / {field.zone} / {nothing} / {open"
+            ),
+            "Garden {1} / L-101 /  / 7 /  / {open"
+        );
         assert_eq!(f.0["sheet.index"], "1");
         assert_eq!(f.0["sheet.paper"], "A3 landscape");
         let g = title_block_geometry(&tb, &f, v(420.0, 297.0));
@@ -1232,23 +1644,55 @@ mod tests {
         let mut vp1 = vp();
         vp1.scale = 100.0;
         let mut ed = crate::command::Editor::new(doc.clone());
-        ed.execute(&crate::command::Command::AddObject { shape: Shape::Viewport(Box::new(vp1.clone())), layer: Some(LayerId(5)), class: None, attrs: Attributes::default() }).unwrap();
-        assert_eq!(Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"], "1:100");
+        ed.execute(&crate::command::Command::AddObject {
+            shape: Shape::Viewport(Box::new(vp1.clone())),
+            layer: Some(LayerId(5)),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        assert_eq!(
+            Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"],
+            "1:100"
+        );
         vp1.scale = 12.5;
-        ed.execute(&crate::command::Command::AddObject { shape: Shape::Viewport(Box::new(vp1)), layer: Some(LayerId(5)), class: None, attrs: Attributes::default() }).unwrap();
-        assert_eq!(Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"], "As noted");
+        ed.execute(&crate::command::Command::AddObject {
+            shape: Shape::Viewport(Box::new(vp1)),
+            layer: Some(LayerId(5)),
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        assert_eq!(
+            Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"],
+            "As noted"
+        );
         assert_eq!(format_scale(12.5), "1:12.5");
         // No margin: no grid reference drawn.
-        let tb0 = TitleBlock { margin: 0.0, grid_columns: 3, ..Default::default() };
-        assert!(title_block_geometry(&tb0, &f, v(420.0, 297.0)).grid_labels.is_empty());
+        let tb0 = TitleBlock {
+            margin: 0.0,
+            grid_columns: 3,
+            ..Default::default()
+        };
+        assert!(
+            title_block_geometry(&tb0, &f, v(420.0, 297.0))
+                .grid_labels
+                .is_empty()
+        );
     }
 
     #[test]
     fn title_block_validation() {
         assert_eq!(TitleBlock::default().problem(), None);
-        let mut tb = TitleBlock { margin: -1.0, ..Default::default() };
+        let mut tb = TitleBlock {
+            margin: -1.0,
+            ..Default::default()
+        };
         assert!(tb.problem().is_some());
-        tb = TitleBlock { grid_columns: 27, ..Default::default() };
+        tb = TitleBlock {
+            grid_columns: 27,
+            ..Default::default()
+        };
         assert!(tb.problem().is_some());
         let mut l = TitleLayout::standard();
         assert_eq!(l.problem(), None);
@@ -1260,7 +1704,10 @@ mod tests {
         l = TitleLayout::standard();
         l.cells = vec![l.cells[0].clone(); 201];
         assert!(l.problem().is_some());
-        tb = TitleBlock { layout: Some(l), ..Default::default() };
+        tb = TitleBlock {
+            layout: Some(l),
+            ..Default::default()
+        };
         assert!(tb.problem().is_some());
         let mut tb = TitleBlock::default();
         tb.translate(v(1.0, 2.0));
@@ -1275,14 +1722,27 @@ mod tests {
         let mut d = Drawing::default();
         assert!(d.is_empty());
         d.sheets.insert(LayerId(3), Sheet::new("1", "t"));
-        d.saved_views.push(SavedView { name: "Plan".into(), layers: [(LayerId(1), true)].into(), classes: [(ClassId(0), false)].into(), zoom: Some(2.0), pan: Some(v(1.0, 2.0)), ..Default::default() });
+        d.saved_views.push(SavedView {
+            name: "Plan".into(),
+            layers: [(LayerId(1), true)].into(),
+            classes: [(ClassId(0), false)].into(),
+            zoom: Some(2.0),
+            pan: Some(v(1.0, 2.0)),
+            ..Default::default()
+        });
         let json = serde_json::to_string(&d).unwrap();
         assert_eq!(serde_json::from_str::<Drawing>(&json).unwrap(), d);
         assert!(d.saved_view(" plan ").is_some() && d.saved_view("x").is_none());
         assert!(d.saved_views[0].is_finite());
-        let bad = SavedView { zoom: Some(0.0), ..Default::default() };
+        let bad = SavedView {
+            zoom: Some(0.0),
+            ..Default::default()
+        };
         assert!(!bad.is_finite());
-        let bad = SavedView { pan: Some(v(f64::NAN, 0.0)), ..Default::default() };
+        let bad = SavedView {
+            pan: Some(v(f64::NAN, 0.0)),
+            ..Default::default()
+        };
         assert!(!bad.is_finite());
         assert!(!d.is_empty());
     }
@@ -1290,14 +1750,50 @@ mod tests {
     #[test]
     fn viewport_json_roundtrip_and_defaults() {
         let mut p = vp();
-        p.crop = Some(Crop::Polygon { points: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)] });
+        p.crop = Some(Crop::Polygon {
+            points: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)],
+        });
         p.layer_overrides.insert(FIRST_LAYER, false);
-        p.class_overrides.insert(NONE_CLASS, ClassOverride { visible: Some(true), line_weight: Some(0.3), ..Default::default() });
-        p.annotations.push(Annotation { id: 1, class: NONE_CLASS, attrs: Attributes::default(), item: AnnotationItem::Dimension { a: v(0.0, 0.0), b: v(10.0, 0.0), offset: 5.0, text: None } });
-        p.annotations.push(Annotation { id: 2, class: NONE_CLASS, attrs: Attributes::default(), item: AnnotationItem::Shape { shape: Box::new(Shape::Circle { center: v(1.0, 1.0), radius: 2.0 }) } });
+        p.class_overrides.insert(
+            NONE_CLASS,
+            ClassOverride {
+                visible: Some(true),
+                line_weight: Some(0.3),
+                ..Default::default()
+            },
+        );
+        p.annotations.push(Annotation {
+            id: 1,
+            class: NONE_CLASS,
+            attrs: Attributes::default(),
+            item: AnnotationItem::Dimension {
+                a: v(0.0, 0.0),
+                b: v(10.0, 0.0),
+                offset: 5.0,
+                text: None,
+            },
+        });
+        p.annotations.push(Annotation {
+            id: 2,
+            class: NONE_CLASS,
+            attrs: Attributes::default(),
+            item: AnnotationItem::Shape {
+                shape: Box::new(Shape::Circle {
+                    center: v(1.0, 1.0),
+                    radius: 2.0,
+                }),
+            },
+        });
         let json = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<Viewport>(&json).unwrap(), p);
-        let minimal: Viewport = serde_json::from_str(r#"{"min":[0,0],"max":[10,10],"center":[0,0],"scale":10}"#).unwrap();
-        assert!(minimal.is_plan() && minimal.mode == "shaded" && minimal.dpi == DEFAULT_DPI && minimal.layers.is_empty());
+        let minimal: Viewport =
+            serde_json::from_str(r#"{"min":[0,0],"max":[10,10],"center":[0,0],"scale":10}"#)
+                .unwrap();
+        assert!(
+            minimal.is_plan()
+                && minimal.mode == "shaded"
+                && minimal.dpi == DEFAULT_DPI
+                && minimal.layers.is_empty()
+        );
     }
 }

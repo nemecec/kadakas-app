@@ -23,7 +23,10 @@ pub struct Entity {
 
 impl Entity {
     pub fn get(&self, code: i32) -> Option<&str> {
-        self.items.iter().find(|(c, _)| *c == code).map(|(_, v)| v.as_str())
+        self.items
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn f(&self, code: i32) -> Option<f64> {
@@ -40,7 +43,11 @@ impl Entity {
 
     /// All numbers with this code, in order.
     pub fn all_f(&self, code: i32) -> Vec<f64> {
-        self.items.iter().filter(|(c, _)| *c == code).filter_map(|(_, v)| parse_f64(v)).collect()
+        self.items
+            .iter()
+            .filter(|(c, _)| *c == code)
+            .filter_map(|(_, v)| parse_f64(v))
+            .collect()
     }
 
     pub fn layer(&self) -> &str {
@@ -56,13 +63,18 @@ impl Entity {
 /// A finite number. DXF writers sometimes write `1.5D+2` or leave spaces.
 pub fn parse_f64(s: &str) -> Option<f64> {
     let t = s.trim();
-    let v = t.parse::<f64>().ok().or_else(|| t.replace(['D', 'd'], "e").parse::<f64>().ok())?;
+    let v = t
+        .parse::<f64>()
+        .ok()
+        .or_else(|| t.replace(['D', 'd'], "e").parse::<f64>().ok())?;
     v.is_finite().then_some(v)
 }
 
 pub fn parse_int(s: &str) -> Option<i64> {
     let t = s.trim();
-    t.parse::<i64>().ok().or_else(|| parse_f64(t).map(|v| v as i64))
+    t.parse::<i64>()
+        .ok()
+        .or_else(|| parse_f64(t).map(|v| v as i64))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,7 +140,9 @@ fn pairs(text: &str) -> (Vec<(i32, String)>, bool) {
     let mut out = Vec::new();
     let mut lines = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l));
     loop {
-        let Some(code_line) = lines.next() else { return (out, false) };
+        let Some(code_line) = lines.next() else {
+            return (out, false);
+        };
         if code_line.trim().is_empty() && out.is_empty() {
             continue;
         }
@@ -136,7 +150,9 @@ fn pairs(text: &str) -> (Vec<(i32, String)>, bool) {
             // A blank line at the very end is fine. Anything else is not a pair.
             return (out, !code_line.trim().is_empty());
         };
-        let Some(value) = lines.next() else { return (out, true) };
+        let Some(value) = lines.next() else {
+            return (out, true);
+        };
         out.push((code, value.to_string()));
     }
 }
@@ -147,7 +163,10 @@ fn records(items: &[(i32, String)]) -> Vec<Entity> {
     let mut out: Vec<Entity> = Vec::new();
     for (code, value) in items {
         if *code == 0 {
-            out.push(Entity { kind: value.trim().to_string(), ..Entity::default() });
+            out.push(Entity {
+                kind: value.trim().to_string(),
+                ..Entity::default()
+            });
         } else if let Some(last) = out.last_mut() {
             last.items.push((*code, value.clone()));
         }
@@ -179,13 +198,18 @@ fn nest_polylines(records: Vec<Entity>) -> Vec<Entity> {
 /// Parses an ASCII DXF file.
 pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
     if bytes.starts_with(BINARY_SENTINEL) {
-        return Err(IoError::Format("binary DXF files are not supported: save the drawing as ASCII DXF".into()));
+        return Err(IoError::Format(
+            "binary DXF files are not supported: save the drawing as ASCII DXF".into(),
+        ));
     }
     let (items, bad_line) = pairs(&decode(bytes));
     if !items.iter().any(|(c, v)| *c == 0 && v.trim() == "SECTION") {
         return Err(IoError::Format("not a DXF file: no SECTION found".into()));
     }
-    let mut dxf = Dxf { truncated: bad_line, ..Dxf::default() };
+    let mut dxf = Dxf {
+        truncated: bad_line,
+        ..Dxf::default()
+    };
     let mut i = 0;
     let mut saw_eof = false;
     while i < items.len() {
@@ -203,7 +227,10 @@ pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
             _ => String::new(),
         };
         let start = i + usize::from(!name.is_empty());
-        let end = items[start..].iter().position(|(c, v)| *c == 0 && v.trim() == "ENDSEC").map_or(items.len(), |p| start + p);
+        let end = items[start..]
+            .iter()
+            .position(|(c, v)| *c == 0 && v.trim() == "ENDSEC")
+            .map_or(items.len(), |p| start + p);
         let body = &items[start..end];
         match name.as_str() {
             "HEADER" => read_header(&mut dxf, body),
@@ -230,7 +257,10 @@ fn read_header(dxf: &mut Dxf, body: &[(i32, String)]) {
             current = Some(value.trim().to_string());
             dxf.header.entry(value.trim().to_string()).or_default();
         } else if let Some(var) = &current {
-            dxf.header.get_mut(var).expect("inserted").push((*code, value.clone()));
+            dxf.header
+                .get_mut(var)
+                .expect("inserted")
+                .push((*code, value.clone()));
         }
     }
 }
@@ -255,7 +285,13 @@ fn read_blocks(dxf: &mut Dxf, body: &[(i32, String)]) {
             "BLOCK" => {
                 let name = r.get(2).unwrap_or("").to_string();
                 let base = [r.fd(10, 0.0), r.fd(20, 0.0), r.fd(30, 0.0)];
-                current = Some((name, Block { base, entities: vec![] }));
+                current = Some((
+                    name,
+                    Block {
+                        base,
+                        entities: vec![],
+                    },
+                ));
             }
             "ENDBLK" => {
                 if let Some((name, block)) = current.take() {
@@ -337,7 +373,8 @@ mod tests {
         bytes.extend_from_slice(b"\n0\nENDSEC\n0\nEOF\n");
         let d = parse(&bytes).unwrap();
         assert_eq!(d.entities[0].get(1), Some("K\u{e4}"));
-        let utf = parse("0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\nKä\n0\nENDSEC\n0\nEOF\n".as_bytes()).unwrap();
+        let utf = parse("0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\nKä\n0\nENDSEC\n0\nEOF\n".as_bytes())
+            .unwrap();
         assert_eq!(utf.entities[0].get(1), Some("Kä"));
     }
 

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use cadektor_ifc::{IfcError, IfcOptions};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{RpcError, Session};
 
@@ -11,7 +11,9 @@ use crate::{RpcError, Session};
 pub(crate) fn is_ifc(format: Option<&str>, path: &Path) -> bool {
     match format {
         Some(f) => f.trim().trim_start_matches('.').eq_ignore_ascii_case("ifc"),
-        None => path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ifc")),
+        None => path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ifc")),
     }
 }
 
@@ -52,15 +54,31 @@ fn rpc(e: IfcError) -> RpcError {
 }
 
 impl Session {
-    pub(crate) fn export_ifc_file(&mut self, path: PathBuf, options: &Value, overwrite: bool, checked: bool) -> Result<Value, RpcError> {
+    pub(crate) fn export_ifc_file(
+        &mut self,
+        path: PathBuf,
+        options: &Value,
+        overwrite: bool,
+        checked: bool,
+    ) -> Result<Value, RpcError> {
         let opts = IfcOptions::from_json(options).map_err(rpc)?;
-        let path = if checked { self.check_path(&path, true, &["ifc"]).map_err(RpcError::app)? } else { path };
+        let path = if checked {
+            self.check_path(&path, true, &["ifc"])
+                .map_err(RpcError::app)?
+        } else {
+            path
+        };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(RpcError::app(format!("{} exists: pass \"overwrite\": true to replace it", path.display())));
+            return Err(RpcError::app(format!(
+                "{} exists: pass \"overwrite\": true to replace it",
+                path.display()
+            )));
         }
         let doc = self.editor.doc();
         let report = cadektor_ifc::export_file(&path, doc, &opts).map_err(rpc)?;
-        Ok(json!({ "path": path, "exported": report.total(), "report": report, "project_guid": cadektor_ifc::project_guid(doc).0 }))
+        Ok(
+            json!({ "path": path, "exported": report.total(), "report": report, "project_guid": cadektor_ifc::project_guid(doc).0 }),
+        )
     }
 }
 

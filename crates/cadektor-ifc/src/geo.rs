@@ -39,7 +39,9 @@ impl GeoInfo {
         };
         let lat_lon = parsed.as_ref().and_then(|crs| {
             let wgs = Crs::from_epsg(4326).ok()?;
-            let (lon, lat, _) = Transformer::new(crs, &wgs).apply(g.origin.x, g.origin.y, 0.0).ok()?;
+            let (lon, lat, _) = Transformer::new(crs, &wgs)
+                .apply(g.origin.x, g.origin.y, 0.0)
+                .ok()?;
             Some((lat, lon))
         });
         // True north: move a little north on the earth and see where that goes on the map.
@@ -49,8 +51,12 @@ impl GeoInfo {
             .filter(|crs| !crs.is_geographic())
             .and_then(|crs| {
                 let wgs = Crs::from_epsg(4326).ok()?;
-                let (lon, lat, _) = Transformer::new(crs, &wgs).apply(g.origin.x, g.origin.y, 0.0).ok()?;
-                let (nx, ny, _) = Transformer::new(&wgs, crs).apply(lon, (lat + 1.0e-4).min(89.9), 0.0).ok()?;
+                let (lon, lat, _) = Transformer::new(crs, &wgs)
+                    .apply(g.origin.x, g.origin.y, 0.0)
+                    .ok()?;
+                let (nx, ny, _) = Transformer::new(&wgs, crs)
+                    .apply(lon, (lat + 1.0e-4).min(89.9), 0.0)
+                    .ok()?;
                 let d = DVec2::new(nx - g.origin.x, ny - g.origin.y).normalize_or_zero();
                 (d != DVec2::ZERO).then(|| DVec2::from_angle(-g.rotation).rotate(d))
             })
@@ -90,14 +96,24 @@ pub fn compound_angle(deg: f64) -> [i64; 4] {
         m -= 60.0;
         d += 1.0;
     }
-    [sign * d as i64, sign * m as i64, sign * s as i64, sign * micro as i64]
+    [
+        sign * d as i64,
+        sign * m as i64,
+        sign * s as i64,
+        sign * micro as i64,
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn geo(crs: &str) -> Georeference {
-        Georeference { crs: crs.into(), origin: DVec2::new(385000.0, 6672000.0), rotation: 0.0, user_origin: DVec2::ZERO }
+        Georeference {
+            crs: crs.into(),
+            origin: DVec2::new(385000.0, 6672000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        }
     }
 
     #[test]
@@ -105,7 +121,10 @@ mod tests {
         let g = GeoInfo::from_georef(&geo("EPSG:3067")).unwrap();
         assert_eq!(g.crs_name, "EPSG:3067");
         assert!(g.description.is_none());
-        assert_eq!((g.eastings, g.northings, g.scale), (385000.0, 6672000.0, 0.001));
+        assert_eq!(
+            (g.eastings, g.northings, g.scale),
+            (385000.0, 6672000.0, 0.001)
+        );
         assert_eq!((g.x_abscissa, g.x_ordinate), (1.0, 0.0));
         // Helsinki area.
         let (lat, lon) = g.lat_lon.unwrap();
@@ -126,12 +145,26 @@ mod tests {
         r.rotation = 0.2;
         let t = GeoInfo::from_georef(&r).unwrap().true_north;
         let turned = t[0].atan2(t[1]).to_degrees();
-        assert!((turned - (angle + 0.2f64.to_degrees())).abs() < 0.01, "{turned}");
+        assert!(
+            (turned - (angle + 0.2f64.to_degrees())).abs() < 0.01,
+            "{turned}"
+        );
         // A CRS that is not known gives grid north.
-        let unknown = GeoInfo::from_georef(&Georeference { rotation: 0.1, ..geo("MYSTERY") }).unwrap().true_north;
-        assert!((unknown[0] - 0.1f64.sin()).abs() < 1e-12 && (unknown[1] - 0.1f64.cos()).abs() < 1e-12);
+        let unknown = GeoInfo::from_georef(&Georeference {
+            rotation: 0.1,
+            ..geo("MYSTERY")
+        })
+        .unwrap()
+        .true_north;
+        assert!(
+            (unknown[0] - 0.1f64.sin()).abs() < 1e-12 && (unknown[1] - 0.1f64.cos()).abs() < 1e-12
+        );
         // Longitude and latitude as CRS: grid north.
-        let geographic = GeoInfo::from_georef(&Georeference { origin: DVec2::new(24.9, 60.2), ..geo("EPSG:4326") }).unwrap();
+        let geographic = GeoInfo::from_georef(&Georeference {
+            origin: DVec2::new(24.9, 60.2),
+            ..geo("EPSG:4326")
+        })
+        .unwrap();
         assert_eq!(geographic.true_north, [0.0, 1.0]);
     }
 
@@ -141,7 +174,8 @@ mod tests {
         g.rotation = std::f64::consts::FRAC_PI_2;
         let i = GeoInfo::from_georef(&g).unwrap();
         assert!(i.x_abscissa.abs() < 1e-12 && (i.x_ordinate - 1.0).abs() < 1e-12);
-        let custom = GeoInfo::from_georef(&geo("+proj=utm +zone=35 +ellps=GRS80 +units=m")).unwrap();
+        let custom =
+            GeoInfo::from_georef(&geo("+proj=utm +zone=35 +ellps=GRS80 +units=m")).unwrap();
         assert_eq!(custom.crs_name, "Custom");
         assert!(custom.description.as_deref().unwrap().starts_with("+proj"));
         assert!(custom.lat_lon.is_some());

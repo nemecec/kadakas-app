@@ -40,7 +40,10 @@ impl TextSource for Cached<'_> {
             return rows.as_ref().clone();
         }
         let rows = Arc::new(crate::legend_rows(doc, legend));
-        self.cache.lock(self.revision).rows.insert(key, rows.clone());
+        self.cache
+            .lock(self.revision)
+            .rows
+            .insert(key, rows.clone());
         rows.as_ref().clone()
     }
 }
@@ -48,9 +51,15 @@ impl TextSource for Cached<'_> {
 impl AnnotCache {
     /// The inner state, emptied first if it belongs to another revision.
     fn lock(&self, revision: u64) -> MutexGuard<'_, Inner> {
-        let mut g = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.revision != revision {
-            *g = Inner { revision, ..Inner::default() };
+            *g = Inner {
+                revision,
+                ..Inner::default()
+            };
         }
         g
     }
@@ -58,14 +67,29 @@ impl AnnotCache {
     /// The primitives of an annotation object on its layer. `revision` is the revision of the
     /// document (0: do not keep anything).
     pub fn prims(&self, doc: &Document, obj: &Object, revision: u64) -> Arc<Vec<Prim>> {
-        let Shape::Annotation(a) = &obj.shape else { return Arc::new(Vec::new()) };
+        let Shape::Annotation(a) = &obj.shape else {
+            return Arc::new(Vec::new());
+        };
         if revision == 0 {
-            return Arc::new(draw::prims(doc, a, &Ctx::layer(doc, obj.layer), &crate::Sheets));
+            return Arc::new(draw::prims(
+                doc,
+                a,
+                &Ctx::layer(doc, obj.layer),
+                &crate::Sheets,
+            ));
         }
         if let Some(p) = self.lock(revision).prims.get(&obj.id) {
             return p.clone();
         }
-        let made = Arc::new(draw::prims(doc, a, &Ctx::layer(doc, obj.layer), &Cached { cache: self, revision }));
+        let made = Arc::new(draw::prims(
+            doc,
+            a,
+            &Ctx::layer(doc, obj.layer),
+            &Cached {
+                cache: self,
+                revision,
+            },
+        ));
         self.lock(revision).prims.insert(obj.id, made.clone());
         made
     }

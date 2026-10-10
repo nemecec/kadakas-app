@@ -12,7 +12,13 @@ use glam::DVec2;
 /// left out, so the call is safe to repeat. `offset_mm` is the place of the label against the
 /// object, in paper mm. Each tag goes on the layer of its object. Objects on locked layers
 /// are left out.
-pub fn tag_all(doc: &Document, style: ResourceId, criteria: &str, layer: Option<LayerId>, offset_mm: DVec2) -> Result<Vec<Command>, String> {
+pub fn tag_all(
+    doc: &Document,
+    style: ResourceId,
+    criteria: &str,
+    layer: Option<LayerId>,
+    offset_mm: DVec2,
+) -> Result<Vec<Command>, String> {
     if doc.resources.tag_style(style).is_none() {
         return Err(format!("resource {style} is not a tag style"));
     }
@@ -30,13 +36,29 @@ pub fn tag_all(doc: &Document, style: ResourceId, criteria: &str, layer: Option<
     let mut out = Vec::new();
     for obj in crate::select(doc, criteria)? {
         let l = doc.layer(obj.layer);
-        if layer.is_some_and(|x| x != obj.layer) || tagged.contains(&obj.id) || l.is_none_or(|l| l.locked || l.kind != LayerKind::Design) {
+        if layer.is_some_and(|x| x != obj.layer)
+            || tagged.contains(&obj.id)
+            || l.is_none_or(|l| l.locked || l.kind != LayerKind::Design)
+        {
             continue;
         }
-        let Some(anchor) = ref_point(&obj.shape) else { continue };
+        let Some(anchor) = ref_point(&obj.shape) else {
+            continue;
+        };
         let paper = l.map_or(1.0, |l| l.scale);
-        let tag = DataTag { style, object: obj.id, offset: offset_mm, at: anchor + offset_mm * paper, anchor };
-        out.push(Command::AddObject { shape: Shape::Annotation(Box::new(Annot::DataTag(tag))), layer: Some(obj.layer), class: Some(obj.class), attrs: Attributes::default() });
+        let tag = DataTag {
+            style,
+            object: obj.id,
+            offset: offset_mm,
+            at: anchor + offset_mm * paper,
+            anchor,
+        };
+        out.push(Command::AddObject {
+            shape: Shape::Annotation(Box::new(Annot::DataTag(tag))),
+            layer: Some(obj.layer),
+            class: Some(obj.class),
+            attrs: Attributes::default(),
+        });
     }
     Ok(out)
 }
@@ -56,17 +78,41 @@ pub struct RevisionInfo {
 pub fn revisions(doc: &Document) -> Vec<RevisionInfo> {
     let mut out: Vec<RevisionInfo> = Vec::new();
     for o in doc.objects.values() {
-        let Shape::Annotation(a) = &o.shape else { continue };
-        let Annot::RevisionCloud(RevisionCloud { revision, date, description, author, .. }) = &**a else { continue };
-        let at = match out.iter().position(|r| r.revision.eq_ignore_ascii_case(revision)) {
+        let Shape::Annotation(a) = &o.shape else {
+            continue;
+        };
+        let Annot::RevisionCloud(RevisionCloud {
+            revision,
+            date,
+            description,
+            author,
+            ..
+        }) = &**a
+        else {
+            continue;
+        };
+        let at = match out
+            .iter()
+            .position(|r| r.revision.eq_ignore_ascii_case(revision))
+        {
             Some(i) => i,
             None => {
-                out.push(RevisionInfo { revision: revision.clone(), date: String::new(), description: String::new(), author: String::new(), clouds: vec![] });
+                out.push(RevisionInfo {
+                    revision: revision.clone(),
+                    date: String::new(),
+                    description: String::new(),
+                    author: String::new(),
+                    clouds: vec![],
+                });
                 out.len() - 1
             }
         };
         let r = &mut out[at];
-        for (dst, src) in [(&mut r.date, date), (&mut r.description, description), (&mut r.author, author)] {
+        for (dst, src) in [
+            (&mut r.date, date),
+            (&mut r.description, description),
+            (&mut r.author, author),
+        ] {
             if dst.is_empty() {
                 dst.clone_from(src);
             }

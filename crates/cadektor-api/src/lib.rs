@@ -11,16 +11,16 @@ mod plants_api;
 mod sheets_api;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
 use cadektor_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
-mod io;
-#[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,10 +67,16 @@ pub struct RpcError {
 
 impl RpcError {
     fn invalid_params(e: impl std::fmt::Display) -> Self {
-        RpcError { code: -32602, message: e.to_string() }
+        RpcError {
+            code: -32602,
+            message: e.to_string(),
+        }
     }
     fn app(e: impl std::fmt::Display) -> Self {
-        RpcError { code: 1, message: e.to_string() }
+        RpcError {
+            code: 1,
+            message: e.to_string(),
+        }
     }
 }
 
@@ -89,26 +95,62 @@ struct ObjectFilter {
 /// Method names with a short description, for discovery by agents.
 pub const METHODS: &[(&str, &str)] = &[
     ("describe", "List methods and command examples."),
-    ("execute", "Run one command. params: {command: Command}. Returns {created: [id]}."),
+    (
+        "execute",
+        "Run one command. params: {command: Command}. Returns {created: [id]}.",
+    ),
     ("undo", "Undo the last command. Returns {done: bool}."),
-    ("redo", "Redo the last undone command. Returns {done: bool}."),
-    ("document.summary", "Layers, classes, object counts and drawing bounds."),
+    (
+        "redo",
+        "Redo the last undone command. Returns {done: bool}.",
+    ),
+    (
+        "document.summary",
+        "Layers, classes, object counts and drawing bounds.",
+    ),
     ("document.get", "The full document as JSON."),
-    ("document.load", "Replace the document. params: {document}. Clears history."),
+    (
+        "document.load",
+        "Replace the document. params: {document}. Clears history.",
+    ),
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
     ("selection.get", "Selected object IDs."),
     ("selection.set", "Select objects. params: {ids: [id]}."),
-    ("render.svg", "SVG image of visible objects. params: {width?: px}."),
-    ("render.png", "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}."),
-    ("view.list", "Standard 3D views, projections and render modes, and the current view."),
-    ("view.set", "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view."),
-    ("report.plants", "Plant schedule: count by species. Rows of plants with a style also have style, style_name, id_code and prices (see report.plant_schedule)."),
-    ("report.areas", "Areas of landscape areas and hardscapes, in m²."),
+    (
+        "render.svg",
+        "SVG image of visible objects. params: {width?: px}.",
+    ),
+    (
+        "render.png",
+        "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}.",
+    ),
+    (
+        "view.list",
+        "Standard 3D views, projections and render modes, and the current view.",
+    ),
+    (
+        "view.set",
+        "Switch the view (also in the live app). params: {view?, projection?, mode?}. view is a name from view.list; top is the 2D plan in the app. Returns the current view.",
+    ),
+    (
+        "report.plants",
+        "Plant schedule: count by species. Rows of plants with a style also have style, style_name, id_code and prices (see report.plant_schedule).",
+    ),
+    (
+        "report.areas",
+        "Areas of landscape areas and hardscapes, in m².",
+    ),
     #[cfg(not(target_arch = "wasm32"))]
-    ("import.file", "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}."),
+    (
+        "import.file",
+        "Import a DXF, Shapefile or GeoJSON file as one undo step. params: {path, format?: dxf|shp|geojson, options?}. See describe.io for options. Returns {imported, skipped, report, georeference}.",
+    ),
     #[cfg(not(target_arch = "wasm32"))]
-    ("export.file", "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}."),
+    (
+        "export.file",
+        "Export the document to a DXF or GeoJSON file. params: {path, format?: dxf|geojson, options?}. Returns {path, exported, report}.",
+    ),
     // Plants (see plants_api.rs).
     plants_api::PLANT_STYLE_LIST,
     plants_api::PLANT_STYLE_GET,
@@ -176,13 +218,34 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::REPORT_HARDSCAPE,
     hardscape_api::REPORT_LANDSCAPE_AREAS,
     hardscape_api::REPORT_PLANT_LIST,
-    ("site.create", "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh). Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}."),
-    ("site.update", "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}."),
-    ("site.elevation", "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y."),
-    ("site.cut_fill", "Cut and fill volumes of the proposed surface against the existing one. params: {id}. Returns {cut_m3, fill_m3, net_m3, area_m2, out_of_date} (net is fill minus cut)."),
-    ("site.drape", "Put a 2D line on the proposed surface, with extra points where it crosses triangle edges. params: {id, points: [[x, y]], closed?: bool}. Returns {points: [[x, y, z]]}. Fails if a point is outside the model."),
-    ("site.refresh", "Update Site Model: rebuild the surfaces now. Needed when auto_update is false and the source data or a modifier has changed (cut_fill shows out_of_date: true). params: {id}. Returns {id, out_of_date, modifiers, has_proposed}."),
-    ("site.contours", "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}."),
+    (
+        "site.create",
+        "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh). Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
+    ),
+    (
+        "site.update",
+        "Change a site model. params: {id, settings?, add_source_ids?, remove_points?: [index], remove_lines?: [index]}. Returns {id, points, lines}.",
+    ),
+    (
+        "site.elevation",
+        "Ground height at a point. params: {id, x, y, surface?: existing | proposed}. Returns {z, slope, aspect}; z is null outside the model. aspect is in radians clockwise from +Y.",
+    ),
+    (
+        "site.cut_fill",
+        "Cut and fill volumes of the proposed surface against the existing one. params: {id}. Returns {cut_m3, fill_m3, net_m3, area_m2, out_of_date} (net is fill minus cut).",
+    ),
+    (
+        "site.drape",
+        "Put a 2D line on the proposed surface, with extra points where it crosses triangle edges. params: {id, points: [[x, y]], closed?: bool}. Returns {points: [[x, y, z]]}. Fails if a point is outside the model.",
+    ),
+    (
+        "site.refresh",
+        "Update Site Model: rebuild the surfaces now. Needed when auto_update is false and the source data or a modifier has changed (cut_fill shows out_of_date: true). params: {id}. Returns {id, out_of_date, modifiers, has_proposed}.",
+    ),
+    (
+        "site.contours",
+        "Contour lines. params: {id, surface?: existing | proposed, points?: bool (default true)}. Returns {count, levels, contours: [{level, major, closed, points}]}.",
+    ),
     // Drawing documentation (see sheets_api.rs).
     sheets_api::SHEET_LIST,
     sheets_api::SHEET_CREATE,
@@ -246,7 +309,10 @@ impl Default for Session {
     fn default() -> Self {
         let mut doc = Document::default();
         doc.drawing.project.guid = cadektor_core::guid::random();
-        Session { editor: Editor::new(doc), ..Session::blank() }
+        Session {
+            editor: Editor::new(doc),
+            ..Session::blank()
+        }
     }
 }
 
@@ -277,14 +343,21 @@ impl Session {
     pub fn with_document(mut doc: Document) -> Self {
         // An old file has no project GUID. It gets one in memory, and the next save writes it.
         doc.ensure_project_guid();
-        Session { editor: Editor::new(doc), ..Session::blank() }
+        Session {
+            editor: Editor::new(doc),
+            ..Session::blank()
+        }
     }
 
     /// Replaces the document, as `document.load` does. Sets the `replaced` flag.
     pub fn replace_document(&mut self, doc: Document) {
         #[cfg(not(target_arch = "wasm32"))]
         let (paths, doc_dir) = (std::mem::take(&mut self.paths), self.doc_dir.take());
-        *self = Session { replaced: true, view: self.view, ..Session::with_document(doc) };
+        *self = Session {
+            replaced: true,
+            view: self.view,
+            ..Session::with_document(doc)
+        };
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.paths = paths;
@@ -295,14 +368,29 @@ impl Session {
     /// The canonical path for a file request, if the path policy allows it. `exts` are the allowed
     /// extensions (lower case, without the dot); the check applies to restricted sessions only.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn check_path(&self, path: &std::path::Path, write: bool, exts: &[&str]) -> Result<std::path::PathBuf, String> {
+    pub fn check_path(
+        &self,
+        path: &std::path::Path,
+        write: bool,
+        exts: &[&str],
+    ) -> Result<std::path::PathBuf, String> {
         if !self.paths.is_restricted() {
             return Ok(path.to_path_buf());
         }
         {
-            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
             if !ext.as_deref().is_some_and(|e| exts.contains(&e)) {
-                return Err(format!("{} must have the extension {}", path.display(), exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" or ")));
+                return Err(format!(
+                    "{} must have the extension {}",
+                    path.display(),
+                    exts.iter()
+                        .map(|e| format!(".{e}"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ));
             }
         }
         self.paths.resolve(path, self.doc_dir.as_deref(), write)
@@ -312,7 +400,8 @@ impl Session {
     pub fn scene(&mut self) -> Arc<Scene> {
         let revision = self.editor.revision();
         let ext = cadektor_site::draw::scene_ext(&self.site_cache, revision);
-        self.mesh_cache.get_with(revision, self.editor.doc(), Some(&ext))
+        self.mesh_cache
+            .get_with(revision, self.editor.doc(), Some(&ext))
     }
 
     /// The cache of site model results (TIN, contours, volumes), by document revision.
@@ -383,7 +472,8 @@ impl Session {
                 for o in doc.objects.values() {
                     *kinds.entry(o.shape.kind()).or_default() += 1;
                 }
-                let bounds = cadektor_core::svg::drawing_bounds(doc).map(|(a, b)| json!({"min": a, "max": b}));
+                let bounds = cadektor_core::svg::drawing_bounds(doc)
+                    .map(|(a, b)| json!({"min": a, "max": b}));
                 json!({
                     "layers": doc.layers,
                     "classes": doc.classes,
@@ -428,7 +518,9 @@ impl Session {
                     id: ObjectId,
                 }
                 let P { id } = params(p)?;
-                let o = doc.object(id).ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+                let o = doc
+                    .object(id)
+                    .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
                 serde_json::to_value(o).unwrap()
             }
             "selection.get" => json!({ "ids": self.selection }),
@@ -454,7 +546,14 @@ impl Session {
                 let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, revision);
                 let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
                     site_ext(d, o, style, out);
-                    cadektor_annot::svg::object_svg_with(d, o, style, out, &self.annot_cache, revision);
+                    cadektor_annot::svg::object_svg_with(
+                        d,
+                        o,
+                        style,
+                        out,
+                        &self.annot_cache,
+                        revision,
+                    );
                 };
                 json!({ "svg": cadektor_core::svg::render_with(doc, width.unwrap_or(800).clamp(16, 8192), Some(&ext)) })
             }
@@ -467,13 +566,29 @@ impl Session {
                     projection: Option<String>,
                     mode: Option<String>,
                 }
-                let P { view, width, height, projection, mode } = params(p)?;
-                let settings = self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
+                let P {
+                    view,
+                    width,
+                    height,
+                    projection,
+                    mode,
+                } = params(p)?;
+                let settings =
+                    self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
                 let scene = self.scene();
                 let mut camera = Camera::standard(settings.view, settings.projection);
                 camera.fit(scene.bounds, width as f32 / height as f32);
-                let img = cadektor_render::render(&scene, &camera, &RenderOptions { width, height, mode: settings.mode, ..Default::default() });
+                let img = cadektor_render::render(
+                    &scene,
+                    &camera,
+                    &RenderOptions {
+                        width,
+                        height,
+                        mode: settings.mode,
+                        ..Default::default()
+                    },
+                );
                 use base64::Engine;
                 json!({
                     "png_base64": base64::engine::general_purpose::STANDARD.encode(img.to_png()),
@@ -497,11 +612,16 @@ impl Session {
                     projection: Option<String>,
                     mode: Option<String>,
                 }
-                let P { view, projection, mode } = params(p)?;
+                let P {
+                    view,
+                    projection,
+                    mode,
+                } = params(p)?;
                 if view.is_none() && projection.is_none() && mode.is_none() {
                     return Err(RpcError::invalid_params("give view, projection or mode"));
                 }
-                self.view = self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
+                self.view =
+                    self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 self.view_changed = true;
                 view_json(self.view)
             }
@@ -534,13 +654,23 @@ impl Session {
                     .or_else(|| sheets_api::handle(self, method, p.clone()))
                     .or_else(|| annotation_api::handle(self, method, p.clone()))
                     .or_else(|| data_api::handle(self, method, p))
-                    .unwrap_or_else(|| Err(RpcError { code: -32601, message: format!("unknown method: {method}") }));
+                    .unwrap_or_else(|| {
+                        Err(RpcError {
+                            code: -32601,
+                            message: format!("unknown method: {method}"),
+                        })
+                    });
             }
         })
     }
 
     /// The current view with the given names applied. Fails on an unknown name.
-    fn resolve_view(&self, view: Option<&str>, projection: Option<&str>, mode: Option<&str>) -> Result<ViewSettings, RpcError> {
+    fn resolve_view(
+        &self,
+        view: Option<&str>,
+        projection: Option<&str>,
+        mode: Option<&str>,
+    ) -> Result<ViewSettings, RpcError> {
         let mut v = self.view;
         if let Some(n) = view {
             v.view = StandardView::from_name(n).ok_or_else(|| {
@@ -549,10 +679,16 @@ impl Session {
             })?;
         }
         if let Some(n) = projection {
-            v.projection = Projection::from_name(n).ok_or_else(|| RpcError::invalid_params(format!("unknown projection '{n}'. Use ortho or perspective")))?;
+            v.projection = Projection::from_name(n).ok_or_else(|| {
+                RpcError::invalid_params(format!(
+                    "unknown projection '{n}'. Use ortho or perspective"
+                ))
+            })?;
         }
         if let Some(n) = mode {
-            v.mode = RenderMode::from_name(n).ok_or_else(|| RpcError::invalid_params(format!("unknown mode '{n}'. Use shaded or wireframe")))?;
+            v.mode = RenderMode::from_name(n).ok_or_else(|| {
+                RpcError::invalid_params(format!("unknown mode '{n}'. Use shaded or wireframe"))
+            })?;
         }
         Ok(v)
     }
@@ -568,11 +704,21 @@ impl Session {
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
         let req: Value = match serde_json::from_str(line) {
             Ok(v) => v,
-            Err(e) => return Some(error_response(Value::Null, -32700, &format!("parse error: {e}"))),
+            Err(e) => {
+                return Some(error_response(
+                    Value::Null,
+                    -32700,
+                    &format!("parse error: {e}"),
+                ));
+            }
         };
         let id = req.get("id").cloned();
         let Some(method) = req.get("method").and_then(Value::as_str) else {
-            return Some(error_response(id.unwrap_or(Value::Null), -32600, "missing method"));
+            return Some(error_response(
+                id.unwrap_or(Value::Null),
+                -32600,
+                "missing method",
+            ));
         };
         let result = self.handle(method, req.get("params").cloned().unwrap_or(Value::Null));
         let id = id?;
@@ -596,7 +742,10 @@ fn image_size(width: u32, height: u32) -> (u32, u32) {
         return (w, h);
     }
     let k = (MAX_PIXELS as f64 / area as f64).sqrt();
-    (((w as f64 * k) as u32).max(16), ((h as f64 * k) as u32).max(16))
+    (
+        ((w as f64 * k) as u32).max(16),
+        ((h as f64 * k) as u32).max(16),
+    )
 }
 
 fn view_json(v: ViewSettings) -> Value {
@@ -646,11 +795,20 @@ mod tests {
     #[test]
     fn rpc_roundtrip() {
         let mut s = Session::default();
-        let r = call(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"execute","params":{"command":{"op":"add_object","shape":{"kind":"plant","at":[0,0],"species":"Oak","spread":3000,"height":9000}}}}"#);
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"execute","params":{"command":{"op":"add_object","shape":{"kind":"plant","at":[0,0],"species":"Oak","spread":3000,"height":9000}}}}"#,
+        );
         let id = r["result"]["created"][0].as_u64().unwrap();
-        let r = call(&mut s, r#"{"jsonrpc":"2.0","id":2,"method":"report.plants"}"#);
+        let r = call(
+            &mut s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"report.plants"}"#,
+        );
         assert_eq!(r["result"]["rows"][0]["count"], 1);
-        call(&mut s, &format!(r#"{{"id":3,"method":"selection.set","params":{{"ids":[{id}]}}}}"#));
+        call(
+            &mut s,
+            &format!(r#"{{"id":3,"method":"selection.set","params":{{"ids":[{id}]}}}}"#),
+        );
         call(&mut s, r#"{"id":4,"method":"undo"}"#);
         let r = call(&mut s, r#"{"id":5,"method":"selection.get"}"#);
         assert_eq!(r["result"]["ids"], json!([]));
@@ -661,27 +819,53 @@ mod tests {
         let mut s = Session::default();
         assert_eq!(call(&mut s, "{nope")["error"]["code"], -32700);
         assert_eq!(call(&mut s, r#"{"id":1}"#)["error"]["code"], -32600);
-        assert_eq!(call(&mut s, r#"{"id":1,"method":"x"}"#)["error"]["code"], -32601);
-        assert_eq!(call(&mut s, r#"{"id":1,"method":"objects.get","params":{}}"#)["error"]["code"], -32602);
-        assert_eq!(call(&mut s, r#"{"id":1,"method":"objects.get","params":{"id":9}}"#)["error"]["code"], 1);
+        assert_eq!(
+            call(&mut s, r#"{"id":1,"method":"x"}"#)["error"]["code"],
+            -32601
+        );
+        assert_eq!(
+            call(&mut s, r#"{"id":1,"method":"objects.get","params":{}}"#)["error"]["code"],
+            -32602
+        );
+        assert_eq!(
+            call(
+                &mut s,
+                r#"{"id":1,"method":"objects.get","params":{"id":9}}"#
+            )["error"]["code"],
+            1
+        );
         assert!(s.handle_line(r#"{"method":"undo"}"#).is_none());
     }
 
     fn ok(s: &mut Session, method: &str, params: Value) -> Value {
-        let r = call(s, &json!({"id": 1, "method": method, "params": params}).to_string());
+        let r = call(
+            s,
+            &json!({"id": 1, "method": method, "params": params}).to_string(),
+        );
         assert!(r.get("error").is_none(), "{r}");
         r["result"].clone()
     }
 
     fn fail(s: &mut Session, method: &str, params: Value) -> (i64, String) {
-        let r = call(s, &json!({"id": 1, "method": method, "params": params}).to_string());
-        (r["error"]["code"].as_i64().unwrap(), r["error"]["message"].as_str().unwrap().to_string())
+        let r = call(
+            s,
+            &json!({"id": 1, "method": method, "params": params}).to_string(),
+        );
+        (
+            r["error"]["code"].as_i64().unwrap(),
+            r["error"]["message"].as_str().unwrap().to_string(),
+        )
     }
 
     /// Runs one `execute` call and returns the created IDs.
     fn exec(s: &mut Session, command: Value) -> Vec<u64> {
         let r = ok(s, "execute", json!({"command": command}));
-        r["created"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect()
+        r["created"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect()
     }
 
     fn xy(v: &Value) -> (f64, f64) {
@@ -696,7 +880,12 @@ mod tests {
     fn describe_lists_every_method_and_every_method_is_routed() {
         let mut s = Session::default();
         let d = ok(&mut s, "describe", json!(null));
-        let names: Vec<&str> = d["methods"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = d["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
         let expected: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, expected);
         assert!(d["units"].as_str().unwrap().contains("millimeters"));
@@ -704,7 +893,10 @@ mod tests {
 
         // Every advertised method is handled: none of them is "unknown method".
         for (name, _) in METHODS {
-            let r = call(&mut s, &json!({"id": 1, "method": name, "params": {}}).to_string());
+            let r = call(
+                &mut s,
+                &json!({"id": 1, "method": name, "params": {}}).to_string(),
+            );
             let code = r["error"]["code"].as_i64().unwrap_or(0);
             assert_ne!(code, -32601, "{name} is advertised but not routed");
         }
@@ -718,7 +910,10 @@ mod tests {
             "execute",
             json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 0}}}),
         );
-        assert_eq!((code, msg.as_str()), (1, "invalid value: radius must be positive"));
+        assert_eq!(
+            (code, msg.as_str()),
+            (1, "invalid value: radius must be positive")
+        );
 
         let (code, msg) = fail(&mut s, "execute", json!({"command": {"op": "explode"}}));
         assert_eq!(code, -32602);
@@ -727,7 +922,11 @@ mod tests {
         let (code, _) = fail(&mut s, "execute", json!({}));
         assert_eq!(code, -32602);
 
-        let (code, msg) = fail(&mut s, "execute", json!({"command": {"op": "delete_objects", "ids": [42]}}));
+        let (code, msg) = fail(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "delete_objects", "ids": [42]}}),
+        );
         assert_eq!((code, msg.as_str()), (1, "object 42 does not exist"));
         assert!(ok(&mut s, "document.summary", json!({}))["object_count"] == 0);
     }
@@ -755,9 +954,18 @@ mod tests {
         assert_eq!(empty["layers"].as_array().unwrap().len(), 1);
         assert_eq!(empty["active_class"], 0);
 
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5, 3]}}));
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "plant", "at": [10, 10], "species": "Oak", "spread": 4, "height": 8}}));
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 2, "height": 8}}));
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [5, 3]}}),
+        );
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "plant", "at": [10, 10], "species": "Oak", "spread": 4, "height": 8}}),
+        );
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 2, "height": 8}}),
+        );
         let sum = ok(&mut s, "document.summary", json!({}));
         assert_eq!(sum["object_count"], 3);
         assert_eq!(sum["objects_by_kind"], json!({"plant": 2, "rect": 1}));
@@ -785,7 +993,10 @@ mod tests {
         ok(&mut s, "selection.set", json!({"ids": [id]}));
 
         let blank = serde_json::to_value(Document::default()).unwrap();
-        assert_eq!(ok(&mut s, "document.load", json!({"document": blank})), json!({"ok": true}));
+        assert_eq!(
+            ok(&mut s, "document.load", json!({"document": blank})),
+            json!({"ok": true})
+        );
         let sum = ok(&mut s, "document.summary", json!({}));
         assert_eq!(sum["object_count"], 0);
         assert_eq!(sum["can_undo"], false);
@@ -799,9 +1010,16 @@ mod tests {
         newer["format_version"] = json!(FORMAT_VERSION + 1);
         let (code, msg) = fail(&mut s, "document.load", json!({"document": newer}));
         assert_eq!(code, 1);
-        assert_eq!(msg, format!("file format {} is newer than this app", FORMAT_VERSION + 1));
+        assert_eq!(
+            msg,
+            format!("file format {} is newer than this app", FORMAT_VERSION + 1)
+        );
 
-        let (code, _) = fail(&mut s, "document.load", json!({"document": {"format_version": 1}}));
+        let (code, _) = fail(
+            &mut s,
+            "document.load",
+            json!({"document": {"format_version": 1}}),
+        );
         assert_eq!(code, -32602);
         let (code, _) = fail(&mut s, "document.load", json!({}));
         assert_eq!(code, -32602);
@@ -813,7 +1031,10 @@ mod tests {
         let layer = exec(&mut s, json!({"op": "add_layer", "name": "Planting"}))[0];
         let class = exec(&mut s, json!({"op": "add_class", "name": "Trees"}))[0];
         let c1 = exec(&mut s, circle_cmd(0.0))[0];
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}}));
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}}),
+        );
         let c3 = exec(
             &mut s,
             json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 1}, "layer": layer, "class": class}),
@@ -823,14 +1044,39 @@ mod tests {
             json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 1, "height": 1}, "layer": layer}),
         );
 
-        let ids = |v: Value| -> Vec<u64> { v.as_array().unwrap().iter().map(|o| o["id"].as_u64().unwrap()).collect() };
+        let ids = |v: Value| -> Vec<u64> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["id"].as_u64().unwrap())
+                .collect()
+        };
         assert_eq!(ids(ok(&mut s, "objects.list", json!({}))).len(), 4);
-        assert_eq!(ids(ok(&mut s, "objects.list", json!({"layer": layer}))).len(), 2);
-        assert_eq!(ids(ok(&mut s, "objects.list", json!({"class": class}))), vec![c3]);
-        assert_eq!(ids(ok(&mut s, "objects.list", json!({"kind": "circle"}))), vec![c1, c3]);
-        assert_eq!(ids(ok(&mut s, "objects.list", json!({"layer": layer, "kind": "circle"}))), vec![c3]);
+        assert_eq!(
+            ids(ok(&mut s, "objects.list", json!({"layer": layer}))).len(),
+            2
+        );
+        assert_eq!(
+            ids(ok(&mut s, "objects.list", json!({"class": class}))),
+            vec![c3]
+        );
+        assert_eq!(
+            ids(ok(&mut s, "objects.list", json!({"kind": "circle"}))),
+            vec![c1, c3]
+        );
+        assert_eq!(
+            ids(ok(
+                &mut s,
+                "objects.list",
+                json!({"layer": layer, "kind": "circle"})
+            )),
+            vec![c3]
+        );
         assert!(ids(ok(&mut s, "objects.list", json!({"kind": "text"}))).is_empty());
-        assert_eq!(ids(ok(&mut s, "objects.list", json!({"layer": null}))).len(), 4);
+        assert_eq!(
+            ids(ok(&mut s, "objects.list", json!({"layer": null}))).len(),
+            4
+        );
     }
 
     #[test]
@@ -842,7 +1088,10 @@ mod tests {
         assert_eq!(o["layer"], 1);
         assert_eq!(o["shape"]["radius"], 1.0);
 
-        assert_eq!(fail(&mut s, "objects.get", json!({"id": 999})), (1, "object 999 does not exist".into()));
+        assert_eq!(
+            fail(&mut s, "objects.get", json!({"id": 999})),
+            (1, "object 999 does not exist".into())
+        );
         assert_eq!(fail(&mut s, "objects.get", json!({})).0, -32602);
     }
 
@@ -852,11 +1101,20 @@ mod tests {
         assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": []}));
         let a = exec(&mut s, circle_cmd(0.0))[0];
         let b = exec(&mut s, circle_cmd(5.0))[0];
-        assert_eq!(ok(&mut s, "selection.set", json!({"ids": [a, b]})), json!({"ids": [a, b]}));
+        assert_eq!(
+            ok(&mut s, "selection.set", json!({"ids": [a, b]})),
+            json!({"ids": [a, b]})
+        );
 
         // An unknown ID is rejected and the selection stays as it was.
-        assert_eq!(fail(&mut s, "selection.set", json!({"ids": [a, 999]})), (1, "object 999 does not exist".into()));
-        assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": [a, b]}));
+        assert_eq!(
+            fail(&mut s, "selection.set", json!({"ids": [a, 999]})),
+            (1, "object 999 does not exist".into())
+        );
+        assert_eq!(
+            ok(&mut s, "selection.get", json!({})),
+            json!({"ids": [a, b]})
+        );
 
         // Deleting a selected object drops it from the selection.
         exec(&mut s, json!({"op": "delete_objects", "ids": [a]}));
@@ -875,7 +1133,8 @@ mod tests {
             let start = svg.find(r#"width=""#).unwrap() + 7;
             svg[start..].split('"').next().unwrap().to_string()
         };
-        let render = |s: &mut Session, p: Value| ok(s, "render.svg", p)["svg"].as_str().unwrap().to_string();
+        let render =
+            |s: &mut Session, p: Value| ok(s, "render.svg", p)["svg"].as_str().unwrap().to_string();
 
         assert_eq!(width_of(&render(&mut s, json!({}))), "800");
         assert_eq!(width_of(&render(&mut s, json!({"width": 300}))), "300");
@@ -883,7 +1142,10 @@ mod tests {
         assert_eq!(width_of(&render(&mut s, json!({"width": 1}))), "16");
         assert_eq!(width_of(&render(&mut s, json!({"width": 100000}))), "8192");
         assert!(render(&mut s, json!({})).contains(r#"data-id="#));
-        assert_eq!(fail(&mut s, "render.svg", json!({"width": "wide"})).0, -32602);
+        assert_eq!(
+            fail(&mut s, "render.svg", json!({"width": "wide"})).0,
+            -32602
+        );
     }
 
     #[test]
@@ -891,7 +1153,10 @@ mod tests {
         let mut s = Session::default();
         assert_eq!(ok(&mut s, "report.plants", json!({})), json!({"rows": []}));
         for species in ["Oak", "Acer", "Oak"] {
-            exec(&mut s, json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": species, "spread": 1, "height": 1}}));
+            exec(
+                &mut s,
+                json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": species, "spread": 1, "height": 1}}),
+            );
         }
         exec(&mut s, circle_cmd(0.0));
         assert_eq!(
@@ -911,7 +1176,10 @@ mod tests {
             &mut s,
             json!({"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [3000, 0], [0, 2000]], "material": "Setts"}}),
         )[0];
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [9000, 9000]}}));
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [9000, 9000]}}),
+        );
 
         let rows = ok(&mut s, "report.areas", json!({}))["rows"].clone();
         let rows = rows.as_array().unwrap();
@@ -938,7 +1206,12 @@ mod tests {
         // A parse error has a null id.
         let r: Value = serde_json::from_str(&s.handle_line("[1,").unwrap()).unwrap();
         assert_eq!(r["error"]["code"], -32700);
-        assert!(r["error"]["message"].as_str().unwrap().starts_with("parse error"));
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("parse error")
+        );
     }
 
     #[test]
@@ -964,8 +1237,15 @@ mod tests {
         let mut s = Session::default();
         assert!(!s.take_replaced());
         exec(&mut s, circle_cmd(0.0));
-        assert!(!s.take_replaced(), "normal edits do not replace the document");
-        ok(&mut s, "document.load", json!({"document": serde_json::to_value(Document::default()).unwrap()}));
+        assert!(
+            !s.take_replaced(),
+            "normal edits do not replace the document"
+        );
+        ok(
+            &mut s,
+            "document.load",
+            json!({"document": serde_json::to_value(Document::default()).unwrap()}),
+        );
         assert!(s.take_replaced());
         assert!(!s.take_replaced(), "the flag is cleared when read");
 
@@ -1001,24 +1281,47 @@ mod tests {
         assert_eq!(s.selection, vec![ObjectId(id)]);
         s.replace_document(Document::default());
         assert!(s.selection.is_empty() && s.take_replaced());
-        assert!(Session::with_document(Document::default()).editor.doc().objects.is_empty());
+        assert!(
+            Session::with_document(Document::default())
+                .editor
+                .doc()
+                .objects
+                .is_empty()
+        );
     }
 
     #[test]
     fn execute_set_data_over_rpc() {
         let mut s = Session::default();
         let id = exec(&mut s, circle_cmd(0.0))[0];
-        exec(&mut s, json!({"op": "set_data", "id": id, "set": {"Pset": {"a": 1}}}));
-        assert_eq!(ok(&mut s, "objects.get", json!({"id": id}))["data"], json!({"Pset": {"a": 1}}));
-        exec(&mut s, json!({"op": "set_data", "id": id, "remove": ["Pset"]}));
-        assert!(ok(&mut s, "objects.get", json!({"id": id})).get("data").is_none());
+        exec(
+            &mut s,
+            json!({"op": "set_data", "id": id, "set": {"Pset": {"a": 1}}}),
+        );
+        assert_eq!(
+            ok(&mut s, "objects.get", json!({"id": id}))["data"],
+            json!({"Pset": {"a": 1}})
+        );
+        exec(
+            &mut s,
+            json!({"op": "set_data", "id": id, "remove": ["Pset"]}),
+        );
+        assert!(
+            ok(&mut s, "objects.get", json!({"id": id}))
+                .get("data")
+                .is_none()
+        );
     }
 
     fn decode_png(result: &Value) -> (u32, u32, Vec<u8>) {
         use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(result["png_base64"].as_str().unwrap()).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(result["png_base64"].as_str().unwrap())
+            .unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .unwrap();
         let mut buf = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         (info.width, info.height, buf)
@@ -1030,49 +1333,119 @@ mod tests {
         let empty = ok(&mut s, "render.png", json!({"width": 64, "height": 48}));
         let (w, h, px) = decode_png(&empty);
         assert_eq!((w, h), (64, 48));
-        assert!(px.chunks(4).all(|p| p == cadektor_render::BACKGROUND), "empty drawing is all background");
+        assert!(
+            px.chunks(4).all(|p| p == cadektor_render::BACKGROUND),
+            "empty drawing is all background"
+        );
 
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]], "material": "Setts", "thickness": 100}}));
-        let r = ok(&mut s, "render.png", json!({"view": "Right Isometric", "width": 100, "height": 80, "projection": "perspective", "mode": "wireframe"}));
-        assert_eq!((r["view"].as_str(), r["projection"].as_str(), r["mode"].as_str()), (Some("right_isometric"), Some("perspective"), Some("wireframe")));
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]], "material": "Setts", "thickness": 100}}),
+        );
+        let r = ok(
+            &mut s,
+            "render.png",
+            json!({"view": "Right Isometric", "width": 100, "height": 80, "projection": "perspective", "mode": "wireframe"}),
+        );
+        assert_eq!(
+            (
+                r["view"].as_str(),
+                r["projection"].as_str(),
+                r["mode"].as_str()
+            ),
+            (
+                Some("right_isometric"),
+                Some("perspective"),
+                Some("wireframe")
+            )
+        );
         let (w, h, px) = decode_png(&r);
         assert_eq!((w, h), (100, 80));
         assert!(px.chunks(4).any(|p| p != cadektor_render::BACKGROUND));
 
         let r = ok(&mut s, "render.png", json!({"width": 1, "height": 100000}));
-        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(16), Some(2048)));
+        assert_eq!(
+            (r["width"].as_u64(), r["height"].as_u64()),
+            (Some(16), Some(2048))
+        );
         // Too many pixels: both sides shrink, keeping the shape.
-        let r = ok(&mut s, "render.png", json!({"width": 99999, "height": 99999}));
-        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(2000), Some(2000)));
+        let r = ok(
+            &mut s,
+            "render.png",
+            json!({"width": 99999, "height": 99999}),
+        );
+        assert_eq!(
+            (r["width"].as_u64(), r["height"].as_u64()),
+            (Some(2000), Some(2000))
+        );
         assert_eq!(image_size(2048, 2048), (2000, 2000));
         assert_eq!(image_size(2000, 2000), (2000, 2000));
         assert_eq!(image_size(2048, 1024), (2048, 1024));
-        assert_eq!(fail(&mut s, "render.png", json!({"view": "sideways"})).0, -32602);
-        assert!(fail(&mut s, "render.png", json!({"view": "sideways"})).1.contains("right_isometric"));
-        assert_eq!(fail(&mut s, "render.png", json!({"projection": "fisheye"})).0, -32602);
-        assert_eq!(fail(&mut s, "render.png", json!({"mode": "xray"})).0, -32602);
-        assert_eq!(fail(&mut s, "render.png", json!({"width": "wide"})).0, -32602);
+        assert_eq!(
+            fail(&mut s, "render.png", json!({"view": "sideways"})).0,
+            -32602
+        );
+        assert!(
+            fail(&mut s, "render.png", json!({"view": "sideways"}))
+                .1
+                .contains("right_isometric")
+        );
+        assert_eq!(
+            fail(&mut s, "render.png", json!({"projection": "fisheye"})).0,
+            -32602
+        );
+        assert_eq!(
+            fail(&mut s, "render.png", json!({"mode": "xray"})).0,
+            -32602
+        );
+        assert_eq!(
+            fail(&mut s, "render.png", json!({"width": "wide"})).0,
+            -32602
+        );
     }
 
     #[test]
     fn view_list_and_view_set() {
         let mut s = Session::default();
         let l = ok(&mut s, "view.list", json!({}));
-        let ids: Vec<&str> = l["views"].as_array().unwrap().iter().map(|v| v["id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = l["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["id"].as_str().unwrap())
+            .collect();
         assert_eq!(ids.len(), 11);
-        assert!(ids.contains(&"plan") && ids.contains(&"top") && ids.contains(&"left_rear_isometric"));
-        assert_eq!(l["current"], json!({"view": "plan", "projection": "ortho", "mode": "shaded"}));
+        assert!(
+            ids.contains(&"plan") && ids.contains(&"top") && ids.contains(&"left_rear_isometric")
+        );
+        assert_eq!(
+            l["current"],
+            json!({"view": "plan", "projection": "ortho", "mode": "shaded"})
+        );
         assert!(!s.take_view_changed());
 
         let r = ok(&mut s, "view.set", json!({"view": "front"}));
-        assert_eq!(r, json!({"view": "front", "projection": "ortho", "mode": "shaded"}));
+        assert_eq!(
+            r,
+            json!({"view": "front", "projection": "ortho", "mode": "shaded"})
+        );
         assert!(s.take_view_changed());
         assert!(!s.take_view_changed());
         // Fields that are not given stay as they were.
-        ok(&mut s, "view.set", json!({"projection": "perspective", "mode": "wireframe"}));
-        assert_eq!(ok(&mut s, "view.list", json!({}))["current"], json!({"view": "front", "projection": "perspective", "mode": "wireframe"}));
+        ok(
+            &mut s,
+            "view.set",
+            json!({"projection": "perspective", "mode": "wireframe"}),
+        );
+        assert_eq!(
+            ok(&mut s, "view.list", json!({}))["current"],
+            json!({"view": "front", "projection": "perspective", "mode": "wireframe"})
+        );
         // render.png without a view uses the current one.
-        assert_eq!(ok(&mut s, "render.png", json!({"width": 16, "height": 16}))["view"], "front");
+        assert_eq!(
+            ok(&mut s, "render.png", json!({"width": 16, "height": 16}))["view"],
+            "front"
+        );
         // Nothing given, or a bad name: refused, nothing changes.
         s.take_view_changed();
         assert_eq!(fail(&mut s, "view.set", json!({})).0, -32602);
@@ -1088,7 +1461,11 @@ mod tests {
     fn render_png_reuses_the_mesh_until_the_document_changes() {
         let mut s = Session::default();
         ok(&mut s, "render.png", json!({"width": 16, "height": 16}));
-        ok(&mut s, "render.png", json!({"width": 16, "height": 16, "view": "front"}));
+        ok(
+            &mut s,
+            "render.png",
+            json!({"width": 16, "height": 16, "view": "front"}),
+        );
         assert_eq!(s.mesh_cache.builds, 1);
         exec(&mut s, circle_cmd(0.0));
         ok(&mut s, "render.png", json!({"width": 16, "height": 16}));

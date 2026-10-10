@@ -13,7 +13,7 @@ use cadektor_core::{DVec2, DVec3};
 use serde_json::Value;
 
 use crate::builder::Builder;
-use crate::crs::{utm_epsg, Crs, Transformer};
+use crate::crs::{Crs, Transformer, utm_epsg};
 use crate::options::OriginMode;
 use crate::{Context, ImportOptions, ImportResult, IoError};
 
@@ -54,16 +54,25 @@ pub struct GisData {
 }
 
 fn points_of(f: &Feature) -> impl Iterator<Item = &Pt> {
-    f.parts.iter().flat_map(|p| -> Box<dyn Iterator<Item = &Pt> + '_> {
-        match p {
-            Part::Point(p) => Box::new(std::iter::once(p)),
-            Part::Line(v) | Part::Ring(v, _) => Box::new(v.iter()),
-        }
-    })
+    f.parts
+        .iter()
+        .flat_map(|p| -> Box<dyn Iterator<Item = &Pt> + '_> {
+            match p {
+                Part::Point(p) => Box::new(std::iter::once(p)),
+                Part::Line(v) | Part::Ring(v, _) => Box::new(v.iter()),
+            }
+        })
 }
 
 /// Turns features into an import. `default_crs` is used when neither the options nor the file name a CRS.
-pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &ImportOptions, default_crs: Option<&str>) -> Result<ImportResult, IoError> {
+pub fn build(
+    format: &str,
+    name: &str,
+    data: GisData,
+    ctx: &Context,
+    opts: &ImportOptions,
+    default_crs: Option<&str>,
+) -> Result<ImportResult, IoError> {
     let mut b = Builder::new(ctx, format, opts.max_objects);
     for (kind, why) in &data.skipped {
         b.report.skip(kind, why);
@@ -80,11 +89,14 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
         match text.map(Crs::parse) {
             Some(Ok(c)) => Some(c),
             Some(Err(e)) => {
-                b.report.note(&format!("the CRS of the file is not known ({e}): coordinates are used as meters"));
+                b.report.note(&format!(
+                    "the CRS of the file is not known ({e}): coordinates are used as meters"
+                ));
                 None
             }
             None => {
-                b.report.note("the file has no CRS: coordinates are used as meters");
+                b.report
+                    .note("the file has no CRS: coordinates are used as meters");
                 None
             }
         }
@@ -92,10 +104,16 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
 
     // 2. The target CRS and the georeference.
     let geographic_source = source.as_ref().is_some_and(Crs::is_geographic);
-    let usable = |p: &&Pt| p.x.is_finite() && p.y.is_finite() && (!geographic_source || (p.x.abs() <= 180.0 && p.y.abs() <= 90.0));
+    let usable = |p: &&Pt| {
+        p.x.is_finite()
+            && p.y.is_finite()
+            && (!geographic_source || (p.x.abs() <= 180.0 && p.y.abs() <= 90.0))
+    };
     let mut all = data.features.iter().flat_map(points_of).filter(usable);
     let first = all.next().copied();
-    let (mut lo, mut hi) = first.map_or((DVec2::ZERO, DVec2::ZERO), |p| (DVec2::new(p.x, p.y), DVec2::new(p.x, p.y)));
+    let (mut lo, mut hi) = first.map_or((DVec2::ZERO, DVec2::ZERO), |p| {
+        (DVec2::new(p.x, p.y), DVec2::new(p.x, p.y))
+    });
     for p in all {
         lo = lo.min(DVec2::new(p.x, p.y));
         hi = hi.max(DVec2::new(p.x, p.y));
@@ -114,10 +132,14 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
     }
     let mut transform: Option<(Crs, Crs)> = None;
     let georef: Option<Georeference>;
-    let doc_has_crs = ctx.georef.as_ref().is_some_and(|g| !g.crs.trim().is_empty());
+    let doc_has_crs = ctx
+        .georef
+        .as_ref()
+        .is_some_and(|g| !g.crs.trim().is_empty());
     match (&ctx.georef, source) {
         (Some(g), Some(src)) if doc_has_crs => {
-            let target = Crs::parse(&g.crs).map_err(|e| IoError::Option(format!("the document CRS cannot be used: {e}")))?;
+            let target = Crs::parse(&g.crs)
+                .map_err(|e| IoError::Option(format!("the document CRS cannot be used: {e}")))?;
             georef = Some(g.clone());
             transform = Some((src, target));
             b.report.georeferenced = true;
@@ -129,25 +151,38 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
         }
         (None, Some(src)) => {
             let target = match &opts.target_crs {
-                Some(t) => Crs::parse(t).map_err(|e| IoError::Option(format!("target_crs: {e}")))?,
-                None if src.is_geographic() => {
-                    Crs::from_epsg(utm_epsg(center.x, center.y)).map_err(|e| IoError::Format(format!("cannot choose a projection: {e}")))?
+                Some(t) => {
+                    Crs::parse(t).map_err(|e| IoError::Option(format!("target_crs: {e}")))?
                 }
+                None if src.is_geographic() => Crs::from_epsg(utm_epsg(center.x, center.y))
+                    .map_err(|e| IoError::Format(format!("cannot choose a projection: {e}")))?,
                 None => Crs::parse(&src.spec).map_err(IoError::Format)?,
             };
             if target.is_geographic() {
-                return Err(IoError::Option("target_crs must be a projected CRS (meters)".into()));
+                return Err(IoError::Option(
+                    "target_crs must be a projected CRS (meters)".into(),
+                ));
             }
             let origin = if first.is_some() {
-                let (x, y, _) = Transformer::new(&src, &target).apply(center.x, center.y, 0.0).map_err(IoError::Format)?;
-                DVec2::new((x * target.to_meter()).round(), (y * target.to_meter()).round())
+                let (x, y, _) = Transformer::new(&src, &target)
+                    .apply(center.x, center.y, 0.0)
+                    .map_err(IoError::Format)?;
+                DVec2::new(
+                    (x * target.to_meter()).round(),
+                    (y * target.to_meter()).round(),
+                )
             } else {
                 DVec2::ZERO
             };
             if !origin.is_finite() || origin.abs().max_element() > 1.0e6 * 1.0e3 {
                 return Err(IoError::Format("coordinates are out of range".into()));
             }
-            let g = Georeference { crs: target.spec.clone(), origin, rotation: 0.0, user_origin: DVec2::ZERO };
+            let g = Georeference {
+                crs: target.spec.clone(),
+                origin,
+                rotation: 0.0,
+                user_origin: DVec2::ZERO,
+            };
             b.set_georef(g.clone());
             georef = Some(g);
             transform = Some((src, target));
@@ -156,9 +191,18 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
             // No CRS anywhere. The numbers are meters, and real-world values are far from 0: center the
             // drawing and record the shift as the origin of a local frame (a georeference without CRS).
             let far = center.is_finite() && center.abs().max_element() > FAR_M;
-            let origin = if first.is_some() && far && opts.origin == OriginMode::Center { center.round() } else { DVec2::ZERO };
+            let origin = if first.is_some() && far && opts.origin == OriginMode::Center {
+                center.round()
+            } else {
+                DVec2::ZERO
+            };
             if origin != DVec2::ZERO && origin.is_finite() && origin.abs().max_element() <= 1.0e9 {
-                let g = Georeference { crs: String::new(), origin, rotation: 0.0, user_origin: DVec2::ZERO };
+                let g = Georeference {
+                    crs: String::new(),
+                    origin,
+                    rotation: 0.0,
+                    user_origin: DVec2::ZERO,
+                };
                 b.set_georef(g.clone());
                 b.report.georeferenced = false;
                 b.report.note(&format!("the file has no CRS: the drawing is centered, the origin shift ({}, {}) m is saved in the document", origin.x, origin.y));
@@ -174,7 +218,11 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
         Some(l) => b.layer(l, true),
         None => b.default_layer,
     };
-    let class_attrs = Attributes { pen: Some(Color::BLACK), fill: Some(Color::NONE), line_weight: Some(0.25) };
+    let class_attrs = Attributes {
+        pen: Some(Color::BLACK),
+        fill: Some(Color::NONE),
+        line_weight: Some(0.25),
+    };
     let to_model = |p: &Pt| -> Result<DVec3, String> {
         let (x, y, z) = match &transform {
             Some((s, t)) => {
@@ -236,23 +284,36 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
             let shape = if point {
                 Shape::Locus3d { p: model[0] }
             } else if has_z {
-                Shape::Polyline3d { points: model, closed }
+                Shape::Polyline3d {
+                    points: model,
+                    closed,
+                }
             } else {
                 let xy: Vec<DVec2> = model.iter().map(|p| p.truncate()).collect();
-                Shape::Polyline { points: corners(&xy), closed }
+                Shape::Polyline {
+                    points: corners(&xy),
+                    closed,
+                }
             };
             let shape = match shape {
-                Shape::Polyline { ref points, closed: true } if points.len() < 3 => {
+                Shape::Polyline {
+                    ref points,
+                    closed: true,
+                } if points.len() < 3 => {
                     b.report.skip(kind, "ring has fewer than 3 points");
                     continue;
                 }
-                Shape::Polyline3d { ref points, closed: true } if points.len() < 3 => {
+                Shape::Polyline3d {
+                    ref points,
+                    closed: true,
+                } if points.len() < 3 => {
                     b.report.skip(kind, "ring has fewer than 3 points");
                     continue;
                 }
                 s => s,
             };
-            let is_outer = matches!(part, Part::Ring(_, false)) || (matches!(part, Part::Ring(_, true)) && outer.is_none());
+            let is_outer = matches!(part, Part::Ring(_, false))
+                || (matches!(part, Part::Ring(_, true)) && outer.is_none());
             let added = b.add(kind, shape, layer, class, Attributes::default(), data);
             if is_outer && added {
                 outer = Some(b.last_id());
@@ -273,10 +334,18 @@ mod tests {
     }
 
     fn feature(parts: Vec<Part>, key: &str, v: Value) -> Feature {
-        Feature { parts, props: BTreeMap::from([(key.to_string(), v)]) }
+        Feature {
+            parts,
+            props: BTreeMap::from([(key.to_string(), v)]),
+        }
     }
 
-    fn run(data: GisData, doc: Document, opts: &ImportOptions, default_crs: Option<&str>) -> Result<(Document, crate::Report), IoError> {
+    fn run(
+        data: GisData,
+        doc: Document,
+        opts: &ImportOptions,
+        default_crs: Option<&str>,
+    ) -> Result<(Document, crate::Report), IoError> {
         let r = build("test", "roads", data, &Context::of(&doc), opts, default_crs)?;
         let mut ed = Editor::new(doc);
         ed.execute(&r.command).unwrap();
@@ -287,12 +356,35 @@ mod tests {
     fn lonlat_gets_utm_georef_with_small_coordinates() {
         let data = GisData {
             features: vec![
-                feature(vec![Part::Point(Pt { x: 24.9384, y: 60.1699, z: Some(12.5) })], "name", Value::from("A")),
-                feature(vec![Part::Line(vec![pt(24.9384, 60.1699), pt(24.9394, 60.1699)])], "name", Value::from("B")),
+                feature(
+                    vec![Part::Point(Pt {
+                        x: 24.9384,
+                        y: 60.1699,
+                        z: Some(12.5),
+                    })],
+                    "name",
+                    Value::from("A"),
+                ),
+                feature(
+                    vec![Part::Line(vec![pt(24.9384, 60.1699), pt(24.9394, 60.1699)])],
+                    "name",
+                    Value::from("B"),
+                ),
                 feature(
                     vec![
-                        Part::Ring(vec![pt(24.93, 60.16), pt(24.94, 60.16), pt(24.94, 60.17), pt(24.93, 60.16)], false),
-                        Part::Ring(vec![pt(24.932, 60.162), pt(24.936, 60.162), pt(24.936, 60.166)], true),
+                        Part::Ring(
+                            vec![
+                                pt(24.93, 60.16),
+                                pt(24.94, 60.16),
+                                pt(24.94, 60.17),
+                                pt(24.93, 60.16),
+                            ],
+                            false,
+                        ),
+                        Part::Ring(
+                            vec![pt(24.932, 60.162), pt(24.936, 60.162), pt(24.936, 60.166)],
+                            true,
+                        ),
                     ],
                     "name",
                     Value::from("C"),
@@ -300,24 +392,36 @@ mod tests {
             ],
             ..GisData::default()
         };
-        let (doc, report) = run(data, Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
+        let (doc, report) = run(
+            data,
+            Document::default(),
+            &ImportOptions::default(),
+            Some("EPSG:4326"),
+        )
+        .unwrap();
         let g = doc.georef.clone().unwrap();
         assert_eq!(g.crs, "EPSG:32635");
         assert!(report.georeferenced);
         assert_eq!(doc.objects.len(), 4);
         let o: Vec<_> = doc.objects.values().collect();
-        let Shape::Locus3d { p } = o[0].shape else { panic!() };
+        let Shape::Locus3d { p } = o[0].shape else {
+            panic!()
+        };
         assert_eq!(p.z, 12_500.0);
         assert!(p.x.abs() < 1.0e6 && p.y.abs() < 1.0e6, "{p:?}");
         // 0.001 degree of longitude at 60 N is about 55 m.
-        let Shape::Polyline { points, .. } = &o[1].shape else { panic!() };
+        let Shape::Polyline { points, .. } = &o[1].shape else {
+            panic!()
+        };
         let len = points[0].p.distance(points[1].p);
         assert!((len - 55_700.0).abs() < 500.0, "{len}");
         assert_eq!(o[0].data["name"], "A");
         assert_eq!(o[0].data["_feature"], 0);
         assert_eq!(o[3].data["_ring"], "hole");
         assert!(!o[2].data.contains_key("_ring"));
-        let Shape::Polyline { points, closed } = &o[2].shape else { panic!() };
+        let Shape::Polyline { points, closed } = &o[2].shape else {
+            panic!()
+        };
         assert!(*closed && points.len() == 3);
         // Class is the file name.
         assert_eq!(doc.class(o[0].class).unwrap().name, "roads");
@@ -325,29 +429,75 @@ mod tests {
         let map = g.to_map(p.truncate());
         let crs = Crs::parse("EPSG:32635").unwrap();
         let wgs = Crs::parse("EPSG:4326").unwrap();
-        let (lon, lat, _) = Transformer::new(&crs, &wgs).apply(map.x, map.y, 0.0).unwrap();
+        let (lon, lat, _) = Transformer::new(&crs, &wgs)
+            .apply(map.x, map.y, 0.0)
+            .unwrap();
         assert!((lon - 24.9384).abs() < 1e-6 && (lat - 60.1699).abs() < 1e-6);
     }
 
     #[test]
     fn existing_georef_is_used_and_projected_source() {
         let mut doc = Document::default();
-        doc.georef = Some(Georeference { crs: "EPSG:3067".into(), origin: DVec2::new(385_000.0, 6_672_000.0), rotation: 0.0, user_origin: DVec2::ZERO });
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(385_010.0, 6_672_020.0))], "k", Value::Null)], ..GisData::default() };
-        let (d, _) = run(data, doc.clone(), &ImportOptions::default(), Some("EPSG:3067")).unwrap();
-        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else { panic!() };
+        doc.georef = Some(Georeference {
+            crs: "EPSG:3067".into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        });
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Point(pt(385_010.0, 6_672_020.0))],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let (d, _) = run(
+            data,
+            doc.clone(),
+            &ImportOptions::default(),
+            Some("EPSG:3067"),
+        )
+        .unwrap();
+        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else {
+            panic!()
+        };
         assert!(p.truncate().distance(DVec2::new(10_000.0, 20_000.0)) < 1e-3);
         // Georeference stays unchanged, and the batch has no SetGeoreference.
         assert_eq!(d.georef, doc.georef);
         // File in lon/lat into a projected document.
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(24.9384, 60.1699))], "k", Value::Null)], ..GisData::default() };
-        let (d, _) = run(data, doc.clone(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
-        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else { panic!() };
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Point(pt(24.9384, 60.1699))],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let (d, _) = run(
+            data,
+            doc.clone(),
+            &ImportOptions::default(),
+            Some("EPSG:4326"),
+        )
+        .unwrap();
+        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else {
+            panic!()
+        };
         assert!(p.truncate().length() < 3.0e6, "{p:?}");
         // Unknown CRS in a georeferenced document: the document CRS is assumed.
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(385_005.0, 6_672_005.0))], "k", Value::Null)], ..GisData::default() };
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Point(pt(385_005.0, 6_672_005.0))],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
         let (d, report) = run(data, doc, &ImportOptions::default(), None).unwrap();
-        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else { panic!() };
+        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else {
+            panic!()
+        };
         assert!(p.truncate().distance(DVec2::new(5_000.0, 5_000.0)) < 1e-3);
         assert!(report.notes.iter().any(|n| n.contains("assumed")));
     }
@@ -355,7 +505,11 @@ mod tests {
     #[test]
     fn projected_source_without_document_georef_and_options() {
         let data = || GisData {
-            features: vec![feature(vec![Part::Point(pt(385_010.0, 6_672_020.0))], "kind", Value::from("tree"))],
+            features: vec![feature(
+                vec![Part::Point(pt(385_010.0, 6_672_020.0))],
+                "kind",
+                Value::from("tree"),
+            )],
             file_crs: Some("EPSG:3067".into()),
             ..GisData::default()
         };
@@ -363,23 +517,57 @@ mod tests {
         let g = d.georef.unwrap();
         assert_eq!(g.crs, "EPSG:3067");
         assert_eq!(g.origin, DVec2::new(385_010.0, 6_672_020.0));
-        let opts = ImportOptions { class_field: Some("kind".into()), layer: Some("GIS".into()), ..Default::default() };
+        let opts = ImportOptions {
+            class_field: Some("kind".into()),
+            layer: Some("GIS".into()),
+            ..Default::default()
+        };
         let (d, _) = run(data(), Document::default(), &opts, None).unwrap();
         assert!(d.classes.iter().any(|c| c.name == "tree"));
         assert!(d.layers.iter().any(|l| l.name == "GIS"));
         // Explicit source and target.
-        let opts = ImportOptions { source_crs: Some("EPSG:3067".into()), target_crs: Some("EPSG:32635".into()), ..Default::default() };
+        let opts = ImportOptions {
+            source_crs: Some("EPSG:3067".into()),
+            target_crs: Some("EPSG:32635".into()),
+            ..Default::default()
+        };
         let (d, _) = run(data(), Document::default(), &opts, None).unwrap();
         assert_eq!(d.georef.unwrap().crs, "EPSG:32635");
-        let bad = ImportOptions { source_crs: Some("nope".into()), ..Default::default() };
-        assert!(matches!(run(data(), Document::default(), &bad, None), Err(IoError::Option(_))));
-        let bad = ImportOptions { target_crs: Some("EPSG:4326".into()), ..Default::default() };
-        assert!(matches!(run(data(), Document::default(), &bad, None), Err(IoError::Option(_))));
-        let bad = ImportOptions { target_crs: Some("nope".into()), ..Default::default() };
-        assert!(matches!(run(data(), Document::default(), &bad, None), Err(IoError::Option(_))));
+        let bad = ImportOptions {
+            source_crs: Some("nope".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            run(data(), Document::default(), &bad, None),
+            Err(IoError::Option(_))
+        ));
+        let bad = ImportOptions {
+            target_crs: Some("EPSG:4326".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            run(data(), Document::default(), &bad, None),
+            Err(IoError::Option(_))
+        ));
+        let bad = ImportOptions {
+            target_crs: Some("nope".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            run(data(), Document::default(), &bad, None),
+            Err(IoError::Option(_))
+        ));
         let mut doc = Document::default();
-        doc.georef = Some(Georeference { crs: "nope".into(), origin: DVec2::ZERO, rotation: 0.0, user_origin: DVec2::ZERO });
-        assert!(matches!(run(data(), doc, &ImportOptions::default(), None), Err(IoError::Option(_))));
+        doc.georef = Some(Georeference {
+            crs: "nope".into(),
+            origin: DVec2::ZERO,
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        });
+        assert!(matches!(
+            run(data(), doc, &ImportOptions::default(), None),
+            Err(IoError::Option(_))
+        ));
     }
 
     #[test]
@@ -387,43 +575,114 @@ mod tests {
         let data = GisData {
             features: vec![
                 feature(vec![Part::Point(pt(1.0, 2.0))], "a", Value::from(1)),
-                feature(vec![Part::Ring(vec![pt(0.0, 0.0), pt(1.0, 0.0)], false)], "a", Value::from(2)),
-                feature(vec![Part::Line(vec![pt(0.0, 0.0), pt(f64::NAN, 0.0)])], "a", Value::from(3)),
-                feature(vec![Part::Ring(vec![Pt { x: 0.0, y: 0.0, z: Some(1.0) }, Pt { x: 1.0, y: 0.0, z: Some(1.0) }], false)], "a", Value::from(3)),
-                feature(vec![Part::Line(vec![pt(1e7, 0.0), pt(0.0, 0.0)])], "a", Value::from(4)),
+                feature(
+                    vec![Part::Ring(vec![pt(0.0, 0.0), pt(1.0, 0.0)], false)],
+                    "a",
+                    Value::from(2),
+                ),
+                feature(
+                    vec![Part::Line(vec![pt(0.0, 0.0), pt(f64::NAN, 0.0)])],
+                    "a",
+                    Value::from(3),
+                ),
+                feature(
+                    vec![Part::Ring(
+                        vec![
+                            Pt {
+                                x: 0.0,
+                                y: 0.0,
+                                z: Some(1.0),
+                            },
+                            Pt {
+                                x: 1.0,
+                                y: 0.0,
+                                z: Some(1.0),
+                            },
+                        ],
+                        false,
+                    )],
+                    "a",
+                    Value::from(3),
+                ),
+                feature(
+                    vec![Part::Line(vec![pt(1e7, 0.0), pt(0.0, 0.0)])],
+                    "a",
+                    Value::from(4),
+                ),
             ],
             skipped: vec![("Null".into(), "no geometry".into())],
             notes: vec!["hello".into()],
             file_crs: Some("garbage".into()),
         };
-        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let keep = ImportOptions {
+            origin: OriginMode::File,
+            ..ImportOptions::default()
+        };
         let (d, report) = run(data, Document::default(), &keep, None).unwrap();
         assert!(d.georef.is_none());
         assert!(!report.georeferenced);
         assert_eq!(d.objects.len(), 1);
         assert_eq!(report.skipped_total(), 5);
-        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else { panic!() };
+        let Shape::Locus3d { p } = d.objects.values().next().unwrap().shape else {
+            panic!()
+        };
         assert_eq!(p, DVec3::new(1000.0, 2000.0, 0.0));
         assert!(report.notes.len() == 2);
         // No CRS at all.
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(1.0, 2.0))], "a", Value::Null)], ..GisData::default() };
+        let data = GisData {
+            features: vec![feature(vec![Part::Point(pt(1.0, 2.0))], "a", Value::Null)],
+            ..GisData::default()
+        };
         let (_, report) = run(data, Document::default(), &ImportOptions::default(), None).unwrap();
         assert!(report.notes[0].contains("no CRS"));
         // Empty input.
-        let (d, _) = run(GisData::default(), Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
+        let (d, _) = run(
+            GisData::default(),
+            Document::default(),
+            &ImportOptions::default(),
+            Some("EPSG:4326"),
+        )
+        .unwrap();
         assert!(d.objects.is_empty());
     }
 
     #[test]
     fn object_limit_and_projection_failure() {
-        let feats = (0..5).map(|i| feature(vec![Part::Point(pt(i as f64, 0.0))], "a", Value::Null)).collect();
-        let opts = ImportOptions { max_objects: 2, ..Default::default() };
-        let (d, report) = run(GisData { features: feats, ..GisData::default() }, Document::default(), &opts, None).unwrap();
+        let feats = (0..5)
+            .map(|i| feature(vec![Part::Point(pt(i as f64, 0.0))], "a", Value::Null))
+            .collect();
+        let opts = ImportOptions {
+            max_objects: 2,
+            ..Default::default()
+        };
+        let (d, report) = run(
+            GisData {
+                features: feats,
+                ..GisData::default()
+            },
+            Document::default(),
+            &opts,
+            None,
+        )
+        .unwrap();
         assert_eq!(d.objects.len(), 2);
         assert!(report.notes.iter().any(|n| n.contains("limit")));
         // A latitude outside the valid range cannot be projected.
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(10.0, 60.0)), Part::Point(pt(10.0, 95.0))], "a", Value::Null)], ..GisData::default() };
-        let (d, report) = run(data, Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Point(pt(10.0, 60.0)), Part::Point(pt(10.0, 95.0))],
+                "a",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let (d, report) = run(
+            data,
+            Document::default(),
+            &ImportOptions::default(),
+            Some("EPSG:4326"),
+        )
+        .unwrap();
         assert!(d.objects.len() <= 2);
         let _ = report;
     }
@@ -432,8 +691,16 @@ mod tests {
     fn real_world_numbers_without_crs_are_centered() {
         // L-EST97-like meters, and a shapefile without .prj.
         let line = |x: f64, y: f64| Part::Line(vec![pt(x, y), pt(x + 100.0, y + 50.0)]);
-        let data = || GisData { features: vec![feature(vec![line(6_589_000.0, 540_000.0)], "k", Value::Null)], ..GisData::default() };
-        let (d, report) = run(data(), Document::default(), &ImportOptions::default(), None).unwrap();
+        let data = || GisData {
+            features: vec![feature(
+                vec![line(6_589_000.0, 540_000.0)],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let (d, report) =
+            run(data(), Document::default(), &ImportOptions::default(), None).unwrap();
         assert_eq!(d.objects.len(), 1, "{:?}", report.skipped);
         let g = d.georef.clone().unwrap();
         assert_eq!(g.crs, "");
@@ -444,12 +711,18 @@ mod tests {
         // The shift maps back to the file coordinates.
         assert!((g.to_map(lo).x - 6_589_000.0).abs() < 1e-6);
         // `file` keeps the numbers, and the object is out of range.
-        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let keep = ImportOptions {
+            origin: OriginMode::File,
+            ..ImportOptions::default()
+        };
         let (d, report) = run(data(), Document::default(), &keep, None).unwrap();
         assert_eq!(d.objects.len(), 0);
         assert_eq!(report.skipped_total(), 1);
         // Small numbers stay as they are.
-        let small = GisData { features: vec![feature(vec![line(10.0, 20.0)], "k", Value::Null)], ..GisData::default() };
+        let small = GisData {
+            features: vec![feature(vec![line(10.0, 20.0)], "k", Value::Null)],
+            ..GisData::default()
+        };
         let (d, _) = run(small, Document::default(), &ImportOptions::default(), None).unwrap();
         assert!(d.georef.is_none());
         // A second import into the local frame lands in the same place.
@@ -459,9 +732,35 @@ mod tests {
 
     #[test]
     fn holes_know_their_outer_ring_and_orphans_are_islands() {
-        let ring = |x: f64, hole: bool| Part::Ring(vec![pt(x, 0.0), pt(x + 10.0, 0.0), pt(x + 10.0, 10.0), pt(x, 10.0)], hole);
-        let data = GisData { features: vec![feature(vec![ring(0.0, true), ring(0.0, false), ring(2.0, true), ring(20.0, false), ring(22.0, true)], "k", Value::Null)], ..GisData::default() };
-        let keep = ImportOptions { origin: OriginMode::File, ..ImportOptions::default() };
+        let ring = |x: f64, hole: bool| {
+            Part::Ring(
+                vec![
+                    pt(x, 0.0),
+                    pt(x + 10.0, 0.0),
+                    pt(x + 10.0, 10.0),
+                    pt(x, 10.0),
+                ],
+                hole,
+            )
+        };
+        let data = GisData {
+            features: vec![feature(
+                vec![
+                    ring(0.0, true),
+                    ring(0.0, false),
+                    ring(2.0, true),
+                    ring(20.0, false),
+                    ring(22.0, true),
+                ],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let keep = ImportOptions {
+            origin: OriginMode::File,
+            ..ImportOptions::default()
+        };
         let (d, _) = run(data, Document::default(), &keep, None).unwrap();
         let objs: Vec<_> = d.objects.values().collect();
         assert_eq!(objs.len(), 5);
@@ -475,19 +774,46 @@ mod tests {
 
     #[test]
     fn antimeridian_picks_the_zone_from_the_mean_longitude() {
-        let data = GisData { features: vec![feature(vec![Part::Line(vec![pt(179.9, 10.0), pt(-179.9, 10.0)])], "k", Value::Null)], ..GisData::default() };
-        let (d, _) = run(data, Document::default(), &ImportOptions::default(), Some("EPSG:4326")).unwrap();
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Line(vec![pt(179.9, 10.0), pt(-179.9, 10.0)])],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let (d, _) = run(
+            data,
+            Document::default(),
+            &ImportOptions::default(),
+            Some("EPSG:4326"),
+        )
+        .unwrap();
         let crs = d.georef.unwrap().crs;
         assert!(crs == "EPSG:32660" || crs == "EPSG:32601", "{crs}");
     }
 
     #[test]
     fn feet_crs_origin_is_in_meters() {
-        let data = GisData { features: vec![feature(vec![Part::Point(pt(986_000.0, 212_000.0))], "k", Value::Null)], ..GisData::default() };
-        let opts = ImportOptions { source_crs: Some("EPSG:2263".into()), ..ImportOptions::default() };
+        let data = GisData {
+            features: vec![feature(
+                vec![Part::Point(pt(986_000.0, 212_000.0))],
+                "k",
+                Value::Null,
+            )],
+            ..GisData::default()
+        };
+        let opts = ImportOptions {
+            source_crs: Some("EPSG:2263".into()),
+            ..ImportOptions::default()
+        };
         let (d, _) = run(data, Document::default(), &opts, None).unwrap();
         let g = d.georef.unwrap();
         // 986000 ft is about 300 km, not 986 km.
-        assert!((g.origin.x - 300_533.0).abs() < 2.0 && (g.origin.y - 64_617.0).abs() < 2.0, "{:?}", g.origin);
+        assert!(
+            (g.origin.x - 300_533.0).abs() < 2.0 && (g.origin.y - 64_617.0).abs() < 2.0,
+            "{:?}",
+            g.origin
+        );
     }
 }

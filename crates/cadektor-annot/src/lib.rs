@@ -26,15 +26,19 @@ use cadektor_sheet::formula::{self, Expr};
 use cadektor_sheet::value::Value;
 
 mod cache;
-mod tags;
 pub mod svg;
+mod tags;
 
 pub use cache::AnnotCache;
 pub use tags::{RevisionInfo, revisions, tag_all};
 
 /// The environment of an object: names are its properties (the same as in worksheet databases).
 fn env<'a>(doc: &'a Document, obj: &'a Object) -> ObjEnv<'a> {
-    ObjEnv { doc, obj, ground: &NoTerrain }
+    ObjEnv {
+        doc,
+        obj,
+        ground: &NoTerrain,
+    }
 }
 
 /// Calculates one expression for an object.
@@ -68,7 +72,11 @@ pub fn render_template(doc: &Document, obj: &Object, template: &str) -> String {
 /// The lines of a data tag.
 pub fn tag_lines(doc: &Document, tag: &DataTag, style: &TagStyle) -> Vec<String> {
     match doc.object(tag.object) {
-        Some(obj) => style.lines.iter().map(|l| render_template(doc, obj, l)).collect(),
+        Some(obj) => style
+            .lines
+            .iter()
+            .map(|l| render_template(doc, obj, l))
+            .collect(),
         None => vec!["?".into()],
     }
 }
@@ -76,22 +84,41 @@ pub fn tag_lines(doc: &Document, tag: &DataTag, style: &TagStyle) -> Vec<String>
 /// True for the objects that a legend or `tag_all` looks at: drawing objects, not annotations,
 /// viewports or the tags of plants.
 pub fn is_subject(doc: &Document, obj: &Object) -> bool {
-    doc.is_visible(obj) && !matches!(obj.shape, Shape::Annotation(_) | Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::PlantTag { .. })
+    doc.is_visible(obj)
+        && !matches!(
+            obj.shape,
+            Shape::Annotation(_)
+                | Shape::Viewport(_)
+                | Shape::TitleBlock(_)
+                | Shape::PlantTag { .. }
+        )
 }
 
 fn parse_criteria(src: &str) -> Result<Option<Expr>, String> {
-    if src.trim().is_empty() { Ok(None) } else { formula::parse(src).map(Some).map_err(|e| format!("criteria: {e}")) }
+    if src.trim().is_empty() {
+        Ok(None)
+    } else {
+        formula::parse(src)
+            .map(Some)
+            .map_err(|e| format!("criteria: {e}"))
+    }
 }
 
 /// True if the object matches the criteria. An error in the criteria for this object counts as no match.
 fn matches(doc: &Document, obj: &Object, criteria: &Option<Expr>) -> bool {
-    criteria.as_ref().is_none_or(|c| eval(c, &env(doc, obj)).to_bool() == Ok(true))
+    criteria
+        .as_ref()
+        .is_none_or(|c| eval(c, &env(doc, obj)).to_bool() == Ok(true))
 }
 
 /// The objects that match the criteria (a worksheet expression, empty for all), in document order.
 pub fn select<'a>(doc: &'a Document, criteria: &str) -> Result<Vec<&'a Object>, String> {
     let c = parse_criteria(criteria)?;
-    Ok(doc.objects.values().filter(|o| is_subject(doc, o) && matches(doc, o, &c)).collect())
+    Ok(doc
+        .objects
+        .values()
+        .filter(|o| is_subject(doc, o) && matches(doc, o, &c))
+        .collect())
 }
 
 /// The colors a swatch shows for an object: fill (if it has one) and pen.
@@ -112,11 +139,23 @@ pub const MAX_LEGEND_ROWS: usize = 500;
 /// (text, ignoring case), sorted by label. Each row has the label, the number of objects and the
 /// colors of the first object of the group. After `MAX_LEGEND_ROWS` rows, one row counts the rest.
 pub fn legend_rows(doc: &Document, legend: &Legend) -> Vec<LegendRow> {
-    let Ok(criteria) = parse_criteria(&legend.criteria) else { return Vec::new() };
-    let Ok(group) = formula::parse(if legend.group_by.trim().is_empty() { "Style" } else { &legend.group_by }) else { return Vec::new() };
+    let Ok(criteria) = parse_criteria(&legend.criteria) else {
+        return Vec::new();
+    };
+    let Ok(group) = formula::parse(if legend.group_by.trim().is_empty() {
+        "Style"
+    } else {
+        &legend.group_by
+    }) else {
+        return Vec::new();
+    };
     let mut rows: Vec<LegendRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    for obj in doc.objects.values().filter(|o| is_subject(doc, o) && matches(doc, o, &criteria)) {
+    for obj in doc
+        .objects
+        .values()
+        .filter(|o| is_subject(doc, o) && matches(doc, o, &criteria))
+    {
         let key = match eval(&group, &env(doc, obj)) {
             Value::Empty | Value::Error(_) => continue,
             v => v.to_text(),
@@ -129,14 +168,24 @@ pub fn legend_rows(doc: &Document, legend: &Legend) -> Vec<LegendRow> {
             None => {
                 let (fill, stroke) = swatch(doc, obj);
                 index.insert(key.to_lowercase(), rows.len());
-                rows.push(LegendRow { label: key, count: 1, fill, stroke });
+                rows.push(LegendRow {
+                    label: key,
+                    count: 1,
+                    fill,
+                    stroke,
+                });
             }
         }
     }
     rows.sort_by_cached_key(|r| r.label.to_lowercase());
     if rows.len() > MAX_LEGEND_ROWS {
         let rest = rows.split_off(MAX_LEGEND_ROWS);
-        rows.push(LegendRow { label: format!("... {} more", rest.len()), count: rest.iter().map(|r| r.count).sum(), fill: None, stroke: None });
+        rows.push(LegendRow {
+            label: format!("... {} more", rest.len()),
+            count: rest.iter().map(|r| r.count).sum(),
+            fill: None,
+            stroke: None,
+        });
     }
     rows
 }

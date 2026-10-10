@@ -3,9 +3,9 @@
 
 use std::time::{Duration, Instant};
 
+use cadektor_core::DVec2;
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::model::{Attributes, ObjectId, Shape};
-use cadektor_core::DVec2;
 
 const N: usize = 50_000;
 const LIMIT: Duration = Duration::from_millis(200);
@@ -14,7 +14,10 @@ fn add_all() -> Command {
     Command::Batch {
         commands: (0..N)
             .map(|i| Command::AddObject {
-                shape: Shape::Line { a: DVec2::new(i as f64, 0.0), b: DVec2::new(i as f64, 10.0) },
+                shape: Shape::Line {
+                    a: DVec2::new(i as f64, 0.0),
+                    b: DVec2::new(i as f64, 10.0),
+                },
                 layer: None,
                 class: None,
                 attrs: Attributes::default(),
@@ -51,7 +54,10 @@ fn move_50k_objects_in_one_command() {
     let mut ed = Editor::default();
     ed.execute(&add_all()).unwrap();
     let ids: Vec<ObjectId> = ed.doc().objects.keys().copied().collect();
-    let mv = Command::MoveObjects { ids: ids.clone(), delta: DVec2::new(5.0, 5.0) };
+    let mv = Command::MoveObjects {
+        ids: ids.clone(),
+        delta: DVec2::new(5.0, 5.0),
+    };
     timed("move 50k", || ed.execute(&mv).unwrap());
     timed("undo move", || ed.undo());
     timed("redo move", || ed.redo());
@@ -66,13 +72,18 @@ fn move_50k_objects_in_one_command() {
 #[ignore]
 fn mesh_build_5k_plants_and_1k_hardscapes() {
     use cadektor_core::curve::{self, Vertex, VertexKind};
-    use cadektor_core::mesh::{build, MeshCache};
+    use cadektor_core::mesh::{MeshCache, build};
 
     let mut cmds = Vec::new();
     for i in 0..5000 {
         let (x, y) = ((i % 100) as f64 * 3000.0, (i / 100) as f64 * 3000.0);
         cmds.push(Command::AddObject {
-            shape: Shape::Plant { at: DVec2::new(x, y), species: format!("Species {}", i % 40), spread: 2500.0, height: 6000.0 },
+            shape: Shape::Plant {
+                at: DVec2::new(x, y),
+                species: format!("Species {}", i % 40),
+                spread: 2500.0,
+                height: 6000.0,
+            },
             layer: None,
             class: None,
             attrs: Attributes::default(),
@@ -90,9 +101,17 @@ fn mesh_build_5k_plants_and_1k_hardscapes() {
             o + DVec2::new(1500.0, 4000.0),
             o + DVec2::new(0.0, 4000.0),
         ]);
-        boundary[2] = Vertex::new(o + DVec2::new(4000.0, 1500.0), VertexKind::Arc { radius: 300.0 });
+        boundary[2] = Vertex::new(
+            o + DVec2::new(4000.0, 1500.0),
+            VertexKind::Arc { radius: 300.0 },
+        );
         cmds.push(Command::AddObject {
-            shape: Shape::Hardscape { boundary, material: "Setts".into(), thickness: None, elevation: None },
+            shape: Shape::Hardscape {
+                boundary,
+                material: "Setts".into(),
+                thickness: None,
+                elevation: None,
+            },
             layer: None,
             class: None,
             attrs: Attributes::default(),

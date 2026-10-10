@@ -2,9 +2,11 @@
 //! "Create Site Model" command. The terrain math is in `cadektor-site`.
 
 use cadektor_api::Session;
-use cadektor_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
 use cadektor_core::curve::Vertex;
-use cadektor_core::site::{Display3d, PadSlope, SurfaceDisplay, boundary_points, end_elevation, slope_from_end_elevation};
+use cadektor_core::model::{Document, ModifierKind, Object, ObjectId, Shape, SiteSettings};
+use cadektor_core::site::{
+    Display3d, PadSlope, SurfaceDisplay, boundary_points, end_elevation, slope_from_end_elevation,
+};
 use cadektor_site::draw::shown_surfaces;
 use cadektor_site::{SiteCache, Surface};
 use egui::epaint::{PathShape, PathStroke};
@@ -19,7 +21,15 @@ const PROPOSED_LINE: Color32 = Color32::from_rgb(30, 120, 50);
 
 /// The selected objects that can be site model source data (3D loci and 3D polylines).
 pub fn source_ids(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
-    selection.iter().copied().filter(|id| doc.object(*id).is_some_and(|o| matches!(o.shape, Shape::Locus3d { .. } | Shape::Polyline3d { .. }))).collect()
+    selection
+        .iter()
+        .copied()
+        .filter(|id| {
+            doc.object(*id).is_some_and(|o| {
+                matches!(o.shape, Shape::Locus3d { .. } | Shape::Polyline3d { .. })
+            })
+        })
+        .collect()
 }
 
 /// Makes a site model from the selected loci and 3D polylines, which move into it.
@@ -29,7 +39,9 @@ pub fn create_site_model(session: &mut Session) -> Result<ObjectId, String> {
     if ids.is_empty() {
         return Err("Select 3D loci or 3D polylines first".into());
     }
-    let r = session.handle("site.create", json!({ "source_ids": ids })).map_err(|e| e.message)?;
+    let r = session
+        .handle("site.create", json!({ "source_ids": ids }))
+        .map_err(|e| e.message)?;
     let id = ObjectId(r["id"].as_u64().unwrap_or(0));
     session.selection = vec![id];
     Ok(id)
@@ -37,7 +49,14 @@ pub fn create_site_model(session: &mut Session) -> Result<ObjectId, String> {
 
 /// The selected site models.
 pub fn selected_site_models(doc: &Document, selection: &[ObjectId]) -> Vec<ObjectId> {
-    selection.iter().copied().filter(|id| doc.object(*id).is_some_and(|o| matches!(o.shape, Shape::SiteModel { .. }))).collect()
+    selection
+        .iter()
+        .copied()
+        .filter(|id| {
+            doc.object(*id)
+                .is_some_and(|o| matches!(o.shape, Shape::SiteModel { .. }))
+        })
+        .collect()
 }
 
 /// "Update Site Model": rebuilds the surfaces of the selected site models now.
@@ -56,21 +75,48 @@ pub fn update_site_models(session: &mut Session) -> String {
 }
 
 /// Draws the contours of a site model over its outline, for the surfaces its settings choose.
-pub fn draw_contours(painter: &Painter, view: &View, doc: &Document, obj: &Object, cache: &SiteCache, revision: u64, base_width: f32) {
-    let Ok(site) = cache.get(revision, doc, obj.id) else { return };
+pub fn draw_contours(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    obj: &Object,
+    cache: &SiteCache,
+    revision: u64,
+    base_width: f32,
+) {
+    let Ok(site) = cache.get(revision, doc, obj.id) else {
+        return;
+    };
     for which in shown_surfaces(&site, site.settings.display_2d) {
         let color = match which {
             Surface::Existing => site.settings.existing_color.map_or(EXISTING_LINE, color32),
             Surface::Proposed => site.settings.proposed_color.map_or(PROPOSED_LINE, color32),
         };
-        let Ok(list) = site.contours(which) else { continue };
+        let Ok(list) = site.contours(which) else {
+            continue;
+        };
         for c in list {
-            let width = if c.major { (base_width * 2.0).max(1.5) } else { base_width.min(1.0) };
+            let width = if c.major {
+                (base_width * 2.0).max(1.5)
+            } else {
+                base_width.min(1.0)
+            };
             let points = c.points.iter().map(|p| view.to_screen(*p)).collect();
-            painter.add(PathShape { points, closed: c.closed, fill: Color32::TRANSPARENT, stroke: PathStroke::new(width, color) });
+            painter.add(PathShape {
+                points,
+                closed: c.closed,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(width, color),
+            });
             if site.settings.label_contours && c.major && !c.points.is_empty() {
                 let mid = view.to_screen(c.points[c.points.len() / 2]);
-                painter.text(mid, egui::Align2::CENTER_CENTER, cadektor_site::draw::format_level(c.level), egui::FontId::proportional(10.0), color);
+                painter.text(
+                    mid,
+                    egui::Align2::CENTER_CENTER,
+                    cadektor_site::draw::format_level(c.level),
+                    egui::FontId::proportional(10.0),
+                    color,
+                );
             }
         }
     }
@@ -78,11 +124,17 @@ pub fn draw_contours(painter: &Painter, view: &View, doc: &Document, obj: &Objec
 
 fn surface_combo(ui: &mut Ui, id: &str, value: &mut SurfaceDisplay) -> bool {
     let before = *value;
-    egui::ComboBox::from_id_salt(id).selected_text(surface_label(*value)).show_ui(ui, |ui| {
-        for v in [SurfaceDisplay::Existing, SurfaceDisplay::Proposed, SurfaceDisplay::Both] {
-            ui.selectable_value(value, v, surface_label(v));
-        }
-    });
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(surface_label(*value))
+        .show_ui(ui, |ui| {
+            for v in [
+                SurfaceDisplay::Existing,
+                SurfaceDisplay::Proposed,
+                SurfaceDisplay::Both,
+            ] {
+                ui.selectable_value(value, v, surface_label(v));
+            }
+        });
     *value != before
 }
 
@@ -102,7 +154,13 @@ fn display3d_label(v: Display3d) -> &'static str {
     }
 }
 
-fn length_row(ui: &mut Ui, label: &str, v: &mut f64, speed: f64, range: std::ops::RangeInclusive<f64>) -> bool {
+fn length_row(
+    ui: &mut Ui,
+    label: &str,
+    v: &mut f64,
+    speed: f64,
+    range: std::ops::RangeInclusive<f64>,
+) -> bool {
     ui.label(label);
     let r = ui.add(DragValue::new(v).speed(speed).range(range).suffix(" mm"));
     ui.end_row();
@@ -115,8 +173,20 @@ pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettin
     ui.label("Source data");
     ui.label(format!("{points} points, {lines} polygons"));
     ui.end_row();
-    commit |= length_row(ui, "Minor interval", &mut s.minor_interval, 10.0, 1.0..=1.0e6);
-    commit |= length_row(ui, "Major interval", &mut s.major_interval, 10.0, s.minor_interval..=1.0e7);
+    commit |= length_row(
+        ui,
+        "Minor interval",
+        &mut s.minor_interval,
+        10.0,
+        1.0..=1.0e6,
+    );
+    commit |= length_row(
+        ui,
+        "Major interval",
+        &mut s.major_interval,
+        10.0,
+        s.minor_interval..=1.0e7,
+    );
     commit |= length_row(ui, "Datum", &mut s.datum, 10.0, -1.0e8..=1.0e8);
     ui.label("Update");
     commit |= ui.checkbox(&mut s.auto_update, "Automatic").changed();
@@ -146,11 +216,13 @@ pub fn model_fields(ui: &mut Ui, points: usize, lines: usize, s: &mut SiteSettin
     ui.end_row();
     ui.label("3D display");
     let before = s.display_3d;
-    egui::ComboBox::from_id_salt("site_3d_display").selected_text(display3d_label(s.display_3d)).show_ui(ui, |ui| {
-        for v in [Display3d::Mesh, Display3d::Contours, Display3d::Both] {
-            ui.selectable_value(&mut s.display_3d, v, display3d_label(v));
-        }
-    });
+    egui::ComboBox::from_id_salt("site_3d_display")
+        .selected_text(display3d_label(s.display_3d))
+        .show_ui(ui, |ui| {
+            for v in [Display3d::Mesh, Display3d::Contours, Display3d::Both] {
+                ui.selectable_value(&mut s.display_3d, v, display3d_label(v));
+            }
+        });
     commit |= s.display_3d != before;
     ui.end_row();
     commit
@@ -169,7 +241,10 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Ver
             ui.label("Slope");
             let mut sloped = slope.is_some();
             if ui.checkbox(&mut sloped, "").changed() {
-                *slope = sloped.then_some(PadSlope { direction: 0.0, percent: 2.0 });
+                *slope = sloped.then_some(PadSlope {
+                    direction: 0.0,
+                    percent: 2.0,
+                });
                 commit = true;
             }
             ui.end_row();
@@ -178,7 +253,12 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Ver
                 let flat = boundary_points(boundary);
                 let mut end = end_elevation(&flat, *elevation, *s);
                 ui.label("Elevation at end");
-                let r = ui.add(DragValue::new(&mut end).speed(10.0).range(-1.0e8..=1.0e8).suffix(" mm"));
+                let r = ui.add(
+                    DragValue::new(&mut end)
+                        .speed(10.0)
+                        .range(-1.0e8..=1.0e8)
+                        .suffix(" mm"),
+                );
                 if r.changed()
                     && let Some(n) = slope_from_end_elevation(&flat, *elevation, s.direction, end)
                 {
@@ -212,16 +292,30 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Ver
 /// Cut and fill of a selected site model, in cubic meters.
 pub fn cut_fill_readout(ui: &mut Ui, session: &Session, id: ObjectId) {
     let doc = session.editor.doc();
-    if !matches!(doc.object(id).map(|o| &o.shape), Some(Shape::SiteModel { .. })) {
+    if !matches!(
+        doc.object(id).map(|o| &o.shape),
+        Some(Shape::SiteModel { .. })
+    ) {
         return;
     }
     match session.site_cache().get(session.editor.revision(), doc, id) {
         Ok(site) => {
             let c = site.cut_fill();
-            ui.label(format!("Cut {:.2} m\u{b3}  Fill {:.2} m\u{b3}  Net {:+.2} m\u{b3}", c.cut / 1e9, c.fill / 1e9, c.net() / 1e9));
-            ui.label(format!("Surface {:.1} m\u{b2}", site.existing.area_xy() / 1e6));
+            ui.label(format!(
+                "Cut {:.2} m\u{b3}  Fill {:.2} m\u{b3}  Net {:+.2} m\u{b3}",
+                c.cut / 1e9,
+                c.fill / 1e9,
+                c.net() / 1e9
+            ));
+            ui.label(format!(
+                "Surface {:.1} m\u{b2}",
+                site.existing.area_xy() / 1e6
+            ));
             if session.site_cache().is_stale(doc, id) {
-                ui.colored_label(Color32::from_rgb(200, 120, 20), "Proposed surface is out of date: Site > Update Site Model");
+                ui.colored_label(
+                    Color32::from_rgb(200, 120, 20),
+                    "Proposed surface is out of date: Site > Update Site Model",
+                );
             }
         }
         Err(e) => {
@@ -238,26 +332,54 @@ mod tests {
     use glam::{DVec2, DVec3};
 
     fn add(s: &mut Session, shape: Shape) -> ObjectId {
-        let out = s.editor.execute(&Command::AddObject { shape, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+        let out = s
+            .editor
+            .execute(&Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
         ObjectId(out.created[0])
     }
 
     fn locus(s: &mut Session, x: f64, y: f64, z: f64) -> ObjectId {
-        add(s, Shape::Locus3d { p: DVec3::new(x, y, z) })
+        add(
+            s,
+            Shape::Locus3d {
+                p: DVec3::new(x, y, z),
+            },
+        )
     }
 
     #[test]
     fn create_uses_only_the_selected_sources() {
         let mut s = Session::default();
-        let circle = add(&mut s, Shape::Circle { center: DVec2::ZERO, radius: 5.0 });
-        assert_eq!(create_site_model(&mut s).unwrap_err(), "Select 3D loci or 3D polylines first");
-        let pts = [locus(&mut s, 0.0, 0.0, 0.0), locus(&mut s, 1000.0, 0.0, 100.0), locus(&mut s, 0.0, 1000.0, 200.0)];
+        let circle = add(
+            &mut s,
+            Shape::Circle {
+                center: DVec2::ZERO,
+                radius: 5.0,
+            },
+        );
+        assert_eq!(
+            create_site_model(&mut s).unwrap_err(),
+            "Select 3D loci or 3D polylines first"
+        );
+        let pts = [
+            locus(&mut s, 0.0, 0.0, 0.0),
+            locus(&mut s, 1000.0, 0.0, 100.0),
+            locus(&mut s, 0.0, 1000.0, 200.0),
+        ];
         s.selection = vec![circle, pts[0], pts[1], pts[2]];
         let id = create_site_model(&mut s).unwrap();
         assert_eq!(s.selection, vec![id]);
         // The circle stays, the loci moved into the site model.
         assert_eq!(s.editor.doc().objects.len(), 2);
-        assert!(matches!(&s.editor.doc().object(id).unwrap().shape, Shape::SiteModel { points, .. } if points.len() == 3));
+        assert!(
+            matches!(&s.editor.doc().object(id).unwrap().shape, Shape::SiteModel { points, .. } if points.len() == 3)
+        );
         // One locus alone is accepted. The missing surface is reported when the model is used.
         let a = locus(&mut s, 5.0, 5.0, 0.0);
         s.selection = vec![a, ObjectId(9999)];
@@ -268,9 +390,25 @@ mod tests {
     fn source_ids_keep_loci_and_3d_polylines() {
         let mut s = Session::default();
         let l = locus(&mut s, 0.0, 0.0, 0.0);
-        let p = add(&mut s, Shape::Polyline3d { points: vec![DVec3::ZERO, DVec3::X], closed: false });
-        let t = add(&mut s, Shape::Text { at: DVec2::ZERO, text: "a".into(), height: 5.0 });
-        assert_eq!(source_ids(s.editor.doc(), &[t, l, p, ObjectId(77)]), vec![l, p]);
+        let p = add(
+            &mut s,
+            Shape::Polyline3d {
+                points: vec![DVec3::ZERO, DVec3::X],
+                closed: false,
+            },
+        );
+        let t = add(
+            &mut s,
+            Shape::Text {
+                at: DVec2::ZERO,
+                text: "a".into(),
+                height: 5.0,
+            },
+        );
+        assert_eq!(
+            source_ids(s.editor.doc(), &[t, l, p, ObjectId(77)]),
+            vec![l, p]
+        );
     }
 
     #[test]
@@ -283,16 +421,30 @@ mod tests {
     fn panels_run_without_a_window() {
         let ctx = egui::Context::default();
         let mut s = Session::default();
-        let pts = [locus(&mut s, 0.0, 0.0, 0.0), locus(&mut s, 5000.0, 0.0, 100.0), locus(&mut s, 0.0, 5000.0, 200.0)];
+        let pts = [
+            locus(&mut s, 0.0, 0.0, 0.0),
+            locus(&mut s, 5000.0, 0.0, 100.0),
+            locus(&mut s, 0.0, 5000.0, 200.0),
+        ];
         s.selection = pts.to_vec();
         let id = create_site_model(&mut s).unwrap();
         let mut settings = SiteSettings::default();
-        let mut kind = ModifierKind::Pad { elevation: 10.0, slope: Some(PadSlope { direction: 0.0, percent: 2.0 }) };
+        let mut kind = ModifierKind::Pad {
+            elevation: 10.0,
+            slope: Some(PadSlope {
+                direction: 0.0,
+                percent: 2.0,
+            }),
+        };
         let mut grade = ModifierKind::GradeLimit;
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::Grid::new("g").show(ui, |ui| {
                 assert!(!model_fields(ui, 3, 0, &mut settings));
-                let b = cadektor_core::curve::corners(&[glam::DVec2::ZERO, glam::DVec2::X * 1000.0, glam::DVec2::ONE * 1000.0]);
+                let b = cadektor_core::curve::corners(&[
+                    glam::DVec2::ZERO,
+                    glam::DVec2::X * 1000.0,
+                    glam::DVec2::ONE * 1000.0,
+                ]);
                 assert!(!modifier_fields(ui, &mut kind, &b));
                 assert!(!modifier_fields(ui, &mut grade, &b));
             });

@@ -7,9 +7,9 @@ use super::link;
 use super::style::{PlantCategory, PlantStyle, QuantityType};
 use super::tree::rpz_radius;
 use crate::model::{DEFAULT_TAG_HEIGHT, Document, LayerId, ObjectId, Shape};
-use std::collections::HashMap;
-use glam::DVec2;
 use crate::resource::ResourceId;
+use glam::DVec2;
+use std::collections::HashMap;
 
 /// One line of the plant schedule: a plant style, or one species of plants without a style.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -54,9 +54,15 @@ pub struct Schedule {
 pub fn schedule(doc: &Document) -> Schedule {
     let mut rows: Vec<ScheduleRow> = Vec::new();
     for obj in doc.objects.values() {
-        let Some(e) = link::effective(doc, obj) else { continue };
+        let Some(e) = link::effective(doc, obj) else {
+            continue;
+        };
         // Size variation does not split a row: plants of one style differ in spread and height only by chance.
-        let key = PlantStyle { spread: 0.0, height: 0.0, ..e.style.clone() };
+        let key = PlantStyle {
+            spread: 0.0,
+            height: 0.0,
+            ..e.style.clone()
+        };
         let found = rows.iter_mut().find(|r| match e.style_id {
             Some(id) => r.style == Some(id) && r.key.as_ref() == Some(&key),
             None => r.style.is_none() && r.name == e.style_name,
@@ -76,8 +82,14 @@ pub fn schedule(doc: &Document) -> Schedule {
                     size: base.size.clone(),
                     container: base.container.clone(),
                     root: base.root.clone(),
-                    spread: e.style_id.and_then(|id| doc.resources.plant_style(id)).map_or(base.spread, |s| s.spread),
-                    height: e.style_id.and_then(|id| doc.resources.plant_style(id)).map_or(base.height, |s| s.height),
+                    spread: e
+                        .style_id
+                        .and_then(|id| doc.resources.plant_style(id))
+                        .map_or(base.spread, |s| s.spread),
+                    height: e
+                        .style_id
+                        .and_then(|id| doc.resources.plant_style(id))
+                        .map_or(base.height, |s| s.height),
                     count: 0,
                     unit_price: 0.0,
                     total_price: 0.0,
@@ -100,22 +112,51 @@ pub fn schedule(doc: &Document) -> Schedule {
     for r in &mut rows {
         r.unit_price = r.total_price / r.count as f64;
     }
-    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.style.cmp(&b.style)).then(a.size.cmp(&b.size)).then(a.container.cmp(&b.container)).then(a.root.cmp(&b.root)).then(a.unit_price.total_cmp(&b.unit_price)));
+    rows.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.style.cmp(&b.style))
+            .then(a.size.cmp(&b.size))
+            .then(a.container.cmp(&b.container))
+            .then(a.root.cmp(&b.root))
+            .then(a.unit_price.total_cmp(&b.unit_price))
+    });
     let total_count = rows.iter().map(|r| r.count).sum();
     let total_price = rows.iter().map(|r| r.total_price).sum::<f64>() + 0.0;
     let total_area_m2 = rows.iter().map(|r| r.area_m2).sum::<f64>() + 0.0;
-    Schedule { rows, total_count, total_price, total_area_m2 }
+    Schedule {
+        rows,
+        total_count,
+        total_price,
+        total_area_m2,
+    }
 }
 
 /// The schedule as CSV text, with a total line.
 pub fn schedule_csv(s: &Schedule) -> String {
-    let mut out = vec![[
-        "Name", "ID", "Botanical name", "Common name", "Category", "Size", "Container", "Root", "Spread (mm)", "Height (mm)", "Count",
-        "Unit price", "Total price", "Quantity", "Area (m2)",
-    ]
-    .iter()
-    .map(|h| h.to_string())
-    .collect::<Vec<_>>()];
+    let mut out = vec![
+        [
+            "Name",
+            "ID",
+            "Botanical name",
+            "Common name",
+            "Category",
+            "Size",
+            "Container",
+            "Root",
+            "Spread (mm)",
+            "Height (mm)",
+            "Count",
+            "Unit price",
+            "Total price",
+            "Quantity",
+            "Area (m2)",
+        ]
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>(),
+    ];
     for r in &s.rows {
         out.push(vec![
             r.name.clone(),
@@ -132,7 +173,11 @@ pub fn schedule_csv(s: &Schedule) -> String {
             format!("{:.2}", r.unit_price),
             format!("{:.2}", r.total_price),
             r.quantity.id().into(),
-            if r.quantity == QuantityType::Area { format!("{:.2}", r.area_m2) } else { String::new() },
+            if r.quantity == QuantityType::Area {
+                format!("{:.2}", r.area_m2)
+            } else {
+                String::new()
+            },
         ]);
     }
     let mut total = vec![String::new(); 15];
@@ -151,10 +196,18 @@ pub fn schedule_csv(s: &Schedule) -> String {
 pub fn group_tag(style: ResourceId, positions: &[DVec2], spread: f64) -> Shape {
     let n = positions.len().max(1) as f64;
     let centroid = positions.iter().fold(DVec2::ZERO, |a, p| a + *p) / n;
-    let top = positions.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    let top = positions
+        .iter()
+        .map(|p| p.y)
+        .fold(f64::NEG_INFINITY, f64::max);
     let top = if top.is_finite() { top } else { 0.0 };
     let label = DVec2::new(centroid.x, top + spread / 2.0 + DEFAULT_TAG_HEIGHT);
-    Shape::PlantTag { at: label, anchor: centroid, style, height: DEFAULT_TAG_HEIGHT }
+    Shape::PlantTag {
+        at: label,
+        anchor: centroid,
+        style,
+        height: DEFAULT_TAG_HEIGHT,
+    }
 }
 
 /// What a plant tag shows.
@@ -197,10 +250,16 @@ pub fn tag_info(doc: &Document, tag: ObjectId) -> Option<TagInfo> {
 /// Like `tag_info`, with the counts given. Use it to draw many tags.
 pub fn tag_info_with(doc: &Document, tag: ObjectId, counts: &TagCounts) -> Option<TagInfo> {
     let obj = doc.object(tag)?;
-    let Shape::PlantTag { style, .. } = &obj.shape else { return None };
+    let Shape::PlantTag { style, .. } = &obj.shape else {
+        return None;
+    };
     let res = doc.resources.get(*style)?;
     let s = doc.resources.plant_style(*style)?;
-    let code = if s.id_code.trim().is_empty() { res.name.clone() } else { s.id_code.clone() };
+    let code = if s.id_code.trim().is_empty() {
+        res.name.clone()
+    } else {
+        s.id_code.clone()
+    };
     let count = counts.get(&(obj.layer, *style)).copied().unwrap_or(0);
     Some(TagInfo { code, count })
 }
@@ -223,7 +282,17 @@ pub fn existing_trees(doc: &Document) -> Vec<TreeRow> {
     doc.objects
         .values()
         .filter_map(|o| match &o.shape {
-            Shape::ExistingTree { species, dbh, spread, height, condition, action, rpz_factor, rpz_cap, .. } => Some(TreeRow {
+            Shape::ExistingTree {
+                species,
+                dbh,
+                spread,
+                height,
+                condition,
+                action,
+                rpz_factor,
+                rpz_cap,
+                ..
+            } => Some(TreeRow {
                 id: o.id,
                 species: species.clone(),
                 dbh: *dbh,
@@ -249,14 +318,38 @@ mod tests {
 
     fn setup() -> (Editor, ResourceId) {
         let mut ed = Editor::default();
-        let style = PlantStyle { id_code: "AC".into(), botanical_name: "Acer".into(), price: 100.0, size: "16-18".into(), ..PlantStyle::default() };
-        let out = ed.execute(&Command::AddResource { name: "Maple".into(), body: ResourceBody::plant_style(style) }).unwrap();
+        let style = PlantStyle {
+            id_code: "AC".into(),
+            botanical_name: "Acer".into(),
+            price: 100.0,
+            size: "16-18".into(),
+            ..PlantStyle::default()
+        };
+        let out = ed
+            .execute(&Command::AddResource {
+                name: "Maple".into(),
+                body: ResourceBody::plant_style(style),
+            })
+            .unwrap();
         (ed, ResourceId(out.created[0]))
     }
 
-    fn put(ed: &mut Editor, style: Option<ResourceId>, overrides: serde_json::Map<String, serde_json::Value>, n: usize) {
+    fn put(
+        ed: &mut Editor,
+        style: Option<ResourceId>,
+        overrides: serde_json::Map<String, serde_json::Value>,
+        n: usize,
+    ) {
         let positions = (0..n).map(|i| DVec2::new(i as f64 * 5000.0, 0.0)).collect();
-        ed.execute(&Command::AddPlants { style, overrides, positions, layer: None, class: None, variation: None }).unwrap();
+        ed.execute(&Command::AddPlants {
+            style,
+            overrides,
+            positions,
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
     }
 
     #[test]
@@ -269,7 +362,11 @@ mod tests {
         let s = schedule(ed.doc());
         // The two prices make two rows.
         assert_eq!(s.rows.len(), 2);
-        let by_price: Vec<_> = s.rows.iter().map(|r| (r.unit_price, r.count, r.total_price)).collect();
+        let by_price: Vec<_> = s
+            .rows
+            .iter()
+            .map(|r| (r.unit_price, r.count, r.total_price))
+            .collect();
         assert_eq!(by_price, vec![(50.0, 2, 100.0), (100.0, 3, 300.0)]);
         assert_eq!((s.total_count, s.total_price), (5, 400.0));
         assert_eq!(s.rows[1].id_code, "AC");
@@ -279,8 +376,21 @@ mod tests {
     #[test]
     fn groundcovers_are_counted_by_area_and_priced_per_square_meter() {
         let mut ed = Editor::default();
-        let style = PlantStyle { quantity: QuantityType::Area, spread: 1000.0, price: 20.0, id_code: "GC".into(), ..PlantStyle::default() };
-        let id = ResourceId(ed.execute(&Command::AddResource { name: "Thyme".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0]);
+        let style = PlantStyle {
+            quantity: QuantityType::Area,
+            spread: 1000.0,
+            price: 20.0,
+            id_code: "GC".into(),
+            ..PlantStyle::default()
+        };
+        let id = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Thyme".into(),
+                body: ResourceBody::plant_style(style),
+            })
+            .unwrap()
+            .created[0],
+        );
         put(&mut ed, Some(id), Default::default(), 4);
         let s = schedule(ed.doc());
         let one = std::f64::consts::PI * 0.25;
@@ -288,32 +398,67 @@ mod tests {
         assert!((s.rows[0].area_m2 - 4.0 * one).abs() < 1e-9);
         assert!((s.rows[0].total_price - 4.0 * one * 20.0).abs() < 1e-9);
         assert!((s.total_area_m2 - 4.0 * one).abs() < 1e-9);
-        assert_eq!((s.rows[0].count, s.total_count), (4, 4), "the plants are still counted");
+        assert_eq!(
+            (s.rows[0].count, s.total_count),
+            (4, 4),
+            "the plants are still counted"
+        );
         let csv = schedule_csv(&s);
         let rows = crate::plants::catalog::parse_csv(&csv).unwrap();
-        assert_eq!((rows[1][13].as_str(), rows[1][14].as_str(), rows[2][14].as_str()), ("area", "3.14", "3.14"));
+        assert_eq!(
+            (
+                rows[1][13].as_str(),
+                rows[1][14].as_str(),
+                rows[2][14].as_str()
+            ),
+            ("area", "3.14", "3.14")
+        );
         // Count rows have no area.
         let (mut ed2, id2) = setup();
         put(&mut ed2, Some(id2), Default::default(), 2);
         let s2 = schedule(ed2.doc());
         assert_eq!((s2.rows[0].area_m2, s2.total_area_m2), (0.0, 0.0));
-        assert_eq!(crate::plants::catalog::parse_csv(&schedule_csv(&s2)).unwrap()[1][13], "count");
+        assert_eq!(
+            crate::plants::catalog::parse_csv(&schedule_csv(&s2)).unwrap()[1][13],
+            "count"
+        );
     }
 
     #[test]
     fn size_variation_keeps_plants_in_one_row() {
         let (mut ed, id) = setup();
-        let v = crate::plants::placement::Variation { seed: 5, size: 0.4, rotation: true };
-        ed.execute(&Command::AddPlants { style: Some(id), overrides: Default::default(), positions: (0..30).map(|i| DVec2::new(i as f64 * 9000.0, 0.0)).collect(), layer: None, class: None, variation: Some(v) }).unwrap();
+        let v = crate::plants::placement::Variation {
+            seed: 5,
+            size: 0.4,
+            rotation: true,
+        };
+        ed.execute(&Command::AddPlants {
+            style: Some(id),
+            overrides: Default::default(),
+            positions: (0..30)
+                .map(|i| DVec2::new(i as f64 * 9000.0, 0.0))
+                .collect(),
+            layer: None,
+            class: None,
+            variation: Some(v),
+        })
+        .unwrap();
         let s = schedule(ed.doc());
-        assert_eq!((s.rows.len(), s.rows[0].count, s.total_price), (1, 30, 3000.0));
+        assert_eq!(
+            (s.rows.len(), s.rows[0].count, s.total_price),
+            (1, 30, 3000.0)
+        );
         assert_eq!(s.rows[0].spread, 3000.0, "the row shows the style size");
     }
 
     #[test]
     fn plants_with_different_sizes_containers_and_roots_get_their_own_rows() {
         let (mut ed, id) = setup();
-        for (field, value) in [("size", "20-25"), ("container", "C30"), ("root", "bare root")] {
+        for (field, value) in [
+            ("size", "20-25"),
+            ("container", "C30"),
+            ("root", "bare root"),
+        ] {
             let mut o = serde_json::Map::new();
             o.insert(field.into(), value.into());
             put(&mut ed, Some(id), o, 1);
@@ -322,7 +467,11 @@ mod tests {
         let s = schedule(ed.doc());
         assert_eq!(s.rows.len(), 4);
         assert_eq!(s.total_count, 5);
-        let plain = s.rows.iter().find(|r| r.size == "16-18" && r.container.is_empty() && r.root.is_empty()).unwrap();
+        let plain = s
+            .rows
+            .iter()
+            .find(|r| r.size == "16-18" && r.container.is_empty() && r.root.is_empty())
+            .unwrap();
         assert_eq!(plain.count, 2);
         assert!(s.rows.iter().any(|r| r.size == "20-25" && r.count == 1));
         assert!(s.rows.iter().any(|r| r.container == "C30" && r.count == 1));
@@ -337,7 +486,12 @@ mod tests {
         put(&mut ed, Some(id), Default::default(), 1);
         for sp in ["Oak", "Oak", "Beech"] {
             ed.execute(&Command::AddObject {
-                shape: Shape::Plant { at: DVec2::ZERO, species: sp.into(), spread: 3000.0, height: 5000.0 },
+                shape: Shape::Plant {
+                    at: DVec2::ZERO,
+                    species: sp.into(),
+                    spread: 3000.0,
+                    height: 5000.0,
+                },
                 layer: None,
                 class: None,
                 attrs: Attributes::default(),
@@ -345,8 +499,15 @@ mod tests {
             .unwrap();
         }
         let s = schedule(ed.doc());
-        let names: Vec<_> = s.rows.iter().map(|r| (r.name.as_str(), r.count, r.style.is_some())).collect();
-        assert_eq!(names, vec![("Beech", 1, false), ("Maple", 1, true), ("Oak", 2, false)]);
+        let names: Vec<_> = s
+            .rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.count, r.style.is_some()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("Beech", 1, false), ("Maple", 1, true), ("Oak", 2, false)]
+        );
         assert_eq!(s.total_count, 4);
         assert_eq!(s.total_price, 100.0);
     }
@@ -367,8 +528,23 @@ mod tests {
         let rows = crate::plants::catalog::parse_csv(&csv).unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0][0], "Name");
-        assert_eq!((rows[1][0].as_str(), rows[1][10].as_str(), rows[1][11].as_str(), rows[1][12].as_str()), ("Maple", "2", "100.00", "200.00"));
-        assert_eq!((rows[2][0].as_str(), rows[2][10].as_str(), rows[2][12].as_str()), ("Total", "2", "200.00"));
+        assert_eq!(
+            (
+                rows[1][0].as_str(),
+                rows[1][10].as_str(),
+                rows[1][11].as_str(),
+                rows[1][12].as_str()
+            ),
+            ("Maple", "2", "100.00", "200.00")
+        );
+        assert_eq!(
+            (
+                rows[2][0].as_str(),
+                rows[2][10].as_str(),
+                rows[2][12].as_str()
+            ),
+            ("Total", "2", "200.00")
+        );
     }
 
     #[test]
@@ -377,7 +553,12 @@ mod tests {
         put(&mut ed, Some(id), Default::default(), 4);
         let out = ed
             .execute(&Command::AddObject {
-                shape: Shape::PlantTag { at: DVec2::new(0.0, 3000.0), anchor: DVec2::ZERO, style: id, height: 400.0 },
+                shape: Shape::PlantTag {
+                    at: DVec2::new(0.0, 3000.0),
+                    anchor: DVec2::ZERO,
+                    style: id,
+                    height: 400.0,
+                },
                 layer: None,
                 class: None,
                 attrs: Attributes::default(),
@@ -391,13 +572,22 @@ mod tests {
         ed.execute(&Command::ModifyResource {
             id,
             name: None,
-            body: Some(ResourceBody::plant_style(PlantStyle { id_code: String::new(), ..PlantStyle::default() })),
+            body: Some(ResourceBody::plant_style(PlantStyle {
+                id_code: String::new(),
+                ..PlantStyle::default()
+            })),
         })
         .unwrap();
         assert_eq!(tag_info(ed.doc(), tag).unwrap().code, "Maple");
         // Not a tag, or missing.
         assert!(tag_info(ed.doc(), ObjectId(9999)).is_none());
-        let plant = ed.doc().objects.values().find(|o| matches!(o.shape, Shape::Plant { .. })).unwrap().id;
+        let plant = ed
+            .doc()
+            .objects
+            .values()
+            .find(|o| matches!(o.shape, Shape::Plant { .. }))
+            .unwrap()
+            .id;
         assert!(tag_info(ed.doc(), plant).is_none());
     }
 
@@ -407,7 +597,14 @@ mod tests {
         put(&mut ed, Some(id), Default::default(), 3);
         let mut tags = Vec::new();
         for _ in 0..5 {
-            let out = ed.execute(&Command::AddObject { shape: group_tag(id, &[DVec2::ZERO], 1000.0), layer: None, class: None, attrs: Attributes::default() }).unwrap();
+            let out = ed
+                .execute(&Command::AddObject {
+                    shape: group_tag(id, &[DVec2::ZERO], 1000.0),
+                    layer: None,
+                    class: None,
+                    attrs: Attributes::default(),
+                })
+                .unwrap();
             tags.push(ObjectId(out.created[0]));
         }
         let counts = tag_counts(ed.doc());
@@ -422,11 +619,28 @@ mod tests {
     #[test]
     fn group_tag_sits_above_the_group() {
         let pts = [DVec2::new(0.0, 0.0), DVec2::new(4000.0, 2000.0)];
-        let Shape::PlantTag { at, anchor, style, height } = group_tag(ResourceId(5), &pts, 1000.0) else { panic!() };
-        assert_eq!((anchor, style, height), (DVec2::new(2000.0, 1000.0), ResourceId(5), DEFAULT_TAG_HEIGHT));
+        let Shape::PlantTag {
+            at,
+            anchor,
+            style,
+            height,
+        } = group_tag(ResourceId(5), &pts, 1000.0)
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (anchor, style, height),
+            (
+                DVec2::new(2000.0, 1000.0),
+                ResourceId(5),
+                DEFAULT_TAG_HEIGHT
+            )
+        );
         assert_eq!(at, DVec2::new(2000.0, 2000.0 + 500.0 + DEFAULT_TAG_HEIGHT));
         // No positions: the tag still has finite numbers.
-        let Shape::PlantTag { at, anchor, .. } = group_tag(ResourceId(5), &[], 1000.0) else { panic!() };
+        let Shape::PlantTag { at, anchor, .. } = group_tag(ResourceId(5), &[], 1000.0) else {
+            panic!()
+        };
         assert!(at.is_finite() && anchor.is_finite());
     }
 
@@ -452,6 +666,9 @@ mod tests {
         .unwrap();
         let rows = existing_trees(ed.doc());
         assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].condition, rows[0].action, rows[0].rpz_radius), ("good", "remove", 6000.0));
+        assert_eq!(
+            (rows[0].condition, rows[0].action, rows[0].rpz_radius),
+            ("good", "remove", 6000.0)
+        );
     }
 }

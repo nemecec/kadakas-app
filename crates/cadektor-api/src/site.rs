@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use glam::DVec2;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use cadektor_core::command::Command;
 use cadektor_core::model::{Attributes, Document, ObjectId, Shape, SiteLine, SiteSettings};
 use cadektor_site::{SiteResult, Surface};
 
-use crate::{params, RpcError, Session};
+use crate::{RpcError, Session, params};
 
 #[derive(Deserialize)]
 struct Create {
@@ -44,18 +44,38 @@ fn surface_of(name: Option<&str>) -> Result<Surface, RpcError> {
     match name {
         None | Some("proposed") => Ok(Surface::Proposed),
         Some("existing") => Ok(Surface::Existing),
-        Some(n) => Err(RpcError::invalid_params(format!("unknown surface '{n}'. Use existing or proposed"))),
+        Some(n) => Err(RpcError::invalid_params(format!(
+            "unknown surface '{n}'. Use existing or proposed"
+        ))),
     }
 }
 
 /// Takes 3D loci and 3D polylines out of objects. Fails for any other kind of object.
-fn take_sources(doc: &Document, ids: &[ObjectId], points: &mut Vec<glam::DVec3>, lines: &mut Vec<SiteLine>) -> Result<(), RpcError> {
+fn take_sources(
+    doc: &Document,
+    ids: &[ObjectId],
+    points: &mut Vec<glam::DVec3>,
+    lines: &mut Vec<SiteLine>,
+) -> Result<(), RpcError> {
     for id in ids {
-        let o = doc.object(*id).ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+        let o = doc
+            .object(*id)
+            .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
         match &o.shape {
             Shape::Locus3d { p } => points.push(*p),
-            Shape::Polyline3d { points: pts, closed } => lines.push(SiteLine { points: pts.clone(), closed: *closed }),
-            other => return Err(RpcError::invalid_params(format!("object {id} is a {}: only locus3d and polyline3d can be site model sources", other.kind()))),
+            Shape::Polyline3d {
+                points: pts,
+                closed,
+            } => lines.push(SiteLine {
+                points: pts.clone(),
+                closed: *closed,
+            }),
+            other => {
+                return Err(RpcError::invalid_params(format!(
+                    "object {id} is a {}: only locus3d and polyline3d can be site model sources",
+                    other.kind()
+                )));
+            }
         }
     }
     Ok(())
@@ -81,34 +101,74 @@ impl Session {
     pub(crate) fn handle_site(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
         match method {
             "site.create" => {
-                let Create { source_ids, settings } = params(p)?;
+                let Create {
+                    source_ids,
+                    settings,
+                } = params(p)?;
                 if source_ids.is_empty() {
-                    return Err(RpcError::invalid_params("give source_ids: at least one locus3d or polyline3d"));
+                    return Err(RpcError::invalid_params(
+                        "give source_ids: at least one locus3d or polyline3d",
+                    ));
                 }
                 let doc = self.editor.doc();
                 let (mut points, mut lines) = (Vec::new(), Vec::new());
                 take_sources(doc, &source_ids, &mut points, &mut lines)?;
                 let settings = merge_settings(&SiteSettings::default(), &settings)?;
                 let layer = doc.object(source_ids[0]).map(|o| o.layer);
-                let create = Command::AddObject { shape: Shape::SiteModel { points, lines, settings }, layer, class: None, attrs: Attributes::default() };
-                let out = self.editor.execute(&Command::Batch { commands: vec![create, Command::DeleteObjects { ids: source_ids }] }).map_err(RpcError::app)?;
+                let create = Command::AddObject {
+                    shape: Shape::SiteModel {
+                        points,
+                        lines,
+                        settings,
+                    },
+                    layer,
+                    class: None,
+                    attrs: Attributes::default(),
+                };
+                let out = self
+                    .editor
+                    .execute(&Command::Batch {
+                        commands: vec![create, Command::DeleteObjects { ids: source_ids }],
+                    })
+                    .map_err(RpcError::app)?;
                 self.prune_selection();
                 Ok(json!({ "id": out.created[0] }))
             }
             "site.update" => {
-                let Update { id, settings, add_source_ids, remove_points, remove_lines } = params(p)?;
+                let Update {
+                    id,
+                    settings,
+                    add_source_ids,
+                    remove_points,
+                    remove_lines,
+                } = params(p)?;
                 let doc = self.editor.doc();
-                let obj = doc.object(id).ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
-                let Shape::SiteModel { points, lines, settings: current } = &obj.shape else {
+                let obj = doc
+                    .object(id)
+                    .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+                let Shape::SiteModel {
+                    points,
+                    lines,
+                    settings: current,
+                } = &obj.shape
+                else {
                     return Err(RpcError::app(format!("object {id} is not a site model")));
                 };
                 let (mut points, mut lines) = (points.clone(), lines.clone());
-                for (what, list, len) in [("point", &remove_points, points.len()), ("line", &remove_lines, lines.len())] {
+                for (what, list, len) in [
+                    ("point", &remove_points, points.len()),
+                    ("line", &remove_lines, lines.len()),
+                ] {
                     if let Some(i) = list.iter().find(|i| **i >= len) {
-                        return Err(RpcError::invalid_params(format!("{what} index {i} is out of range (0 to {})", len.saturating_sub(1))));
+                        return Err(RpcError::invalid_params(format!(
+                            "{what} index {i} is out of range (0 to {})",
+                            len.saturating_sub(1)
+                        )));
                     }
                 }
-                let keep = |len: usize, remove: &[usize]| -> Vec<bool> { (0..len).map(|i| !remove.contains(&i)).collect() };
+                let keep = |len: usize, remove: &[usize]| -> Vec<bool> {
+                    (0..len).map(|i| !remove.contains(&i)).collect()
+                };
                 let kp = keep(points.len(), &remove_points);
                 let kl = keep(lines.len(), &remove_lines);
                 let mut it = kp.iter();
@@ -116,25 +176,46 @@ impl Session {
                 let mut it = kl.iter();
                 lines.retain(|_| *it.next().unwrap());
                 if add_source_ids.contains(&id) {
-                    return Err(RpcError::invalid_params("a site model cannot be its own source"));
+                    return Err(RpcError::invalid_params(
+                        "a site model cannot be its own source",
+                    ));
                 }
                 take_sources(doc, &add_source_ids, &mut points, &mut lines)?;
                 let settings = merge_settings(current, &settings)?;
                 let (np, nl) = (points.len(), lines.len());
-                let modify = Command::ModifyObject { id, shape: Some(Shape::SiteModel { points, lines, settings }), layer: None, class: None, attrs: None };
+                let modify = Command::ModifyObject {
+                    id,
+                    shape: Some(Shape::SiteModel {
+                        points,
+                        lines,
+                        settings,
+                    }),
+                    layer: None,
+                    class: None,
+                    attrs: None,
+                };
                 let mut commands = vec![modify];
                 if !add_source_ids.is_empty() {
-                    commands.push(Command::DeleteObjects { ids: add_source_ids });
+                    commands.push(Command::DeleteObjects {
+                        ids: add_source_ids,
+                    });
                 }
-                self.editor.execute(&Command::Batch { commands }).map_err(RpcError::app)?;
+                self.editor
+                    .execute(&Command::Batch { commands })
+                    .map_err(RpcError::app)?;
                 self.prune_selection();
                 Ok(json!({ "id": id, "points": np, "lines": nl }))
             }
             "site.refresh" => {
                 // "Update Site Model": rebuild the surfaces now, even when the site model does not update by itself.
                 let q: Query = params(p)?;
-                let site = self.site_cache.update(self.editor.revision(), self.editor.doc(), q.id).map_err(RpcError::app)?;
-                Ok(json!({ "id": q.id, "out_of_date": false, "modifiers": site.modifiers, "has_proposed": site.proposed.is_some() }))
+                let site = self
+                    .site_cache
+                    .update(self.editor.revision(), self.editor.doc(), q.id)
+                    .map_err(RpcError::app)?;
+                Ok(
+                    json!({ "id": q.id, "out_of_date": false, "modifiers": site.modifiers, "has_proposed": site.proposed.is_some() }),
+                )
             }
             "site.drape" => {
                 #[derive(Deserialize)]
@@ -145,13 +226,20 @@ impl Session {
                     closed: bool,
                 }
                 let P { id, points, closed } = params(p)?;
-                if points.is_empty() || points.iter().any(|p| !(p[0].is_finite() && p[1].is_finite())) {
-                    return Err(RpcError::invalid_params("points must be a list of finite [x, y] pairs"));
+                if points.is_empty()
+                    || points
+                        .iter()
+                        .any(|p| !(p[0].is_finite() && p[1].is_finite()))
+                {
+                    return Err(RpcError::invalid_params(
+                        "points must be a list of finite [x, y] pairs",
+                    ));
                 }
                 let site = self.site(id)?;
                 let flat: Vec<DVec2> = points.iter().map(|p| DVec2::new(p[0], p[1])).collect();
                 // Draped on the proposed surface, with extra points where the line crosses triangle edges.
-                let out = cadektor_site::drape(site.surface(Surface::Proposed), &flat, closed).map_err(RpcError::app)?;
+                let out = cadektor_site::drape(site.surface(Surface::Proposed), &flat, closed)
+                    .map_err(RpcError::app)?;
                 Ok(json!({ "points": out.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>() }))
             }
             "site.elevation" => {
@@ -218,15 +306,22 @@ impl Session {
                         o
                     })
                     .collect();
-                Ok(json!({ "count": list.len(), "major_count": list.iter().filter(|c| c.major).count(), "levels": levels, "contours": contours }))
+                Ok(
+                    json!({ "count": list.len(), "major_count": list.iter().filter(|c| c.major).count(), "levels": levels, "contours": contours }),
+                )
             }
-            _ => Err(RpcError { code: -32601, message: format!("unknown method: {method}") }),
+            _ => Err(RpcError {
+                code: -32601,
+                message: format!("unknown method: {method}"),
+            }),
         }
     }
 
     /// The derived surfaces of a site model, from the cache.
     fn site(&self, id: ObjectId) -> Result<Arc<SiteResult>, RpcError> {
-        self.site_cache.get(self.editor.revision(), self.editor.doc(), id).map_err(RpcError::app)
+        self.site_cache
+            .get(self.editor.revision(), self.editor.doc(), id)
+            .map_err(RpcError::app)
     }
 }
 
@@ -239,7 +334,9 @@ mod tests {
     }
 
     fn exec(s: &mut Session, command: Value) -> u64 {
-        call(s, "execute", json!({"command": command})).unwrap()["created"][0].as_u64().unwrap()
+        call(s, "execute", json!({"command": command})).unwrap()["created"][0]
+            .as_u64()
+            .unwrap()
     }
 
     /// A 9 by 9 grid of loci, 1 m apart, on a plane that rises 10 percent toward +X.
@@ -272,19 +369,40 @@ mod tests {
     #[test]
     fn create_checks_its_input() {
         let mut s = Session::default();
-        let circle = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}));
+        let circle = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}),
+        );
         let e = call(&mut s, "site.create", json!({"source_ids": []})).unwrap_err();
         assert_eq!(e.code, -32602);
         let e = call(&mut s, "site.create", json!({"source_ids": [circle]})).unwrap_err();
         assert!(e.message.contains("only locus3d"), "{}", e.message);
         let e = call(&mut s, "site.create", json!({"source_ids": [999]})).unwrap_err();
         assert!(e.message.contains("does not exist"));
-        let locus = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [0, 0, 0]}}));
-        let e = call(&mut s, "site.create", json!({"source_ids": [locus], "settings": {"minor_interval": -1}})).unwrap_err();
+        let locus = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [0, 0, 0]}}),
+        );
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": [locus], "settings": {"minor_interval": -1}}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("positive"), "{}", e.message);
-        let e = call(&mut s, "site.create", json!({"source_ids": [locus], "settings": 5})).unwrap_err();
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": [locus], "settings": 5}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("object"));
-        let e = call(&mut s, "site.create", json!({"source_ids": [locus], "settings": {"display_2d": "sideways"}})).unwrap_err();
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": [locus], "settings": {"display_2d": "sideways"}}),
+        )
+        .unwrap_err();
         assert_eq!(e.code, -32602);
         // A failed create leaves the document alone.
         assert!(s.editor.doc().object(ObjectId(locus)).is_some());
@@ -294,23 +412,55 @@ mod tests {
     fn drape_refresh_and_tiny_intervals() {
         let mut s = Session::default();
         let ids = grid(&mut s);
-        let id = call(&mut s, "site.create", json!({"source_ids": ids, "settings": {"auto_update": false}})).unwrap()["id"].as_u64().unwrap();
-        let r = call(&mut s, "site.drape", json!({"id": id, "points": [[500, 500], [3500, 500]]})).unwrap();
+        let id = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": ids, "settings": {"auto_update": false}}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let r = call(
+            &mut s,
+            "site.drape",
+            json!({"id": id, "points": [[500, 500], [3500, 500]]}),
+        )
+        .unwrap();
         let pts = r["points"].as_array().unwrap();
         assert!(pts.len() >= 2);
         for p in pts {
             assert!((p[2].as_f64().unwrap() - p[0].as_f64().unwrap() / 10.0).abs() < 1e-9);
         }
-        assert!(call(&mut s, "site.drape", json!({"id": id, "points": [[99999, 0]]})).is_err());
-        assert_eq!(call(&mut s, "site.drape", json!({"id": id, "points": []})).unwrap_err().code, -32602);
+        assert!(
+            call(
+                &mut s,
+                "site.drape",
+                json!({"id": id, "points": [[99999, 0]]})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            call(&mut s, "site.drape", json!({"id": id, "points": []}))
+                .unwrap_err()
+                .code,
+            -32602
+        );
         // A pad is added: with auto_update off the model is out of date until site.refresh.
         let cf = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
         assert_eq!(cf["out_of_date"], false);
         s.editor
             .execute(&Command::AddObject {
                 shape: Shape::SiteModifier {
-                    modifier: cadektor_core::model::ModifierKind::Pad { elevation: 5000.0, slope: None },
-                    boundary: cadektor_core::curve::corners(&[DVec2::new(2000.0, 2000.0), DVec2::new(4000.0, 2000.0), DVec2::new(4000.0, 4000.0), DVec2::new(2000.0, 4000.0)]),
+                    modifier: cadektor_core::model::ModifierKind::Pad {
+                        elevation: 5000.0,
+                        slope: None,
+                    },
+                    boundary: cadektor_core::curve::corners(&[
+                        DVec2::new(2000.0, 2000.0),
+                        DVec2::new(4000.0, 2000.0),
+                        DVec2::new(4000.0, 4000.0),
+                        DVec2::new(2000.0, 4000.0),
+                    ]),
                 },
                 layer: None,
                 class: None,
@@ -326,8 +476,16 @@ mod tests {
         assert_eq!(cf["out_of_date"], false);
         assert!(cf["fill_m3"].as_f64().unwrap() > 0.0);
         // A contour interval that would overflow is refused.
-        let locus = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [0, 0, 0]}}));
-        let e = call(&mut s, "site.create", json!({"source_ids": [locus], "settings": {"minor_interval": 1e-300}})).unwrap_err();
+        let locus = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "locus3d", "p": [0, 0, 0]}}),
+        );
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": [locus], "settings": {"minor_interval": 1e-300}}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("contour"), "{}", e.message);
     }
 
@@ -335,17 +493,52 @@ mod tests {
     fn elevation_slope_and_surfaces() {
         let mut s = Session::default();
         let ids = grid(&mut s);
-        let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"].as_u64().unwrap();
-        let r = call(&mut s, "site.elevation", json!({"id": id, "x": 2500, "y": 3100})).unwrap();
+        let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let r = call(
+            &mut s,
+            "site.elevation",
+            json!({"id": id, "x": 2500, "y": 3100}),
+        )
+        .unwrap();
         assert!((r["z"].as_f64().unwrap() - 250.0).abs() < 1e-9);
         assert!((r["slope"].as_f64().unwrap() - 0.1).abs() < 1e-9);
         // The ground falls toward -X, so it faces west: 270 degrees clockwise from north.
         assert!((r["aspect"].as_f64().unwrap() - 1.5 * std::f64::consts::PI).abs() < 1e-9);
-        let r = call(&mut s, "site.elevation", json!({"id": id, "x": -10, "y": 0, "surface": "existing"})).unwrap();
+        let r = call(
+            &mut s,
+            "site.elevation",
+            json!({"id": id, "x": -10, "y": 0, "surface": "existing"}),
+        )
+        .unwrap();
         assert!(r["z"].is_null() && r["slope"].is_null());
-        assert_eq!(call(&mut s, "site.elevation", json!({"id": id, "x": 0, "y": 0, "surface": "x"})).unwrap_err().code, -32602);
-        assert_eq!(call(&mut s, "site.elevation", json!({"id": id, "x": "a", "y": 0})).unwrap_err().code, -32602);
-        let e = call(&mut s, "site.elevation", json!({"id": 123456, "x": 0, "y": 0})).unwrap_err();
+        assert_eq!(
+            call(
+                &mut s,
+                "site.elevation",
+                json!({"id": id, "x": 0, "y": 0, "surface": "x"})
+            )
+            .unwrap_err()
+            .code,
+            -32602
+        );
+        assert_eq!(
+            call(
+                &mut s,
+                "site.elevation",
+                json!({"id": id, "x": "a", "y": 0})
+            )
+            .unwrap_err()
+            .code,
+            -32602
+        );
+        let e = call(
+            &mut s,
+            "site.elevation",
+            json!({"id": 123456, "x": 0, "y": 0}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("does not exist"));
     }
 
@@ -353,9 +546,16 @@ mod tests {
     fn non_finite_coordinates_are_refused() {
         let mut s = Session::default();
         let ids = grid(&mut s);
-        let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"].as_u64().unwrap();
+        let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
         // JSON cannot hold NaN, but a very large number is still finite and simply outside the model.
-        let r = call(&mut s, "site.elevation", json!({"id": id, "x": 1e300, "y": 0})).unwrap();
+        let r = call(
+            &mut s,
+            "site.elevation",
+            json!({"id": id, "x": 1e300, "y": 0}),
+        )
+        .unwrap();
         assert!(r["z"].is_null());
         let p = serde_json::from_str::<Value>(r#"{"id": 1, "x": 1e999, "y": 0}"#);
         assert!(p.is_err() || call(&mut s, "site.elevation", p.unwrap()).is_err());
@@ -365,9 +565,22 @@ mod tests {
     fn pad_gives_cut_and_fill_and_contours() {
         let mut s = Session::default();
         let ids = grid(&mut s);
-        let id = call(&mut s, "site.create", json!({"source_ids": ids, "settings": {"minor_interval": 100, "major_interval": 400}})).unwrap()["id"].as_u64().unwrap();
+        let id = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": ids, "settings": {"minor_interval": 100, "major_interval": 400}}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap();
         let c = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
-        assert_eq!((c["cut_m3"].as_f64().unwrap(), c["fill_m3"].as_f64().unwrap()), (0.0, 0.0));
+        assert_eq!(
+            (
+                c["cut_m3"].as_f64().unwrap(),
+                c["fill_m3"].as_f64().unwrap()
+            ),
+            (0.0, 0.0)
+        );
         assert!((c["area_m2"].as_f64().unwrap() - 64.0).abs() < 1e-9);
         let cs = call(&mut s, "site.contours", json!({"id": id, "points": false})).unwrap();
         // Levels 100..=800 mm: one line per level (level 0 is not above any vertex).
@@ -375,16 +588,39 @@ mod tests {
         assert_eq!(cs["major_count"], 2);
         assert!(cs["contours"][0].get("points").is_none());
         // A flat pad at 400 mm over x = 2..6 m, y = 2..6 m: the ground there is 200..600, so it is part cut, part fill.
-        exec(&mut s, json!({"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "pad", "elevation": 400}, "boundary": [[2000,2000],[6000,2000],[6000,6000],[2000,6000]]}}));
+        exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "pad", "elevation": 400}, "boundary": [[2000,2000],[6000,2000],[6000,6000],[2000,6000]]}}),
+        );
         let c = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
-        assert!(c["cut_m3"].as_f64().unwrap() > 0.5 && c["fill_m3"].as_f64().unwrap() > 0.5, "{c}");
+        assert!(
+            c["cut_m3"].as_f64().unwrap() > 0.5 && c["fill_m3"].as_f64().unwrap() > 0.5,
+            "{c}"
+        );
         let z = |s: &mut Session, x: f64, surface: &str| {
-            call(s, "site.elevation", json!({"id": id, "x": x, "y": 4000, "surface": surface})).unwrap()["z"].as_f64().unwrap()
+            call(
+                s,
+                "site.elevation",
+                json!({"id": id, "x": x, "y": 4000, "surface": surface}),
+            )
+            .unwrap()["z"]
+                .as_f64()
+                .unwrap()
         };
         assert!((z(&mut s, 3000.0, "proposed") - 400.0).abs() < 1e-9);
         assert!((z(&mut s, 3000.0, "existing") - 300.0).abs() < 1e-9);
-        let p = call(&mut s, "site.contours", json!({"id": id, "surface": "proposed"})).unwrap();
-        let e = call(&mut s, "site.contours", json!({"id": id, "surface": "existing"})).unwrap();
+        let p = call(
+            &mut s,
+            "site.contours",
+            json!({"id": id, "surface": "proposed"}),
+        )
+        .unwrap();
+        let e = call(
+            &mut s,
+            "site.contours",
+            json!({"id": id, "surface": "existing"}),
+        )
+        .unwrap();
         assert_ne!(p["contours"], e["contours"]);
         // Undo of the pad restores the old numbers (the cache follows the revision).
         assert!(s.editor.undo());
@@ -396,23 +632,80 @@ mod tests {
     fn update_changes_settings_and_sources() {
         let mut s = Session::default();
         let ids = grid(&mut s);
-        let id = call(&mut s, "site.create", json!({"source_ids": &ids[..40]})).unwrap()["id"].as_u64().unwrap();
-        let extra = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 0], [1000, 0, 100]]}}));
+        let id = call(&mut s, "site.create", json!({"source_ids": &ids[..40]})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let extra = exec(
+            &mut s,
+            json!({"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 0], [1000, 0, 100]]}}),
+        );
         let r = call(&mut s, "site.update", json!({"id": id, "settings": {"smooth_contours": true, "existing_color": [1, 2, 3, 255]}, "add_source_ids": [extra], "remove_points": [0, 1]})).unwrap();
-        assert_eq!((r["points"].as_u64().unwrap(), r["lines"].as_u64().unwrap()), (38, 1));
+        assert_eq!(
+            (r["points"].as_u64().unwrap(), r["lines"].as_u64().unwrap()),
+            (38, 1)
+        );
         assert!(s.editor.doc().object(ObjectId(extra)).is_none());
         let o = call(&mut s, "objects.get", json!({"id": id})).unwrap();
         assert_eq!(o["shape"]["settings"]["smooth_contours"], true);
         assert_eq!(o["shape"]["settings"]["minor_interval"], 500.0);
-        let r = call(&mut s, "site.update", json!({"id": id, "settings": {"existing_color": null}, "remove_lines": [0]})).unwrap();
+        let r = call(
+            &mut s,
+            "site.update",
+            json!({"id": id, "settings": {"existing_color": null}, "remove_lines": [0]}),
+        )
+        .unwrap();
         assert_eq!(r["lines"], 0);
         // Errors.
-        assert!(call(&mut s, "site.update", json!({"id": id, "remove_points": [500]})).unwrap_err().message.contains("out of range"));
-        assert!(call(&mut s, "site.update", json!({"id": id, "remove_lines": [1]})).unwrap_err().message.contains("out of range"));
-        assert!(call(&mut s, "site.update", json!({"id": id, "add_source_ids": [id]})).unwrap_err().message.contains("own source"));
-        assert!(call(&mut s, "site.update", json!({"id": ids[45]})).unwrap_err().message.contains("not a site model"));
-        assert!(call(&mut s, "site.update", json!({"id": 99999})).unwrap_err().message.contains("does not exist"));
-        assert!(call(&mut s, "site.update", json!({"id": id, "settings": {"major_interval": 1}})).is_err());
+        assert!(
+            call(
+                &mut s,
+                "site.update",
+                json!({"id": id, "remove_points": [500]})
+            )
+            .unwrap_err()
+            .message
+            .contains("out of range")
+        );
+        assert!(
+            call(
+                &mut s,
+                "site.update",
+                json!({"id": id, "remove_lines": [1]})
+            )
+            .unwrap_err()
+            .message
+            .contains("out of range")
+        );
+        assert!(
+            call(
+                &mut s,
+                "site.update",
+                json!({"id": id, "add_source_ids": [id]})
+            )
+            .unwrap_err()
+            .message
+            .contains("own source")
+        );
+        assert!(
+            call(&mut s, "site.update", json!({"id": ids[45]}))
+                .unwrap_err()
+                .message
+                .contains("not a site model")
+        );
+        assert!(
+            call(&mut s, "site.update", json!({"id": 99999}))
+                .unwrap_err()
+                .message
+                .contains("does not exist")
+        );
+        assert!(
+            call(
+                &mut s,
+                "site.update",
+                json!({"id": id, "settings": {"major_interval": 1}})
+            )
+            .is_err()
+        );
         assert!(call(&mut s, "site.nothing", json!({})).unwrap_err().code == -32601);
     }
 
@@ -421,10 +714,17 @@ mod tests {
         let mut s = Session::default();
         let ids = grid(&mut s);
         call(&mut s, "site.create", json!({"source_ids": ids})).unwrap();
-        let svg = call(&mut s, "render.svg", json!({})).unwrap()["svg"].as_str().unwrap().to_string();
+        let svg = call(&mut s, "render.svg", json!({})).unwrap()["svg"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(svg.contains(r#"data-kind="contour""#));
         assert!(s.scene().mesh.triangle_count() > 100);
-        let png = call(&mut s, "render.png", json!({"view": "left_isometric", "width": 64, "height": 64}));
+        let png = call(
+            &mut s,
+            "render.png",
+            json!({"view": "left_isometric", "width": 64, "height": 64}),
+        );
         assert!(png.is_ok(), "{png:?}");
     }
 }

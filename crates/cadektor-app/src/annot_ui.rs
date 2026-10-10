@@ -30,7 +30,14 @@ fn object_prims(doc: &Document, o: &Object) -> std::sync::Arc<Vec<Prim>> {
 }
 
 /// Draws an annotation object. `offset` is added to every point (drag ghosts).
-pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, st: Style, offset: DVec2) {
+pub fn draw_object(
+    painter: &Painter,
+    view: &View,
+    doc: &Document,
+    o: &Object,
+    st: Style,
+    offset: DVec2,
+) {
     if !matches!(o.shape, Shape::Annotation(_)) {
         return;
     }
@@ -40,14 +47,25 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, s
 /// Draws the preview of an annotation that a tool is making (on the active layer).
 pub fn draw_preview(painter: &Painter, view: &View, doc: &Document, a: &Annot, st: Style) {
     let ctx = cadektor_core::annot::draw::Ctx::layer(doc, doc.active_layer);
-    draw_prims(painter, view, &cadektor_annot::prims_in(doc, a, &ctx), st, DVec2::ZERO);
+    draw_prims(
+        painter,
+        view,
+        &cadektor_annot::prims_in(doc, a, &ctx),
+        st,
+        DVec2::ZERO,
+    );
 }
 
 fn draw_prims(painter: &Painter, view: &View, prims: &[Prim], st: Style, offset: DVec2) {
     let s = |p: DVec2| view.to_screen(p + offset);
     for p in prims {
         match p {
-            Prim::Poly { pts, closed, fill, color } => {
+            Prim::Poly {
+                pts,
+                closed,
+                fill,
+                color,
+            } => {
                 let pen = color.map_or(st.pen, color32);
                 let screen: Vec<Pos2> = pts.iter().map(|q| s(*q)).collect();
                 let fill_color = match fill {
@@ -59,13 +77,35 @@ fn draw_prims(painter: &Painter, view: &View, prims: &[Prim], st: Style, offset:
                     let moved: Vec<DVec2> = pts.iter().map(|q| *q + offset).collect();
                     crate::canvas::fill_polygon(painter, &moved, &screen, fill_color);
                 }
-                painter.add(egui::epaint::PathShape { points: screen, closed: *closed, fill: Color32::TRANSPARENT, stroke: egui::epaint::PathStroke::new(st.width.min(3.0), pen) });
+                painter.add(egui::epaint::PathShape {
+                    points: screen,
+                    closed: *closed,
+                    fill: Color32::TRANSPARENT,
+                    stroke: egui::epaint::PathStroke::new(st.width.min(3.0), pen),
+                });
             }
-            Prim::Text { at, text, height, center, color, .. } => {
+            Prim::Text {
+                at,
+                text,
+                height,
+                center,
+                color,
+                ..
+            } => {
                 let size = (*height * view.zoom) as f32;
                 if size >= 3.0 {
-                    let anchor = if *center { Align2::CENTER_BOTTOM } else { Align2::LEFT_BOTTOM };
-                    painter.text(s(*at), anchor, text, FontId::proportional(size.min(400.0)), color.map_or(st.pen, color32));
+                    let anchor = if *center {
+                        Align2::CENTER_BOTTOM
+                    } else {
+                        Align2::LEFT_BOTTOM
+                    };
+                    painter.text(
+                        s(*at),
+                        anchor,
+                        text,
+                        FontId::proportional(size.min(400.0)),
+                        color.map_or(st.pen, color32),
+                    );
                 }
             }
         }
@@ -94,25 +134,52 @@ pub fn bounds(doc: &Document, o: &Object) -> (DVec2, DVec2) {
 
 /// The command that adds a graphic legend at `at` (the top left corner), on the active layer.
 pub fn legend_command(at: DVec2) -> Command {
-    let legend = Legend { at, title: "Legend".into(), criteria: String::new(), group_by: "Style".into(), show_count: true, swatch_mm: 6.0, style: None };
-    Command::AddObject { shape: Shape::Annotation(Box::new(Annot::Legend(legend))), layer: None, class: None, attrs: Attributes::default() }
+    let legend = Legend {
+        at,
+        title: "Legend".into(),
+        criteria: String::new(),
+        group_by: "Style".into(),
+        show_count: true,
+        swatch_mm: 6.0,
+        style: None,
+    };
+    Command::AddObject {
+        shape: Shape::Annotation(Box::new(Annot::Legend(legend))),
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    }
 }
 
-fn combo(ui: &mut Ui, salt: &str, current: Option<ResourceId>, items: &[(ResourceId, String)], none: &str) -> Option<Option<ResourceId>> {
+fn combo(
+    ui: &mut Ui,
+    salt: &str,
+    current: Option<ResourceId>,
+    items: &[(ResourceId, String)],
+    none: &str,
+) -> Option<Option<ResourceId>> {
     let mut chosen = current;
-    let text = current.and_then(|c| items.iter().find(|(i, _)| *i == c)).map_or(none.to_string(), |(_, n)| n.clone());
-    egui::ComboBox::from_id_salt(salt).selected_text(text).show_ui(ui, |ui| {
-        ui.selectable_value(&mut chosen, None, none);
-        for (id, n) in items {
-            ui.selectable_value(&mut chosen, Some(*id), n);
-        }
-    });
+    let text = current
+        .and_then(|c| items.iter().find(|(i, _)| *i == c))
+        .map_or(none.to_string(), |(_, n)| n.clone());
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut chosen, None, none);
+            for (id, n) in items {
+                ui.selectable_value(&mut chosen, Some(*id), n);
+            }
+        });
     (chosen != current).then_some(chosen)
 }
 
 /// The resources of one annotation type, with their names.
 fn styles(doc: &Document, ty: &str) -> Vec<(ResourceId, String)> {
-    doc.resources.iter().filter(|r| r.body.type_name() == ty).map(|r| (r.id, r.name.clone())).collect()
+    doc.resources
+        .iter()
+        .filter(|r| r.body.type_name() == ty)
+        .map(|r| (r.id, r.name.clone()))
+        .collect()
 }
 
 /// The options of the annotation tools in the Tool bar.
@@ -124,13 +191,23 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             ui.label("Dimension mode");
             ui.horizontal_wrapped(|ui| {
                 for m in DimToolMode::ALL {
-                    if ui.selectable_label(s.dim_mode == m, m.label()).on_hover_text(m.help()).clicked() {
+                    if ui
+                        .selectable_label(s.dim_mode == m, m.label())
+                        .on_hover_text(m.help())
+                        .clicked()
+                    {
                         s.dim_mode = m;
                     }
                 }
             });
             ui.label("Dimension style");
-            if let Some(c) = combo(ui, "dim_style", s.dim_style, &styles(doc, "dimension_style"), "(default)") {
+            if let Some(c) = combo(
+                ui,
+                "dim_style",
+                s.dim_style,
+                &styles(doc, "dimension_style"),
+                "(default)",
+            ) {
                 s.dim_style = c;
             }
             ui.horizontal(|ui| {
@@ -142,7 +219,13 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
         }
         Tool::Callout => {
             ui.label("Text style");
-            if let Some(c) = combo(ui, "callout_text_style", s.text_style, &styles(doc, "text_style"), "(default)") {
+            if let Some(c) = combo(
+                ui,
+                "callout_text_style",
+                s.text_style,
+                &styles(doc, "text_style"),
+                "(default)",
+            ) {
                 s.text_style = c;
             }
             ui.label("Text");
@@ -150,20 +233,36 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
         }
         Tool::DataTag => {
             ui.label("Tag style");
-            if let Some(c) = combo(ui, "tag_style", s.tag_style, &styles(doc, "tag_style"), "(first)") {
+            if let Some(c) = combo(
+                ui,
+                "tag_style",
+                s.tag_style,
+                &styles(doc, "tag_style"),
+                "(first)",
+            ) {
                 s.tag_style = c;
             }
         }
         Tool::NorthArrow => {
             ui.horizontal(|ui| {
                 ui.label("Size");
-                ui.add(DragValue::new(&mut s.north_size_mm).speed(0.5).range(2.0..=300.0).suffix(" mm"));
+                ui.add(
+                    DragValue::new(&mut s.north_size_mm)
+                        .speed(0.5)
+                        .range(2.0..=300.0)
+                        .suffix(" mm"),
+                );
             });
         }
         Tool::ScaleBar => {
             ui.horizontal(|ui| {
                 ui.label("Segment");
-                ui.add(DragValue::new(&mut s.bar_segment_m).speed(0.1).range(0.001..=100000.0).suffix(" m"));
+                ui.add(
+                    DragValue::new(&mut s.bar_segment_m)
+                        .speed(0.1)
+                        .range(0.001..=100000.0)
+                        .suffix(" m"),
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Segments");
@@ -182,23 +281,44 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
 /// styles. The app runs what is left in `pending` and places the legend when `legend_requested` is set.
 pub fn panel_buttons(ui: &mut Ui, doc: &Document, s: &mut crate::tools::AnnotSettings) {
     let cmds = &mut s.pending;
-    if ui.button("Graphic Legend").on_hover_text("Add a legend that lists the objects by style and updates itself").clicked() {
+    if ui
+        .button("Graphic Legend")
+        .on_hover_text("Add a legend that lists the objects by style and updates itself")
+        .clicked()
+    {
         s.legend_requested = true;
     }
     let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
     if !has("dimension_style") || !has("tag_style") || !has("text_style") {
-        let r = ui.button("Add default styles").on_hover_text("Adds a text style, a dimension style and a tag style, if the document has none");
+        let r = ui.button("Add default styles").on_hover_text(
+            "Adds a text style, a dimension style and a tag style, if the document has none",
+        );
         if r.clicked() {
             use cadektor_core::annot::style::{AnnotResource, DimensionStyle, TagStyle, TextStyle};
-            let add = |name: &str, r: AnnotResource| Command::AddResource { name: name.into(), body: ResourceBody::annot(r) };
+            let add = |name: &str, r: AnnotResource| Command::AddResource {
+                name: name.into(),
+                body: ResourceBody::annot(r),
+            };
             if !has("text_style") {
-                cmds.push(add("Text 3 mm", AnnotResource::TextStyle(TextStyle::default())));
+                cmds.push(add(
+                    "Text 3 mm",
+                    AnnotResource::TextStyle(TextStyle::default()),
+                ));
             }
             if !has("dimension_style") {
-                cmds.push(add("Dimension 2.5 mm", AnnotResource::DimensionStyle(DimensionStyle::default())));
+                cmds.push(add(
+                    "Dimension 2.5 mm",
+                    AnnotResource::DimensionStyle(DimensionStyle::default()),
+                ));
             }
             if !has("tag_style") {
-                cmds.push(add("Plant tag", AnnotResource::TagStyle(TagStyle { lines: vec!["{IdCode}".into(), "{Botanical}".into()], ..TagStyle::default() })));
+                cmds.push(add(
+                    "Plant tag",
+                    AnnotResource::TagStyle(TagStyle {
+                        lines: vec!["{IdCode}".into(), "{Botanical}".into()],
+                        ..TagStyle::default()
+                    }),
+                ));
             }
         }
     }
@@ -216,7 +336,13 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
     let mut commit = false;
     match a {
         Annot::Dimension(d) => {
-            num(ui, &mut commit, "Line offset (paper mm)", &mut d.offset, 0.5);
+            num(
+                ui,
+                &mut commit,
+                "Line offset (paper mm)",
+                &mut d.offset,
+                0.5,
+            );
             ui.label("Text");
             let mut t = d.text.clone().unwrap_or_default();
             let r = ui.text_edit_singleline(&mut t);
@@ -224,7 +350,11 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
             commit |= r.lost_focus();
             ui.end_row();
             ui.label("Associative");
-            ui.label(format!("{} of {} points", d.anchors.iter().flatten().count(), d.points.len()));
+            ui.label(format!(
+                "{} of {} points",
+                d.anchors.iter().flatten().count(),
+                d.points.len()
+            ));
             ui.end_row();
             if d.detached {
                 ui.label("Detached");
@@ -243,7 +373,13 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
             let r = ui.text_edit_multiline(&mut c.text);
             commit |= r.lost_focus();
             ui.end_row();
-            num(ui, &mut commit, "Shoulder (paper mm)", &mut c.shoulder_mm, 0.5);
+            num(
+                ui,
+                &mut commit,
+                "Shoulder (paper mm)",
+                &mut c.shoulder_mm,
+                0.5,
+            );
             if c.detached {
                 ui.label("Detached");
                 ui.label("A leader lost its vertex or edge.");
