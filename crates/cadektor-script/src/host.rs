@@ -401,7 +401,11 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(20));
         }
-        panic!("script did not end");
+        panic!(
+            "script {id} did not end: {:?} {:?}",
+            h.poll(id, 0),
+            h.list()
+        );
     }
 
     #[test]

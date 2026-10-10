@@ -3,19 +3,38 @@
 use std::process::Command;
 
 /// Kills the process and its whole process group (on Unix), so child processes of the script die too.
+///
+/// The signal to the group can miss a process that the group leader is forking at that moment
+/// (seen on macOS: a `sleep` that started while a stop was under way outlived the stop and held
+/// the output pipes open). So the signal goes out again a moment later, when such a process is
+/// in the group. This is safe: the leader is not collected yet (the caller does that), so its
+/// process ID cannot name another group in the meantime.
 pub fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         // The child leads its own group (see `own_group`), so the group ID is its process ID.
         if let Ok(pid) = i32::try_from(child.id()) {
-            // SAFETY: killpg only sends a signal.
-            unsafe {
-                libc::killpg(pid, libc::SIGKILL);
+            for round in 0..GROUP_KILL_ROUNDS {
+                // SAFETY: killpg only sends a signal.
+                unsafe {
+                    libc::killpg(pid, libc::SIGKILL);
+                }
+                if round == 0 {
+                    // The leader dies first, so it forks nothing more.
+                    let _ = child.kill();
+                }
+                if round + 1 < GROUP_KILL_ROUNDS {
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                }
             }
         }
     }
     let _ = child.kill();
 }
+
+/// How often `kill_tree` signals the group.
+#[cfg(unix)]
+const GROUP_KILL_ROUNDS: usize = 3;
 
 /// Makes the command start its own process group, so `kill_tree` reaches child processes of the child.
 pub fn own_group(cmd: &mut Command) {
@@ -78,6 +97,30 @@ mod tests {
             !pid_alive(u32::MAX),
             "an id that does not fit names no process"
         );
+    }
+
+    #[test]
+    fn kill_tree_catches_children_that_start_while_it_runs() {
+        // A leader that forks children all the time: some are in flight when the kill comes.
+        for _ in 0..20 {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "while :; do sleep 30 & done"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            own_group(&mut cmd);
+            let mut child = cmd.spawn().unwrap();
+            let pid = child.id() as i32;
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            kill_tree(&mut child);
+            child.wait().unwrap();
+            // Nobody of the group is left: the pipe closes at once.
+            let mut out = Vec::new();
+            let t = std::time::Instant::now();
+            std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+            assert!(t.elapsed() < std::time::Duration::from_secs(5));
+            // SAFETY: signal 0 only checks that the group exists.
+            assert_eq!(unsafe { libc::killpg(pid, 0) }, -1, "the group is empty");
+        }
     }
 
     #[test]
