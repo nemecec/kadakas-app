@@ -310,6 +310,55 @@ pub fn validate_ops(ops: &[Op]) -> Result<(), InvalidTxn> {
     Ok(())
 }
 
+/// The digest of a list of operations: SHA-256 of their *canonical JSON*. A server stores it for
+/// each client (the hash of the last transaction, rule 6), so it must give the same answer in
+/// every version of the server and of this crate. Do not change it.
+///
+/// Canonical JSON is the compact JSON text of the list in which the keys of every object are
+/// sorted by their bytes (written out here, so it does not depend on the `preserve_order` feature
+/// of `serde_json`), with the number forms of `serde_json` (integers as they are, other numbers in
+/// the shortest form that reads back to the same `f64`).
+pub fn ops_digest(ops: &[Op]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let value = serde_json::to_value(ops).unwrap_or(Value::Null);
+    let mut text = Vec::new();
+    write_canonical(&value, &mut text);
+    Sha256::digest(&text).into()
+}
+
+fn write_canonical(v: &Value, out: &mut Vec<u8>) {
+    match v {
+        Value::Array(items) => {
+            out.push(b'[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+            out.push(b'{');
+            for (i, k) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                let _ = serde_json::to_writer(&mut *out, k);
+                out.push(b':');
+                write_canonical(&map[k], out);
+            }
+            out.push(b'}');
+        }
+        // Null, booleans, numbers and strings: the text of serde_json.
+        other => {
+            let _ = serde_json::to_writer(&mut *out, other);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +366,46 @@ mod tests {
 
     fn t(n: u64) -> Target {
         Target::new(Kind::Object, Uid::from_num(n))
+    }
+
+    #[test]
+    fn the_digest_is_pinned() {
+        // Do not change this value: servers store the digest, and a new one would make every
+        // resend of a transaction look like a reused number.
+        let ops = vec![
+            Op::Create {
+                target: t(9),
+                props: BTreeMap::from([
+                    ("z".to_string(), json!({"a": 1e22})),
+                    (
+                        "shape".to_string(),
+                        json!({"min": [0, 0], "max": [5, 3.5], "kind": "rect"}),
+                    ),
+                ]),
+                merge: false,
+            },
+            Op::Set {
+                target: t(9),
+                prop: "w".into(),
+                value: json!(0.1),
+            },
+        ];
+        let text = r#"[{"op":"create","props":{"shape":{"kind":"rect","max":[5,3.5],"min":[0,0]},"z":{"a":1e+22}},"target":{"id":"00000000-0000-0000-0000-000000000009","kind":"object"}},{"op":"set","prop":"w","target":{"id":"00000000-0000-0000-0000-000000000009","kind":"object"},"value":0.1}]"#;
+        let hex = |d: [u8; 32]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let expected = "439a5f566e5be46c133989315390521e0857df659124a8b15d5aa099101c2304";
+        assert_eq!(hex(ops_digest(&ops)), expected);
+        // The same digest as the SHA-256 of the text above (`serde_json` writes 1e22 as `1e+22`).
+        assert_eq!(crate::blob::sha256_hex(text.as_bytes()), expected);
+        // Other content, other digest. The key order of the input does not matter.
+        assert_ne!(ops_digest(&ops), ops_digest(&ops[..1]));
+        let swapped: Vec<Op> = serde_json::from_str(
+            r#"[{"target":{"kind":"object","id":"00000000-0000-0000-0000-000000000009"},"op":"delete"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ops_digest(&swapped),
+            ops_digest(&[Op::Delete { target: t(9) }])
+        );
     }
 
     #[test]

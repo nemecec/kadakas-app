@@ -26,12 +26,11 @@
 //! - Can answer the next submits with an error of your choice (for tests of retry).
 
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use kadakas_core::uid::Uid;
 
-use crate::op::{Op, Writer, validate_ops};
+use crate::op::{Op, Writer, ops_digest, validate_ops};
 use crate::presence::{self, Peer, PresenceState, Throttle};
 use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
@@ -63,7 +62,7 @@ struct Conn {
 struct WriterRecord {
     high: u64,
     seq: u64,
-    hash: u64,
+    hash: [u8; 32],
 }
 
 /// The reference sequencer.
@@ -88,12 +87,6 @@ pub struct Sequencer {
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
     /// Blobs by hash.
     blobs: BTreeMap<String, String>,
-}
-
-fn hash_ops(ops: &[Op]) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_string(ops).unwrap_or_default().hash(&mut h);
-    h.finish()
 }
 
 impl Sequencer {
@@ -439,7 +432,7 @@ impl Sequencer {
             }
             return reply(error(code, "injected by the test", Some(op_id)));
         }
-        let hash = hash_ops(&ops);
+        let hash = ops_digest(&ops);
         if let Some(w) = self.writers.get(&client) {
             if op_id == w.high && hash == w.hash {
                 return reply(ServerMsg::Ack { op_id, seq: w.seq });

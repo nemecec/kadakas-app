@@ -350,7 +350,10 @@ as canonical JSON text, are equal.
    and signs in again.
 6. **Per-writer numbers.** For each client ID the server keeps only three things: the highest
    `op_id` it ordered (the high-water mark), the sequence number of that transaction, and a hash of
-   its content (use a strong hash, such as SHA-256, of the JSON text). It does not keep a set of all
+   its content. The hash is `kadakas_collab::op::ops_digest(ops)`: SHA-256 of the canonical JSON of
+   the operations (keys of objects sorted, numbers in the shortest form of `serde_json`). The server
+   stores it, so it must stay the same across server versions; a server that writes its own code
+   must compute the same bytes. It does not keep a set of all
    numbers. For a `submit`:
    - `op_id` equal to the high-water mark and the same hash: answer with `ack` and the old sequence
      number. Do not order it again. (A client sends again after a lost connection.)
