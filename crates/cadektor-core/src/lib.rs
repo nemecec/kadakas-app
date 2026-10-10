@@ -2,6 +2,7 @@
 //! The agent API is in `cadektor-api`, and the 3D camera and CPU renderer are in `cadektor-render`.
 //! This crate has no UI dependencies and compiles to native and WebAssembly.
 
+pub mod annot;
 pub mod command;
 pub mod curve;
 pub mod datamap;

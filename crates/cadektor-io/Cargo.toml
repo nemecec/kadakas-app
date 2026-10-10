@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 cadektor-site = { version = "0.1.0", path = "../cadektor-site" }
 encoding_rs = "0.8.42"

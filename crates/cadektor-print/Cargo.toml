@@ -9,6 +9,7 @@ ab_glyph = "0.2.32"
 base64 = "0.22.1"
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }
+cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-sheet = { version = "0.1.0", path = "../cadektor-sheet" }
 cadektor-site = { version = "0.1.0", path = "../cadektor-site" }
 epaint_default_fonts = "0.35.0"

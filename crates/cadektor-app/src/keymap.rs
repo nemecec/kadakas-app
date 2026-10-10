@@ -145,6 +145,15 @@ actions! {
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
     ToolGrading => "tool.grading", "Grading tool", [], true;
+    ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
+    ToolAngularDim => "tool.angular_dimension", "Angular Dimension tool", ["."], true;
+    ToolRadialDim => "tool.radial_dimension", "Radial Dimension tool", [","], true;
+    ToolCallout => "tool.callout", "Callout tool", ["Alt+1"], true;
+    ToolDataTag => "tool.data_tag", "Data Tag tool", ["Alt+Shift+T"], true;
+    ToolNorthArrow => "tool.north_arrow", "North Arrow tool", ["Alt+Shift+N"], true;
+    ToolScaleBar => "tool.scale_bar", "Scale Bar tool", ["Alt+Shift+B"], true;
+    ToolRevisionCloud => "tool.revision_cloud", "Revision Cloud tool", ["Alt+Shift+V"], true;
+    CmdGraphicLegend => "cmd.graphic_legend", "Add a graphic legend", ["Alt+Shift+E"], true;
     ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
     ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
     ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
@@ -216,6 +225,14 @@ impl Action {
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
             Action::ToolGrading => Tool::Grading,
+            Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
+                Tool::Dimension
+            }
+            Action::ToolCallout => Tool::Callout,
+            Action::ToolDataTag => Tool::DataTag,
+            Action::ToolNorthArrow => Tool::NorthArrow,
+            Action::ToolScaleBar => Tool::ScaleBar,
+            Action::ToolRevisionCloud => Tool::RevisionCloud,
             _ => return None,
         })
     }
@@ -233,6 +250,12 @@ impl Action {
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
             Tool::Grading => Action::ToolGrading,
+            Tool::Dimension => Action::ToolDimension,
+            Tool::Callout => Action::ToolCallout,
+            Tool::DataTag => Action::ToolDataTag,
+            Tool::NorthArrow => Action::ToolNorthArrow,
+            Tool::ScaleBar => Action::ToolScaleBar,
+            Tool::RevisionCloud => Action::ToolRevisionCloud,
         }
     }
 

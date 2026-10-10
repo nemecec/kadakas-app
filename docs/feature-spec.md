@@ -116,7 +116,7 @@ Non-goals
 | DRF-18 | Vertex mode buttons in the tool bar for Polyline, Landscape Area and Hardscape: Corner, Bézier, Cubic, Tangent arc, Point on arc, Arc. The Arc radius is a default that stays until changed. | P1 | done |
 | DRF-19 | Object Info vertex list: index, X, Y, kind and radius, all editable. Selected paths show vertex markers. | P1 | done |
 | DRF-10 | Fill, pen, line type, hatch attributes. Attributes `fill_pattern` (a hatch or tile) and `line_type` on objects and classes. Hatches (line families with angle, spacing, offset, dash, color and weight, in paper or model units), tiles (a symbol repeated on a grid with row shift and angle) and line types (dashes, gaps, symbols along the line) are clipped to the shape (holes included) in the canvas, SVG, PDF and PNG sheet output, and written to DXF as plain LINE entities. Textures exist as a resource type only. | P1 | done |
-| DRF-11 | Dimensions (linear, angular, radial, area). | P1 | planned |
+| DRF-11 | Dimensions: see ANN-01 to ANN-03. Area dimensions are missing. | P1 | partial |
 | DRF-12 | Groups: group and ungroup (one level), nested groups, enter and exit a group (edit context), move, rotate and copy a group as a unit, delete with members, all undoable. A click selects the top group, and inside a group it selects the members. Select-similar is planned. Rotating hardscapes, landscape areas and site models is not built yet. | P1 | done |
 | DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
 | DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
@@ -306,13 +306,13 @@ Non-goals
 | SHT-02 | Sheet layer with paper size, orientation, sheet number and title (paper space, mm, 1:1). Separate section in the Navigation palette. `sheet.*`. | P1 | done |
 | SHT-03 | Viewport object: design layers at a scale, plan (vector) or 3D standard view (raster), rectangular or polygon crop, live update cached by revision. `viewport.*`. | P1 | done |
 | SHT-04 | Viewport layer and class visibility overrides and class graphic overrides (pen, fill, line weight). Order: object attributes, viewport class override (by-class attributes only), class attributes, defaults. A viewport keeps its own layer and class visibility. Layer and class graphic "grey" mode is missing. | P1 | done |
-| SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation tools in the app are still missing. | P1 | partial |
+| SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation objects can sit in the space too (`AnnotationItem::Shape`, see ANN-10). | P1 | done |
 | SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
 | SHT-07 | Batch print / publish. | P2 | planned |
 | SHT-08 | Section and elevation viewports. | P2 | planned |
 | SHT-09 | Design layer viewports. | P2 | planned |
 | SHT-10 | Title block border: parametric object with border, grid reference and a title block with fields from project and sheet data. Standard layout or JSON layout. `title_block.*`, `project.*`. | P1 | done |
-| SHT-11 | North arrow and scale bar. | P1 | planned |
+| SHT-11 | North arrow and scale bar: see ANN-08 and ANN-09. | P1 | done |
 
 ### 4.14 3D and rendering
 
@@ -461,3 +461,23 @@ Later (P2)
 - Dependencies must be compatible with Apache-2.0 OR MIT. Keep a third-party license list.
 - Plant data and symbol libraries must have a clear, open license.
 - Research notes cite public pages only. Mark unverified items as such.
+
+### 4.19 Annotation
+
+Annotation objects are `Shape::Annotation` (module `cadektor_core::annot`, crate `cadektor-annot` for worksheet expressions). Sizes are paper mm and follow the scale of the layer or viewport.
+
+| ID | Feature | Pri | Status |
+|---|---|---|---|
+| ANN-01 | Associative dimensions: horizontal, vertical, aligned, angular, radial, diameter, arc length. Points tie to vertices, edges or centers of objects by ID and index. They follow moves and edits, and stay at the last position when the object is deleted (one undo step). An anchor re-binds to the vertex that is still in place when vertices are inserted or deleted, and detaches (flag `detached`) when its vertex is gone. `dimension.add`. | P1 | done |
+| ANN-02 | Chain, baseline and ordinate dimension groups. | P1 | done |
+| ANN-03 | Dimension standards (dimension style resource): font, text size, units (mm, cm, m, in, ft, ft-in), precision, round to an increment (half away from zero), unit suffix, terminators, extension gaps, baseline spacing, prefix, suffix, tolerance. Area dimensions are missing. | P1 | done |
+| ANN-04 | Text styles (resource) for styled text, callouts, legends and scale bars. `annotation.text`, `annotation.apply_text_style`. Paper-size text. Font family is stored, the output uses the sheet font. | P1 | done |
+| ANN-05 | Callouts with one or more leaders, shoulder, terminator, and a notes database resource (note key; a change of the note reaches all callouts). Leaders follow anchored objects. | P1 | done |
+| ANN-06 | Data tags: tag style resource (lines with `{expression}` fields over object properties, plant style fields and record fields, frame, leader). Tags follow their object and go with it when it is deleted. `data_tag.add`, `data_tag.tag_all`. Subpart tags are missing. | P1 | done |
+| ANN-07 | Graphic legends: criteria and a group expression give rows with swatch, label and count, live. Cells that show object views are missing. | P1 | done |
+| ANN-08 | North arrow (three styles, rotation, true north from the georeference). | P1 | done |
+| ANN-09 | Scale bar that follows the scale of the layer or viewport, or its own scale; m, mm, ft. | P1 | done |
+| ANN-10 | Revision clouds with revision data (mark, date, description, author), `revision.list`. In viewports the annotation space takes all annotation objects in paper mm. | P1 | done |
+| ANN-11 | Output: canvas, SVG, sheet PDF/SVG/PNG, DXF (exploded into lines and text; native DIMENSION, MTEXT and LEADER entities are missing). | P1 | partial |
+| ANN-12 | App tools: Dimension (modes), Callout, Data Tag, North Arrow, Scale Bar, Revision Cloud, Graphic Legend command, Object Info fields. No editor windows for the styles (use the API). | P1 | partial |
+| ANN-13 | API: `*_style.*`, `notes_db.*`, `dimension.add`, `callout.add`, `data_tag.*`, `legend.add`, `north_arrow.add`, `scale_bar.add`, `revision_cloud.add`, `annotation.*`, `revision.list`. | P1 | done |
