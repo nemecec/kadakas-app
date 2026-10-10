@@ -51,6 +51,8 @@ fn write_replacing(
         if let Some(p) = &old_perms {
             f.set_permissions(p.clone())?;
         }
+        // On wasm `File` has no drop code.
+        #[allow(clippy::drop_non_drop)]
         drop(f);
         if keep_backup && path.is_file() {
             std::fs::copy(path, sibling(path, "", ".bak"))?;
@@ -260,6 +262,7 @@ mod tests {
         let sub = dir.join("a").join("b");
         create_private_dir(&sub).unwrap();
         let lock = sub.join("l");
+        #[allow(clippy::drop_non_drop)]
         drop(create_new_private(&lock).unwrap());
         assert!(create_new_private(&lock).is_err());
         #[cfg(unix)]
