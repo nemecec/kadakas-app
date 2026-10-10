@@ -421,6 +421,10 @@ functions, so a server need not copy them: `validate::check_transaction(replica,
 `validate::referenced_blobs(replica)` (the blobs to keep, section 4.7). An edit of a thing that is not there or is deleted is not an error: the merge drops
 it. This check is the first defence; the quarantine of section 3.4 is the second one.
 
+**Frames that cannot be read.** A frame that is not JSON or not a known message: `bad_message`
+without `op_id`, and the connection stays. A `submit` whose `ops` cannot be read: `invalid_txn` with
+its `op_id` when it can be read. A frame above the limit: close with WebSocket code 1009.
+
 A client that cannot read a frame from the server, or gets a value that is too deep, does not try
 again in a loop. It stops with a fatal error (`bad_message`) and tells the host. Going back to the
 server would bring the same frame again.
