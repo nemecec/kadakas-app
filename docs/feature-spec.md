@@ -505,3 +505,14 @@ Annotation objects are `Shape::Annotation` (module `cadektor_core::annot`, crate
 | ANN-11 | Output: canvas, SVG, sheet PDF/SVG/PNG, DXF (exploded into lines and text; native DIMENSION, MTEXT and LEADER entities are missing). | P1 | partial |
 | ANN-12 | App tools: Dimension (modes), Callout, Data Tag, North Arrow, Scale Bar, Revision Cloud, Graphic Legend command, Object Info fields. No editor windows for the styles (use the API). | P1 | partial |
 | ANN-13 | API: `*_style.*`, `notes_db.*`, `dimension.add`, `callout.add`, `data_tag.*`, `legend.add`, `north_arrow.add`, `scale_bar.add`, `revision_cloud.add`, `annotation.*`, `revision.list`. | P1 | done |
+
+### 4.20 Shipping quality
+
+| ID | Feature | Pri | Status |
+|---|---|---|---|
+| SHIP-01 | Autosave to a per-user recovery folder (not the file of the user): every N minutes (default 5) or M operations (default 50), compact JSON made on the UI thread and written atomically on a worker thread. The last K versions stay (default 5). Opt-in: also save over the open file. Preferences dialog (File > Preferences...). | P1 | done |
+| SHIP-02 | Crash recovery: a lock file with an exclusive file lock marks a running session. At start, a lock that nobody holds and that has versions next to it is an unclean shutdown. A dialog offers: open the recovered copy, discard it, show its location. A clean exit deletes the copies. | P1 | done |
+| SHIP-03 | Installers with cargo-packager (`packager.toml`): macOS `.app` and `.dmg`, Windows NSIS and WiX `.msi`, Linux AppImage and `.deb`. Own icon (`packaging/icons`). `.cdk.json` file association. The `cadektor` CLI is bundled next to the app. Nothing is signed. | P1 | partial (.app checked on macOS; other formats and the Finder step of `.dmg` not run) |
+| SHIP-04 | GitHub release workflow on tag push. | P1 | partial (not run on GitHub yet) |
+| SHIP-05 | Web build (eframe on WebGPU, WebGL2 fallback). Open and save through the browser, autosave in local storage. No agent server, scripting, GIS or native import and export. See `docs/web.md`. | P2 | partial (compiles; not run in a browser) |
+| SHIP-06 | Signing and notarization, auto update. | P2 | missing |

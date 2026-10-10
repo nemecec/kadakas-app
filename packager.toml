@@ -1,0 +1,67 @@
+# Installer settings for cargo-packager. See docs/release.md.
+#
+#   cargo install cargo-packager --locked
+#   cargo build --release -p cadektor-app -p cadektor-cli
+#   cargo packager --release --formats app,dmg          # macOS
+#   cargo packager --release --formats nsis,wix         # Windows
+#   cargo packager --release --formats appimage,deb     # Linux
+#
+# Nothing is signed. Signing is a TODO (docs/release.md).
+
+# The package name. Set here so cargo-packager need not look for a Cargo.toml.
+name = "cadektor"
+product-name = "Cadektor"
+identifier = "net.cadektor.app"
+version = "0.1.0"
+description = "CAD for landscape architects"
+authors = ["The Cadektor authors"]
+homepage = "https://github.com/cadektor/cadektor"
+license-file = "LICENSE-APACHE"
+category = "Graphics and Design"
+
+# The installers go to dist/. The release binaries come from target/release.
+# With another CARGO_TARGET_DIR, pass --binaries-dir <that folder>/release.
+out-dir = "dist"
+binaries-dir = "target/release"
+
+# The app is the main binary. The `cadektor` command line tool (the MCP server and the renderer)
+# is installed next to it, so agents can find it at a fixed place on every system.
+binaries = [
+  { path = "cadektor-app", main = true },
+  { path = "cadektor" },
+]
+
+icons = [
+  "packaging/icons/32x32.png",
+  "packaging/icons/64x64.png",
+  "packaging/icons/128x128.png",
+  "packaging/icons/256x256.png",
+  "packaging/icons/512x512.png",
+  "packaging/icons/icon.icns",
+  "packaging/icons/icon.ico",
+]
+
+# Cadektor documents end in .cdk.json.
+[[file-associations]]
+extensions = ["cdk.json"]
+name = "Cadektor drawing"
+description = "Cadektor drawing"
+mime-type = "application/vnd.cadektor.drawing+json"
+role = "editor"
+
+[macos]
+minimum-system-version = "11.0"
+info-plist-path = "packaging/macos/Info.plist"
+
+[dmg]
+window-size = { width = 540, height = 380 }
+app-position = { x = 140, y = 190 }
+application-folder-position = { x = 400, y = 190 }
+
+[nsis]
+installer-icon = "packaging/icons/icon.ico"
+installer-mode = "both"
+
+[deb]
+depends = ["libxkbcommon0", "libgtk-3-0"]
+section = "graphics"

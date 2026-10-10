@@ -1,0 +1,80 @@
+name: Release
+# Builds the installers when a version tag is pushed (for example v0.1.0).
+# Nothing is signed yet. See docs/release.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            formats: app,dmg
+            name: macos-arm64
+          - os: macos-13
+            formats: app,dmg
+            name: macos-x86_64
+          - os: windows-latest
+            formats: nsis,wix
+            name: windows-x86_64
+          - os: ubuntu-22.04
+            formats: appimage,deb
+            name: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgtk-3-dev libfuse2 file
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+      - name: Build the app and the cadektor command line tool
+        run: cargo build --release -p cadektor-app -p cadektor-cli
+      - name: Package
+        run: cargo packager --release --formats ${{ matrix.formats }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadektor-${{ matrix.name }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.msi
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@trunk
+      - run: trunk build --release
+      - run: tar -czf cadektor-web.tar.gz -C dist-web .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadektor-web
+          path: cadektor-web.tar.gz
+
+  publish:
+    needs: [package, web]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: artifacts/*

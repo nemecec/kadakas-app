@@ -46,12 +46,12 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot --target wasm32-unknown-unknown
+cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-app --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
 
-All five must pass. The Python package tests belong to check 5. End each commit message with the co-author line that the project uses.
+All five must pass. The wasm check covers the app crate too: keep native-only code (files, threads, sockets, Python) behind `#[cfg(not(target_arch = "wasm32"))]`. The Python package tests belong to check 5. End each commit message with the co-author line that the project uses.
 
 ## Parallel work in worktrees
 

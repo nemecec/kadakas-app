@@ -267,6 +267,7 @@ impl MassingToolSettings {
 /// The coordinate readout of the Data bar: prepared conversions that follow the georeference.
 #[derive(Default)]
 pub struct ReadoutState {
+    #[cfg(not(target_arch = "wasm32"))]
     reader: Option<(
         cadektor_core::georef::Georeference,
         cadektor_gis::coords::Reader,
@@ -278,6 +279,22 @@ pub struct ReadoutState {
 impl ReadoutState {
     /// The text for the cursor position (model mm), or `None` if the document has no CRS.
     pub fn text(
+        &mut self,
+        georef: Option<&cadektor_core::georef::Georeference>,
+        cursor: DVec2,
+    ) -> Option<String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The web build has no coordinate conversion.
+            let _ = (georef, cursor);
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.text_native(georef, cursor)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn text_native(
         &mut self,
         georef: Option<&cadektor_core::georef::Georeference>,
         cursor: DVec2,

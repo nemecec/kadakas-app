@@ -26,7 +26,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site --target wasm32-unknown-unknown
+      - run: cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-app --target wasm32-unknown-unknown
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@trunk
+      - run: trunk build
   coverage:
     runs-on: ubuntu-latest
     steps:

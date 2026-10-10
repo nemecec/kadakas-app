@@ -1,0 +1,8 @@
+# Web build. Run `scripts/build-web.sh` (or `trunk serve` while you work). See docs/web.md.
+[build]
+target = "web/index.html"
+dist = "dist-web"
+
+[serve]
+address = "127.0.0.1"
+port = 8080

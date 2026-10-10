@@ -23,6 +23,20 @@ cargo build --release
 cargo test --workspace
 ```
 
+## Install
+
+Installers for macOS (`.dmg`), Windows (`.exe`, `.msi`) and Linux (`.AppImage`, `.deb`) come with each release.
+They are not signed yet, so your system may warn you at the first start. The installer also puts the `cadektor`
+command line tool next to the app. `docs/release.md` has the paths and the build steps.
+
+## Autosave and recovery
+
+The app saves a recovery copy every 5 minutes (when the drawing changed) or after 50 operations, and keeps the last 5
+versions. They go to a folder of your user account, never over your file (File > Preferences... changes all of this, and has
+an opt-in to save over your own file too). After a crash, the app offers the last copy at the next start: open it, discard it
+or show its folder. A normal exit removes the copies. The folder is `~/Library/Application Support/cadektor/recovery` on macOS,
+`%LOCALAPPDATA%\cadektor\recovery` on Windows and `~/.local/state/cadektor/recovery` on Linux (`CADEKTOR_RECOVERY_DIR` changes it).
+
 ## Run
 
 ```sh
@@ -35,6 +49,11 @@ cargo run --release -p cadektor-cli -- serve [file.cdk.json]
 # Render a document to SVG
 cargo run --release -p cadektor-cli -- render drawing.cdk.json -o drawing.svg
 ```
+
+## Web
+
+The app also runs in a browser (WebGPU, or WebGL2 as the fallback) with fewer features. Build it with
+`scripts/build-web.sh`. `docs/web.md` lists what works and what does not.
 
 Import and export (File > Import... and File > Export... in the app, `import.file` and `export.file` in the API):
 

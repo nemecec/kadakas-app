@@ -41,6 +41,7 @@ pub fn with_extension(path: &Path) -> std::path::PathBuf {
 
 /// What an agent request changed in the app besides the document.
 #[derive(Debug, Default, PartialEq)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AgentEffects {
     /// The document was replaced: the app must cancel the active tool and refit the view.
     pub replaced: bool,
@@ -50,6 +51,7 @@ pub struct AgentEffects {
 
 /// Answers one request line from an agent. Like `Session::handle_line`, and
 /// also `file.save {path}` and `file.open {path}`, which need the app's file path.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn agent_line(
     session: &mut Session,
     path: &mut Option<PathBuf>,
