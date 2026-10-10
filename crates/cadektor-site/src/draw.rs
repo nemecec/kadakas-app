@@ -112,7 +112,7 @@ pub fn scene_ext<'a>(
         } else if let Shape::SiteModel { .. } = obj.shape {
             if let Ok(site) = cache.get(revision, doc, obj.id) {
                 let analysis = grading::analysis::spec_of(obj)
-                    .and_then(|s| grading::analysis::for_site(&site, &s));
+                    .and_then(|s| grading::analysis::for_site(cache, &site, &s));
                 draw_3d_with(&site, analysis.as_deref(), sink);
             }
         } else if matches!(

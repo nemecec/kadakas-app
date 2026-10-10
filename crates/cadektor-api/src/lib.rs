@@ -64,6 +64,7 @@ pub use plugin_api::{
 };
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
+mod limits;
 mod site;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod x3d_material_tests;
@@ -71,6 +72,7 @@ mod x3d_material_tests;
 mod x3d_tests;
 
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
+pub use limits::SessionLimits;
 
 /// An open document with its history and selection.
 pub struct Session {
@@ -86,6 +88,8 @@ pub struct Session {
     pub smart: cadektor_core::snapping::Smart,
     replaced: bool,
     view_changed: bool,
+    /// Memory, time and size limits of this session (see `SessionLimits`).
+    limits: SessionLimits,
     mesh_cache: MeshCache,
     /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
     lod_scene: Option<(u64, cadektor_core::plants::form3d::Detail, Arc<Scene>)>,
@@ -620,6 +624,7 @@ impl Session {
             smart: Default::default(),
             replaced: false,
             view_changed: false,
+            limits: SessionLimits::default(),
             mesh_cache: MeshCache::default(),
             lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -673,6 +678,7 @@ impl Session {
         let gis = std::mem::take(&mut self.gis);
         #[cfg(not(target_arch = "wasm32"))]
         let scripting = std::mem::take(&mut self.scripting);
+        let limits = self.limits.clone();
         *self = Session {
             replaced: true,
             view: self.view,
@@ -688,6 +694,7 @@ impl Session {
             // Jobs that were started for the old document must not change this one.
             self.gis.epoch += 1;
         }
+        self.set_limits(limits);
     }
 
     /// The canonical path for a file request, if the path policy allows it. `exts` are the allowed
@@ -790,7 +797,22 @@ impl Session {
         std::mem::take(&mut self.replaced)
     }
 
+    /// Runs one request. The limits of the session (`SessionLimits`) apply: a call that breaks one
+    /// is undone and fails with a limit error.
     pub fn handle(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
+        let depth = self.editor.undo_depth();
+        #[cfg(not(target_arch = "wasm32"))]
+        let start = std::time::Instant::now();
+        let result = self.dispatch(method, p);
+        #[cfg(not(target_arch = "wasm32"))]
+        let elapsed = Some(start.elapsed());
+        #[cfg(target_arch = "wasm32")]
+        let elapsed = None;
+        let steps = self.editor.undo_depth().saturating_sub(depth);
+        self.enforce_limits(steps, elapsed, result)
+    }
+
+    fn dispatch(&mut self, method: &str, p: Value) -> Result<Value, RpcError> {
         if grading_api::knows(method) {
             return self.handle_grading(method, p);
         }
@@ -992,7 +1014,9 @@ impl Session {
                 } = params(p)?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
-                let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
+                let (width, height) = self
+                    .limits
+                    .image_size(width.unwrap_or(800), height.unwrap_or(600));
                 let scene = self.scene();
                 let doc = self.editor.doc();
                 let mut camera = Camera::standard(settings.view, settings.projection);
@@ -1243,25 +1267,6 @@ impl Session {
             Err(e) => errors::error_response(id, e.code, e.kind, &e.message),
         })
     }
-}
-
-/// Longest side of a rendered image, in px.
-const MAX_SIDE: u32 = 2048;
-/// Most pixels in a rendered image. The renderer runs on the UI thread of the app.
-const MAX_PIXELS: u64 = 4_000_000;
-
-/// The size to render: each side 16 to `MAX_SIDE`, scaled down in one piece if the area is too big.
-fn image_size(width: u32, height: u32) -> (u32, u32) {
-    let (w, h) = (width.clamp(16, MAX_SIDE), height.clamp(16, MAX_SIDE));
-    let area = w as u64 * h as u64;
-    if area <= MAX_PIXELS {
-        return (w, h);
-    }
-    let k = (MAX_PIXELS as f64 / area as f64).sqrt();
-    (
-        ((w as f64 * k) as u32).max(16),
-        ((h as f64 * k) as u32).max(16),
-    )
 }
 
 fn view_json(v: ViewSettings) -> Value {
@@ -1901,9 +1906,6 @@ mod tests {
             (r["width"].as_u64(), r["height"].as_u64()),
             (Some(2000), Some(2000))
         );
-        assert_eq!(image_size(2048, 2048), (2000, 2000));
-        assert_eq!(image_size(2000, 2000), (2000, 2000));
-        assert_eq!(image_size(2048, 1024), (2048, 1024));
         assert_eq!(
             fail(&mut s, "render.png", json!({"view": "sideways"})).0,
             -32602

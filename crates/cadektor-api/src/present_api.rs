@@ -1123,7 +1123,7 @@ fn hidden_line(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             .and_then(Value::as_u64)
             .map_or(d, |n| n.min(u32::MAX as u64) as u32)
     };
-    let (width, height) = crate::image_size(size("width", 800), size("height", 600));
+    let (width, height) = s.limits.image_size(size("width", 800), size("height", 600));
     let get = |k: &str, d: bool| m.get(k).and_then(Value::as_bool).unwrap_or(d);
     let scene = s.scene();
     let mut camera = cadektor_render::Camera::standard(settings.view, settings.projection);

@@ -5,10 +5,9 @@
 //! The classes are computed per triangle and kept by the content of the site model, so a change
 //! of anything else in the drawing does not compute them again.
 
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,7 @@ use cadektor_core::model::{Object, ObjectId, Shape};
 
 use super::draw::{Drawn, Label, Poly};
 use super::{Follow, meters, read};
-use crate::model::SiteResult;
+use crate::model::{SiteCache, SiteResult};
 use crate::tin::Tin;
 
 /// The key on a site model object that holds the analysis settings.
@@ -28,7 +27,8 @@ pub const LEGEND_KEY: &str = "analysis_legend";
 pub const MAX_BREAKS: usize = 40;
 /// Default slope class limits, in percent.
 pub const SLOPE_BREAKS: [f64; 6] = [2.0, 5.0, 10.0, 15.0, 25.0, 50.0];
-const CACHE_SIZE: usize = 64;
+/// Most analyses that a session keeps.
+pub(crate) const CACHE_SIZE: usize = 64;
 
 /// What the site model shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -317,23 +317,22 @@ fn straighten(pts: Vec<DVec2>) -> Vec<DVec2> {
         .collect()
 }
 
-thread_local! {
-    static COMPUTED: Cell<u64> = const { Cell::new(0) };
-}
-
-/// How many analyses this thread computed (did not find in the cache) so far.
-pub fn computed() -> u64 {
-    COMPUTED.with(Cell::get)
-}
-
-fn cache() -> &'static Mutex<HashMap<u64, Arc<AnalysisResult>>> {
-    static CACHE: OnceLock<Mutex<HashMap<u64, Arc<AnalysisResult>>>> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+impl SiteCache {
+    /// How many analyses this cache computed (did not find in the cache) so far.
+    pub fn analyses_computed(&self) -> u64 {
+        self.analysis_runs
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// The analysis of a site model for the settings, from the cache when the content of the site
-/// model and the settings are the same. `None` when the analysis is off.
-pub fn for_site(site: &SiteResult, spec: &AnalysisSpec) -> Option<Arc<AnalysisResult>> {
+/// model and the settings are the same. `None` when the analysis is off. The cache belongs to
+/// one session and holds at most `CACHE_SIZE` analyses.
+pub fn for_site(
+    cache: &SiteCache,
+    site: &SiteResult,
+    spec: &AnalysisSpec,
+) -> Option<Arc<AnalysisResult>> {
     if spec.mode == Mode::Off {
         return None;
     }
@@ -344,21 +343,28 @@ pub fn for_site(site: &SiteResult, spec: &AnalysisSpec) -> Option<Arc<AnalysisRe
     spec.colors.hash(&mut h);
     spec.opacity.to_bits().hash(&mut h);
     let key = h.finish();
-    if let Some(r) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Some(r.clone());
+    if let Some(r) = cache
+        .analyses
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+    {
+        return Some(r);
     }
     let tin = site.surface(spec.surface);
     let breaks = resolve_breaks(spec, tin);
     let mut r = analyze(tin, spec.mode, &breaks, &spec.colors);
     r.surface = spec.surface;
     r.opacity = spec.opacity;
-    COMPUTED.with(|c| c.set(c.get() + 1));
+    cache
+        .analysis_runs
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let r = Arc::new(r);
-    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    if c.len() >= CACHE_SIZE {
-        c.clear();
-    }
-    c.insert(key, r.clone());
+    cache
+        .analyses
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, r.clone());
     Some(r)
 }
 
@@ -591,23 +597,25 @@ mod tests {
 
     #[test]
     fn defaults_and_cache() {
+        let cache = SiteCache::default();
         let mut ed = Editor::default();
         let id = add(&mut ed, grid_site(6, 1000.0, |x, y| x / 5.0 + y / 20.0));
         let site = SiteResult::compute(ed.doc(), id).unwrap();
-        assert!(for_site(&site, &AnalysisSpec::default()).is_none());
+        assert!(for_site(&cache, &site, &AnalysisSpec::default()).is_none());
         let spec = AnalysisSpec {
             mode: Mode::Elevation,
             surface: Follow::Existing,
             ..AnalysisSpec::default()
         };
-        let before = computed();
-        let a = for_site(&site, &spec).unwrap();
+        let before = cache.analyses_computed();
+        let a = for_site(&cache, &site, &spec).unwrap();
         assert_eq!(a.bands.len(), 7, "seven default hypsometric bands");
-        let b = for_site(&site, &spec).unwrap();
+        let b = for_site(&cache, &site, &spec).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
-        assert_eq!(computed(), before + 1);
+        assert_eq!(cache.analyses_computed(), before + 1);
         // Other settings are other entries.
         let c = for_site(
+            &cache,
             &site,
             &AnalysisSpec {
                 mode: Mode::Slope,
@@ -618,12 +626,12 @@ mod tests {
         assert_eq!(c.bands.len(), 7);
         assert_eq!(c.breaks, SLOPE_BREAKS);
         assert_eq!(c.surface, Follow::Existing);
-        assert_eq!(computed(), before + 2);
+        assert_eq!(cache.analyses_computed(), before + 2);
         // A flat site has one elevation band.
         let mut ed2 = Editor::default();
         let flat = add(&mut ed2, grid_site(4, 1000.0, |_, _| 7.0));
         let fs = SiteResult::compute(ed2.doc(), flat).unwrap();
-        assert_eq!(for_site(&fs, &spec).unwrap().bands.len(), 1);
+        assert_eq!(for_site(&cache, &fs, &spec).unwrap().bands.len(), 1);
         assert!(resolve_breaks(&AnalysisSpec::default(), &fs.existing).is_empty());
         assert_eq!(
             resolve_breaks(
@@ -635,15 +643,16 @@ mod tests {
             ),
             vec![3.0]
         );
-        // The cache empties when it is full.
+        // The cache stays bounded.
         for i in 0..(CACHE_SIZE + 3) {
             let s = AnalysisSpec {
                 mode: Mode::Slope,
                 breaks: vec![i as f64 + 0.5],
                 ..spec.clone()
             };
-            assert!(for_site(&site, &s).is_some());
+            assert!(for_site(&cache, &site, &s).is_some());
         }
+        assert_eq!(cache.analyses.lock().unwrap().len(), CACHE_SIZE);
     }
 
     #[test]
@@ -774,6 +783,7 @@ mod tests {
                 300.0 * ((x / 900.0).sin() + (y / 1100.0).cos())
             }),
         );
+        let cache = SiteCache::default();
         let site = SiteResult::compute(ed.doc(), id).unwrap();
         let spec = AnalysisSpec {
             mode: Mode::Slope,
@@ -781,7 +791,7 @@ mod tests {
             ..AnalysisSpec::default()
         };
         let start = std::time::Instant::now();
-        let a = for_site(&site, &spec).unwrap();
+        let a = for_site(&cache, &site, &spec).unwrap();
         let svg = draw(id, &a).svg();
         let took = start.elapsed();
         assert!(took.as_secs_f64() < 1.0, "analysis and svg took {took:?}");
@@ -791,8 +801,8 @@ mod tests {
         assert!(corners < a.tri_band.len() / 2, "{corners} corners");
         assert!(svg.len() < 4_000_000, "{} bytes", svg.len());
         // The second call finds the result in the cache.
-        let before = computed();
-        let again = for_site(&site, &spec).unwrap();
-        assert!(Arc::ptr_eq(&a, &again) && computed() == before);
+        let before = cache.analyses_computed();
+        let again = for_site(&cache, &site, &spec).unwrap();
+        assert!(Arc::ptr_eq(&a, &again) && cache.analyses_computed() == before);
     }
 }

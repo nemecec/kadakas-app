@@ -5,10 +5,12 @@
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use glam::{DVec2, DVec3};
 
+use cadektor_core::cache::LruCache;
 use cadektor_core::curve::{self, Vertex};
 use cadektor_core::model::{Document, ModifierKind, ObjectId, Shape, SiteSettings};
 use cadektor_core::site::boundary_points;
@@ -16,6 +18,7 @@ use cadektor_core::site::boundary_points;
 use crate::SiteError;
 use crate::contour::{Contour, ContourSpec, contours};
 use crate::drape::drape;
+use crate::grading::analysis::AnalysisResult;
 use crate::modifier::{Modifier, PadSlope, proposed_surface};
 use crate::overlay::crop;
 use crate::tin::{SlopeAspect, SourceData, SourceLine, Tin};
@@ -263,9 +266,22 @@ pub fn fingerprints(doc: &Document, id: ObjectId) -> Option<(u64, u64)> {
 /// Results of site models. A result is kept while the content of its site model and modifiers
 /// stays the same, so an edit of anything else in the document does not rebuild the terrain.
 /// Failures are not kept.
-#[derive(Default)]
 pub struct SiteCache {
     inner: Mutex<CacheInner>,
+    /// Slope and elevation analyses by the content of the site model and the settings (see
+    /// `grading::analysis::for_site`). Bounded.
+    pub(crate) analyses: Mutex<LruCache<u64, Arc<AnalysisResult>>>,
+    pub(crate) analysis_runs: AtomicU64,
+}
+
+impl Default for SiteCache {
+    fn default() -> Self {
+        SiteCache {
+            inner: Mutex::default(),
+            analyses: Mutex::new(LruCache::new(crate::grading::analysis::CACHE_SIZE)),
+            analysis_runs: AtomicU64::new(0),
+        }
+    }
 }
 
 struct Entry {
@@ -314,6 +330,8 @@ impl SiteCache {
         id: ObjectId,
     ) -> Result<Arc<SiteResult>, SiteError> {
         let s = Arc::new(SiteResult::compute(doc, id)?);
+        // Results of site models that are gone do not stay.
+        c.sites.retain(|k, _| *k == id || doc.object(*k).is_some());
         c.sites.insert(
             id,
             Entry {

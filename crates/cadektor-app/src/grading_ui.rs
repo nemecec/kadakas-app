@@ -302,7 +302,7 @@ pub fn draw_analysis(
     let Ok(site) = cache.get(revision, doc, obj.id) else {
         return;
     };
-    let Some(a) = analysis::for_site(&site, &spec) else {
+    let Some(a) = analysis::for_site(cache, &site, &spec) else {
         return;
     };
     let key = MeshKey {
@@ -676,7 +676,7 @@ mod tests {
         // Only the triangles in view are made: a view far from the site has none.
         let tin_site = cache.get(1, &doc, site).unwrap();
         let spec = analysis::spec_of(doc.object(site).unwrap()).unwrap();
-        let a = analysis::for_site(&tin_site, &spec).unwrap();
+        let a = analysis::for_site(&cache, &tin_site, &spec).unwrap();
         let far = analysis_mesh(
             &View {
                 origin: DVec2::new(1.0e6, 1.0e6),

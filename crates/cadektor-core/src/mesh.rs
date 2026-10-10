@@ -291,6 +291,20 @@ pub struct MeshCache {
 }
 
 impl MeshCache {
+    /// A rough figure for the memory of the cached scene, in bytes.
+    pub fn approx_bytes(&self) -> u64 {
+        self.scene.as_ref().map_or(0, |s| {
+            let m = &s.mesh;
+            (m.positions.len() * 12
+                + m.normals.len() * 12
+                + m.colors.len() * 4
+                + m.indices.len() * 4
+                + m.tri_object.len() * 8
+                + m.tri_part.len()
+                + s.lines.positions.len() * 16) as u64
+        })
+    }
+
     /// The scene of `doc`, which must be the document of `revision`.
     pub fn get(&mut self, revision: u64, doc: &Document) -> Arc<Scene> {
         self.get_with(revision, doc, None)

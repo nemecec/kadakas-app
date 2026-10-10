@@ -77,12 +77,9 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
     })
 }
 
-/// The most text that an import reads: 256 MB.
-const MAX_TEXT: u64 = 256 * 1024 * 1024;
-
 fn text_of(s: &Session, m: &Map<String, Value>) -> Result<String, RpcError> {
     if let Some(t) = m.get("text").and_then(Value::as_str) {
-        if t.len() as u64 > MAX_TEXT {
+        if t.len() as u64 > s.limits.import_text_bytes {
             return Err(RpcError::limit("the text is too long"));
         }
         return Ok(t.to_string());
@@ -98,7 +95,7 @@ fn text_of(s: &Session, m: &Map<String, Value>) -> Result<String, RpcError> {
             .map_err(RpcError::policy)?;
         let meta = std::fs::metadata(&path)
             .map_err(|e| RpcError::not_found(format!("{}: {e}", path.display())))?;
-        if meta.len() > MAX_TEXT {
+        if meta.len() > s.limits.import_text_bytes {
             return Err(RpcError::limit("the file is larger than 256 MB"));
         }
         let bytes = std::fs::read(&path)

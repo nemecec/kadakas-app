@@ -72,7 +72,7 @@ pub fn extras_at(
         });
         let result = site_obj.and_then(|so| {
             let site = cache.get(revision, doc, so.id).ok()?;
-            analysis::for_site(&site, &analysis::spec_of(so)?)
+            analysis::for_site(cache, &site, &analysis::spec_of(so)?)
         });
         if let Some(a) = result {
             return analysis::legend_draw(obj.id, min.min(*max), min.max(*max), &d, &a);
@@ -102,7 +102,7 @@ pub fn site_layers(
     let Ok(site) = cache.get(revision, doc, obj.id) else {
         return out;
     };
-    if let Some(a) = analysis::spec_of(obj).and_then(|s| analysis::for_site(&site, &s)) {
+    if let Some(a) = analysis::spec_of(obj).and_then(|s| analysis::for_site(cache, &site, &s)) {
         out.extend(analysis::draw(obj.id, &a));
     }
     if contours {
@@ -355,6 +355,7 @@ mod tests {
         // Showing contours only still shows the analysis colors.
         let site = SiteResult::compute(ed.doc(), id).unwrap();
         let a = analysis::for_site(
+            &SiteCache::default(),
             &site,
             &analysis::spec_of(ed.doc().object(id).unwrap()).unwrap(),
         )

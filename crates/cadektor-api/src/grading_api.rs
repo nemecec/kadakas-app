@@ -843,7 +843,7 @@ impl Session {
                 Some(id),
             )
             .ok_or_else(|| app("the site model has no surface yet"))?;
-            if let Some(a) = analysis::for_site(&site, &spec) {
+            if let Some(a) = analysis::for_site(&self.site_cache, &site, &spec) {
                 let total: f64 = a.bands.iter().map(|b| b.area_xy).sum();
                 out["breaks"] = json!(a.breaks);
                 out["bands"] = json!(a

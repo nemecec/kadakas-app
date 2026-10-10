@@ -1471,6 +1471,26 @@ impl Editor {
             .is_some()
     }
 
+    /// Number of steps that `undo` can take back.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Takes back the last `steps` steps and forgets them: they cannot be redone. For a host that
+    /// refuses a call after it ran (see `SessionLimits`).
+    pub fn rollback(&mut self, steps: usize) {
+        let mut any = false;
+        for _ in 0..steps {
+            let Some(p) = self.undo.pop() else { break };
+            p.apply(&mut self.doc, false);
+            any = true;
+        }
+        if any {
+            self.redo.clear();
+            self.revision = next_revision();
+        }
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
