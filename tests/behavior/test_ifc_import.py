@@ -117,7 +117,7 @@ def test_every_fixture_imports_and_survives_save(cad, make_serve, name, tmp_path
     r = cad.result("import.file", {"path": str(FIXTURES / name)})
     assert r["report"]["format"] == "ifc"
     # The document stays valid: it saves and loads again.
-    saved = tmp_path / "out.json"
+    saved = tmp_path / "out.kad"
     expected = cad.doc()
     cad.result("file.save", {"path": str(saved)})
     other = make_serve()

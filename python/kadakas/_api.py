@@ -1329,7 +1329,7 @@ class Api:
         return self._call("resource.list_file", params or None)
 
     def resource_import_from_file(self, **params: Any) -> Any:
-        """Import resources from another .cdk.json file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.
+        """Import resources from another .kad file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.
 
         JSON-RPC method ``resource.import_from_file``."""
         return self._call("resource.import_from_file", params or None)

@@ -27,14 +27,14 @@ pub fn library_dir() -> Option<PathBuf> {
     )
 }
 
-/// True for the name of a document file: `.cdk` or the old `.cdk.json` (any `.json` is read, too).
+/// True for the name of a document file: `.kad`.
 fn is_library_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.ends_with(".cdk") || lower.ends_with(".json")
+    lower.ends_with(".kad")
 }
 
 /// A file in the library folder by name. The name has no folders. A name without an extension
-/// means the `.cdk` file, or the old `.cdk.json` file if only that one exists.
+/// means the `.kad` file.
 fn library_file(name: &str) -> Result<PathBuf, RpcError> {
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         return Err(bad("a library name is a file name without folders"));
@@ -44,13 +44,7 @@ fn library_file(name: &str) -> Result<PathBuf, RpcError> {
     if is_library_name(name) {
         return Ok(dir.join(name));
     }
-    let old = dir.join(format!("{name}.cdk.json"));
-    let new = dir.join(format!("{name}.cdk"));
-    Ok(if !new.exists() && old.exists() {
-        old
-    } else {
-        new
-    })
+    Ok(dir.join(format!("{name}.kad")))
 }
 
 /// The path of a request (`path` or `library`), checked by the path policy of the session.
@@ -304,12 +298,8 @@ mod tests {
         assert!(library_file(".hidden").is_err());
         assert!(library_file("").is_err());
         let p = library_file("Trees").unwrap();
-        assert!(p.to_string_lossy().ends_with("Trees.cdk"));
-        let q = library_file("Trees.cdk.json").unwrap();
-        assert!(q.to_string_lossy().ends_with("Trees.cdk.json"));
-        assert!(library_file("Trees.cdk").unwrap().ends_with("Trees.cdk"));
-        assert!(
-            is_library_name("A.CDK") && is_library_name("a.cdk.json") && !is_library_name("a.txt")
-        );
+        assert!(p.to_string_lossy().ends_with("Trees.kad"));
+        assert!(library_file("Trees.kad").unwrap().ends_with("Trees.kad"));
+        assert!(is_library_name("A.KAD") && is_library_name("a.kad") && !is_library_name("a.txt"));
     }
 }

@@ -440,7 +440,7 @@ mod tests {
         let dir = temp("damaged");
         crashed_session(&dir);
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
-            if e.file_name().to_string_lossy().ends_with(".cdk.json") {
+            if e.file_name().to_string_lossy().ends_with(".autosave.kad") {
                 std::fs::write(e.path(), "{broken").unwrap();
             }
         }

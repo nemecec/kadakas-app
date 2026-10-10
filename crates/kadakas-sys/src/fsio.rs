@@ -174,18 +174,15 @@ mod tests {
     #[test]
     fn atomic_write_replaces_file_keeps_backup_and_leaves_no_temp_file() {
         let dir = temp_dir("atomic");
-        let f = dir.join("a.cdk.json");
+        let f = dir.join("a.kad");
         write_atomic(&f, b"one").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"one");
-        assert!(
-            !dir.join("a.cdk.json.bak").exists(),
-            "no backup for a new file"
-        );
+        assert!(!dir.join("a.kad.bak").exists(), "no backup for a new file");
         write_atomic(&f, b"two").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"two");
-        assert_eq!(std::fs::read(dir.join("a.cdk.json.bak")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dir.join("a.kad.bak")).unwrap(), b"one");
         write_atomic(&f, b"three").unwrap();
-        assert_eq!(std::fs::read(dir.join("a.cdk.json.bak")).unwrap(), b"two");
+        assert_eq!(std::fs::read(dir.join("a.kad.bak")).unwrap(), b"two");
         let names: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())

@@ -47,8 +47,8 @@ A request can never name a program. An agent cannot make Kadakas run something e
 ## Use
 
 ```
-kadakas import survey.dwg -o survey.cdk.json
-kadakas export survey.cdk.json -o out.dwg
+kadakas import survey.dwg -o survey.kad
+kadakas export survey.kad -o out.dwg
 ```
 
 ```json

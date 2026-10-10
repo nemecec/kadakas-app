@@ -182,7 +182,7 @@ def test_a_loaded_file_without_a_guid_gets_one_in_memory(cad, tmp_path):
 
 def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
     garden(cad)
-    src = tmp_path / "garden.cdk.json"
+    src = tmp_path / "garden.kad"
     cad.result("file.save", {"path": str(src)})
     doc = json.loads(src.read_text())
     del doc["drawing"]["project"]["guid"]

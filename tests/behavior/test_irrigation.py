@@ -208,7 +208,7 @@ def test_objects_save_load_move_and_undo(make_serve, tmp_path):
     cad = first
     cad.result("irrigation.calculate", {})
     cad.result("irrigation.catalog.set", {"heads": [{"name": "Saved head", "radius": 2000, "flow": 3, "pressure": 200}]})
-    path = tmp_path / "irrigation.json"
+    path = tmp_path / "irrigation.kad"
     cad.result("file.save", {"path": str(path)})
     cad = make_serve()
     assert cad.result("objects.list", {}) == []

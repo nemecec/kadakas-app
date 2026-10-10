@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 fn tmp(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("cdk-audit-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("kad-audit-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::canonicalize(d).unwrap()
@@ -116,31 +116,25 @@ fn describe_documents_the_error_codes() {
 }
 
 #[test]
-fn files_open_and_save_cdk_and_old_names_through_the_session() {
+fn files_open_and_save_kad_through_the_session() {
     let dir = tmp("files");
     let mut s = restricted(&dir);
     circle(&mut s);
     // `file.save` and `file.open` are not Session methods: a session reports them as unknown. The
     // hosts (cli, app) route them to `files::handle_file_request`.
-    let f = dir.join("plan.cdk");
+    let f = dir.join("plan.kad");
     let req = json!({"jsonrpc": "2.0", "id": 4, "method": "file.save", "params": {"path": f}});
     let reply: Value =
         serde_json::from_str(&kadakas_api::files::handle_file_request(&mut s, &req)).unwrap();
     assert_eq!(reply["result"]["ok"], true, "{reply}");
     assert!(f.exists());
-    let old = dir.join("plan.cdk.json");
-    let req = json!({"jsonrpc": "2.0", "id": 5, "method": "file.save", "params": {"path": old}});
-    let reply: Value =
-        serde_json::from_str(&kadakas_api::files::handle_file_request(&mut s, &req)).unwrap();
-    assert_eq!(reply["result"]["ok"], true, "{reply}");
     let mut t = restricted(&dir);
-    for p in [&f, &old] {
-        let req = json!({"jsonrpc": "2.0", "id": 6, "method": "file.open", "params": {"path": p}});
-        let reply: Value =
-            serde_json::from_str(&kadakas_api::files::handle_file_request(&mut t, &req)).unwrap();
-        assert_eq!(reply["result"]["ok"], true, "{reply}");
-        assert_eq!(ok(&mut t, "document.summary", json!({}))["object_count"], 1);
-    }
+    let p = &f;
+    let req = json!({"jsonrpc": "2.0", "id": 6, "method": "file.open", "params": {"path": p}});
+    let reply: Value =
+        serde_json::from_str(&kadakas_api::files::handle_file_request(&mut t, &req)).unwrap();
+    assert_eq!(reply["result"]["ok"], true, "{reply}");
+    assert_eq!(ok(&mut t, "document.summary", json!({}))["object_count"], 1);
 }
 
 #[test]

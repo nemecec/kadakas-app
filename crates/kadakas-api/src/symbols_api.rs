@@ -150,7 +150,7 @@ pub const RESOURCE_LIST_FILE: (&str, &str) = (
 #[cfg(not(target_arch = "wasm32"))]
 pub const RESOURCE_IMPORT_FROM_FILE: (&str, &str) = (
     "resource.import_from_file",
-    "Import resources from another .cdk.json file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.",
+    "Import resources from another .kad file as one undo step, with the resources they need (a symbol brings its hatch). The path follows the path policy. params: {path | library, items? ([{type, name}] or [name]; default: everything when all is true), all?, on_conflict? (rename (default) | reuse | replace), classes? ([names]), layers? ([names])}. Returns {imported: [{name, type, id, status (added|renamed|reused|replaced), dependency}], classes_added, layers_added}.",
 );
 #[cfg(not(target_arch = "wasm32"))]
 pub const RESOURCE_EXPORT_TO_FILE: (&str, &str) = (
@@ -184,7 +184,7 @@ pub fn describe() -> Value {
         "groups": "A group is an object (kind group) whose members name it as parent. Moving, turning, copying and deleting a group acts on all members. A click selects the top group (selection.click). group.enter lets you select members. Groups undo like any command.",
         "symbols": "A symbol definition is a resource with 2D components and optional 3D components (hybrid). An instance (shape kind symbol) has a definition, a position (where the insertion point goes), a rotation and a scale. Editing the definition changes every instance at once.",
         "patterns": "Hatches, tiles and line types are resources. Objects use them with the attributes fill_pattern (a hatch or tile) and line_type, on the object or on its class: {op: modify_object, id, attrs: {fill_pattern: 5}}. Paper units follow the drawing scale. The pattern is clipped to the shape in the canvas, SVG, PDF and DXF.",
-        "libraries": "resource.import_from_file reads another document and imports the resources you name with what they need. The library folder holds shared .cdk.json files.",
+        "libraries": "resource.import_from_file reads another document and imports the resources you name with what they need. The library folder holds shared .kad files.",
         "examples": [
             {"method": "group.create", "params": {"ids": ["00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004"], "name": "Bench"}},
             {"method": "group.rotate", "params": {"ids": ["00000000-0000-0000-0000-000000000005"], "center": [0, 0], "angle": 1.57}},
@@ -193,7 +193,7 @@ pub fn describe() -> Value {
             {"method": "symbol.place", "params": {"symbol": "Tree mark", "at": [1000, 2000], "rotation": 0.5, "scale": 2, "scale_y": 1}},
             {"method": "symbol.from_objects", "params": {"name": "Planter", "ids": ["00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"], "replace": true}},
             {"method": "resource.create", "params": {"type": "line_type", "name": "Dashed", "elements": [{"kind": "dash", "length": 3}, {"kind": "gap", "length": 1.5}]}},
-            {"method": "resource.import_from_file", "params": {"path": "/data/library.cdk.json", "items": [{"type": "symbol", "name": "Tree mark"}], "on_conflict": "rename"}},
+            {"method": "resource.import_from_file", "params": {"path": "/data/library.kad", "items": [{"type": "symbol", "name": "Tree mark"}], "on_conflict": "rename"}},
             {"method": "resource.purge_unused", "params": {"dry_run": true}}
         ],
     })

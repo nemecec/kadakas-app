@@ -544,7 +544,7 @@ impl KadakasApp {
         let (inbox, ctx) = (self.web_inbox.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             if let Some(f) = rfd::AsyncFileDialog::new()
-                .add_filter("Kadakas", &["cdk", "json"])
+                .add_filter("Kadakas", &["kad"])
                 .pick_file()
                 .await
             {
@@ -562,7 +562,7 @@ impl KadakasApp {
             .path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map_or("drawing.cdk".into(), |n| n.to_string_lossy().into_owned());
+            .map_or("drawing.kad".into(), |n| n.to_string_lossy().into_owned());
         match serde_json::to_vec_pretty(self.session.editor.doc()) {
             Ok(bytes) => self.download(&name, bytes, Some(self.web_saved.clone())),
             Err(e) => self.status = e.to_string(),
@@ -622,7 +622,7 @@ impl KadakasApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Kadakas", &["cdk", "json"])
+            .add_filter("Kadakas", &["kad"])
             .pick_file()
         else {
             return;
@@ -643,8 +643,8 @@ impl KadakasApp {
             (Some(p), false) => p.clone(),
             _ => {
                 let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Kadakas", &["cdk"])
-                    .set_file_name("drawing.cdk")
+                    .add_filter("Kadakas", &["kad"])
+                    .set_file_name("drawing.kad")
                     .save_file()
                 else {
                     return;
@@ -654,14 +654,7 @@ impl KadakasApp {
         };
         match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
-                self.status = if file_io::is_legacy_name(&path) {
-                    format!(
-                        "Saved {}. File > Save As makes a file with the new .cdk extension.",
-                        path.display()
-                    )
-                } else {
-                    format!("Saved {}", path.display())
-                };
+                self.status = format!("Saved {}", path.display());
                 self.path = Some(path);
                 self.set_title(ctx);
             }

@@ -81,7 +81,7 @@ fn serve_answers_requests_and_reports_bad_lines() {
 fn serve_saves_and_opens_documents_inside_the_allowed_folder() {
     let dir = temp("files");
     let other = temp("outside");
-    let doc = dir.join("a.json");
+    let doc = dir.join("a.kad");
     let input = requests(&[
         rpc(
             1,
@@ -90,9 +90,9 @@ fn serve_saves_and_opens_documents_inside_the_allowed_folder() {
         ),
         rpc(2, "file.save", json!({"path": doc})),
         rpc(3, "file.save", json!({})),
-        rpc(4, "file.save", json!({"path": other.join("b.json")})),
+        rpc(4, "file.save", json!({"path": other.join("b.kad")})),
         rpc(5, "file.open", json!({"path": doc})),
-        rpc(6, "file.open", json!({"path": dir.join("missing.json")})),
+        rpc(6, "file.open", json!({"path": dir.join("missing.kad")})),
         rpc(7, "objects.list", json!({})),
     ]);
     let out = run(
@@ -117,14 +117,10 @@ fn serve_saves_and_opens_documents_inside_the_allowed_folder() {
     );
     assert!(lines(&out)[0]["result"].is_object());
     // A file that does not open is a startup error.
-    let out = run(
-        &["serve", dir.join("nope.json").to_str().unwrap()],
-        "",
-        &dir,
-    );
+    let out = run(&["serve", dir.join("nope.kad").to_str().unwrap()], "", &dir);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("kadakas:"));
-    let bad = dir.join("bad.json");
+    let bad = dir.join("bad.kad");
     std::fs::write(&bad, "{nope").unwrap();
     let out = run(&["mcp", bad.to_str().unwrap()], "", &dir);
     assert_eq!(out.status.code(), Some(1));
@@ -189,12 +185,12 @@ fn mcp_lists_domain_tools_and_runs_methods() {
             call(
                 10,
                 "document",
-                json!({"method": "file.save", "params": {"path": "saved.json"}}),
+                json!({"method": "file.save", "params": {"path": "saved.kad"}}),
             ),
             call(
                 11,
                 "document",
-                json!({"method": "file.open", "params": {"path": "saved.json"}}),
+                json!({"method": "file.open", "params": {"path": "saved.kad"}}),
             ),
             call(12, "selection_undo", json!({"method": "undo"})),
         ],
@@ -290,7 +286,7 @@ fn render_import_and_export_commands() {
         r#"{"type":"LineString","coordinates":[[24.9,60.1],[24.91,60.11]]}"#,
     )
     .unwrap();
-    let doc = dir.join("doc.json");
+    let doc = dir.join("doc.kad");
     let out = run(
         &["import", geo.to_str().unwrap(), "-o", doc.to_str().unwrap()],
         "",
@@ -385,9 +381,9 @@ fn render_import_and_export_commands() {
 
     // Errors end with a message and exit code 1.
     for args in [
-        vec!["render", "missing.json", "-o", "x.svg"],
-        vec!["import", "missing.dxf", "-o", "x.json"],
-        vec!["export", "missing.json", "-o", "x.dxf"],
+        vec!["render", "missing.kad", "-o", "x.svg"],
+        vec!["import", "missing.dxf", "-o", "x.kad"],
+        vec!["export", "missing.kad", "-o", "x.dxf"],
     ] {
         let out = run(&args, "", &dir);
         assert_eq!(out.status.code(), Some(1), "{args:?}");
@@ -398,7 +394,7 @@ fn render_import_and_export_commands() {
             "import",
             geo.to_str().unwrap(),
             "-o",
-            "x.json",
+            "x.kad",
             "--options",
             "{nope",
         ],

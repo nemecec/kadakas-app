@@ -212,7 +212,7 @@ def test_sheets_survive_save_and_open(garden, tmp_path):
     cad.result("viewport.create", {"sheet": "Planting plan"})
     cad.result("title_block.create", {"sheet": "Planting plan"})
     cad.result("saved_view.save", {"name": "V"})
-    path = tmp_path / "drawing.json"
+    path = tmp_path / "drawing.kad"
     assert cad.rpc("file.save", {"path": str(path)})["result"] == {"ok": True}
     before = cad.doc()
     cad.rpc("file.open", {"path": str(path)})

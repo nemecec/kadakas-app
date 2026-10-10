@@ -149,7 +149,7 @@ def test_notifications_get_no_response(mcp):
 
 
 def test_file_save_then_file_open_round_trip_through_tools(mcp, tmp_path):
-    path = tmp_path / "agent.json"
+    path = tmp_path / "agent.kad"
     mcp.method_json("document", "execute", {"command": rect_cmd(0, 0, 500, 500)})
     assert mcp.method_json("document", "file.save", {"path": str(path)}) == {"ok": True}
     expected = mcp.method_json("document", "document.get")

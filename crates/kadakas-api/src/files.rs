@@ -1,8 +1,8 @@
 //! `file.open` and `file.save`: one handler for `kadakas serve`, `kadakas mcp` and the app.
 //! Native only: it reads and writes files. The path policy of the session applies.
 //!
-//! A document file is the JSON of `Document`. The extension is `.cdk` (the main format) or the old
-//! `.cdk.json` (a path that ends in `.json`). Saving keeps the old file as `.bak` and is atomic.
+//! A document file is the JSON of `Document`. The extension is `.kad`. Saving keeps the old file as `.bak` and
+//! is atomic.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use crate::{RpcError, Session};
 
-/// The extensions of a document file (lower case, no dot). `.cdk.json` ends in `json`.
-pub const DOC_EXTS: [&str; 2] = ["cdk", "json"];
+/// The extensions of a document file (lower case, no dot).
+pub const DOC_EXTS: [&str; 1] = ["kad"];
 
 /// Stores the bytes of a save: the path and the bytes. The error is a message.
 pub type WriteFn<'a> = dyn FnMut(&Path, &[u8]) -> Result<(), String> + 'a;
@@ -141,7 +141,7 @@ mod tests {
     use kadakas_core::model::Shape;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cdk-files-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("kad-files-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::canonicalize(d).unwrap()
@@ -174,39 +174,38 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_opens_cdk_and_old_cdk_json() {
+    fn saves_and_opens_kad_files() {
         let dir = tmp("both");
-        for name in ["plan.cdk", "plan.cdk.json", "plan.json"] {
-            let mut s = restricted(&dir);
-            add_circle(&mut s);
-            let f = dir.join(name);
-            assert_eq!(
-                call(&mut s, "file.save", &f)["result"]["ok"],
-                true,
-                "{name}"
-            );
-            let mut t = restricted(&dir);
-            assert_eq!(
-                call(&mut t, "file.open", &f)["result"]["ok"],
-                true,
-                "{name}"
-            );
-            assert_eq!(t.editor.doc().objects.len(), 1);
-            assert_eq!(t.doc_dir.as_deref(), Some(dir.as_path()));
-        }
+        let name = "plan.kad";
+        let mut s = restricted(&dir);
+        add_circle(&mut s);
+        let f = dir.join(name);
+        assert_eq!(
+            call(&mut s, "file.save", &f)["result"]["ok"],
+            true,
+            "{name}"
+        );
+        let mut t = restricted(&dir);
+        assert_eq!(
+            call(&mut t, "file.open", &f)["result"]["ok"],
+            true,
+            "{name}"
+        );
+        assert_eq!(t.editor.doc().objects.len(), 1);
+        assert_eq!(t.doc_dir.as_deref(), Some(dir.as_path()));
     }
 
     #[test]
     fn a_second_save_keeps_the_first_as_bak() {
         let dir = tmp("bak");
         let mut s = restricted(&dir);
-        let f = dir.join("a.cdk");
+        let f = dir.join("a.kad");
         call(&mut s, "file.save", &f);
         let first = std::fs::read_to_string(&f).unwrap();
         add_circle(&mut s);
         call(&mut s, "file.save", &f);
         assert_eq!(
-            std::fs::read_to_string(dir.join("a.cdk.bak")).unwrap(),
+            std::fs::read_to_string(dir.join("a.kad.bak")).unwrap(),
             first
         );
         assert_ne!(std::fs::read_to_string(&f).unwrap(), first);
@@ -217,7 +216,7 @@ mod tests {
         let dir = tmp("policy");
         let other = tmp("policy-other");
         let mut s = restricted(&dir);
-        let r = call(&mut s, "file.save", &other.join("x.cdk"));
+        let r = call(&mut s, "file.save", &other.join("x.kad"));
         assert_eq!(r["error"]["code"], 4);
         assert_eq!(r["error"]["data"]["kind"], "policy");
         let r = call(&mut s, "file.save", &dir.join("x.txt"));
@@ -225,7 +224,7 @@ mod tests {
         // An unrestricted session (a library user) may use any path and extension.
         let mut u = Session::with_sequential_ids();
         assert_eq!(
-            call(&mut u, "file.save", &other.join("x.cdk"))["result"]["ok"],
+            call(&mut u, "file.save", &other.join("x.kad"))["result"]["ok"],
             true
         );
     }
@@ -234,15 +233,15 @@ mod tests {
     fn errors_have_codes() {
         let dir = tmp("errors");
         let mut s = restricted(&dir);
-        let r = call(&mut s, "file.open", &dir.join("missing.cdk"));
+        let r = call(&mut s, "file.open", &dir.join("missing.kad"));
         assert_eq!(
             r["error"]["code"], 4,
             "a missing file cannot be resolved: {r}"
         );
         let mut u = Session::with_sequential_ids();
-        let r = call(&mut u, "file.open", &dir.join("missing.cdk"));
+        let r = call(&mut u, "file.open", &dir.join("missing.kad"));
         assert_eq!(r["error"]["code"], 2);
-        let bad = dir.join("bad.cdk");
+        let bad = dir.join("bad.kad");
         std::fs::write(&bad, "{nope").unwrap();
         let r = call(&mut u, "file.open", &bad);
         assert_eq!(r["error"]["code"], 3);
@@ -254,7 +253,7 @@ mod tests {
     #[test]
     fn a_newer_file_says_so() {
         let dir = tmp("newer");
-        let f = dir.join("future.cdk");
+        let f = dir.join("future.kad");
         std::fs::write(&f, r#"{"format_version":99,"layers":"???"}"#).unwrap();
         let mut s = Session::with_sequential_ids();
         let r = call(&mut s, "file.open", &f);
@@ -272,13 +271,13 @@ mod tests {
         let dir = tmp("replace");
         let mut a = restricted(&dir);
         add_circle(&mut a);
-        let f = dir.join("a.cdk");
+        let f = dir.join("a.kad");
         call(&mut a, "file.save", &f);
         let mut b = restricted(&dir);
         call(&mut b, "file.open", &f);
         assert!(!b.take_replaced());
         assert_eq!(b.editor.doc().objects.len(), 1);
-        assert!(FileDone::Opened(f.clone()).path().ends_with("a.cdk"));
+        assert!(FileDone::Opened(f.clone()).path().ends_with("a.kad"));
         assert!(is_file_method("file.open") && !is_file_method("render.svg"));
     }
 }

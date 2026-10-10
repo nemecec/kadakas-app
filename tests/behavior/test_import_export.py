@@ -397,16 +397,16 @@ def test_agents_can_only_use_allowed_folders(tmp_path):
         (inside / "link.dxf").symlink_to(outside / "secret.dxf")
         assert srv.error("import.file", {"path": str(inside / "link.dxf")})
         # file.save and file.open follow the same folders.
-        srv.result("file.save", {"path": str(inside / "doc.json")})
-        assert srv.error("file.save", {"path": str(outside / "doc.json")})
-        assert srv.error("file.open", {"path": str(outside / "doc.json")})
+        srv.result("file.save", {"path": str(inside / "doc.kad")})
+        assert srv.error("file.save", {"path": str(outside / "doc.kad")})
+        assert srv.error("file.open", {"path": str(outside / "doc.kad")})
         assert "extension" in srv.error("file.save", {"path": str(inside / "doc.txt")})["message"]
-        srv.result("file.open", {"path": str(inside / "doc.json")})
+        srv.result("file.open", {"path": str(inside / "doc.kad")})
     finally:
         srv.close()
     # The folder of the document is allowed too.
-    (outside / "doc.json").write_text(json.dumps(REPO and json.loads(open(inside / "doc.json").read())))
-    other = JsonRpc(["serve", str(outside / "doc.json"), "--allow-dir", str(inside)])
+    (outside / "doc.kad").write_text(json.dumps(REPO and json.loads(open(inside / "doc.kad").read())))
+    other = JsonRpc(["serve", str(outside / "doc.kad"), "--allow-dir", str(inside)])
     try:
         assert other.result("import.file", {"path": str(outside / "secret.dxf")})["imported"] == 1
     finally:

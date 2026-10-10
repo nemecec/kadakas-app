@@ -182,7 +182,7 @@ def test_import_export_and_files(doc, tmp_path: Path):
     out = tmp_path / "out.dxf"
     doc.export_file(out)
     assert out.stat().st_size > 0
-    saved = tmp_path / "saved.json"
+    saved = tmp_path / "saved.kad"
     doc.save(saved)
     count = doc.summary()["object_count"]
     doc.add.circle([0, 0], 1)
@@ -202,7 +202,7 @@ def test_render(doc, tmp_path: Path):
 
 
 def test_open_a_document_file_and_describe(tmp_path: Path):
-    saved = tmp_path / "start.json"
+    saved = tmp_path / "start.kad"
     with kadakas.open(allow_dir=[tmp_path]) as d:
         d.add.circle([0, 0], 7)
         d.save(saved)

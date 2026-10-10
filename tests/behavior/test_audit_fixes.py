@@ -7,24 +7,23 @@ from helpers import McpClient, rect_cmd, run_cli
 from conftest import ALLOW
 
 
-def test_serve_saves_and_opens_cdk_and_cdk_json(cad, make_serve, tmp_path):
+def test_serve_saves_and_opens_kad(cad, make_serve, tmp_path):
     cad.execute(rect_cmd(0, 0, 1, 1))
-    for name in ("plan.cdk", "plan.cdk.json"):
-        f = tmp_path / name
-        assert cad.result("file.save", {"path": str(f)}) == {"ok": True}
-        assert json.loads(f.read_text())["format_version"] == 3
-        other = make_serve()
-        assert other.result("file.open", {"path": str(f)}) == {"ok": True}
-        assert other.result("document.summary")["object_count"] == 1
+    f = tmp_path / "plan.kad"
+    assert cad.result("file.save", {"path": str(f)}) == {"ok": True}
+    assert json.loads(f.read_text())["format_version"] == 3
+    other = make_serve()
+    assert other.result("file.open", {"path": str(f)}) == {"ok": True}
+    assert other.result("document.summary")["object_count"] == 1
     # A second save keeps the first file as .bak.
     cad.execute(rect_cmd(2, 2, 3, 3))
-    cad.result("file.save", {"path": str(tmp_path / "plan.cdk")})
-    assert json.loads((tmp_path / "plan.cdk.bak").read_text())["objects"][0]["id"]
+    cad.result("file.save", {"path": str(tmp_path / "plan.kad")})
+    assert json.loads((tmp_path / "plan.kad.bak").read_text())["objects"][0]["id"]
     assert cad.error("file.save", {"path": str(tmp_path / "x.txt")})["code"] == 4
 
 
-def test_mcp_saves_and_opens_cdk(tmp_path):
-    f = tmp_path / "m.cdk"
+def test_mcp_saves_and_opens_kad(tmp_path):
+    f = tmp_path / "m.kad"
     mcp = McpClient(["mcp", "--mcp-flat", *ALLOW])
     mcp.initialize()
     try:
@@ -37,7 +36,7 @@ def test_mcp_saves_and_opens_cdk(tmp_path):
 
 
 def test_a_newer_file_gets_a_clear_message(cad, tmp_path):
-    f = tmp_path / "future.cdk"
+    f = tmp_path / "future.kad"
     f.write_text(json.dumps({"format_version": 99, "layers": "???"}))
     err = cad.error("file.open", {"path": str(f)})
     assert "file was made by a newer Kadakas (format 99)" in err["message"]
@@ -52,13 +51,13 @@ def test_future_shapes_and_fields_survive_open_and_save(cad, make_serve, tmp_pat
     doc["objects"][0]["future"] = {"a": 1}
     doc["layers"][0]["future_layer"] = True
     doc["new_top"] = [1, 2]
-    src = tmp_path / "future.cdk"
+    src = tmp_path / "future.kad"
     src.write_text(json.dumps(doc))
     cad.result("file.open", {"path": str(src)})
     summary = cad.result("document.summary")
     assert summary["objects_by_kind"] == {"unknown": 1}
     assert summary["unknown_shapes"][0]["kind"] == "spiral"
-    out = tmp_path / "again.cdk"
+    out = tmp_path / "again.kad"
     cad.result("file.save", {"path": str(out)})
     assert json.loads(out.read_text()) == doc
     oid = summary["unknown_shapes"][0]["id"]
@@ -81,7 +80,7 @@ def test_dwg_needs_allow_converters(make_serve, tmp_path):
 
 def test_cli_render_is_the_same_svg_as_the_api(cad, tmp_path):
     cad.execute(rect_cmd(0, 0, 4000, 3000))
-    f = tmp_path / "r.cdk"
+    f = tmp_path / "r.kad"
     cad.result("file.save", {"path": str(f)})
     out = tmp_path / "r.svg"
     p = run_cli("render", str(f), "-o", str(out), "--width", "700")

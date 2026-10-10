@@ -1,5 +1,7 @@
 # Kadakas
 
+The project was formerly named Cadektor.
+
 Kadakas is a 2D CAD program for landscape design, written in Rust. Every change to a drawing is a
 serializable, undoable command. The desktop app, scripts and AI agents all send the same commands.
 
@@ -11,7 +13,7 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 - `crates/kadakas-cli`: the `kadakas` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/kadakas-app`: the desktop app (egui). It can also serve the API over TCP to agents.
 
-Documents are JSON files with the extension `.cdk`. Older files named `*.cdk.json` still open, and File > Save keeps their name (File > Save As offers `.cdk`). Units are millimeters, the Y axis points up, angles are in radians.
+Documents are JSON files with the extension `.kad`. Units are millimeters, the Y axis points up, angles are in radians.
 See `docs/feature-spec.md` for the plan.
 
 ## Build
@@ -44,10 +46,10 @@ or show its folder. A normal exit removes the copies. The folder is `~/Library/A
 cargo run --release -p kadakas-app
 
 # Headless: one JSON-RPC 2.0 request per line on stdin, one response per line on stdout
-cargo run --release -p kadakas-cli -- serve [file.cdk.json]
+cargo run --release -p kadakas-cli -- serve [file.kad]
 
 # Render a document to SVG
-cargo run --release -p kadakas-cli -- render drawing.cdk.json -o drawing.svg
+cargo run --release -p kadakas-cli -- render drawing.kad -o drawing.svg
 ```
 
 ## Web
@@ -58,13 +60,13 @@ The app also runs in a browser (WebGPU, or WebGL2 as the fallback) with fewer fe
 Import and export (File > Import... and File > Export... in the app, `import.file` and `export.file` in the API):
 
 ```sh
-kadakas import site.dxf -o drawing.cdk.json                                # DXF layers become classes
-kadakas import trees.geojson -o drawing.cdk.json --into drawing.cdk.json  # GIS data sets the georeference
-kadakas import site.dxf -o d.cdk.json --options '{"layer_mode": "layers", "unit": "m"}'
-kadakas export drawing.cdk.json -o out.dxf --options '{"unit": "m"}'
-kadakas export drawing.cdk.json -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
-kadakas import model.ifc -o drawing.cdk.json                                # IFC2x3, IFC4 or IFC4x3
-kadakas import survey.dwg -o drawing.cdk.json                               # needs a converter, see docs/dwg.md
+kadakas import site.dxf -o drawing.kad                                # DXF layers become classes
+kadakas import trees.geojson -o drawing.kad --into drawing.kad  # GIS data sets the georeference
+kadakas import site.dxf -o d.kad --options '{"layer_mode": "layers", "unit": "m"}'
+kadakas export drawing.kad -o out.dxf --options '{"unit": "m"}'
+kadakas export drawing.kad -o site.ifc                                 # IFC4; the first export stores a project GUID in the file
+kadakas import model.ifc -o drawing.kad                                # IFC2x3, IFC4 or IFC4x3
+kadakas import survey.dwg -o drawing.kad                               # needs a converter, see docs/dwg.md
 ```
 
 An import is one undo step and returns a report of what it skipped and why. GIS files are converted to the

@@ -173,9 +173,9 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
     src.result("symbol.create", {"name": "Dot", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 5}, "attrs": {"fill_pattern": h}}]})
     src.result("resource.create", {"type": "texture", "name": "Bark", "color": [1, 2, 3, 255]})
     path = src.result("resource.export_to_file", {"library": "Garden", "overwrite": True})["path"]
-    assert path.endswith("Garden.cdk")
+    assert path.endswith("Garden.kad")
     json.loads(open(path).read())
-    assert src.result("library.list")["files"] == [{"file": "Garden.cdk", "resources": 3}]
+    assert src.result("library.list")["files"] == [{"file": "Garden.kad", "resources": 3}]
 
     dst = make_serve()
     listing = dst.result("resource.list_file", {"library": "Garden"})
@@ -191,7 +191,7 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
     dst.result("undo")
     assert dst.result("resource.list")["resources"] == []
     # Favorites are kept in the library folder.
-    fav = {"library": "Garden.cdk.json", "type": "symbol", "name": "Dot"}
+    fav = {"library": "Garden.kad", "type": "symbol", "name": "Dot"}
     dst.result("library.favorite_add", fav)
     dst.result("library.favorite_add", fav)
     assert dst.result("library.favorites")["favorites"] == [fav]
@@ -200,19 +200,19 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
 
 
 def test_import_follows_the_path_policy(cad, tmp_path):
-    outside = "/etc/hosts.cdk.json"
+    outside = "/etc/hosts.kad"
     err = cad.error("resource.import_from_file", {"path": outside, "all": True})
     assert err["code"] == 4
     assert "cannot read" in err["message"] or "outside" in err["message"]
     assert cad.error("resource.import_from_file", {"library": "../x", "all": True})["code"] == -32602
     # A file that is not a Kadakas document is refused with a clear message.
-    bad = tmp_path / "bad.cdk.json"
+    bad = tmp_path / "bad.kad"
     bad.write_text("{}")
     assert "not a Kadakas file" in cad.error("resource.import_from_file", {"path": str(bad), "all": True})["message"]
-    # An extension other than json is refused in a restricted session.
+    # An extension other than kad is refused in a restricted session.
     txt = tmp_path / "lib.txt"
     txt.write_text("x")
-    assert ".json" in cad.error("resource.import_from_file", {"path": str(txt), "all": True})["message"]
+    assert ".kad" in cad.error("resource.import_from_file", {"path": str(txt), "all": True})["message"]
 
 
 def test_describe_lists_the_new_methods_with_examples(cad):

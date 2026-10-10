@@ -7,7 +7,7 @@ This page tells how to build the installers of Kadakas and where the files go on
 We use `cargo-packager` (settings in `packager.toml`). We chose it over `cargo-bundle` for these reasons.
 
 - It builds all targets we need: `.app` and `.dmg` (macOS), NSIS `.exe` and WiX `.msi` (Windows), AppImage and `.deb` (Linux). `cargo-bundle` has no Windows installer and no AppImage.
-- One file, `packager.toml`, holds the settings for all systems. It also holds the file type association (`.cdk`) and the extra binary.
+- One file, `packager.toml`, holds the settings for all systems. It also holds the file type association (`.kad`) and the extra binary.
 - It is maintained, and it can sign and update packages later without a change of tool.
 
 ## Build on your own machine
@@ -42,9 +42,9 @@ scripts/notices.sh
 
 ## macOS notes
 
-- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.kadakas.drawing` (it conforms to `public.json`) and makes Kadakas the owner of `.cdk` files. Old `.cdk.json` files still open with File > Open, but a double click does not open them in Kadakas.
+- `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.kadakas.drawing` (it conforms to `public.json`) and makes Kadakas the owner of `.kad` files.
 - The `.app` build was checked on macOS 26 (Apple silicon). The `.dmg` step runs a Finder script for the window layout. It needs a normal desktop session, and it timed out in a headless run. Run it on a Mac with a user logged in.
-- The bundle id is `net.kadakas.Kadakas`. Test the double click on a `.cdk` file on a real Mac before the first release.
+- The bundle id is `net.kadakas.Kadakas`. Test the double click on a `.kad` file on a real Mac before the first release.
 
 ## Where is the `kadakas` command line tool?
 

@@ -56,7 +56,7 @@ def test_render_svg_of_empty_drawing_is_valid_and_empty(cad):
 
 
 def test_render_cli_writes_valid_svg_matching_visible_objects(make_serve, tmp_path):
-    doc_path = tmp_path / "garden.json"
+    doc_path = tmp_path / "garden.kad"
     svg_path = tmp_path / "garden.svg"
     cad = make_serve()
     visible = build_mixed_drawing(cad)
@@ -70,7 +70,7 @@ def test_render_cli_writes_valid_svg_matching_visible_objects(make_serve, tmp_pa
 
 
 def test_render_cli_width_flag_is_honored(make_serve, tmp_path):
-    doc_path = tmp_path / "d.json"
+    doc_path = tmp_path / "d.kad"
     svg_path = tmp_path / "d.svg"
     cad = make_serve()
     cad.execute(rect_cmd(0, 0, 10, 10))
@@ -81,15 +81,15 @@ def test_render_cli_width_flag_is_honored(make_serve, tmp_path):
 
 
 def test_render_cli_fails_cleanly_for_missing_input(tmp_path):
-    proc = run_cli("render", str(tmp_path / "nope.json"), "-o", str(tmp_path / "out.svg"))
+    proc = run_cli("render", str(tmp_path / "nope.kad"), "-o", str(tmp_path / "out.svg"))
     assert proc.returncode != 0
-    assert "nope.json" in proc.stderr
+    assert "nope.kad" in proc.stderr
     assert not (tmp_path / "out.svg").exists()
 
 
 def test_render_cli_fails_cleanly_for_invalid_document(tmp_path):
-    bad = tmp_path / "bad.json"
+    bad = tmp_path / "bad.kad"
     bad.write_text("{not a document")
     proc = run_cli("render", str(bad), "-o", str(tmp_path / "out.svg"))
     assert proc.returncode != 0
-    assert "bad.json" in proc.stderr
+    assert "bad.kad" in proc.stderr

@@ -45,10 +45,9 @@ icons = [
   "packaging/icons/icon.ico",
 ]
 
-# Kadakas documents end in .cdk. The old .cdk.json files still open (File > Open), but the system
-# does not hand them to the app by double click.
+# Kadakas documents end in .kad.
 [[file-associations]]
-extensions = ["cdk"]
+extensions = ["kad"]
 name = "Kadakas drawing"
 description = "Kadakas drawing"
 mime-type = "application/vnd.kadakas.drawing+json"

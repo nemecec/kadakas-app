@@ -186,7 +186,7 @@ def test_definitions_update_and_regenerate_in_one_step(open_doc):
 def test_a_document_with_plug_in_objects_saves_and_opens_again(doc, tmp_path: Path):
     doc.plugins.install_example("Bench")
     bench = doc.plugins.place("Bench", at=[10, 10])
-    saved = tmp_path / "bench.json"
+    saved = tmp_path / "bench.kad"
     doc.save(saved)
     count = doc.summary()["object_count"]
     doc.undo()

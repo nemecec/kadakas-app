@@ -103,7 +103,7 @@ print(doc.worksheets.evaluate(sheet)["cells"]["A3"])      # 360
 doc.import_file("survey.geojson")
 doc.export_file("plan.dxf")
 doc.render_png("view.png", view="front", width=1200, height=800)
-doc.save("garden.json")
+doc.save("garden.kad")
 ```
 
 ### Undo groups

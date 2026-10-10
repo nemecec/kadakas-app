@@ -1,5 +1,4 @@
-//! Document files: JSON of `Document`. The extension is `.cdk`. Files that end in `.cdk.json`
-//! (the old extension) still open and save, and Save As offers `.cdk`.
+//! Document files: JSON of `Document`. The extension is `.kad`.
 
 use std::path::{Path, PathBuf};
 
@@ -39,19 +38,14 @@ pub fn write_svg(path: &Path, session: &Session) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// Adds `.cdk` unless the name already ends in `.cdk` or in the old `.cdk.json`.
+/// Adds `.kad` unless the name already ends in `.kad`.
 pub fn with_extension(path: &Path) -> std::path::PathBuf {
     let s = path.to_string_lossy();
-    if s.ends_with(".cdk") || s.ends_with(".cdk.json") {
+    if s.ends_with(".kad") {
         path.to_path_buf()
     } else {
-        format!("{s}.cdk").into()
+        format!("{s}.kad").into()
     }
-}
-
-/// True for the old `.cdk.json` extension. Save keeps such a file as it is. Save As offers `.cdk`.
-pub fn is_legacy_name(path: &Path) -> bool {
-    path.to_string_lossy().ends_with(".cdk.json")
 }
 
 /// What an agent request changed in the app besides the document.
@@ -134,8 +128,7 @@ mod tests {
                 attrs: Attributes::default(),
             })
             .unwrap();
-        let path =
-            std::env::temp_dir().join(format!("kadakas-test-{}.cdk.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("kadakas-test-{}.kad", std::process::id()));
         write_document(&path, s.editor.doc()).unwrap();
         assert_eq!(read_document(&path).unwrap(), s.editor.doc().clone());
         let svg = std::env::temp_dir().join(format!("kadakas-test-{}.svg", std::process::id()));
@@ -159,14 +152,8 @@ mod tests {
 
     #[test]
     fn extension_helper() {
-        assert_eq!(with_extension(Path::new("a")).to_str(), Some("a.cdk"));
-        assert_eq!(with_extension(Path::new("a.cdk")).to_str(), Some("a.cdk"));
-        assert_eq!(
-            with_extension(Path::new("a.cdk.json")).to_str(),
-            Some("a.cdk.json")
-        );
-        assert!(is_legacy_name(Path::new("a.cdk.json")));
-        assert!(!is_legacy_name(Path::new("a.cdk")));
+        assert_eq!(with_extension(Path::new("a")).to_str(), Some("a.kad"));
+        assert_eq!(with_extension(Path::new("a.kad")).to_str(), Some("a.kad"));
     }
 
     fn temp(name: &str) -> PathBuf {
@@ -188,14 +175,14 @@ mod tests {
     #[test]
     fn saving_keeps_a_backup_and_leaves_no_temp_files() {
         let dir = temp("save");
-        let p = dir.join("a.cdk.json");
+        let p = dir.join("a.kad");
         let mut doc = Document::default();
         write_document(&p, &doc).unwrap();
         doc.layers[0].name = "Second".into();
         write_document(&p, &doc).unwrap();
         assert_eq!(read_document(&p).unwrap().layers[0].name, "Second");
         assert_eq!(
-            read_document(&dir.join("a.cdk.json.bak")).unwrap().layers[0].name,
+            read_document(&dir.join("a.kad.bak")).unwrap().layers[0].name,
             "Layer 1"
         );
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
@@ -203,12 +190,12 @@ mod tests {
     }
 
     #[test]
-    fn restricted_agents_may_use_cdk_and_old_json_files_but_not_other_extensions() {
+    fn restricted_agents_may_use_kad_files_but_not_other_extensions() {
         let dir = temp("agent-ext");
         let mut s = Session::default();
         s.paths = kadakas_api::PathPolicy::restricted(vec![dir.clone()]);
         let (mut path, mut fx) = (None, AgentEffects::default());
-        for (name, ok) in [("a.cdk", true), ("b.cdk.json", true), ("c.txt", false)] {
+        for (name, ok) in [("a.kad", true), ("b.json", false), ("c.txt", false)] {
             let p = dir.join(name);
             let r = call(
                 &mut s,
@@ -225,7 +212,7 @@ mod tests {
     #[test]
     fn agent_file_save_and_open_use_the_app_path() {
         let dir = temp("agent-files");
-        let p = dir.join("plan.cdk.json");
+        let p = dir.join("plan.kad");
         let mut s = Session::default();
         let mut path = None;
         let mut fx = AgentEffects::default();
@@ -261,7 +248,7 @@ mod tests {
         assert_eq!(read_document(&p).unwrap().objects.len(), 1);
 
         // Open a different document: the session is replaced and the app is told.
-        let other = dir.join("other.cdk.json");
+        let other = dir.join("other.kad");
         write_document(&other, &Document::default()).unwrap();
         let mut fx = AgentEffects::default();
         let r = call(
@@ -337,7 +324,7 @@ mod tests {
     #[test]
     fn agent_document_load_clears_the_file_path_and_tells_the_app() {
         let mut s = Session::default();
-        let mut path = Some(PathBuf::from("/tmp/old.cdk.json"));
+        let mut path = Some(PathBuf::from("/tmp/old.kad"));
         let mut fx = AgentEffects::default();
         let doc = serde_json::to_value(Document::default()).unwrap();
         let r = call(
@@ -357,7 +344,7 @@ mod tests {
         );
 
         // A refused load changes nothing.
-        let mut path = Some(PathBuf::from("/tmp/keep.cdk.json"));
+        let mut path = Some(PathBuf::from("/tmp/keep.kad"));
         let mut fx = AgentEffects::default();
         let r = call(
             &mut s,
@@ -366,7 +353,7 @@ mod tests {
             json!({"id": 2, "method": "document.load", "params": {"document": {"format_version": 99}}}),
         );
         assert!(r.get("error").is_some());
-        assert_eq!(path, Some(PathBuf::from("/tmp/keep.cdk.json")));
+        assert_eq!(path, Some(PathBuf::from("/tmp/keep.kad")));
         assert_eq!(fx, AgentEffects::default());
 
         // Lines that are not JSON still get the normal parse error.

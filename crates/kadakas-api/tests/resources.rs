@@ -498,7 +498,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
         &mut src,
         json!({"op": "add_layer", "name": "Site", "elevation": 100}),
     );
-    let file = tmp("lib.cdk.json");
+    let file = tmp("lib.kad");
     let text = serde_json::to_string(&ok(&mut src, "document.get", json!({}))).unwrap();
     std::fs::write(&file, text).unwrap();
 
@@ -599,7 +599,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
         call(
             &mut s,
             "resource.import_from_file",
-            json!({"path": tmp("missing.cdk.json"), "all": true})
+            json!({"path": tmp("missing.kad"), "all": true})
         )
         .is_err()
     );
@@ -630,7 +630,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
         json!({"path": file, "all": true}),
     );
     // Export a library from a document and read it back.
-    let out = tmp("exported.cdk.json");
+    let out = tmp("exported.kad");
     let e = ok(
         &mut s,
         "resource.export_to_file",
@@ -748,7 +748,7 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         err(
             &mut s,
             "resource.list_file",
-            json!({"path": tmp("none.cdk.json")})
+            json!({"path": tmp("none.kad")})
         )
         .contains("cannot read")
     );

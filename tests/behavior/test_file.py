@@ -6,7 +6,7 @@ from helpers import plant_cmd, rect_cmd, uid
 
 
 def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
-    path = tmp_path / "garden.json"
+    path = tmp_path / "garden.kad"
     first = make_serve()
     site = first.execute({"op": "add_layer", "name": "Site", "elevation": 150})[0]
     first.execute({"op": "set_active", "layer": site})
@@ -23,7 +23,7 @@ def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
 
 
 def test_saved_file_is_the_document_json(make_serve, tmp_path):
-    path = tmp_path / "doc.json"
+    path = tmp_path / "doc.kad"
     cad = make_serve()
     cad.execute(rect_cmd(0, 0, 10, 10))
     cad.result("file.save", {"path": str(path)})
@@ -33,7 +33,7 @@ def test_saved_file_is_the_document_json(make_serve, tmp_path):
 
 
 def test_serve_with_a_file_argument_opens_it_at_start(make_serve, tmp_path):
-    path = tmp_path / "start.json"
+    path = tmp_path / "start.kad"
     writer = make_serve()
     writer.execute(plant_cmd(0, 0, species="Betula pendula"))
     writer.result("file.save", {"path": str(path)})
@@ -43,7 +43,7 @@ def test_serve_with_a_file_argument_opens_it_at_start(make_serve, tmp_path):
 
 
 def test_opening_a_file_clears_undo_history(make_serve, tmp_path):
-    path = tmp_path / "d.json"
+    path = tmp_path / "d.kad"
     writer = make_serve()
     writer.execute(rect_cmd(0, 0, 1, 1))
     writer.result("file.save", {"path": str(path)})
@@ -56,7 +56,7 @@ def test_opening_a_file_clears_undo_history(make_serve, tmp_path):
 
 
 def test_document_with_newer_format_version_is_refused_and_session_is_kept(make_serve, tmp_path):
-    future = tmp_path / "future.json"
+    future = tmp_path / "future.kad"
     doc = make_serve().doc()
     doc["format_version"] = 999
     future.write_text(json.dumps(doc))
@@ -79,12 +79,12 @@ def test_document_load_with_newer_format_version_is_refused(cad):
 
 
 def test_opening_a_missing_file_is_an_application_error(cad, tmp_path):
-    error = cad.error("file.open", {"path": str(tmp_path / "missing.json")})
+    error = cad.error("file.open", {"path": str(tmp_path / "missing.kad")})
     assert error["code"] == 4
 
 
 def test_opening_a_file_that_is_not_a_document_is_an_application_error(cad, tmp_path):
-    junk = tmp_path / "junk.json"
+    junk = tmp_path / "junk.kad"
     junk.write_text("[1, 2, 3]")
     error = cad.error("file.open", {"path": str(junk)})
     assert error["code"] == 3
@@ -95,6 +95,6 @@ def test_saving_without_a_path_is_invalid_params(cad):
 
 
 def test_saving_into_a_missing_directory_is_an_application_error(cad, tmp_path):
-    error = cad.error("file.save", {"path": str(tmp_path / "no" / "such" / "dir.json")})
+    error = cad.error("file.save", {"path": str(tmp_path / "no" / "such" / "dir.kad")})
     assert error["code"] == 4
     assert not (tmp_path / "no").exists()

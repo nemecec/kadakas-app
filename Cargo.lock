@@ -557,285 +557,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "kadakas-annot"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "kadakas-sheet",
- "glam",
- "proptest",
- "serde_json",
-]
-
-[[package]]
-name = "kadakas-api"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "kadakas-annot",
- "kadakas-core",
- "kadakas-crs",
- "kadakas-gis",
- "kadakas-ifc",
- "kadakas-io",
- "kadakas-irrigation",
- "kadakas-plants",
- "kadakas-print",
- "kadakas-render",
- "kadakas-script",
- "kadakas-sheet",
- "kadakas-site",
- "kadakas-sys",
- "kadakas-x3d",
- "glam",
- "png",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "kadakas-app"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytemuck",
- "kadakas-annot",
- "kadakas-api",
- "kadakas-core",
- "kadakas-gis",
- "kadakas-irrigation",
- "kadakas-plants",
- "kadakas-print",
- "kadakas-render",
- "kadakas-script",
- "kadakas-sheet",
- "kadakas-site",
- "kadakas-sys",
- "eframe",
- "egui",
- "egui_dock",
- "getrandom 0.4.3",
- "glam",
- "js-sys",
- "pollster 1.0.1",
- "resvg",
- "rfd",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
-]
-
-[[package]]
-name = "kadakas-cli"
-version = "0.1.0"
-dependencies = [
- "kadakas-api",
- "kadakas-core",
- "kadakas-sys",
- "clap",
- "serde_json",
-]
-
-[[package]]
-name = "kadakas-core"
-version = "0.1.0"
-dependencies = [
- "glam",
- "i_overlay",
- "indexmap",
- "png",
- "proptest",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "kadakas-crs"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "proj4rs",
- "proptest",
-]
-
-[[package]]
-name = "kadakas-gis"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "kadakas-crs",
- "kadakas-io",
- "image",
- "proptest",
- "roxmltree",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tiff",
- "ureq",
-]
-
-[[package]]
-name = "kadakas-ifc"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "kadakas-crs",
- "kadakas-io",
- "kadakas-site",
- "kadakas-sys",
- "glam",
- "i_overlay",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "kadakas-io"
-version = "0.1.0"
-dependencies = [
- "kadakas-annot",
- "kadakas-core",
- "kadakas-crs",
- "kadakas-site",
- "kadakas-sys",
- "encoding_rs",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "kadakas-irrigation"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "kadakas-plants"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "glam",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "kadakas-print"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "base64 0.22.1",
- "kadakas-annot",
- "kadakas-core",
- "kadakas-render",
- "kadakas-sheet",
- "kadakas-site",
- "kadakas-sys",
- "kadakas-x3d",
- "epaint_default_fonts",
- "glam",
- "lopdf",
- "miniz_oxide 0.8.9",
- "pdf-writer",
- "png",
- "proptest",
- "serde_json",
- "tiny-skia",
-]
-
-[[package]]
-name = "kadakas-render"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "kadakas-core",
- "glam",
- "png",
- "proptest",
- "serde_json",
- "zune-core",
- "zune-jpeg",
-]
-
-[[package]]
-name = "kadakas-script"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "kadakas-sys",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "kadakas-sheet"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "kadakas-plants",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "kadakas-site"
-version = "0.1.0"
-dependencies = [
- "kadakas-core",
- "glam",
- "proptest",
- "serde",
- "serde_json",
- "spade",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "kadakas-sys"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "kadakas-x3d"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "kadakas-core",
- "kadakas-render",
- "glam",
- "gltf",
- "proptest",
- "serde",
- "serde_json",
- "spade",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2418,6 +2139,285 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kadakas-annot"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-core",
+ "kadakas-sheet",
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-api"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "glam",
+ "kadakas-annot",
+ "kadakas-core",
+ "kadakas-crs",
+ "kadakas-gis",
+ "kadakas-ifc",
+ "kadakas-io",
+ "kadakas-irrigation",
+ "kadakas-plants",
+ "kadakas-print",
+ "kadakas-render",
+ "kadakas-script",
+ "kadakas-sheet",
+ "kadakas-site",
+ "kadakas-sys",
+ "kadakas-x3d",
+ "png",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "kadakas-app"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytemuck",
+ "eframe",
+ "egui",
+ "egui_dock",
+ "getrandom 0.4.3",
+ "glam",
+ "js-sys",
+ "kadakas-annot",
+ "kadakas-api",
+ "kadakas-core",
+ "kadakas-gis",
+ "kadakas-irrigation",
+ "kadakas-plants",
+ "kadakas-print",
+ "kadakas-render",
+ "kadakas-script",
+ "kadakas-sheet",
+ "kadakas-site",
+ "kadakas-sys",
+ "pollster 1.0.1",
+ "resvg",
+ "rfd",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "kadakas-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "kadakas-api",
+ "kadakas-core",
+ "kadakas-sys",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "i_overlay",
+ "indexmap",
+ "png",
+ "proptest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-crs"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "proj4rs",
+ "proptest",
+]
+
+[[package]]
+name = "kadakas-gis"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "kadakas-core",
+ "kadakas-crs",
+ "kadakas-io",
+ "proptest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tiff",
+ "ureq",
+]
+
+[[package]]
+name = "kadakas-ifc"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "i_overlay",
+ "kadakas-core",
+ "kadakas-crs",
+ "kadakas-io",
+ "kadakas-site",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-io"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "kadakas-annot",
+ "kadakas-core",
+ "kadakas-crs",
+ "kadakas-site",
+ "kadakas-sys",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-irrigation"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-plants"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-core",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-print"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "base64 0.22.1",
+ "epaint_default_fonts",
+ "glam",
+ "kadakas-annot",
+ "kadakas-core",
+ "kadakas-render",
+ "kadakas-sheet",
+ "kadakas-site",
+ "kadakas-sys",
+ "kadakas-x3d",
+ "lopdf",
+ "miniz_oxide 0.8.9",
+ "pdf-writer",
+ "png",
+ "proptest",
+ "serde_json",
+ "tiny-skia",
+]
+
+[[package]]
+name = "kadakas-render"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "glam",
+ "kadakas-core",
+ "png",
+ "proptest",
+ "serde_json",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "kadakas-script"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "kadakas-sys",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "kadakas-sheet"
+version = "0.1.0"
+dependencies = [
+ "kadakas-core",
+ "kadakas-plants",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-site"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-core",
+ "proptest",
+ "serde",
+ "serde_json",
+ "spade",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kadakas-x3d"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "glam",
+ "gltf",
+ "kadakas-core",
+ "kadakas-render",
+ "proptest",
+ "serde",
+ "serde_json",
+ "spade",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use crate::autosave::AutosaveSettings;
 use crate::file_io;
 
-const VERSION_SUFFIX: &str = ".cdk.json";
+const VERSION_SUFFIX: &str = ".autosave.kad";
 
 /// A lock file that nobody holds is stale at once if its process is gone. If the process id is
 /// alive (or unknown), the lock must be this old first. This covers the start of another app,
@@ -521,14 +521,14 @@ mod tests {
     fn a_version_is_written_and_read_back() {
         let dir = temp("write");
         let doc = doc_with_circles(3);
-        let out = write_version(&dir, "s1", 1, &job(&doc, Some("/a/b.cdk".into()), 5)).unwrap();
+        let out = write_version(&dir, "s1", 1, &job(&doc, Some("/a/b.kad".into()), 5)).unwrap();
         assert_eq!(out, Over::NotAsked);
-        let text = std::fs::read_to_string(dir.join("s1.000001.cdk.json")).unwrap();
+        let text = std::fs::read_to_string(dir.join("s1.000001.autosave.kad")).unwrap();
         assert_eq!(Document::from_json(&text).unwrap(), doc);
         let meta: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("s1.meta.json")).unwrap())
                 .unwrap();
-        assert_eq!(meta["original"], "/a/b.cdk");
+        assert_eq!(meta["original"], "/a/b.kad");
         // No temporary files remain.
         let names: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
@@ -547,7 +547,7 @@ mod tests {
         write_version(&dir, "s", 1, &job(&doc, None, 3)).unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700);
-        assert_eq!(mode(&dir.join("s.000001.cdk.json")), 0o600);
+        assert_eq!(mode(&dir.join("s.000001.autosave.kad")), 0o600);
         assert_eq!(mode(&dir.join("s.meta.json")), 0o600);
         // A session lock is private too.
         let r = Recovery::start(dir.clone()).unwrap();
@@ -581,21 +581,21 @@ mod tests {
     #[test]
     fn opt_in_writes_the_user_file_but_never_its_backup() {
         let dir = temp("over");
-        let target = dir.join("mine.cdk");
+        let target = dir.join("mine.kad");
         std::fs::write(&target, "old").unwrap();
         let doc = doc_with_circles(2);
         let j = over_job(&doc, &target);
         assert_eq!(write_version(&dir, "s", 1, &j).unwrap(), Over::Written);
         assert_eq!(file_io::read_document(&target).unwrap(), doc);
         assert!(
-            !dir.join("mine.cdk.bak").exists(),
+            !dir.join("mine.kad.bak").exists(),
             "autosave must not touch .bak"
         );
         // A real .bak of the user stays as it is.
-        std::fs::write(dir.join("mine.cdk.bak"), "mine").unwrap();
+        std::fs::write(dir.join("mine.kad.bak"), "mine").unwrap();
         write_version(&dir, "s", 2, &j).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join("mine.cdk.bak")).unwrap(),
+            std::fs::read_to_string(dir.join("mine.kad.bak")).unwrap(),
             "mine"
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn a_manual_save_after_the_job_makes_the_autosave_stale() {
         let dir = temp("stale");
-        let target = dir.join("mine.cdk");
+        let target = dir.join("mine.kad");
         let old = doc_with_circles(1);
         let j = over_job(&old, &target);
         // The user saves a newer document before the writer gets to the job.
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn manual_saves_and_autosaves_never_interleave() {
         let dir = temp("race");
-        let target = dir.join("mine.cdk");
+        let target = dir.join("mine.kad");
         let a = doc_with_circles(2);
         let b = doc_with_circles(3);
         std::thread::scope(|s| {
@@ -660,7 +660,7 @@ mod tests {
         let mut r = Recovery::start(dir.clone()).unwrap();
         let id = r.id().to_string();
         r.submit(job(&doc_with_circles(1), None, 3));
-        let last = r.submit(job(&doc, Some("/work/plan.cdk".into()), 3));
+        let last = r.submit(job(&doc, Some("/work/plan.kad".into()), 3));
         wait_for(|| r.completed() >= last);
         assert!(r.last_error().is_none());
         // The lock is still held: another app is running. Nothing to recover.
@@ -672,7 +672,7 @@ mod tests {
         let c = &found[0];
         assert_eq!(c.id, id);
         assert_eq!(c.versions.len(), 2);
-        assert_eq!(c.original.as_deref(), Some(Path::new("/work/plan.cdk")));
+        assert_eq!(c.original.as_deref(), Some(Path::new("/work/plan.kad")));
         assert!(c.saved_unix.unwrap() <= now_unix());
         // The newest version comes first.
         let (loaded, from) = c.load().unwrap();

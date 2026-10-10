@@ -40,7 +40,7 @@ def test_numbers_beyond_1e9_mm_are_refused_and_the_document_still_saves_and_open
     for bad in (0, -3):
         err = cad.error("execute", {"command": {"op": "add_object", "shape": slab | {"thickness": bad}}})
         assert "thickness" in err["message"]
-    path = tmp_path / "big.json"
+    path = tmp_path / "big.kad"
     assert cad.result("file.save", {"path": str(path)}) == {"ok": True}
     other = make_serve()
     assert other.result("file.open", {"path": str(path)}) == {"ok": True}
@@ -87,7 +87,7 @@ def test_a_loaded_document_never_gets_an_id_twice(make_serve, tmp_path):
     doc = make_serve().doc()
     assert "next_id" not in doc, "the file has no counter: new IDs are UUIDs"
     doc["objects"] = [{"id": uid(2), "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
-    old = tmp_path / "old.json"
+    old = tmp_path / "old.kad"
     old.write_text(json.dumps(doc))
     cad = make_serve(old)
     (new,) = cad.execute(rect_cmd(0, 0, 1, 1))
@@ -95,14 +95,14 @@ def test_a_loaded_document_never_gets_an_id_twice(make_serve, tmp_path):
 
 
 def test_saving_twice_keeps_the_previous_file_as_bak(make_serve, tmp_path):
-    path = tmp_path / "d.json"
+    path = tmp_path / "d.kad"
     cad = make_serve()
     cad.result("file.save", {"path": str(path)})
     cad.execute(rect_cmd(0, 0, 1, 1))
     cad.result("file.save", {"path": str(path)})
     assert len(json.loads(path.read_text())["objects"]) == 1
-    assert json.loads((tmp_path / "d.json.bak").read_text())["objects"] == []
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["d.json", "d.json.bak"]
+    assert json.loads((tmp_path / "d.kad.bak").read_text())["objects"] == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["d.kad", "d.kad.bak"]
 
 
 def test_a_new_layer_can_be_a_sheet(cad):
@@ -115,7 +115,7 @@ def test_ids_of_any_value_survive_a_round_trip(make_serve, tmp_path):
     doc = make_serve().doc()
     big = "0190f1c2-7a3b-7c1d-8e2f-123456789abc"
     doc["objects"] = [{"id": big, "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
-    p = tmp_path / "big-id.json"
+    p = tmp_path / "big-id.kad"
     p.write_text(json.dumps(doc))
     cad = make_serve(p)
     (lid,) = cad.execute({"op": "add_layer", "name": "L"})

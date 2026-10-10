@@ -426,7 +426,7 @@ def test_styles_survive_save_and_open(make_serve, tmp_path):
     first = make_serve()
     sid = make_style(first)
     place(first, mode="poly", style=sid, points=[[0, 0], [100, 100]], overrides={"price": 7})
-    path = tmp_path / "garden.cdk.json"
+    path = tmp_path / "garden.kad"
     first.result("file.save", {"path": str(path)})
     second = make_serve(path)
     assert [s["name"] for s in second.result("plant_style.list")["styles"]] == ["Field maple"]

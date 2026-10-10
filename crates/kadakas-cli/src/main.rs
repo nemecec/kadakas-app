@@ -632,7 +632,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("in.geojson");
         std::fs::write(&src, r#"{"type":"Point","coordinates":[24.9,60.1,3]}"#).unwrap();
-        let doc = dir.join("doc.cdk.json");
+        let doc = dir.join("doc.kad");
         import_command(&src, &doc, None, None, None).unwrap();
         let loaded = load(&doc).unwrap();
         assert_eq!(loaded.objects.len(), 1);
@@ -664,11 +664,11 @@ mod tests {
     fn load_reports_file_errors_with_the_path() {
         let dir = std::env::temp_dir().join(format!("kadakas-cli-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let bad = dir.join("bad.cdk.json");
+        let bad = dir.join("bad.kad");
         std::fs::write(&bad, "{nope").unwrap();
-        assert!(load(&bad).unwrap_err().contains("bad.cdk.json"));
+        assert!(load(&bad).unwrap_err().contains("bad.kad"));
         assert!(load(&dir.join("missing")).is_err());
-        let good = dir.join("good.cdk.json");
+        let good = dir.join("good.kad");
         std::fs::write(&good, serde_json::to_string(&Document::default()).unwrap()).unwrap();
         assert!(load(&good).is_ok());
         let _ = std::fs::remove_dir_all(dir);

@@ -20,7 +20,7 @@ Host the `dist-web` folder on any static web server. No server code is needed.
 
 - Drawing, editing, undo and redo, snaps, layers, classes, plants, hardscapes, grading, irrigation, sheets on screen, and the 3D view.
 - Graphics: WebGPU if the browser has it, WebGL2 if not. If neither exists, the page shows an error message.
-- File > Open picks a `.cdk` or `.cdk.json` file from your computer. File > Save and Save As download the file. File > Export SVG downloads an SVG.
+- File > Open picks a `.kad` file from your computer. File > Save and Save As download the file. File > Export SVG downloads an SVG.
 - Autosave keeps one recovery copy in the local storage of the browser. After a crash or a closed tab, the app offers it at the next start: open it or discard it. The copy is removed after a File > Save download has really finished.
 
 ## What does not work (and why)

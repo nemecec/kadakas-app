@@ -89,7 +89,7 @@ def test_images_are_stored_in_the_document_and_survive_saving(make_serve, tmp_pa
     mat = cad.result("material.create", {"name": "Photo", "texture": {"png_base64": b64}})["id"]
     tex = cad.result("material.get", {"id": mat})["texture"]
     assert (tex["source"], tex["width"], tex["height"]) == ("image", 4, 4)
-    path = tmp_path / "doc.json"
+    path = tmp_path / "doc.kad"
     cad.result("file.save", {"path": str(path)})
     other = make_serve()
     other.result("file.open", {"path": str(path)})
