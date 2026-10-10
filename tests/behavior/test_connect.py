@@ -92,7 +92,7 @@ def test_mcp_file_tools_are_forwarded_to_the_app():
     app = FakeApp()
     reqs = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "file_save", "arguments": {"path": "/x"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "document", "arguments": {"method": "file.save", "params": {"path": "/x"}}}},
     ]
     env = os.environ
     p = subprocess.run([str(BIN), "mcp", "--connect", f"127.0.0.1:{app.port}", "--token", "s3cret"],

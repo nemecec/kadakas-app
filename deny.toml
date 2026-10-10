@@ -1,0 +1,67 @@
+# Settings for cargo-deny. CI runs `cargo deny check` (see .github/workflows/ci.yml).
+#
+#   cargo install cargo-deny --locked
+#   cargo deny check licenses bans sources    # offline
+#   cargo deny check advisories               # needs the network (the RustSec database)
+#
+# Rule: Cadektor ships under "Apache-2.0 OR MIT". Every dependency must be under a permissive
+# license. Copyleft licenses (GPL, LGPL, AGPL) are not allowed, not even as the only option.
+
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.93
+# Only these licenses. cargo-deny checks the SPDX expression of each crate: "A OR B" passes when
+# one of the options is allowed. That is how the crates below pass with their permissive option.
+#
+#   self_cell     "Apache-2.0 OR GPL-2.0-only"                     -> Apache-2.0
+#   r-efi         "MIT OR Apache-2.0 OR LGPL-2.1-or-later"         -> MIT
+#   adler2        "0BSD OR MIT OR Apache-2.0"                      -> MIT
+#   ryu           "Apache-2.0 OR BSL-1.0"                          -> Apache-2.0
+#   memchr, walkdir, same-file, winapi-util, byteorder-lite
+#                 "Unlicense OR MIT"                               -> MIT
+#
+# A crate that has only a copyleft license fails the check.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "OFL-1.1",
+  "Ubuntu-font-1.0",
+  # Weak copyleft at file level: changes to MPL files stay open, the rest of the program does not.
+  "MPL-2.0",
+  "CC0-1.0",
+  # Boost license, permissive. Used by clipboard-win and error-code (Windows clipboard).
+  "BSL-1.0",
+  # webpki-roots (the list of root certificates) has this permissive license for data.
+  "CDLA-Permissive-2.0",
+]
+# Not every allowed license is in use all the time.
+unused-allowed-license = "allow"
+
+[bans]
+# Many GUI and system crates exist in two versions. This is noise, not an error.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+yanked = "deny"
+# Known problems of dependencies that we cannot fix and that do not reach us can be listed here
+# with a reason. Keep this list empty if you can.
+ignore = [
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in cadektor-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

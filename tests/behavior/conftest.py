@@ -64,3 +64,12 @@ def mcp_raw():
     client = McpClient(["mcp", *ALLOW])
     yield client
     client.close()
+
+
+@pytest.fixture
+def mcp_flat() -> McpClient:
+    """A fresh `cadektor mcp --mcp-flat` process (one tool per API method), already initialized."""
+    client = McpClient(["mcp", "--mcp-flat", *ALLOW])
+    client.initialize()
+    yield client
+    client.close()

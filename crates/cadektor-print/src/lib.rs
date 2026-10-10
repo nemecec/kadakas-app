@@ -102,11 +102,12 @@ pub fn export_pdf_on(
             }
         })
         .sum();
-    if pixels > compose::MAX_RASTER_PIXELS {
+    let limit = cache.raster_pixels();
+    if pixels > limit {
         return Err(PrintError::Invalid(format!(
             "the 3D viewports of these sheets make {} megapixels of images. The limit is {}. Lower the dpi",
             pixels / 1_000_000,
-            compose::MAX_RASTER_PIXELS / 1_000_000
+            limit / 1_000_000
         )));
     }
     let refs: Vec<&Page> = pages.iter().map(|p| &**p).collect();

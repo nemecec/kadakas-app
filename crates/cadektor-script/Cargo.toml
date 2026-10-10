@@ -1,7 +1,10 @@
 [package]
 name = "cadektor-script"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Scripting for Cadektor: Python discovery, safe process runs, plug-in object definitions and the reset protocol, and the script host for the Scripts palette. Native only."
 
 [dependencies]

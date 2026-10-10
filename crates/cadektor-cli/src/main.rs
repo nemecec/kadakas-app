@@ -11,11 +11,13 @@
 //! app through its runtime file. `--connect HOST:PORT` needs `--token` (or the
 //! runtime file). The first message on the connection is always `auth`.
 
+mod mcp_tools;
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use cadektor_api::{METHODS, Session};
+use cadektor_api::Session;
 use cadektor_core::fsio::{self, AgentInfo};
 use cadektor_core::model::Document;
 use clap::{Parser, Subcommand};
@@ -42,6 +44,9 @@ enum Cmd {
         file: Option<PathBuf>,
         #[command(flatten)]
         remote: RemoteArgs,
+        /// List one tool per API method (about 280) instead of one tool per domain (about 20).
+        #[arg(long = "mcp-flat")]
+        mcp_flat: bool,
     },
     /// Render a document to SVG.
     Render {
@@ -294,11 +299,6 @@ fn serve(mut backend: Backend) {
     }
 }
 
-/// Maps API method names to MCP tool names: `objects.list` -> `objects_list`.
-fn tool_name(method: &str) -> String {
-    method.replace('.', "_")
-}
-
 /// MCP protocol versions that this server speaks, newest first.
 const MCP_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26"];
 
@@ -309,16 +309,6 @@ fn mcp_version(requested: Option<&str>) -> &'static str {
         .copied()
         .find(|v| Some(*v) == requested)
         .unwrap_or(MCP_VERSIONS[0])
-}
-
-fn mcp_tools() -> Value {
-    let mut tools: Vec<Value> = METHODS
-        .iter()
-        .map(|(m, d)| json!({"name": tool_name(m), "description": d, "inputSchema": {"type": "object", "additionalProperties": true}}))
-        .collect();
-    tools.push(json!({"name": "file_save", "description": "Save the document. params: {path}.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}));
-    tools.push(json!({"name": "file_open", "description": "Open a document. params: {path}.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}));
-    json!(tools)
 }
 
 /// The content of a tool result. `render.png` gives an image block that a model can look at,
@@ -334,7 +324,7 @@ fn tool_content(method: &str, response: &Value, text: String) -> Value {
     json!([{"type": "text", "text": text}])
 }
 
-fn mcp(mut backend: Backend) {
+fn mcp(mut backend: Backend, flat: bool) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines().map_while(Result::ok) {
@@ -361,24 +351,22 @@ fn mcp(mut backend: Backend) {
                 "protocolVersion": mcp_version(req["params"]["protocolVersion"].as_str()),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "cadektor", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Cadektor CAD. Call describe first. Units are mm, Y axis up. Change the drawing only with execute."
+                "instructions": if flat { "Cadektor CAD. Call describe first. Units are mm, Y axis up. Most changes to the drawing go through the execute tool; many other tools change it too (plants, hardscape, annotation and so on)." } else { "Cadektor CAD. Call describe first. Units are mm, Y axis up. Each tool is a domain and takes {method, params}; its description lists the methods. The execute method of the document tool runs one command; many other methods change the drawing too." }
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": mcp_tools()})),
+            "tools/list" => Ok(json!({"tools": mcp_tools::tools(flat)})),
             "tools/call" => {
                 let name = req["params"]["name"].as_str().unwrap_or("");
                 let args = req["params"]["arguments"].clone();
-                let method = METHODS
-                    .iter()
-                    .map(|(m, _)| *m)
-                    .chain(["file.save", "file.open"])
-                    .find(|m| tool_name(m) == name);
-                match method {
-                    None => {
+                match mcp_tools::resolve(flat, name, &args) {
+                    mcp_tools::Call::UnknownTool => {
                         Err(json!({"code": -32602, "message": format!("unknown tool: {name}")}))
                     }
-                    Some(m) => {
-                        let r = backend.call(json!(1), m, args);
+                    mcp_tools::Call::Invalid(text) => {
+                        Ok(json!({"content": [{"type": "text", "text": text}], "isError": true}))
+                    }
+                    mcp_tools::Call::Method(m, params) => {
+                        let r = backend.call(json!(1), m, params);
                         let (text, is_error) = match r.get("error") {
                             Some(e) => (e["message"].as_str().unwrap_or("error").to_string(), true),
                             None => (r["result"].to_string(), false),
@@ -463,7 +451,11 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
-        Cmd::Mcp { file, remote } => Backend::new(file, remote).map(mcp),
+        Cmd::Mcp {
+            file,
+            remote,
+            mcp_flat,
+        } => Backend::new(file, remote).map(|b| mcp(b, mcp_flat)),
         Cmd::Import {
             file,
             output,

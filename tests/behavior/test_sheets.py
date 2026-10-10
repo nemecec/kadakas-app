@@ -241,16 +241,18 @@ def test_describe_and_mcp_cover_the_new_methods(garden):
 
 
 def test_mcp_tools_make_a_sheet_and_export_it(mcp, tmp_path):
-    names = {tool["name"] for tool in mcp.request("tools/list")["result"]["tools"]}
-    assert {"sheet_create", "viewport_create", "viewport_set_override", "viewport_annotate", "title_block_create", "saved_view_save", "export_file"} <= names
-    mcp.tool_json("execute", {"command": rect_cmd(0, 0, 5000, 3000)})
-    layer = mcp.tool_json("sheet_create", {"name": "A", "paper": "a4"})["layer"]
-    assert mcp.tool_json("viewport_create", {"sheet": layer})["view"] == "plan"
+    tools = {tool["name"]: tool for tool in mcp.request("tools/list")["result"]["tools"]}
+    methods = lambda name: set(tools[name]["inputSchema"]["properties"]["method"]["enum"])
+    assert {"sheet.create", "viewport.create", "viewport.set_override", "viewport.annotate", "title_block.create"} <= methods("sheets_print")
+    assert "saved_view.save" in methods("document") and "export.file" in methods("io")
+    mcp.method_json("document", "execute", {"command": rect_cmd(0, 0, 5000, 3000)})
+    layer = mcp.method_json("sheets_print", "sheet.create", {"name": "A", "paper": "a4"})["layer"]
+    assert mcp.method_json("sheets_print", "viewport.create", {"sheet": layer})["view"] == "plan"
     path = tmp_path / "mcp.pdf"
-    assert mcp.tool_json("export_file", {"format": "pdf", "path": str(path)})["pages"] == 1
+    assert mcp.method_json("io", "export.file", {"format": "pdf", "path": str(path)})["pages"] == 1
     assert path.read_bytes().startswith(b"%PDF-")
     # A rendered sheet comes back as an image the model can look at.
-    result = mcp.tool("sheet_render", {"sheet": layer, "format": "png", "dpi": 20})
+    result = mcp.method("sheets_print", "sheet.render", {"sheet": layer, "format": "png", "dpi": 20})
     assert result["content"][0]["type"] == "image" and result["content"][0]["mimeType"] == "image/png"
 
 

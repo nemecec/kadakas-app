@@ -27,6 +27,19 @@ full path: `cargo packager --release --config $PWD/packager.toml`.
 The icon is our own. `python3 packaging/icons/make_icons.py` draws `icon.svg` and renders all PNG sizes, `icon.ico` and
 `icon.icns` with the Python standard library only.
 
+## License texts in the installers
+
+Every installer ships `THIRD_PARTY_NOTICES.txt` (the licenses of all libraries in Cadektor), `LICENSE-APACHE` and
+`LICENSE-MIT`. The list `resources` in `packager.toml` puts them in the package. `scripts/notices.sh` makes the notices
+file with `cargo-about` (settings in `about.toml` and `about.hbs`). CI checks that the committed file is up to date, and
+the release workflow makes it again before it packages. CI also runs `cargo deny check` (`deny.toml`): a dependency
+with a license that is not permissive, such as GPL or AGPL, fails the build.
+
+```sh
+cargo install cargo-about --locked --features cli
+scripts/notices.sh
+```
+
 ## macOS notes
 
 - `packaging/macos/Info.plist` is merged into the one that the packager writes. It declares the type `net.cadektor.drawing` (it conforms to `public.json`) and makes Cadektor the owner of `.cdk` files. Old `.cdk.json` files still open with File > Open, but a double click does not open them in Cadektor.
