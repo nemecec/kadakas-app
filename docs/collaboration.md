@@ -375,10 +375,9 @@ as canonical JSON text, are equal.
    document. Keep the latest state of each connected client to fill `peers` in `welcome`.
 10. **Leaving.** On `bye` or when the connection ends, send `presence_leave` to the others.
 11. **Log size.** The server may drop old log entries. A client that needs them gets a `snapshot`.
-12. **Relay byte for byte.** The server sends the operations on exactly as it got them (the JSON text
-    of the numbers too). It does not parse numbers to floats and write them again. Clients compare
-    numbers as numbers (`1` and `1.0` are the same), so a program that writes `1.0` for `1` makes no
-    edit.
+12. **Re-serializing.** The server may re-serialize the operations. Each value must stay equal as JSON
+    (keys, strings, and numbers as numbers, with no loss of precision; `kadakas-collab` parses with
+    `float_roundtrip`). Clients compare numbers as numbers.
 
 ### 4.5 Limits and value checks
 

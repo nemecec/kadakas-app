@@ -358,6 +358,18 @@ mod tests {
     }
 
     #[test]
+    fn numbers_keep_every_digit_when_read_and_written_again() {
+        // The crate parses with `float_roundtrip`: a server that re-serializes must not lose digits.
+        for text in ["0.1", "0.30000000000000004", "123456.789012345", "1e-7", "5e22"] {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            let again: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+            assert_eq!(v, again, "{text}");
+            assert_eq!(v.as_f64(), text.parse::<f64>().ok(), "{text}");
+        }
+    }
+
+    #[test]
     fn fatal_codes() {
         assert!(ErrorCode::AuthFailed.is_fatal());
         assert!(ErrorCode::UnsupportedProtocol.is_fatal());
