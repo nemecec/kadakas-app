@@ -97,7 +97,9 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    /// A sequencer for a document in this state, at sequence number 0.
+    /// A sequencer for a document in this state, at sequence number 0. A new shared document
+    /// starts from `docsync::replica_of(&Document::default())`: it has the protected first layer,
+    /// the class "None" and the document settings. An empty `Replica::new()` has none of them.
     pub fn new(initial: Replica) -> Sequencer {
         Sequencer {
             replica: initial,

@@ -841,7 +841,7 @@ fn auth_and_protocol_failures_are_final() {
 
 #[test]
 fn the_sequencer_checks_messages() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     let conn = s.open();
     assert_eq!(s.connections(), 1);
     // Anything before hello is refused.
@@ -1006,7 +1006,7 @@ fn presence_flows_between_clients_and_is_never_saved() {
 
 #[test]
 fn the_server_drops_presence_that_comes_too_fast() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     let a = s.open();
     let b = s.open();
     for (c, u) in [(a, 1), (b, 2)] {
@@ -1519,7 +1519,7 @@ fn op_id_reused_takes_the_client_offline_and_fixes_the_numbers_at_the_next_sign_
 
 #[test]
 fn a_server_that_remembers_an_id_with_other_content_refuses_it() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conn = s.open();
     let hello = ClientMsg::Hello {
@@ -2016,7 +2016,7 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
 
 #[test]
 fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conns: Vec<ConnId> = (1..=2)
         .map(|u| {
@@ -2125,7 +2125,7 @@ fn blobs_travel_by_hash_and_the_object_waits_for_its_picture() {
     let text = "A".repeat(crate::blob::MIN_BLOB_BYTES + 1);
     let shape = json!({"kind": "underlay", "png": text, "opacity": 1.0});
     let (reference, hash, data) = externalize(&shape).unwrap();
-    let mut s = Sequencer::new(Replica::new());
+    let mut s = Sequencer::new(replica_of(&Document::default()));
     s.check_entities(false);
     let conn = s.open();
     s.receive(

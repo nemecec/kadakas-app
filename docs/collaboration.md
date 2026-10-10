@@ -125,6 +125,10 @@ properties.
 - **set** and **unset**: drop them if the thing is unknown, deleted, or the property is `id`.
   Otherwise write the value (or the removal) with the writer.
 
+A new shared document starts from `docsync::replica_of(&Document::default())`. It has the protected
+things above: the document settings, the first layer and the class "None". An empty
+`Replica::new()` has none of them, so it is not a valid start.
+
 To "drop" means the operation has no effect, and the transaction is still ordered. A dropped
 operation is not an error: every replica drops the same operations.
 
@@ -595,8 +599,10 @@ normal `undo` is cleared, because its steps no longer fit. While a session is co
 
 ## 10. Not in version 1
 
-- Creating the first shared document. The server makes it from an uploaded `.kad` file (the function
-  `docsync::replica_of` reads a document into a replica).
+- Creating the first shared document from the content of a `.kad` file. A new, empty shared
+  document starts from `docsync::replica_of(&Document::default())` (section 3.3). Uploading a file as
+  the first content is later: `docsync::replica_of` reads any document into a replica, so the server
+  can use it for this.
 - Permissions, roles and locking of layers.
 - Cutting other big values (a long polyline, a worksheet) into parts.
 - Comments and chat.
