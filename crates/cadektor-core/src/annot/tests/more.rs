@@ -222,7 +222,7 @@ fn tag_positions_follow_a_new_layer_scale() {
         }),
     );
     ed.execute(&Command::ModifyLayer {
-        id: LayerId(1),
+        id: LayerId::from_num(1),
         name: None,
         visible: None,
         locked: None,
@@ -297,7 +297,7 @@ fn clockwise_angular_points_are_put_in_order() {
 
 #[test]
 fn a_resource_with_an_unknown_value_is_kept_as_it_is() {
-    let json = serde_json::json!({"id": 9, "name": "Yards", "body": {"type": "dimension_style", "unit": "yd", "precision": 2}});
+    let json = serde_json::json!({"id": "00000000-0000-0000-0000-000000000009", "name": "Yards", "body": {"type": "dimension_style", "unit": "yd", "precision": 2}});
     let r: crate::resource::Resource = serde_json::from_value(json.clone()).unwrap();
     assert!(matches!(r.body, ResourceBody::Unknown(_)));
     assert_eq!(serde_json::to_value(&r).unwrap(), json);
@@ -308,7 +308,7 @@ fn a_resource_with_an_unknown_value_is_kept_as_it_is() {
     // An annotation that refers to it is refused, since it is not a dimension style.
     let mut ed = Editor::new(doc);
     let mut d = dim(horiz(), vec![v(0.0, 0.0), v(1.0, 0.0)]);
-    d.style = Some(ResourceId(9));
+    d.style = Some(ResourceId::from_num(9));
     assert!(
         ed.execute(&Command::AddObject {
             shape: Shape::Annotation(Box::new(Annot::Dimension(d))),
@@ -374,8 +374,8 @@ fn limits_for_agent_input() {
 fn objects_round_trip_with_every_option() {
     let full = serde_json::json!({
         "type": "dimension", "mode": {"type": "ordinate", "axis": "vertical"}, "points": [[0.0, 0.0], [1.0, 1.0]],
-        "anchors": [{"object": 3, "target": {"at": "edge", "index": 1, "t": 0.25}, "count": 4}, null],
-        "offset": -2.5, "style": 7, "text": "x", "detached": true
+        "anchors": [{"object": "00000000-0000-0000-0000-000000000003", "target": {"at": "edge", "index": 1, "t": 0.25}, "count": 4}, null],
+        "offset": -2.5, "style": "00000000-0000-0000-0000-000000000007", "text": "x", "detached": true
     });
     let d: Annot = serde_json::from_value(full.clone()).unwrap();
     assert_eq!(serde_json::to_value(&d).unwrap(), full);
@@ -384,18 +384,18 @@ fn objects_round_trip_with_every_option() {
         panic!()
     };
     assert!(m.anchors.is_empty() && !m.detached && m.offset == 0.0);
-    let callout: Annot = serde_json::from_value(serde_json::json!({"type": "callout", "at": [0, 0], "leaders": [{"points": [[1, 1]], "anchor": {"object": 1, "target": {"at": "center"}}}], "terminator": "tick", "detached": true})).unwrap();
+    let callout: Annot = serde_json::from_value(serde_json::json!({"type": "callout", "at": [0, 0], "leaders": [{"points": [[1, 1]], "anchor": {"object": "00000000-0000-0000-0000-000000000001", "target": {"at": "center"}}}], "terminator": "tick", "detached": true})).unwrap();
     assert_eq!(serde_json::to_value(&callout).unwrap()["detached"], true);
     let Annot::Callout(c) = &callout else {
         panic!()
     };
     assert_eq!(c.shoulder_mm, 5.0);
     let tag: Annot =
-        serde_json::from_value(serde_json::json!({"type": "data_tag", "style": 1, "object": 2}))
+        serde_json::from_value(serde_json::json!({"type": "data_tag", "style": "00000000-0000-0000-0000-000000000001", "object": "00000000-0000-0000-0000-000000000002"}))
             .unwrap();
     let Annot::DataTag(t) = &tag else { panic!() };
     assert_eq!(t.offset, DVec2::ZERO);
-    let legend: Annot = serde_json::from_value(serde_json::json!({"type": "legend", "at": [0, 0], "title": "T", "criteria": "c", "group_by": "Class", "show_count": false, "swatch_mm": 8, "style": 2})).unwrap();
+    let legend: Annot = serde_json::from_value(serde_json::json!({"type": "legend", "at": [0, 0], "title": "T", "criteria": "c", "group_by": "Class", "show_count": false, "swatch_mm": 8, "style": "00000000-0000-0000-0000-000000000002"})).unwrap();
     assert_eq!(serde_json::to_value(&legend).unwrap()["group_by"], "Class");
     let legend_min: Annot =
         serde_json::from_value(serde_json::json!({"type": "legend", "at": [0, 0]})).unwrap();
@@ -408,7 +408,7 @@ fn objects_round_trip_with_every_option() {
         assert_eq!(serde_json::to_value(&n).unwrap()["style"], style);
     }
     for unit in ["mm", "m", "ft"] {
-        let b: Annot = serde_json::from_value(serde_json::json!({"type": "scale_bar", "at": [0, 0], "unit": unit, "scale": 50, "style": 3, "segments": 2, "segment": 1.5, "height_mm": 3})).unwrap();
+        let b: Annot = serde_json::from_value(serde_json::json!({"type": "scale_bar", "at": [0, 0], "unit": unit, "scale": 50, "style": "00000000-0000-0000-0000-000000000003", "segments": 2, "segment": 1.5, "height_mm": 3})).unwrap();
         let Annot::ScaleBar(b) = &b else { panic!() };
         assert_eq!(b.segments, 2);
     }
@@ -420,7 +420,10 @@ fn objects_round_trip_with_every_option() {
         panic!()
     };
     assert!(r.mark && r.bump_mm == 6.0);
-    assert_eq!(Anchor::new(ObjectId(1), AnchorTarget::Center).count, None);
+    assert_eq!(
+        Anchor::new(ObjectId::from_num(1), AnchorTarget::Center).count,
+        None
+    );
     for axis in ["horizontal", "vertical", "aligned"] {
         assert!(serde_json::from_value::<Axis>(serde_json::json!(axis)).is_ok());
     }

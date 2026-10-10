@@ -258,11 +258,11 @@ mod tests {
         };
         assert!(ed.execute(&attach(vec![], rid, json!({}))).is_err());
         assert!(
-            ed.execute(&attach(vec![ids[0]], ResourceId(999), json!({})))
+            ed.execute(&attach(vec![ids[0]], ResourceId::from_num(999), json!({})))
                 .is_err()
         );
         assert!(
-            ed.execute(&attach(vec![ObjectId(999)], rid, json!({})))
+            ed.execute(&attach(vec![ObjectId::from_num(999)], rid, json!({})))
                 .is_err()
         );
         assert!(

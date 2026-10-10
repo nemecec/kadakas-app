@@ -128,7 +128,7 @@ fn tags_show_live_values_and_tag_all_is_repeatable() {
         tag_lines(
             ed.doc(),
             &DataTag {
-                object: cadektor_core::model::ObjectId(999),
+                object: cadektor_core::model::ObjectId::from_num(999),
                 ..t.clone()
             },
             st
@@ -140,14 +140,14 @@ fn tags_show_live_values_and_tag_all_is_repeatable() {
             .iter()
             .any(|p| matches!(p, Prim::Text { text, .. } if text == "rect"))
     );
-    assert!(tag_all(ed.doc(), ResourceId(999), "", None, DVec2::ZERO).is_err());
+    assert!(tag_all(ed.doc(), ResourceId::from_num(999), "", None, DVec2::ZERO).is_err());
     assert!(tag_all(ed.doc(), style, "((", None, DVec2::ZERO).is_err());
     // Only objects of the layer, and none on a locked layer.
     let none = tag_all(
         ed.doc(),
         style,
         "",
-        Some(cadektor_core::model::LayerId(77)),
+        Some(cadektor_core::model::LayerId::from_num(77)),
         DVec2::ZERO,
     )
     .unwrap();

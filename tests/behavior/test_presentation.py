@@ -7,7 +7,7 @@ import zlib
 
 import pytest
 
-from helpers import plant_cmd
+from helpers import plant_cmd, uid
 from test_render_png import BACKGROUND, decode_png, render
 
 
@@ -113,7 +113,7 @@ def test_textures_show_in_the_render_and_resolution_follows_the_order(cad):
     row = [flat[80][x] for x in range(40, 120)]
     assert max(lum(p) for p in row) - min(lum(p) for p in row) < 2
     # By class: the bark texture adds detail.
-    cad.result("material.assign", {"material": "Concrete pavers", "class": 0})
+    cad.result("material.assign", {"material": "Concrete pavers", "class": uid(0)})
     textured = render(cad, view="top", width=160, height=160)[1]
     row = [textured[80][x] for x in range(40, 120)]
     assert statistics.pstdev(lum(p) for p in row) > 8

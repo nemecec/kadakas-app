@@ -7,6 +7,7 @@
 //! Scripts run only when a user starts them. A request from an agent may run a script only if the
 //! host allows it (`--allow-agent-scripts`), except for the scripts that ship with the app.
 
+use cadektor_core::uid::AsUid;
 use serde_json::{Map, Value, json};
 
 use cadektor_core::command::Command;
@@ -153,7 +154,7 @@ pub fn describe() -> Value {
         "examples": [
             {"method": "plugin.install_example", "params": {"name": "Bench"}},
             {"method": "plugin.place", "params": {"definition": "Bench", "at": [2000, 1500], "rotation": 0.5, "params": {"length": 2000, "back": false}}},
-            {"method": "plugin.set_params", "params": {"id": 12, "params": {"slats": 7}}},
+            {"method": "plugin.set_params", "params": {"id": "00000000-0000-0000-0000-00000000000c", "params": {"slats": 7}}},
             {"method": "plugin.place", "params": {"definition": "Stepping stones", "points": [[0, 0], [4000, 0], [6000, 2000]], "params": {"spacing": 600, "stone": "Square"}}}
         ]
     })
@@ -222,12 +223,16 @@ fn all_defs(s: &Session) -> Vec<Found> {
         .collect()
 }
 
-/// Finds a definition by ID (number) or name (text, compared without case).
+/// Finds a definition by ID or name (text, compared without case).
 fn find_def(s: &Session, sel: &Value) -> Result<Found, RpcError> {
     let defs = all_defs(s);
     let found = match sel {
-        Value::Number(n) => defs.into_iter().find(|d| Some(d.id.0) == n.as_u64()),
-        Value::String(name) => defs.into_iter().find(|d| d.name.eq_ignore_ascii_case(name)),
+        Value::String(name) => {
+            let id = cadektor_core::uid::Uid::parse(name.trim());
+            let by_id = defs.iter().position(|d| Some(d.id.0) == id);
+            let at = by_id.or_else(|| defs.iter().position(|d| d.name.eq_ignore_ascii_case(name)));
+            at.and_then(|i| defs.into_iter().nth(i))
+        }
         _ => return Err(bad("definition must be an ID or a name")),
     };
     found.ok_or_else(|| RpcError::not_found(format!("there is no plug-in object definition {sel}")))
@@ -293,7 +298,7 @@ fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
     Ok(n.to_string())
 }
 
-fn exec(s: &mut Session, cmd: &Command) -> Result<Vec<u64>, RpcError> {
+fn exec(s: &mut Session, cmd: &Command) -> Result<Vec<cadektor_core::uid::Uid>, RpcError> {
     let cmd = s.in_context(cmd.clone());
     let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     s.prune_selection();
@@ -575,16 +580,20 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     allowed(s, &f.def)?;
     let params = f.def.resolve_params(&opt_params(m)?).map_err(bad)?;
     let geometry = geometry_of(&f.def, m)?;
-    let layer = m.get("layer").and_then(Value::as_u64).map(LayerId);
-    let class = m.get("class").and_then(Value::as_u64).map(ClassId);
+    let layer = m.get("layer").and_then(AsUid::as_uid).map(LayerId);
+    let class = m.get("class").and_then(AsUid::as_uid).map(ClassId);
     let shapes = run_script(s, &f.name, &f.def, &params, &geometry).map_err(app)?;
     let n = shapes.len() as u64;
-    let first = s.editor.doc().next_id();
-    let group = ObjectId(first + n);
+    let planned = s.editor.doc().next_ids(n as usize + 1);
+    let group = ObjectId(planned[n as usize]);
     let origin = origin_of(shapes.iter().map(|g| g.shape.clone()));
     let mut commands = add_cmds(&shapes, layer, class);
     commands.push(Command::Group {
-        ids: (first..first + n).map(ObjectId).collect(),
+        ids: planned[..n as usize]
+            .iter()
+            .copied()
+            .map(ObjectId)
+            .collect(),
         name: Some(match m.get("name") {
             Some(_) => name_of(m, "name")?,
             None => f.name.clone(),
@@ -790,7 +799,7 @@ fn instance_def(s: &Session, id: ObjectId) -> Result<Found, RpcError> {
 
 fn object_id(m: &Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
     m.get(key)
-        .and_then(Value::as_u64)
+        .and_then(AsUid::as_uid)
         .map(ObjectId)
         .ok_or_else(|| bad(format!("{key} must be an object ID")))
 }
@@ -820,7 +829,7 @@ fn reset_many(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     } else if let Some(Value::Array(a)) = m.get("ids") {
         a.iter()
             .map(|v| {
-                v.as_u64()
+                v.as_uid()
                     .map(ObjectId)
                     .ok_or_else(|| bad("ids must be object IDs"))
             })

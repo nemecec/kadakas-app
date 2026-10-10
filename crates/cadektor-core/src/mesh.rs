@@ -784,7 +784,7 @@ impl Builder<'_> {
                     form: look.form,
                     color,
                     trunk_radius: None,
-                    seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
+                    seed: form3d::seed_for(id.0.low_u64() % form3d::VARIANTS, species),
                 };
                 self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
@@ -803,7 +803,7 @@ impl Builder<'_> {
                     form: PlantForm::Tree,
                     color: fill.unwrap_or_else(|| species_color(species)),
                     trunk_radius: Some(dbh / 2.0),
-                    seed: form3d::seed_for(id.0 % form3d::VARIANTS, species),
+                    seed: form3d::seed_for(id.0.low_u64() % form3d::VARIANTS, species),
                 };
                 self.plant(&build, link::ground_z(obj).unwrap_or(z), edge, id);
             }
@@ -1707,7 +1707,7 @@ mod tests {
         // Degenerate plants have no geometry.
         let mut doc = Document::default();
         let obj = Object::new(
-            ObjectId(50),
+            ObjectId::from_num(50),
             FIRST_LAYER,
             NONE_CLASS,
             Shape::Plant {
@@ -1960,7 +1960,7 @@ mod tests {
         assert_eq!(scene.mesh.colors[0], [10, 20, 30, 255]);
         assert_eq!(scene.lines.colors[0], [1, 2, 3, 255]);
         assert!(scene.object_bounds(ObjectId(out.created[0])).is_some());
-        assert!(scene.object_bounds(ObjectId(9999)).is_none());
+        assert!(scene.object_bounds(ObjectId::from_num(9999)).is_none());
     }
 
     #[test]
@@ -1990,7 +1990,7 @@ mod tests {
         let before = ed.revision();
         assert!(
             ed.execute(&Command::DeleteObjects {
-                ids: vec![ObjectId(999)]
+                ids: vec![ObjectId::from_num(999)]
             })
             .is_err()
         );
@@ -2087,7 +2087,12 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let o = Object::new(ObjectId(10 + i as u64), FIRST_LAYER, NONE_CLASS, shape);
+            let o = Object::new(
+                ObjectId(crate::uid::Uid::from_num(10 + i as u64)),
+                FIRST_LAYER,
+                NONE_CLASS,
+                shape,
+            );
             doc.objects.insert(o.id, o);
         }
         let scene = build(&doc);

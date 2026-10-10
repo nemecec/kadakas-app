@@ -338,7 +338,10 @@ pub enum Input {
     Enter,
 }
 
+/// What a tool asks the app to do. It lives for one frame, so the size of the biggest variant (a
+/// command) does not matter.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Effect {
     Exec(Command),
     SetSelection(Vec<ObjectId>),

@@ -61,7 +61,7 @@ pub fn describe() -> Value {
             {"method": "objects.query", "params": {"criteria": "Kind = \"plant\" AND Layer = \"Planting\"", "columns": ["Style", "Area"]}},
             {"method": "snap.set", "params": {"set": {"angle": true, "distance": true}, "angle_step_deg": 45}},
             {"method": "snap.query", "params": {"point": [1003, 998], "anchor": [0, 0], "tolerance": 10}},
-            {"method": "visibility.set", "params": {"mode": "grey", "layers": [2]}},
+            {"method": "visibility.set", "params": {"mode": "grey", "layers": ["00000000-0000-0000-0000-000000000002"]}},
         ],
     })
 }

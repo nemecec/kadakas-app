@@ -8,6 +8,7 @@
 //!   the copy up to date.
 //! - For a path, the center line is the source and `boundary` is derived from it.
 
+use crate::uid::AsUid;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -288,7 +289,7 @@ pub fn style_of(
 
 /// The ID of the hardscape style that an object refers to, without checking that it exists.
 pub fn style_id(obj: &Object) -> Option<ResourceId> {
-    obj.data.get(KEY)?.get("style")?.as_u64().map(ResourceId)
+    obj.data.get(KEY)?.get("style")?.as_uid().map(ResourceId)
 }
 
 /// Copies the material and the total thickness of the style into the shape.
@@ -525,9 +526,9 @@ mod tests {
             DVec2::new(0.0, 2000.0),
         ]);
         Object::new(
-            ObjectId(5),
-            LayerId(1),
-            ClassId(0),
+            ObjectId::from_num(5),
+            LayerId::from_num(1),
+            ClassId::from_num(0),
             Shape::Hardscape {
                 boundary: b,
                 material: "Gravel".into(),
@@ -539,7 +540,7 @@ mod tests {
 
     fn doc_with_style() -> (Document, ResourceId) {
         let mut doc = Document::default();
-        let id = ResourceId(doc.alloc_id().unwrap());
+        let id = ResourceId(doc.alloc_id());
         let style = super::super::style::HardscapeStyle {
             material: "Setts".into(),
             thickness: 60.0,
@@ -563,9 +564,9 @@ mod tests {
         assert!(data(&o).is_none());
         assert!(!has_unreadable_data(&o));
         let mut text = Object::new(
-            ObjectId(6),
-            LayerId(1),
-            ClassId(0),
+            ObjectId::from_num(6),
+            LayerId::from_num(1),
+            ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,
@@ -827,9 +828,9 @@ mod tests {
         );
         // Not a hardscape.
         let mut line = Object::new(
-            ObjectId(9),
-            LayerId(1),
-            ClassId(0),
+            ObjectId::from_num(9),
+            LayerId::from_num(1),
+            ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,

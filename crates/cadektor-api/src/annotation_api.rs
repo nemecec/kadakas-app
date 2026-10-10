@@ -7,6 +7,7 @@
 //! viewport (`viewport` param, positions in paper mm from the lower left corner of the frame).
 //! The sizes of annotations are paper mm. On a design layer they grow with the scale of the layer.
 
+use cadektor_core::uid::{AsUid, Uid};
 use serde_json::{Map, Value, json};
 
 use cadektor_annot as annot;
@@ -178,8 +179,8 @@ pub fn describe() -> Value {
         },
         "examples": [
             {"method": "dimension_style.create", "params": {"name": "Metric 1:100", "unit": "m", "precision": 2, "show_unit": true, "terminator": "tick"}},
-            {"method": "dimension.add", "params": {"mode": "horizontal", "anchors": [{"object": 5, "vertex": 0}, {"object": 5, "vertex": 1}], "offset": 10, "style": "Metric 1:100"}},
-            {"method": "dimension.add", "params": {"mode": "radial", "object": 7}},
+            {"method": "dimension.add", "params": {"mode": "horizontal", "anchors": [{"object": "00000000-0000-0000-0000-000000000005", "vertex": 0}, {"object": "00000000-0000-0000-0000-000000000005", "vertex": 1}], "offset": 10, "style": "Metric 1:100"}},
+            {"method": "dimension.add", "params": {"mode": "radial", "object": "00000000-0000-0000-0000-000000000007"}},
             {"method": "tag_style.create", "params": {"name": "Plant tag", "lines": ["{IdCode}", "{Botanical}"], "frame": "box"}},
             {"method": "data_tag.tag_all", "params": {"style": "Plant tag", "criteria": "Kind = \"plant\""}},
             {"method": "legend.add", "params": {"at": [20, 280], "title": "Plants", "criteria": "Kind = \"plant\"", "group_by": "Style"}},
@@ -248,12 +249,14 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
 /// A resource of one type from an ID or a name.
 fn resource_ref(doc: &Document, v: &Value, ty: &str) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| {
-            doc.resources
-                .get(*id)
-                .is_some_and(|r| r.body.type_name() == ty)
-        }),
-        Value::String(name) => doc.resources.find_annot(ty, name),
+        Value::String(name) => cadektor_core::uid::Uid::parse(name.trim())
+            .map(ResourceId)
+            .filter(|id| {
+                doc.resources
+                    .get(*id)
+                    .is_some_and(|r| r.body.type_name() == ty)
+            })
+            .or_else(|| doc.resources.find_annot(ty, name)),
         _ => None,
     };
     found.ok_or_else(|| bad(format!("no {} {v}", ty.replace('_', " "))))
@@ -264,11 +267,13 @@ fn layer_ref(doc: &Document, v: Option<&Value>) -> Result<LayerId, RpcError> {
         return Ok(doc.active_layer);
     };
     let found = match v {
-        Value::Number(n) => n.as_u64().and_then(|i| doc.layer(LayerId(i))).map(|l| l.id),
-        Value::String(t) => doc
-            .layers
-            .iter()
-            .find(|l| l.name.eq_ignore_ascii_case(t.trim()))
+        Value::String(t) => cadektor_core::uid::Uid::parse(t.trim())
+            .and_then(|i| doc.layer(LayerId(i)))
+            .or_else(|| {
+                doc.layers
+                    .iter()
+                    .find(|l| l.name.eq_ignore_ascii_case(t.trim()))
+            })
             .map(|l| l.id),
         _ => None,
     };
@@ -280,11 +285,13 @@ fn class_ref(doc: &Document, v: Option<&Value>) -> Result<Option<ClassId>, RpcEr
         return Ok(None);
     };
     let found = match v {
-        Value::Number(n) => n.as_u64().and_then(|i| doc.class(ClassId(i))).map(|c| c.id),
-        Value::String(t) => doc
-            .classes
-            .iter()
-            .find(|c| c.name.eq_ignore_ascii_case(t.trim()))
+        Value::String(t) => cadektor_core::uid::Uid::parse(t.trim())
+            .and_then(|i| doc.class(ClassId(i)))
+            .or_else(|| {
+                doc.classes
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(t.trim()))
+            })
             .map(|c| c.id),
         _ => None,
     };
@@ -293,7 +300,7 @@ fn class_ref(doc: &Document, v: Option<&Value>) -> Result<Option<ClassId>, RpcEr
 
 fn object_param(p: &Value, key: &str) -> Result<ObjectId, RpcError> {
     p.get(key)
-        .and_then(Value::as_u64)
+        .and_then(AsUid::as_uid)
         .map(ObjectId)
         .ok_or_else(|| bad(format!("params.{key} is required (an object ID)")))
 }
@@ -441,7 +448,7 @@ fn anchor_json(v: &Value) -> Result<Value, RpcError> {
     }
     let object = v
         .get("object")
-        .and_then(Value::as_u64)
+        .and_then(AsUid::as_uid)
         .ok_or_else(|| bad("an anchor needs object (an object ID)"))?;
     let target = if let Some(i) = v.get("vertex").and_then(Value::as_u64) {
         json!({"at": "vertex", "index": i})
@@ -504,7 +511,7 @@ fn prep_dimension(
         ));
     }
     // A circle or an arc gives the center and the radius for radial, diameter and arc length.
-    if let Some(object) = j.remove("object").and_then(|v| v.as_u64()).map(ObjectId) {
+    if let Some(object) = j.remove("object").and_then(|v| v.as_uid()).map(ObjectId) {
         let shape = &doc
             .object(object)
             .ok_or_else(|| RpcError::not_found(format!("object {object} does not exist")))?
@@ -703,7 +710,7 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
     let viewport = match p.get("viewport") {
         None | Some(Value::Null) => None,
         Some(v) => Some(ObjectId(
-            v.as_u64().ok_or_else(|| bad("viewport is an object ID"))?,
+            v.as_uid().ok_or_else(|| bad("viewport is an object ID"))?,
         )),
     };
     let layer = layer_ref(doc, p.get("layer"))?;
@@ -749,7 +756,7 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
     s.prune_selection();
     // The command may have changed the annotation (anchors apply), so read the stored one.
     let stored = match (&id, viewport) {
-        (Value::Number(n), None) => n.as_u64().and_then(|i| {
+        (Value::String(n), None) => Uid::parse(n).and_then(|i| {
             annot_of(s.editor.doc(), ObjectId(i))
                 .ok()
                 .map(|(_, a)| a.clone())
@@ -757,7 +764,7 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
         _ => None,
     }
     .unwrap_or(a);
-    let info = if matches!(id, Value::Number(_)) {
+    let info = if matches!(id, Value::String(_)) {
         computed(s.editor.doc(), &stored, &ctx)
     } else {
         info

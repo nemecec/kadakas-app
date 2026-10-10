@@ -639,7 +639,7 @@ mod tests {
             ..GradeData::default()
         };
         let g = solve(a(), b(10_000.0), &d, None).unwrap();
-        let out = draw(ObjectId(7), &d, &g, 100.0);
+        let out = draw(ObjectId::from_num(7), &d, &g, 100.0);
         let texts: Vec<&str> = out.labels.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["2.0% (1:50)", "1.00", "1.20"]);
         assert!(out.polys.len() == 1 && out.polys[0].tag == "grade-arrow");
@@ -656,7 +656,7 @@ mod tests {
             ..d.clone()
         };
         let g2 = solve(a(), b(10_000.0), &down, None).unwrap();
-        assert!(draw(ObjectId(7), &down, &g2, 100.0).polys[0].rings[0][0].x > 5000.0);
+        assert!(draw(ObjectId::from_num(7), &down, &g2, 100.0).polys[0].rings[0][0].x > 5000.0);
         // Level ground has a bar.
         let level = GradeData {
             elevation_b: Some(1000.0),
@@ -665,14 +665,14 @@ mod tests {
             ..d.clone()
         };
         let g3 = solve(b(10_000.0), a(), &level, None).unwrap();
-        let s3 = draw(ObjectId(7), &level, &g3, 100.0);
+        let s3 = draw(ObjectId::from_num(7), &level, &g3, 100.0);
         assert!(!s3.polys[0].closed && s3.labels.len() == 1 && s3.labels[0].angle_deg == 0.0);
         let none = GradeData {
             label: false,
             end_tags: false,
             ..d.clone()
         };
-        assert!(draw(ObjectId(7), &none, &g, 100.0).is_empty());
+        assert!(draw(ObjectId::from_num(7), &none, &g, 100.0).is_empty());
         // Steep lines in both directions rotate by less than 90 degrees.
         for (p, q) in [
             (DVec2::new(0.0, 0.0), DVec2::new(1.0, 5.0)),
@@ -681,7 +681,7 @@ mod tests {
             (DVec2::new(0.0, 5.0), DVec2::new(-1.0, 0.0)),
         ] {
             let gg = solve(p, q, &d, None).unwrap();
-            let r = draw(ObjectId(1), &d, &gg, 100.0).labels[0].angle_deg;
+            let r = draw(ObjectId::from_num(1), &d, &gg, 100.0).labels[0].angle_deg;
             assert!(r.abs() <= 90.0);
         }
     }

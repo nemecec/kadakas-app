@@ -1253,7 +1253,7 @@ fn class_layer_combos(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], stat
     let class_names: Vec<_> = classes.iter().map(|(id, n)| (id.0, n.clone())).collect();
     let mut layer = first.layer;
     let mut class = first.class;
-    let name_of = |v: &[(u64, String)], id: u64| {
+    let name_of = |v: &[(cadektor_core::uid::Uid, String)], id: cadektor_core::uid::Uid| {
         v.iter()
             .find(|x| x.0 == id)
             .map(|x| x.1.clone())
@@ -1297,7 +1297,7 @@ enum RenameKind {
 #[derive(Default)]
 pub struct NavState {
     pub sheets: crate::sheets_ui::SheetUi,
-    renaming: Option<(RenameKind, u64, String)>,
+    renaming: Option<(RenameKind, cadektor_core::uid::Uid, String)>,
 }
 
 pub fn navigation(ui: &mut Ui, session: &mut Session, nav: &mut NavState, status: &mut String) {

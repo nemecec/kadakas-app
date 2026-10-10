@@ -121,7 +121,7 @@ impl Source {
 /// It lets the importer plan IDs and reuse layers and classes by name.
 #[derive(Clone, Debug)]
 pub struct Context {
-    pub next_id: u64,
+    pub ids: cadektor_core::uid::IdGen,
     pub layers: Vec<Layer>,
     pub classes: Vec<(ClassId, String)>,
     pub active_layer: LayerId,
@@ -132,7 +132,7 @@ pub struct Context {
 impl Context {
     pub fn of(doc: &Document) -> Context {
         Context {
-            next_id: doc.next_id(),
+            ids: doc.id_plan(),
             layers: doc.layers.clone(),
             classes: doc.classes.iter().map(|c| (c.id, c.name.clone())).collect(),
             active_layer: doc.active_layer,
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn file_errors() {
-        let doc = Document::default();
+        let doc = Document::with_sequential_ids();
         let o = ImportOptions::default();
         assert!(matches!(
             import_file(Path::new("/nonexistent/x.dxf"), None, &o, &doc),

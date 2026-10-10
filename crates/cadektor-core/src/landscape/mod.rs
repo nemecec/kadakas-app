@@ -8,6 +8,7 @@
 
 pub mod style;
 
+use crate::uid::AsUid;
 use std::fmt::Write;
 
 use glam::{DVec2, DVec3};
@@ -67,7 +68,7 @@ pub fn data(obj: &Object) -> Option<LandscapeData> {
 
 /// The ID of the landscape area style that an object refers to, without checking that it exists.
 pub fn style_id(obj: &Object) -> Option<ResourceId> {
-    obj.data.get(KEY)?.get("style")?.as_u64().map(ResourceId)
+    obj.data.get(KEY)?.get("style")?.as_uid().map(ResourceId)
 }
 
 /// The style of a landscape area, if the area has one and the style exists.
@@ -409,7 +410,7 @@ pub fn scatter(doc: &Document, obj: &Object) -> Vec<Placed> {
         lo = lo.min(*p);
         hi = hi.max(*p);
     }
-    let mut rng = Rng(obj.id.0.wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0xA5A5);
+    let mut rng = Rng(obj.id.0.low_u64().wrapping_mul(0x2545_F491_4F6C_DD1D) ^ 0xA5A5);
     // A thin shape in a big box: a coarser grid keeps the work small and thins the symbols evenly.
     let grid = |cell: f64| {
         (

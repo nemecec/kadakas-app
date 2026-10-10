@@ -15,7 +15,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn run(name: &str, opts: &ImportOptions) -> (Editor, cadektor_io::Report) {
-    let doc = Document::default();
+    let doc = Document::with_sequential_ids();
     let r = import_file(&fixture(name), None, opts, &doc).unwrap();
     let mut ed = Editor::new(doc);
     ed.execute(&r.command).unwrap();

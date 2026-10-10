@@ -31,7 +31,7 @@ fn plants(s: &mut Session, n: usize) {
 
 #[test]
 fn twenty_legends_over_4000_plants_add_little_to_an_svg_export() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     plants(&mut s, 4000);
     let t = Instant::now();
     let base = call(&mut s, "render.svg", json!({}))["svg"]
@@ -62,7 +62,7 @@ fn twenty_legends_over_4000_plants_add_little_to_an_svg_export() {
 
 #[test]
 fn tag_all_is_not_quadratic() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     plants(&mut s, 3000);
     call(
         &mut s,
@@ -81,7 +81,7 @@ fn tag_all_is_not_quadratic() {
 
 #[test]
 fn a_legend_shows_at_most_500_rows() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let cmds: Vec<Value> = (0..600)
         .map(|i| json!({"op": "add_object", "shape": {"kind": "plant", "at": [i, 0], "species": format!("Species {i:04}"), "spread": 100, "height": 100}}))
         .collect();
@@ -98,7 +98,7 @@ fn a_legend_shows_at_most_500_rows() {
 
 #[test]
 fn north_arrow_style_is_the_look_and_the_georeference_turns_it() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = call(
         &mut s,
         "north_arrow.add",
@@ -107,8 +107,11 @@ fn north_arrow_style_is_the_look_and_the_georeference_turns_it() {
     let listed = call(&mut s, "annotation.evaluate", json!({"id": r["id"]}));
     assert_eq!(listed["annotation"]["style"], "compass");
     assert!(
-        s.handle("north_arrow.add", json!({"at": [0, 0], "style": 5}))
-            .is_err()
+        s.handle(
+            "north_arrow.add",
+            json!({"at": [0, 0], "style": "00000000-0000-0000-0000-000000000005"})
+        )
+        .is_err()
     );
     exec(
         &mut s,
@@ -124,7 +127,7 @@ fn north_arrow_style_is_the_look_and_the_georeference_turns_it() {
 
 #[test]
 fn detached_dimensions_say_so() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let pl = exec(&mut s, json!({"op": "add_object", "shape": {"kind": "polyline", "closed": false, "points": [[0, 0], [1000, 0], [2000, 0]]}}))["created"][0].clone();
     let d = call(
         &mut s,
@@ -143,7 +146,7 @@ fn detached_dimensions_say_so() {
 
 #[test]
 fn annotations_made_in_an_entered_group_become_members() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = exec(
         &mut s,
         json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 100}}),

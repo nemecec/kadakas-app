@@ -739,13 +739,13 @@ mod tests {
             ..Catalog::default()
         };
         doc.resources.push(cadektor_core::resource::Resource {
-            id: cadektor_core::resource::ResourceId(900),
+            id: cadektor_core::resource::ResourceId::from_num(900),
             name: "My heads".into(),
             body: ResourceBody::IrrigationCatalog(extra.to_value()),
         });
         // A broken catalog resource is ignored.
         doc.resources.push(cadektor_core::resource::Resource {
-            id: cadektor_core::resource::ResourceId(901),
+            id: cadektor_core::resource::ResourceId::from_num(901),
             name: "Broken".into(),
             body: ResourceBody::IrrigationCatalog(serde_json::json!({"heads": 3})),
         });

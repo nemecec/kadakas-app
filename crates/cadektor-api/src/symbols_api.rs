@@ -186,12 +186,12 @@ pub fn describe() -> Value {
         "patterns": "Hatches, tiles and line types are resources. Objects use them with the attributes fill_pattern (a hatch or tile) and line_type, on the object or on its class: {op: modify_object, id, attrs: {fill_pattern: 5}}. Paper units follow the drawing scale. The pattern is clipped to the shape in the canvas, SVG, PDF and DXF.",
         "libraries": "resource.import_from_file reads another document and imports the resources you name with what they need. The library folder holds shared .cdk.json files.",
         "examples": [
-            {"method": "group.create", "params": {"ids": [2, 3, 4], "name": "Bench"}},
-            {"method": "group.rotate", "params": {"ids": [5], "center": [0, 0], "angle": 1.57}},
+            {"method": "group.create", "params": {"ids": ["00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004"], "name": "Bench"}},
+            {"method": "group.rotate", "params": {"ids": ["00000000-0000-0000-0000-000000000005"], "center": [0, 0], "angle": 1.57}},
             {"method": "resource.create", "params": {"type": "hatch", "name": "Diagonal", "units": "paper", "lines": [{"angle": 45, "spacing": 2}]}},
             {"method": "symbol.create", "params": {"name": "Tree mark", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 500}}, {"shape": {"kind": "line", "a": [-500, 0], "b": [500, 0]}}]}},
             {"method": "symbol.place", "params": {"symbol": "Tree mark", "at": [1000, 2000], "rotation": 0.5, "scale": 2, "scale_y": 1}},
-            {"method": "symbol.from_objects", "params": {"name": "Planter", "ids": [2, 3], "replace": true}},
+            {"method": "symbol.from_objects", "params": {"name": "Planter", "ids": ["00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"], "replace": true}},
             {"method": "resource.create", "params": {"type": "line_type", "name": "Dashed", "elements": [{"kind": "dash", "length": 3}, {"kind": "gap", "length": 1.5}]}},
             {"method": "resource.import_from_file", "params": {"path": "/data/library.cdk.json", "items": [{"type": "symbol", "name": "Tree mark"}], "on_conflict": "rename"}},
             {"method": "resource.purge_unused", "params": {"dry_run": true}}
@@ -240,12 +240,17 @@ fn ids_of(s: &Session, m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError
 /// A resource by ID or by name. `ty` limits a name lookup to one type (and checks the type of an ID).
 fn resource_ref(doc: &Document, v: &Value, ty: Option<&str>) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| {
-            doc.resources
-                .get(*id)
-                .is_some_and(|r| ty.is_none_or(|t| r.body.type_name() == t))
-        }),
         Value::String(name) => {
+            let by_id = cadektor_core::uid::Uid::parse(name.trim())
+                .map(ResourceId)
+                .filter(|id| {
+                    doc.resources
+                        .get(*id)
+                        .is_some_and(|r| ty.is_none_or(|t| r.body.type_name() == t))
+                });
+            if let Some(id) = by_id {
+                return Ok(id);
+            }
             let mut hits = doc.resources.iter().filter(|r| {
                 r.name.eq_ignore_ascii_case(name.trim())
                     && ty.is_none_or(|t| r.body.type_name() == t)

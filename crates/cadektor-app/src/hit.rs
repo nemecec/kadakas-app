@@ -589,7 +589,7 @@ mod tests {
         let tag = Shape::PlantTag {
             at: DVec2::new(1000.0, 1000.0),
             anchor: DVec2::ZERO,
-            style: cadektor_core::resource::ResourceId(1),
+            style: cadektor_core::resource::ResourceId::from_num(1),
             height: 400.0,
         };
         assert!(

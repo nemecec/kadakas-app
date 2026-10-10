@@ -60,7 +60,7 @@ fn dwg_files_go_through_the_converter_named_by_the_environment() {
     let input = dir.join("site.dwg");
     std::fs::write(&input, "FAKEDWG\n").unwrap();
 
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     assert!(d["io"]["dwg"]["converter"]["name"].is_string(), "{d}");
     let r = ok(&mut s, "import.file", json!({"path": input}));
@@ -71,7 +71,7 @@ fn dwg_files_go_through_the_converter_named_by_the_environment() {
     assert!(out.exists());
 
     // A restricted session checks the path, the extension and the overwrite flag.
-    let mut r = Session::default();
+    let mut r = Session::with_sequential_ids();
     r.paths = PathPolicy::restricted([dir.clone()]).with_converters(true);
     ok(&mut r, "import.file", json!({"path": input}));
     assert!(err(&mut r, "export.file", json!({"path": out})).contains("overwrite"));
@@ -132,7 +132,7 @@ fn dwg_files_go_through_the_converter_named_by_the_environment() {
 #[test]
 fn ifc_files_round_trip_and_errors_are_reported() {
     let dir = work_dir("ifc");
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     add_site(&mut s);
     let path = dir.join("site.ifc");
     let r = ok(
@@ -142,12 +142,12 @@ fn ifc_files_round_trip_and_errors_are_reported() {
     );
     assert!(r["exported"].as_u64().unwrap() >= 1, "{r}");
     assert!(path.exists());
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     let r = ok(&mut t, "import.file", json!({"path": path}));
     assert!(r["imported"].as_u64().unwrap() >= 1, "{r}");
 
     // A restricted session checks the path and the overwrite flag.
-    let mut r = Session::default();
+    let mut r = Session::with_sequential_ids();
     r.paths = PathPolicy::restricted([dir.clone()]);
     add_site(&mut r);
     assert!(err(&mut r, "export.file", json!({"path": path})).contains("overwrite"));

@@ -1,5 +1,6 @@
 //! Commands for groups, copies, rotation and symbols. They run inside `Tx` like all others.
 
+use crate::uid::AsUid;
 use std::collections::HashMap;
 
 use super::*;
@@ -216,7 +217,7 @@ impl Tx<'_> {
                 .object(id)
                 .and_then(|g| g.data.get(EDIT_GROUP_KEY))
                 .and_then(|v| v.get("instance"))
-                .and_then(Value::as_u64)
+                .and_then(AsUid::as_uid)
                 .map(ObjectId);
             if let Some(i) = instance.filter(|i| {
                 self.doc
@@ -620,7 +621,7 @@ impl Tx<'_> {
             o.data
                 .get(EDIT_GROUP_KEY)
                 .and_then(|v| v.get("symbol"))
-                .and_then(Value::as_u64)
+                .and_then(AsUid::as_uid)
                 == Some(symbol.0)
         }) {
             return Err(invalid("this symbol is being edited already"));
@@ -675,10 +676,10 @@ impl Tx<'_> {
             })?;
         let symbol = ResourceId(
             info.get("symbol")
-                .and_then(Value::as_u64)
+                .and_then(AsUid::as_uid)
                 .ok_or_else(|| invalid("the edit group is damaged"))?,
         );
-        let instance = info.get("instance").and_then(Value::as_u64).map(ObjectId);
+        let instance = info.get("instance").and_then(AsUid::as_uid).map(ObjectId);
         let off = info
             .get("offset")
             .and_then(Value::as_array)
@@ -781,9 +782,7 @@ mod tests {
 
     /// The document without its ID counter, which undo does not take back.
     fn norm(d: &Document) -> Document {
-        let mut c = d.clone();
-        c.set_next_id(0);
-        c
+        d.clone()
     }
 
     fn center(ed: &Editor, id: ObjectId) -> DVec2 {
@@ -862,8 +861,8 @@ mod tests {
             matches!(err(&mut ed, vec![]), CommandError::Invalid(m) if m.contains("at least one"))
         );
         assert_eq!(
-            err(&mut ed, vec![ObjectId(999)]),
-            CommandError::NoObject(ObjectId(999))
+            err(&mut ed, vec![ObjectId::from_num(999)]),
+            CommandError::NoObject(ObjectId::from_num(999))
         );
         let layer = LayerId(
             ed.execute(&Command::AddLayer {
@@ -1092,7 +1091,7 @@ mod tests {
                 closed: false,
             },
             Shape::Symbol {
-                symbol: ResourceId(1),
+                symbol: ResourceId::from_num(1),
                 at: v(0.0, 0.0),
                 rotation: 0.25,
                 scale: 1.0,
@@ -1102,7 +1101,7 @@ mod tests {
             Shape::PlantTag {
                 at: v(0.0, 0.0),
                 anchor: v(1.0, 1.0),
-                style: ResourceId(1),
+                style: ResourceId::from_num(1),
                 height: 1.0,
             },
             Shape::ExistingTree {
@@ -1134,7 +1133,7 @@ mod tests {
         let tag = Shape::PlantTag {
             at: v(0.0, 0.0),
             anchor: v(1.0, 1.0),
-            style: ResourceId(1),
+            style: ResourceId::from_num(1),
             height: 1.0,
         };
         assert_eq!(rotate_shape(&tag, c, 0.0).unwrap(), tag);
@@ -1177,7 +1176,7 @@ mod tests {
         assert!((crate::plants::link::rotation(ed.doc().object(p).unwrap()) - 0.75).abs() < 1e-12);
     }
 
-    fn symbol_from(ed: &mut Editor, ids: &[ObjectId], replace: bool) -> Vec<u64> {
+    fn symbol_from(ed: &mut Editor, ids: &[ObjectId], replace: bool) -> Vec<Uid> {
         ed.execute(&Command::CreateSymbol {
             name: "Tree".into(),
             ids: ids.to_vec(),

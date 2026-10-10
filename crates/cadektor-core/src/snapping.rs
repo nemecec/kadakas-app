@@ -1308,7 +1308,7 @@ mod tests {
             .unwrap()
             .created[0]
         };
-        let (a, b) = (add(&mut ed, LayerId(1)), add(&mut ed, l2));
+        let (a, b) = (add(&mut ed, LayerId::from_num(1)), add(&mut ed, l2));
         let points =
             |ed: &Editor, reach: Reach| Geometry::from_doc(ed.doc(), &[], reach, None).points.len();
         assert_eq!(points(&ed, Reach::default()), 6);

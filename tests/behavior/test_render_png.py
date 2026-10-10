@@ -9,7 +9,7 @@ import zlib
 
 import pytest
 
-from helpers import BIN, line_cmd, plant_cmd
+from helpers import BIN, line_cmd, plant_cmd, uid
 from test_connect import FakeApp
 
 BACKGROUND = (246, 247, 249, 255)
@@ -142,10 +142,10 @@ def test_a_hidden_layer_gives_an_empty_image(cad):
     cad.execute(hardscape(0, 0, 4000, 3000))
     _, rows = render(cad, width=64, height=48)
     assert box_of(rows, lambda p: p != BACKGROUND) is not None
-    cad.execute({"op": "modify_layer", "id": 1, "visible": False})
+    cad.execute({"op": "modify_layer", "id": uid(1), "visible": False})
     _, rows = render(cad, width=64, height=48)
     assert box_of(rows, lambda p: p != BACKGROUND) is None, "every pixel is background"
-    cad.execute({"op": "modify_layer", "id": 1, "visible": True})
+    cad.execute({"op": "modify_layer", "id": uid(1), "visible": True})
     _, rows = render(cad, width=64, height=48)
     assert box_of(rows, lambda p: p != BACKGROUND) is not None
 

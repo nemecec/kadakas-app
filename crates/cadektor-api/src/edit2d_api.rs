@@ -103,15 +103,15 @@ pub fn describe() -> Value {
     json!({
         "notes": "Every edit is one undo step and works through commands: edit.rotate, edit.scale, edit.mirror and edit.array run the commands transform_objects and array_objects; the others run a batch of modify_object, add_object and delete_objects. Lines, arcs, circles and rectangles are exact. Polylines are read as lines and exact arcs (fillet vertices and arcs through three points); Bezier and spline pieces are cut into short lines (0.05 mm). Edited polylines write arcs back as point_on_arc vertices. Surface operations flatten curves to 0.05 mm: a circle becomes a polygon with the exact area of the circle.",
         "examples": [
-            {"method": "edit.mirror", "params": {"ids": [2], "a": [0, 0], "b": [0, 1000], "copy": true}},
-            {"method": "edit.array", "params": {"ids": [2], "shape": "rectangular", "columns": 4, "rows": 3, "column_spacing": 2000, "row_spacing": 1500}},
-            {"method": "edit.array", "params": {"ids": [2], "shape": "circular", "count": 5, "center": [0, 0]}},
-            {"method": "edit.offset", "params": {"id": 2, "distance": 500, "side": "outside"}},
+            {"method": "edit.mirror", "params": {"ids": ["00000000-0000-0000-0000-000000000002"], "a": [0, 0], "b": [0, 1000], "copy": true}},
+            {"method": "edit.array", "params": {"ids": ["00000000-0000-0000-0000-000000000002"], "shape": "rectangular", "columns": 4, "rows": 3, "column_spacing": 2000, "row_spacing": 1500}},
+            {"method": "edit.array", "params": {"ids": ["00000000-0000-0000-0000-000000000002"], "shape": "circular", "count": 5, "center": [0, 0]}},
+            {"method": "edit.offset", "params": {"id": "00000000-0000-0000-0000-000000000002", "distance": 500, "side": "outside"}},
             {"method": "edit.fillet", "params": {"a": 2, "b": 3, "pick_a": [8000, 0], "pick_b": [0, 8000], "radius": 500}},
-            {"method": "edit.chamfer", "params": {"id": 4, "all": true, "distance": 300}},
-            {"method": "edit.trim", "params": {"id": 2, "pick": [5000, 0]}},
-            {"method": "edit.split", "params": {"id": 5, "line": {"a": [4000, -1000], "b": [4000, 9000]}}},
-            {"method": "surface.subtract", "params": {"base": 2, "cutters": [3]}},
+            {"method": "edit.chamfer", "params": {"id": "00000000-0000-0000-0000-000000000004", "all": true, "distance": 300}},
+            {"method": "edit.trim", "params": {"id": "00000000-0000-0000-0000-000000000002", "pick": [5000, 0]}},
+            {"method": "edit.split", "params": {"id": "00000000-0000-0000-0000-000000000005", "line": {"a": [4000, -1000], "b": [4000, 9000]}}},
+            {"method": "surface.subtract", "params": {"base": "00000000-0000-0000-0000-000000000002", "cutters": ["00000000-0000-0000-0000-000000000003"]}},
         ],
     })
 }

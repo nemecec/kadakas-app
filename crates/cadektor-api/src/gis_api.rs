@@ -12,6 +12,7 @@
 //! Network calls run on a worker thread. In `cadektor serve` they wait for the answer by default. In
 //! the app they return `{job, status: "running"}` at once, and `gis.job.status` gives the result.
 
+use cadektor_core::uid::Uid;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -432,7 +433,7 @@ impl Session {
                         id
                     }
                     None => {
-                        let next = ObjectId(self.editor.doc().next_id());
+                        let next = ObjectId(self.editor.doc().next_ids(1)[0]);
                         self.editor
                             .execute(&Command::Batch {
                                 commands: vec![
@@ -997,7 +998,7 @@ impl Session {
             path.extension().map_or("", |e| e.to_str().unwrap_or(""))
         );
         let (w, h) = (u.width, u.height);
-        let next = ObjectId(self.editor.doc().next_id());
+        let next = ObjectId(self.editor.doc().next_ids(1)[0]);
         let mut commands = Vec::new();
         if let Some(g) = &placed.new_georef {
             commands.push(Command::SetGeoreference {
@@ -1030,12 +1031,13 @@ impl Session {
         by_name: Option<String>,
     ) -> Result<Option<LayerId>, RpcError> {
         let doc: &Document = self.editor.doc();
-        if let Some(Value::Number(n)) = by_id {
-            let id = LayerId(n.as_u64().ok_or_else(|| bad("layer must be an ID"))?);
-            return doc
-                .layer(id)
-                .map(|_| Some(id))
-                .ok_or_else(|| bad(format!("layer {id} does not exist")));
+        if let Some(id) = by_id
+            .and_then(Value::as_str)
+            .and_then(|t| Uid::parse(t.trim()))
+            .map(LayerId)
+            .filter(|id| doc.layer(*id).is_some())
+        {
+            return Ok(Some(id));
         }
         let name = by_name.or_else(|| by_id.and_then(Value::as_str).map(str::to_string));
         match name {
@@ -1045,7 +1047,13 @@ impl Session {
                 .iter()
                 .find(|l| l.name.eq_ignore_ascii_case(&n))
                 .map(|l| Some(l.id))
-                .ok_or_else(|| bad(format!("no layer named {n}"))),
+                .ok_or_else(|| {
+                    if Uid::parse(n.trim()).is_some() {
+                        bad(format!("layer {n} does not exist"))
+                    } else {
+                        bad(format!("no layer named {n}"))
+                    }
+                }),
         }
     }
 }

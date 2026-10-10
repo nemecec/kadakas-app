@@ -591,6 +591,7 @@ pub fn draw_badge(painter: &egui::Painter, view: &View, doc: &Document, o: &Obje
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_core::uid::AsUid;
 
     #[test]
     fn colors_round_trip() {
@@ -616,7 +617,7 @@ mod tests {
         let g = s
             .handle("plugin.place", json!({"definition": "Bench", "at": [0, 0]}))
             .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let id = ObjectId(g);
         let mut ui_state = ScriptUi::default();
@@ -752,7 +753,7 @@ mod tests {
         let g = maker
             .handle("plugin.place", json!({"definition": def, "at": [0, 0]}))
             .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let doc = maker.handle("document.get", json!({})).unwrap();
         let mut s = Session::default();
@@ -806,7 +807,7 @@ mod tests {
         let g = s
             .handle("plugin.place", json!({"definition": "Bench", "at": [0, 0]}))
             .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let id = ObjectId(g);
         let mut data =
@@ -841,7 +842,7 @@ mod tests {
         let g = s
             .handle("plugin.place", json!({"definition": "Bench", "at": [0, 0]}))
             .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let id = ObjectId(g);
         let mut ui_state = ScriptUi::default();

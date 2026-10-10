@@ -39,6 +39,7 @@ pub mod sun;
 pub mod survey;
 pub mod svg;
 pub mod symbols;
+pub mod uid;
 pub mod underlay;
 pub mod viewrules;
 pub mod visibility;

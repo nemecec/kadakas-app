@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
+use crate::uid::Uid;
 
 mod annot_ops;
 mod area_ops;
@@ -469,7 +470,7 @@ pub enum CommandError {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     /// IDs of new objects, layers and classes, in creation order.
-    pub created: Vec<u64>,
+    pub created: Vec<Uid>,
 }
 
 /// Snapshot of the document parts that are not objects.
@@ -691,10 +692,8 @@ impl<'a> Tx<'a> {
         }
     }
 
-    fn alloc(&mut self) -> Result<u64, CommandError> {
-        self.doc
-            .alloc_id()
-            .ok_or_else(|| CommandError::Invalid("ids are exhausted".into()))
+    fn alloc(&mut self) -> Result<Uid, CommandError> {
+        Ok(self.doc.alloc_id())
     }
 
     fn check_class(&self, id: ClassId) -> Result<(), CommandError> {
@@ -1402,6 +1401,18 @@ fn next_revision() -> u64 {
 }
 
 impl Editor {
+    /// An editor for an empty document whose IDs count 2, 3, 4 and so on (see
+    /// `Document::with_sequential_ids`). For tests and fixtures.
+    pub fn with_sequential_ids() -> Self {
+        Editor::new(Document::with_sequential_ids())
+    }
+
+    /// Makes the IDs of this document count on from its largest small ID (see
+    /// `Document::use_sequential_ids_after_existing`).
+    pub fn use_sequential_ids(&mut self) {
+        self.doc.use_sequential_ids_after_existing();
+    }
+
     pub fn new(doc: Document) -> Self {
         Editor {
             doc,
@@ -1550,23 +1561,6 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_ids_return_an_error_instead_of_panicking() {
-        let mut ed = Editor::default();
-        ed.doc.set_next_id(u64::MAX);
-        assert!(
-            matches!(ed.execute(&line(1.0)), Err(CommandError::Invalid(m)) if m.contains("exhausted"))
-        );
-        assert!(
-            ed.execute(&Command::AddClass {
-                name: "c".into(),
-                attrs: Attributes::default()
-            })
-            .is_err()
-        );
-        assert!(ed.doc.objects.is_empty());
-    }
-
-    #[test]
     fn undo_redo_restores_order() {
         let mut ed = Editor::default();
         let ids: Vec<ObjectId> = (0..4)
@@ -1592,11 +1586,11 @@ mod tests {
             commands: vec![
                 line(0.0),
                 Command::DeleteObjects {
-                    ids: vec![ObjectId(999)],
+                    ids: vec![ObjectId::from_num(999)],
                 },
             ],
         });
-        assert_eq!(err, Err(CommandError::NoObject(ObjectId(999))));
+        assert_eq!(err, Err(CommandError::NoObject(ObjectId::from_num(999))));
         assert_eq!(ed.doc.objects, before);
         assert!(!ed.can_undo());
     }
@@ -1606,7 +1600,7 @@ mod tests {
         let mut ed = Editor::default();
         let id = ObjectId(ed.execute(&line(0.0)).unwrap().created[0]);
         ed.execute(&Command::ModifyLayer {
-            id: LayerId(1),
+            id: LayerId::from_num(1),
             name: None,
             visible: None,
             locked: Some(true),
@@ -1618,7 +1612,7 @@ mod tests {
             ids: vec![id],
             delta: DVec2::X,
         });
-        assert_eq!(r, Err(CommandError::LayerLocked(LayerId(1))));
+        assert_eq!(r, Err(CommandError::LayerLocked(LayerId::from_num(1))));
     }
 
     #[test]
@@ -1728,17 +1722,17 @@ mod tests {
             attrs: Attributes::default(),
         };
         assert_eq!(
-            ed.execute(&add(Some(LayerId(99)), None)),
-            Err(CommandError::NoLayer(LayerId(99)))
+            ed.execute(&add(Some(LayerId::from_num(99)), None)),
+            Err(CommandError::NoLayer(LayerId::from_num(99)))
         );
         assert_eq!(
-            ed.execute(&add(None, Some(ClassId(99)))),
-            Err(CommandError::NoClass(ClassId(99)))
+            ed.execute(&add(None, Some(ClassId::from_num(99)))),
+            Err(CommandError::NoClass(ClassId::from_num(99)))
         );
-        lock_layer(&mut ed, LayerId(1), true);
+        lock_layer(&mut ed, LayerId::from_num(1), true);
         assert_eq!(
             ed.execute(&add(None, None)),
-            Err(CommandError::LayerLocked(LayerId(1)))
+            Err(CommandError::LayerLocked(LayerId::from_num(1)))
         );
         assert!(ed.doc.objects.is_empty());
     }
@@ -1900,9 +1894,9 @@ mod tests {
         let b = add_to(&mut ed, circle());
         assert_eq!(
             ed.execute(&Command::DeleteObjects {
-                ids: vec![ObjectId(999)]
+                ids: vec![ObjectId::from_num(999)]
             }),
-            Err(CommandError::NoObject(ObjectId(999)))
+            Err(CommandError::NoObject(ObjectId::from_num(999)))
         );
         assert_eq!(ed.doc.objects.len(), 2);
 
@@ -1911,10 +1905,10 @@ mod tests {
         assert!(ed.doc.object(a).is_none());
         assert!(ed.doc.object(b).is_some());
 
-        lock_layer(&mut ed, LayerId(1), true);
+        lock_layer(&mut ed, LayerId::from_num(1), true);
         assert_eq!(
             ed.execute(&Command::DeleteObjects { ids: vec![b] }),
-            Err(CommandError::LayerLocked(LayerId(1)))
+            Err(CommandError::LayerLocked(LayerId::from_num(1)))
         );
         assert!(ed.doc.object(b).is_some());
     }
@@ -1953,10 +1947,10 @@ mod tests {
         // The second id is missing, so the first move must be undone too.
         let before = ed.doc.clone();
         let r = ed.execute(&Command::MoveObjects {
-            ids: vec![a, ObjectId(999)],
+            ids: vec![a, ObjectId::from_num(999)],
             delta: DVec2::X,
         });
-        assert_eq!(r, Err(CommandError::NoObject(ObjectId(999))));
+        assert_eq!(r, Err(CommandError::NoObject(ObjectId::from_num(999))));
         assert_eq!(ed.doc, before);
     }
 
@@ -2037,22 +2031,22 @@ mod tests {
             attrs: None,
         };
         assert_eq!(
-            ed.execute(&modify(Some(LayerId(99)), None)),
-            Err(CommandError::NoLayer(LayerId(99)))
+            ed.execute(&modify(Some(LayerId::from_num(99)), None)),
+            Err(CommandError::NoLayer(LayerId::from_num(99)))
         );
         assert_eq!(
-            ed.execute(&modify(None, Some(ClassId(99)))),
-            Err(CommandError::NoClass(ClassId(99)))
+            ed.execute(&modify(None, Some(ClassId::from_num(99)))),
+            Err(CommandError::NoClass(ClassId::from_num(99)))
         );
         assert_eq!(
             ed.execute(&Command::ModifyObject {
-                id: ObjectId(999),
+                id: ObjectId::from_num(999),
                 shape: None,
                 layer: None,
                 class: None,
                 attrs: None
             }),
-            Err(CommandError::NoObject(ObjectId(999)))
+            Err(CommandError::NoObject(ObjectId::from_num(999)))
         );
 
         // Moving an object into a locked layer is refused.
@@ -2132,7 +2126,7 @@ mod tests {
     fn modify_layer_updates_fields_and_checks_scale() {
         let mut ed = Editor::default();
         ed.execute(&Command::ModifyLayer {
-            id: LayerId(1),
+            id: LayerId::from_num(1),
             name: Some("Renamed".into()),
             visible: Some(false),
             locked: Some(true),
@@ -2147,7 +2141,7 @@ mod tests {
         );
 
         let r = ed.execute(&Command::ModifyLayer {
-            id: LayerId(1),
+            id: LayerId::from_num(1),
             name: None,
             visible: None,
             locked: None,
@@ -2161,25 +2155,29 @@ mod tests {
         assert_eq!(ed.doc.layer(FIRST_LAYER).unwrap().scale, 50.0);
 
         let r = ed.execute(&Command::ModifyLayer {
-            id: LayerId(99),
+            id: LayerId::from_num(99),
             name: None,
             visible: None,
             locked: None,
             elevation: None,
             scale: None,
         });
-        assert_eq!(r, Err(CommandError::NoLayer(LayerId(99))));
+        assert_eq!(r, Err(CommandError::NoLayer(LayerId::from_num(99))));
     }
 
     #[test]
     fn delete_layer_rules() {
         let mut ed = Editor::default();
         assert_eq!(
-            ed.execute(&Command::DeleteLayer { id: LayerId(99) }),
-            Err(CommandError::NoLayer(LayerId(99)))
+            ed.execute(&Command::DeleteLayer {
+                id: LayerId::from_num(99)
+            }),
+            Err(CommandError::NoLayer(LayerId::from_num(99)))
         );
         assert_eq!(
-            ed.execute(&Command::DeleteLayer { id: LayerId(1) }),
+            ed.execute(&Command::DeleteLayer {
+                id: LayerId::from_num(1)
+            }),
             Err(CommandError::LastLayer)
         );
 
@@ -2267,12 +2265,12 @@ mod tests {
 
         assert_eq!(
             ed.execute(&Command::ModifyClass {
-                id: ClassId(99),
+                id: ClassId::from_num(99),
                 name: None,
                 visible: None,
                 attrs: None
             }),
-            Err(CommandError::NoClass(ClassId(99)))
+            Err(CommandError::NoClass(ClassId::from_num(99)))
         );
         ed.undo();
         assert_eq!(ed.doc.class(cid).unwrap().attrs, attrs);
@@ -2299,17 +2297,17 @@ mod tests {
 
         assert_eq!(
             ed.execute(&Command::SetActive {
-                layer: Some(LayerId(99)),
+                layer: Some(LayerId::from_num(99)),
                 class: None
             }),
-            Err(CommandError::NoLayer(LayerId(99)))
+            Err(CommandError::NoLayer(LayerId::from_num(99)))
         );
         assert_eq!(
             ed.execute(&Command::SetActive {
                 layer: None,
-                class: Some(ClassId(99))
+                class: Some(ClassId::from_num(99))
             }),
-            Err(CommandError::NoClass(ClassId(99)))
+            Err(CommandError::NoClass(ClassId::from_num(99)))
         );
         assert_eq!(ed.doc.active_class, cid, "failed SetActive changes nothing");
 
@@ -2377,7 +2375,7 @@ mod tests {
         // A failed command does not touch the redo stack.
         assert!(
             ed.execute(&Command::DeleteObjects {
-                ids: vec![ObjectId(999)]
+                ids: vec![ObjectId::from_num(999)]
             })
             .is_err()
         );
@@ -2450,24 +2448,24 @@ mod tests {
     #[test]
     fn command_error_messages() {
         assert_eq!(
-            CommandError::NoObject(ObjectId(3)).to_string(),
-            "object 3 does not exist"
+            CommandError::NoObject(ObjectId::from_num(3)).to_string(),
+            format!("object {} does not exist", ObjectId::from_num(3)).as_str()
         );
         assert_eq!(
-            CommandError::NoLayer(LayerId(4)).to_string(),
-            "layer 4 does not exist"
+            CommandError::NoLayer(LayerId::from_num(4)).to_string(),
+            format!("layer {} does not exist", LayerId::from_num(4)).as_str()
         );
         assert_eq!(
-            CommandError::NoClass(ClassId(5)).to_string(),
-            "class 5 does not exist"
+            CommandError::NoClass(ClassId::from_num(5)).to_string(),
+            format!("class {} does not exist", ClassId::from_num(5)).as_str()
         );
         assert_eq!(
-            CommandError::LayerLocked(LayerId(6)).to_string(),
-            "layer 6 is locked"
+            CommandError::LayerLocked(LayerId::from_num(6)).to_string(),
+            format!("layer {} is locked", LayerId::from_num(6)).as_str()
         );
         assert_eq!(
-            CommandError::LayerNotEmpty(LayerId(7)).to_string(),
-            "layer 7 is not empty"
+            CommandError::LayerNotEmpty(LayerId::from_num(7)).to_string(),
+            format!("layer {} is not empty", LayerId::from_num(7)).as_str()
         );
         assert_eq!(
             CommandError::LastLayer.to_string(),
@@ -2482,11 +2480,11 @@ mod tests {
     #[test]
     fn command_json_uses_op_tag() {
         let c: Command =
-            serde_json::from_str(r#"{"op":"move_objects","ids":[2],"delta":[1.5,-2]}"#).unwrap();
+            serde_json::from_str(r#"{"op":"move_objects","ids":["00000000-0000-0000-0000-000000000002"],"delta":[1.5,-2]}"#).unwrap();
         assert_eq!(
             c,
             Command::MoveObjects {
-                ids: vec![ObjectId(2)],
+                ids: vec![ObjectId::from_num(2)],
                 delta: DVec2::new(1.5, -2.0)
             }
         );
@@ -2539,24 +2537,27 @@ mod tests {
     }
 
     #[test]
-    fn typed_ids_are_plain_numbers_in_json_and_not_truncated() {
+    fn typed_ids_are_uuid_texts_in_json() {
         assert_eq!(
-            serde_json::to_value(ObjectId(7)).unwrap(),
-            serde_json::json!(7)
+            serde_json::to_value(ObjectId::from_num(7)).unwrap(),
+            serde_json::json!("00000000-0000-0000-0000-000000000007")
         );
-        assert_eq!(serde_json::from_str::<LayerId>("3").unwrap(), LayerId(3));
-        assert_eq!(ObjectId(9).to_string(), "9");
-        assert_eq!(u64::from(ClassId(4)), 4);
+        assert_eq!(
+            serde_json::from_str::<LayerId>("\"00000000-0000-0000-0000-000000000003\"").unwrap(),
+            LayerId::from_num(3)
+        );
+        assert!(
+            serde_json::from_str::<LayerId>("3").is_err(),
+            "a number is not an ID"
+        );
+        assert_eq!(
+            ObjectId::from_num(9).to_string(),
+            "00000000-0000-0000-0000-000000000009"
+        );
+        assert_eq!(Uid::from(ClassId::from_num(4)), Uid::from_num(4));
 
-        // An ID above u32::MAX must survive for layers and classes too.
-        let mut doc = Document::default();
-        let big = u32::MAX as u64 + 10;
-        doc.objects.insert(
-            ObjectId(big),
-            Object::new(ObjectId(big), FIRST_LAYER, NONE_CLASS, circle()),
-        );
-        doc.validate().unwrap();
-        let mut ed = Editor::new(doc);
+        // New layers, classes and objects get different, version 7 IDs, in creation order.
+        let mut ed = Editor::default();
         let lid = ed
             .execute(&Command::AddLayer {
                 name: "L".into(),
@@ -2573,7 +2574,8 @@ mod tests {
             })
             .unwrap()
             .created[0];
-        assert!(lid > big && cid > lid);
+        assert!(lid < cid);
+        assert_eq!((lid.version(), cid.version()), (7, 7));
         assert!(ed.doc.layer(LayerId(lid)).is_some());
         assert!(ed.doc.class(ClassId(cid)).is_some());
     }
@@ -2634,14 +2636,10 @@ mod tests {
     #[test]
     fn object_added_and_deleted_in_one_batch_leaves_no_history() {
         let mut ed = Editor::default();
-        // The next ID is 2, so the batch deletes the object it just made.
+        // The batch deletes the object it just made: its ID is planned.
+        let planned = ObjectId(ed.doc.next_ids(1)[0]);
         let r = ed.execute(&Command::Batch {
-            commands: vec![
-                line(0.0),
-                Command::DeleteObjects {
-                    ids: vec![ObjectId(2)],
-                },
-            ],
+            commands: vec![line(0.0), Command::DeleteObjects { ids: vec![planned] }],
         });
         assert!(r.is_ok());
         assert!(ed.doc.objects.is_empty());
@@ -2653,15 +2651,16 @@ mod tests {
         let mut ed = Editor::default();
         let keep = add_to(&mut ed, circle());
         let before = ed.doc.clone();
+        let new = ObjectId(ed.doc.next_ids(1)[0]);
         ed.execute(&Command::Batch {
             commands: vec![
                 line(0.0),
                 Command::MoveObjects {
-                    ids: vec![ObjectId(3), keep],
+                    ids: vec![new, keep],
                     delta: DVec2::X,
                 },
                 Command::SetData {
-                    id: ObjectId(3),
+                    id: new,
                     set: BTreeMap::from([("k".into(), Value::from(1))]),
                     remove: vec![],
                 },
@@ -3026,11 +3025,11 @@ mod tests {
         assert_eq!(ed.undo.len(), steps);
         assert_eq!(
             ed.execute(&Command::SetData {
-                id: ObjectId(999),
+                id: ObjectId::from_num(999),
                 set: BTreeMap::new(),
                 remove: vec![]
             }),
-            Err(CommandError::NoObject(ObjectId(999)))
+            Err(CommandError::NoObject(ObjectId::from_num(999)))
         );
         lock_layer(&mut ed, FIRST_LAYER, true);
         assert_eq!(
@@ -3043,7 +3042,7 @@ mod tests {
         );
 
         let c: Command =
-            serde_json::from_str(r#"{"op":"set_data","id":2,"set":{"k":[1]},"remove":["z"]}"#)
+            serde_json::from_str(r#"{"op":"set_data","id":"00000000-0000-0000-0000-000000000002","set":{"k":[1]},"remove":["z"]}"#)
                 .unwrap();
         assert!(matches!(c, Command::SetData { .. }));
     }
@@ -3115,7 +3114,7 @@ mod tests {
             ed.execute(&set(1, Some(VertexKind::Arc { radius: 25.0 }), None))
                 .unwrap()
                 .created,
-            Vec::<u64>::new()
+            Vec::<Uid>::new()
         );
         for _ in 0..3 {
             assert!(ed.undo());
@@ -3140,8 +3139,8 @@ mod tests {
             invalid("object has no vertices")
         );
         assert_eq!(
-            ed.execute(&set(ObjectId(999), 0, None, None)),
-            Err(CommandError::NoObject(ObjectId(999)))
+            ed.execute(&set(ObjectId::from_num(999), 0, None, None)),
+            Err(CommandError::NoObject(ObjectId::from_num(999)))
         );
         for radius in [-1.0, f64::NAN, f64::INFINITY] {
             let kind = Some(VertexKind::Arc { radius });
@@ -3180,24 +3179,24 @@ mod tests {
     #[test]
     fn set_vertex_json_form() {
         let c: Command = serde_json::from_str(
-            r#"{"op":"set_vertex","id":2,"index":1,"kind":{"kind":"arc","radius":30}}"#,
+            r#"{"op":"set_vertex","id":"00000000-0000-0000-0000-000000000002","index":1,"kind":{"kind":"arc","radius":30}}"#,
         )
         .unwrap();
         assert_eq!(
             c,
             Command::SetVertex {
-                id: ObjectId(2),
+                id: ObjectId::from_num(2),
                 index: 1,
                 kind: Some(VertexKind::Arc { radius: 30.0 }),
                 p: None
             }
         );
         let c: Command =
-            serde_json::from_str(r#"{"op":"set_vertex","id":2,"index":0,"p":[1,2]}"#).unwrap();
+            serde_json::from_str(r#"{"op":"set_vertex","id":"00000000-0000-0000-0000-000000000002","index":0,"p":[1,2]}"#).unwrap();
         assert_eq!(
             c,
             Command::SetVertex {
-                id: ObjectId(2),
+                id: ObjectId::from_num(2),
                 index: 0,
                 kind: None,
                 p: Some(DVec2::new(1.0, 2.0))

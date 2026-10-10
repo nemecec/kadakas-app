@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::command::Command;
 use crate::model::{Attributes, ClassId, Document, LayerKind, Object, ObjectId, Shape};
 use crate::resource::{Resource, ResourceBody, ResourceId};
+use crate::uid::IdGen;
 
 /// What uses a resource.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,7 +135,7 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
         let tags: HashMap<String, ResourceId> = doc
             .resources
             .iter()
-            .map(|r| (r.id.0.to_string(), r.id))
+            .map(|r| (format!("\"{}\"", r.id.0), r.id))
             .collect();
         for o in doc.objects.values() {
             let mut seen: HashSet<ResourceId> = HashSet::new();
@@ -308,7 +309,7 @@ struct Planner<'a> {
     dst: &'a Document,
     src: &'a Document,
     conflict: Conflict,
-    next: u64,
+    ids: IdGen,
     cmds: Vec<Command>,
     map: HashMap<ResourceId, ResourceId>,
     class_map: HashMap<ClassId, Option<ClassId>>,
@@ -332,8 +333,7 @@ impl Planner<'_> {
             {
                 return dc.id;
             }
-            let id = ClassId(self.next);
-            self.next += 1;
+            let id = ClassId(self.ids.take());
             self.cmds.push(Command::AddClass {
                 name: sc.name.clone(),
                 attrs: Attributes {
@@ -436,8 +436,7 @@ impl Planner<'_> {
                 } else {
                     (r.name.clone(), ImportStatus::Added)
                 };
-                let new_id = ResourceId(self.next);
-                self.next += 1;
+                let new_id = ResourceId(self.ids.take());
                 self.added.insert((type_name, name.to_lowercase()));
                 self.cmds.push(Command::AddResource {
                     name: name.clone(),
@@ -472,7 +471,7 @@ pub fn import_plan(
         dst,
         src,
         conflict,
-        next: dst.next_id(),
+        ids: dst.id_plan(),
         cmds: Vec::new(),
         map: HashMap::new(),
         class_map: HashMap::new(),
@@ -983,9 +982,14 @@ mod tests {
             matches!(dst.doc().resources.line_type(new_lt).unwrap().elements[1], LineElement::Mark { symbol, .. } if symbol == new_s)
         );
         assert!(
-            import_plan(dst.doc(), ed.doc(), &[ResourceId(9999)], Conflict::Rename)
-                .unwrap_err()
-                .contains("no resource")
+            import_plan(
+                dst.doc(),
+                ed.doc(),
+                &[ResourceId::from_num(9999)],
+                Conflict::Rename
+            )
+            .unwrap_err()
+            .contains("no resource")
         );
         // A damaged file where a symbol contains itself must not hang.
         let mut loop_doc = ed.doc().clone();
@@ -1097,9 +1101,9 @@ mod tests {
         );
         assert_eq!(dst.doc().resources.plant_styles().count(), 1);
         let remapped = remap_body(&ed.doc().resources.get(area).unwrap().body, &|_| {
-            ResourceId(77)
+            ResourceId::from_num(77)
         });
-        assert_eq!(body_refs(&remapped), vec![ResourceId(77)]);
+        assert_eq!(body_refs(&remapped), vec![ResourceId::from_num(77)]);
     }
 
     #[test]
@@ -1206,7 +1210,7 @@ mod tests {
             } else {
                 vec![SymbolItem {
                     shape: Shape::Symbol {
-                        symbol: ResourceId(100 + k - 1),
+                        symbol: ResourceId(crate::uid::Uid::from_num(100 + k - 1)),
                         at: DVec2::ZERO,
                         rotation: 0.0,
                         scale: 1.0,
@@ -1217,7 +1221,7 @@ mod tests {
                 }]
             };
             doc.resources.push(Resource {
-                id: ResourceId(100 + k),
+                id: ResourceId(crate::uid::Uid::from_num(100 + k)),
                 name: format!("S{k}"),
                 body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
                     items,
@@ -1228,7 +1232,7 @@ mod tests {
         let err = import_plan(
             &Document::default(),
             &doc,
-            &[ResourceId(139)],
+            &[ResourceId::from_num(139)],
             Conflict::Rename,
         )
         .unwrap_err();
@@ -1237,7 +1241,7 @@ mod tests {
             import_plan(
                 &Document::default(),
                 &doc,
-                &[ResourceId(120)],
+                &[ResourceId::from_num(120)],
                 Conflict::Rename
             )
             .is_ok()

@@ -42,7 +42,7 @@ def test_layers_and_classes(doc):
     cls.activate()
     obj = doc.add.circle([0, 0], 5)
     assert obj.layer.name == "Planting" and obj.class_.name == "Trees"
-    other = doc.add.circle([0, 0], 5, layer=doc.layers[0], class_=0)
+    other = doc.add.circle([0, 0], 5, layer=doc.layers[0], class_=doc.classes[0])
     assert other.layer_id == doc.layers[0].id
     assert [o.id for o in doc.objects(layer="Planting")] == [obj.id]
     assert [o.id for o in layer.objects()] == [obj.id]
@@ -79,7 +79,7 @@ def test_modify_move_delete_and_record(doc):
     assert c["center"] == [10.0, 20.0]
     c.set_record(Note="hello")
     assert c.refresh().record["Note"] == "hello"
-    c.modify(layer=doc.layers[0], class_=0)
+    c.modify(layer=doc.layers[0], class_=doc.classes[0])
     c.delete()
     assert doc.summary()["object_count"] == 0
     assert doc.undo() and doc.redo()
@@ -126,9 +126,10 @@ def test_undo_group_on_error_sends_nothing(doc):
 
 
 def test_errors_carry_code_and_method(doc):
+    missing = "00000000-0000-0000-0000-0000000003e7"
     with pytest.raises(CadektorError) as e:
-        doc.get(999)
-    assert e.value.code == 2 and "999" in str(e.value) and e.value.method == "objects.get"
+        doc.get(missing)
+    assert e.value.code == 2 and missing in str(e.value) and e.value.method == "objects.get"
     assert not e.value.is_forbidden
     with pytest.raises(CadektorError) as e:
         doc.call("nothing.here")

@@ -930,6 +930,7 @@ fn existing_tree_info(ui: &mut Ui, shape: &Shape) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_core::uid::AsUid;
 
     fn frame(f: impl FnMut(&mut Ui)) {
         let ctx = egui::Context::default();
@@ -945,7 +946,7 @@ mod tests {
                 json!({"name": "Maple", "id_code": "AC", "price": 10}),
             )
             .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         s.handle(
             "plants.place",
@@ -979,7 +980,7 @@ mod tests {
         let id = *s.editor.doc().objects.keys().next().unwrap();
         let mut status = String::new();
         frame(|ui| plant_object_info(ui, &mut s, id, &mut status));
-        frame(|ui| plant_object_info(ui, &mut s, ObjectId(999), &mut status));
+        frame(|ui| plant_object_info(ui, &mut s, ObjectId::from_num(999), &mut status));
     }
 
     #[test]

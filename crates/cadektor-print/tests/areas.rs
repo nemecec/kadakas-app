@@ -20,7 +20,7 @@ fn v(x: f64, y: f64) -> DVec2 {
 const GREEN: Color = Color([20, 160, 40, 255]);
 const BLUE: Color = Color([0, 0, 220, 255]);
 
-fn run(ed: &mut Editor, c: Command) -> Vec<u64> {
+fn run(ed: &mut Editor, c: Command) -> Vec<cadektor_core::uid::Uid> {
     ed.execute(&c).unwrap().created
 }
 

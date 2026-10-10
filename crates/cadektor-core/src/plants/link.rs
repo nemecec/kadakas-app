@@ -12,6 +12,7 @@
 //! the effective values, so bounds, picking and snapping need no document access.
 //! Commands keep the copy up to date.
 
+use crate::uid::AsUid;
 use serde_json::{Map, Value};
 
 use super::style::{PlantForm, PlantGraphic, PlantStyle};
@@ -35,7 +36,7 @@ pub struct PlantLink {
 /// The link of a plant object, if it has a valid one.
 pub fn link(obj: &Object) -> Option<PlantLink> {
     let v = obj.data.get(KEY)?;
-    let style = ResourceId(v.get("style")?.as_u64()?);
+    let style = ResourceId(v.get("style")?.as_uid()?);
     let overrides = v
         .get("overrides")
         .and_then(Value::as_object)
@@ -46,7 +47,7 @@ pub fn link(obj: &Object) -> Option<PlantLink> {
 
 /// The style a plant refers to, without copying the overrides.
 pub fn style_of(obj: &Object) -> Option<ResourceId> {
-    obj.data.get(KEY)?.get("style")?.as_u64().map(ResourceId)
+    obj.data.get(KEY)?.get("style")?.as_uid().map(ResourceId)
 }
 
 /// Writes or removes the link of an object.
@@ -339,7 +340,7 @@ mod tests {
 
     fn plant(species: &str, spread: f64, height: f64) -> Object {
         Object::new(
-            ObjectId(50),
+            ObjectId::from_num(50),
             FIRST_LAYER,
             NONE_CLASS,
             Shape::Plant {
@@ -361,7 +362,7 @@ mod tests {
             ..PlantStyle::default()
         };
         doc.resources.push(Resource {
-            id: ResourceId(7),
+            id: ResourceId::from_num(7),
             name: "Field maple".into(),
             body: ResourceBody::plant_style(style),
         });
@@ -373,7 +374,7 @@ mod tests {
         set_link(
             &mut o,
             Some(&PlantLink {
-                style: ResourceId(7),
+                style: ResourceId::from_num(7),
                 overrides: overrides.as_object().unwrap().clone(),
             }),
         );
@@ -385,7 +386,7 @@ mod tests {
         let mut o = plant("a", 1.0, 1.0);
         assert_eq!(link(&o), None);
         let l = PlantLink {
-            style: ResourceId(7),
+            style: ResourceId::from_num(7),
             overrides: json!({"height": 5.0}).as_object().unwrap().clone(),
         };
         set_link(&mut o, Some(&l));
@@ -393,11 +394,14 @@ mod tests {
         set_link(
             &mut o,
             Some(&PlantLink {
-                style: ResourceId(7),
+                style: ResourceId::from_num(7),
                 overrides: Map::new(),
             }),
         );
-        assert_eq!(o.data[KEY], json!({"style": 7}));
+        assert_eq!(
+            o.data[KEY],
+            json!({"style": "00000000-0000-0000-0000-000000000007"})
+        );
         set_link(&mut o, None);
         assert!(o.data.is_empty());
         o.data.insert(KEY.into(), json!("junk"));
@@ -421,7 +425,7 @@ mod tests {
         sync_shape(&doc, &mut o);
         assert_eq!(o.shape, plant("Quercus", 6000.0, 12000.0).shape);
         let line = Object::new(
-            ObjectId(1),
+            ObjectId::from_num(1),
             FIRST_LAYER,
             NONE_CLASS,
             Shape::Circle {
@@ -438,7 +442,7 @@ mod tests {
         let e = effective(&doc, &linked(json!({}))).unwrap();
         assert_eq!(
             (e.style_id, e.style.spread, e.style.price),
-            (Some(ResourceId(7)), 5000.0, 40.0)
+            (Some(ResourceId::from_num(7)), 5000.0, 40.0)
         );
         assert_eq!(e.style_name, "Field maple");
         let e = effective(&doc, &linked(json!({"height": 3000.0, "price": 10.0}))).unwrap();
@@ -455,7 +459,7 @@ mod tests {
         set_link(
             &mut o,
             Some(&PlantLink {
-                style: ResourceId(99),
+                style: ResourceId::from_num(99),
                 overrides: Map::new(),
             }),
         );
@@ -480,7 +484,7 @@ mod tests {
     #[test]
     fn look_follows_the_style_and_its_overrides() {
         let mut doc = doc_with_style();
-        if let Some(r) = doc.resources.get_mut(ResourceId(7)) {
+        if let Some(r) = doc.resources.get_mut(ResourceId::from_num(7)) {
             let ResourceBody::PlantStyle(s) = &mut r.body else {
                 panic!()
             };
@@ -526,7 +530,7 @@ mod tests {
         set_link(
             &mut o,
             Some(&PlantLink {
-                style: ResourceId(99),
+                style: ResourceId::from_num(99),
                 overrides: Map::new(),
             }),
         );
@@ -541,7 +545,7 @@ mod tests {
     }
 
     fn lock(doc: &mut Document, fields: &[&str]) {
-        let r = doc.resources.get_mut(ResourceId(7)).unwrap();
+        let r = doc.resources.get_mut(ResourceId::from_num(7)).unwrap();
         let ResourceBody::PlantStyle(s) = &mut r.body else {
             panic!()
         };
@@ -552,7 +556,11 @@ mod tests {
     fn locked_fields_refuse_and_ignore_overrides() {
         let mut doc = doc_with_style();
         lock(&mut doc, &["price", "spread"]);
-        let style = doc.resources.plant_style(ResourceId(7)).unwrap().clone();
+        let style = doc
+            .resources
+            .plant_style(ResourceId::from_num(7))
+            .unwrap()
+            .clone();
         let ov = |v: Value| v.as_object().unwrap().clone();
         assert!(check_overrides(&style, &ov(json!({"height": 100.0}))).is_ok());
         assert!(
@@ -602,7 +610,7 @@ mod tests {
     fn look_has_rotation_and_the_protection_zone() {
         let mut doc = doc_with_style();
         {
-            let r = doc.resources.get_mut(ResourceId(7)).unwrap();
+            let r = doc.resources.get_mut(ResourceId::from_num(7)).unwrap();
             let ResourceBody::PlantStyle(s) = &mut r.body else {
                 panic!()
             };
@@ -636,7 +644,7 @@ mod tests {
         set_link(
             &mut dangling,
             Some(&PlantLink {
-                style: ResourceId(99),
+                style: ResourceId::from_num(99),
                 overrides: Map::new(),
             }),
         );

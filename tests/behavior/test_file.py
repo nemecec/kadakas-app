@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import plant_cmd, rect_cmd
+from helpers import plant_cmd, rect_cmd, uid
 
 
 def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
@@ -10,7 +10,7 @@ def test_save_then_open_in_a_fresh_process_round_trips(make_serve, tmp_path):
     first = make_serve()
     site = first.execute({"op": "add_layer", "name": "Site", "elevation": 150})[0]
     first.execute({"op": "set_active", "layer": site})
-    first.execute(rect_cmd(0, 0, 3000, 1200, **{"class": 0}))
+    first.execute(rect_cmd(0, 0, 3000, 1200, **{"class": uid(0)}))
     first.execute({"op": "add_class", "name": "Paths"})
     first.execute(plant_cmd(500, 500, species="Ilex aquifolium"))
     saved = first.result("file.save", {"path": str(path)})
@@ -29,7 +29,7 @@ def test_saved_file_is_the_document_json(make_serve, tmp_path):
     cad.result("file.save", {"path": str(path)})
     on_disk = json.loads(path.read_text())
     assert on_disk == cad.doc()
-    assert on_disk["format_version"] == 2
+    assert on_disk["format_version"] == 3
 
 
 def test_serve_with_a_file_argument_opens_it_at_start(make_serve, tmp_path):

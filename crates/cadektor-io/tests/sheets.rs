@@ -5,7 +5,7 @@ use cadektor_core::sheets::Viewport;
 use cadektor_io::{ExportOptions, Format, LayerMode, export_file};
 
 fn doc_with_sheet() -> Document {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     let add = |ed: &mut Editor, shape, layer| {
         ed.execute(&Command::AddObject {
             shape,

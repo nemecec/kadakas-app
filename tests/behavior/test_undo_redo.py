@@ -1,6 +1,6 @@
 """Scenario: a designer makes changes, steps back and forth through history, and makes new changes."""
 
-from helpers import line_cmd, rect_cmd, strip_next_id
+from helpers import line_cmd, rect_cmd, strip_next_id, uid
 
 
 def test_undo_then_redo_walks_history_exactly(cad):
@@ -62,13 +62,13 @@ def test_set_active_layer_is_undoable(cad):
     cad.execute({"op": "set_active", "layer": site})
     assert cad.result("document.summary")["active_layer"] == site
     cad.result("undo")
-    assert cad.result("document.summary")["active_layer"] == 1
+    assert cad.result("document.summary")["active_layer"] == uid(1)
 
 
 def test_failed_command_leaves_document_and_undo_stack_unchanged(cad):
     cad.execute(rect_cmd(0, 0, 1, 1))
     before = cad.doc()
-    error = cad.error("execute", {"command": {"op": "delete_objects", "ids": [999]}})
+    error = cad.error("execute", {"command": {"op": "delete_objects", "ids": [uid(999)]}})
     assert error["code"] == 2
     assert cad.doc() == before
     assert cad.result("undo") == {"done": True}

@@ -166,7 +166,7 @@ pub struct Exporter<'a, W: Write> {
     massing_buildings: Vec<u64>,
     storeys: BTreeMap<LayerId, (u64, u64)>,
     /// Elements by container: 0 is the site, else a layer ID.
-    contained: BTreeMap<u64, Vec<u64>>,
+    contained: BTreeMap<cadektor_core::uid::Uid, Vec<u64>>,
     // Shared entities.
     styles: BTreeMap<[u8; 4], u64>,
     materials: BTreeMap<String, u64>,
@@ -174,7 +174,7 @@ pub struct Exporter<'a, W: Write> {
     class_layers: BTreeMap<ClassId, Vec<u64>>,
     notes: BTreeSet<String>,
     /// The element entity of each exported object.
-    elements: BTreeMap<u64, u64>,
+    elements: BTreeMap<cadektor_core::uid::Uid, u64>,
     up: Option<u64>,
     /// Properties of the element being written, by property set name. Sets that come from several
     /// sources (standard, Data Manager, records) merge here, so one set is written once.
@@ -380,6 +380,11 @@ impl<'a, W: Write> Exporter<'a, W> {
 
     fn guid(&self, tag: &str, id: u64) -> Value {
         Value::Str(guid::derive(&self.project, tag, id))
+    }
+
+    /// The GUID of something that belongs to an object, layer or class (see `guid::derive_uid`).
+    fn guid_of(&self, tag: &str, id: cadektor_core::uid::Uid) -> Value {
+        Value::Str(guid::derive_uid(&self.project, tag, id))
     }
 
     fn name_value(s: &str) -> Value {
@@ -617,9 +622,9 @@ impl<'a, W: Write> Exporter<'a, W> {
     }
 
     /// The container of the elements of a layer and its placement. Layers become storeys when asked.
-    fn container(&mut self, layer: LayerId) -> R<(u64, u64, u64)> {
+    fn container(&mut self, layer: LayerId) -> R<(cadektor_core::uid::Uid, u64, u64)> {
         if !self.opts.layers_as_storeys {
-            return Ok((0, self.site, self.site_placement));
+            return Ok((cadektor_core::uid::Uid::NIL, self.site, self.site_placement));
         }
         if let Some((id, pl)) = self.storeys.get(&layer) {
             return Ok((layer.0, *id, *pl));
@@ -654,7 +659,7 @@ impl<'a, W: Write> Exporter<'a, W> {
         let storey = self.ent(
             "IFCBUILDINGSTOREY",
             vec![
-                self.guid("storey", layer.0),
+                self.guid_of("storey", layer.0),
                 Value::Null,
                 Value::s(l.name.trim()),
                 Value::Null,
@@ -914,7 +919,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             let set = self.ent(
                 "IFCPROPERTYSET",
                 vec![
-                    self.guid(&format!("pset:{name}"), owner.id.0),
+                    self.guid_of(&format!("pset:{name}"), owner.id.0),
                     Value::Null,
                     Value::s(&name),
                     Value::Null,
@@ -935,7 +940,7 @@ impl<'a, W: Write> Exporter<'a, W> {
         self.ent(
             "IFCRELDEFINESBYPROPERTIES",
             vec![
-                self.guid(&format!("rel_pset:{name}"), owner.id.0),
+                self.guid_of(&format!("rel_pset:{name}"), owner.id.0),
                 Value::Null,
                 Value::Null,
                 Value::Null,

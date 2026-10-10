@@ -1429,11 +1429,11 @@ mod tests {
                 closed: true,
             },
         ];
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         let c = doc.classes[0].id;
         let ly = doc.layers[0].id;
         for s in shapes {
-            let id = doc.alloc_id().unwrap();
+            let id = doc.alloc_id();
             let mut o = Object::new(cadektor_core::model::ObjectId(id), ly, c, s);
             o.attrs.pen = Some(Color([10, 20, 30, 255]));
             o.attrs.line_weight = Some(0.5);
@@ -1486,7 +1486,7 @@ mod tests {
 
     #[test]
     fn file_structure_has_handles_owners_and_valid_line_weights() {
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         let c = doc.classes[0].id;
         let ly = doc.layers[0].id;
         for (i, (s, lw)) in [
@@ -1533,7 +1533,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let id = doc.alloc_id().unwrap();
+            let id = doc.alloc_id();
             let mut o = Object::new(cadektor_core::model::ObjectId(id), ly, c, s);
             o.attrs.line_weight = Some(lw);
             if i >= 3 {
@@ -1649,11 +1649,11 @@ mod tests {
         };
         let r = super::super::import::import(
             &src,
-            &crate::Context::of(&Document::default()),
+            &crate::Context::of(&Document::with_sequential_ids()),
             &crate::ImportOptions::default(),
         )
         .unwrap();
-        let mut ed = cadektor_core::command::Editor::new(Document::default());
+        let mut ed = cadektor_core::command::Editor::new(Document::with_sequential_ids());
         ed.execute(&r.command).unwrap();
         let rotated = ed
             .doc()

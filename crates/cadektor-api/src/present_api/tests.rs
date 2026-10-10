@@ -1,6 +1,7 @@
 use super::*;
 use crate::PathPolicy;
 use base64::Engine;
+use cadektor_core::uid::AsUid;
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
     s.handle(method, params)
@@ -11,7 +12,15 @@ fn fail(s: &mut Session, method: &str, params: Value) -> String {
     s.handle(method, params).unwrap_err().message
 }
 
-fn slab(s: &mut Session, x0: i64, y0: i64, x1: i64, y1: i64, thickness: i64, fill: Value) -> u64 {
+fn slab(
+    s: &mut Session,
+    x0: i64,
+    y0: i64,
+    x1: i64,
+    y1: i64,
+    thickness: i64,
+    fill: Value,
+) -> cadektor_core::uid::Uid {
     ok(
         s,
         "execute",
@@ -20,18 +29,18 @@ fn slab(s: &mut Session, x0: i64, y0: i64, x1: i64, y1: i64, thickness: i64, fil
                       "material": "m", "thickness": thickness, "elevation": thickness},
             "attrs": {"fill": fill}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
-fn plant(s: &mut Session) -> u64 {
+fn plant(s: &mut Session) -> cadektor_core::uid::Uid {
     ok(
         s,
         "execute",
         json!({"command": {"op": "add_object",
             "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 4000, "height": 8000}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
@@ -50,7 +59,7 @@ fn lum(px: &[u8], w: u32, x: u32, y: u32) -> f32 {
 
 #[test]
 fn material_crud_and_validation() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = ok(
         &mut s,
         "material.create",
@@ -58,7 +67,7 @@ fn material_crud_and_validation() {
                "mapping": {"kind": "planar", "scale": [1200, 300], "rotation": 15, "offset": [10, 20]},
                "roughness": 0.6, "metallic": 0.1, "opacity": 0.9}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let m = ok(&mut s, "material.get", json!({"id": "teak"}));
     assert_eq!(m["id"], id);
@@ -101,14 +110,14 @@ fn material_crud_and_validation() {
 
     // Duplicate, name clash, delete.
     let copy = ok(&mut s, "material.duplicate", json!({"id": id}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "material.get", json!({"id": copy}))["name"],
         "Teak deck copy"
     );
     let copy2 = ok(&mut s, "material.duplicate", json!({"id": id}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "material.get", json!({"id": copy2}))["name"],
@@ -172,7 +181,7 @@ fn material_crud_and_validation() {
 
 #[test]
 fn default_library_is_added_once() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = ok(&mut s, "material.add_defaults", json!({}));
     assert_eq!(r["added"].as_array().unwrap().len(), 7);
     let names: Vec<_> = r["added"]
@@ -193,7 +202,7 @@ fn default_library_is_added_once() {
         assert!(names.contains(&n.to_string()), "{n}");
     }
     // The ids are real.
-    let first = r["added"][0]["id"].as_u64().unwrap();
+    let first = r["added"][0]["id"].as_uid().unwrap();
     assert_eq!(
         ok(&mut s, "material.get", json!({"id": first}))["name"],
         "Grass"
@@ -222,9 +231,9 @@ fn default_library_is_added_once() {
 
 #[test]
 fn textures_come_from_png_and_jpeg_images() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = ok(&mut s, "material.create", json!({"name": "Photo"}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let png = cadektor_render::texture::encode_png(4, 2, &[200; 32]).unwrap();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
@@ -326,7 +335,7 @@ fn textures_come_from_png_and_jpeg_images() {
 
 #[test]
 fn assigning_materials_and_resolution_order_in_the_api() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(&mut s, "material.add_defaults", json!({}));
     let tree = plant(&mut s);
     let style = ok(
@@ -334,7 +343,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
         "plant_style.create",
         json!({"name": "Oak", "spread": 4000}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut s,
@@ -346,7 +355,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
     ok(
         &mut s,
         "material.assign",
-        json!({"material": "Grass", "class": 0}),
+        json!({"material": "Grass", "class": "00000000-0000-0000-0000-000000000000"}),
     );
     ok(
         &mut s,
@@ -403,7 +412,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
     ok(
         &mut s,
         "material.assign",
-        json!({"material": null, "class": 0}),
+        json!({"material": null, "class": "00000000-0000-0000-0000-000000000000"}),
     );
     assert_eq!(
         ok(&mut s, "material.slots", json!({}))["slots"]
@@ -423,7 +432,14 @@ fn assigning_materials_and_resolution_order_in_the_api() {
     );
 
     // Errors.
-    assert!(fail(&mut s, "material.assign", json!({"class": 0})).contains("missing 'material'"));
+    assert!(
+        fail(
+            &mut s,
+            "material.assign",
+            json!({"class": "00000000-0000-0000-0000-000000000000"})
+        )
+        .contains("missing 'material'")
+    );
     assert!(
         fail(&mut s, "material.assign", json!({"material": "Grass"}))
             .contains("exactly one target")
@@ -432,7 +448,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
         fail(
             &mut s,
             "material.assign",
-            json!({"material": "Grass", "class": 0, "object": a})
+            json!({"material": "Grass", "class": "00000000-0000-0000-0000-000000000000", "object": a})
         )
         .contains("exactly one")
     );
@@ -456,7 +472,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
         fail(
             &mut s,
             "material.assign",
-            json!({"material": "Nothing", "class": 0})
+            json!({"material": "Nothing", "class": "00000000-0000-0000-0000-000000000000"})
         )
         .contains("no material")
     );
@@ -464,7 +480,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
         fail(
             &mut s,
             "material.assign",
-            json!({"material": "Grass", "object": 9999})
+            json!({"material": "Grass", "object": "00000000-0000-0000-0000-00000000270f"})
         )
         .contains("does not exist")
     );
@@ -472,7 +488,7 @@ fn assigning_materials_and_resolution_order_in_the_api() {
         fail(
             &mut s,
             "material.assign",
-            json!({"material": "Grass", "class": 77})
+            json!({"material": "Grass", "class": "00000000-0000-0000-0000-00000000004d"})
         )
         .contains("does not exist")
     );
@@ -528,13 +544,13 @@ fn assigning_materials_and_resolution_order_in_the_api() {
 
 #[test]
 fn render_styles_crud_and_names() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = ok(
         &mut s,
         "render_style.create",
         json!({"name": "Afternoon", "mode": "shaded", "sun": true, "shadows": true, "background": [250, 250, 250], "line_weight": 0.35}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = ok(&mut s, "render_style.get", json!({"id": "afternoon"}));
     assert_eq!(r["sun"], true);
@@ -566,7 +582,7 @@ fn render_styles_crud_and_names() {
         "render_style.duplicate",
         json!({"id": id, "name": "Plan B"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(&mut s, "render_style.delete", json!({"id": id}));
     assert_eq!(
@@ -594,12 +610,17 @@ fn render_styles_crud_and_names() {
         );
     }
     assert!(
-        fail(&mut s, "render_style.set_active", json!({"id": 424242})).contains("no render style")
+        fail(
+            &mut s,
+            "render_style.set_active",
+            json!({"id": "00000000-0000-0000-0000-000000067932"})
+        )
+        .contains("no render style")
     );
     assert!(fail(&mut s, "render_style.set_active", json!({})).contains("missing"));
     // A material is not a render style.
     let m = ok(&mut s, "material.create", json!({"name": "M"}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(fail(&mut s, "render_style.get", json!({"id": m})).contains("no render style"));
     assert!(fail(&mut s, "material.get", json!({"id": copy})).contains("no material"));
@@ -607,7 +628,7 @@ fn render_styles_crud_and_names() {
 
 #[test]
 fn sun_set_and_get_give_published_positions() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(ok(&mut s, "sun.get", json!({}))["sun"], Value::Null);
     let r = ok(
         &mut s,
@@ -687,7 +708,7 @@ fn sun_set_and_get_give_published_positions() {
 
 #[test]
 fn sun_can_take_its_place_from_the_georeference() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // ETRS-TM35FIN coordinates in Helsinki.
     ok(
         &mut s,
@@ -728,7 +749,7 @@ fn sun_can_take_its_place_from_the_georeference() {
 
 #[test]
 fn render_png_uses_materials_styles_the_sun_and_shadows() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(&mut s, "material.add_defaults", json!({}));
     slab(
         &mut s,
@@ -756,7 +777,7 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
     ok(
         &mut s,
         "material.assign",
-        json!({"material": "Gravel", "class": 0}),
+        json!({"material": "Gravel", "class": "00000000-0000-0000-0000-000000000000"}),
     );
     let r = ok(
         &mut s,
@@ -782,7 +803,7 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
     ok(
         &mut s,
         "material.assign",
-        json!({"material": null, "class": 0}),
+        json!({"material": null, "class": "00000000-0000-0000-0000-000000000000"}),
     );
     let shadowed = ok(
         &mut s,
@@ -828,7 +849,7 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
         "render_style.create",
         json!({"name": "Plan", "mode": "hidden_line", "background": [255, 255, 255]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(&mut s, "render_style.set_active", json!({"id": hl}));
     let r = ok(
@@ -865,7 +886,7 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
 
 #[test]
 fn hidden_line_output_has_nine_edges_for_a_cube() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     slab(&mut s, 0, 0, 1000, 1000, 1000, json!([180, 180, 180, 255]));
     let r = ok(
         &mut s,
@@ -893,7 +914,7 @@ fn hidden_line_output_has_nine_edges_for_a_cube() {
 
 #[test]
 fn methods_are_documented() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     assert!(d["presentation"]["examples"].as_array().unwrap().len() >= 8);
     let names: Vec<&str> = d["methods"]
@@ -919,7 +940,7 @@ fn methods_are_documented() {
 
 #[test]
 fn summer_time_and_true_north_in_sun_set() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let winter = ok(
         &mut s,
         "sun.set",

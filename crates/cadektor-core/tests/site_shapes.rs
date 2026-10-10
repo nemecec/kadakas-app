@@ -278,13 +278,13 @@ fn mesh_hook_adds_geometry_and_flips_triangles_upward() {
         site(&[(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (0.0, 100.0, 0.0)]),
     )
     .unwrap();
-    add(&mut ed, pad()).unwrap();
+    let pad_id = add(&mut ed, pad()).unwrap();
     // Without a hook: only the outline of the modifier.
     let bare = mesh::build_at(ed.doc(), DVec3::ZERO);
     assert_eq!(bare.mesh.triangle_count(), 0);
     assert_eq!(bare.lines.segment_count(), 4);
     let hook = |_: &Document, o: &Object, sink: &mut mesh::SceneSink<'_>| {
-        if o.id == ObjectId(2) {
+        if o.id == pad_id {
             // One triangle given clockwise and one with a bad index.
             let p = [
                 DVec3::new(0.0, 0.0, 1.0),
@@ -305,7 +305,7 @@ fn mesh_hook_adds_geometry_and_flips_triangles_upward() {
             .mesh
             .tri_object
             .iter()
-            .all(|o| *o == id || *o == ObjectId(2))
+            .all(|o| *o == id || *o == pad_id)
     );
     assert_eq!(layer_z, 0.0);
     // The cache passes the hook through.

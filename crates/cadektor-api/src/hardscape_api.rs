@@ -5,6 +5,7 @@
 //! `hardscape.add|set`, `landscape_area.add|set`,
 //! `report.hardscape`, `report.landscape_areas`, `report.plant_list`.
 
+use cadektor_core::uid::AsUid;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -108,7 +109,7 @@ pub fn describe() -> Value {
         "examples": [
             {"method": "hardscape_style.create", "params": {"name": "Granite setts", "material": "Granite", "thickness": 60, "components": [{"name": "Bedding", "material": "Sand", "thickness": 40}, {"name": "Base", "material": "Crushed stone", "thickness": 150}], "border": {"width": 150, "material": "Kerb"}, "joints": {"kind": "herringbone", "unit_length": 200, "unit_width": 100, "spacing": 5}}},
             {"method": "hardscape.add", "params": {"center": [[0, 0], {"p": [6000, 0], "kind": "arc", "radius": 1500}, [6000, 5000]], "width": 1500, "join": "round", "style": "Granite setts", "drape": true}},
-            {"method": "hardscape.set", "params": {"id": 12, "slope": {"type": "cross", "percent": 2}}},
+            {"method": "hardscape.set", "params": {"id": "00000000-0000-0000-0000-00000000000c", "slope": {"type": "cross", "percent": 2}}},
             {"method": "landscape_area_style.create", "params": {"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 5}, {"plant": "Sedge", "percent": 40, "spacing": 400, "min_count": 10}], "show_plants": true, "fields": {"hydrozone": "low"}}},
             {"method": "landscape_area.add", "params": {"boundary": [[0, 0], [20000, 0], [20000, 10000], [0, 10000]], "name": "Bed A", "style": "Meadow", "holes": [[[2000, 2000], [4000, 2000], [4000, 4000]]]}},
             {"method": "report.hardscape", "params": {}},
@@ -142,12 +143,18 @@ impl Kind {
 /// A style reference: an ID, or a style name.
 fn style_ref(doc: &Document, v: &Value, kind: Kind) -> Result<ResourceId, RpcError> {
     let id = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(s) => match kind {
-            Kind::Hardscape => doc.resources.find_hardscape_style(s),
-            Kind::Landscape => doc.resources.find_landscape_area_style(s),
-            Kind::Plant => doc.resources.find_plant_style(s),
-        },
+        Value::String(s) => cadektor_core::uid::Uid::parse(s.trim())
+            .map(ResourceId)
+            .filter(|id| match kind {
+                Kind::Hardscape => doc.resources.hardscape_style(*id).is_some(),
+                Kind::Landscape => doc.resources.landscape_area_style(*id).is_some(),
+                Kind::Plant => doc.resources.plant_style(*id).is_some(),
+            })
+            .or_else(|| match kind {
+                Kind::Hardscape => doc.resources.find_hardscape_style(s),
+                Kind::Landscape => doc.resources.find_landscape_area_style(s),
+                Kind::Plant => doc.resources.find_plant_style(s),
+            }),
         _ => None,
     };
     let ok = |id: ResourceId| match kind {
@@ -527,11 +534,11 @@ fn ids_param(m: &Map<String, Value>) -> Result<Vec<ObjectId>, RpcError> {
     }
 }
 
-fn opt_id(m: &Map<String, Value>, key: &str) -> Result<Option<u64>, RpcError> {
+fn opt_id(m: &Map<String, Value>, key: &str) -> Result<Option<cadektor_core::uid::Uid>, RpcError> {
     match m.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
-            .as_u64()
+            .as_uid()
             .map(Some)
             .ok_or_else(|| bad(format!("'{key}' must be an ID"))),
     }

@@ -51,7 +51,7 @@ def test_policy_refusals_are_forbidden():
 
 def test_a_live_session_raises_the_right_class(doc):
     with pytest.raises(NotFound) as e:
-        doc.get(999)
+        doc.get("00000000-0000-0000-0000-0000000003e7")
     assert e.value.kind == "not_found" and e.value.code == 2
     with pytest.raises(UnknownMethod):
         doc.call("nothing.here")
@@ -60,7 +60,7 @@ def test_a_live_session_raises_the_right_class(doc):
     assert e.value.kind == "validation"
     # Catching the base class still works.
     with pytest.raises(CadektorError):
-        doc.get(999)
+        doc.get("00000000-0000-0000-0000-0000000003e7")
 
 
 def test_converters_are_off_unless_allowed(tmp_path):

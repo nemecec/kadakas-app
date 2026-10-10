@@ -42,7 +42,7 @@ pub fn use_builtin_style(session: &mut Session, name: &str) -> Result<(), String
                     }),
                 )
                 .map_err(|e| e.message)?;
-            ResourceId(r["id"].as_u64().ok_or("no style id")?)
+            ResourceId(cadektor_core::uid::AsUid::as_uid(&r["id"]).ok_or("no style id")?)
         }
     };
     set_active(session, id)
@@ -111,7 +111,7 @@ pub fn assign_to_selection(
     if session.selection.is_empty() {
         return Err("select objects first".into());
     }
-    let ids: Vec<u64> = session.selection.iter().map(|o| o.0).collect();
+    let ids: Vec<cadektor_core::uid::Uid> = session.selection.iter().map(|o| o.0).collect();
     session
         .handle(
             "material.assign",
@@ -423,7 +423,7 @@ mod tests {
         // Going back to a style of the document.
         set_active(&mut s, active).unwrap();
         assert_eq!(s.view.mode, RenderMode::Shaded);
-        assert!(set_active(&mut s, ResourceId(777)).is_err());
+        assert!(set_active(&mut s, ResourceId::from_num(777)).is_err());
     }
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
         }
         assert!(errors.is_empty(), "{errors:?}");
         // The material picker draws with and without a selection.
-        s.selection = vec![cadektor_core::model::ObjectId(1)];
+        s.selection = vec![cadektor_core::model::ObjectId::from_num(1)];
         let mut errors = Vec::new();
         let _ = ctx.run_ui(
             egui::RawInput {

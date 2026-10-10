@@ -1,4 +1,5 @@
 use super::*;
+use cadektor_core::uid::AsUid;
 use cadektor_irrigation::hydraulics::{pipe_loss_kpa, valve_loss_kpa};
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
@@ -11,14 +12,14 @@ fn fail(s: &mut Session, method: &str, params: Value) -> (i64, String) {
     (e.code, e.message)
 }
 
-fn id(v: &Value) -> u64 {
-    v["id"].as_u64().unwrap()
+fn id(v: &Value) -> cadektor_core::uid::Uid {
+    v["id"].as_uid().unwrap()
 }
 
 /// POC, 20 m PVC 50 mainline, valve (zone 1, kv 6), 30 m PE 32 lateral, 10 m PE 25 branch and
 /// four Spray-4.0 heads (8 l/min each) at the ends.
-fn zone() -> (Session, Vec<u64>) {
-    let mut s = Session::default();
+fn zone() -> (Session, Vec<cadektor_core::uid::Uid>) {
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "irrigation.poc.add",
@@ -191,9 +192,13 @@ fn set_changes_fields_in_one_step() {
     );
     assert!(fail(&mut s, "irrigation.set", json!({"id": ids[0], "arc": "x"})).0 != 0);
     assert!(
-        fail(&mut s, "irrigation.set", json!({"id": 99999, "arc": 5}))
-            .1
-            .contains("does not exist")
+        fail(
+            &mut s,
+            "irrigation.set",
+            json!({"id": "00000000-0000-0000-0000-00000001869f", "arc": 5})
+        )
+        .1
+        .contains("does not exist")
     );
     assert!(
         fail(&mut s, "irrigation.set", json!({"arc": 5}))
@@ -250,7 +255,7 @@ fn set_works_on_every_kind() {
 
 #[test]
 fn add_errors() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let cases = [
         ("irrigation.outlet.add", json!({"at": [0, 0]}), "model"),
         (
@@ -368,7 +373,7 @@ fn add_errors() {
 
 #[test]
 fn catalog_get_set_and_csv() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let c = ok(&mut s, "irrigation.catalog.get", json!(null));
     assert!(c["heads"].as_array().unwrap().len() >= 6);
     assert!(
@@ -565,14 +570,14 @@ fn catalog_get_set_and_csv() {
 
 #[test]
 fn catalog_is_undoable_and_saved_in_the_file() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "irrigation.catalog.set",
         json!({"heads": [{"name": "Saved", "radius": 3000, "flow": 5, "pressure": 200}]}),
     );
     let doc = serde_json::to_value(s.editor.doc()).unwrap();
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     ok(&mut t, "document.load", json!({"document": doc}));
     let c = ok(&mut t, "irrigation.catalog.get", json!({}));
     assert!(
@@ -599,7 +604,7 @@ fn rect(w: i64, h: i64) -> Value {
 
 #[test]
 fn layout_fill_places_heads_in_one_undo_step() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // 10 m x 6 m, spacing 2 m, square: 6 x 4 = 24 heads.
     let r = ok(
         &mut s,
@@ -661,7 +666,7 @@ fn layout_fill_places_heads_in_one_undo_step() {
             "3 or more",
         ),
         (
-            json!({"object": 99999, "model": "Spray-4.0"}),
+            json!({"object": "00000000-0000-0000-0000-00000001869f", "model": "Spray-4.0"}),
             "does not exist",
         ),
     ] {
@@ -687,7 +692,7 @@ fn layout_fill_places_heads_in_one_undo_step() {
 
 #[test]
 fn layout_edge_faces_inward_on_the_left() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // The bottom edge of a 10 m wide bed, going right: left is up (+Y, direction 90).
     let r = ok(
         &mut s,
@@ -761,7 +766,7 @@ fn layout_edge_faces_inward_on_the_left() {
 
 #[test]
 fn layout_drip_draws_lines() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = ok(
         &mut s,
         "irrigation.layout.drip",
@@ -883,7 +888,7 @@ fn reports_agree_with_the_zone() {
 
 #[test]
 fn describe_and_methods_list_irrigation() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     assert!(d["irrigation"]["examples"].as_array().unwrap().len() >= 10);
     let names: Vec<&str> = d["methods"]
@@ -999,7 +1004,7 @@ fn fittings_supply_and_meter_losses_and_the_site_model_change_the_pressure() {
 
 #[test]
 fn csv_import_reads_semicolons_decimal_commas_and_warns_about_duplicates() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = ok(
         &mut s,
         "irrigation.catalog.import_csv",

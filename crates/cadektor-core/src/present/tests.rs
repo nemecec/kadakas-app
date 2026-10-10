@@ -341,9 +341,9 @@ fn commands_set_slots_the_sun_and_the_style_with_undo() {
     // Render style: must exist and be a render style.
     assert_eq!(
         ed.execute(&Command::SetRenderStyle {
-            style: Some(ResourceId(999))
+            style: Some(ResourceId::from_num(999))
         }),
-        Err(CommandError::NoResource(ResourceId(999)))
+        Err(CommandError::NoResource(ResourceId::from_num(999)))
     );
     assert!(
         ed.execute(&Command::SetRenderStyle { style: Some(grass) })
@@ -388,12 +388,12 @@ fn slot_commands_check_their_targets() {
         set(
             &mut ed,
             SlotTarget::Object {
-                object: ObjectId(777),
+                object: ObjectId::from_num(777),
                 slot: None
             },
             Some(grass)
         ),
-        Err(CommandError::NoObject(ObjectId(777)))
+        Err(CommandError::NoObject(ObjectId::from_num(777)))
     );
     assert!(
         set(
@@ -409,18 +409,20 @@ fn slot_commands_check_their_targets() {
     assert_eq!(
         set(
             &mut ed,
-            SlotTarget::Class { class: ClassId(55) },
+            SlotTarget::Class {
+                class: ClassId::from_num(55)
+            },
             Some(grass)
         ),
-        Err(CommandError::NoClass(ClassId(55)))
+        Err(CommandError::NoClass(ClassId::from_num(55)))
     );
     assert_eq!(
         set(
             &mut ed,
             SlotTarget::Class { class: NONE_CLASS },
-            Some(ResourceId(888))
+            Some(ResourceId::from_num(888))
         ),
-        Err(CommandError::NoResource(ResourceId(888)))
+        Err(CommandError::NoResource(ResourceId::from_num(888)))
     );
     // A resource of another kind is not a material.
     let style = ResourceId(
@@ -443,12 +445,12 @@ fn slot_commands_check_their_targets() {
         set(
             &mut ed,
             SlotTarget::Style {
-                style: ResourceId(4242),
+                style: ResourceId::from_num(4242),
                 slot: "trunk".into()
             },
             Some(grass)
         ),
-        Err(CommandError::NoResource(ResourceId(4242)))
+        Err(CommandError::NoResource(ResourceId::from_num(4242)))
     );
     assert!(
         set(
@@ -571,7 +573,7 @@ fn material_resolution_order_is_part_object_style_class() {
             object: id,
             slot: Some("canopy".into()),
         },
-        Some(ResourceId(31337)),
+        Some(ResourceId::from_num(31337)),
     );
     assert_eq!(
         SlotIndex::new(&doc).resolve(doc.object(id).unwrap(), PART_CANOPY),

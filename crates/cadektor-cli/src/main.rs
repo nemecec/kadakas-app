@@ -114,6 +114,11 @@ struct RemoteArgs {
     /// Default: off. The converter is a separate program that the user installed.
     #[arg(long = "allow-converters")]
     allow_converters: bool,
+    /// Give new objects, layers and classes the IDs 2, 3, 4 and so on, as small numbers, so a test
+    /// can predict them. Never use it for documents that are merged with others: these IDs are
+    /// not unique in the world. Default: off (new IDs are UUIDs).
+    #[arg(long = "sequential-ids")]
+    sequential_ids: bool,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -131,6 +136,7 @@ impl Backend {
             return connect_remote(&addr, &token).map(Backend::Remote);
         }
         let mut session = Session::default();
+        let sequential = remote.sequential_ids;
         // Requests come from agents: they may only use the allowed folders.
         let dirs = if remote.allow_dir.is_empty() {
             vec![PathBuf::from(".")]
@@ -146,6 +152,7 @@ impl Backend {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
             session.doc_dir = doc_dir_of(&f);
         }
+        session.set_sequential_ids(sequential);
         Ok(Backend::Local(Box::new(session)))
     }
 

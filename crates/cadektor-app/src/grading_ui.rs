@@ -110,7 +110,7 @@ fn has_site(doc: &Document) -> bool {
 
 /// The command that adds an object and its settings: one undo step.
 fn add_with(doc: &Document, shape: Shape, key: &str, data: Value) -> Command {
-    let id = ObjectId(doc.next_id());
+    let id = ObjectId(doc.next_ids(1)[0]);
     Command::Batch {
         commands: vec![
             Command::AddObject {
@@ -714,18 +714,25 @@ mod tests {
             ]
         };
         let mut d = Drawn::default();
-        d.polys
-            .push(Poly::new("a", ObjectId(1), vec![ring(0.0)], true).filled([200, 0, 0, 255]));
         d.polys.push(
-            Poly::new("b", ObjectId(1), vec![ring(0.0), ring(200.0)], true)
-                .filled([0, 200, 0, 255]),
+            Poly::new("a", ObjectId::from_num(1), vec![ring(0.0)], true).filled([200, 0, 0, 255]),
         );
         d.polys.push(
-            Poly::new("c", ObjectId(1), vec![ring(100.0)], false).stroked([0, 0, 0, 255], 5.0),
+            Poly::new(
+                "b",
+                ObjectId::from_num(1),
+                vec![ring(0.0), ring(200.0)],
+                true,
+            )
+            .filled([0, 200, 0, 255]),
+        );
+        d.polys.push(
+            Poly::new("c", ObjectId::from_num(1), vec![ring(100.0)], false)
+                .stroked([0, 0, 0, 255], 5.0),
         );
         let mut turned = Label::new(
             "t",
-            ObjectId(1),
+            ObjectId::from_num(1),
             DVec2::new(500.0, 500.0),
             "up".into(),
             100.0,
@@ -735,7 +742,7 @@ mod tests {
         d.labels.push(turned);
         d.labels.push(Label::new(
             "t",
-            ObjectId(1),
+            ObjectId::from_num(1),
             DVec2::new(500.0, 100.0),
             "flat".into(),
             100.0,

@@ -149,7 +149,7 @@ mod tests {
     fn restricted(dir: &Path) -> Session {
         Session {
             paths: PathPolicy::restricted([dir.to_path_buf()]),
-            ..Session::default()
+            ..Session::with_sequential_ids()
         }
     }
 
@@ -222,7 +222,7 @@ mod tests {
         let r = call(&mut s, "file.save", &dir.join("x.txt"));
         assert_eq!(r["error"]["code"], 4);
         // An unrestricted session (a library user) may use any path and extension.
-        let mut u = Session::default();
+        let mut u = Session::with_sequential_ids();
         assert_eq!(
             call(&mut u, "file.save", &other.join("x.cdk"))["result"]["ok"],
             true
@@ -238,7 +238,7 @@ mod tests {
             r["error"]["code"], 4,
             "a missing file cannot be resolved: {r}"
         );
-        let mut u = Session::default();
+        let mut u = Session::with_sequential_ids();
         let r = call(&mut u, "file.open", &dir.join("missing.cdk"));
         assert_eq!(r["error"]["code"], 2);
         let bad = dir.join("bad.cdk");
@@ -255,7 +255,7 @@ mod tests {
         let dir = tmp("newer");
         let f = dir.join("future.cdk");
         std::fs::write(&f, r#"{"format_version":99,"layers":"???"}"#).unwrap();
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = call(&mut s, "file.open", &f);
         let m = r["error"]["message"].as_str().unwrap();
         assert!(

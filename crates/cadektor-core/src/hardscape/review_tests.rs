@@ -562,13 +562,16 @@ fn style_ids_in_a_file_that_do_not_exist_are_ignored() {
     let id = add(&mut ed, sq(1000.0), HardscapePatch::default());
     let mut o = ed.doc().object(id).unwrap().clone();
     let d = HardscapeData {
-        style: Some(ResourceId(999)),
+        style: Some(ResourceId::from_num(999)),
         ..Default::default()
     };
     data::set_data(&mut o, &d);
     assert!(data::style_of(ed.doc(), &o).is_none());
     assert!(!matches!(
-        ed.doc().resources.get(ResourceId(999)).map(|r| &r.body),
+        ed.doc()
+            .resources
+            .get(ResourceId::from_num(999))
+            .map(|r| &r.body),
         Some(ResourceBody::HardscapeStyle(_))
     ));
 }

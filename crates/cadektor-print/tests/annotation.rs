@@ -80,7 +80,7 @@ fn tags_keep_their_paper_offset_and_size_in_a_viewport_with_another_scale() {
         v(280.0, 200.0),
         v(1500.0, 0.0),
         500.0,
-        vec![LayerId(1)],
+        vec![LayerId::from_num(1)],
     );
     ed.execute(&Command::AddObject {
         shape: Shape::Viewport(Box::new(vp.clone())),

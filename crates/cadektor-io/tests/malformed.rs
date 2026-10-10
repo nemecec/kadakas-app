@@ -43,7 +43,7 @@ fn try_import(format: Format, data: Vec<u8>) {
         data,
         extra: Default::default(),
     };
-    let doc = Document::default();
+    let doc = Document::with_sequential_ids();
     if let Ok(r) = importer(format).import(&src, &Context::of(&doc), &ImportOptions::default()) {
         let mut ed = Editor::new(doc);
         ed.execute(&r.command)
@@ -130,7 +130,7 @@ fn valid_fixtures_import() {
         let r = importer(f)
             .import(
                 &src,
-                &Context::of(&Document::default()),
+                &Context::of(&Document::with_sequential_ids()),
                 &ImportOptions::default(),
             )
             .unwrap();

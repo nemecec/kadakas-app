@@ -4,6 +4,7 @@
 //! Methods: `view_rules.get`, `grid.set`, `phase.set`, `phase.display`, `phase.report`,
 //! `visualization.set`, `visualization.get`, `visualization.clear`.
 
+use cadektor_core::uid::AsUid;
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
@@ -59,7 +60,7 @@ pub fn describe() -> Value {
         "visualization": "Color by criteria is a display rule. Sheet viewports and exports of other formats ignore it where noted in the feature spec.",
         "examples": [
             {"method": "grid.set", "params": {"spacing": 10}},
-            {"method": "phase.set", "params": {"ids": [3, 4], "phase": "demolished"}},
+            {"method": "phase.set", "params": {"ids": ["00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004"], "phase": "demolished"}},
             {"method": "visualization.set", "params": {"field": "Condition", "rules": [
                 {"criterion": {"type": "equals", "value": "good"}, "color": [0, 160, 0, 255]},
                 {"criterion": {"type": "otherwise"}, "color": [200, 0, 0, 255], "label": "Needs a look"}]}}
@@ -186,7 +187,7 @@ fn phase_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError>
         .ok_or_else(|| bad("give ids: a list of object IDs"))?
         .iter()
         .map(|v| {
-            v.as_u64()
+            v.as_uid()
                 .map(ObjectId)
                 .ok_or_else(|| bad("ids are whole numbers"))
         })
@@ -372,19 +373,19 @@ mod tests {
             .unwrap_or_else(|e| panic!("{method}: {}", e.message))
     }
 
-    fn tree(s: &mut Session, x: i64, condition: &str) -> u64 {
+    fn tree(s: &mut Session, x: i64, condition: &str) -> cadektor_core::uid::Uid {
         ok(
             s,
             "execute",
             json!({"command": {"op": "add_object", "shape": {"kind": "existing_tree", "at": [x, 0], "dbh": 300, "spread": 4000, "height": 8000, "condition": condition}}}),
         )["created"][0]
-            .as_u64()
+            .as_uid()
             .unwrap()
     }
 
     #[test]
     fn the_grid_needs_a_georeference_and_shows_in_the_svg() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(&mut s, "grid.set", json!({"spacing": 10}));
         assert_eq!(r["georeferenced"], false);
         assert!(
@@ -436,7 +437,7 @@ mod tests {
 
     #[test]
     fn phases_are_a_data_field_with_display_rules_and_a_report() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let a = tree(&mut s, 0, "good");
         let b = tree(&mut s, 5000, "good");
         ok(
@@ -500,7 +501,7 @@ mod tests {
             json!({"ids": [], "phase": "new"}),
             json!({"phase": "new"}),
             json!({"ids": ["x"], "phase": "new"}),
-            json!({"ids": [9999], "phase": "new"}),
+            json!({"ids": ["00000000-0000-0000-0000-00000000270f"], "phase": "new"}),
         ] {
             assert!(s.handle("phase.set", bad_params).is_err());
         }
@@ -517,7 +518,7 @@ mod tests {
 
     #[test]
     fn a_visualization_colors_the_svg_without_changing_objects() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let good = tree(&mut s, 0, "good");
         let poor = tree(&mut s, 5000, "poor");
         let before = ok(&mut s, "objects.get", json!({"id": poor}));
@@ -570,7 +571,7 @@ mod tests {
 
     #[test]
     fn visualization_auto_colors_by_value_or_range() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         tree(&mut s, 0, "good");
         tree(&mut s, 5000, "poor");
         tree(&mut s, 9000, "poor");
@@ -607,22 +608,22 @@ mod tests {
 
     #[test]
     fn hiding_a_phase_never_changes_the_terrain_results() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let mut ids = Vec::new();
         for x in 0..5 {
             for y in 0..5 {
                 ids.push(
                     ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x * 5000, y * 5000, 0]}}}))["created"][0]
-                        .as_u64()
+                        .as_uid()
                         .unwrap(),
                 );
             }
         }
         let site = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let pad = ok(&mut s, "pad.add", json!({"boundary": [[5000, 5000], [15000, 5000], [15000, 15000], [5000, 15000]], "elevation": 2000}))["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let before = ok(&mut s, "site.cut_fill", json!({"id": site}));
         assert!(before["fill_m3"].as_f64().unwrap() > 100.0);

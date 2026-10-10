@@ -185,10 +185,11 @@
       "type": "object"
     },
     "ClassId": {
-      "description": "An ID.",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer"
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
     },
     "Color": {
       "description": "[red, green, blue, alpha], 0 to 255.",
@@ -214,10 +215,11 @@
       "type": "object"
     },
     "LayerId": {
-      "description": "An ID.",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer"
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
     },
     "LayerKind": {
       "enum": [
@@ -227,10 +229,11 @@
       "type": "string"
     },
     "ObjectId": {
-      "description": "An ID.",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer"
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
     },
     "Orientation": {
       "enum": [
@@ -270,10 +273,11 @@
       "type": "object"
     },
     "ResourceId": {
-      "description": "An ID.",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer"
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
     },
     "SavedView": {
       "description": "A saved view: name, layer visibility, active layer and camera.",

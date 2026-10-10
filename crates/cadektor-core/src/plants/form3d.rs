@@ -501,7 +501,12 @@ pub fn build(p: &Params) -> FormMesh {
                 3 + (rng.next_u64() % 3) as usize
             };
             let phase = rng.unit() * std::f32::consts::TAU;
-            let (seg, rings) = if coarse { (6, 3) } else { (8, 4) };
+            // Five stems with the full detail would pass the triangle budget: they get fewer sides.
+            let (seg, rings, stem_sides) = match (coarse, stems) {
+                (true, _) => (6, 3, 5),
+                (false, 5) => (7, 4, 5),
+                (false, _) => (8, 4, 6),
+            };
             for k in 0..stems {
                 let th = phase + std::f32::consts::TAU * k as f32 / stems as f32 + rng.spread(0.3);
                 let dir = Vec3::new(th.cos(), th.sin(), 0.0);
@@ -511,7 +516,7 @@ pub fn build(p: &Params) -> FormMesh {
                 m.tube(
                     &[dir * (0.05 * r), mid, top],
                     &[sr, sr * 0.8, sr * 0.6],
-                    if coarse { 5 } else { 6 },
+                    stem_sides,
                     p.trunk_color,
                 );
                 let k = 0.9 + rng.unit() * 0.1;
@@ -838,6 +843,27 @@ mod tests {
                 assert!(a.indices.iter().all(|i| (*i as usize) < a.positions.len()));
                 assert!(a.positions.iter().all(|p| p.is_finite()));
                 assert!(a.normals.iter().all(|n| n.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn every_form_stays_within_budget_for_every_seed() {
+        // The seed comes from the object ID and the species, so any seed can happen.
+        for form in PlantForm::ALL {
+            for seed in 0..400u64 {
+                for (detail, max) in [
+                    (Detail::Fine, MAX_FINE_TRIANGLES),
+                    (Detail::Coarse, MAX_COARSE_TRIANGLES),
+                    (Detail::Billboard, MAX_BILLBOARD_TRIANGLES),
+                ] {
+                    let p = Params {
+                        seed,
+                        ..params(form, detail)
+                    };
+                    let n = build(&p).triangle_count();
+                    assert!(n <= max, "{form:?} {detail:?} seed {seed}: {n} triangles");
+                }
             }
         }
     }

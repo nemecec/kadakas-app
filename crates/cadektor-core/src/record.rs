@@ -433,7 +433,7 @@ pub fn fields_only(stored: &Map<String, Value>) -> Map<String, Value> {
 }
 
 /// A record ready to store: the field values and the marker with the ID of the format.
-pub fn tagged(fields: Map<String, Value>, format_id: u64) -> Map<String, Value> {
+pub fn tagged(fields: Map<String, Value>, format_id: crate::uid::Uid) -> Map<String, Value> {
     let mut m = fields;
     m.insert(MARKER.into(), Value::from(format_id));
     m
@@ -669,11 +669,14 @@ mod tests {
 
     #[test]
     fn tags_are_added_and_removed() {
-        let m = tagged(json!({"a": 1}).as_object().unwrap().clone(), 7);
-        assert_eq!(m[MARKER], json!(7));
+        let m = tagged(
+            json!({"a": 1}).as_object().unwrap().clone(),
+            crate::uid::Uid::from_num(7),
+        );
+        assert_eq!(m[MARKER], json!(crate::uid::Uid::from_num(7).to_string()));
         assert_eq!(fields_only(&m), *json!({"a": 1}).as_object().unwrap());
         let mut o = Object::new(
-            crate::model::ObjectId(1),
+            crate::model::ObjectId::from_num(1),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             crate::model::Shape::Circle {
@@ -707,7 +710,7 @@ mod tests {
         let back: RecordFormat = serde_json::from_value(j).unwrap();
         assert_eq!(back, f);
         let mut o = Object::new(
-            crate::model::ObjectId(1),
+            crate::model::ObjectId::from_num(1),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             crate::model::Shape::Circle {

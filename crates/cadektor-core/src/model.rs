@@ -1,7 +1,6 @@
 //! Document model: design layers, classes and drawing objects.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use glam::{DVec2, DVec3};
 use indexmap::IndexMap;
@@ -14,29 +13,11 @@ use crate::plants::tree::{self, TreeAction, TreeCondition};
 use crate::resource::{ResourceId, Resources};
 pub use crate::site::{ModifierKind, PadSlope, SiteLine, SiteSettings};
 
-macro_rules! id_type {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(pub u64);
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.fmt(f)
-            }
-        }
-
-        impl From<$name> for u64 {
-            fn from(id: $name) -> u64 {
-                id.0
-            }
-        }
-    };
-}
+use crate::uid::{IdGen, Uid, id_type};
 
 id_type!(
-    /// Identifier of an object. Objects, layers and classes share one ID space.
+    /// Identifier of an object. Objects, layers, classes and resources have IDs that are unique
+    /// in the world (see `crate::uid`).
     ObjectId
 );
 id_type!(
@@ -958,8 +939,9 @@ pub struct Document {
     /// Sheets, project data and saved views. Older files have none.
     #[serde(default, skip_serializing_if = "crate::sheets::Drawing::is_empty")]
     pub drawing: crate::sheets::Drawing,
-    #[serde(default)]
-    next_id: u64,
+    /// The generator of new IDs (see `crate::uid`). It is not saved.
+    #[serde(skip)]
+    ids: IdGen,
     /// Fields that this version does not know (from a newer file). They are saved again unchanged.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
@@ -974,7 +956,6 @@ impl PartialEq for Document {
             && self.active_layer == other.active_layer
             && self.active_class == other.active_class
             && self.georef == other.georef
-            && self.next_id == other.next_id
             && self.resources == other.resources
             && self.drawing == other.drawing
             && self.extra == other.extra
@@ -983,12 +964,16 @@ impl PartialEq for Document {
     }
 }
 
-/// The file format version. 2: unknown shape kinds and unknown fields are kept (no data changed from 1).
-pub const FORMAT_VERSION: u32 = 2;
-/// The class that every new document has. It cannot be deleted.
-pub const NONE_CLASS: ClassId = ClassId(0);
+/// The file format version. 3: IDs are UUID texts (see `crate::uid`) and there is no `next_id`.
+/// 2: unknown shape kinds and unknown fields are kept (no data changed from 1).
+pub const FORMAT_VERSION: u32 = 3;
+/// The oldest format that this version reads. Older files have numbers as IDs.
+pub const OLDEST_FORMAT: u32 = 3;
+/// The class that every new document has. It cannot be deleted. Like `FIRST_LAYER`, it has a
+/// well-known ID, the same in every document.
+pub const NONE_CLASS: ClassId = ClassId::from_num(0);
 /// The layer that every new document has.
-pub const FIRST_LAYER: LayerId = LayerId(1);
+pub const FIRST_LAYER: LayerId = LayerId::from_num(1);
 
 /// Why a document could not be loaded.
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -998,30 +983,14 @@ pub enum LoadError {
     Parse(String),
     #[error("file was made by a newer Cadektor (format {0})")]
     Newer(u32),
+    /// The file is older than the oldest format that this version reads.
+    #[error(
+        "unsupported old format {0}: this version of Cadektor reads format {OLDEST_FORMAT} and newer (IDs are UUID texts now)"
+    )]
+    Unsupported(u32),
     /// The document breaks a rule, for example a duplicate ID.
     #[error("{0}")]
     Invalid(String),
-}
-
-/// Upgrades the JSON of an older format to the current one, in place.
-/// Add one step per format version here when the format changes.
-///
-/// 1 to 2: no data changes. Version 2 only adds the rule that unknown shape kinds and unknown
-/// fields are kept, so the step records the new version and nothing else.
-fn migrate(doc: &mut Value, from: u32) -> Result<(), LoadError> {
-    if from == 0 {
-        return Err(LoadError::Invalid("unsupported format version 0".into()));
-    }
-    let mut version = from;
-    while version < FORMAT_VERSION {
-        match version {
-            1 => {}
-            v => return Err(LoadError::Invalid(format!("no migration from format {v}"))),
-        }
-        version += 1;
-        doc["format_version"] = Value::from(version);
-    }
-    Ok(())
 }
 
 impl Default for Document {
@@ -1056,7 +1025,7 @@ impl Default for Document {
             georef: None,
             resources: Resources::default(),
             drawing: Default::default(),
-            next_id: 2,
+            ids: IdGen::default(),
             extra: Default::default(),
         }
     }
@@ -1071,7 +1040,7 @@ impl Document {
     }
 
     /// Like `from_json`, for JSON that is already parsed.
-    pub fn from_value(mut value: Value) -> Result<Document, LoadError> {
+    pub fn from_value(value: Value) -> Result<Document, LoadError> {
         let version = value
             .get("format_version")
             .and_then(Value::as_u64)
@@ -1080,35 +1049,73 @@ impl Document {
         if version > FORMAT_VERSION {
             return Err(LoadError::Newer(version));
         }
-        migrate(&mut value, version)?;
+        if version < OLDEST_FORMAT {
+            return Err(LoadError::Unsupported(version));
+        }
         let mut doc: Document =
             serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.validate().map_err(LoadError::Invalid)?;
         Ok(doc)
     }
 
-    /// Returns a new ID that is unique across objects, layers and classes.
-    #[cfg(test)]
-    pub(crate) fn set_next_id(&mut self, n: u64) {
-        self.next_id = n;
+    /// The IDs that the next `n` new objects, layers, classes or resources get, in order. File
+    /// importers and the API use them to plan the IDs of a batch of commands: the commands, run
+    /// next, take exactly these IDs.
+    pub fn next_ids(&self, n: usize) -> Vec<Uid> {
+        self.ids.peek(n)
     }
 
-    /// The ID that the next new object, layer or class gets. File importers use it
-    /// to plan the IDs of a batch of commands.
-    pub fn next_id(&self) -> u64 {
-        self.next_id
+    /// A copy of the generator of IDs, to plan the IDs of a batch of commands that adds many
+    /// things: the n-th ID that the copy gives is the n-th ID that the commands take.
+    pub fn id_plan(&self) -> IdGen {
+        self.ids.clone()
     }
 
-    /// Returns `None` when the IDs are used up.
-    pub fn alloc_id(&mut self) -> Option<u64> {
-        let id = self.next_id;
-        self.next_id = id.checked_add(1)?;
-        Some(id)
+    /// Takes a new ID. It is unique in the world (UUID version 7, see `crate::uid`).
+    pub fn alloc_id(&mut self) -> Uid {
+        self.ids.take()
+    }
+
+    /// An empty document whose IDs count 2, 3, 4 and so on. For tests and fixtures; see
+    /// [`Document::use_sequential_ids`].
+    pub fn with_sequential_ids() -> Document {
+        let mut doc = Document::default();
+        doc.use_sequential_ids(2);
+        doc
+    }
+
+    /// Makes the generator count on from the largest small ID in the document (at least from 2).
+    /// For a host that runs in the predictable mode (`cadektor serve --sequential-ids`) when it
+    /// opens a document.
+    pub fn use_sequential_ids_after_existing(&mut self) {
+        let last = self
+            .objects
+            .keys()
+            .map(|i| i.0)
+            .chain(self.layers.iter().map(|l| l.id.0))
+            .chain(self.classes.iter().map(|c| c.id.0))
+            .chain(self.resources.iter().map(|r| r.id.0))
+            .filter(|u| u.as_u128() < (1 << 63))
+            .map(|u| u.low_u64())
+            .max()
+            .unwrap_or(0);
+        self.use_sequential_ids(last.saturating_add(1).max(2));
+    }
+
+    /// Makes the generator count from `first`: 2, 3, 4 and so on, as small numbers. For tests and
+    /// fixtures that need predictable IDs. These IDs are not unique in the world.
+    pub fn use_sequential_ids(&mut self, first: u64) {
+        self.ids = IdGen::sequential(first);
+    }
+
+    /// Restarts the generator of IDs from a time (milliseconds since 1970) and a random number.
+    /// A host without a clock in `std` (the browser) calls this once, with its own clock.
+    pub fn seed_ids(&mut self, unix_ms: u64, salt: u64) {
+        self.ids = IdGen::seed(unix_ms, salt);
     }
 
     /// Checks a loaded document: IDs must be unique, and every object must
-    /// refer to an existing layer and class. Also repairs the ID counter, so
-    /// new objects never reuse an ID.
+    /// refer to an existing layer and class.
     pub fn validate(&mut self) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
         let ids = self
@@ -1171,11 +1178,6 @@ impl Document {
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {
             return Err("active layer or class does not exist".into());
         }
-        let max_id = seen.into_iter().max().unwrap_or(0);
-        if max_id >= u64::MAX - 1 || self.next_id >= u64::MAX - 1 {
-            return Err("ids are too large".into());
-        }
-        self.next_id = self.next_id.max(max_id + 1);
         Ok(())
     }
 
@@ -1240,7 +1242,7 @@ mod tests {
     use super::*;
 
     fn obj(shape: Shape) -> Object {
-        Object::new(ObjectId(7), FIRST_LAYER, NONE_CLASS, shape)
+        Object::new(ObjectId::from_num(7), FIRST_LAYER, NONE_CLASS, shape)
     }
 
     fn v(x: f64, y: f64) -> DVec2 {
@@ -1761,25 +1763,44 @@ mod tests {
         assert_eq!(doc.active_class, NONE_CLASS);
         assert_eq!(doc.layer(FIRST_LAYER).unwrap().name, "Layer 1");
         assert_eq!(doc.class(NONE_CLASS).unwrap().name, "None");
-        assert!(doc.layer(LayerId(99)).is_none());
-        assert!(doc.class(ClassId(99)).is_none());
-        assert!(doc.object(ObjectId(1)).is_none());
+        assert!(doc.layer(LayerId::from_num(99)).is_none());
+        assert!(doc.class(ClassId::from_num(99)).is_none());
+        assert!(doc.object(ObjectId::from_num(1)).is_none());
     }
 
     #[test]
-    fn alloc_id_is_increasing_and_object_lookup_works() {
+    fn alloc_id_is_unique_increasing_and_planned_and_object_lookup_works() {
         let mut doc = Document::default();
-        assert_eq!(doc.alloc_id(), Some(2));
-        assert_eq!(doc.alloc_id(), Some(3));
+        let plan = doc.next_ids(3);
+        let (a, b) = (doc.alloc_id(), doc.alloc_id());
+        assert_eq!(
+            (plan[0], plan[1]),
+            (a, b),
+            "the plan shows the IDs that are taken"
+        );
+        assert!(a < b);
+        assert_eq!((a.version(), b.version()), (7, 7));
+        assert_eq!(doc.id_plan().take(), plan[2]);
+        // Another document makes other IDs, also when both start in the same millisecond.
+        let mut other = Document::default();
+        other.seed_ids(a.unix_ms(), 12345);
+        doc.seed_ids(a.unix_ms(), 54321);
+        assert_ne!(doc.alloc_id(), other.alloc_id());
         let o = obj(Shape::Circle {
             center: v(0.0, 0.0),
             radius: 1.0,
         });
         doc.objects.insert(o.id, o);
-        assert_eq!(doc.object(ObjectId(7)).unwrap().id, ObjectId(7));
-        doc.object_mut(ObjectId(7)).unwrap().layer = LayerId(9);
-        assert_eq!(doc.object(ObjectId(7)).unwrap().layer, LayerId(9));
-        assert!(doc.object_mut(ObjectId(8)).is_none());
+        assert_eq!(
+            doc.object(ObjectId::from_num(7)).unwrap().id,
+            ObjectId::from_num(7)
+        );
+        doc.object_mut(ObjectId::from_num(7)).unwrap().layer = LayerId::from_num(9);
+        assert_eq!(
+            doc.object(ObjectId::from_num(7)).unwrap().layer,
+            LayerId::from_num(9)
+        );
+        assert!(doc.object_mut(ObjectId::from_num(8)).is_none());
     }
 
     #[test]
@@ -1787,7 +1808,7 @@ mod tests {
         let mut doc = Document::default();
         doc.classes.push(Class {
             extra: Default::default(),
-            id: ClassId(5),
+            id: ClassId::from_num(5),
             name: "Trees".into(),
             visible: true,
             attrs: Attributes {
@@ -1803,7 +1824,7 @@ mod tests {
             center: v(0.0, 0.0),
             radius: 1.0,
         });
-        o.class = ClassId(5);
+        o.class = ClassId::from_num(5);
         let a = doc.resolved_attrs(&o);
         assert_eq!(a.pen, Some(Color([0, 128, 0, 255])));
         assert_eq!(a.fill, Some(Color([1, 2, 3, 255])));
@@ -1822,7 +1843,7 @@ mod tests {
         assert_eq!(a.line_weight, Some(2.0));
 
         // Unknown class: only object values survive.
-        o.class = ClassId(99);
+        o.class = ClassId::from_num(99);
         o.attrs = Attributes::default();
         assert_eq!(doc.resolved_attrs(&o), Attributes::default());
     }
@@ -1845,13 +1866,13 @@ mod tests {
         doc.classes[0].visible = true;
 
         let mut orphan = o.clone();
-        orphan.layer = LayerId(42);
+        orphan.layer = LayerId::from_num(42);
         assert!(
             !doc.is_visible(&orphan),
             "object on a missing layer is hidden"
         );
         let mut orphan = o;
-        orphan.class = ClassId(42);
+        orphan.class = ClassId::from_num(42);
         assert!(
             !doc.is_visible(&orphan),
             "object with a missing class is hidden"
@@ -2000,8 +2021,13 @@ mod tests {
         serde_json::to_value(Document::default()).unwrap()
     }
 
+    /// The JSON text of the ID that has the small number `n`.
+    fn u(n: u64) -> String {
+        Uid::from_num(n).to_string()
+    }
+
     #[test]
-    fn from_json_loads_a_saved_document_and_ids_stay_plain_numbers() {
+    fn from_json_loads_a_saved_document_and_ids_are_uuid_texts() {
         let mut doc = Document::default();
         let o = obj(Shape::Circle {
             center: v(0.0, 0.0),
@@ -2011,9 +2037,14 @@ mod tests {
         doc.validate().unwrap();
         let text = serde_json::to_string(&doc).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["objects"][0]["id"], 7);
-        assert_eq!(v["objects"][0]["layer"], 1);
-        assert_eq!(v["active_layer"], 1);
+        assert_eq!(v["objects"][0]["id"], u(7));
+        assert_eq!(v["objects"][0]["layer"], u(1));
+        assert_eq!(v["active_layer"], u(1));
+        assert!(
+            v.get("next_id").is_none(),
+            "there is no counter in the file"
+        );
+        assert_eq!(v["format_version"], FORMAT_VERSION);
         assert!(
             v["objects"][0].get("data").is_none(),
             "empty data and no parent are left out"
@@ -2030,10 +2061,14 @@ mod tests {
         assert!(
             matches!(Document::from_json("[]"), Err(LoadError::Parse(m)) if m.contains("format_version"))
         );
-        assert!(matches!(
-            Document::from_json(r#"{"format_version":1}"#),
-            Err(LoadError::Parse(_))
-        ));
+        // Files of an older format are refused with a clear message.
+        let e = Document::from_json(r#"{"format_version":1}"#).unwrap_err();
+        assert_eq!(e, LoadError::Unsupported(1));
+        assert!(e.to_string().contains("unsupported old format 1"), "{e}");
+        assert_eq!(
+            Document::from_json(r#"{"format_version":2,"layers":"???"}"#),
+            Err(LoadError::Unsupported(2))
+        );
 
         let mut v = doc_json();
         v["format_version"] = serde_json::json!(FORMAT_VERSION + 1);
@@ -2057,17 +2092,15 @@ mod tests {
         );
 
         v["format_version"] = serde_json::json!(0);
-        assert!(
-            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("version 0"))
-        );
+        assert_eq!(Document::from_value(v), Err(LoadError::Unsupported(0)));
 
         let mut v = doc_json();
-        v["objects"] = serde_json::json!([{"id": 5, "layer": 99, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        v["objects"] = serde_json::json!([{"id": u(5), "layer": u(99), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
         assert!(
             matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("missing layer"))
         );
         let mut v = doc_json();
-        v["active_layer"] = serde_json::json!(77);
+        v["active_layer"] = serde_json::json!(u(77));
         assert!(matches!(
             Document::from_value(v),
             Err(LoadError::Invalid(_))
@@ -2081,70 +2114,58 @@ mod tests {
 
     #[test]
     fn from_json_rejects_duplicate_ids_and_bad_shapes() {
-        let circle = |id: u64| serde_json::json!({"id": id, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}});
+        let circle = |id: u64| serde_json::json!({"id": u(id), "layer": u(1), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}});
         let mut v = doc_json();
         v["objects"] = serde_json::json!([circle(5), circle(5)]);
         assert!(
-            matches!(Document::from_value(v), Err(LoadError::Parse(m)) if m.contains("duplicate id 5"))
+            matches!(Document::from_value(v), Err(LoadError::Parse(m)) if m.contains(&format!("duplicate id {}", u(5))))
         );
         // An object may not reuse the ID of a layer.
         let mut v = doc_json();
         v["objects"] = serde_json::json!([circle(1)]);
         assert!(
-            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("duplicate id 1"))
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains(&format!("duplicate id {}", u(1))))
         );
 
         let mut v = doc_json();
-        v["objects"] = serde_json::json!([{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "arc", "center": [0, 0], "radius": 1, "start": 1, "end": 1}}]);
+        v["objects"] = serde_json::json!([{"id": u(5), "layer": u(1), "class": u(0), "shape": {"kind": "arc", "center": [0, 0], "radius": 1, "start": 1, "end": 1}}]);
         assert!(
-            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains("object 5 has an invalid shape"))
+            matches!(Document::from_value(v), Err(LoadError::Invalid(m)) if m.contains(&format!("object {} has an invalid shape", u(5))))
         );
     }
 
     #[test]
-    fn huge_ids_are_rejected_and_alloc_never_overflows() {
+    fn ids_must_be_uuid_texts_and_a_number_is_refused() {
         let mut v = doc_json();
-        v["next_id"] = serde_json::json!(u64::MAX);
-        assert!(matches!(
-            Document::from_value(v),
-            Err(LoadError::Invalid(_))
-        ));
-        let circle = |id: u64| serde_json::json!({"id": id, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}});
+        v["objects"] = serde_json::json!([{"id": 5, "layer": u(1), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        let e = Document::from_value(v).unwrap_err();
+        assert!(
+            matches!(&e, LoadError::Parse(m) if m.contains("UUID")),
+            "{e}"
+        );
         let mut v = doc_json();
-        v["objects"] = serde_json::json!([circle(u64::MAX)]);
-        assert!(matches!(
-            Document::from_value(v),
-            Err(LoadError::Invalid(_))
-        ));
-        let mut doc = Document {
-            next_id: u64::MAX,
-            ..Default::default()
-        };
-        assert_eq!(doc.alloc_id(), None);
+        v["objects"] = serde_json::json!([{"id": "nope", "layer": u(1), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        assert!(matches!(Document::from_value(v), Err(LoadError::Parse(_))));
     }
 
     #[test]
-    fn missing_next_id_is_repaired_and_never_collides() {
+    fn a_loaded_document_makes_new_ids_that_never_collide() {
         let mut v = doc_json();
-        v.as_object_mut().unwrap().remove("next_id");
-        v["objects"] = serde_json::json!([{"id": 40, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        v["objects"] = serde_json::json!([{"id": u(40), "layer": u(1), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
         let mut doc = Document::from_value(v).unwrap();
-        assert_eq!(doc.alloc_id(), Some(41));
-        // A stale counter is repaired the same way.
-        let mut v = doc_json();
-        v["next_id"] = serde_json::json!(2);
-        v["objects"] = serde_json::json!([{"id": 2, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
-        assert_eq!(Document::from_value(v).unwrap().alloc_id(), Some(3));
+        let id = doc.alloc_id();
+        assert!(!doc.objects.contains_key(&ObjectId(id)));
+        assert_eq!(id.version(), 7);
     }
 
     #[test]
     fn old_files_without_new_fields_load_with_defaults() {
         let mut v = doc_json();
         v["layers"][0].as_object_mut().unwrap().remove("kind");
-        v["objects"] = serde_json::json!([{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        v["objects"] = serde_json::json!([{"id": u(5), "layer": u(1), "class": u(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
         let doc = Document::from_value(v).unwrap();
         assert_eq!(doc.layers[0].kind, LayerKind::Design);
-        let o = doc.object(ObjectId(5)).unwrap();
+        let o = doc.object(ObjectId::from_num(5)).unwrap();
         assert!(o.data.is_empty() && o.parent.is_none());
     }
 
@@ -2160,14 +2181,14 @@ mod tests {
             "Pset_Wall".into(),
             serde_json::json!({"FireRating": "REI60", "Load": 2.5}),
         );
-        o.parent = Some(ObjectId(99));
+        o.parent = Some(ObjectId::from_num(99));
         doc.objects.insert(o.id, o);
         // The parent must be a group that exists.
         assert!(doc.validate().unwrap_err().contains("does not exist"));
         doc.objects.insert(
-            ObjectId(99),
+            ObjectId::from_num(99),
             Object::new(
-                ObjectId(99),
+                ObjectId::from_num(99),
                 FIRST_LAYER,
                 NONE_CLASS,
                 Shape::Group { name: "g".into() },
@@ -2178,7 +2199,7 @@ mod tests {
         assert!(
             text.contains(r#""kind":"sheet""#)
                 && text.contains("Pset_Wall")
-                && text.contains(r#""parent":99"#)
+                && text.contains(&format!(r#""parent":"{}""#, u(99)))
         );
         assert_eq!(Document::from_json(&text).unwrap(), doc);
     }
@@ -2197,11 +2218,15 @@ mod tests {
                 },
             )
         };
-        a.objects.insert(ObjectId(10), mk(10));
-        a.objects.insert(ObjectId(11), mk(11));
+        a.objects
+            .insert(ObjectId::from_num(10), mk(crate::uid::Uid::from_num(10)));
+        a.objects
+            .insert(ObjectId::from_num(11), mk(crate::uid::Uid::from_num(11)));
         let mut b = Document::default();
-        b.objects.insert(ObjectId(11), mk(11));
-        b.objects.insert(ObjectId(10), mk(10));
+        b.objects
+            .insert(ObjectId::from_num(11), mk(crate::uid::Uid::from_num(11)));
+        b.objects
+            .insert(ObjectId::from_num(10), mk(crate::uid::Uid::from_num(10)));
         assert_ne!(a, b);
         b.objects.move_index(1, 0);
         assert_eq!(a, b);
@@ -2210,14 +2235,23 @@ mod tests {
     }
 
     #[test]
-    fn old_files_with_plain_points_still_load() {
-        let old = r#"{"format_version":1,"layers":[{"id":1,"name":"L","visible":true,"locked":false,"elevation":0,"scale":100}],
-            "classes":[{"id":0,"name":"None","visible":true,"attrs":{}}],
-            "objects":[{"id":2,"layer":1,"class":0,"shape":{"kind":"hardscape","boundary":[[0,0],[4,0],[4,3]],"material":"m"}},
-                       {"id":3,"layer":1,"class":0,"shape":{"kind":"polyline","points":[[0,0],[1,1]],"closed":false}}],
-            "active_layer":1,"active_class":0,"next_id":4}"#;
-        let doc = Document::from_json(old).unwrap();
-        assert_eq!(doc.object(ObjectId(2)).unwrap().shape.area(), Some(6.0));
+    fn plain_points_load_and_curved_vertices_round_trip() {
+        let old = format!(
+            r#"{{"format_version":{FORMAT_VERSION},"layers":[{{"id":"{l}","name":"L","visible":true,"locked":false,"elevation":0,"scale":100}}],
+            "classes":[{{"id":"{c}","name":"None","visible":true,"attrs":{{}}}}],
+            "objects":[{{"id":"{o2}","layer":"{l}","class":"{c}","shape":{{"kind":"hardscape","boundary":[[0,0],[4,0],[4,3]],"material":"m"}}}},
+                       {{"id":"{o3}","layer":"{l}","class":"{c}","shape":{{"kind":"polyline","points":[[0,0],[1,1]],"closed":false}}}}],
+            "active_layer":"{l}","active_class":"{c}"}}"#,
+            l = u(1),
+            c = u(0),
+            o2 = u(2),
+            o3 = u(3)
+        );
+        let doc = Document::from_json(&old).unwrap();
+        assert_eq!(
+            doc.object(ObjectId::from_num(2)).unwrap().shape.area(),
+            Some(6.0)
+        );
         // Saving writes corners as plain points, so old readers' format is kept for old content.
         let text = serde_json::to_string(&doc).unwrap();
         assert!(
@@ -2288,7 +2322,7 @@ mod tests {
         let tag = Shape::PlantTag {
             at: v(0.0, 100.0),
             anchor: v(-50.0, 0.0),
-            style: ResourceId(3),
+            style: ResourceId::from_num(3),
             height: 400.0,
         };
         assert_eq!((tree.kind(), tag.kind()), ("existing_tree", "plant_tag"));
@@ -2324,7 +2358,7 @@ mod tests {
             !Shape::PlantTag {
                 at: v(0.0, 0.0),
                 anchor: v(f64::NAN, 0.0),
-                style: ResourceId(1),
+                style: ResourceId::from_num(1),
                 height: 1.0
             }
             .is_finite()
@@ -2333,7 +2367,7 @@ mod tests {
             !Shape::PlantTag {
                 at: v(0.0, 0.0),
                 anchor: v(2.0 * MAX_COORD, 0.0),
-                style: ResourceId(1),
+                style: ResourceId::from_num(1),
                 height: 1.0
             }
             .is_in_range()
@@ -2354,27 +2388,27 @@ mod tests {
         assert_eq!(j["action"], "relocate");
         assert_eq!(serde_json::from_value::<Shape>(j).unwrap(), tree);
         let j =
-            serde_json::json!({"kind": "plant_tag", "at": [0, 0], "anchor": [1, 1], "style": 4});
+            serde_json::json!({"kind": "plant_tag", "at": [0, 0], "anchor": [1, 1], "style": u(4)});
         assert!(
             matches!(serde_json::from_value::<Shape>(j).unwrap(), Shape::PlantTag { height, .. } if height == DEFAULT_TAG_HEIGHT)
         );
     }
 
     #[test]
-    fn old_files_without_resources_load_and_plants_keep_their_fields() {
-        // A file from before plant styles: no `resources` key, and a plant with its own fields.
+    fn files_without_resources_load_and_plants_keep_their_fields() {
+        // A file with no `resources` key, and a plant with its own fields.
         let old = serde_json::json!({
-            "format_version": 1,
-            "layers": [{"id": 1, "name": "Layer 1", "visible": true, "locked": false, "elevation": 0.0, "scale": 100.0}],
-            "classes": [{"id": 0, "name": "None", "visible": true, "attrs": {}}],
-            "objects": [{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "plant", "at": [1.0, 2.0], "species": "Quercus robur", "spread": 6000.0, "height": 12000.0}}],
-            "active_layer": 1,
-            "active_class": 0,
-            "next_id": 6
+            "format_version": FORMAT_VERSION,
+            "layers": [{"id": u(1), "name": "Layer 1", "visible": true, "locked": false, "elevation": 0.0, "scale": 100.0}],
+            "classes": [{"id": u(0), "name": "None", "visible": true, "attrs": {}}],
+            "objects": [{"id": u(5), "layer": u(1), "class": u(0), "shape": {"kind": "plant", "at": [1.0, 2.0], "species": "Quercus robur", "spread": 6000.0, "height": 12000.0}}],
+            "active_layer": u(1),
+            "active_class": u(0)
         });
         let doc = Document::from_value(old).unwrap();
         assert!(doc.resources.is_empty());
-        let e = crate::plants::link::effective(&doc, doc.object(ObjectId(5)).unwrap()).unwrap();
+        let e = crate::plants::link::effective(&doc, doc.object(ObjectId::from_num(5)).unwrap())
+            .unwrap();
         assert_eq!(
             (
                 e.style_id,
@@ -2384,7 +2418,7 @@ mod tests {
             ),
             (None, "Quercus robur", 6000.0, 12000.0)
         );
-        // Saving a document without resources writes no `resources` key, so old apps still read it.
+        // Saving a document without resources writes no `resources` key.
         assert!(
             serde_json::to_value(&doc)
                 .unwrap()
@@ -2417,19 +2451,19 @@ mod tests {
         let text = serde_json::to_string(ed.doc()).unwrap();
         let back = Document::from_json(&text).unwrap();
         assert_eq!(&back, ed.doc());
-        // The ID of a resource is unique among all IDs, and the counter moves past it.
+        // The ID of a resource is unique among all IDs.
         let mut j: Value = serde_json::from_str(&text).unwrap();
-        j["resources"][0]["id"] = serde_json::json!(1);
+        j["resources"][0]["id"] = serde_json::json!(u(1));
         assert!(
             Document::from_value(j.clone())
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate id")
         );
-        j["resources"][0]["id"] = serde_json::json!(40);
-        j["next_id"] = serde_json::json!(0);
+        j["resources"][0]["id"] = serde_json::json!(u(40));
         let mut loaded = Document::from_value(j).unwrap();
-        assert!(loaded.alloc_id().unwrap() > 40);
+        let fresh = loaded.alloc_id();
+        assert!(!loaded.resources.iter().any(|r| r.id.0 == fresh));
         // A bad style stops the load.
         let mut j: Value = serde_json::from_str(&text).unwrap();
         j["resources"][0]["body"]["spread"] = serde_json::json!(-1.0);

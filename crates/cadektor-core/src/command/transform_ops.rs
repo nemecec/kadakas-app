@@ -465,7 +465,7 @@ mod tests {
         );
         assert!(
             ed.execute(&Command::ArrayObjects {
-                ids: vec![ObjectId(999)],
+                ids: vec![ObjectId::from_num(999)],
                 array: array(serde_json::json!({"shape": "linear", "count": 1, "offset": [0, 10]}))
             })
             .is_err()

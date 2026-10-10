@@ -1,4 +1,5 @@
 use super::*;
+use cadektor_core::uid::AsUid;
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
     s.handle(method, params)
@@ -15,7 +16,7 @@ fn square(w: i64) -> Value {
 }
 
 fn setup() -> Session {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "plant_style.create",
@@ -31,7 +32,7 @@ fn setup() -> Session {
 
 #[test]
 fn hardscape_styles_crud() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = ok(
         &mut s,
         "hardscape_style.create",
@@ -40,7 +41,7 @@ fn hardscape_styles_crud() {
             "border": {"width": 150, "material": "Kerb", "sides": "left"},
             "joints": {"kind": "herringbone", "unit_length": 200, "unit_width": 100, "spacing": 4, "angle": 45}}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "hardscape_style.get", json!({"id": "setts"}));
     assert_eq!(got["total_thickness"], 250.0);
@@ -52,7 +53,7 @@ fn hardscape_styles_crud() {
         "hardscape.add",
         json!({"boundary": square(3000), "style": id}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "hardscape_style.list", json!(null))["styles"][0]["used_by"],
@@ -71,14 +72,14 @@ fn hardscape_styles_crud() {
     assert_eq!(o["shape"]["material"], "Granite");
     // Duplicate, delete.
     let copy = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "hardscape_style.get", json!({"id": copy}))["name"],
         "Setts 2 copy"
     );
     let copy2 = ok(&mut s, "hardscape_style.duplicate", json!({"id": id}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "hardscape_style.get", json!({"id": copy2}))["name"],
@@ -89,7 +90,7 @@ fn hardscape_styles_crud() {
         "hardscape_style.duplicate",
         json!({"id": id, "name": "Mine"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "hardscape_style.get", json!({"id": named}))["name"],
@@ -157,7 +158,12 @@ fn hardscape_styles_crud() {
         "name exists"
     );
     assert_eq!(
-        fail(&mut s, "hardscape_style.get", json!({"id": 999})).0,
+        fail(
+            &mut s,
+            "hardscape_style.get",
+            json!({"id": "00000000-0000-0000-0000-0000000003e7"})
+        )
+        .0,
         -32602
     );
     assert_eq!(
@@ -193,7 +199,7 @@ fn hardscape_styles_crud() {
     );
     // A plant style is not a hardscape style.
     let plant = ok(&mut s, "plant_style.create", json!({"name": "Oak"}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         fail(&mut s, "hardscape_style.get", json!({"id": plant})).0,
@@ -211,7 +217,7 @@ fn landscape_area_styles_crud_and_mix_names() {
         json!({"name": "Meadow", "show_plants": true, "fields": {"hydrozone": "low"},
             "mix": [{"plant": "Lavender", "percent": 60, "density": 5}, {"plant": sedge, "percent": 40, "spacing": 400, "min_count": 10}]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "landscape_area_style.get", json!({"id": "Meadow"}));
     assert_eq!(got["mix_names"], json!(["Lavender", "Sedge"]));
@@ -232,7 +238,7 @@ fn landscape_area_styles_crud_and_mix_names() {
     assert_eq!(r["mix_names"], json!(["Sedge"]));
     assert_eq!(r["name"], "Sedge lawn");
     let copy = ok(&mut s, "landscape_area_style.duplicate", json!({"id": id}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "landscape_area_style.get", json!({"id": copy}))["name"],
@@ -274,13 +280,13 @@ fn landscape_area_styles_crud_and_mix_names() {
 
 #[test]
 fn hardscape_add_and_set() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let st = ok(
         &mut s,
         "hardscape_style.create",
         json!({"name": "Setts", "thickness": 60}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     // A path with a curve.
     let p = ok(
@@ -288,7 +294,7 @@ fn hardscape_add_and_set() {
         "hardscape.add",
         json!({"center": [[0, 0], {"p": [6000, 0], "kind": "arc", "radius": 1500}, [6000, 5000]], "width": 1500, "join": "round", "style": "Setts", "elevation": 20}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let o = ok(&mut s, "objects.get", json!({"id": p}));
     assert_eq!(o["data"]["hardscape"]["mode"], "path");
@@ -324,14 +330,14 @@ fn hardscape_add_and_set() {
         "execute",
         json!({"command": {"op": "add_layer", "name": "Hard"}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let slab = ok(
         &mut s,
         "hardscape.add",
-        json!({"boundary": square(3000), "mode": "slab", "slope": {"type": "edges", "elevations": [0, 10, 20, 10]}, "layer": layer, "class": 0, "material": "Slate", "thickness": 50, "site_modifier": true, "drape": false}),
+        json!({"boundary": square(3000), "mode": "slab", "slope": {"type": "edges", "elevations": [0, 10, 20, 10]}, "layer": layer, "class": "00000000-0000-0000-0000-000000000000", "material": "Slate", "thickness": 50, "site_modifier": true, "drape": false}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "objects.get", json!({"id": slab}))["layer"],
@@ -484,7 +490,11 @@ fn hardscape_add_and_set() {
         -32602
     );
     assert_eq!(
-        f(&mut s, "hardscape.set", json!({"id": 999, "width": 5})),
+        f(
+            &mut s,
+            "hardscape.set",
+            json!({"id": "00000000-0000-0000-0000-0000000003e7", "width": 5})
+        ),
         2
     );
     assert_eq!(
@@ -502,14 +512,14 @@ fn landscape_areas_holes_and_reports() {
         "landscape_area_style.create",
         json!({"name": "Meadow", "mix": [{"plant": "Lavender", "percent": 60, "density": 4}, {"plant": "Sedge", "percent": 40, "density": 4}]}),
     );
-    let pond = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [5000, 5000], "radius": 1000}}}))["created"][0].as_u64().unwrap();
-    let rect = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [7000, 1000], "max": [8000, 2000]}}}))["created"][0].as_u64().unwrap();
+    let pond = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [5000, 5000], "radius": 1000}}}))["created"][0].as_uid().unwrap();
+    let rect = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [7000, 1000], "max": [8000, 2000]}}}))["created"][0].as_uid().unwrap();
     let a = ok(
         &mut s,
         "landscape_area.add",
         json!({"boundary": square(10_000), "name": "Bed A", "style": "Meadow", "exclude": [pond, rect], "holes": [[[1000, 1000], [2000, 1000], [2000, 2000]]], "show_plants": true}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = ok(&mut s, "report.landscape_areas", json!({}));
     let row = &r["rows"][0];
@@ -599,7 +609,7 @@ fn landscape_areas_holes_and_reports() {
         f(
             &mut s,
             "landscape_area.add",
-            json!({"boundary": square(10), "exclude": [999]})
+            json!({"boundary": square(10), "exclude": ["00000000-0000-0000-0000-0000000003e7"]})
         ),
         -32602
     );
@@ -619,7 +629,7 @@ fn landscape_areas_holes_and_reports() {
         ),
         -32602
     );
-    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
+    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_uid().unwrap();
     assert_eq!(
         f(
             &mut s,
@@ -629,7 +639,7 @@ fn landscape_areas_holes_and_reports() {
         -32602
     );
     // A polyline and another area can be holes.
-    let poly = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[100, 100], [900, 100], [900, 900]]}}}))["created"][0].as_u64().unwrap();
+    let poly = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[100, 100], [900, 100], [900, 900]]}}}))["created"][0].as_uid().unwrap();
     ok(
         &mut s,
         "landscape_area.set",
@@ -645,7 +655,7 @@ fn hardscape_report_and_plant_list() {
         "hardscape_style.create",
         json!({"name": "Setts", "material": "Granite", "thickness": 60, "components": [{"name": "Base", "material": "Stone", "thickness": 150}], "border": {"width": 200, "material": "Kerb"}}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut s,
@@ -705,11 +715,11 @@ fn hardscape_report_and_plant_list() {
 
 #[test]
 fn drape_uses_the_site_model_in_reports_and_in_3d() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // A ramp: z = x / 10, on 7 by 7 points of 1 m.
     let pts: Vec<Value> =
         (0..7).flat_map(|i| (0..7).map(move |j| json!({"kind": "locus3d", "p": [i as f64 * 1000.0, j as f64 * 1000.0, i as f64 * 100.0]}))).collect();
-    let ids: Vec<u64> = pts
+    let ids: Vec<cadektor_core::uid::Uid> = pts
         .iter()
         .map(|p| {
             ok(
@@ -717,13 +727,13 @@ fn drape_uses_the_site_model_in_reports_and_in_3d() {
                 "execute",
                 json!({"command": {"op": "add_object", "shape": p}}),
             )["created"][0]
-                .as_u64()
+                .as_uid()
                 .unwrap()
         })
         .collect();
     ok(&mut s, "site.create", json!({"source_ids": ids}));
     let h = ok(&mut s, "hardscape.add", json!({"boundary": [[1000, 1000], [3000, 1000], [3000, 3000], [1000, 3000]], "drape": true, "thickness": 100}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = ok(&mut s, "report.hardscape", json!({}));
     let q = &r["rows"][0];

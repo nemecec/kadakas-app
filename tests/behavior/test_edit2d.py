@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from helpers import line_cmd, rect_cmd, strip_next_id
+from helpers import line_cmd, rect_cmd, strip_next_id, uid
 
 
 def shape_of(cad, oid):
@@ -283,7 +283,7 @@ def test_surface_errors(cad):
     a = cad.execute(rect_cmd(0, 0, 10, 10))[0]
     ln = cad.execute(line_cmd(0, 0, 5, 5))[0]
     assert "line" in cad.error("surface.add", {"ids": [a, ln]})["message"]
-    assert cad.error("surface.add", {"ids": [a, 999]})["code"] == 2
+    assert cad.error("surface.add", {"ids": [a, uid(999)]})["code"] == 2
     assert cad.error("surface.add", {"ids": [a]})["code"] == 3
     assert cad.error("surface.subtract", {"base": a})["code"] == -32602
     far = cad.execute(rect_cmd(500, 500, 600, 600))[0]

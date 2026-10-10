@@ -129,7 +129,7 @@ impl<W: Write> Exporter<'_, W> {
         let id = self.ent(
             class,
             vec![
-                self.guid("obj", e.obj.id.0),
+                self.guid_of("obj", e.obj.id.0),
                 Value::Null,
                 Self::name_value(&e.name),
                 Value::Null,
@@ -212,7 +212,7 @@ impl<W: Write> Exporter<'_, W> {
         let q = self.ent(
             "IFCELEMENTQUANTITY",
             vec![
-                self.guid(&format!("qto:{name}"), obj.id.0),
+                self.guid_of(&format!("qto:{name}"), obj.id.0),
                 Value::Null,
                 Value::s(name),
                 Value::Null,
@@ -227,7 +227,7 @@ impl<W: Write> Exporter<'_, W> {
     pub(super) fn flush(&mut self) -> R<()> {
         let contained = std::mem::take(&mut self.contained);
         for (key, elements) in contained {
-            let container = if key == 0 {
+            let container = if key == cadektor_core::uid::Uid::NIL {
                 self.site
             } else {
                 self.storeys[&LayerId(key)].0
@@ -235,7 +235,7 @@ impl<W: Write> Exporter<'_, W> {
             self.ent(
                 "IFCRELCONTAINEDINSPATIALSTRUCTURE",
                 vec![
-                    self.guid("rel_contained", key),
+                    self.guid_of("rel_contained", key),
                     Value::Null,
                     Value::Null,
                     Value::Null,

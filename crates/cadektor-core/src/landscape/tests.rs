@@ -206,9 +206,9 @@ fn minimum_counts_default_spacing_and_area_quantity() {
         quantities(
             ed.doc(),
             &Object::new(
-                ObjectId(99),
-                crate::model::LayerId(1),
-                crate::model::ClassId(0),
+                ObjectId::from_num(99),
+                crate::model::LayerId::from_num(1),
+                crate::model::ClassId::from_num(0),
                 Shape::Line {
                     a: DVec2::ZERO,
                     b: DVec2::X
@@ -304,9 +304,9 @@ fn patch_checks_holes_names_and_styles() {
     assert_eq!(name, "Beta");
     // Not an area, or unreadable data.
     let mut line = Object::new(
-        ObjectId(99),
-        crate::model::LayerId(1),
-        crate::model::ClassId(0),
+        ObjectId::from_num(99),
+        crate::model::LayerId::from_num(1),
+        crate::model::ClassId::from_num(0),
         Shape::Line {
             a: DVec2::ZERO,
             b: DVec2::X,
@@ -324,7 +324,7 @@ fn patch_checks_holes_names_and_styles() {
     let bad = ed.execute(&Command::SetLandscapeArea {
         ids: vec![id],
         patch: LandscapePatch {
-            style: Some(ResourceId(999)),
+            style: Some(ResourceId::from_num(999)),
             ..Default::default()
         },
     });
@@ -482,9 +482,9 @@ fn scatter_is_deterministic_inside_and_proportional() {
 fn scatter_edge_cases() {
     let (mut ed, id, ..) = setup();
     let line = Object::new(
-        ObjectId(99),
-        crate::model::LayerId(1),
-        crate::model::ClassId(0),
+        ObjectId::from_num(99),
+        crate::model::LayerId::from_num(1),
+        crate::model::ClassId::from_num(0),
         Shape::Line {
             a: DVec2::ZERO,
             b: DVec2::X,
@@ -681,9 +681,9 @@ fn svg_shows_holes_and_plants() {
     );
     assert!(!svg_extras(ed.doc(), ed.doc().object(id).unwrap(), 100.0, "black").contains("plants"));
     let line = Object::new(
-        ObjectId(99),
-        crate::model::LayerId(1),
-        crate::model::ClassId(0),
+        ObjectId::from_num(99),
+        crate::model::LayerId::from_num(1),
+        crate::model::ClassId::from_num(0),
         Shape::Line {
             a: DVec2::ZERO,
             b: DVec2::X,
@@ -777,7 +777,7 @@ fn deleting_a_plant_style_checks_the_mixes() {
     );
     // A style cannot use a plant that does not exist, or a resource of another type.
     let bad = LandscapeAreaStyle {
-        mix: vec![entry(ResourceId(999), 100.0)],
+        mix: vec![entry(ResourceId::from_num(999), 100.0)],
         ..Default::default()
     };
     assert!(
@@ -860,9 +860,9 @@ fn report_lists_areas_with_fields() {
     assert!(
         draped_area_m2(
             &Object::new(
-                ObjectId(99),
-                crate::model::LayerId(1),
-                crate::model::ClassId(0),
+                ObjectId::from_num(99),
+                crate::model::LayerId::from_num(1),
+                crate::model::ClassId::from_num(0),
                 Shape::Line {
                     a: DVec2::ZERO,
                     b: DVec2::X
@@ -881,9 +881,9 @@ fn old_files_load_and_styles_round_trip() {
     let back = Document::from_json(&text).unwrap();
     assert_eq!(&back, ed.doc());
     // A landscape area from an old file has no data and no rows.
-    let old = r#"{"format_version":1,"layers":[{"id":1,"name":"L","visible":true,"locked":false,"elevation":0,"scale":100}],"classes":[{"id":0,"name":"None","visible":true,"attrs":{}}],"objects":[{"id":2,"layer":1,"class":0,"shape":{"kind":"landscape_area","boundary":[[0,0],[4,0],[4,3]],"name":"Lawn"}}],"active_layer":1,"active_class":0}"#;
+    let old = r#"{"format_version":3,"layers":[{"id":"00000000-0000-0000-0000-000000000001","name":"L","visible":true,"locked":false,"elevation":0,"scale":100}],"classes":[{"id":"00000000-0000-0000-0000-000000000000","name":"None","visible":true,"attrs":{}}],"objects":[{"id":"00000000-0000-0000-0000-000000000002","layer":"00000000-0000-0000-0000-000000000001","class":"00000000-0000-0000-0000-000000000000","shape":{"kind":"landscape_area","boundary":[[0,0],[4,0],[4,3]],"name":"Lawn"}}],"active_layer":"00000000-0000-0000-0000-000000000001","active_class":"00000000-0000-0000-0000-000000000000"}"#;
     let doc = Document::from_json(old).unwrap();
-    let o = doc.object(ObjectId(2)).unwrap();
+    let o = doc.object(ObjectId::from_num(2)).unwrap();
     assert!(data(o).is_none());
     assert!(quantities(&doc, o).unwrap().rows.is_empty());
     assert_eq!(quantities(&doc, o).unwrap().gross_area_m2, 6.0e-6);

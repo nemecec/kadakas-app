@@ -4,6 +4,7 @@
 //! `render_style.list|get|create|update|duplicate|delete|set_active`, `sun.set|get`,
 //! `render.hidden_line`. `render.png` takes a `render_style` (see `lib.rs`).
 
+use cadektor_core::uid::AsUid;
 use serde_json::{Map, Value, json};
 
 use cadektor_core::command::Command;
@@ -131,7 +132,7 @@ pub fn describe() -> Value {
             {"method": "material.add_defaults", "params": {}},
             {"method": "material.create", "params": {"name": "Teak", "base_color": [150, 100, 60], "texture": {"procedural": "timber"}, "mapping": {"kind": "box", "scale": [1200, 300], "rotation": 0}, "roughness": 0.6}},
             {"method": "material.import_texture", "params": {"id": "Teak", "path": "/tmp/teak.jpg", "max_side": 1024}},
-            {"method": "material.assign", "params": {"material": "Grass", "class": 0}},
+            {"method": "material.assign", "params": {"material": "Grass", "class": "00000000-0000-0000-0000-000000000000"}},
             {"method": "material.assign", "params": {"material": "Bark mulch", "style": "Oak", "slot": "trunk"}},
             {"method": "sun.set", "params": {"latitude": 60.17, "longitude": 24.94, "date": "2026-06-21", "time": "15:30", "tz_offset": 3}},
             {"method": "render_style.create", "params": {"name": "Afternoon", "mode": "shaded", "sun": true, "shadows": true}},
@@ -185,12 +186,15 @@ fn ref_of(doc: &Document, v: &Value, kind: Kind) -> Result<ResourceId, RpcError>
         Kind::Style => present::render_style(doc, id).is_some(),
     };
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(name) => doc
-            .resources
-            .iter()
-            .find(|r| ok(r.id) && r.name.trim().eq_ignore_ascii_case(name.trim()))
-            .map(|r| r.id),
+        Value::String(name) => cadektor_core::uid::Uid::parse(name.trim())
+            .map(ResourceId)
+            .filter(|id| ok(*id))
+            .or_else(|| {
+                doc.resources
+                    .iter()
+                    .find(|r| ok(r.id) && r.name.trim().eq_ignore_ascii_case(name.trim()))
+                    .map(|r| r.id)
+            }),
         _ => None,
     };
     found
@@ -715,10 +719,10 @@ fn style_target(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
         doc.resources.plant_style(id).is_some() || doc.resources.hardscape_style(id).is_some()
     };
     let id = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(name) => doc
-            .resources
-            .find_plant_style(name)
+        Value::String(name) => cadektor_core::uid::Uid::parse(name.trim())
+            .map(ResourceId)
+            .filter(|id| ok(*id))
+            .or_else(|| doc.resources.find_plant_style(name))
             .or_else(|| doc.resources.find_hardscape_style(name)),
         _ => None,
     };
@@ -762,7 +766,7 @@ fn assign(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         let mut ids: Vec<ObjectId> = Vec::new();
         if let Some(v) = m.get("object") {
             ids.push(ObjectId(
-                v.as_u64()
+                v.as_uid()
                     .ok_or_else(|| bad("'object' must be an object ID"))?,
             ));
         }
@@ -772,7 +776,7 @@ fn assign(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 .ok_or_else(|| bad("'objects' must be a list of IDs"))?
             {
                 ids.push(ObjectId(
-                    x.as_u64()
+                    x.as_uid()
                         .ok_or_else(|| bad("'objects' must be a list of IDs"))?,
                 ));
             }
@@ -790,7 +794,7 @@ fn assign(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         push(SlotTarget::Style { style, slot });
     } else if let Some(v) = m.get("class") {
         let class = ClassId(
-            v.as_u64()
+            v.as_uid()
                 .ok_or_else(|| bad("'class' must be a class ID"))?,
         );
         push(SlotTarget::Class { class });

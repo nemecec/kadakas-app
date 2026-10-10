@@ -507,7 +507,7 @@ mod tests {
         .unwrap();
         assert_eq!(tag_info(ed.doc(), tag).unwrap().code, "Maple");
         // Not a tag, or missing.
-        assert!(tag_info(ed.doc(), ObjectId(9999)).is_none());
+        assert!(tag_info(ed.doc(), ObjectId::from_num(9999)).is_none());
         let plant = ed
             .doc()
             .objects
@@ -540,7 +540,7 @@ mod tests {
             assert_eq!(tag_info_with(ed.doc(), t, &counts), tag_info(ed.doc(), t));
             assert_eq!(tag_info(ed.doc(), t).unwrap().count, 3);
         }
-        assert!(tag_info_with(ed.doc(), ObjectId(1), &counts).is_none());
+        assert!(tag_info_with(ed.doc(), ObjectId::from_num(1), &counts).is_none());
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
             anchor,
             style,
             height,
-        } = group_tag(ResourceId(5), &pts, 1000.0)
+        } = group_tag(ResourceId::from_num(5), &pts, 1000.0)
         else {
             panic!()
         };
@@ -559,13 +559,14 @@ mod tests {
             (anchor, style, height),
             (
                 DVec2::new(2000.0, 1000.0),
-                ResourceId(5),
+                ResourceId::from_num(5),
                 DEFAULT_TAG_HEIGHT
             )
         );
         assert_eq!(at, DVec2::new(2000.0, 2000.0 + 500.0 + DEFAULT_TAG_HEIGHT));
         // No positions: the tag still has finite numbers.
-        let Shape::PlantTag { at, anchor, .. } = group_tag(ResourceId(5), &[], 1000.0) else {
+        let Shape::PlantTag { at, anchor, .. } = group_tag(ResourceId::from_num(5), &[], 1000.0)
+        else {
             panic!()
         };
         assert!(at.is_finite() && anchor.is_finite());
@@ -651,7 +652,7 @@ mod tests {
     #[test]
     fn tag_format_comes_from_the_data_and_defaults_to_one_level() {
         let mut o = cadektor_core::model::Object::new(
-            ObjectId(1),
+            ObjectId::from_num(1),
             cadektor_core::model::FIRST_LAYER,
             cadektor_core::model::NONE_CLASS,
             Shape::Line {

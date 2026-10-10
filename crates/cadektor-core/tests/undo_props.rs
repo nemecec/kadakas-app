@@ -86,9 +86,9 @@ fn data() -> impl Strategy<Value = BTreeMap<String, Value>> {
 
 /// Commands with small IDs, so they often hit existing objects and layers.
 fn command() -> impl Strategy<Value = Command> {
-    let oid = || (0u64..12).prop_map(ObjectId);
-    let lid = || (0u64..12).prop_map(LayerId);
-    let cid = || (0u64..12).prop_map(ClassId);
+    let oid = || (0u64..12).prop_map(ObjectId::from_num);
+    let lid = || (0u64..12).prop_map(LayerId::from_num);
+    let cid = || (0u64..12).prop_map(ClassId::from_num);
     let ids = || prop::collection::vec(oid(), 0..4);
     let leaf = prop_oneof![
         4 => (shape(), prop::option::of(lid()), prop::option::of(cid()), attrs())

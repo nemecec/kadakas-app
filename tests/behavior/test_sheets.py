@@ -5,7 +5,7 @@ import zlib
 
 import pytest
 
-from helpers import JsonRpc, rect_cmd
+from helpers import JsonRpc, rect_cmd, uid
 
 MM = 72.0 / 25.4
 
@@ -42,7 +42,7 @@ def test_sheet_layers_are_listed_apart_from_design_layers(garden):
     assert [(s["number"], s["title"], s["paper"]) for s in sheets] == [("L-101", "Planting plan", "a3")]
     assert (sheets[0]["width_mm"], sheets[0]["height_mm"]) == (420.0, 297.0)
     layers = {l["id"]: l for l in cad.result("document.summary")["layers"]}
-    assert layers[garden["sheet"]]["kind"] == "sheet" and layers[1]["kind"] == "design"
+    assert layers[garden["sheet"]]["kind"] == "sheet" and layers[uid(1)]["kind"] == "design"
     # The model view does not show paper space.
     cad.execute({"op": "add_object", "layer": garden["sheet"], "shape": {"kind": "line", "a": [0, 0], "b": [100, 0]}})
     assert cad.result("document.summary")["bounds"]["max"] == [17000.0, 8000.0]
@@ -128,13 +128,13 @@ def test_saved_views_restore_visibility_and_the_active_layer(garden):
     cad = garden["cad"]
     cad.execute({"op": "add_layer", "name": "Planting"})
     cad.result("saved_view.save", {"name": "All", "zoom": 0.2, "pan": [1000, 2000]})
-    cad.execute({"op": "modify_layer", "id": 1, "visible": False})
+    cad.execute({"op": "modify_layer", "id": uid(1), "visible": False})
     cad.execute({"op": "modify_class", "id": garden["trees"], "visible": False})
     cad.execute({"op": "set_active", "layer": cad.result("document.summary")["layers"][-1]["id"]})
     restored = cad.result("saved_view.restore", {"name": "all"})
     assert restored["zoom"] == 0.2 and restored["pan"] == [1000.0, 2000.0]
     summary = cad.result("document.summary")
-    assert summary["active_layer"] == 1
+    assert summary["active_layer"] == uid(1)
     assert all(l["visible"] for l in summary["layers"]) and all(c["visible"] for c in summary["classes"])
     assert [v["name"] for v in cad.result("saved_view.list")["views"]] == ["All"]
     cad.result("saved_view.delete", {"name": "All"})

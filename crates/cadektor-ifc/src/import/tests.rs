@@ -26,7 +26,11 @@ fn import_into(doc: Document, name: &str, opts: &IfcImportOptions) -> (Editor, R
 }
 
 fn import(name: &str) -> (Editor, Report) {
-    import_into(Document::default(), name, &IfcImportOptions::default())
+    import_into(
+        Document::with_sequential_ids(),
+        name,
+        &IfcImportOptions::default(),
+    )
 }
 
 fn objects(ed: &Editor) -> Vec<&Object> {
@@ -112,7 +116,7 @@ fn rectangle_slab_is_a_mesh_with_class_data_and_records() {
 
 #[test]
 fn import_is_one_undo_step() {
-    let doc = Document::default();
+    let doc = Document::with_sequential_ids();
     let before = doc.clone();
     let (mut ed, _) = import_into(doc, "extruded_rect.ifc", &IfcImportOptions::default());
     assert!(!ed.doc().objects.is_empty());
@@ -131,7 +135,7 @@ fn property_set_modes() {
         property_sets: PropertyMode::Data,
         ..IfcImportOptions::default()
     };
-    let (ed, _) = import_into(Document::default(), "extruded_rect.ifc", &opts);
+    let (ed, _) = import_into(Document::with_sequential_ids(), "extruded_rect.ifc", &opts);
     let o = only(&ed);
     assert_eq!(
         o.data["ifc_psets"]["Pset_SlabCommon"]["Material"],
@@ -142,7 +146,7 @@ fn property_set_modes() {
         property_sets: PropertyMode::None,
         ..IfcImportOptions::default()
     };
-    let (ed, _) = import_into(Document::default(), "extruded_rect.ifc", &opts);
+    let (ed, _) = import_into(Document::with_sequential_ids(), "extruded_rect.ifc", &opts);
     assert!(!only(&ed).data.contains_key("ifc_psets"));
     assert!(ed.doc().resources.iter().count() == 0);
 }
@@ -203,7 +207,11 @@ fn terrain_becomes_a_site_model() {
         terrain: TerrainMode::Mesh,
         ..IfcImportOptions::default()
     };
-    let (ed, _) = import_into(Document::default(), "terrain_triangulated.ifc", &opts);
+    let (ed, _) = import_into(
+        Document::with_sequential_ids(),
+        "terrain_triangulated.ifc",
+        &opts,
+    );
     let m = mesh(only(&ed));
     assert_eq!(m.triangles.len(), 8);
 }
@@ -283,7 +291,7 @@ fn mapped_items_become_symbols_with_instances() {
         instances: false,
         ..IfcImportOptions::default()
     };
-    let (ed, report) = import_into(Document::default(), "mapped_items.ifc", &opts);
+    let (ed, report) = import_into(Document::with_sequential_ids(), "mapped_items.ifc", &opts);
     assert_eq!(report.objects["mesh3d"], 3);
     assert!(ed.doc().resources.iter().count() == 0);
     for o in objects(&ed) {
@@ -360,7 +368,7 @@ fn georeference_storeys_classes_and_colors() {
 
 #[test]
 fn file_in_a_document_with_the_same_crs_is_moved_into_its_georeference() {
-    let mut doc = Document::default();
+    let mut doc = Document::with_sequential_ids();
     doc.georef = Some(cadektor_core::georef::Georeference {
         crs: "EPSG:3067".into(),
         origin: DVec2::new(384_990.0, 6_671_995.0),
@@ -401,7 +409,7 @@ fn file_in_a_document_with_the_same_crs_is_moved_into_its_georeference() {
         georef: false,
         ..IfcImportOptions::default()
     };
-    let (ed, _) = import_into(Document::default(), "georef_storeys.ifc", &opts);
+    let (ed, _) = import_into(Document::with_sequential_ids(), "georef_storeys.ifc", &opts);
     assert!(ed.doc().georef.is_none());
 }
 
@@ -444,7 +452,11 @@ fn vegetation_with_a_size_becomes_a_plant() {
         vegetation: false,
         ..IfcImportOptions::default()
     };
-    let (ed, _) = import_into(Document::default(), "vegetation_plant.ifc", &opts);
+    let (ed, _) = import_into(
+        Document::with_sequential_ids(),
+        "vegetation_plant.ifc",
+        &opts,
+    );
     assert_eq!(only(&ed).shape.kind(), "mesh3d");
 }
 
@@ -491,7 +503,7 @@ fn truncated_file_imports_what_is_complete() {
 
 #[test]
 fn bad_files_are_refused() {
-    let doc = Document::default();
+    let doc = Document::with_sequential_ids();
     let opts = IfcImportOptions::default();
     let err = import_bytes(b"hello".to_vec(), &doc, &opts).unwrap_err();
     assert!(matches!(err, IfcImportError::Format(_)));
@@ -518,7 +530,7 @@ fn an_ifc_file_with_no_products_says_so() {
     let text = "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n#1=IFCPROJECT('g',$,'p',$,$,$,$,$,$);\nENDSEC;\nEND-ISO-10303-21;\n";
     let r = import_bytes(
         text.as_bytes().to_vec(),
-        &Document::default(),
+        &Document::with_sequential_ids(),
         &IfcImportOptions::default(),
     )
     .unwrap();
@@ -532,7 +544,7 @@ fn the_object_limit_stops_the_import() {
         max_objects: 1,
         ..IfcImportOptions::default()
     };
-    let (ed, report) = import_into(Document::default(), "mapped_items.ifc", &opts);
+    let (ed, report) = import_into(Document::with_sequential_ids(), "mapped_items.ifc", &opts);
     assert_eq!(ed.doc().objects.len(), 1);
     assert!(report.notes.iter().any(|n| n.contains("object limit")));
 }
@@ -614,7 +626,7 @@ fn layers_off_puts_everything_on_the_active_layer() {
         classes_from_layers: false,
         ..IfcImportOptions::default()
     };
-    let (ed, report) = import_into(Document::default(), "georef_storeys.ifc", &opts);
+    let (ed, report) = import_into(Document::with_sequential_ids(), "georef_storeys.ifc", &opts);
     assert!(report.layers_created.is_empty());
     assert!(report.classes_created.is_empty());
     for o in objects(&ed) {
@@ -626,8 +638,13 @@ fn layers_off_puts_everything_on_the_active_layer() {
 fn round_trip(opts: &crate::IfcOptions) -> (Document, Editor, Report) {
     let doc = crate::tests::sample();
     let (bytes, _) = crate::export_bytes(&doc, opts).unwrap();
-    let result = import_bytes(bytes, &Document::default(), &IfcImportOptions::default()).unwrap();
-    let mut ed = Editor::new(Document::default());
+    let result = import_bytes(
+        bytes,
+        &Document::with_sequential_ids(),
+        &IfcImportOptions::default(),
+    )
+    .unwrap();
+    let mut ed = Editor::new(Document::with_sequential_ids());
     ed.execute(&result.command).unwrap();
     (doc, ed, result.report)
 }
@@ -740,9 +757,13 @@ fn imported_meshes_export_again_and_come_back_the_same() {
             1,
             "{file}"
         );
-        let result =
-            import_bytes(bytes, &Document::default(), &IfcImportOptions::default()).unwrap();
-        let mut again = Editor::new(Document::default());
+        let result = import_bytes(
+            bytes,
+            &Document::with_sequential_ids(),
+            &IfcImportOptions::default(),
+        )
+        .unwrap();
+        let mut again = Editor::new(Document::with_sequential_ids());
         again.execute(&result.command).unwrap();
         let o = only(&again);
         assert!(
@@ -775,7 +796,7 @@ mod fuzz {
 
     /// Imports the bytes. Must not panic, and a batch that comes back must run.
     fn check(bytes: Vec<u8>) {
-        let doc = Document::default();
+        let doc = Document::with_sequential_ids();
         if let Ok(r) = import_bytes(bytes, &doc, &IfcImportOptions::default()) {
             let mut ed = Editor::new(doc);
             ed.execute(&r.command)
@@ -892,13 +913,13 @@ fn a_big_file_imports() {
     // The placement of the terrain refers to a point, which is not a placement: it is read as the origin.
     let r = import_bytes(
         text.into_bytes(),
-        &Document::default(),
+        &Document::with_sequential_ids(),
         &IfcImportOptions::default(),
     )
     .unwrap();
     assert_eq!(r.report.objects["mesh3d"], 1500);
     assert_eq!(r.report.objects["site_model"], 1);
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     ed.execute(&r.command).unwrap();
     assert_eq!(ed.doc().objects.len(), 1501);
 }

@@ -9,7 +9,7 @@ use cadektor_io::{Context, ExportOptions, Exporter, ImportOptions, Importer, Sou
 use proptest::prelude::*;
 
 fn add(doc: &mut Document, shape: Shape) {
-    let id = ObjectId(doc.alloc_id().unwrap());
+    let id = ObjectId(doc.alloc_id());
     doc.objects.insert(
         id,
         Object::new(id, doc.layers[0].id, doc.classes[0].id, shape),
@@ -24,10 +24,10 @@ fn roundtrip(doc: &Document, eo: &ExportOptions, io: &ImportOptions) -> Document
         extra: Default::default(),
     };
     let r = DxfFormat
-        .import(&src, &Context::of(&Document::default()), io)
+        .import(&src, &Context::of(&Document::with_sequential_ids()), io)
         .unwrap();
     assert_eq!(r.report.skipped_total(), 0, "{:?}", r.report.skipped);
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     ed.execute(&r.command).unwrap();
     ed.doc().clone()
 }
@@ -68,7 +68,7 @@ fn assert_same_curve(a: &[Vertex], ca: bool, b: &[Vertex], cb: bool, tol: f64) {
 
 #[test]
 fn all_shapes_round_trip() {
-    let mut doc = Document::default();
+    let mut doc = Document::with_sequential_ids();
     let arc_poly = vec![
         Vertex::corner(DVec2::new(0.0, 0.0)),
         Vertex::new(DVec2::new(1500.0, -800.0), VertexKind::PointOnArc),
@@ -278,8 +278,8 @@ fn all_shapes_round_trip() {
 
 #[test]
 fn classes_and_layers_round_trip_by_name() {
-    let mut doc = Document::default();
-    let walls = cadektor_core::model::ClassId(doc.alloc_id().unwrap());
+    let mut doc = Document::with_sequential_ids();
+    let walls = cadektor_core::model::ClassId(doc.alloc_id());
     doc.classes.push(cadektor_core::model::Class {
         extra: Default::default(),
         id: walls,
@@ -299,7 +299,7 @@ fn classes_and_layers_round_trip_by_name() {
             b: DVec2::X,
         },
     );
-    let id = ObjectId(doc.alloc_id().unwrap());
+    let id = ObjectId(doc.alloc_id());
     let mut o = Object::new(
         id,
         doc.layers[0].id,
@@ -337,7 +337,7 @@ fn classes_and_layers_round_trip_by_name() {
 
 #[test]
 fn units_scale_both_ways() {
-    let mut doc = Document::default();
+    let mut doc = Document::with_sequential_ids();
     add(
         &mut doc,
         Shape::Line {
@@ -405,7 +405,7 @@ proptest! {
                 prop_assume!((b - a).dot(c - b) > 0.0);
             }
         }
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         add(&mut doc, Shape::Polyline { points: pts.clone(), closed });
         // A nearly straight arc has a huge bounding box, which could make the default `center` shift the drawing.
         let keep = ImportOptions { origin: cadektor_io::OriginMode::File, ..ImportOptions::default() };
@@ -418,7 +418,7 @@ proptest! {
 
     #[test]
     fn random_survey_points_round_trip(x in -1.0e7..1.0e7f64, y in -1.0e7..1.0e7f64, z in -1.0e5..1.0e5f64) {
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         add(&mut doc, Shape::Locus3d { p: DVec3::new(x, y, z) });
         // `file` keeps the coordinates. With the default (`center`) a point 6 km from the origin is shifted.
         let keep = ImportOptions { origin: cadektor_io::OriginMode::File, ..ImportOptions::default() };
@@ -441,11 +441,11 @@ fn survey_in_lest97_keeps_its_real_world_coordinates() {
     let r = DxfFormat
         .import(
             &src,
-            &Context::of(&Document::default()),
+            &Context::of(&Document::with_sequential_ids()),
             &ImportOptions::default(),
         )
         .unwrap();
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     ed.execute(&r.command).unwrap();
     let doc = ed.doc().clone();
     assert!(doc.georef.is_some());
@@ -494,11 +494,11 @@ fn survey_in_lest97_keeps_its_real_world_coordinates() {
     let r = DxfFormat
         .import(
             &src,
-            &Context::of(&Document::default()),
+            &Context::of(&Document::with_sequential_ids()),
             &ImportOptions::default(),
         )
         .unwrap();
-    let mut ed2 = Editor::new(Document::default());
+    let mut ed2 = Editor::new(Document::with_sequential_ids());
     ed2.execute(&r.command).unwrap();
     assert_eq!(ed2.doc().georef, doc.georef);
     let back: Vec<_> = ed2

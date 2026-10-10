@@ -37,7 +37,7 @@ pub struct MixEntry {
 impl Default for MixEntry {
     fn default() -> Self {
         MixEntry {
-            plant: ResourceId(0),
+            plant: ResourceId::from_num(0),
             percent: 100.0,
             spacing: None,
             density: None,
@@ -136,7 +136,7 @@ mod tests {
 
     fn entry(plant: u64, percent: f64) -> MixEntry {
         MixEntry {
-            plant: ResourceId(plant),
+            plant: ResourceId(crate::uid::Uid::from_num(plant)),
             percent,
             ..Default::default()
         }
@@ -170,7 +170,7 @@ mod tests {
         assert!(bad(&|s| s.mix[0].percent = f64::NAN).contains("percent"));
         assert!(bad(&|s| s.mix[0].percent = 120.0).contains("percent"));
         assert!(bad(&|s| s.mix[0].percent = 70.0).contains("add up"));
-        assert!(bad(&|s| s.mix[1].plant = ResourceId(1)).contains("twice"));
+        assert!(bad(&|s| s.mix[1].plant = ResourceId::from_num(1)).contains("twice"));
         assert!(
             bad(&|s| {
                 s.mix[0].spacing = Some(100.0);
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn partial_json_uses_defaults() {
         let s: LandscapeAreaStyle = serde_json::from_str(
-            r#"{"mix": [{"plant": 7, "spacing": 300}], "fields": {"hydrozone": "low"}}"#,
+            r#"{"mix": [{"plant": "00000000-0000-0000-0000-000000000007", "spacing": 300}], "fields": {"hydrozone": "low"}}"#,
         )
         .unwrap();
         assert_eq!(s.mix[0].percent, 100.0);

@@ -492,7 +492,7 @@ mod tests {
     fn trim_undo_and_count() {
         let mut ed = Editor::default();
         let t = line(&mut ed, v(0.0, 0.0), v(10.0, 0.0));
-        line(&mut ed, v(3.0, -1.0), v(3.0, 1.0));
+        let first_cutter = line(&mut ed, v(3.0, -1.0), v(3.0, 1.0));
         line(&mut ed, v(7.0, -1.0), v(7.0, 1.0));
         let before = ed.doc().clone();
         let cmd = trim(ed.doc(), t, v(5.0, 0.0), None).unwrap();
@@ -501,10 +501,10 @@ mod tests {
         assert!(ed.undo());
         assert_eq!(ed.doc().objects, before.objects);
         // Only the listed cutters count.
-        let one = trim(ed.doc(), t, v(5.0, 0.0), Some(&[ObjectId(3)])).unwrap();
+        let one = trim(ed.doc(), t, v(5.0, 0.0), Some(&[first_cutter])).unwrap();
         ed.execute(&one).unwrap();
         assert_eq!(ed.doc().objects.len(), 3);
-        assert!(trim(ed.doc(), ObjectId(99), v(0.0, 0.0), None).is_err());
+        assert!(trim(ed.doc(), ObjectId::from_num(99), v(0.0, 0.0), None).is_err());
     }
 
     #[test]
@@ -669,7 +669,16 @@ mod tests {
         assert!((area(&ed) - 175.0).abs() < 1e-9);
         // Errors.
         let l = line(&mut ed, v(0.0, 0.0), v(1.0, 1.0));
-        assert!(surface(ed.doc(), SurfaceOp::Add, &[l, ObjectId(2)], None, false).is_err());
+        assert!(
+            surface(
+                ed.doc(),
+                SurfaceOp::Add,
+                &[l, ObjectId::from_num(2)],
+                None,
+                false
+            )
+            .is_err()
+        );
         assert!(surface(ed.doc(), SurfaceOp::Add, &[l], None, false).is_err());
         assert!(surface(ed.doc(), SurfaceOp::Subtract, &[l, a], None, false).is_err());
     }

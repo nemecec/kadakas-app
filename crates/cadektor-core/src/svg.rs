@@ -669,7 +669,7 @@ mod tests {
         assert!(!render(ed.doc(), 400).contains("<circle"));
     }
 
-    fn add(ed: &mut Editor, shape: Shape) -> u64 {
+    fn add(ed: &mut Editor, shape: Shape) -> crate::uid::Uid {
         ed.execute(&Command::AddObject {
             shape,
             layer: None,

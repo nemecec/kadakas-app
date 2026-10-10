@@ -481,7 +481,7 @@ pub(crate) mod tests {
             ShapefileFormat
                 .import(
                     &s,
-                    &Context::of(&cadektor_core::model::Document::default()),
+                    &Context::of(&cadektor_core::model::Document::with_sequential_ids()),
                     &ImportOptions::default(),
                 )
                 .unwrap()
@@ -674,7 +674,7 @@ pub(crate) mod tests {
                 ("prj".to_string(), prj.as_bytes().to_vec()),
             ]),
         };
-        let doc = cadektor_core::model::Document::default();
+        let doc = cadektor_core::model::Document::with_sequential_ids();
         let r = ShapefileFormat
             .import(&src, &Context::of(&doc), &ImportOptions::default())
             .unwrap();

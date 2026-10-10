@@ -6,6 +6,7 @@
 //! the pad (plus an offset). The wall is an ordinary wall, so it has a style, quantities and a
 //! 3D solid. The pad keeps the ID of its wall in its data, and the wall keeps the ID of its pad.
 
+use cadektor_core::uid::AsUid;
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
@@ -191,7 +192,7 @@ impl Session {
             Some(v) => Some(crate::sheets_api::class_ref(doc, v)?),
             None => None,
         };
-        let wall_id = ObjectId(doc.next_id() + ahead);
+        let wall_id = ObjectId(doc.next_ids(ahead as usize + 1)[ahead as usize]);
         let mut cmds = Vec::new();
         // The old wall of this pad goes first.
         if !pad_id_is_new
@@ -199,7 +200,7 @@ impl Session {
                 .object(pad)
                 .and_then(|o| o.data.get(PAD_KEY))
                 .and_then(|v| v.get("wall"))
-                .and_then(Value::as_u64)
+                .and_then(AsUid::as_uid)
                 .map(ObjectId)
                 .filter(|w| doc.object(*w).is_some_and(|o| wall::data(o).is_some()))
         {
@@ -251,7 +252,7 @@ impl Session {
                 .object(id)
                 .and_then(|o| o.data.get(PAD_KEY))
                 .and_then(|v| v.get("wall"))
-                .and_then(Value::as_u64)
+                .and_then(AsUid::as_uid)
                 .map(ObjectId)
                 .filter(|w| doc.object(*w).is_some());
             let mut cmds = Vec::new();
@@ -310,7 +311,7 @@ impl Session {
         if edge.is_some() && slope.is_some() {
             return Err(bad("a retaining edge needs a level pad: give no slope"));
         }
-        let pad_id = ObjectId(self.editor.doc().next_id());
+        let pad_id = ObjectId(self.editor.doc().next_ids(1)[0]);
         let mut cmds = vec![Command::AddObject {
             shape: Shape::SiteModifier {
                 modifier: ModifierKind::Pad { elevation, slope },
@@ -353,7 +354,7 @@ mod tests {
     }
 
     /// A site 20 m by 20 m, flat at 0.
-    fn site(s: &mut Session) -> u64 {
+    fn site(s: &mut Session) -> cadektor_core::uid::Uid {
         let mut ids = Vec::new();
         for x in 0..5 {
             for y in 0..5 {
@@ -362,11 +363,11 @@ mod tests {
                     "execute",
                     json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x * 5000, y * 5000, 0]}}}),
                 );
-                ids.push(r["created"][0].as_u64().unwrap());
+                ids.push(r["created"][0].as_uid().unwrap());
             }
         }
         ok(s, "site.create", json!({"source_ids": ids}))["id"]
-            .as_u64()
+            .as_uid()
             .unwrap()
     }
 
@@ -374,14 +375,14 @@ mod tests {
 
     #[test]
     fn a_pad_with_a_retaining_edge_adds_a_wall_at_the_level_of_the_pad() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let site = site(&mut s);
         let r = ok(
             &mut s,
             "pad.add",
             json!({"boundary": SQUARE, "elevation": 800, "retaining_edge": {"thickness": 250, "top_offset": 100}}),
         );
-        let (pad, wall) = (r["id"].as_u64().unwrap(), r["wall"].as_u64().unwrap());
+        let (pad, wall) = (r["id"].as_uid().unwrap(), r["wall"].as_uid().unwrap());
         let rows = r["quantities"].clone();
         assert_eq!(rows["length_m"], 40.0);
         assert_eq!(rows["thickness_mm"], 250.0);
@@ -410,7 +411,7 @@ mod tests {
             "pad.retaining_edge",
             json!({"id": pad, "thickness": 400}),
         );
-        let wall2 = r2["wall"].as_u64().unwrap();
+        let wall2 = r2["wall"].as_uid().unwrap();
         assert_ne!(wall, wall2);
         assert!(s.handle("objects.get", json!({"id": wall})).is_err());
         assert_eq!(r2["quantities"]["thickness_mm"], 400.0);
@@ -447,7 +448,7 @@ mod tests {
 
     #[test]
     fn retaining_edge_errors() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         site(&mut s);
         let sloped = ok(
             &mut s,
@@ -469,7 +470,7 @@ mod tests {
         let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}))["created"][0].clone();
         for bad in [
             json!({}),
-            json!({"id": 9999}),
+            json!({"id": "00000000-0000-0000-0000-00000000270f"}),
             json!({"id": circle}),
             json!({"id": sloped, "enabled": "yes"}),
         ] {
@@ -499,12 +500,12 @@ mod tests {
             "pad.add",
             json!({"boundary": SQUARE, "elevation": 100, "retaining_edge": true}),
         );
-        assert!(with_true["wall"].is_u64());
+        assert!(with_true["wall"].is_string());
     }
 
     #[test]
     fn a_cut_pad_gets_a_wall_from_the_pad_up_to_the_ground() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         site(&mut s);
         let r = ok(
             &mut s,
@@ -531,14 +532,14 @@ mod tests {
 
     #[test]
     fn the_wall_follows_its_pad_and_goes_with_it() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         site(&mut s);
         let r = ok(
             &mut s,
             "pad.add",
             json!({"boundary": SQUARE, "elevation": 800, "retaining_edge": {"top_offset": 100}}),
         );
-        let (pad, wall) = (r["id"].as_u64().unwrap(), r["wall"].as_u64().unwrap());
+        let (pad, wall) = (r["id"].as_uid().unwrap(), r["wall"].as_uid().unwrap());
         // Moving the pad moves the wall (also when only the pad is moved).
         ok(
             &mut s,

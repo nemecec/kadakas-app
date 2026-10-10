@@ -5,9 +5,11 @@ use cadektor_core::model::{Document, FORMAT_VERSION, LoadError, ObjectId, Shape}
 use glam::DVec2;
 use serde_json::{Value, json};
 
-/// A document with one circle, as JSON.
+/// A document with one circle, as JSON. The IDs do not change between calls.
 fn base_json() -> Value {
-    let mut ed = Editor::default();
+    let mut doc = Document::default();
+    doc.seed_ids(1_700_000_000_000, 1);
+    let mut ed = Editor::new(doc);
     ed.execute(&Command::AddObject {
         shape: Shape::Circle {
             center: DVec2::new(1.0, 2.0),
@@ -38,23 +40,24 @@ fn future_json() -> Value {
 }
 
 #[test]
-fn the_format_version_is_2_and_old_files_migrate() {
-    assert_eq!(FORMAT_VERSION, 2);
+fn the_format_version_is_3_and_older_files_are_refused() {
+    assert_eq!(FORMAT_VERSION, 3);
     let mut v = base_json();
-    v["format_version"] = json!(1);
     let doc = Document::from_value(v.clone()).unwrap();
-    assert_eq!(
-        doc.format_version, 2,
-        "the migration records the new version"
-    );
-    assert_eq!(doc.objects.len(), 1, "no data changed");
+    assert_eq!(doc.format_version, 3);
+    assert_eq!(doc.objects.len(), 1);
     assert_eq!(serde_json::to_value(&doc).unwrap(), base_json());
-    // Version 0 never existed.
-    v["format_version"] = json!(0);
-    assert!(matches!(
-        Document::from_value(v),
-        Err(LoadError::Invalid(_))
-    ));
+    // Older files have numbers as IDs. They are refused, with a clear message.
+    for old in [0, 1, 2] {
+        v["format_version"] = json!(old);
+        let e = Document::from_value(v.clone()).unwrap_err();
+        assert_eq!(e, LoadError::Unsupported(old));
+        assert!(
+            e.to_string()
+                .starts_with(&format!("unsupported old format {old}")),
+            "{e}"
+        );
+    }
 }
 
 #[test]

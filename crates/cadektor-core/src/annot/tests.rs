@@ -102,8 +102,8 @@ fn all_kinds() -> Vec<Annot> {
             detached: false,
         }),
         Annot::DataTag(DataTag {
-            style: ResourceId(1),
-            object: ObjectId(2),
+            style: ResourceId::from_num(1),
+            object: ObjectId::from_num(2),
             offset: v(1.0, 1.0),
             at: v(3.0, 3.0),
             anchor: v(2.0, 2.0),
@@ -536,14 +536,14 @@ fn anchors_resolve_to_points() {
         anchor_point(
             doc,
             &Anchor {
-                object: ObjectId(99),
+                object: ObjectId::from_num(99),
                 target: AnchorTarget::Center,
                 count: None
             }
         ),
         None
     );
-    let json = serde_json::json!({"object": 5, "target": {"at": "edge", "index": 1}});
+    let json = serde_json::json!({"object": "00000000-0000-0000-0000-000000000005", "target": {"at": "edge", "index": 1}});
     let back: Anchor = serde_json::from_value(json).unwrap();
     assert_eq!(back.target, AnchorTarget::Edge { index: 1, t: 0.5 });
 }
@@ -708,7 +708,7 @@ fn resources_validate_and_look_up() {
     assert!(r.notes_db(n).is_some() && r.notes_db(g).is_none());
     assert_eq!(r.find_annot("tag_style", "TAG"), Some(g));
     assert_eq!(r.find_annot("tag_style", "nope"), None);
-    assert!(r.text_style(ResourceId(999)).is_none());
+    assert!(r.text_style(ResourceId::from_num(999)).is_none());
     // The body names and JSON.
     let names: Vec<&str> = r.iter().map(|x| x.body.type_name()).collect();
     assert_eq!(names, TYPE_NAMES_OF_STYLES);
@@ -1505,7 +1505,7 @@ fn data_tags_follow_and_go_with_their_object() {
     // A tag of a missing object or style is refused.
     let bad = Annot::DataTag(DataTag {
         style,
-        object: ObjectId(999),
+        object: ObjectId::from_num(999),
         offset: DVec2::ZERO,
         at: DVec2::ZERO,
         anchor: DVec2::ZERO,
@@ -1520,7 +1520,7 @@ fn data_tags_follow_and_go_with_their_object() {
         .is_err()
     );
     let bad = Annot::DataTag(DataTag {
-        style: ResourceId(999),
+        style: ResourceId::from_num(999),
         object: p,
         offset: DVec2::ZERO,
         at: DVec2::ZERO,
@@ -1578,7 +1578,7 @@ fn a_tag_on_a_locked_layer_stays_when_its_object_goes() {
         }),
     );
     ed.execute(&Command::ModifyLayer {
-        id: LayerId(1),
+        id: LayerId::from_num(1),
         name: None,
         visible: None,
         locked: Some(true),
@@ -1623,7 +1623,7 @@ fn annotations_check_their_resources() {
             .to_string()
             .contains("not a dimension style")
     );
-    d.style = Some(ResourceId(999));
+    d.style = Some(ResourceId::from_num(999));
     assert!(
         try_add(&mut ed, Annot::Dimension(d.clone()))
             .unwrap_err()
@@ -1722,7 +1722,7 @@ fn annotations_check_their_resources() {
     assert!(!north.uses_resource(text));
     let mut tag = Annot::DataTag(DataTag {
         style: text,
-        object: ObjectId(1),
+        object: ObjectId::from_num(1),
         offset: DVec2::ZERO,
         at: DVec2::ZERO,
         anchor: DVec2::ZERO,
@@ -1732,7 +1732,7 @@ fn annotations_check_their_resources() {
     tag.replace_resource(text, other);
     // Anchors to missing objects are refused.
     let d = Dimension {
-        anchors: vec![vertex(ObjectId(999), 0)],
+        anchors: vec![vertex(ObjectId::from_num(999), 0)],
         ..dim(horiz(), vec![v(0.0, 0.0), v(1.0, 0.0)])
     };
     assert!(
@@ -1818,11 +1818,11 @@ fn annotations_are_allowed_on_sheets_and_in_viewports() {
         v(210.0, 150.0),
         v(0.0, 0.0),
         100.0,
-        vec![LayerId(1)],
+        vec![LayerId::from_num(1)],
     );
     vp.annotations.push(crate::sheets::Annotation {
         id: 1,
-        class: ClassId(0),
+        class: ClassId::from_num(0),
         attrs: Attributes::default(),
         item: crate::sheets::AnnotationItem::Shape {
             shape: Box::new(Shape::Annotation(Box::new(a))),
@@ -1859,7 +1859,7 @@ fn ctx100() -> Ctx {
 fn ctx_maps_layers_and_viewports() {
     let mut ed = Editor::default();
     ed.execute(&Command::ModifyLayer {
-        id: LayerId(1),
+        id: LayerId::from_num(1),
         name: None,
         visible: None,
         locked: None,
@@ -1867,10 +1867,10 @@ fn ctx_maps_layers_and_viewports() {
         scale: Some(50.0),
     })
     .unwrap();
-    let c = Ctx::layer(ed.doc(), LayerId(1));
+    let c = Ctx::layer(ed.doc(), LayerId::from_num(1));
     assert_eq!((c.paper, c.real), (50.0, 1.0));
     assert_eq!(c.local(v(3.0, 4.0)), v(3.0, 4.0));
-    assert_eq!(Ctx::layer(ed.doc(), LayerId(99)).paper, 1.0);
+    assert_eq!(Ctx::layer(ed.doc(), LayerId::from_num(99)).paper, 1.0);
     let vp = crate::sheets::Viewport::new(
         v(10.0, 10.0),
         v(110.0, 60.0),
@@ -2029,14 +2029,14 @@ fn annotations_draw_primitives() {
     assert!(polys(&pr) >= 3, "frame, leader and end");
     let orphan = Annot::DataTag(DataTag {
         style: tag_style,
-        object: ObjectId(999),
+        object: ObjectId::from_num(999),
         offset: v(10.0, 10.0),
         at: v(1.0, 1.0),
         anchor: v(0.0, 0.0),
     });
     assert_eq!(texts_of(&draw::prims(doc, &orphan, &c, &src)), vec!["?"]);
     let missing = Annot::DataTag(DataTag {
-        style: ResourceId(999),
+        style: ResourceId::from_num(999),
         object: p,
         offset: DVec2::ZERO,
         at: DVec2::ZERO,

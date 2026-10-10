@@ -373,9 +373,9 @@ mod tests {
 
     fn hardscape(pts: &[DVec2], elevation: Option<f64>) -> Object {
         Object::new(
-            crate::model::ObjectId(1),
-            crate::model::LayerId(1),
-            crate::model::ClassId(0),
+            crate::model::ObjectId::from_num(1),
+            crate::model::LayerId::from_num(1),
+            crate::model::ClassId::from_num(0),
             Shape::Hardscape {
                 boundary: curve::corners(pts),
                 material: "m".into(),

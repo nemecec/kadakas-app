@@ -32,7 +32,7 @@ pub struct ReprojectOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Skipped {
-    pub id: u64,
+    pub id: cadektor_core::uid::Uid,
     pub kind: String,
     pub reason: String,
 }
@@ -869,7 +869,7 @@ mod tests {
         );
         let mut bad = doc_in("EPSG:3067", DVec2::NAN, 0.0);
         assert!(plan(bad.doc(), "EPSG:32635", &ReprojectOptions::default()).is_err());
-        let _ = (&mut bad, LayerId(0), ClassId(0));
+        let _ = (&mut bad, LayerId::from_num(0), ClassId::from_num(0));
     }
 
     #[test]

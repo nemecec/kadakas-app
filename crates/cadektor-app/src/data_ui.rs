@@ -180,7 +180,7 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
     if !free_ids.is_empty() {
         ui.separator();
         let mut choice: Option<ResourceId> =
-            load::<Option<u64>>(ui, "data_tab_attach").map(ResourceId);
+            load::<Option<cadektor_core::uid::Uid>>(ui, "data_tab_attach").map(ResourceId);
         if choice.is_none_or(|c| !free_ids.iter().any(|(i, ..)| *i == c)) {
             choice = Some(free_ids[0].0);
         }
@@ -458,7 +458,7 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
 }
 
 fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
-    let mut selected: Option<u64> = load(ui, "record_format_selected");
+    let mut selected: Option<cadektor_core::uid::Uid> = load(ui, "record_format_selected");
     let mut buf: FormatBuffer = load(ui, "record_format_buffer");
     let mut commands: Vec<Command> = Vec::new();
     egui::CollapsingHeader::new("Record formats")
@@ -1719,7 +1719,10 @@ mod tests {
                     ..Default::default()
                 },
             );
-            d.insert_temp(Id::new("record_format_selected"), Some(2u64));
+            d.insert_temp(
+                Id::new("record_format_selected"),
+                Some(cadektor_core::uid::Uid::from_num(2)),
+            );
         });
         for _ in 0..3 {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -1820,7 +1823,7 @@ mod tests {
         let a = calculated(s.editor.doc(), ws, Some((&cache, rev))).unwrap();
         let b = calculated(s.editor.doc(), ws, Some((&cache, rev))).unwrap();
         assert!(std::sync::Arc::ptr_eq(&a, &b));
-        assert!(calculated(s.editor.doc(), ResourceId(9999), None).is_none());
+        assert!(calculated(s.editor.doc(), ResourceId::from_num(9999), None).is_none());
         assert!(calculated(s.editor.doc(), ResourceId(oid.0), None).is_none());
         assert!(calculated(s.editor.doc(), ws, None).is_some());
         let mut status = String::new();

@@ -308,7 +308,7 @@ mod tests {
     fn extras_are_found_by_their_data_key() {
         use crate::model::{Object, ObjectId, Shape};
         let mut o = Object::new(
-            ObjectId(1),
+            ObjectId::from_num(1),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Line {

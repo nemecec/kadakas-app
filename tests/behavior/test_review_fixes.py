@@ -1,3 +1,4 @@
+from helpers import uid
 """Regression tests for the review of the editing, snapping and schema work."""
 
 U_SHAPE = [[0, 0], [3000, 0], [3000, 2000], [2200, 2000], [2200, 600], [800, 600], [800, 2000], [0, 2000]]
@@ -58,7 +59,7 @@ def test_grey_objects_cannot_be_selected_or_edited(cad):
     ):
         err = cad.rpc("execute", {"command": cmd})["error"]
         assert err["code"] == 3 and "grey" in err["message"], err
-    err = cad.error("visibility.set", {"mode": "grey", "layers": [1]})
+    err = cad.error("visibility.set", {"mode": "grey", "layers": [uid(1)]})
     assert "active layer" in err["message"]
     cad.result("visibility.set", {"mode": "visible", "layers": [layer]})
     cad.execute({"op": "move_objects", "ids": [a], "delta": [1, 1]})
@@ -85,4 +86,5 @@ def test_the_schema_describes_shapes_field_by_field(cad):
     assert "structural_only_commands" in desc["schemas"]
     schema = desc["command_schema"]
     assert len(schema["$defs"]["Shape"]["anyOf"]) == len(desc["schemas"]["exact_shape_kinds"]) + 1
-    assert schema["$defs"]["ObjectId"]["maximum"] == 9007199254740991
+    assert schema["$defs"]["ObjectId"]["type"] == "string"
+    assert schema["$defs"]["ObjectId"]["pattern"].startswith("^[0-9a-fA-F]{8}-")

@@ -513,7 +513,7 @@ pub(crate) mod tests {
             },
         );
         assert_eq!(modifiers_for(ed.doc(), id).len(), 2);
-        assert!(modifiers_for(ed.doc(), ObjectId(9999)).is_empty());
+        assert!(modifiers_for(ed.doc(), ObjectId::from_num(9999)).is_empty());
     }
 
     #[test]
@@ -531,7 +531,7 @@ pub(crate) mod tests {
             Err(SiteError::NotASiteModel(_))
         ));
         assert!(matches!(
-            SiteResult::compute(ed.doc(), ObjectId(77)),
+            SiteResult::compute(ed.doc(), ObjectId::from_num(77)),
             Err(SiteError::NoObject(_))
         ));
         let few = add(
@@ -596,7 +596,11 @@ pub(crate) mod tests {
         let d = cache.get(ed.revision(), ed.doc(), id).unwrap();
         assert!(!Arc::ptr_eq(&a, &d));
         assert_eq!(cache.builds(), 2);
-        assert!(cache.get(ed.revision(), ed.doc(), ObjectId(500)).is_err());
+        assert!(
+            cache
+                .get(ed.revision(), ed.doc(), ObjectId::from_num(500))
+                .is_err()
+        );
     }
 
     #[test]

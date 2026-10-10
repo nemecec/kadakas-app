@@ -33,6 +33,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+Id = str
+"""The ID of an object, layer, class or resource: a UUID text such as
+``0190f1c2-7a3b-7c1d-8e2f-123456789abc``. Parameters and results that the text of a method calls
+an ID have this type."""
+
 
 class Api:
     """Every API method as a Python method. Give the parameters as keyword arguments."""

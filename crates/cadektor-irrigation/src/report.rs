@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use cadektor_core::DVec2;
 use cadektor_core::csv::write_rows as write_csv;
 use cadektor_core::irrigation::LineType;
+use cadektor_core::uid::Uid;
 use serde::Serialize;
 
 use crate::extract::Analysis;
@@ -428,7 +429,7 @@ impl PipeSchedule {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OutletPressure {
-    pub id: Option<u64>,
+    pub id: Option<Uid>,
     pub label: String,
     pub flow_lpm: f64,
     pub pressure_kpa: f64,
@@ -440,7 +441,7 @@ pub struct OutletPressure {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PathPoint {
     pub label: String,
-    pub id: Option<u64>,
+    pub id: Option<Uid>,
     pub pressure_kpa: f64,
 }
 
@@ -460,7 +461,7 @@ pub struct ZonePressure {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct WarningRow {
     pub kind: &'static str,
-    pub object: Option<u64>,
+    pub object: Option<Uid>,
     pub zone: Option<u32>,
     pub message: String,
 }
@@ -724,7 +725,7 @@ mod tests {
 
     fn head(x: f64, y: f64, arc: f64) -> crate::extract::OutletInfo {
         crate::extract::OutletInfo {
-            id: 1,
+            id: cadektor_core::uid::Uid::from_num(1),
             at: DVec2::new(x, y),
             model: "Spray-4.0".into(),
             kind: Some(crate::catalog::HeadKind::Spray),
@@ -770,7 +771,7 @@ mod tests {
 
     fn drip(id: u64, y: f64) -> crate::extract::LineInfo {
         crate::extract::LineInfo {
-            id,
+            id: cadektor_core::uid::Uid::from_num(id),
             line_type: LineType::Drip,
             size: "16".into(),
             material: "PE".into(),

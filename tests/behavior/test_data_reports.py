@@ -1,3 +1,4 @@
+from helpers import uid
 """Scenario: a landscape architect defines records, attaches them to objects, builds a plant
 list worksheet over the API, checks its totals, and exports it. Also the Data Manager."""
 
@@ -88,7 +89,7 @@ def test_bad_records_are_refused_and_change_nothing(cad):
     before = cad.doc()
     for values in ({"Depth": "deep"}, {"Grade": "Z"}, {"Samples": 1.5}, {"Nope": 1}, {"Wet": "maybe"}, {"Depth": 1e15}):
         assert cad.error("record.attach", {"ids": [a], "record": "Soil", "values": values})["code"] in (1, 3, -32602)
-    assert cad.error("record.attach", {"ids": [999], "record": "Soil"})["code"] == 2
+    assert cad.error("record.attach", {"ids": [uid(999)], "record": "Soil"})["code"] == 2
     assert cad.error("record.attach", {"ids": [a], "record": "Missing"})["code"] == -32602
     assert cad.error("record.set", {"ids": [a], "record": "Soil", "values": {"Wet": True}})["code"] == 3  # not attached
     cad.result("record.attach", {"ids": [a], "record": "Soil"})
@@ -150,7 +151,7 @@ def test_date_time_volume_and_angle_fields_and_unknown_types(cad, tmp_path):
     assert cad.error("record_format.create", {"name": "X", "fields": [{"name": "A", "type": "hologram"}]})["code"] == -32602
     # A document with a field type from a newer app still opens, and the resource is kept.
     doc = cad.result("document.get")
-    doc["resources"].append({"id": 9999, "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}})
+    doc["resources"].append({"id": uid(9999), "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}})
     cad.result("document.load", {"document": doc})
     assert any(r["name"] == "Later" for r in cad.result("document.get")["resources"])
     assert [f["name"] for f in cad.result("record_format.list")["formats"]] == ["Care"]
@@ -570,10 +571,10 @@ def test_a_worksheet_table_on_a_design_layer_and_the_rules_of_sheets(cad):
     assert "x-ray" in cad.result("sheet.render", {"sheet": sheet})["svg"], "a table on a design layer shows in a viewport"
     assert cad.error("worksheet.place", {"id": "nope", "at": [0, 0]})["code"] == -32602
     assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "text_height": -1})["code"] == -32602
-    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": 9999})["code"] == 2
+    assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": uid(9999)})["code"] == 2
     assert "used by 1" in cad.error("worksheet.delete", {"id": sid})["message"]
     assert cad.error("execute", {"command": {"op": "set_data", "id": on_design, "set": {"worksheet_table": {}}}})["code"] == 3
-    assert cad.error("worksheet.fit", {"ids": [999]})["code"] == -32602
+    assert cad.error("worksheet.fit", {"ids": [uid(999)]})["code"] == -32602
     cad.execute({"op": "modify_layer", "id": sheet, "locked": True})
     assert cad.error("worksheet.place", {"id": sid, "at": [0, 0], "layer": sheet})["code"] == 5
     cad.execute({"op": "modify_layer", "id": sheet, "locked": False})

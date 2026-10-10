@@ -15,7 +15,7 @@ use cadektor_io::{
     SiteMesh, Source, Unit,
 };
 
-fn add(ed: &mut Editor, shape: Shape) -> u64 {
+fn add(ed: &mut Editor, shape: Shape) -> cadektor_core::uid::Uid {
     ed.execute(&Command::AddObject {
         shape,
         layer: None,
@@ -69,7 +69,7 @@ fn count(text: &str, entity: &str) -> usize {
 
 #[test]
 fn dimensions_callouts_and_text_are_native() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     let h = DimMode::Linear {
         axis: Axis::Horizontal,
     };
@@ -249,7 +249,7 @@ fn mesh(n: usize) -> Mesh3d {
 
 #[test]
 fn meshes_are_polyface_meshes_or_3d_faces_and_big_ones_are_cut() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     add(&mut ed, Shape::Mesh3d(Box::new(mesh(2))));
     let (text, _) = export(ed.doc(), &ExportOptions::default());
     assert_eq!(count(&text, "POLYLINE"), 1);
@@ -263,7 +263,7 @@ fn meshes_are_polyface_meshes_or_3d_faces_and_big_ones_are_cut() {
     );
     assert_eq!(count(&faces, "3DFACE"), 8);
     // 100 by 100 cells: 20 000 triangles in one piece. 200 by 200: 80 000 in three pieces.
-    let mut big = Editor::default();
+    let mut big = Editor::with_sequential_ids();
     add(&mut big, Shape::Mesh3d(Box::new(mesh(200))));
     let (text, _) = export(big.doc(), &ExportOptions::default());
     assert_eq!(count(&text, "POLYLINE"), 3);
@@ -271,7 +271,7 @@ fn meshes_are_polyface_meshes_or_3d_faces_and_big_ones_are_cut() {
 
 #[test]
 fn the_site_surface_can_be_written_as_a_mesh() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     let mut points = Vec::new();
     for i in 0..5 {
         for j in 0..5 {
@@ -309,7 +309,7 @@ fn the_site_surface_can_be_written_as_a_mesh() {
 }
 
 fn georef(crs: &str, rotation: f64) -> Editor {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     ed.execute(&Command::SetGeoreference {
         georef: Some(Georeference {
             crs: crs.into(),
@@ -383,9 +383,9 @@ fn import(entities: &str, opts: &ImportOptions) -> (Document, cadektor_io::Repor
         extra: Default::default(),
     };
     let r = DxfFormat
-        .import(&src, &Context::of(&Document::default()), opts)
+        .import(&src, &Context::of(&Document::with_sequential_ids()), opts)
         .unwrap();
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     ed.execute(&r.command).unwrap();
     (ed.doc().clone(), r.report)
 }

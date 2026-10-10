@@ -2,6 +2,7 @@
 //! must not share any cache or state: not the site analysis, the scene, the worksheets, the
 //! SVG, the limits or the revision numbers.
 
+use cadektor_core::uid::AsUid;
 use std::sync::Arc;
 
 use cadektor_api::{Session, SessionLimits};
@@ -12,15 +13,15 @@ fn ok(s: &mut Session, method: &str, params: Value) -> Value {
         .unwrap_or_else(|e| panic!("{method}: {} {}", e.code, e.message))
 }
 
-fn exec(s: &mut Session, command: Value) -> u64 {
+fn exec(s: &mut Session, command: Value) -> cadektor_core::uid::Uid {
     ok(s, "execute", json!({ "command": command }))["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
 /// A document with a site model (the same points in every call), plants of one species at a
 /// place that depends on `x`, and a plant list worksheet. Returns the session and the site ID.
-fn document(species: &str, x: f64) -> (Session, u64) {
+fn document(species: &str, x: f64) -> (Session, cadektor_core::uid::Uid) {
     let mut s = Session::default();
     let mut ids = Vec::new();
     for i in 0..9 {
@@ -32,7 +33,7 @@ fn document(species: &str, x: f64) -> (Session, u64) {
         }
     }
     let site = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     for k in 0..3 {
         exec(
@@ -48,7 +49,7 @@ fn document(species: &str, x: f64) -> (Session, u64) {
     (s, site)
 }
 
-fn analysis(s: &mut Session, site: u64) -> Value {
+fn analysis(s: &mut Session, site: cadektor_core::uid::Uid) -> Value {
     ok(
         s,
         "site.analysis",
@@ -67,15 +68,32 @@ fn csv(s: &mut Session) -> String {
         .to_string()
 }
 
+/// Replaces every ID in a text by `ID`: the IDs of two sessions differ, the drawings do not.
+fn blank_ids(text: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < text.len() {
+        match text.get(i..i + 36).and_then(cadektor_core::uid::Uid::parse) {
+            Some(_) => {
+                out.push_str("ID");
+                i += 36;
+            }
+            None => {
+                let c = text[i..].chars().next().unwrap();
+                out.push(c);
+                i += c.len_utf8();
+            }
+        }
+    }
+    out
+}
+
 fn svg(s: &mut Session) -> String {
-    ok(s, "render.svg", json!({}))["svg"]
-        .as_str()
-        .unwrap()
-        .to_string()
+    blank_ids(ok(s, "render.svg", json!({}))["svg"].as_str().unwrap())
 }
 
 /// What a session shows: the analysis bands, the plant list and the SVG.
-fn view_of(s: &mut Session, site: u64) -> (Value, String, String) {
+fn view_of(s: &mut Session, site: cadektor_core::uid::Uid) -> (Value, String, String) {
     (analysis(s, site)["bands"].clone(), csv(s), svg(s))
 }
 

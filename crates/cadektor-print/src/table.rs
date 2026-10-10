@@ -438,7 +438,7 @@ mod tests {
         let obj = ed.doc().object(id).unwrap().clone();
         let mut out = vec![];
         let gone = TableData {
-            worksheet: ResourceId(9999),
+            worksheet: ResourceId::from_num(9999),
             text_height: 3.0,
         };
         table_prims(

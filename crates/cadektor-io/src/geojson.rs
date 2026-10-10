@@ -325,7 +325,7 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
         Some(json!([x, y, p[2] / 1000.0]))
     };
     // Holes belong to the polygon of their outer ring (see `_hole_of`): they are written as its interior rings.
-    let mut holes: BTreeMap<u64, Vec<&Object>> = BTreeMap::new();
+    let mut holes: BTreeMap<cadektor_core::uid::Uid, Vec<&Object>> = BTreeMap::new();
     for o in doc.objects.values() {
         if o.data.get("_ring").and_then(Value::as_str) != Some("hole")
             || (opts.visible_only && !doc.is_visible(o))
@@ -335,7 +335,7 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
         let outer = o
             .data
             .get("_hole_of")
-            .and_then(Value::as_u64)
+            .and_then(cadektor_core::uid::AsUid::as_uid)
             .and_then(|id| doc.object(cadektor_core::model::ObjectId(id)));
         let closed_outer = outer.is_some_and(|ou| {
             outline(&ou.shape, opts.tolerance)
@@ -346,12 +346,12 @@ fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError>
             && outline(&o.shape, opts.tolerance).is_some_and(|(p, c, _)| c && p.len() >= 3)
         {
             holes
-                .entry(o.data["_hole_of"].as_u64().unwrap_or(0))
+                .entry(cadektor_core::uid::AsUid::as_uid(&o.data["_hole_of"]).unwrap_or_default())
                 .or_default()
                 .push(o);
         }
     }
-    let absorbed: std::collections::BTreeSet<u64> =
+    let absorbed: std::collections::BTreeSet<cadektor_core::uid::Uid> =
         holes.values().flatten().map(|o| o.id.0).collect();
     let mut features = Vec::new();
     for o in doc.objects.values() {
@@ -570,7 +570,12 @@ mod tests {
 
     #[test]
     fn imports_features_with_properties() {
-        let (doc, report) = import(SAMPLE, Document::default(), &ImportOptions::default()).unwrap();
+        let (doc, report) = import(
+            SAMPLE,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+        )
+        .unwrap();
         // 1 point + 1 line + 2 rings + 2 polygons + (1 point + 2 points + 1 line) = 10
         assert_eq!(doc.objects.len(), 10, "{:?}", report.skipped);
         assert_eq!(report.skipped_total(), 3);
@@ -591,16 +596,16 @@ mod tests {
     fn accepts_other_root_types_and_rejects_garbage() {
         let (doc, _) = import(
             r#"{"type": "Point", "coordinates": [10, 20]}"#,
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
         )
         .unwrap();
         assert_eq!(doc.objects.len(), 1);
-        let (doc, _) = import(r#"{"type": "Feature", "geometry": {"type": "Point", "coordinates": [10, 20]}, "id": "abc"}"#, Document::default(), &ImportOptions::default()).unwrap();
+        let (doc, _) = import(r#"{"type": "Feature", "geometry": {"type": "Point", "coordinates": [10, 20]}, "id": "abc"}"#, Document::with_sequential_ids(), &ImportOptions::default()).unwrap();
         assert_eq!(doc.objects.values().next().unwrap().data["_id"], "abc");
         let (doc, report) = import(
             r#"{"type": "Polygon", "coordinates": "x"}"#,
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
         )
         .unwrap();
@@ -616,7 +621,12 @@ mod tests {
             "nul",
         ] {
             assert!(
-                import(bad, Document::default(), &ImportOptions::default()).is_err(),
+                import(
+                    bad,
+                    Document::with_sequential_ids(),
+                    &ImportOptions::default()
+                )
+                .is_err(),
                 "{bad}"
             );
         }
@@ -629,7 +639,7 @@ mod tests {
             GeoJsonFormat
                 .import(
                     &src,
-                    &Context::of(&Document::default()),
+                    &Context::of(&Document::with_sequential_ids()),
                     &ImportOptions::default()
                 )
                 .is_err()
@@ -638,19 +648,31 @@ mod tests {
             "\u{feff}{}",
             r#"{"type": "Point", "coordinates": [10, 20]}"#
         );
-        assert!(import(&with_bom, Document::default(), &ImportOptions::default()).is_ok());
+        assert!(
+            import(
+                &with_bom,
+                Document::with_sequential_ids(),
+                &ImportOptions::default()
+            )
+            .is_ok()
+        );
         // Deeply nested collections.
         let mut nested = r#"{"type": "Point", "coordinates": [1, 2]}"#.to_string();
         for _ in 0..12 {
             nested = format!(r#"{{"type": "GeometryCollection", "geometries": [{nested}]}}"#);
         }
-        let (_, report) = import(&nested, Document::default(), &ImportOptions::default()).unwrap();
+        let (_, report) = import(
+            &nested,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+        )
+        .unwrap();
         assert_eq!(report.skipped_total(), 1);
         // Bad positions.
         for pos in ["[\"a\", 1]", "[1, null]", "5", "[]"] {
             let (doc, _) = import(
                 &format!(r#"{{"type": "Point", "coordinates": {pos}}}"#),
-                Document::default(),
+                Document::with_sequential_ids(),
                 &ImportOptions::default(),
             )
             .unwrap();
@@ -662,14 +684,19 @@ mod tests {
     fn legacy_crs_member_is_used() {
         let text = r#"{"type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::3067"}},
           "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [385010, 6672020]}, "properties": {}}]}"#;
-        let (doc, _) = import(text, Document::default(), &ImportOptions::default()).unwrap();
+        let (doc, _) = import(
+            text,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+        )
+        .unwrap();
         let g = doc.georef.unwrap();
         assert_eq!(g.crs, "EPSG:3067");
         assert_eq!(g.origin, DVec2::new(385_010.0, 6_672_020.0));
     }
 
     fn sample_doc() -> Document {
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         doc.georef = Some(Georeference {
             crs: "EPSG:3067".into(),
             origin: DVec2::new(385_000.0, 6_672_000.0),
@@ -740,7 +767,7 @@ mod tests {
         ];
         let (ly, c) = (doc.layers[0].id, doc.classes[0].id);
         for s in shapes {
-            let id = cadektor_core::model::ObjectId(doc.alloc_id().unwrap());
+            let id = cadektor_core::model::ObjectId(doc.alloc_id());
             let mut o = Object::new(id, ly, c, s);
             o.data.insert("note".into(), json!("n"));
             doc.objects.insert(id, o);
@@ -759,7 +786,7 @@ mod tests {
         assert_eq!(v["features"][6]["properties"]["species"], "Betula");
         assert_eq!(v["features"][5]["properties"]["text"], "hi");
         // Import into a document with the same georeference: locus comes back.
-        let mut empty = Document::default();
+        let mut empty = Document::with_sequential_ids();
         empty.georef = doc.georef.clone();
         let text = String::from_utf8(out.bytes).unwrap();
         let (back, _) = import(&text, empty, &ImportOptions::default()).unwrap();
@@ -831,7 +858,12 @@ mod tests {
 
     #[test]
     fn holes_are_exported_as_interior_rings() {
-        let (doc, _) = import(SAMPLE, Document::default(), &ImportOptions::default()).unwrap();
+        let (doc, _) = import(
+            SAMPLE,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+        )
+        .unwrap();
         let rings_before = doc
             .objects
             .values()
@@ -870,7 +902,7 @@ mod tests {
             .sum();
         assert!(area < 0.0);
         // Round trip: the hole is a hole again, not an island.
-        let mut empty = Document::default();
+        let mut empty = Document::with_sequential_ids();
         empty.georef = doc.georef.clone();
         let (back, _) = import(
             &String::from_utf8(out.bytes).unwrap(),
@@ -891,7 +923,7 @@ mod tests {
             .objects
             .values()
             .find(|o| o.data.contains_key("_hole_of"))
-            .map(|o| o.data["_hole_of"].as_u64().unwrap())
+            .map(|o| cadektor_core::uid::AsUid::as_uid(&o.data["_hole_of"]).unwrap())
             .unwrap();
         doc2.objects
             .shift_remove(&cadektor_core::model::ObjectId(outer));

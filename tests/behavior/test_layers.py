@@ -2,14 +2,14 @@
 
 import pytest
 
-from helpers import plant_cmd, rect_cmd, svg_object_ids
+from helpers import plant_cmd, rect_cmd, svg_object_ids, uid
 
 
 @pytest.fixture
 def locked_rect(cad):
     """A rectangle on layer 1, and layer 1 locked."""
     oid = cad.execute(rect_cmd(0, 0, 1000, 1000))[0]
-    cad.execute({"op": "modify_layer", "id": 1, "locked": True})
+    cad.execute({"op": "modify_layer", "id": uid(1), "locked": True})
     return oid
 
 
@@ -18,7 +18,7 @@ def locked_rect(cad):
     lambda oid: {"op": "delete_objects", "ids": [oid]},
     lambda oid: {"op": "modify_object", "id": oid, "attrs": {"line_weight": 1.0}},
     lambda oid: {"op": "modify_object", "id": oid, "shape": {"kind": "circle", "center": [0, 0], "radius": 5}},
-    lambda oid: rect_cmd(5, 5, 6, 6, layer=1),
+    lambda oid: rect_cmd(5, 5, 6, 6, layer=uid(1)),
 ])
 def test_locked_layer_blocks_edits_and_leaves_document_unchanged(cad, locked_rect, make_command):
     before = cad.doc()
@@ -29,7 +29,7 @@ def test_locked_layer_blocks_edits_and_leaves_document_unchanged(cad, locked_rec
 
 
 def test_unlocking_a_layer_allows_edits_again(cad, locked_rect):
-    cad.execute({"op": "modify_layer", "id": 1, "locked": False})
+    cad.execute({"op": "modify_layer", "id": uid(1), "locked": False})
     cad.execute({"op": "move_objects", "ids": [locked_rect], "delta": [10, 0]})
     (obj,) = cad.result("objects.list")
     assert obj["shape"]["min"] == [10.0, 0.0]
@@ -77,11 +77,11 @@ def test_deleting_the_active_empty_layer_moves_active_to_first_layer(cad):
     cad.execute({"op": "set_active", "layer": site})
     cad.execute({"op": "delete_layer", "id": site})
     summary = cad.result("document.summary")
-    assert [layer["id"] for layer in summary["layers"]] == [1]
-    assert summary["active_layer"] == 1
+    assert [layer["id"] for layer in summary["layers"]] == [uid(1)]
+    assert summary["active_layer"] == uid(1)
 
 
 def test_the_last_layer_cannot_be_deleted(cad):
-    error = cad.error("execute", {"command": {"op": "delete_layer", "id": 1}})
+    error = cad.error("execute", {"command": {"op": "delete_layer", "id": uid(1)}})
     assert error["code"] == 3
     assert "at least one layer" in error["message"]

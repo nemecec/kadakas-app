@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from helpers import rect_cmd
+from helpers import rect_cmd, uid
 
 
 def line_cmd(a, b):
@@ -85,7 +85,7 @@ def test_data_tags_legend_and_tag_all(cad):
 
 
 def test_scale_bar_follows_the_scale(cad):
-    cad.execute({"op": "modify_layer", "id": 1, "scale": 50})
+    cad.execute({"op": "modify_layer", "id": uid(1), "scale": 50})
     bar = cad.result("scale_bar.add", {"at": [0, 0], "segment": 5, "segments": 4})
     assert bar["length_mm"] == 20000 and bar["length_paper_mm"] == 400
     own = cad.result("scale_bar.add", {"at": [0, 0], "segment": 10, "segments": 1, "scale": 200})
@@ -119,9 +119,9 @@ def test_update_apply_text_style_and_errors(cad):
     assert annotations(cad)[t]["annotation"]["style"]
     updated = cad.result("annotation.update", {"id": t, "text": "Bye"})
     assert updated["computed"]["text"] == "Bye"
-    assert cad.error("annotation.update", {"id": 9999})
+    assert cad.error("annotation.update", {"id": uid(9999)})
     assert cad.error("annotation.list", {"type": "bogus"})
-    assert cad.error("data_tag.add", {"style": "nope", "object": 1})
+    assert cad.error("data_tag.add", {"style": "nope", "object": uid(1)})
     assert cad.error("tag_style.create", {"name": "bad", "lines": ["{open"]})
     assert cad.result("tag_style.list")["items"] == []
 

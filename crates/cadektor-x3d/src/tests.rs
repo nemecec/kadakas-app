@@ -163,7 +163,7 @@ pub(crate) fn split_glb(bytes: &[u8]) -> (Value, Vec<u8>) {
     (json, bytes[b0 + 8..b0 + 8 + bl].to_vec())
 }
 
-fn node_by_object(root: &Value, id: u64) -> Value {
+fn node_by_object(root: &Value, id: cadektor_core::uid::Uid) -> Value {
     root["nodes"]
         .as_array()
         .unwrap()
@@ -222,7 +222,11 @@ fn glb_is_valid_and_readable_by_a_gltf_reader() {
         .unwrap();
     let extras: Value = serde_json::from_str(slab_node.extras().as_ref().unwrap().get()).unwrap();
     assert_eq!(extras["kind"], "hardscape");
-    assert!(extras["id"].as_u64().is_some());
+    assert!(
+        extras["id"]
+            .as_str()
+            .is_some_and(|s| cadektor_core::uid::Uid::parse(s).is_some())
+    );
 }
 
 #[test]
@@ -596,7 +600,7 @@ fn a_selection_limits_the_export() {
     );
     assert_eq!(stats.objects, 1);
     let (root, _) = split_glb(&bytes);
-    assert_eq!(root["nodes"][0]["extras"]["id"], ids[1].0);
+    assert_eq!(root["nodes"][0]["extras"]["id"], Value::from(ids[1].0));
     let scene = mesh::build(&doc);
     let none = export_glb(
         &doc,

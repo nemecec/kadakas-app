@@ -19,10 +19,12 @@ See ``docs/scripting.md``.
 from .document import (
     Class,
     Document,
+    Id,
     Layer,
     Obj,
     Pending,
     connect,
+    is_id,
     open,
 )
 from .errors import (
@@ -40,8 +42,8 @@ from .errors import (
 from .plugins import Param, PluginObject, Run
 
 __all__ = [
-    "CadektorError", "Class", "Conflict", "ConnectionFailed", "Document", "InvalidParams", "Layer",
+    "CadektorError", "Class", "Conflict", "ConnectionFailed", "Document", "Id", "InvalidParams", "Layer",
     "LimitExceeded", "NotFound", "Obj", "Param", "Pending", "PluginObject", "PolicyRefused",
-    "RequestTimeout", "Run", "UnknownMethod", "ValidationError", "connect", "open",
+    "RequestTimeout", "Run", "UnknownMethod", "ValidationError", "connect", "is_id", "open",
 ]
 __version__ = "0.1.0"

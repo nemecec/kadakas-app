@@ -2,6 +2,7 @@
 //! clouds, styles and the update and error paths.
 
 use cadektor_api::Session;
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
@@ -13,29 +14,29 @@ fn err(s: &mut Session, method: &str, params: Value) -> String {
     s.handle(method, params).unwrap_err().message
 }
 
-fn exec(s: &mut Session, command: Value) -> Vec<u64> {
+fn exec(s: &mut Session, command: Value) -> Vec<cadektor_core::uid::Uid> {
     ok(s, "execute", json!({ "command": command }))["created"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v.as_u64().unwrap())
+        .map(|v| v.as_uid().unwrap())
         .collect()
 }
 
-fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> u64 {
+fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> cadektor_core::uid::Uid {
     exec(
         s,
         json!({"op":"add_object","shape":{"kind":"line","a":a,"b":b}}),
     )[0]
 }
 
-fn item(s: &mut Session, id: u64) -> Value {
+fn item(s: &mut Session, id: cadektor_core::uid::Uid) -> Value {
     ok(s, "annotation.evaluate", json!({ "id": id }))
 }
 
 #[test]
 fn dimensions_follow_objects_and_cover_every_mode() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let ln = line(&mut s, [0.0, 0.0], [5000.0, 0.0]);
     let d = ok(
         &mut s,
@@ -47,7 +48,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
         &mut s,
         json!({"op":"modify_object","id":ln,"shape":{"kind":"line","a":[0,0],"b":[8000,0]}}),
     );
-    let id = d["id"].as_u64().unwrap();
+    let id = d["id"].as_uid().unwrap();
     assert_eq!(item(&mut s, id)["computed"]["texts"], json!(["8000"]));
     // Edge and center anchors.
     ok(
@@ -129,7 +130,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
         err(
             &mut s,
             "dimension.add",
-            json!({"mode":"radial","object":999})
+            json!({"mode":"radial","object":"00000000-0000-0000-0000-0000000003e7"})
         )
         .contains("does not exist")
     );
@@ -194,7 +195,7 @@ fn dimensions_follow_objects_and_cover_every_mode() {
         err(
             &mut s,
             "dimension.add",
-            json!({"mode":"horizontal","points":[[0,0],[1,0]],"viewport":999})
+            json!({"mode":"horizontal","points":[[0,0],[1,0]],"viewport":"00000000-0000-0000-0000-0000000003e7"})
         )
         .contains("does not exist")
     );
@@ -224,13 +225,20 @@ fn dimensions_follow_objects_and_cover_every_mode() {
     assert!(
         err(&mut s, "annotation.update", json!({"id":ln,"offset":1})).contains("not an annotation")
     );
-    assert!(err(&mut s, "annotation.update", json!({"id":9999})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s,
+            "annotation.update",
+            json!({"id":"00000000-0000-0000-0000-00000000270f"})
+        )
+        .contains("does not exist")
+    );
     assert!(err(&mut s, "annotation.update", json!({})).contains("params.id"));
 }
 
 #[test]
 fn styles_resources_and_text_annotations() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     for ty in ["text_style", "dimension_style", "tag_style", "notes_db"] {
         assert_eq!(
             ok(&mut s, &format!("{ty}.list"), json!({}))["items"],
@@ -242,10 +250,10 @@ fn styles_resources_and_text_annotations() {
         "dimension_style.create",
         json!({"name":"Metric","unit":"m","precision":2,"show_unit":true}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let other = ok(&mut s, "dimension_style.create", json!({"name":"Other"}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let d = ok(
         &mut s,
@@ -287,7 +295,7 @@ fn styles_resources_and_text_annotations() {
         "annotation.text",
         json!({"at":[0,0],"text":"Hello"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut s,
@@ -302,7 +310,7 @@ fn styles_resources_and_text_annotations() {
         )["changed"],
         1
     );
-    assert!(item(&mut s, t)["annotation"]["style"].is_number());
+    assert!(item(&mut s, t)["annotation"]["style"].is_string());
     assert_eq!(item(&mut s, t)["computed"]["text"], "Hello");
     let plain = exec(
         &mut s,
@@ -332,7 +340,7 @@ fn styles_resources_and_text_annotations() {
         err(
             &mut s,
             "annotation.apply_text_style",
-            json!({"ids":[999],"style":"Big"})
+            json!({"ids":["00000000-0000-0000-0000-0000000003e7"],"style":"Big"})
         )
         .contains("does not exist")
     );
@@ -353,7 +361,7 @@ fn styles_resources_and_text_annotations() {
         .contains("no text style")
     );
     let arrow = ok(&mut s, "north_arrow.add", json!({"at":[0,0]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(
         err(
@@ -399,13 +407,13 @@ fn styles_resources_and_text_annotations() {
 
 #[test]
 fn tags_legends_callouts_scale_bars_and_revisions() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let style = ok(
         &mut s,
         "plant_style.create",
         json!({"name":"Oak","id_code":"QR","spread":3000,"height":8000}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     exec(
         &mut s,
@@ -425,7 +433,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     let again = ok(
         &mut s,
         "data_tag.tag_all",
-        json!({"style":"Plant tag","criteria":"Kind = \"plant\"","layer":1}),
+        json!({"style":"Plant tag","criteria":"Kind = \"plant\"","layer":"00000000-0000-0000-0000-000000000001"}),
     );
     assert_eq!(again["tagged"], 0);
     assert!(
@@ -455,7 +463,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     let pid = plant["objects"]
         .as_array()
         .or(plant.as_array())
-        .map(|a| a[0]["id"].as_u64().unwrap())
+        .map(|a| a[0]["id"].as_uid().unwrap())
         .unwrap();
     let one = ok(
         &mut s,
@@ -470,7 +478,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
         err(
             &mut s,
             "data_tag.add",
-            json!({"style":"Plant tag","object":999})
+            json!({"style":"Plant tag","object":"00000000-0000-0000-0000-0000000003e7"})
         )
         .contains("cannot be tagged")
     );
@@ -494,7 +502,10 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     assert_eq!(legend["rows"], json!([{"label":"Oak","count":2}]));
 
     // Scale bars follow the scale of the layer, of the viewport or of their own.
-    exec(&mut s, json!({"op":"modify_layer","id":1,"scale":50}));
+    exec(
+        &mut s,
+        json!({"op":"modify_layer","id":"00000000-0000-0000-0000-000000000001","scale":50}),
+    );
     let bar = ok(
         &mut s,
         "scale_bar.add",
@@ -509,14 +520,14 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     );
     assert!((own["length_paper_mm"].as_f64().unwrap() - 50.0).abs() < 1e-6);
     let sheet = ok(&mut s, "sheet.create", json!({"name":"S","paper":"a3"}))["layer"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let vp = ok(
         &mut s,
         "viewport.create",
         json!({"sheet":sheet,"scale":250,"view":"plan"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let inside = ok(&mut s, "scale_bar.add", json!({"at":[20,20],"viewport":vp}));
     assert!((inside["length_paper_mm"].as_f64().unwrap() - 80.0).abs() < 1e-6);
@@ -532,7 +543,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
         "data_tag.add",
         json!({"style":"Plant tag","object":pid,"viewport":vp}),
     );
-    assert!(tag_in_vp["id"]["viewport"].is_number());
+    assert!(tag_in_vp["id"]["viewport"].is_string());
     ok(
         &mut s,
         "annotation.text",
@@ -557,7 +568,7 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
         "notes_db.update",
         json!({"id":"General","notes":{"N1":"Changed"}}),
     );
-    let cid = c["id"].as_u64().unwrap();
+    let cid = c["id"].as_uid().unwrap();
     assert_eq!(item(&mut s, cid)["computed"]["text"], "Changed");
     exec(
         &mut s,

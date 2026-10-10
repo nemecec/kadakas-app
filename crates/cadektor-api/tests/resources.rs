@@ -1,6 +1,7 @@
 //! Groups, symbols, patterns and the Resource Manager through the JSON-RPC methods.
 
 use cadektor_api::{METHODS, Session};
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 fn call(s: &mut Session, method: &str, params: Value) -> Result<Value, (i64, String)> {
@@ -15,16 +16,16 @@ fn err(s: &mut Session, method: &str, params: Value) -> String {
     call(s, method, params).unwrap_err().1
 }
 
-fn exec(s: &mut Session, command: Value) -> Vec<u64> {
+fn exec(s: &mut Session, command: Value) -> Vec<cadektor_core::uid::Uid> {
     ok(s, "execute", json!({ "command": command }))["created"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v.as_u64().unwrap())
+        .map(|v| v.as_uid().unwrap())
         .collect()
 }
 
-fn circle(s: &mut Session, x: f64) -> u64 {
+fn circle(s: &mut Session, x: f64) -> cadektor_core::uid::Uid {
     exec(
         s,
         json!({"op": "add_object", "shape": {"kind": "circle", "center": [x, 0], "radius": 1}}),
@@ -39,7 +40,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn every_new_method_is_listed_and_routed() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let listed: Vec<&str> = METHODS.iter().map(|(n, _)| *n).collect();
     for m in [
         "group.create",
@@ -63,7 +64,7 @@ fn every_new_method_is_listed_and_routed() {
 
 #[test]
 fn groups_select_move_rotate_copy_and_undo() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let (a, b, c) = (
         circle(&mut s, 0.0),
         circle(&mut s, 10.0),
@@ -74,7 +75,7 @@ fn groups_select_move_rotate_copy_and_undo() {
         "group.create",
         json!({"ids": [a, b], "name": "pair"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(ok(&mut s, "selection.get", json!({}))["ids"], json!([g]));
     assert_eq!(
@@ -107,7 +108,7 @@ fn groups_select_move_rotate_copy_and_undo() {
     assert_eq!(ok(&mut s, "selection.get", json!({}))["ids"], json!([g]));
     // Move, rotate and copy act on the whole group.
     ok(&mut s, "group.move", json!({"ids": [g], "delta": [0, 5]}));
-    let center = |s: &mut Session, id: u64| {
+    let center = |s: &mut Session, id: cadektor_core::uid::Uid| {
         ok(s, "objects.get", json!({"id": id}))["shape"]["center"].clone()
     };
     assert_eq!(center(&mut s, b), json!([10.0, 5.0]));
@@ -147,7 +148,7 @@ fn groups_select_move_rotate_copy_and_undo() {
     assert!(err(&mut s, "group.create", json!({})).contains("select objects"));
     ok(&mut s, "selection.set", json!({"ids": [a, b]}));
     let g2 = ok(&mut s, "group.create", json!({}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     // Deleting a member that the context needs leaves the context.
     ok(&mut s, "group.enter", json!({"id": g2}));
@@ -157,21 +158,21 @@ fn groups_select_move_rotate_copy_and_undo() {
 
 #[test]
 fn symbols_place_edit_and_follow_the_definition() {
-    let mut s = Session::default();
-    let sym = ok(&mut s, "symbol.create", json!({"name": "Bench", "items": [{"shape": {"kind": "rect", "min": [-500, -200], "max": [500, 200]}}]}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let sym = ok(&mut s, "symbol.create", json!({"name": "Bench", "items": [{"shape": {"kind": "rect", "min": [-500, -200], "max": [500, 200]}}]}))["id"].as_uid().unwrap();
     let a = ok(
         &mut s,
         "symbol.place",
         json!({"symbol": "bench", "at": [1000, 1000]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let b = ok(
         &mut s,
         "symbol.place",
         json!({"symbol": sym, "at": [5000, 0], "rotation": 1.0, "scale": 2.0, "scale_y": 1.0}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let list = ok(&mut s, "symbol.list", json!({}));
     assert_eq!(list["symbols"][0]["instances"], 2);
@@ -203,10 +204,17 @@ fn symbols_place_edit_and_follow_the_definition() {
         ok(&mut s, "objects.get", json!({"id": a}))["shape"]["scale"],
         3.0
     );
-    assert!(err(&mut s, "symbol.set", json!({"id": 9999, "scale": 1})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s,
+            "symbol.set",
+            json!({"id": "00000000-0000-0000-0000-00000000270f", "scale": 1})
+        )
+        .contains("does not exist")
+    );
     // Edit in place, then end.
     let g = ok(&mut s, "symbol.edit", json!({"id": b}))["group"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "group.context", json!({}))["context"],
@@ -245,7 +253,7 @@ fn symbols_place_edit_and_follow_the_definition() {
         "symbol.from_objects",
         json!({"name": "Dot", "ids": [c1], "replace": true}),
     );
-    assert!(made["instance"].is_u64());
+    assert!(made["instance"].is_string());
     assert!(
         err(
             &mut s,
@@ -267,8 +275,8 @@ fn symbols_place_edit_and_follow_the_definition() {
 
 #[test]
 fn hatches_tiles_and_line_types_are_clipped_to_the_shape() {
-    let mut s = Session::default();
-    let hatch = ok(&mut s, "resource.create", json!({"type": "hatch", "name": "Diag", "units": "world", "lines": [{"angle": 0, "spacing": 100}]}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let hatch = ok(&mut s, "resource.create", json!({"type": "hatch", "name": "Diag", "units": "world", "lines": [{"angle": 0, "spacing": 100}]}))["id"].as_uid().unwrap();
     let ring = json!([[0, 0], [1000, 0], [1000, 500], [0, 500]]);
     let r = ok(
         &mut s,
@@ -317,7 +325,7 @@ fn hatches_tiles_and_line_types_are_clipped_to_the_shape() {
         )
         .contains("hatch or a tile")
     );
-    let lt = ok(&mut s, "resource.create", json!({"type": "line_type", "name": "Dashed", "elements": [{"kind": "dash", "length": 3}, {"kind": "gap", "length": 1.5}]}))["id"].as_u64().unwrap();
+    let lt = ok(&mut s, "resource.create", json!({"type": "line_type", "name": "Dashed", "elements": [{"kind": "dash", "length": 3}, {"kind": "gap", "length": 1.5}]}))["id"].as_uid().unwrap();
     // Use them in attributes: a rect with a hatch and a dashed outline.
     let rect = exec(
         &mut s,
@@ -381,7 +389,7 @@ fn hatches_tiles_and_line_types_are_clipped_to_the_shape() {
 
 #[test]
 fn the_resource_manager_lists_renames_duplicates_and_draws_thumbnails() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "plant_style.create",
@@ -392,7 +400,7 @@ fn the_resource_manager_lists_renames_duplicates_and_draws_thumbnails() {
         "resource.create",
         json!({"type": "texture", "name": "Bark", "color": [90, 60, 30, 255], "size": [400, 400]}),
     );
-    let hatch = ok(&mut s, "resource.create", json!({"type": "hatch", "name": "H", "lines": [{"angle": 45, "spacing": 2, "dash": [4, 1]}]}))["id"].as_u64().unwrap();
+    let hatch = ok(&mut s, "resource.create", json!({"type": "hatch", "name": "H", "lines": [{"angle": 45, "spacing": 2, "dash": [4, 1]}]}))["id"].as_uid().unwrap();
     let all = ok(&mut s, "resource.list", json!({"thumbnails": true}));
     assert_eq!(all["resources"].as_array().unwrap().len(), 3);
     assert!(
@@ -420,7 +428,7 @@ fn the_resource_manager_lists_renames_duplicates_and_draws_thumbnails() {
         "resource.duplicate",
         json!({"id": "Dashed diagonal"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "resource.get", json!({"id": dup}))["name"],
@@ -467,13 +475,13 @@ fn the_resource_manager_lists_renames_duplicates_and_draws_thumbnails() {
 
 #[test]
 fn libraries_import_with_dependencies_and_follow_the_path_policy() {
-    let mut src = Session::default();
+    let mut src = Session::with_sequential_ids();
     let hatch = ok(
         &mut src,
         "resource.create",
         json!({"type": "hatch", "name": "Diag", "lines": [{"angle": 45, "spacing": 2}]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut src,
@@ -494,7 +502,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
     let text = serde_json::to_string(&ok(&mut src, "document.get", json!({}))).unwrap();
     std::fs::write(&file, text).unwrap();
 
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let listing = ok(&mut s, "resource.list_file", json!({"path": file}));
     assert_eq!(listing["resources"].as_array().unwrap().len(), 3);
     assert!(
@@ -605,7 +613,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
         .is_err()
     );
     // A restricted session refuses a file outside its folders.
-    let mut restricted = Session::default();
+    let mut restricted = Session::with_sequential_ids();
     restricted.paths =
         cadektor_api::PathPolicy::restricted([std::env::temp_dir().join("cadektor-nowhere-else")]);
     let e = err(
@@ -614,7 +622,7 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
         json!({"path": file, "all": true}),
     );
     assert!(e.contains("outside") || e.contains("cannot read"), "{e}");
-    let mut allowed = Session::default();
+    let mut allowed = Session::with_sequential_ids();
     allowed.paths = cadektor_api::PathPolicy::restricted([file.parent().unwrap().to_path_buf()]);
     ok(
         &mut allowed,
@@ -637,15 +645,15 @@ fn libraries_import_with_dependencies_and_follow_the_path_policy() {
 
 #[test]
 fn bad_parameters_are_refused_with_a_clear_message() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = circle(&mut s, 0.0);
     let b = circle(&mut s, 1.0);
     let g = ok(&mut s, "group.create", json!({"ids": [a, b]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let c = circle(&mut s, 5.0);
     let g2 = ok(&mut s, "group.create", json!({"ids": [c]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(&mut s, "group.enter", json!({"id": g}));
     assert!(err(&mut s, "group.enter", json!({"id": g2})).contains("not inside"));
@@ -660,7 +668,14 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         )
         .contains("number")
     );
-    assert!(err(&mut s, "selection.click", json!({"id": 9999})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s,
+            "selection.click",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .contains("does not exist")
+    );
     assert!(err(&mut s, "group.create", json!({"ids": [a], "name": 5})).contains("text"));
     // Ctrl-click toggles a member in and out of the selection.
     ok(&mut s, "selection.click", json!({"id": a}));
@@ -673,7 +688,7 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         json!([a])
     );
     assert!(call(&mut s, "resource.list", json!(5)).is_err());
-    let sym = ok(&mut s, "symbol.create", json!({"name": "S", "insertion": [10, 10], "items": [{"shape": {"kind": "circle", "center": [10, 10], "radius": 5}}]}))["id"].as_u64().unwrap();
+    let sym = ok(&mut s, "symbol.create", json!({"name": "S", "insertion": [10, 10], "items": [{"shape": {"kind": "circle", "center": [10, 10], "radius": 5}}]}))["id"].as_uid().unwrap();
     assert!(
         err(
             &mut s,
@@ -696,9 +711,9 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         .contains("[x, y]")
     );
     let inst = ok(&mut s, "symbol.place", json!({"symbol": sym, "at": [0, 0]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
-    let other = ok(&mut s, "symbol.create", json!({"name": "Other", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 5}}]}))["id"].as_u64().unwrap();
+    let other = ok(&mut s, "symbol.create", json!({"name": "Other", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 5}}]}))["id"].as_uid().unwrap();
     ok(
         &mut s,
         "symbol.set",
@@ -750,7 +765,7 @@ fn bad_parameters_are_refused_with_a_clear_message() {
         "resource.create",
         json!({"type": "hatch", "name": "H", "lines": [{"spacing": 1}]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(
         call(
@@ -788,13 +803,13 @@ fn bad_parameters_are_refused_with_a_clear_message() {
 
 #[test]
 fn marks_cannot_make_marks_and_export_stays_small() {
-    let mut s = Session::default();
-    let dot = ok(&mut s, "symbol.create", json!({"name": "Dot", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 50}}]}))["id"].as_u64().unwrap();
-    let lt = ok(&mut s, "resource.create", json!({"type": "line_type", "name": "Fence", "units": "world", "elements": [{"kind": "dash", "length": 400}, {"kind": "mark", "symbol": dot}, {"kind": "gap", "length": 200}]}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let dot = ok(&mut s, "symbol.create", json!({"name": "Dot", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 50}}]}))["id"].as_uid().unwrap();
+    let lt = ok(&mut s, "resource.create", json!({"type": "line_type", "name": "Fence", "units": "world", "elements": [{"kind": "dash", "length": 400}, {"kind": "mark", "symbol": dot}, {"kind": "gap", "length": 200}]}))["id"].as_uid().unwrap();
     // The class has the line type too, so a mark that inherits it would make marks on marks.
     exec(
         &mut s,
-        json!({"op": "modify_class", "id": 0, "attrs": {"line_type": lt}}),
+        json!({"op": "modify_class", "id": "00000000-0000-0000-0000-000000000000", "attrs": {"line_type": lt}}),
     );
     exec(
         &mut s,
@@ -820,14 +835,14 @@ fn marks_cannot_make_marks_and_export_stays_small() {
 
 #[test]
 fn objects_drawn_while_editing_a_symbol_become_part_of_it() {
-    let mut s = Session::default();
-    let sym = ok(&mut s, "symbol.create", json!({"name": "Bed", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 100}}]}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let sym = ok(&mut s, "symbol.create", json!({"name": "Bed", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 100}}]}))["id"].as_uid().unwrap();
     let inst = ok(
         &mut s,
         "symbol.place",
         json!({"symbol": sym, "at": [1000, 1000]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(&mut s, "symbol.edit", json!({"id": inst}));
     exec(
@@ -841,7 +856,7 @@ fn objects_drawn_while_editing_a_symbol_become_part_of_it() {
     // Move an object into a group and out again through the API.
     let (a, b) = (circle(&mut s, 0.0), circle(&mut s, 9.0));
     let g = ok(&mut s, "group.create", json!({"ids": [a]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(&mut s, "group.move_into", json!({"ids": [b], "group": g}));
     assert_eq!(
@@ -861,14 +876,14 @@ fn objects_drawn_while_editing_a_symbol_become_part_of_it() {
 
 #[test]
 fn paper_symbols_and_insert_options() {
-    let mut s = Session::default();
-    let arrow = ok(&mut s, "symbol.create", json!({"name": "North", "units": "paper", "rotate_on_insert": true, "items": [{"shape": {"kind": "line", "a": [0, 0], "b": [0, 10]}}]}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let arrow = ok(&mut s, "symbol.create", json!({"name": "North", "units": "paper", "rotate_on_insert": true, "items": [{"shape": {"kind": "line", "a": [0, 0], "b": [0, 10]}}]}))["id"].as_uid().unwrap();
     let id = ok(
         &mut s,
         "symbol.place",
         json!({"symbol": arrow, "at": [0, 0], "rotate_to": [100, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(
         (ok(&mut s, "objects.get", json!({"id": id}))["shape"]["rotation"]
@@ -896,7 +911,7 @@ fn paper_symbols_and_insert_options() {
         "symbol.place",
         json!({"symbol": arrow, "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         ok(&mut s, "objects.get", json!({"id": id2}))["class"],

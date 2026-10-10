@@ -684,7 +684,7 @@ mod tests {
     fn drawing_and_legend() {
         let tin = tin_of(|x, _| x / 10.0);
         let r = analyze(&tin, Mode::Slope, &SLOPE_BREAKS, &[]);
-        let d = draw(ObjectId(3), &r);
+        let d = draw(ObjectId::from_num(3), &r);
         assert_eq!(d.polys.len(), 1, "only bands with triangles are drawn");
         // A plain slope is one square: the triangles merge into a ring with four corners.
         assert_eq!(d.polys[0].rings, vec![r.rings[3][0].clone()]);
@@ -697,7 +697,7 @@ mod tests {
             "{s}"
         );
         let legend = legend_draw(
-            ObjectId(9),
+            ObjectId::from_num(9),
             DVec2::ZERO,
             DVec2::new(3000.0, 8000.0),
             &LegendData {
@@ -717,7 +717,7 @@ mod tests {
             "the highest band is at the top"
         );
         let titled = legend_draw(
-            ObjectId(9),
+            ObjectId::from_num(9),
             DVec2::ZERO,
             DVec2::new(3000.0, 8000.0),
             &LegendData {
@@ -729,7 +729,7 @@ mod tests {
         assert!(titled.svg().contains("Slope &lt;10%") && !titled.svg().contains("m2)"));
         let elev = analyze(&tin, Mode::Elevation, &[1.0], &[]);
         let e = legend_draw(
-            ObjectId(9),
+            ObjectId::from_num(9),
             DVec2::ZERO,
             DVec2::ONE,
             &LegendData::default(),

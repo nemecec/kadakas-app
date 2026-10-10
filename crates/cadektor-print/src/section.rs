@@ -129,7 +129,9 @@ pub fn drawing_key(vp: &Viewport, line: ObjectId) -> u64 {
         "{:?}{:?}{:?}",
         vp.layers, vp.layer_overrides, vp.class_overrides
     );
-    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ line.0.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut h = 0xcbf2_9ce4_8422_2325u64
+        ^ (line.0.as_u128() as u64 ^ (line.0.as_u128() >> 64) as u64)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15);
     for b in text.bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
     }

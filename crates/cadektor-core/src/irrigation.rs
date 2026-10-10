@@ -383,7 +383,7 @@ fn css(c: [u8; 3]) -> String {
 
 /// SVG elements of an irrigation object. `scale` is the drawing scale (1 mm on paper is `scale` mm
 /// in the model). An outlet draws a translucent fan in the color of its zone.
-pub fn svg(id: u64, shape: &IrrigationShape, scale: f64) -> String {
+pub fn svg(id: crate::uid::Uid, shape: &IrrigationShape, scale: f64) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     let k = shape.kind();
@@ -700,12 +700,12 @@ mod tests {
         assert_eq!(sector_points(DVec2::ZERO, 1.0, 1.0, 0.0, 36).len(), 4);
 
         let mut o = outlet();
-        assert!(!svg(1, &o, 100.0).contains("polygon"));
+        assert!(!svg(crate::uid::Uid::from_num(1), &o, 100.0).contains("polygon"));
         if let IrrigationShape::Outlet { radius, zone, .. } = &mut o {
             *radius = Some(4000.0);
             *zone = Some(2);
         }
-        let text = svg(1, &o, 100.0);
+        let text = svg(crate::uid::Uid::from_num(1), &o, 100.0);
         assert!(text.contains("polygon") && text.contains("irrigation_outlet"));
         assert_eq!(outlet_radius(&o), Some(4000.0));
         assert_eq!(outlet_radius(&line()), None);
@@ -714,7 +714,7 @@ mod tests {
             if let IrrigationShape::Line { line_type, .. } = &mut l {
                 *line_type = t;
             }
-            assert!(svg(2, &l, 100.0).contains("polyline"));
+            assert!(svg(crate::uid::Uid::from_num(2), &l, 100.0).contains("polyline"));
         }
         let at = DVec2::ZERO;
         let others = [
@@ -741,7 +741,7 @@ mod tests {
             },
         ];
         for o in &others {
-            assert!(svg(3, o, 100.0).contains(o.kind()));
+            assert!(svg(crate::uid::Uid::from_num(3), o, 100.0).contains(o.kind()));
         }
     }
 

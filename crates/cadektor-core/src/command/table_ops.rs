@@ -228,7 +228,8 @@ mod tests {
             CommandError::LayerLocked(_)
         ));
         assert!(matches!(
-            ed.execute(&add(ws, Some(LayerId(999)))).unwrap_err(),
+            ed.execute(&add(ws, Some(LayerId::from_num(999))))
+                .unwrap_err(),
             CommandError::NoLayer(_)
         ));
     }
@@ -300,7 +301,7 @@ mod tests {
                 &mut ed,
                 with(
                     &|c| if let Command::AddWorksheetTable { worksheet, .. } = c {
-                        *worksheet = ResourceId(999)
+                        *worksheet = ResourceId::from_num(999)
                     }
                 )
             )
@@ -317,8 +318,13 @@ mod tests {
         assert!(err(&mut ed, set(vec![], None, None)).contains("at least one"));
         assert!(err(&mut ed, set(vec![plain], None, None)).contains("not a worksheet table"));
         assert!(err(&mut ed, set(vec![id], Some(DVec2::new(-1.0, 1.0)), None)).contains("size"));
-        assert!(err(&mut ed, set(vec![id], None, Some(ResourceId(77)))).contains("does not exist"));
-        assert!(err(&mut ed, set(vec![ObjectId(555)], None, None)).contains("does not exist"));
+        assert!(
+            err(&mut ed, set(vec![id], None, Some(ResourceId::from_num(77))))
+                .contains("does not exist")
+        );
+        assert!(
+            err(&mut ed, set(vec![ObjectId::from_num(555)], None, None)).contains("does not exist")
+        );
         assert_eq!(*ed.doc(), snap);
     }
 }

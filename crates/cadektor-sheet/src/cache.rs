@@ -9,13 +9,14 @@ use std::sync::{Arc, Mutex};
 
 use cadektor_core::cache::RevCache;
 use cadektor_core::model::Document;
+use cadektor_core::uid::Uid;
 
 use crate::compute::{Computed, compute_with};
 use crate::def::WorksheetDef;
 
 /// Results of worksheets by (revision, worksheet ID).
 pub struct WorksheetCache {
-    inner: Mutex<RevCache<u64, Arc<Computed>>>,
+    inner: Mutex<RevCache<Uid, Arc<Computed>>>,
     runs: AtomicUsize,
 }
 
@@ -36,7 +37,7 @@ impl WorksheetCache {
     pub fn get(
         &self,
         revision: u64,
-        sheet_id: u64,
+        sheet_id: Uid,
         def: &WorksheetDef,
         doc: &Document,
     ) -> Arc<Computed> {
@@ -53,7 +54,7 @@ impl WorksheetCache {
     pub fn get_with(
         &self,
         revision: u64,
-        sheet_id: u64,
+        sheet_id: Uid,
         def: &WorksheetDef,
         doc: &Document,
         ground: &dyn cadektor_core::ground::GroundSource,
@@ -81,6 +82,7 @@ impl WorksheetCache {
 mod tests {
     use super::*;
     use crate::value::Value;
+    use cadektor_core::uid::Uid;
 
     #[test]
     fn one_calculation_per_revision() {
@@ -88,22 +90,22 @@ mod tests {
         let mut def = WorksheetDef::default();
         def.set_cell("A1", "=1+1", None).unwrap();
         let doc = Document::default();
-        let a = cache.get(5, 1, &def, &doc);
-        let b = cache.get(5, 1, &def, &doc);
+        let a = cache.get(5, Uid::from_num(1), &def, &doc);
+        let b = cache.get(5, Uid::from_num(1), &def, &doc);
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(cache.runs(), 1);
         assert_eq!(a.value(1, 1), Value::Number(2.0));
         // Another sheet at the same revision is its own entry.
-        cache.get(5, 2, &def, &doc);
+        cache.get(5, Uid::from_num(2), &def, &doc);
         assert_eq!(cache.runs(), 2);
         // A new revision calculates again, and the old results are dropped.
-        let c = cache.get(6, 1, &def, &doc);
+        let c = cache.get(6, Uid::from_num(1), &def, &doc);
         assert!(!Arc::ptr_eq(&a, &c));
         assert_eq!(cache.runs(), 3);
-        cache.get(6, 1, &def, &doc);
+        cache.get(6, Uid::from_num(1), &def, &doc);
         assert_eq!(cache.runs(), 3);
         // Going back to an older revision (undo) calculates again: the key is the revision number.
-        cache.get(5, 1, &def, &doc);
+        cache.get(5, Uid::from_num(1), &def, &doc);
         assert_eq!(cache.runs(), 4);
     }
 
@@ -117,7 +119,7 @@ mod tests {
         })
         .join();
         let doc = Document::default();
-        let r = cache.get(1, 1, &WorksheetDef::default(), &doc);
+        let r = cache.get(1, Uid::from_num(1), &WorksheetDef::default(), &doc);
         assert_eq!(r.rows, 0);
     }
 }

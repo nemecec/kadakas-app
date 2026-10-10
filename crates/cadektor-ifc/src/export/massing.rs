@@ -54,7 +54,7 @@ impl<W: Write> Exporter<'_, W> {
             let id = self.ent(
                 "IFCBUILDING",
                 vec![
-                    self.guid("obj", obj.id.0),
+                    self.guid_of("obj", obj.id.0),
                     Value::Null,
                     Self::name_value(&name),
                     Value::Null,

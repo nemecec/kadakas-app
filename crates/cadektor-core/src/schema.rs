@@ -72,13 +72,15 @@ macro_rules! schema_impl {
     };
 }
 
-/// The largest ID that every JSON reader keeps exactly (2^53 - 1).
-const MAX_ID: u64 = 9_007_199_254_740_991;
+/// The text form of an ID: a UUID, 8-4-4-4-12 hex digits.
+const ID_PATTERN: &str =
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 
 macro_rules! id_schema {
     ($ty:ty, $name:literal) => {
         schema_impl!($ty, $name, |_g| json_schema!({
-            "type": "integer", "minimum": 0, "maximum": MAX_ID, "description": "An ID."
+            "type": "string", "pattern": ID_PATTERN, "minLength": 36, "maxLength": 36,
+            "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc."
         }));
     };
 }

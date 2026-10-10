@@ -211,7 +211,7 @@ mod tests {
         let inner = group(&mut ed, &[a, b]);
         let outer = group(&mut ed, &[inner, c]);
         let doc = ed.doc();
-        assert!(doc.is_group(inner) && !doc.is_group(a) && !doc.is_group(ObjectId(999)));
+        assert!(doc.is_group(inner) && !doc.is_group(a) && !doc.is_group(ObjectId::from_num(999)));
         assert_eq!(doc.children(outer), vec![c, inner]);
         assert_eq!(doc.children(inner), vec![a, b]);
         let mut all = doc.descendants(outer);
@@ -255,7 +255,7 @@ mod tests {
         // Objects outside the context cannot be selected from it, and the context itself is not a member.
         assert_eq!(doc.selection_target(c, Some(inner)), None);
         assert_eq!(doc.selection_target(inner, Some(inner)), None);
-        assert_eq!(doc.selection_target(ObjectId(999), None), None);
+        assert_eq!(doc.selection_target(ObjectId::from_num(999), None), None);
     }
 
     #[test]
@@ -265,7 +265,7 @@ mod tests {
         let b = add(&mut ed, 1.0);
         let g = group(&mut ed, &[a, b]);
         let mut doc = ed.doc().clone();
-        doc.object_mut(a).unwrap().parent = Some(ObjectId(999));
+        doc.object_mut(a).unwrap().parent = Some(ObjectId::from_num(999));
         assert!(check_tree(&doc).unwrap_err().contains("does not exist"));
         doc.object_mut(a).unwrap().parent = Some(b);
         assert!(check_tree(&doc).unwrap_err().contains("not a group"));
@@ -273,7 +273,7 @@ mod tests {
         let layer = doc.layers[0].id;
         doc.layers.push(crate::model::Layer {
             extra: Default::default(),
-            id: crate::model::LayerId(900),
+            id: crate::model::LayerId::from_num(900),
             name: "x".into(),
             kind: Default::default(),
             visible: true,
@@ -281,7 +281,7 @@ mod tests {
             elevation: 0.0,
             scale: 100.0,
         });
-        doc.object_mut(a).unwrap().layer = crate::model::LayerId(900);
+        doc.object_mut(a).unwrap().layer = crate::model::LayerId::from_num(900);
         assert!(check_tree(&doc).unwrap_err().contains("layer"));
         doc.object_mut(a).unwrap().layer = layer;
         // A group inside itself.

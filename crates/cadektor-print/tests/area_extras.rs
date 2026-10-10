@@ -17,7 +17,7 @@ fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
 }
 
-fn run(ed: &mut Editor, c: Command) -> Vec<u64> {
+fn run(ed: &mut Editor, c: Command) -> Vec<cadektor_core::uid::Uid> {
     ed.execute(&c).unwrap().created
 }
 

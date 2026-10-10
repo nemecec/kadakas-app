@@ -9,7 +9,7 @@ use cadektor_io::{ExportOptions, Format, LayerMode, export_file};
 
 #[test]
 fn exporters_skip_hardscapes_and_landscape_areas_on_sheets() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     let tri = |x: f64| {
         corners(&[
             DVec2::new(x, 0.0),
@@ -56,7 +56,7 @@ fn exporters_skip_hardscapes_and_landscape_areas_on_sheets() {
             name: "PAPERBED".into(),
         },
     ] {
-        let id = ObjectId(next);
+        let id = ObjectId(cadektor_core::uid::Uid::from_num(next));
         next += 1;
         doc.objects
             .insert(id, Object::new(id, sheet, NONE_CLASS, shape));

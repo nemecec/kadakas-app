@@ -19,7 +19,7 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
     // Safe here: this test program has one test, so no other thread reads the environment.
     unsafe { std::env::set_var("CADEKTOR_LIBRARY_DIR", &dir) };
 
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // No folder yet: an empty list.
     assert_eq!(ok(&mut s, "library.list", json!({}))["files"], json!([]));
     assert_eq!(
@@ -78,7 +78,7 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
     std::fs::remove_file(dir.join("Old.cdk.json")).unwrap();
 
     // A restricted session cannot replace a file without overwrite, and the library folder must be allowed.
-    let mut restricted = Session::default();
+    let mut restricted = Session::with_sequential_ids();
     restricted.paths = cadektor_api::PathPolicy::restricted([dir.clone()]);
     ok(
         &mut restricted,
@@ -109,7 +109,7 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
     );
 
     // Items by plain name; a name that two types share needs the type.
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     ok(
         &mut t,
         "resource.create",
@@ -125,7 +125,7 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
         "resource.export_to_file",
         json!({"library": "Twins"}),
     );
-    let mut u = Session::default();
+    let mut u = Session::with_sequential_ids();
     let err = call(
         &mut u,
         "resource.import_from_file",

@@ -33,7 +33,7 @@ fn rect(x: f64, y: f64, w: f64, d: f64) -> Vec<Vertex> {
 }
 
 fn doc() -> (Document, ObjectId, ObjectId) {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     ed.execute(&Command::SetGeoreference {
         georef: Some(Georeference {
             crs: "EPSG:3067".into(),

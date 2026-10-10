@@ -5,6 +5,7 @@
 //! anchor is the corner of the box of the part. A node puts the anchor back with its translation,
 //! so a mesh keeps small numbers and two equal shapes at different places have equal meshes.
 
+use cadektor_core::uid::Uid;
 use std::collections::{BTreeMap, HashMap};
 
 use glam::{DVec3, Vec3};
@@ -73,7 +74,7 @@ pub struct Part {
     /// Goes to `extras` of the node.
     pub extras: Value,
     /// The objects in this part.
-    pub ids: Vec<u64>,
+    pub ids: Vec<Uid>,
     /// Where the origin of the primitives is, in file axes and unit.
     pub anchor: [f64; 3],
     pub prims: Vec<Prim>,
@@ -90,7 +91,7 @@ pub struct Model {
     /// The scene origin: the model position (mm) of the local point (0, 0, 0).
     pub origin: DVec3,
     /// Objects that were left out, with the reason.
-    pub skipped: Vec<(u64, String)>,
+    pub skipped: Vec<(Uid, String)>,
 }
 
 /// A name for a node: the kind, the ID and the species of a plant.
@@ -305,7 +306,7 @@ pub fn build(
     let conv = Conv::new(opts);
     // Triangles and segments by object, in the order of the scene.
     let mut order: Vec<ObjectId> = Vec::new();
-    let mut geo: BTreeMap<u64, Geometry> = BTreeMap::new();
+    let mut geo: BTreeMap<Uid, Geometry> = BTreeMap::new();
     let wanted = |id: ObjectId| opts.objects.as_ref().is_none_or(|list| list.contains(&id));
     for (t, id) in scene.mesh.tri_object.iter().enumerate() {
         if !wanted(*id) {
@@ -343,9 +344,9 @@ pub fn build(
     };
     let mut skipped = Vec::new();
     let mut parts: Vec<Part> = Vec::new();
-    let mut group_index: HashMap<u64, usize> = HashMap::new();
+    let mut group_index: HashMap<Uid, usize> = HashMap::new();
     // Parts of a group are joined at the end: collect (object, geometry) per group first.
-    let mut groups: Vec<(u64, String, Vec<ObjectId>)> = Vec::new();
+    let mut groups: Vec<(Uid, String, Vec<ObjectId>)> = Vec::new();
     for id in &order {
         let Some(obj) = doc.object(*id) else {
             skipped.push((id.0, "the object does not exist".to_string()));
@@ -466,7 +467,7 @@ fn append(q: &mut Prim, p: &Prim) {
 fn finish_part(
     name: String,
     extras: Value,
-    ids: Vec<u64>,
+    ids: Vec<Uid>,
     anchor: Vec3,
     prims: Vec<(Prim, [u8; 4])>,
     conv: Conv,

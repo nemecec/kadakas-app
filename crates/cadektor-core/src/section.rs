@@ -158,9 +158,9 @@ mod tests {
 
     fn line_with(data: serde_json::Value) -> Object {
         let mut o = Object::new(
-            ObjectId(1),
-            LayerId(2),
-            ClassId(3),
+            ObjectId::from_num(1),
+            LayerId::from_num(2),
+            ClassId::from_num(3),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::new(1000.0, 0.0),

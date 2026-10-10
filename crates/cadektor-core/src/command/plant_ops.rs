@@ -611,7 +611,7 @@ mod tests {
             body,
         };
         assert!(matches!(
-            ed.execute(&m(ResourceId(99), None, None)),
+            ed.execute(&m(ResourceId::from_num(99), None, None)),
             Err(CommandError::NoResource(_))
         ));
         assert!(ed.execute(&m(a, Some("b"), None)).is_err());
@@ -666,9 +666,9 @@ mod tests {
         assert_eq!(
             ed.execute(&Command::DeleteResource {
                 id: a,
-                reassign: Some(ResourceId(99))
+                reassign: Some(ResourceId::from_num(99))
             }),
-            Err(CommandError::NoResource(ResourceId(99)))
+            Err(CommandError::NoResource(ResourceId::from_num(99)))
         );
         ed.execute(&Command::DeleteResource {
             id: a,
@@ -752,8 +752,13 @@ mod tests {
         };
         assert!(ed.execute(&cmd(Some(a), json!({}), vec![], None)).is_err());
         assert!(
-            ed.execute(&cmd(Some(ResourceId(99)), json!({}), pts(1), None))
-                .is_err()
+            ed.execute(&cmd(
+                Some(ResourceId::from_num(99)),
+                json!({}),
+                pts(1),
+                None
+            ))
+            .is_err()
         );
         assert!(
             ed.execute(&cmd(Some(a), json!({"bogus": 1}), pts(1), None))
@@ -777,8 +782,13 @@ mod tests {
                 .is_err()
         );
         assert!(
-            ed.execute(&cmd(Some(a), json!({}), pts(1), Some(LayerId(99))))
-                .is_err()
+            ed.execute(&cmd(
+                Some(a),
+                json!({}),
+                pts(1),
+                Some(LayerId::from_num(99))
+            ))
+            .is_err()
         );
         assert!(ed.doc().objects.is_empty());
         // Locked layer.
@@ -881,12 +891,12 @@ mod tests {
         assert!(ed.execute(&c(ids.clone(), None, None, false)).is_err());
         assert!(ed.execute(&c(ids.clone(), Some(a), None, true)).is_err());
         assert!(
-            ed.execute(&c(ids.clone(), Some(ResourceId(99)), None, false))
+            ed.execute(&c(ids.clone(), Some(ResourceId::from_num(99)), None, false))
                 .is_err()
         );
         assert!(ed.execute(&c(vec![line], Some(a), None, false)).is_err());
         assert!(
-            ed.execute(&c(vec![ObjectId(999)], Some(a), None, false))
+            ed.execute(&c(vec![ObjectId::from_num(999)], Some(a), None, false))
                 .is_err()
         );
         assert!(
@@ -1211,15 +1221,15 @@ mod tests {
             attrs: Attributes::default(),
         };
         assert_eq!(
-            ed.execute(&tag(ResourceId(5))),
-            Err(CommandError::NoResource(ResourceId(5)))
+            ed.execute(&tag(ResourceId::from_num(5))),
+            Err(CommandError::NoResource(ResourceId::from_num(5)))
         );
         let a = add_style(&mut ed, "A", 4000.0);
         let id = ObjectId(ed.execute(&tag(a)).unwrap().created[0]);
         let moved = Shape::PlantTag {
             at: DVec2::ZERO,
             anchor: DVec2::ZERO,
-            style: ResourceId(77),
+            style: ResourceId::from_num(77),
             height: 400.0,
         };
         assert!(

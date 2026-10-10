@@ -246,7 +246,7 @@ pub fn build(
         };
         let class = b.class(&class_name, &class_attrs, true);
         // The last outer ring that was imported: holes that follow it belong to it.
-        let mut outer: Option<u64> = None;
+        let mut outer: Option<cadektor_core::uid::Uid> = None;
         for part in &f.parts {
             if b.is_full() {
                 break 'features;
@@ -395,7 +395,7 @@ mod tests {
         };
         let (doc, report) = run(
             data,
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
             Some("EPSG:4326"),
         )
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn existing_georef_is_used_and_projected_source() {
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         doc.georef = Some(Georeference {
             crs: "EPSG:3067".into(),
             origin: DVec2::new(385_000.0, 6_672_000.0),
@@ -514,7 +514,13 @@ mod tests {
             file_crs: Some("EPSG:3067".into()),
             ..GisData::default()
         };
-        let (d, _) = run(data(), Document::default(), &ImportOptions::default(), None).unwrap();
+        let (d, _) = run(
+            data(),
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+            None,
+        )
+        .unwrap();
         let g = d.georef.unwrap();
         assert_eq!(g.crs, "EPSG:3067");
         assert_eq!(g.origin, DVec2::new(385_010.0, 6_672_020.0));
@@ -523,7 +529,7 @@ mod tests {
             layer: Some("GIS".into()),
             ..Default::default()
         };
-        let (d, _) = run(data(), Document::default(), &opts, None).unwrap();
+        let (d, _) = run(data(), Document::with_sequential_ids(), &opts, None).unwrap();
         assert!(d.classes.iter().any(|c| c.name == "tree"));
         assert!(d.layers.iter().any(|l| l.name == "GIS"));
         // Explicit source and target.
@@ -532,14 +538,14 @@ mod tests {
             target_crs: Some("EPSG:32635".into()),
             ..Default::default()
         };
-        let (d, _) = run(data(), Document::default(), &opts, None).unwrap();
+        let (d, _) = run(data(), Document::with_sequential_ids(), &opts, None).unwrap();
         assert_eq!(d.georef.unwrap().crs, "EPSG:32635");
         let bad = ImportOptions {
             source_crs: Some("nope".into()),
             ..Default::default()
         };
         assert!(matches!(
-            run(data(), Document::default(), &bad, None),
+            run(data(), Document::with_sequential_ids(), &bad, None),
             Err(IoError::Option(_))
         ));
         let bad = ImportOptions {
@@ -547,7 +553,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            run(data(), Document::default(), &bad, None),
+            run(data(), Document::with_sequential_ids(), &bad, None),
             Err(IoError::Option(_))
         ));
         let bad = ImportOptions {
@@ -555,10 +561,10 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            run(data(), Document::default(), &bad, None),
+            run(data(), Document::with_sequential_ids(), &bad, None),
             Err(IoError::Option(_))
         ));
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         doc.georef = Some(Georeference {
             crs: "nope".into(),
             origin: DVec2::ZERO,
@@ -619,7 +625,7 @@ mod tests {
             origin: OriginMode::File,
             ..ImportOptions::default()
         };
-        let (d, report) = run(data, Document::default(), &keep, None).unwrap();
+        let (d, report) = run(data, Document::with_sequential_ids(), &keep, None).unwrap();
         assert!(d.georef.is_none());
         assert!(!report.georeferenced);
         assert_eq!(d.objects.len(), 1);
@@ -634,12 +640,18 @@ mod tests {
             features: vec![feature(vec![Part::Point(pt(1.0, 2.0))], "a", Value::Null)],
             ..GisData::default()
         };
-        let (_, report) = run(data, Document::default(), &ImportOptions::default(), None).unwrap();
+        let (_, report) = run(
+            data,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+            None,
+        )
+        .unwrap();
         assert!(report.notes[0].contains("no CRS"));
         // Empty input.
         let (d, _) = run(
             GisData::default(),
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
             Some("EPSG:4326"),
         )
@@ -661,7 +673,7 @@ mod tests {
                 features: feats,
                 ..GisData::default()
             },
-            Document::default(),
+            Document::with_sequential_ids(),
             &opts,
             None,
         )
@@ -679,7 +691,7 @@ mod tests {
         };
         let (d, report) = run(
             data,
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
             Some("EPSG:4326"),
         )
@@ -700,8 +712,13 @@ mod tests {
             )],
             ..GisData::default()
         };
-        let (d, report) =
-            run(data(), Document::default(), &ImportOptions::default(), None).unwrap();
+        let (d, report) = run(
+            data(),
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+            None,
+        )
+        .unwrap();
         assert_eq!(d.objects.len(), 1, "{:?}", report.skipped);
         let g = d.georef.clone().unwrap();
         assert_eq!(g.crs, "");
@@ -716,7 +733,7 @@ mod tests {
             origin: OriginMode::File,
             ..ImportOptions::default()
         };
-        let (d, report) = run(data(), Document::default(), &keep, None).unwrap();
+        let (d, report) = run(data(), Document::with_sequential_ids(), &keep, None).unwrap();
         assert_eq!(d.objects.len(), 0);
         assert_eq!(report.skipped_total(), 1);
         // Small numbers stay as they are.
@@ -724,7 +741,13 @@ mod tests {
             features: vec![feature(vec![line(10.0, 20.0)], "k", Value::Null)],
             ..GisData::default()
         };
-        let (d, _) = run(small, Document::default(), &ImportOptions::default(), None).unwrap();
+        let (d, _) = run(
+            small,
+            Document::with_sequential_ids(),
+            &ImportOptions::default(),
+            None,
+        )
+        .unwrap();
         assert!(d.georef.is_none());
         // A second import into the local frame lands in the same place.
         let (d2, _) = run(data(), d.clone(), &ImportOptions::default(), None).unwrap();
@@ -762,15 +785,21 @@ mod tests {
             origin: OriginMode::File,
             ..ImportOptions::default()
         };
-        let (d, _) = run(data, Document::default(), &keep, None).unwrap();
+        let (d, _) = run(data, Document::with_sequential_ids(), &keep, None).unwrap();
         let objs: Vec<_> = d.objects.values().collect();
         assert_eq!(objs.len(), 5);
         // A hole with no outer ring before it is a plain polygon.
         assert!(!objs[0].data.contains_key("_ring"));
         assert!(!objs[1].data.contains_key("_ring"));
-        assert_eq!(objs[2].data["_hole_of"], objs[1].id.0);
+        assert_eq!(
+            objs[2].data["_hole_of"],
+            serde_json::Value::from(objs[1].id.0)
+        );
         assert!(!objs[3].data.contains_key("_ring"));
-        assert_eq!(objs[4].data["_hole_of"], objs[3].id.0);
+        assert_eq!(
+            objs[4].data["_hole_of"],
+            serde_json::Value::from(objs[3].id.0)
+        );
     }
 
     #[test]
@@ -785,7 +814,7 @@ mod tests {
         };
         let (d, _) = run(
             data,
-            Document::default(),
+            Document::with_sequential_ids(),
             &ImportOptions::default(),
             Some("EPSG:4326"),
         )
@@ -808,7 +837,7 @@ mod tests {
             source_crs: Some("EPSG:2263".into()),
             ..ImportOptions::default()
         };
-        let (d, _) = run(data, Document::default(), &opts, None).unwrap();
+        let (d, _) = run(data, Document::with_sequential_ids(), &opts, None).unwrap();
         let g = d.georef.unwrap();
         // 986000 ft is about 300 km, not 986 km.
         assert!(

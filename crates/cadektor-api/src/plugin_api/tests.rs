@@ -1,3 +1,4 @@
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 use super::*;
@@ -18,29 +19,29 @@ fn fail(s: &mut Session, method: &str, params: Value) -> String {
 
 /// A session that lets "agents" run their own scripts.
 fn open_session() -> Session {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.scripting.allow_agent_scripts = true;
     s
 }
 
 const CIRCLES: &str = "def reset(params, geometry):\n    n = int(params.n)\n    return [circle([geometry.at[0] + 100 * i, geometry.at[1]], 10) for i in range(n)]\n";
 
-fn define_circles(s: &mut Session) -> u64 {
+fn define_circles(s: &mut Session) -> cadektor_core::uid::Uid {
     ok(
         s,
         "plugin.define",
         json!({"name": "Circles", "shape_type": "point", "script": CIRCLES,
                "params": [{"name": "n", "type": "number", "default": 3, "min": 1, "max": 20}]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
-fn children(s: &Session, id: u64) -> Vec<ObjectId> {
+fn children(s: &Session, id: cadektor_core::uid::Uid) -> Vec<ObjectId> {
     s.editor.doc().children(ObjectId(id))
 }
 
-fn centers(s: &Session, id: u64) -> Vec<f64> {
+fn centers(s: &Session, id: cadektor_core::uid::Uid) -> Vec<f64> {
     children(s, id)
         .iter()
         .map(|c| match s.editor.doc().object(*c).unwrap().shape {
@@ -56,7 +57,7 @@ fn count(s: &Session) -> usize {
 
 #[test]
 fn shipped_examples_run_without_the_agent_flag() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let list = ok(&mut s, "plugin.examples", json!({}));
     assert_eq!(list.as_array().unwrap().len(), 2);
     assert_eq!(list[0]["installed"], false);
@@ -74,7 +75,7 @@ fn shipped_examples_run_without_the_agent_flag() {
     );
     // Seat outline and three slat lines.
     assert_eq!(placed["shapes"], 4);
-    let id = placed["id"].as_u64().unwrap();
+    let id = placed["id"].as_uid().unwrap();
     assert!(s.editor.doc().is_group(ObjectId(id)));
     assert_eq!(s.selection, vec![ObjectId(id)]);
     let info = ok(&mut s, "plugin.object", json!({"id": id}));
@@ -91,7 +92,7 @@ fn shipped_examples_run_without_the_agent_flag() {
 
 #[test]
 fn placing_is_one_undo_step() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(&mut s, "plugin.install_example", json!({"name": "Bench"}));
     let before = count(&s);
     ok(
@@ -108,7 +109,7 @@ fn placing_is_one_undo_step() {
 
 #[test]
 fn own_scripts_need_the_flag() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = define_circles(&mut s);
     let msg = fail(
         &mut s,
@@ -140,7 +141,7 @@ fn own_scripts_need_the_flag() {
         json!({"definition": id, "at": [0, 0]}),
     );
     s.scripting.allow_agent_scripts = false;
-    let gid = placed["id"].as_u64().unwrap();
+    let gid = placed["id"].as_uid().unwrap();
     assert!(
         fail(
             &mut s,
@@ -169,7 +170,7 @@ fn parameters_regenerate_the_shapes_and_undo_restores_them() {
         "plugin.place",
         json!({"definition": def, "at": [500, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(centers(&s, g), vec![500.0, 600.0, 700.0]);
     let r = ok(
@@ -205,8 +206,12 @@ fn parameters_regenerate_the_shapes_and_undo_restores_them() {
         .contains("unknown parameter")
     );
     assert!(
-        fail(&mut s, "plugin.set_params", json!({"id": 1, "params": {}}))
-            .contains("does not exist")
+        fail(
+            &mut s,
+            "plugin.set_params",
+            json!({"id": "00000000-0000-0000-0000-000000000001", "params": {}})
+        )
+        .contains("does not exist")
     );
     assert!(
         fail(
@@ -245,7 +250,7 @@ fn a_failing_script_keeps_the_last_good_shapes_and_shows_an_error() {
         "plugin.place",
         json!({"definition": def, "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let shapes = centers(&s, g);
     // The script now fails for n = 7 only.
@@ -303,7 +308,7 @@ fn a_timeout_keeps_the_last_good_shapes() {
         "plugin.place",
         json!({"definition": def, "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let script = "import time\ndef reset(params, geometry):\n    if params.n > 3:\n        time.sleep(60)\n    return [circle(geometry.at, 1)] * int(params.n)\n";
     ok(
@@ -334,7 +339,7 @@ fn a_moved_object_regenerates_where_it_is() {
         "plugin.place",
         json!({"definition": def, "at": [500, 100]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     s.editor
         .execute(&Command::MoveObjects {
@@ -387,14 +392,14 @@ fn definitions_can_be_updated_listed_and_deleted() {
         "plugin.place",
         json!({"definition": "Circles", "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let g2 = ok(
         &mut s,
         "plugin.place",
         json!({"definition": "Circles", "at": [0, 1000]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "plugin.get", json!({"name": "CIRCLES"}));
     assert_eq!(got["instances"], 2);
@@ -439,7 +444,14 @@ fn definitions_can_be_updated_listed_and_deleted() {
     assert_eq!(children(&s, g1).len(), 1);
     ok(&mut s, "plugin.reset", json!({"ids": [g1]}));
     ok(&mut s, "plugin.reset", json!({"id": g2}));
-    assert!(fail(&mut s, "plugin.reset", json!({"id": 1})).contains("does not exist"));
+    assert!(
+        fail(
+            &mut s,
+            "plugin.reset",
+            json!({"id": "00000000-0000-0000-0000-000000000001"})
+        )
+        .contains("does not exist")
+    );
     assert!(fail(&mut s, "plugin.reset", json!({"ids": ["x"]})).contains("object IDs"));
     assert!(fail(&mut s, "plugin.reset", json!({})).contains("id must"));
     // Delete the objects, then the definition.
@@ -462,7 +474,7 @@ fn definitions_can_be_updated_listed_and_deleted() {
 
 #[test]
 fn update_with_reset_needs_permission_when_objects_exist() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(&mut s, "plugin.install_example", json!({"name": "Bench"}));
     ok(
         &mut s,
@@ -554,7 +566,7 @@ fn ty_key(ty: &str) -> &'static str {
 
 #[test]
 fn stepping_stones_follow_the_path() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "plugin.install_example",
@@ -567,7 +579,7 @@ fn stepping_stones_follow_the_path() {
     );
     // Stones at 0, 1000, 2000 and 3000 mm.
     assert_eq!(placed["shapes"], 4);
-    let g = placed["id"].as_u64().unwrap();
+    let g = placed["id"].as_uid().unwrap();
     let ys: Vec<f64> = children(&s, g)
         .iter()
         .map(|c| s.editor.doc().object(*c).unwrap().shape.bounds().0.y)
@@ -591,18 +603,18 @@ fn stepping_stones_follow_the_path() {
 
 #[test]
 fn a_document_with_plug_in_objects_saves_and_loads() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(&mut s, "plugin.install_example", json!({"name": "Bench"}));
     let g = ok(
         &mut s,
         "plugin.place",
         json!({"definition": "Bench", "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let doc = ok(&mut s, "document.get", json!({}));
     assert!(doc["resources"].to_string().contains("plugin_object"));
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     ok(&mut t, "document.load", json!({"document": doc}));
     assert_eq!(ok(&mut t, "plugin.list", json!({}))[0]["name"], "Bench");
     assert_eq!(
@@ -612,7 +624,7 @@ fn a_document_with_plug_in_objects_saves_and_loads() {
     // The shapes are stored, so a session without Python can still show and export them.
     assert_eq!(children(&t, g).len(), children(&s, g).len());
     assert_eq!(instance_info(&t, ObjectId(g)).unwrap()["name"], "Bench");
-    assert!(instance_info(&t, ObjectId(1)).is_none());
+    assert!(instance_info(&t, ObjectId::from_num(1)).is_none());
     // Load keeps the scripting settings of the session.
     s.scripting.allow_agent_scripts = true;
     s.replace_document(Default::default());
@@ -717,7 +729,7 @@ fn without_python_the_reset_fails_with_a_clear_message() {
 
 #[test]
 fn describe_lists_the_scripting_methods() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     assert!(
         d["scripting"]["plugin_objects"]
@@ -785,7 +797,7 @@ impl Spy {
 
 /// A session with a plug-in object from a "downloaded" document: it was made by a session with the
 /// flag, and then loaded into a fresh session that has no flag, no trust, and a spy as interpreter.
-fn downloaded(spy: &Spy) -> (Session, u64, u64) {
+fn downloaded(spy: &Spy) -> (Session, cadektor_core::uid::Uid, cadektor_core::uid::Uid) {
     let mut maker = open_session();
     let def = define_circles(&mut maker);
     let g = ok(
@@ -793,10 +805,10 @@ fn downloaded(spy: &Spy) -> (Session, u64, u64) {
         "plugin.place",
         json!({"definition": def, "at": [0, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let doc = ok(&mut maker, "document.get", json!({}));
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.scripting.interpreter = Some(spy.interpreter());
     ok(&mut s, "document.load", json!({"document": doc}));
     (s, def, g)
@@ -901,7 +913,7 @@ fn nothing_in_the_api_adds_trust() {
 
 #[test]
 fn shipped_examples_are_trusted_by_hash() {
-    let s = Session::default();
+    let s = Session::with_sequential_ids();
     for (_, d) in cadektor_script::examples::all() {
         assert!(s.scripting.trust.is_trusted(&d.script));
     }
@@ -957,7 +969,7 @@ fn text_and_radius_limits_apply_to_generated_shapes() {
         json!({"name": "Bad", "shape_type": "point",
                "script": "def reset(p, g):\n    return [circle(g.at, -5)]\n"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(
         fail(

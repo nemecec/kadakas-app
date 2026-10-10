@@ -90,6 +90,9 @@ pub struct Session {
     view_changed: bool,
     /// Memory, time and size limits of this session (see `SessionLimits`).
     limits: SessionLimits,
+    /// New IDs count 2, 3, 4 and so on (see `Session::with_sequential_ids`). The mode stays when
+    /// the document is replaced.
+    sequential_ids: bool,
     mesh_cache: MeshCache,
     /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
     lod_scene: Option<(u64, cadektor_core::plants::form3d::Detail, Arc<Scene>)>,
@@ -608,6 +611,29 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Like `Session::with_sequential_ids()`, but the new IDs count 2, 3, 4 and so on, as small numbers, so a
+    /// test or a fixture can predict them. They are not unique in the world: never use this for a
+    /// document that is merged with others.
+    pub fn with_sequential_ids() -> Self {
+        let mut doc = Document::default();
+        doc.drawing.project.guid = cadektor_core::guid::random();
+        doc.use_sequential_ids(2);
+        Session {
+            editor: Editor::new(doc),
+            sequential_ids: true,
+            ..Session::blank()
+        }
+    }
+
+    /// Switches the predictable IDs on or off for this session. On: the IDs of the open document
+    /// continue from its largest small ID, and so do the documents that replace it.
+    pub fn set_sequential_ids(&mut self, on: bool) {
+        self.sequential_ids = on;
+        if on {
+            self.editor.use_sequential_ids();
+        }
+    }
+
     /// All fields at their defaults, with an empty document that has no project GUID.
     fn blank() -> Self {
         // The sheets and the API share the section drawings.
@@ -625,6 +651,7 @@ impl Session {
             replaced: false,
             view_changed: false,
             limits: SessionLimits::default(),
+            sequential_ids: false,
             mesh_cache: MeshCache::default(),
             lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -679,12 +706,14 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         let scripting = std::mem::take(&mut self.scripting);
         let limits = self.limits.clone();
+        let sequential = self.sequential_ids;
         *self = Session {
             replaced: true,
             view: self.view,
             snap: self.snap,
             ..Session::with_document(doc)
         };
+        self.set_sequential_ids(sequential);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.paths = paths;
@@ -1288,22 +1317,22 @@ fn command_examples() -> Value {
         {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0,0],[3000,0],[3000,1200],[0,1200]], "material": "Granite setts"}},
         {"op": "add_object", "shape": {"kind": "polyline", "closed": true, "points": [[0,0], {"p": [3000,0], "kind": "arc", "radius": 400}, {"p": [3000,2000], "kind": "arc", "radius": 400}, [0,2000]]}},
         {"op": "add_resource", "name": "Soil", "body": {"type": "record_format", "fields": [{"name": "Depth", "type": "dimension", "default": 300}, {"name": "Grade", "type": "choice", "choices": ["A", "B"]}]}},
-        {"op": "attach_record", "ids": [2], "record": 1, "values": {"Depth": 250}},
-        {"op": "set_record_fields", "ids": [2], "record": 1, "values": {"Grade": "B"}},
-        {"op": "detach_record", "ids": [2], "record": 1},
-        {"op": "add_worksheet_table", "worksheet": 3, "at": [10, 280], "size": [120, 40], "text_height": 3.5},
-        {"op": "set_worksheet_table", "ids": [2], "size": [150, 60]},
-        {"op": "set_vertex", "id": 2, "index": 1, "kind": {"kind": "arc", "radius": 250}},
-        {"op": "move_objects", "ids": [2], "delta": [100, 0]},
+        {"op": "attach_record", "ids": ["00000000-0000-0000-0000-000000000002"], "record": "00000000-0000-0000-0000-000000000001", "values": {"Depth": 250}},
+        {"op": "set_record_fields", "ids": ["00000000-0000-0000-0000-000000000002"], "record": "00000000-0000-0000-0000-000000000001", "values": {"Grade": "B"}},
+        {"op": "detach_record", "ids": ["00000000-0000-0000-0000-000000000002"], "record": "00000000-0000-0000-0000-000000000001"},
+        {"op": "add_worksheet_table", "worksheet": "00000000-0000-0000-0000-000000000003", "at": [10, 280], "size": [120, 40], "text_height": 3.5},
+        {"op": "set_worksheet_table", "ids": ["00000000-0000-0000-0000-000000000002"], "size": [150, 60]},
+        {"op": "set_vertex", "id": "00000000-0000-0000-0000-000000000002", "index": 1, "kind": {"kind": "arc", "radius": 250}},
+        {"op": "move_objects", "ids": ["00000000-0000-0000-0000-000000000002"], "delta": [100, 0]},
         {"op": "add_layer", "name": "Planting", "elevation": 0},
-        {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}]},
+        {"op": "batch", "commands": [{"op": "delete_objects", "ids": ["00000000-0000-0000-0000-000000000002"]}]},
         {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 2000, 350]}},
         {"op": "add_object", "shape": {"kind": "polyline3d", "closed": false, "points": [[0, 0, 100], [2000, 0, 150], [4000, 500, 220]]}},
         {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "pad", "elevation": 1200}, "boundary": [[2000,2000],[6000,2000],[6000,5000],[2000,5000]]}},
         {"op": "add_sheet", "name": "Planting plan", "paper": "a1", "number": "L-101"},
         {"op": "set_project", "name": "Riverside garden", "drawn_by": "NM"},
-        {"op": "add_object", "layer": 3, "shape": {"kind": "viewport", "min": [15, 55], "max": [405, 282], "center": [10000, 5000], "scale": 100, "layers": [1]}},
-        {"op": "add_object", "layer": 3, "shape": {"kind": "title_block", "grid_columns": 6, "grid_rows": 4}},
+        {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "viewport", "min": [15, 55], "max": [405, 282], "center": [10000, 5000], "scale": 100, "layers": ["00000000-0000-0000-0000-000000000001"]}},
+        {"op": "add_object", "layer": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "title_block", "grid_columns": 6, "grid_rows": 4}},
         {"op": "restore_view", "name": "Planting only"},
         {"op": "add_object", "shape": {"kind": "site_modifier", "modifier": {"type": "grade_limit"}, "boundary": [[1000,1000],[7000,1000],[7000,6000],[1000,6000]]}}
     ])
@@ -1312,6 +1341,7 @@ fn command_examples() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_core::uid::AsUid;
 
     fn call(s: &mut Session, line: &str) -> Value {
         serde_json::from_str(&s.handle_line(line).unwrap()).unwrap()
@@ -1319,12 +1349,12 @@ mod tests {
 
     #[test]
     fn rpc_roundtrip() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = call(
             &mut s,
             r#"{"jsonrpc":"2.0","id":1,"method":"execute","params":{"command":{"op":"add_object","shape":{"kind":"plant","at":[0,0],"species":"Oak","spread":3000,"height":9000}}}}"#,
         );
-        let id = r["result"]["created"][0].as_u64().unwrap();
+        let id = r["result"]["created"][0].as_uid().unwrap();
         let r = call(
             &mut s,
             r#"{"jsonrpc":"2.0","id":2,"method":"report.plants"}"#,
@@ -1341,7 +1371,7 @@ mod tests {
 
     #[test]
     fn rpc_errors() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert_eq!(call(&mut s, "{nope")["error"]["code"], -32700);
         assert_eq!(call(&mut s, r#"{"id":1}"#)["error"]["code"], -32600);
         assert_eq!(
@@ -1355,7 +1385,7 @@ mod tests {
         assert_eq!(
             call(
                 &mut s,
-                r#"{"id":1,"method":"objects.get","params":{"id":9}}"#
+                r#"{"id":1,"method":"objects.get","params":{"id":"00000000-0000-0000-0000-000000000009"}}"#
             )["error"]["code"],
             2
         );
@@ -1383,13 +1413,13 @@ mod tests {
     }
 
     /// Runs one `execute` call and returns the created IDs.
-    fn exec(s: &mut Session, command: Value) -> Vec<u64> {
+    fn exec(s: &mut Session, command: Value) -> Vec<cadektor_core::uid::Uid> {
         let r = ok(s, "execute", json!({"command": command}));
         r["created"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| v.as_u64().unwrap())
+            .map(|v| v.as_uid().unwrap())
             .collect()
     }
 
@@ -1403,7 +1433,7 @@ mod tests {
 
     #[test]
     fn describe_lists_every_method_and_every_method_is_routed() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let d = ok(&mut s, "describe", json!(null));
         let names: Vec<&str> = d["methods"]
             .as_array()
@@ -1429,7 +1459,7 @@ mod tests {
 
     #[test]
     fn execute_reports_app_errors_and_bad_params() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let (code, msg) = fail(
             &mut s,
             "execute",
@@ -1450,15 +1480,25 @@ mod tests {
         let (code, msg) = fail(
             &mut s,
             "execute",
-            json!({"command": {"op": "delete_objects", "ids": [42]}}),
+            json!({"command": {"op": "delete_objects", "ids": ["00000000-0000-0000-0000-00000000002a"]}}),
         );
-        assert_eq!((code, msg.as_str()), (2, "object 42 does not exist"));
+        assert_eq!(
+            (code, msg.as_str()),
+            (
+                2,
+                format!(
+                    "object {} does not exist",
+                    cadektor_core::uid::Uid::from_num(42)
+                )
+                .as_str()
+            )
+        );
         assert!(ok(&mut s, "document.summary", json!({}))["object_count"] == 0);
     }
 
     #[test]
     fn undo_and_redo_report_whether_anything_changed() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert_eq!(ok(&mut s, "undo", json!(null)), json!({"done": false}));
         assert_eq!(ok(&mut s, "redo", json!(null)), json!({"done": false}));
 
@@ -1472,12 +1512,12 @@ mod tests {
 
     #[test]
     fn document_summary_counts_kinds_and_bounds() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let empty = ok(&mut s, "document.summary", json!({}));
         assert!(empty["bounds"].is_null());
         assert_eq!(empty["can_undo"], false);
         assert_eq!(empty["layers"].as_array().unwrap().len(), 1);
-        assert_eq!(empty["active_class"], 0);
+        assert_eq!(empty["active_class"], cadektor_core::uid::Uid::from_num(0));
 
         exec(
             &mut s,
@@ -1502,7 +1542,7 @@ mod tests {
 
     #[test]
     fn document_get_returns_the_whole_document() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         exec(&mut s, circle_cmd(0.0));
         let d = ok(&mut s, "document.get", json!(null));
         assert_eq!(d["format_version"], FORMAT_VERSION);
@@ -1513,7 +1553,7 @@ mod tests {
 
     #[test]
     fn document_load_replaces_document_and_clears_history() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = exec(&mut s, circle_cmd(0.0))[0];
         ok(&mut s, "selection.set", json!({"ids": [id]}));
 
@@ -1530,7 +1570,7 @@ mod tests {
 
     #[test]
     fn document_load_rejects_newer_format_and_bad_shape() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let mut newer = serde_json::to_value(Document::default()).unwrap();
         newer["format_version"] = json!(FORMAT_VERSION + 1);
         let (code, msg) = fail(&mut s, "document.load", json!({"document": newer}));
@@ -1548,14 +1588,14 @@ mod tests {
             "document.load",
             json!({"document": {"format_version": 1}}),
         );
-        assert_eq!(code, -32602);
+        assert_eq!(code, 1, "an old format is refused");
         let (code, _) = fail(&mut s, "document.load", json!({}));
         assert_eq!(code, -32602);
     }
 
     #[test]
     fn objects_list_filters_by_layer_class_and_kind() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let layer = exec(&mut s, json!({"op": "add_layer", "name": "Planting"}))[0];
         let class = exec(&mut s, json!({"op": "add_class", "name": "Trees"}))[0];
         let c1 = exec(&mut s, circle_cmd(0.0))[0];
@@ -1572,11 +1612,11 @@ mod tests {
             json!({"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 1, "height": 1}, "layer": layer}),
         );
 
-        let ids = |v: Value| -> Vec<u64> {
+        let ids = |v: Value| -> Vec<cadektor_core::uid::Uid> {
             v.as_array()
                 .unwrap()
                 .iter()
-                .map(|o| o["id"].as_u64().unwrap())
+                .map(|o| o["id"].as_uid().unwrap())
                 .collect()
         };
         assert_eq!(ids(ok(&mut s, "objects.list", json!({}))).len(), 4);
@@ -1609,23 +1649,33 @@ mod tests {
 
     #[test]
     fn objects_get_returns_object_or_error() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = exec(&mut s, circle_cmd(3.0))[0];
         let o = ok(&mut s, "objects.get", json!({"id": id}));
         assert_eq!(o["id"], id);
-        assert_eq!(o["layer"], 1);
+        assert_eq!(o["layer"], cadektor_core::uid::Uid::from_num(1));
         assert_eq!(o["shape"]["radius"], 1.0);
 
         assert_eq!(
-            fail(&mut s, "objects.get", json!({"id": 999})),
-            (2, "object 999 does not exist".into())
+            fail(
+                &mut s,
+                "objects.get",
+                json!({"id": cadektor_core::uid::Uid::from_num(999)})
+            ),
+            (
+                2,
+                format!(
+                    "object {} does not exist",
+                    cadektor_core::uid::Uid::from_num(999)
+                )
+            )
         );
         assert_eq!(fail(&mut s, "objects.get", json!({})).0, -32602);
     }
 
     #[test]
     fn selection_is_validated_and_pruned_when_objects_go_away() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": []}));
         let a = exec(&mut s, circle_cmd(0.0))[0];
         let b = exec(&mut s, circle_cmd(5.0))[0];
@@ -1636,8 +1686,18 @@ mod tests {
 
         // An unknown ID is rejected and the selection stays as it was.
         assert_eq!(
-            fail(&mut s, "selection.set", json!({"ids": [a, 999]})),
-            (2, "object 999 does not exist".into())
+            fail(
+                &mut s,
+                "selection.set",
+                json!({"ids": [a.to_string(), cadektor_core::uid::Uid::from_num(999).to_string()]})
+            ),
+            (
+                2,
+                format!(
+                    "object {} does not exist",
+                    cadektor_core::uid::Uid::from_num(999)
+                )
+            )
         );
         assert_eq!(
             ok(&mut s, "selection.get", json!({})),
@@ -1655,7 +1715,7 @@ mod tests {
 
     #[test]
     fn render_svg_width_is_clamped() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         exec(&mut s, circle_cmd(0.0));
         let width_of = |svg: &str| -> String {
             let start = svg.find(r#"width=""#).unwrap() + 7;
@@ -1678,7 +1738,7 @@ mod tests {
 
     #[test]
     fn report_plants_counts_by_species_sorted() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert_eq!(ok(&mut s, "report.plants", json!({})), json!({"rows": []}));
         for species in ["Oak", "Acer", "Oak"] {
             exec(
@@ -1695,7 +1755,7 @@ mod tests {
 
     #[test]
     fn report_areas_gives_square_meters() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let meadow = exec(
             &mut s,
             json!({"op": "add_object", "shape": {"kind": "landscape_area", "boundary": [[0, 0], [2000, 0], [2000, 3000], [0, 3000]], "name": "Meadow"}}),
@@ -1724,7 +1784,7 @@ mod tests {
 
     #[test]
     fn notifications_and_bad_request_ids() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         // A request without an id is a notification and gets no reply, even on error.
         assert!(s.handle_line(r#"{"method":"nope"}"#).is_none());
         // A missing method is reported with a null id when there is no id.
@@ -1745,12 +1805,12 @@ mod tests {
     #[test]
     fn load_with_stale_next_id_does_not_reuse_ids() {
         let mut doc = serde_json::to_value(Document::default()).unwrap();
-        doc["objects"] = json!([{"id": 2, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        doc["objects"] = json!([{"id": "00000000-0000-0000-0000-000000000002", "layer": "00000000-0000-0000-0000-000000000001", "class": "00000000-0000-0000-0000-000000000000", "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
         // next_id stays at 2, the ID the object above already uses.
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         ok(&mut s, "document.load", json!({"document": doc}));
         let new_id = exec(&mut s, circle_cmd(5.0))[0];
-        assert_ne!(new_id, 2);
+        assert_ne!(new_id, cadektor_core::uid::Uid::from_num(2));
     }
 
     #[test]
@@ -1762,7 +1822,7 @@ mod tests {
 
     #[test]
     fn document_load_signals_that_the_document_was_replaced() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert!(!s.take_replaced());
         exec(&mut s, circle_cmd(0.0));
         assert!(
@@ -1788,23 +1848,26 @@ mod tests {
 
     #[test]
     fn document_load_rejects_invalid_documents_and_repairs_next_id() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let mut bad = serde_json::to_value(Document::default()).unwrap();
-        bad["active_layer"] = json!(42);
+        bad["active_layer"] = json!(cadektor_core::uid::Uid::from_num(42));
         assert_eq!(fail(&mut s, "document.load", json!({"document": bad})).0, 1);
 
         let mut doc = serde_json::to_value(Document::default()).unwrap();
         doc.as_object_mut().unwrap().remove("next_id");
-        doc["objects"] = json!([{"id": 2, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
+        doc["objects"] = json!([{"id": "00000000-0000-0000-0000-000000000002", "layer": "00000000-0000-0000-0000-000000000001", "class": "00000000-0000-0000-0000-000000000000", "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]);
         ok(&mut s, "document.load", json!({"document": doc}));
-        assert_ne!(exec(&mut s, circle_cmd(1.0))[0], 2);
+        assert_ne!(
+            exec(&mut s, circle_cmd(1.0))[0],
+            cadektor_core::uid::Uid::from_num(2)
+        );
     }
 
     #[test]
     fn replace_document_and_prune_selection_are_public() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = exec(&mut s, circle_cmd(0.0))[0];
-        s.selection = vec![ObjectId(id), ObjectId(999)];
+        s.selection = vec![ObjectId(id), ObjectId::from_num(999)];
         s.prune_selection();
         assert_eq!(s.selection, vec![ObjectId(id)]);
         s.replace_document(Document::default());
@@ -1820,7 +1883,7 @@ mod tests {
 
     #[test]
     fn execute_set_data_over_rpc() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = exec(&mut s, circle_cmd(0.0))[0];
         exec(
             &mut s,
@@ -1857,7 +1920,7 @@ mod tests {
 
     #[test]
     fn render_png_draws_the_model_and_clamps_the_size() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let empty = ok(&mut s, "render.png", json!({"width": 64, "height": 48}));
         let (w, h, px) = decode_png(&empty);
         assert_eq!((w, h), (64, 48));
@@ -1931,7 +1994,7 @@ mod tests {
 
     #[test]
     fn view_list_and_view_set() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let l = ok(&mut s, "view.list", json!({}));
         let ids: Vec<&str> = l["views"]
             .as_array()
@@ -1984,7 +2047,7 @@ mod tests {
 
     #[test]
     fn render_png_reuses_the_mesh_until_the_document_changes() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         ok(&mut s, "render.png", json!({"width": 16, "height": 16}));
         ok(
             &mut s,

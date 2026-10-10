@@ -6,6 +6,7 @@
 //! Viewports and title blocks are objects of kind `viewport` and `title_block` on a sheet layer,
 //! so `execute` with `add_object`, `move_objects` and `delete_objects` works on them too.
 
+use cadektor_core::uid::AsUid;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -109,8 +110,8 @@ pub fn describe() -> Value {
         "examples": [
             {"method": "sheet.create", "params": {"name": "Planting plan", "paper": "a1", "number": "L-101", "title": "Planting plan"}},
             {"method": "viewport.create", "params": {"sheet": "Planting plan", "scale": "fit", "view": "plan"}},
-            {"method": "viewport.set_override", "params": {"id": 12, "classes": {"Existing": {"visible": false}, "Trees": {"pen": [0, 100, 0, 255], "line_weight": 0.5}}}},
-            {"method": "viewport.annotate", "params": {"id": 12, "add": [{"kind": "text", "at": [20, 20], "text": "North", "height": 4}]}},
+            {"method": "viewport.set_override", "params": {"id": "00000000-0000-0000-0000-00000000000c", "classes": {"Existing": {"visible": false}, "Trees": {"pen": [0, 100, 0, 255], "line_weight": 0.5}}}},
+            {"method": "viewport.annotate", "params": {"id": "00000000-0000-0000-0000-00000000000c", "add": [{"kind": "text", "at": [20, 20], "text": "North", "height": 4}]}},
             {"method": "title_block.create", "params": {"sheet": "Planting plan", "grid_columns": 6, "grid_rows": 4}},
             {"method": "project.set", "params": {"name": "Riverside garden", "drawn_by": "NM", "date": "2026-10-10"}},
             {"method": "saved_view.save", "params": {"name": "Planting only"}},
@@ -204,7 +205,7 @@ fn str_field(p: &Value, key: &str) -> Result<String, RpcError> {
 
 fn object_id(p: &Value) -> Result<(ObjectId, ()), RpcError> {
     p.get("id")
-        .and_then(Value::as_u64)
+        .and_then(AsUid::as_uid)
         .map(|i| (ObjectId(i), ()))
         .ok_or_else(|| bad("params.id is required (an object ID)"))
 }
@@ -212,10 +213,7 @@ fn object_id(p: &Value) -> Result<(ObjectId, ()), RpcError> {
 /// A layer from an ID or a name.
 pub(crate) fn layer_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().and_then(|i| doc.layer(LayerId(i))).map(|l| l.id),
-        Value::String(t) => t
-            .parse::<u64>()
-            .ok()
+        Value::String(t) => cadektor_core::uid::Uid::parse(t.trim())
             .and_then(|i| doc.layer(LayerId(i)))
             .or_else(|| {
                 doc.layers
@@ -238,10 +236,7 @@ pub(crate) fn sheet_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> 
 
 pub(crate) fn class_ref(doc: &Document, v: &Value) -> Result<ClassId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().and_then(|i| doc.class(ClassId(i))).map(|c| c.id),
-        Value::String(t) => t
-            .parse::<u64>()
-            .ok()
+        Value::String(t) => cadektor_core::uid::Uid::parse(t.trim())
             .and_then(|i| doc.class(ClassId(i)))
             .or_else(|| {
                 doc.classes

@@ -1,6 +1,7 @@
 //! Records, data maps and worksheets through the JSON-RPC methods.
 
 use cadektor_api::Session;
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
@@ -12,20 +13,20 @@ fn err(s: &mut Session, method: &str, params: Value) -> String {
     s.handle(method, params).unwrap_err().message
 }
 
-fn exec(s: &mut Session, command: Value) -> u64 {
+fn exec(s: &mut Session, command: Value) -> cadektor_core::uid::Uid {
     ok(s, "execute", json!({ "command": command }))["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
-fn plant(s: &mut Session, x: f64, species: &str) -> u64 {
+fn plant(s: &mut Session, x: f64, species: &str) -> cadektor_core::uid::Uid {
     exec(
         s,
         json!({"op":"add_object","shape":{"kind":"plant","at":[x,0],"species":species,"spread":2000,"height":3000}}),
     )
 }
 
-fn rect(s: &mut Session, x: f64) -> u64 {
+fn rect(s: &mut Session, x: f64) -> cadektor_core::uid::Uid {
     exec(
         s,
         json!({"op":"add_object","shape":{"kind":"rect","min":[x,0],"max":[x + 1000.0, 1000]}}),
@@ -34,7 +35,7 @@ fn rect(s: &mut Session, x: f64) -> u64 {
 
 #[test]
 fn record_formats_attach_set_get_and_detach() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(
         ok(&mut s, "record_format.list", json!({}))["formats"],
         json!([])
@@ -47,7 +48,7 @@ fn record_formats_attach_set_get_and_detach() {
             {"name":"Kind","type":"choice","choices":["clay","sand"]},
             {"name":"Note","type":"text"}]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "record_format.get", json!({"id":"soil"}));
     assert_eq!(got["fields"].as_array().unwrap().len(), 3);
@@ -69,7 +70,14 @@ fn record_formats_attach_set_get_and_detach() {
         )
         .contains("unknown type")
     );
-    assert!(err(&mut s, "record_format.get", json!({"id":999})).contains("no record format"));
+    assert!(
+        err(
+            &mut s,
+            "record_format.get",
+            json!({"id":"00000000-0000-0000-0000-0000000003e7"})
+        )
+        .contains("no record format")
+    );
     assert!(err(&mut s, "record_format.get", json!({"id":true})).contains("no record format"));
 
     let a = rect(&mut s, 0.0);
@@ -96,9 +104,21 @@ fn record_formats_attach_set_get_and_detach() {
         2
     );
     assert!(
-        err(&mut s, "record.attach", json!({"ids":[777],"record":id})).contains("does not exist")
+        err(
+            &mut s,
+            "record.attach",
+            json!({"ids":["00000000-0000-0000-0000-000000000309"],"record":id})
+        )
+        .contains("does not exist")
     );
-    assert!(err(&mut s, "record.get", json!({"id":777})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s,
+            "record.get",
+            json!({"id":"00000000-0000-0000-0000-000000000309"})
+        )
+        .contains("does not exist")
+    );
     assert!(
         err(&mut s, "record.attach", json!({"ids":[a],"record":"Nope"}))
             .contains("no record format")
@@ -125,7 +145,7 @@ fn record_formats_attach_set_get_and_detach() {
 
 #[test]
 fn data_maps_are_created_checked_evaluated_and_applied() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(
         ok(&mut s, "data_manager.list", json!({}))["maps"],
         json!([])
@@ -164,7 +184,7 @@ fn data_maps_are_created_checked_evaluated_and_applied() {
         "data_manager.create",
         json!({"name":"Landscape IFC","template":"landscape"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let rules = json!([{"kinds":["rect"],"source":{"type":"property","name":"Area"},
         "target":{"type":"record_field","record":"Cost","field":"Area"}}]);
@@ -173,7 +193,7 @@ fn data_maps_are_created_checked_evaluated_and_applied() {
         "data_manager.create",
         json!({"name":"Takeoff","entities":[{"kind":"rect","ifc_class":"IfcSlab"}],"rules":rules}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "data_manager.get", json!({"id":"takeoff"}));
     assert_eq!(got["rules"].as_array().unwrap().len(), 1);
@@ -203,7 +223,7 @@ fn data_maps_are_created_checked_evaluated_and_applied() {
         err(
             &mut s,
             "data_manager.evaluate",
-            json!({"id":map,"ids":[999]})
+            json!({"id":map,"ids":["00000000-0000-0000-0000-0000000003e7"]})
         )
         .contains("does not exist")
     );
@@ -243,7 +263,7 @@ fn data_maps_are_created_checked_evaluated_and_applied() {
 
 #[test]
 fn worksheets_hold_cells_databases_and_export() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(
         ok(&mut s, "worksheet.list", json!({}))["worksheets"],
         json!([])
@@ -274,7 +294,7 @@ fn worksheets_hold_cells_databases_and_export() {
         "worksheet.create",
         json!({"name":"From template","template":first}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert!(ok(&mut s, "worksheet.get", json!({"id":t}))["definition"].is_object());
     let w = ok(
@@ -282,7 +302,7 @@ fn worksheets_hold_cells_databases_and_export() {
         "worksheet.create",
         json!({"name":"Sums","cells":{"A1":1,"B1":2.5,"C1":"=A1+B1","D1":true,"E1":"text","F1":null}}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let ev = ok(&mut s, "worksheet.evaluate", json!({"id":w}));
     assert_eq!(ev["cells"]["C1"], 3.5);
@@ -368,7 +388,7 @@ fn worksheets_hold_cells_databases_and_export() {
         "worksheet.place",
         json!({"id":w,"at":[0,0],"text_height":3}),
     );
-    let table = placed["id"].as_u64().unwrap();
+    let table = placed["id"].as_uid().unwrap();
     assert!(placed["size"][0].as_f64().unwrap() > 0.0);
     assert!(
         err(
@@ -379,7 +399,7 @@ fn worksheets_hold_cells_databases_and_export() {
         .contains("positive")
     );
     let second = ok(&mut s, "worksheet.place", json!({"id":t,"at":[100,100]}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut s,

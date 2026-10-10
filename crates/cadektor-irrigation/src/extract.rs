@@ -17,6 +17,7 @@ use cadektor_core::DVec2;
 use cadektor_core::ground::GroundSource;
 use cadektor_core::irrigation::{IrrigationShape, LineType};
 use cadektor_core::model::{Document, Object};
+use cadektor_core::uid::Uid;
 
 use crate::catalog::{Catalog, HeadKind};
 use crate::network::{
@@ -39,7 +40,7 @@ const LINK_DIAMETER: f64 = 1000.0;
 /// An outlet with the values from the catalog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutletInfo {
-    pub id: u64,
+    pub id: Uid,
     pub at: DVec2,
     pub model: String,
     pub kind: Option<HeadKind>,
@@ -57,7 +58,7 @@ pub struct OutletInfo {
 /// An irrigation line with the values from the catalog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineInfo {
-    pub id: u64,
+    pub id: Uid,
     pub line_type: LineType,
     pub size: String,
     pub material: String,
@@ -74,7 +75,7 @@ pub struct LineInfo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValveInfo {
-    pub id: u64,
+    pub id: Uid,
     pub zone: u32,
     pub name: String,
     pub kv: f64,
@@ -85,7 +86,7 @@ pub struct ValveInfo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PocInfo {
-    pub id: u64,
+    pub id: Uid,
     pub name: String,
     pub static_kpa: f64,
     pub available_lpm: f64,
@@ -95,7 +96,7 @@ pub struct PocInfo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControllerInfo {
-    pub id: u64,
+    pub id: Uid,
     pub name: String,
     pub stations: u32,
 }
@@ -173,7 +174,7 @@ pub fn cluster(points: &[DVec2], tol: f64) -> Vec<usize> {
         .collect()
 }
 
-fn warn(out: &mut Vec<Warning>, kind: WarningKind, object: u64, message: String) {
+fn warn(out: &mut Vec<Warning>, kind: WarningKind, object: Uid, message: String) {
     out.push(Warning {
         kind,
         object: Some(object),
@@ -672,7 +673,7 @@ pub fn extract_with(doc: &Document, catalog: &Catalog, opts: &ExtractOptions) ->
 
 /// Valves that name a controller need an existing controller and a free station in its range.
 fn check_controllers(ex: &mut Extraction) {
-    let mut used: Vec<(String, u32, u64)> = vec![];
+    let mut used: Vec<(String, u32, Uid)> = vec![];
     let mut out = vec![];
     for v in &ex.valves {
         let Some(name) = &v.controller else { continue };
@@ -742,7 +743,7 @@ impl Analysis {
     }
 
     /// The zone of each outlet object that has water (by object ID).
-    pub fn outlet_zones(&self) -> HashMap<u64, u32> {
+    pub fn outlet_zones(&self) -> HashMap<Uid, u32> {
         let mut m = HashMap::new();
         for z in &self.solution.zones {
             for o in &z.outlets {
@@ -784,7 +785,7 @@ pub(crate) mod fixtures {
     use cadektor_core::command::{Command, Editor};
     use cadektor_core::model::{Attributes, Shape};
 
-    pub fn add(ed: &mut Editor, s: IrrigationShape) -> u64 {
+    pub fn add(ed: &mut Editor, s: IrrigationShape) -> cadektor_core::uid::Uid {
         ed.execute(&Command::AddObject {
             shape: Shape::Irrigation(Box::new(s)),
             layer: None,
@@ -930,8 +931,9 @@ mod tests {
         assert!((valve_loss_kpa(32.0, 6.0) - 10.24).abs() < 1e-9);
         let p_end = p_valve - pipe_loss_kpa(32.0, 26.2, 140.0, 30.0);
         let p_far = p_end - pipe_loss_kpa(16.0, 20.4, 140.0, 10.0);
-        let by_id = |id: u64| z.outlets.iter().find(|o| o.object == Some(id)).unwrap();
-        let ids: Vec<u64> = a.extraction.outlets.iter().map(|o| o.id).collect();
+        let by_id =
+            |id: cadektor_core::uid::Uid| z.outlets.iter().find(|o| o.object == Some(id)).unwrap();
+        let ids: Vec<cadektor_core::uid::Uid> = a.extraction.outlets.iter().map(|o| o.id).collect();
         assert!((by_id(ids[0]).pressure_kpa - p_end).abs() < 1e-9);
         assert!((by_id(ids[2]).pressure_kpa - p_far).abs() < 1e-9);
         // The two far heads are critical (the first of them on a tie).

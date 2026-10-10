@@ -352,7 +352,7 @@ mod tests {
             d.polar = shape == Shape::Linear;
             let _ = ctx.run_ui(Default::default(), |_| {
                 assert!(
-                    d.show(&ctx, &[ObjectId(2)], Some(DVec2::new(1.0, 2.0)))
+                    d.show(&ctx, &[ObjectId::from_num(2)], Some(DVec2::new(1.0, 2.0)))
                         .is_none()
                 );
             });

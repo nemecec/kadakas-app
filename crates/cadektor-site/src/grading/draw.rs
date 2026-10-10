@@ -197,17 +197,22 @@ mod tests {
             DVec2::new(10.0, 5.0),
         ];
         d.polys.push(
-            Poly::new("t", ObjectId(3), vec![ring.clone(), ring.clone()], true)
-                .filled([1, 2, 3, 128])
-                .stroked([4, 5, 6, 255], 0.5),
+            Poly::new(
+                "t",
+                ObjectId::from_num(3),
+                vec![ring.clone(), ring.clone()],
+                true,
+            )
+            .filled([1, 2, 3, 128])
+            .stroked([4, 5, 6, 255], 0.5),
         );
-        let mut open =
-            Poly::new("line", ObjectId(3), vec![ring], false).stroked([0, 0, 0, 255], 1.0);
+        let mut open = Poly::new("line", ObjectId::from_num(3), vec![ring], false)
+            .stroked([0, 0, 0, 255], 1.0);
         open.band = Some(2);
         d.polys.push(open);
         let mut l = Label::new(
             "label",
-            ObjectId(3),
+            ObjectId::from_num(3),
             DVec2::new(1.0, 2.0),
             "a<b".into(),
             4.0,
@@ -219,7 +224,7 @@ mod tests {
         let mut other = Drawn::default();
         other.labels.push(Label::new(
             "plain",
-            ObjectId(3),
+            ObjectId::from_num(3),
             DVec2::ZERO,
             "x".into(),
             1.0,
@@ -240,7 +245,10 @@ mod tests {
             lines[0].contains(r#"stroke="rgb(4,5,6)""#)
                 && lines[0].contains(r#"stroke-width="0.5""#)
         );
-        assert!(lines[0].contains(r#"data-kind="t""#) && lines[0].contains(r#"data-owner="3""#));
+        assert!(
+            lines[0].contains(r#"data-kind="t""#)
+                && lines[0].contains(&format!(r#"data-owner="{}""#, ObjectId::from_num(3)))
+        );
         // An open line is not closed and has no fill. The band shows.
         assert!(
             lines[1].contains(r#"fill="none""#)
@@ -252,7 +260,7 @@ mod tests {
             polys: vec![
                 Poly::new(
                     "p",
-                    ObjectId(1),
+                    ObjectId::from_num(1),
                     vec![vec![DVec2::ZERO, DVec2::X, DVec2::Y]],
                     true,
                 )

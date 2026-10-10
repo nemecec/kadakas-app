@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence, Union
@@ -19,6 +20,10 @@ from .errors import CadektorError
 
 Point = Sequence[float]
 JsonDict = dict[str, Any]
+Id = str
+"""The ID of an object, layer, class or resource: a UUID text such as
+``0190f1c2-7a3b-7c1d-8e2f-123456789abc``. IDs are unique in the world, so offline copies of a
+document never create the same ID."""
 
 
 class Pending:
@@ -26,10 +31,10 @@ class Pending:
 
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
-        self._id: int | None = None
+        self._id: Id | None = None
 
     @property
-    def id(self) -> int:
+    def id(self) -> Id:
         if self._id is None:
             raise CadektorError(1, "the ID is known when the undo group ends")
         return self._id
@@ -42,11 +47,19 @@ class Pending:
         return f"Pending({self._id})" if self._id is not None else "Pending(?)"
 
 
-ObjRef = Union["Obj", Pending, int]
+ObjRef = Union["Obj", Pending, Id]
 
 
-def _id_of(ref: ObjRef) -> int:
-    return ref if isinstance(ref, int) else ref.id
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def is_id(text: object) -> bool:
+    """True if ``text`` has the form of an ID (a UUID text). A name that looks like one is an ID."""
+    return isinstance(text, str) and _UUID.match(text) is not None
+
+
+def _id_of(ref: ObjRef) -> Id:
+    return ref if isinstance(ref, str) else ref.id
 
 
 class Layer:
@@ -140,16 +153,16 @@ class Obj:
         self.data = self._doc.api.objects_get(id=self.id)
         return self
 
-    def modify(self, *, layer: Layer | int | None = None, class_: Class | int | None = None,
+    def modify(self, *, layer: Layer | Id | None = None, class_: Class | Id | None = None,
                attrs: JsonDict | None = None, **shape_fields: Any) -> "Obj":
         """Change shape fields (``radius=300``), the layer, the class or the attributes."""
         command: JsonDict = {"op": "modify_object", "id": self.id}
         if shape_fields:
             command["shape"] = {**self.shape, **shape_fields}
         if layer is not None:
-            command["layer"] = layer if isinstance(layer, int) else layer.id
+            command["layer"] = layer if isinstance(layer, str) else layer.id
         if class_ is not None:
-            command["class"] = class_ if isinstance(class_, int) else class_.id
+            command["class"] = class_ if isinstance(class_, str) else class_.id
         if attrs is not None:
             command["attrs"] = {**self.attrs, **attrs}
         self._doc.execute(command)
@@ -175,14 +188,14 @@ class Adder:
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
 
-    def shape(self, kind: str, *, layer: Layer | int | None = None, class_: Class | int | None = None,
+    def shape(self, kind: str, *, layer: Layer | Id | None = None, class_: Class | Id | None = None,
               attrs: JsonDict | None = None, **fields: Any) -> Any:
         """Add any shape kind (see ``describe``): ``doc.add.shape("circle", center=[0, 0], radius=5)``."""
         command: JsonDict = {"op": "add_object", "shape": {"kind": kind, **fields}}
         if layer is not None:
-            command["layer"] = layer if isinstance(layer, int) else layer.id
+            command["layer"] = layer if isinstance(layer, str) else layer.id
         if class_ is not None:
-            command["class"] = class_ if isinstance(class_, int) else class_.id
+            command["class"] = class_ if isinstance(class_, str) else class_.id
         if attrs:
             command["attrs"] = attrs
         return self._doc._add_object(command)
@@ -214,7 +227,7 @@ class Plants:
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
 
-    def place(self, mode: str = "single", **params: Any) -> list[int]:
+    def place(self, mode: str = "single", **params: Any) -> list[Id]:
         """Place plants in one undo step. ``doc.plants.place(at=[0, 0], style="Oak")`` is one plant;
         other modes are ``path``, ``grid``, ``triangular`` and ``fill`` (see the API text of
         ``plants.place``). Returns the IDs of the new plants."""
@@ -239,7 +252,7 @@ class Selection:
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
 
-    def ids(self) -> list[int]:
+    def ids(self) -> list[Id]:
         return self._doc.api.selection_get()["ids"]
 
     def objects(self) -> list[Obj]:
@@ -283,7 +296,7 @@ class Worksheets:
     def __init__(self, doc: "Document") -> None:
         self._doc = doc
 
-    def create(self, name: str, cells: dict[str, Any] | None = None, **params: Any) -> int:
+    def create(self, name: str, cells: dict[str, Any] | None = None, **params: Any) -> Id:
         """Create a worksheet. ``cells`` maps addresses to text, numbers or ``"=formulas"``."""
         if cells is not None:
             params["cells"] = cells
@@ -292,17 +305,17 @@ class Worksheets:
     def list(self) -> Any:
         return self._doc.api.worksheet_list()
 
-    def set_cell(self, sheet: int | str, address: str, value: Any) -> None:
+    def set_cell(self, sheet: Id | str, address: str, value: Any) -> None:
         self._doc.api.worksheet_set_cell(id=sheet, address=address, input=value)
 
-    def evaluate(self, sheet: int | str) -> JsonDict:
+    def evaluate(self, sheet: Id | str) -> JsonDict:
         """The calculated values: ``result["cells"]["B2"]``."""
         return self._doc.api.worksheet_evaluate(id=sheet)
 
-    def csv(self, sheet: int | str) -> str:
+    def csv(self, sheet: Id | str) -> str:
         return self._doc.api.worksheet_export(id=sheet, format="csv")["csv"]
 
-    def place(self, sheet: int | str, at: Point, **params: Any) -> int:
+    def place(self, sheet: Id | str, at: Point, **params: Any) -> Id:
         return self._doc.api.worksheet_place(id=sheet, at=list(at), **params)["id"]
 
 
@@ -351,7 +364,7 @@ class Document:
     def in_undo_group(self) -> bool:
         return self._queue is not None
 
-    def execute(self, command: JsonDict) -> list[int]:
+    def execute(self, command: JsonDict) -> list[Id]:
         """Run one command (see ``describe``: ``command_examples``) as one undo step. Inside an
         ``undo_group`` the command waits, and the list is empty."""
         if self._queue is not None:
@@ -411,14 +424,14 @@ class Document:
     def classes(self) -> list[Class]:
         return [Class(self, d) for d in self.summary()["classes"]]
 
-    def layer(self, ref: str | int | Layer) -> Layer:
+    def layer(self, ref: str | Layer) -> Layer:
         """A layer by ID or name."""
         for lay in self.layers:
             if lay.id == ref or lay.name == ref or (isinstance(ref, Layer) and ref.id == lay.id):
                 return lay
         raise KeyError(f"there is no layer {ref!r}")
 
-    def class_(self, ref: str | int | Class) -> Class:
+    def class_(self, ref: str | Class) -> Class:
         for cls in self.classes:
             if cls.id == ref or cls.name == ref or (isinstance(ref, Class) and ref.id == cls.id):
                 return cls
@@ -445,18 +458,18 @@ class Document:
 
     # -- objects and queries ------------------------------------------------------------------
 
-    def get(self, id: int) -> Obj:
+    def get(self, id: Id) -> Obj:
         return Obj(self, self.api.objects_get(id=id))
 
-    def objects(self, layer: Layer | str | int | None = None, class_: Class | str | int | None = None,
+    def objects(self, layer: Layer | str | None = None, class_: Class | str | None = None,
                 kind: str | None = None, where: Callable[[Obj], bool] | None = None) -> list[Obj]:
         """Query objects. ``layer`` and ``class_`` take an object, an ID or a name. ``where`` is a
         function that gets each ``Obj``: ``doc.objects(kind="circle", where=lambda o: o.radius > 100)``."""
         params: JsonDict = {}
         if layer is not None:
-            params["layer"] = layer if isinstance(layer, int) else self.layer(layer).id
+            params["layer"] = self.layer(layer).id
         if class_ is not None:
-            params["class"] = class_ if isinstance(class_, int) else self.class_(class_).id
+            params["class"] = self.class_(class_).id
         if kind is not None:
             params["kind"] = kind
         found = [Obj(self, d) for d in self.api.objects_list(**params)]
@@ -470,7 +483,7 @@ class Document:
     def delete(self, items: Iterable[ObjRef]) -> None:
         self.execute({"op": "delete_objects", "ids": [_id_of(i) for i in items]})
 
-    def group(self, items: Iterable[ObjRef], name: str | None = None) -> int:
+    def group(self, items: Iterable[ObjRef], name: str | None = None) -> Id:
         """Group objects. Returns the ID of the group."""
         return self.api.group_create(ids=[_id_of(i) for i in items], **({"name": name} if name else {}))["id"]
 

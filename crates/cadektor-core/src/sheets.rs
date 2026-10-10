@@ -1313,9 +1313,9 @@ mod tests {
         assert_eq!(fit_scale(v(0.0, 0.0), v(200.0, 150.0)), 100.0);
         let mut doc = Document::default();
         doc.objects.insert(
-            crate::model::ObjectId(5),
+            crate::model::ObjectId::from_num(5),
             Object::new(
-                crate::model::ObjectId(5),
+                crate::model::ObjectId::from_num(5),
                 FIRST_LAYER,
                 NONE_CLASS,
                 Shape::Rect {
@@ -1439,7 +1439,7 @@ mod tests {
         let mut doc = Document::default();
         doc.classes.push(Class {
             extra: Default::default(),
-            id: ClassId(9),
+            id: ClassId::from_num(9),
             name: "Trees".into(),
             visible: true,
             attrs: Attributes {
@@ -1450,9 +1450,9 @@ mod tests {
             },
         });
         let mut o = Object::new(
-            crate::model::ObjectId(50),
+            crate::model::ObjectId::from_num(50),
             FIRST_LAYER,
-            ClassId(9),
+            ClassId::from_num(9),
             Shape::Circle {
                 center: v(0.0, 0.0),
                 radius: 10.0,
@@ -1473,7 +1473,7 @@ mod tests {
         assert_eq!(a.line_weight, Some(0.5));
         // A viewport override beats the class but not the attributes that the object sets itself.
         p.class_overrides.insert(
-            ClassId(9),
+            ClassId::from_num(9),
             ClassOverride {
                 pen: Some(Color([9, 9, 9, 255])),
                 line_weight: Some(0.1),
@@ -1490,7 +1490,7 @@ mod tests {
         assert_eq!(a.line_weight, Some(0.1));
         // Defaults when nothing sets a field.
         let plain = Object::new(
-            crate::model::ObjectId(51),
+            crate::model::ObjectId::from_num(51),
             FIRST_LAYER,
             NONE_CLASS,
             o.shape.clone(),
@@ -1511,7 +1511,7 @@ mod tests {
         assert!(p.shows(&doc, &o));
         // Not in the layer list: hidden.
         let mut other = o.clone();
-        other.layer = LayerId(77);
+        other.layer = LayerId::from_num(77);
         assert!(!p.shows(&doc, &other));
         // The document visibility does not reach the viewport.
         doc.classes[1].visible = false;
@@ -1526,7 +1526,7 @@ mod tests {
         p.layer_overrides.insert(FIRST_LAYER, true);
         assert!(!p.shows(&doc, &o), "the class is still off");
         p.class_overrides.insert(
-            ClassId(9),
+            ClassId::from_num(9),
             ClassOverride {
                 visible: Some(true),
                 ..Default::default()
@@ -1534,7 +1534,7 @@ mod tests {
         );
         assert!(p.shows(&doc, &o));
         p.class_overrides.insert(
-            ClassId(9),
+            ClassId::from_num(9),
             ClassOverride {
                 visible: Some(false),
                 ..Default::default()
@@ -1547,7 +1547,7 @@ mod tests {
         p.layer_overrides.clear();
         // A missing class is hidden. Sheet layers are never shown in a viewport.
         let mut gone = o.clone();
-        gone.class = ClassId(1234);
+        gone.class = ClassId::from_num(1234);
         p.layer_overrides.clear();
         assert!(!p.shows(&doc, &gone));
         doc.layers[0].kind = LayerKind::Sheet;
@@ -1560,7 +1560,7 @@ mod tests {
         let mut p = vp();
         let a = Annotation {
             id: 1,
-            class: ClassId(9),
+            class: ClassId::from_num(9),
             attrs: Attributes {
                 fill: Some(Color::NONE),
                 ..Default::default()
@@ -1601,7 +1601,7 @@ mod tests {
         let mut doc = Document::default();
         doc.layers.push(crate::model::Layer {
             extra: Default::default(),
-            id: LayerId(5),
+            id: LayerId::from_num(5),
             name: "Plan sheet".into(),
             kind: LayerKind::Sheet,
             visible: true,
@@ -1612,14 +1612,14 @@ mod tests {
         doc.drawing.project.name = "Garden {1}".into();
         doc.drawing
             .sheets
-            .insert(LayerId(5), Sheet::new("L-101", "Planting plan"));
+            .insert(LayerId::from_num(5), Sheet::new("L-101", "Planting plan"));
         let tb = TitleBlock {
             grid_columns: 4,
             grid_rows: 3,
             fields: [("zone".to_string(), "7".to_string())].into(),
             ..Default::default()
         };
-        let f = Fields::of(&doc, LayerId(5), &tb);
+        let f = Fields::of(&doc, LayerId::from_num(5), &tb);
         assert_eq!(
             f.fill(
                 "{project.name} / {sheet.number} / {sheet.scale} / {field.zone} / {nothing} / {open"
@@ -1641,25 +1641,25 @@ mod tests {
         let mut ed = crate::command::Editor::new(doc.clone());
         ed.execute(&crate::command::Command::AddObject {
             shape: Shape::Viewport(Box::new(vp1.clone())),
-            layer: Some(LayerId(5)),
+            layer: Some(LayerId::from_num(5)),
             class: None,
             attrs: Attributes::default(),
         })
         .unwrap();
         assert_eq!(
-            Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"],
+            Fields::of(ed.doc(), LayerId::from_num(5), &tb).0["sheet.scale"],
             "1:100"
         );
         vp1.scale = 12.5;
         ed.execute(&crate::command::Command::AddObject {
             shape: Shape::Viewport(Box::new(vp1)),
-            layer: Some(LayerId(5)),
+            layer: Some(LayerId::from_num(5)),
             class: None,
             attrs: Attributes::default(),
         })
         .unwrap();
         assert_eq!(
-            Fields::of(ed.doc(), LayerId(5), &tb).0["sheet.scale"],
+            Fields::of(ed.doc(), LayerId::from_num(5), &tb).0["sheet.scale"],
             "As noted"
         );
         assert_eq!(format_scale(12.5), "1:12.5");
@@ -1716,11 +1716,11 @@ mod tests {
     fn saved_view_and_drawing_roundtrip() {
         let mut d = Drawing::default();
         assert!(d.is_empty());
-        d.sheets.insert(LayerId(3), Sheet::new("1", "t"));
+        d.sheets.insert(LayerId::from_num(3), Sheet::new("1", "t"));
         d.saved_views.push(SavedView {
             name: "Plan".into(),
-            layers: [(LayerId(1), true)].into(),
-            classes: [(ClassId(0), false)].into(),
+            layers: [(LayerId::from_num(1), true)].into(),
+            classes: [(ClassId::from_num(0), false)].into(),
             zoom: Some(2.0),
             pan: Some(v(1.0, 2.0)),
             ..Default::default()

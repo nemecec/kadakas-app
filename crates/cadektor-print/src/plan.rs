@@ -706,7 +706,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
         }
         AnnotationItem::Shape { shape } => {
             let obj = Object::new(
-                cadektor_core::model::ObjectId(0),
+                cadektor_core::model::ObjectId::from_num(0),
                 cadektor_core::model::FIRST_LAYER,
                 a.class,
                 (**shape).clone(),

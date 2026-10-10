@@ -183,19 +183,19 @@ mod tests {
                 mode: VisMode::Grey,
             },
             Command::SetVisibility {
-                layers: vec![LayerId(99)],
+                layers: vec![LayerId::from_num(99)],
                 classes: vec![],
                 mode: VisMode::Grey,
             },
             Command::SetVisibility {
                 layers: vec![],
-                classes: vec![ClassId(99)],
+                classes: vec![ClassId::from_num(99)],
                 mode: VisMode::Grey,
             },
         ] {
             assert!(ed.execute(&bad).is_err());
         }
-        assert_eq!(ed.doc().layer_mode(LayerId(99)), None);
+        assert_eq!(ed.doc().layer_mode(LayerId::from_num(99)), None);
         assert_eq!(VisMode::from_name("Gray"), Some(VisMode::Grey));
         assert_eq!(VisMode::from_name("nope"), None);
         assert_eq!(VisMode::Invisible.id(), "invisible");

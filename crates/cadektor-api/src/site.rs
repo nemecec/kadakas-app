@@ -327,19 +327,20 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_core::uid::AsUid;
 
     fn call(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
         s.handle(method, p)
     }
 
-    fn exec(s: &mut Session, command: Value) -> u64 {
+    fn exec(s: &mut Session, command: Value) -> cadektor_core::uid::Uid {
         call(s, "execute", json!({"command": command})).unwrap()["created"][0]
-            .as_u64()
+            .as_uid()
             .unwrap()
     }
 
     /// A 9 by 9 grid of loci, 1 m apart, on a plane that rises 10 percent toward +X.
-    fn grid(s: &mut Session) -> Vec<u64> {
+    fn grid(s: &mut Session) -> Vec<cadektor_core::uid::Uid> {
         let mut ids = Vec::new();
         for i in 0..9 {
             for j in 0..9 {
@@ -351,10 +352,10 @@ mod tests {
 
     #[test]
     fn create_moves_the_sources_into_the_site_model_and_undo_restores_them() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let r = call(&mut s, "site.create", json!({"source_ids": ids, "settings": {"minor_interval": 200, "major_interval": 400, "display_2d": "both"}})).unwrap();
-        let id = r["id"].as_u64().unwrap();
+        let id = r["id"].as_uid().unwrap();
         assert_eq!(s.editor.doc().objects.len(), 1);
         let o = call(&mut s, "objects.get", json!({"id": id})).unwrap();
         assert_eq!(o["shape"]["kind"], "site_model");
@@ -367,7 +368,7 @@ mod tests {
 
     #[test]
     fn create_checks_its_input() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let circle = exec(
             &mut s,
             json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}),
@@ -376,7 +377,12 @@ mod tests {
         assert_eq!(e.code, -32602);
         let e = call(&mut s, "site.create", json!({"source_ids": [circle]})).unwrap_err();
         assert!(e.message.contains("only locus3d"), "{}", e.message);
-        let e = call(&mut s, "site.create", json!({"source_ids": [999]})).unwrap_err();
+        let e = call(
+            &mut s,
+            "site.create",
+            json!({"source_ids": ["00000000-0000-0000-0000-0000000003e7"]}),
+        )
+        .unwrap_err();
         assert!(e.message.contains("does not exist"));
         let locus = exec(
             &mut s,
@@ -409,7 +415,7 @@ mod tests {
 
     #[test]
     fn drape_refresh_and_tiny_intervals() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let id = call(
             &mut s,
@@ -417,7 +423,7 @@ mod tests {
             json!({"source_ids": ids, "settings": {"auto_update": false}}),
         )
         .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let r = call(
             &mut s,
@@ -490,10 +496,10 @@ mod tests {
 
     #[test]
     fn elevation_slope_and_surfaces() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let r = call(
             &mut s,
@@ -535,7 +541,7 @@ mod tests {
         let e = call(
             &mut s,
             "site.elevation",
-            json!({"id": 123456, "x": 0, "y": 0}),
+            json!({"id": "00000000-0000-0000-0000-00000001e240", "x": 0, "y": 0}),
         )
         .unwrap_err();
         assert!(e.message.contains("does not exist"));
@@ -543,10 +549,10 @@ mod tests {
 
     #[test]
     fn non_finite_coordinates_are_refused() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let id = call(&mut s, "site.create", json!({"source_ids": ids})).unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         // JSON cannot hold NaN, but a very large number is still finite and simply outside the model.
         let r = call(
@@ -556,13 +562,15 @@ mod tests {
         )
         .unwrap();
         assert!(r["z"].is_null());
-        let p = serde_json::from_str::<Value>(r#"{"id": 1, "x": 1e999, "y": 0}"#);
+        let p = serde_json::from_str::<Value>(
+            r#"{"id": "00000000-0000-0000-0000-000000000001", "x": 1e999, "y": 0}"#,
+        );
         assert!(p.is_err() || call(&mut s, "site.elevation", p.unwrap()).is_err());
     }
 
     #[test]
     fn pad_gives_cut_and_fill_and_contours() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let id = call(
             &mut s,
@@ -570,7 +578,7 @@ mod tests {
             json!({"source_ids": ids, "settings": {"minor_interval": 100, "major_interval": 400}}),
         )
         .unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let c = call(&mut s, "site.cut_fill", json!({"id": id})).unwrap();
         assert_eq!(
@@ -629,10 +637,10 @@ mod tests {
 
     #[test]
     fn update_changes_settings_and_sources() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         let id = call(&mut s, "site.create", json!({"source_ids": &ids[..40]})).unwrap()["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let extra = exec(
             &mut s,
@@ -692,10 +700,14 @@ mod tests {
                 .contains("not a site model")
         );
         assert!(
-            call(&mut s, "site.update", json!({"id": 99999}))
-                .unwrap_err()
-                .message
-                .contains("does not exist")
+            call(
+                &mut s,
+                "site.update",
+                json!({"id": "00000000-0000-0000-0000-00000001869f"})
+            )
+            .unwrap_err()
+            .message
+            .contains("does not exist")
         );
         assert!(
             call(
@@ -710,7 +722,7 @@ mod tests {
 
     #[test]
     fn render_svg_and_png_show_the_terrain() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let ids = grid(&mut s);
         call(&mut s, "site.create", json!({"source_ids": ids})).unwrap();
         let svg = call(&mut s, "render.svg", json!({})).unwrap()["svg"]

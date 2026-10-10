@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
 
+from .document import is_id
 from .errors import CadektorError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -67,7 +68,7 @@ class Param:
 class PluginObject:
     """A plug-in object in the document (a group of generated shapes)."""
 
-    def __init__(self, doc: "Document", id: int) -> None:
+    def __init__(self, doc: "Document", id: str) -> None:
         self._doc, self.id = doc, id
 
     def info(self) -> JsonDict:
@@ -83,7 +84,7 @@ class PluginObject:
         return self.info()["error"]
 
     @property
-    def children(self) -> list[int]:
+    def children(self) -> list[str]:
         return self.info()["children"]
 
     def set_params(self, **values: Any) -> JsonDict:
@@ -109,35 +110,35 @@ class Plugins:
         """The plug-in objects that ship with the app."""
         return self._doc.api.plugin_examples()
 
-    def install_example(self, name: str) -> int:
+    def install_example(self, name: str) -> str:
         """Add a shipped plug-in object (``"Bench"``, ``"Stepping stones"``). Returns the definition ID."""
         return self._doc.api.plugin_install_example(name=name)["id"]
 
     def define(self, name: str, shape_type: str, script: str, params: Sequence[JsonDict] = (),
-               description: str = "", timeout_ms: int | None = None) -> int:
+               description: str = "", timeout_ms: int | None = None) -> str:
         """Create a definition. Returns its ID. Nothing runs yet."""
         extra: JsonDict = {"timeout_ms": timeout_ms} if timeout_ms else {}
         return self._doc.api.plugin_define(name=name, shape_type=shape_type, script=script,
                                            params=list(params), description=description, **extra)["id"]
 
-    def update(self, definition: int | str, *, reset: bool = False, **fields: Any) -> JsonDict:
+    def update(self, definition: str, *, reset: bool = False, **fields: Any) -> JsonDict:
         """Change a definition (``script``, ``params``, ``new_name``, ...). ``reset=True`` also
         regenerates its objects, in the same undo step."""
-        key = "id" if isinstance(definition, int) else "name"
+        key = "id" if is_id(definition) else "name"
         return self._doc.api.plugin_update(**{key: definition}, reset=reset, **fields)
 
-    def delete(self, definition: int | str) -> None:
-        key = "id" if isinstance(definition, int) else "name"
+    def delete(self, definition: str) -> None:
+        key = "id" if is_id(definition) else "name"
         self._doc.api.plugin_delete(**{key: definition})
 
     def list(self) -> list[JsonDict]:
         return self._doc.api.plugin_list()
 
-    def get(self, definition: int | str) -> JsonDict:
-        key = "id" if isinstance(definition, int) else "name"
+    def get(self, definition: str) -> JsonDict:
+        key = "id" if is_id(definition) else "name"
         return self._doc.api.plugin_get(**{key: definition})
 
-    def place(self, definition: int | str, *, at: "Point | None" = None, rotation: float = 0.0,
+    def place(self, definition: str, *, at: "Point | None" = None, rotation: float = 0.0,
               a: "Point | None" = None, b: "Point | None" = None,
               min: "Point | None" = None, max: "Point | None" = None,
               points: Sequence["Point"] | None = None, closed: bool = False,
@@ -159,7 +160,7 @@ class Plugins:
         res = self._doc.api.plugin_place(definition=definition, params=params or {}, **geometry, **options)
         return PluginObject(self._doc, res["id"])
 
-    def object(self, id: int) -> PluginObject:
+    def object(self, id: str) -> PluginObject:
         """The plug-in object with this object ID."""
         self._doc.api.plugin_object(id=id)
         return PluginObject(self._doc, id)

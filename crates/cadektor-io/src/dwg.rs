@@ -642,14 +642,14 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap();
         assert_eq!(r.report.format, "dwg");
         assert_eq!(r.report.objects["line"], 1);
         assert!(r.report.notes.iter().any(|n| n.contains("LibreDWG")));
-        let mut ed = cadektor_core::command::Editor::new(Document::default());
+        let mut ed = cadektor_core::command::Editor::new(Document::with_sequential_ids());
         ed.execute(&r.command).unwrap();
         assert_eq!(ed.doc().objects.len(), 1);
     }
@@ -664,12 +664,12 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap();
         assert_eq!(r.report.objects["line"], 1);
-        let mut ed = cadektor_core::command::Editor::new(Document::default());
+        let mut ed = cadektor_core::command::Editor::new(Document::with_sequential_ids());
         ed.execute(&r.command).unwrap();
         let out = work.0.path().join("out.dwg");
         let run_opts =
@@ -697,7 +697,7 @@ mod tests {
             &out,
             &ExportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap();
@@ -713,7 +713,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &none.search(),
         )
         .unwrap_err();
@@ -729,7 +729,7 @@ mod tests {
             &work.0.path().join("x.dwg"),
             &ExportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &none.search(),
         )
         .unwrap_err();
@@ -741,7 +741,7 @@ mod tests {
             &work.0.path().join("x.dwg"),
             &ExportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &half.search(),
         )
         .unwrap_err();
@@ -769,7 +769,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -782,7 +782,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -799,7 +799,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &quick,
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -812,7 +812,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -830,7 +830,7 @@ mod tests {
             &dwg,
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -842,7 +842,7 @@ mod tests {
             &work.0.path().join("none.dwg"),
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -855,7 +855,7 @@ mod tests {
             &work.0.path().join("e.dwg"),
             &ExportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap_err();
@@ -880,7 +880,7 @@ mod tests {
             &dwg_file(work.0.path()),
             &ImportOptions::default(),
             &RunOptions::default(),
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &s.search(),
         )
         .unwrap();
@@ -980,7 +980,7 @@ mod group_tests {
             &dwg,
             &ImportOptions::default(),
             &quick,
-            &Document::default(),
+            &Document::with_sequential_ids(),
             &search,
         )
         .unwrap_err();

@@ -2,7 +2,7 @@
 
 import pytest
 
-from helpers import line_cmd, plant_cmd, rect_cmd
+from helpers import line_cmd, plant_cmd, rect_cmd, uid
 
 
 def circle_cmd(cx, cy, r, **extra):
@@ -186,7 +186,7 @@ def test_grey_classes_and_undo(cad):
     assert {c["id"]: c["mode"] for c in cad.result("visibility.get")["classes"]}[cls] == "grey"
     assert cad.error("visibility.set", {"mode": "pink", "classes": [cls]})["code"] == -32602
     assert cad.error("visibility.set", {"mode": "grey"})["code"] == 3
-    assert cad.error("visibility.set", {"mode": "grey", "layers": [999]})["code"] == 2
+    assert cad.error("visibility.set", {"mode": "grey", "layers": [uid(999)]})["code"] == 2
 
 
 def test_grey_layers_stay_in_exports_and_the_file(cad, tmp_path):

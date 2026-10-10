@@ -133,7 +133,7 @@ fn add_hardscape_checks_its_input() {
             &mut ed,
             add_hardscape(
                 HardscapePatch {
-                    style: Some(ResourceId(999)),
+                    style: Some(ResourceId::from_num(999)),
                     ..Default::default()
                 },
                 Some(sq(10.0))
@@ -191,7 +191,7 @@ fn add_hardscape_checks_its_input() {
     let missing_layer = Command::AddHardscape {
         boundary: Some(sq(10.0)),
         patch: Box::new(none.clone()),
-        layer: Some(LayerId(99)),
+        layer: Some(LayerId::from_num(99)),
         class: None,
         attrs: Attributes::default(),
     };
@@ -203,7 +203,7 @@ fn add_hardscape_checks_its_input() {
         boundary: Some(sq(10.0)),
         patch: Box::new(none),
         layer: None,
-        class: Some(ClassId(99)),
+        class: Some(ClassId::from_num(99)),
         attrs: Attributes::default(),
     };
     assert!(matches!(
@@ -267,14 +267,14 @@ fn set_hardscape_changes_many_or_none() {
             .is_err()
     );
     assert!(matches!(
-        ed.execute(&set(vec![ObjectId(999)], p.clone())),
+        ed.execute(&set(vec![ObjectId::from_num(999)], p.clone())),
         Err(CommandError::NoObject(_))
     ));
     assert!(matches!(
         ed.execute(&set(
             vec![a],
             HardscapePatch {
-                style: Some(ResourceId(999)),
+                style: Some(ResourceId::from_num(999)),
                 ..Default::default()
             }
         )),
@@ -563,7 +563,7 @@ fn add_landscape_area_with_settings() {
         ed.execute(&add(
             sq(10.0),
             LandscapePatch {
-                style: Some(ResourceId(999)),
+                style: Some(ResourceId::from_num(999)),
                 ..Default::default()
             }
         )),
@@ -615,7 +615,7 @@ fn add_landscape_area_with_settings() {
         boundary: sq(10.0),
         name: "x".into(),
         patch: Box::default(),
-        layer: Some(LayerId(99)),
+        layer: Some(LayerId::from_num(99)),
         class: None,
         attrs: Attributes::default(),
     };
@@ -628,7 +628,7 @@ fn add_landscape_area_with_settings() {
         name: "x".into(),
         patch: Box::default(),
         layer: None,
-        class: Some(ClassId(99)),
+        class: Some(ClassId::from_num(99)),
         attrs: Attributes::default(),
     };
     assert!(matches!(

@@ -8,18 +8,10 @@ use crate::hardscape::style::HardscapeStyle;
 use crate::landscape::style::LandscapeAreaStyle;
 use crate::plants::style::PlantStyle;
 
-/// Identifier of a resource. Resources share one ID space with objects, layers and classes.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
-#[serde(transparent)]
-pub struct ResourceId(pub u64);
-
-impl std::fmt::Display for ResourceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+crate::uid::id_type!(
+    /// Identifier of a resource. Like all IDs, it is unique in the world (see `crate::uid`).
+    ResourceId
+);
 
 /// The content of a resource. The `type` key in JSON names the variant.
 /// A resource of a type that this version does not know (from a newer app) is kept as raw JSON
@@ -360,7 +352,7 @@ mod tests {
 
     fn res(id: u64, name: &str) -> Resource {
         Resource {
-            id: ResourceId(id),
+            id: ResourceId(crate::uid::Uid::from_num(id)),
             name: name.into(),
             body: ResourceBody::plant_style(PlantStyle::default()),
         }
@@ -373,18 +365,21 @@ mod tests {
         r.push(res(5, "Oak"));
         r.push(res(6, "Birch"));
         assert_eq!(r.len(), 2);
-        assert_eq!(r.get(ResourceId(6)).unwrap().name, "Birch");
-        assert!(r.plant_style(ResourceId(5)).is_some());
-        assert!(r.plant_style(ResourceId(9)).is_none());
-        assert_eq!(r.find_plant_style("oak"), Some(ResourceId(5)));
+        assert_eq!(r.get(ResourceId::from_num(6)).unwrap().name, "Birch");
+        assert!(r.plant_style(ResourceId::from_num(5)).is_some());
+        assert!(r.plant_style(ResourceId::from_num(9)).is_none());
+        assert_eq!(r.find_plant_style("oak"), Some(ResourceId::from_num(5)));
         assert_eq!(r.find_plant_style("elm"), None);
-        r.get_mut(ResourceId(5)).unwrap().name = "Elm".into();
-        assert_eq!(r.find_plant_style("elm"), Some(ResourceId(5)));
+        r.get_mut(ResourceId::from_num(5)).unwrap().name = "Elm".into();
+        assert_eq!(r.find_plant_style("elm"), Some(ResourceId::from_num(5)));
         assert_eq!(r.plant_styles().count(), 2);
-        assert!(r.remove(ResourceId(5)).is_some());
-        assert!(r.remove(ResourceId(5)).is_none());
+        assert!(r.remove(ResourceId::from_num(5)).is_some());
+        assert!(r.remove(ResourceId::from_num(5)).is_none());
         assert_eq!(r.iter().count(), 1);
-        assert_eq!(ResourceId(3).to_string(), "3");
+        assert_eq!(
+            ResourceId::from_num(3).to_string(),
+            "00000000-0000-0000-0000-000000000003"
+        );
     }
 
     #[test]
@@ -394,22 +389,26 @@ mod tests {
         assert!(r.validate().is_ok());
         r.push(res(2, "OAK"));
         assert!(r.validate().unwrap_err().contains("named"));
-        r.remove(ResourceId(2));
+        r.remove(ResourceId::from_num(2));
         r.push(res(3, "  "));
         assert!(r.validate().unwrap_err().contains("no name"));
-        r.remove(ResourceId(3));
+        r.remove(ResourceId::from_num(3));
         let mut bad = res(4, "Bad");
         let ResourceBody::PlantStyle(s) = &mut bad.body else {
             panic!()
         };
         s.spread = f64::NAN;
         r.push(bad);
-        assert!(r.validate().unwrap_err().contains("resource 4"));
+        assert!(
+            r.validate()
+                .unwrap_err()
+                .contains(&format!("resource {}", ResourceId::from_num(4)))
+        );
     }
 
     #[test]
     fn unknown_types_are_kept_and_saved_again() {
-        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hologram", "angle": 45, "rows": [1, 2]}});
+        let j = serde_json::json!({"id": "00000000-0000-0000-0000-000000000009", "name": "Hatch 1", "body": {"type": "hologram", "angle": 45, "rows": [1, 2]}});
         let r: Resource = serde_json::from_value(j.clone()).unwrap();
         assert!(matches!(r.body, ResourceBody::Unknown(_)));
         assert_eq!(r.body.type_name(), "unknown");
@@ -418,7 +417,7 @@ mod tests {
         let mut store = Resources::default();
         store.push(r.clone());
         store.push(Resource {
-            id: ResourceId(10),
+            id: ResourceId::from_num(10),
             name: "Hatch 1".into(),
             body: r.body.clone(),
         });
@@ -426,14 +425,14 @@ mod tests {
             store.validate().is_ok(),
             "unknown resources may share a name"
         );
-        assert!(store.plant_style(ResourceId(9)).is_none());
+        assert!(store.plant_style(ResourceId::from_num(9)).is_none());
         assert_eq!(store.plant_styles().count(), 0);
         // A body without a type is also kept.
         let r: Resource =
-            serde_json::from_value(serde_json::json!({"id": 1, "name": "x", "body": 5})).unwrap();
+            serde_json::from_value(serde_json::json!({"id": "00000000-0000-0000-0000-000000000001", "name": "x", "body": 5})).unwrap();
         assert_eq!(r.body, ResourceBody::Unknown(serde_json::json!(5)));
         // A plant style with a bad field is an error.
-        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "plant_style", "spread": "wide"}});
+        let bad = serde_json::json!({"id": "00000000-0000-0000-0000-000000000001", "name": "x", "body": {"type": "plant_style", "spread": "wide"}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
     }
 
@@ -444,7 +443,7 @@ mod tests {
             fields: vec![FieldDef::new("Depth", FieldType::Dimension)],
         };
         let r = Resource {
-            id: ResourceId(1),
+            id: ResourceId::from_num(1),
             name: "Soil".into(),
             body: ResourceBody::RecordFormat(Box::new(fmt)),
         };
@@ -453,7 +452,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<Resource>(j).unwrap(), r);
         assert_eq!(r.body.type_name(), "record_format");
         let m = Resource {
-            id: ResourceId(2),
+            id: ResourceId::from_num(2),
             name: "Map".into(),
             body: ResourceBody::DataMap(Box::new(crate::datamap::DataMap::landscape_template())),
         };
@@ -463,10 +462,10 @@ mod tests {
         assert!(m.body.validate().is_ok());
         let mut store = Resources::default();
         store.push(m);
-        assert!(store.data_map(ResourceId(2)).is_some());
-        assert!(store.data_map(ResourceId(1)).is_none());
+        assert!(store.data_map(ResourceId::from_num(2)).is_some());
+        assert!(store.data_map(ResourceId::from_num(1)).is_none());
         let w = Resource {
-            id: ResourceId(3),
+            id: ResourceId::from_num(3),
             name: "Sheet".into(),
             body: ResourceBody::Worksheet(serde_json::json!({"type": "worksheet", "cells": {}})),
         };
@@ -480,14 +479,13 @@ mod tests {
                 .is_err()
         );
         // A field type from the future keeps the resource, unchanged.
-        let future = serde_json::json!({"id": 4, "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}});
+        let future = serde_json::json!({"id": "00000000-0000-0000-0000-000000000004", "name": "Later", "body": {"type": "record_format", "fields": [{"name": "When", "type": "hologram"}]}});
         let r: Resource = serde_json::from_value(future.clone()).unwrap();
         assert!(matches!(r.body, ResourceBody::Unknown(_)));
         assert_eq!(serde_json::to_value(&r).unwrap(), future);
-        let bad = serde_json::json!({"id": 1, "name": "x", "body": {"type": "record_format", "fields": 5}});
+        let bad = serde_json::json!({"id": "00000000-0000-0000-0000-000000000001", "name": "x", "body": {"type": "record_format", "fields": 5}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
-        let bad =
-            serde_json::json!({"id": 1, "name": "x", "body": {"type": "data_map", "rules": 5}});
+        let bad = serde_json::json!({"id": "00000000-0000-0000-0000-000000000001", "name": "x", "body": {"type": "data_map", "rules": 5}});
         assert!(serde_json::from_value::<Resource>(bad).is_err());
         let bad_fmt = ResourceBody::RecordFormat(Box::new(RecordFormat {
             fields: vec![FieldDef::new("", FieldType::Text)],
@@ -497,7 +495,7 @@ mod tests {
 
     #[test]
     fn graphic_resources_round_trip_and_unreadable_ones_are_kept() {
-        let j = serde_json::json!({"id": 3, "name": "Diag", "body": {"type": "hatch", "units": "world", "lines": [{"angle": 45.0, "spacing": 2.0}]}});
+        let j = serde_json::json!({"id": "00000000-0000-0000-0000-000000000003", "name": "Diag", "body": {"type": "hatch", "units": "world", "lines": [{"angle": 45.0, "spacing": 2.0}]}});
         let r: Resource = serde_json::from_value(j).unwrap();
         assert!(matches!(&r.body, ResourceBody::Graphic(_)));
         assert_eq!((r.body.type_name(), r.body.validate()), ("hatch", Ok(())));
@@ -505,10 +503,13 @@ mod tests {
         assert_eq!(back, r);
         let mut store = Resources::default();
         store.push(r);
-        assert!(store.hatch(ResourceId(3)).is_some() && store.symbol(ResourceId(3)).is_none());
+        assert!(
+            store.hatch(ResourceId::from_num(3)).is_some()
+                && store.symbol(ResourceId::from_num(3)).is_none()
+        );
         assert!(store.find_graphic("hatch", "diag").is_some());
         // A hatch in a shape that this version cannot read stays as it is.
-        let old = serde_json::json!({"id": 4, "name": "Old", "body": {"type": "hatch", "angle": 45, "rows": [1]}});
+        let old = serde_json::json!({"id": "00000000-0000-0000-0000-000000000004", "name": "Old", "body": {"type": "hatch", "angle": 45, "rows": [1]}});
         let r: Resource = serde_json::from_value(old.clone()).unwrap();
         assert!(matches!(r.body, ResourceBody::Unknown(_)));
         assert_eq!(serde_json::to_value(&r).unwrap(), old);
@@ -530,7 +531,7 @@ mod tests {
             GraphicResource, LineElement, LineTypeDef, PatternUnits, SymbolDef, SymbolItem,
         };
         let sym = |id: u64, line_type: u64| Resource {
-            id: ResourceId(id),
+            id: ResourceId(crate::uid::Uid::from_num(id)),
             name: format!("S{id}"),
             body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
                 items: vec![SymbolItem {
@@ -539,7 +540,7 @@ mod tests {
                         radius: 1.0,
                     },
                     attrs: crate::model::Attributes {
-                        line_type: Some(ResourceId(line_type)),
+                        line_type: Some(ResourceId(crate::uid::Uid::from_num(line_type))),
                         ..Default::default()
                     },
                     class: None,
@@ -549,14 +550,14 @@ mod tests {
         };
         // A symbol whose circle has a line type with a mark of the same symbol.
         let lt = Resource {
-            id: ResourceId(2),
+            id: ResourceId::from_num(2),
             name: "Fence".into(),
             body: ResourceBody::Graphic(Box::new(GraphicResource::LineType(LineTypeDef {
                 units: PatternUnits::Paper,
                 elements: vec![
                     LineElement::Dash { length: 1.0 },
                     LineElement::Mark {
-                        symbol: ResourceId(1),
+                        symbol: ResourceId::from_num(1),
                         scale: 1.0,
                         rotate: true,
                     },

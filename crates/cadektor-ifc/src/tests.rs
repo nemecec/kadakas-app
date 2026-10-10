@@ -34,7 +34,7 @@ fn square(x0: f64, y0: f64, s: f64) -> Vec<Vertex> {
     ])
 }
 
-fn run(ed: &mut Editor, c: Command) -> Vec<u64> {
+fn run(ed: &mut Editor, c: Command) -> Vec<cadektor_core::uid::Uid> {
     ed.execute(&c).unwrap().created
 }
 
@@ -69,7 +69,7 @@ fn site_shape() -> Shape {
 
 /// A document with every kind of object that the export handles.
 pub fn sample() -> Document {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     run(
         &mut ed,
         Command::SetGeoreference {
@@ -626,7 +626,7 @@ fn all_elements_are_in_the_site_and_the_tree_is_complete() {
     {
         assert!(e.attrs[5].as_ref_id().is_some());
         assert!(e.attrs[6].as_ref_id().is_some());
-        assert!(str_of(&e.attrs[7]).parse::<u64>().is_ok());
+        assert!(cadektor_core::uid::Uid::parse(str_of(&e.attrs[7])).is_some());
         assert!(matches!(e.attrs[8], Value::Enum(_)));
     }
 }
@@ -777,7 +777,17 @@ fn guids_are_stable_and_follow_object_ids() {
         .to_string();
     assert!(tag_guid(&f, &slab).is_some());
     assert_eq!(tag_guid(&f, &slab), tag_guid(&g, &slab));
-    // A different project GUID gives different GlobalIds.
+    // The GlobalId of an object is its ID in the IFC alphabet: another project GUID leaves it.
+    let id = doc
+        .objects
+        .values()
+        .find(|o| matches!(o.shape, Shape::Hardscape { .. }))
+        .unwrap()
+        .id;
+    assert_eq!(
+        tag_guid(&f, &slab),
+        Some(crate::guid::encode(id.0.as_u128()))
+    );
     let mut other = Editor::new(doc);
     other
         .execute(&Command::SetProjectGuid {
@@ -785,7 +795,15 @@ fn guids_are_stable_and_follow_object_ids() {
         })
         .unwrap();
     let h = parsed(other.doc(), &IfcOptions::default());
-    assert_ne!(tag_guid(&f, &slab), tag_guid(&h, &slab));
+    assert_eq!(tag_guid(&f, &slab), tag_guid(&h, &slab));
+    // The GUIDs of what belongs to the project (the site, the storeys, the relations) follow it.
+    let site_guid = |f: &StepFile| {
+        f.entities
+            .iter()
+            .find(|e| e.name == "IFCSITE")
+            .map(|e| str_of(&e.attrs[0]).to_string())
+    };
+    assert_ne!(site_guid(&f), site_guid(&h));
 }
 
 #[test]
@@ -1061,7 +1079,7 @@ fn hidden_objects_and_sheet_layers_are_skipped() {
 
 #[test]
 fn degenerate_objects_are_skipped_with_a_reason() {
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     // A site model with too few points makes no surface.
     add(
         &mut ed,
@@ -1137,7 +1155,7 @@ fn degenerate_objects_are_skipped_with_a_reason() {
 
 #[test]
 fn georeference_without_a_crs_is_noted() {
-    let mut ed = Editor::new(Document::default());
+    let mut ed = Editor::new(Document::with_sequential_ids());
     run(
         &mut ed,
         Command::SetGeoreference {
@@ -1318,7 +1336,7 @@ fn the_view_definition_is_in_the_header() {
 
 #[test]
 fn tiny_plants_do_not_panic() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     for (spread, height) in [
         (15.0, 15.0),
         (10.0, 10.0),
@@ -1583,7 +1601,7 @@ proptest! {
         dbh in prop_oneof![0.0..30.0f64, 0.0..1.0e4f64],
         tree in any::<bool>(),
     ) {
-        let mut ed = Editor::default();
+        let mut ed = Editor::with_sequential_ids();
         let shape = if tree {
             Shape::ExistingTree { at: v2(0.0, 0.0), species: String::new(), dbh, spread, height, condition: TreeCondition::Good, action: TreeAction::Retain, rpz_factor: None, rpz_cap: None }
         } else {
@@ -1603,7 +1621,7 @@ proptest! {
         extra_layer in any::<bool>(),
         opts in arb_options(),
     ) {
-        let mut ed = Editor::default();
+        let mut ed = Editor::with_sequential_ids();
         let class = ClassId(run(&mut ed, Command::AddClass { name: "Ü".into(), attrs: Attributes { fill: Some(Color([1, 2, 3, 200])), ..Default::default() } })[0]);
         let layer = if extra_layer { Some(LayerId(run(&mut ed, Command::AddLayer { name: "L2".into(), elevation: 1500.0, scale: None, kind: None })[0])) } else { None };
         for s in shapes {
@@ -1741,7 +1759,7 @@ fn ifc4x3_names_vegetation_and_counts_in_integers() {
 
 #[test]
 fn ifc2x3_without_a_georeference_or_with_a_bad_crs_still_writes() {
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     add(&mut ed, site_shape());
     let f = parsed(ed.doc(), &with_version("IFC2X3"));
     assert!(!f.entities.iter().any(|e| e.name == "IFCPROPERTYSET"

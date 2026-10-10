@@ -1,3 +1,4 @@
+from helpers import uid
 """Scenario: a landscape architect builds a plant catalog, places plants in every mode,
 reads the schedule, and checks existing trees."""
 
@@ -237,7 +238,7 @@ def test_tag_is_a_shape_with_an_editable_position(cad):
     assert shape["at"] == [50, 1050] and shape["anchor"] == [50, 50]
     cad.execute({"op": "modify_object", "id": tag, "shape": {**shape, "at": [300, 2000]}})
     assert cad.result("objects.get", {"id": tag})["shape"]["at"] == [300, 2000]
-    err = cad.error("execute", {"command": {"op": "add_object", "shape": {"kind": "plant_tag", "at": [0, 0], "anchor": [0, 0], "style": 9999}}})
+    err = cad.error("execute", {"command": {"op": "add_object", "shape": {"kind": "plant_tag", "at": [0, 0], "anchor": [0, 0], "style": uid(9999)}}})
     assert err["code"] == 2
 
 
@@ -399,27 +400,26 @@ def test_every_plant_form_renders_in_3d(cad, form):
     assert png["width"] == 160 and png["png_base64"]
 
 
-def test_old_documents_load_and_plants_keep_their_own_fields(cad):
+def test_documents_without_resources_load_and_plants_keep_their_own_fields(cad):
     doc = {
-        "format_version": 1,
-        "layers": [{"id": 1, "name": "Layer 1", "visible": True, "locked": False, "elevation": 0.0, "scale": 100.0}],
-        "classes": [{"id": 0, "name": "None", "visible": True, "attrs": {}}],
-        "objects": [{"id": 5, "layer": 1, "class": 0,
+        "format_version": 3,
+        "layers": [{"id": uid(1), "name": "Layer 1", "visible": True, "locked": False, "elevation": 0.0, "scale": 100.0}],
+        "classes": [{"id": uid(0), "name": "None", "visible": True, "attrs": {}}],
+        "objects": [{"id": uid(5), "layer": uid(1), "class": uid(0),
                      "shape": {"kind": "plant", "at": [1.0, 2.0], "species": "Quercus robur", "spread": 6000.0, "height": 12000.0}}],
-        "active_layer": 1,
-        "active_class": 0,
-        "next_id": 6,
+        "active_layer": uid(1),
+        "active_class": uid(0),
     }
     cad.result("document.load", {"document": doc})
-    obj = cad.result("objects.get", {"id": 5})
+    obj = cad.result("objects.get", {"id": uid(5)})
     assert (obj["shape"]["species"], obj["shape"]["spread"], obj["shape"]["height"]) == ("Quercus robur", 6000, 12000)
     rows = cad.result("report.plant_schedule")["rows"]
     assert [(r["name"], r["count"], r["style"]) for r in rows] == [("Quercus robur", 1, None)]
     assert "resources" not in cad.doc()
     # Such a plant can join a style later.
     sid = make_style(cad)
-    cad.result("plants.set_style", {"ids": [5], "style": sid})
-    assert cad.result("objects.get", {"id": 5})["shape"]["spread"] == 7000
+    cad.result("plants.set_style", {"ids": [uid(5)], "style": sid})
+    assert cad.result("objects.get", {"id": uid(5)})["shape"]["spread"] == 7000
 
 
 def test_styles_survive_save_and_open(make_serve, tmp_path):
@@ -457,7 +457,7 @@ def test_schedule_rows_split_by_size_container_and_root(cad):
 def test_set_data_cannot_change_the_plant_link(cad):
     sid = make_style(cad)
     pid = place(cad, mode="single", style=sid, at=[0, 0])["created"][0]
-    err = cad.error("execute", {"command": {"op": "set_data", "id": pid, "set": {"plant": {"style": 999}}}})
+    err = cad.error("execute", {"command": {"op": "set_data", "id": pid, "set": {"plant": {"style": uid(999)}}}})
     assert "reserved" in err["message"]
     assert cad.error("execute", {"command": {"op": "set_data", "id": pid, "remove": ["plant"]}})["code"] == 3
     assert cad.result("objects.get", {"id": pid})["data"]["plant"]["style"] == sid
@@ -500,7 +500,7 @@ def test_catalog_numbers_with_both_separators_and_ambiguous_ones(cad):
 
 def test_unknown_resource_types_survive_a_load_and_save(cad):
     doc = cad.doc()
-    doc["resources"] = [{"id": 90, "name": "Hatch", "body": {"type": "hatch", "angle": 45}}]
+    doc["resources"] = [{"id": uid(90), "name": "Hatch", "body": {"type": "hatch", "angle": 45}}]
     cad.result("document.load", {"document": doc})
     assert cad.doc()["resources"] == doc["resources"]
     assert cad.result("plant_style.list")["styles"] == []

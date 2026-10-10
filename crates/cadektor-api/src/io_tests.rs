@@ -17,7 +17,7 @@ fn call(s: &mut Session, method: &str, p: Value) -> Result<Value, RpcError> {
 fn import_export_round_trip_through_the_api() {
     let dxf = tmp("in.dxf");
     std::fs::write(&dxf, "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nWalls\n10\n0\n20\n0\n11\n1000\n21\n0\n0\nENDSEC\n0\nEOF\n").unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = call(&mut s, "import.file", json!({"path": dxf})).unwrap();
     assert_eq!(r["imported"], 1);
     assert_eq!(r["report"]["classes_created"][0], "Walls");
@@ -38,7 +38,7 @@ fn import_export_round_trip_through_the_api() {
         json!({"path": back, "options": {"unit": "m"}}),
     )
     .unwrap();
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     let r = call(&mut t, "import.file", json!({"path": back})).unwrap();
     assert_eq!(r["imported"], 1);
     assert!(s.editor.undo());
@@ -57,7 +57,7 @@ fn import_export_round_trip_through_the_api() {
 
 #[test]
 fn errors_are_reported() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let e = call(&mut s, "import.file", json!({"path": "/nonexistent/x.dxf"})).unwrap_err();
     assert_eq!(e.code, 1);
     assert_eq!(
@@ -121,7 +121,7 @@ fn restricted_sessions_only_use_allowed_folders() {
     std::fs::write(inside.join("notes.txt"), line).unwrap();
     let mut s = Session {
         paths: crate::PathPolicy::restricted([inside.clone()]),
-        ..Session::default()
+        ..Session::with_sequential_ids()
     };
     // Inside works. Outside, `..` and a wrong extension do not.
     assert_eq!(
@@ -260,13 +260,13 @@ fn restricted_sessions_only_use_allowed_folders() {
             .is_ok()
     );
     assert_eq!(
-        Session::default()
+        Session::with_sequential_ids()
             .check_path(Path::new("rel/x.txt"), true, &["json"])
             .unwrap(),
         PathBuf::from("rel/x.txt")
     );
     // Without a policy any path works.
-    let mut free = Session::default();
+    let mut free = Session::with_sequential_ids();
     assert!(
         free.import_file_trusted(json!({"path": outside.join("secret.dxf")}))
             .is_ok()
@@ -287,7 +287,7 @@ fn ifc_export_follows_the_path_policy_and_never_changes_the_document() {
     let (inside, outside) = policy_dirs("ifc");
     let mut s = Session {
         paths: crate::PathPolicy::restricted([inside.clone()]),
-        ..Session::default()
+        ..Session::with_sequential_ids()
     };
     s.handle("execute", json!({"command": {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[0, 0], [1000, 0], [1000, 1000], [0, 1000]], "material": "Stone"}}})).unwrap();
     let guid = s.editor.doc().drawing.project.guid.clone();

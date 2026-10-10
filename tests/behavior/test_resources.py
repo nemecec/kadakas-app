@@ -6,7 +6,7 @@ import json
 import ezdxf
 from pytest import approx
 
-from helpers import parse_svg, rect_cmd
+from helpers import parse_svg, rect_cmd, uid
 
 
 def circle(cad, x, y=0, r=100):
@@ -120,8 +120,8 @@ def test_hatches_clip_to_the_shape_and_export_to_svg_and_dxf(cad, tmp_path):
     lines = [e for e in doc.modelspace() if e.dxftype() == "LINE"]
     assert len(lines) > 40
     # The class default fill_pattern also works: set it on the class.
-    cad.execute({"op": "modify_class", "id": 0, "attrs": {"fill_pattern": hatch}})
-    assert cad.result("resource.get", {"id": hatch})["used_by"]["classes"] == [0]
+    cad.execute({"op": "modify_class", "id": uid(0), "attrs": {"fill_pattern": hatch}})
+    assert cad.result("resource.get", {"id": hatch})["used_by"]["classes"] == [uid(0)]
 
 
 def test_a_symbol_can_draw_a_plant_and_a_tile_repeats_a_symbol(cad):

@@ -7,6 +7,7 @@
 //!
 //! Units: mm for lengths and coordinates, degrees for angles, kPa for pressure, l/min for flow.
 
+use cadektor_core::uid::AsUid;
 use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
@@ -171,11 +172,11 @@ fn points(v: &Value, what: &str) -> Result<Vec<DVec2>, RpcError> {
         .collect()
 }
 
-fn opt_id(m: &Map<String, Value>, key: &str) -> Result<Option<u64>, RpcError> {
+fn opt_id(m: &Map<String, Value>, key: &str) -> Result<Option<cadektor_core::uid::Uid>, RpcError> {
     match m.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
-            .as_u64()
+            .as_uid()
             .map(Some)
             .ok_or_else(|| bad(format!("'{key}' must be an ID"))),
     }
@@ -265,7 +266,7 @@ fn add_many(
     s: &mut Session,
     shapes: Vec<IrrigationShape>,
     m: &Map<String, Value>,
-) -> Result<Vec<u64>, RpcError> {
+) -> Result<Vec<cadektor_core::uid::Uid>, RpcError> {
     if shapes.is_empty() {
         return Ok(vec![]);
     }
@@ -319,7 +320,7 @@ fn store_catalog(s: &mut Session, cat: &Catalog) -> Result<Value, RpcError> {
         .first()
         .copied()
         .or_else(|| doc_catalog_resource(s.editor.doc()).map(|r| r.0))
-        .unwrap_or(0);
+        .unwrap_or(cadektor_core::uid::Uid::from_num(0));
     Ok(json!({ "id": id }))
 }
 
@@ -400,7 +401,7 @@ fn catalog_import(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcE
 }
 
 /// The corner points of a polygon object.
-fn polygon_of(doc: &Document, id: u64) -> Result<(Vec<DVec2>, bool), RpcError> {
+fn polygon_of(doc: &Document, id: cadektor_core::uid::Uid) -> Result<(Vec<DVec2>, bool), RpcError> {
     let o = doc
         .object(ObjectId(id))
         .ok_or_else(|| bad(format!("object {id} does not exist")))?;
@@ -458,7 +459,7 @@ fn layout_outlets(
     positions: &[(DVec2, f64)],
     model: &str,
     arc: f64,
-) -> Result<Vec<u64>, RpcError> {
+) -> Result<Vec<cadektor_core::uid::Uid>, RpcError> {
     let shapes = positions
         .iter()
         .map(|(at, direction)| IrrigationShape::Outlet {

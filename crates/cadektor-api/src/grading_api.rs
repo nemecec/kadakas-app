@@ -5,6 +5,7 @@
 //! `site.analysis`, `spot.add|set|get`, `section.add|set|profile|place`.
 //! The objects are plain shapes with settings in `Object::data` (see `cadektor_site::grading`).
 
+use cadektor_core::uid::AsUid;
 use std::collections::BTreeMap;
 
 use glam::DVec2;
@@ -243,12 +244,15 @@ fn patched<T: Serialize + DeserializeOwned + Default>(
 
 fn wall_style_id(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(s) => doc
-            .resources
-            .iter()
-            .find(|r| r.name == *s && wall::style_of(doc, r.id).is_some())
-            .map(|r| r.id),
+        Value::String(s) => cadektor_core::uid::Uid::parse(s.trim())
+            .map(ResourceId)
+            .filter(|id| wall::style_of(doc, *id).is_some())
+            .or_else(|| {
+                doc.resources
+                    .iter()
+                    .find(|r| r.name == *s && wall::style_of(doc, r.id).is_some())
+                    .map(|r| r.id)
+            }),
         _ => None,
     };
     found
@@ -333,7 +337,7 @@ impl Session {
         key: &str,
         data: Value,
     ) -> Result<ObjectId, RpcError> {
-        let id = ObjectId(self.editor.doc().next_id());
+        let id = ObjectId(self.editor.doc().next_ids(1)[0]);
         let add = Command::AddObject {
             shape,
             layer,
@@ -1086,7 +1090,7 @@ impl Session {
                 o.data
                     .get(section::PROFILE_KEY)
                     .and_then(|v| v.get("section"))
-                    .and_then(Value::as_u64)
+                    .and_then(AsUid::as_uid)
                     == Some(id.0)
             })
             .map(|o| o.id)
@@ -1095,7 +1099,7 @@ impl Session {
         if !stale.is_empty() {
             commands.push(Command::DeleteObjects { ids: stale });
         }
-        let first = doc.next_id();
+        let planned = doc.next_ids(items.len());
         let mut ids = Vec::new();
         let mut bounds = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for (k, item) in items.iter().enumerate() {
@@ -1113,7 +1117,7 @@ impl Session {
                 class: None,
                 attrs,
             });
-            ids.push(ObjectId(first + k as u64));
+            ids.push(ObjectId(planned[k]));
         }
         for (obj_id, item) in ids.iter().zip(&items) {
             let tag = json!({ "section": id, "role": item.role });

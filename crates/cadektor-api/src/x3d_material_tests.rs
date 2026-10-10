@@ -1,17 +1,18 @@
 //! Massing models and material resources in glTF, GLB and OBJ exports and in sections.
 
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 use crate::Session;
 use crate::x3d_tests::{fail, glb_json, ok, slab, tmp};
 
-fn massing(s: &mut Session, roof: &str) -> u64 {
+fn massing(s: &mut Session, roof: &str) -> cadektor_core::uid::Uid {
     ok(
         s,
         "massing.add",
         json!({"footprint": [[0, 0], [8000, 0], [8000, 6000], [0, 6000]], "floors": 2, "floor_height": 3000, "roof": roof, "pitch": 30, "name": "House"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
@@ -20,7 +21,7 @@ fn massing_models_export_and_are_cut_by_sections() {
     let dir = tmp("massing");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = massing(&mut s, "gable");
     let glb = dir.join("m.glb");
     let r = ok(&mut s, "export.file", json!({"path": glb, "format": "glb"}));
@@ -50,7 +51,7 @@ fn massing_models_export_and_are_cut_by_sections() {
         "section_viewport.line_add",
         json!({"a": [-1000, 3000], "b": [9000, 3000], "name": "A"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(
         &mut s,
@@ -71,7 +72,7 @@ fn materials_flow_into_gltf_glb_and_obj() {
     let dir = tmp("materials");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = massing(&mut s, "flat");
     let slab_id = slab(&mut s, 10_000, 0, 14_000, 3000, 150, 0);
     ok(&mut s, "material.add_defaults", json!({}));
@@ -187,7 +188,7 @@ fn obj_texture_files_follow_the_path_policy() {
     std::fs::create_dir_all(&inside).unwrap();
     let mut s = Session {
         paths: crate::PathPolicy::restricted([inside.clone()]),
-        ..Session::default()
+        ..Session::with_sequential_ids()
     };
     let id = massing(&mut s, "flat");
     ok(&mut s, "material.add_defaults", json!({}));
@@ -214,13 +215,13 @@ fn obj_texture_files_follow_the_path_policy() {
 }
 
 /// A park of `n` multi-stem plants on a grid, a section line through the middle of it.
-fn park(s: &mut Session, n: i64) -> u64 {
+fn park(s: &mut Session, n: i64) -> cadektor_core::uid::Uid {
     let style = ok(
         s,
         "plant_style.create",
         json!({"name": "Clump", "botanical_name": "Amelanchier", "id_code": "AM", "category": "tree", "spread": 3000, "height": 6000, "form": "multi_stem"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let side = (n as f64).sqrt().ceil() as i64;
     let positions: Vec<Value> = (0..n)
@@ -236,7 +237,7 @@ fn park(s: &mut Session, n: i64) -> u64 {
         "section_viewport.line_add",
         json!({"a": [-2000, (side / 2) * 3500], "b": [side * 3500 + 2000, (side / 2) * 3500], "name": "P", "depth": 12000}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
@@ -245,7 +246,7 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
     let dir = tmp("park");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let line = park(&mut s, 3000);
     // Instancing: the plants of one style share a few meshes, not one each.
     let glb = dir.join("park.glb");
@@ -260,7 +261,7 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
     assert!(std::fs::metadata(&glb).unwrap().len() < 6_000_000);
     // A section of the park, in a debug build, in seconds; later calls and the sheet use the cache.
     let sheet = ok(&mut s, "sheet.create", json!({"name": "S", "paper": "a1"}))["layer"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let t = std::time::Instant::now();
     let vp = ok(
@@ -268,7 +269,7 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
         "section_viewport.create",
         json!({"sheet": sheet, "line": line, "scale": "fit"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let first = t.elapsed();
     assert!(first.as_secs_f64() < 5.0, "create took {first:?}");
@@ -307,7 +308,7 @@ fn views_far_from_the_plants_get_coarser_scenes_and_exports_choose_their_detail(
     let dir = tmp("lod");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     park(&mut s, 50);
     let near = s.scene_for_pixel_size(5.0);
     let far = s.scene_for_pixel_size(500.0);
@@ -351,7 +352,7 @@ fn obj_names_with_spaces_and_equal_cleaned_names_stay_apart() {
     let dir = tmp("objnames");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = massing(&mut s, "flat");
     let b = slab(&mut s, 10_000, 0, 14_000, 3000, 150, 0);
     // "Red brick" and "Red_brick" are the same text once spaces are cleaned.

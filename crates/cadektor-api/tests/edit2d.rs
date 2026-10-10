@@ -2,6 +2,7 @@
 //! `snap.*`, `visibility.*`, and the command schema in `describe`.
 
 use cadektor_api::{METHODS, Session};
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 fn call(s: &mut Session, m: &str, p: Value) -> Value {
@@ -19,29 +20,29 @@ fn fail(s: &mut Session, m: &str, p: Value) -> (i64, String) {
     }
 }
 
-fn add(s: &mut Session, shape: Value) -> u64 {
+fn add(s: &mut Session, shape: Value) -> cadektor_core::uid::Uid {
     call(
         s,
         "execute",
         json!({"command": {"op": "add_object", "shape": shape}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
-fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> u64 {
+fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) -> cadektor_core::uid::Uid {
     add(s, json!({"kind": "line", "a": a, "b": b}))
 }
 
-fn rect(s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64) -> u64 {
+fn rect(s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64) -> cadektor_core::uid::Uid {
     add(s, json!({"kind": "rect", "min": [x0, y0], "max": [x1, y1]}))
 }
 
-fn circle(s: &mut Session, x: f64, y: f64, r: f64) -> u64 {
+fn circle(s: &mut Session, x: f64, y: f64, r: f64) -> cadektor_core::uid::Uid {
     add(s, json!({"kind": "circle", "center": [x, y], "radius": r}))
 }
 
-fn shape(s: &mut Session, id: u64) -> Value {
+fn shape(s: &mut Session, id: cadektor_core::uid::Uid) -> Value {
     call(s, "objects.get", json!({"id": id}))["shape"].clone()
 }
 
@@ -83,7 +84,7 @@ fn every_method_of_these_modules_is_listed_and_routed() {
     for n in names {
         assert!(METHODS.iter().any(|(m, d)| *m == n && !d.is_empty()), "{n}");
     }
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     for n in names {
         // Empty params are an error of the parameters, never an unknown method.
         if let Err(e) = s.handle(n, json!({})) {
@@ -106,14 +107,14 @@ fn every_method_of_these_modules_is_listed_and_routed() {
 
 #[test]
 fn transforms_copy_and_select() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let c = circle(&mut s, 1000.0, 0.0, 100.0);
     let out = call(
         &mut s,
         "edit.scale",
         json!({"ids": [c], "center": [0, 0], "sx": 2, "copy": true}),
     );
-    let copy = out["created"][0].as_u64().unwrap();
+    let copy = out["created"][0].as_uid().unwrap();
     assert_eq!(
         call(&mut s, "selection.get", json!({}))["ids"],
         json!([copy])
@@ -167,7 +168,7 @@ fn transforms_copy_and_select() {
 
 #[test]
 fn arrays_in_three_shapes() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let c = circle(&mut s, 500.0, 0.0, 10.0);
     let lin = call(
         &mut s,
@@ -190,18 +191,18 @@ fn arrays_in_three_shapes() {
 
 #[test]
 fn offset_and_its_errors() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let l = line(&mut s, [0.0, 0.0], [100.0, 0.0]);
     let r = rect(&mut s, 0.0, 100.0, 50.0, 150.0);
     // A line offsets to its left by default, a rectangle outwards.
     let o = call(&mut s, "edit.offset", json!({"id": l, "distance": 10}));
     assert!(near(
-        &shape(&mut s, o["created"][0].as_u64().unwrap())["a"],
+        &shape(&mut s, o["created"][0].as_uid().unwrap())["a"],
         [0.0, 10.0]
     ));
     let o = call(&mut s, "edit.offset", json!({"id": r, "distance": 10}));
     assert_eq!(
-        shape(&mut s, o["created"][0].as_u64().unwrap())["min"],
+        shape(&mut s, o["created"][0].as_uid().unwrap())["min"],
         json!([-10.0, 90.0])
     );
     call(
@@ -215,7 +216,10 @@ fn offset_and_its_errors() {
         (json!({"id": l, "distance": 1, "through": [0, 0]}), -32602),
         (json!({"id": l, "distance": 1, "side": "up"}), -32602),
         (json!({"id": l, "through": [null, 0]}), -32602),
-        (json!({"id": 999, "distance": 1}), 2),
+        (
+            json!({"id": "00000000-0000-0000-0000-0000000003e7", "distance": 1}),
+            2,
+        ),
         (json!({"id": l, "distance": -1}), 3),
     ] {
         assert_eq!(fail(&mut s, "edit.offset", p.clone()).0, code, "{p}");
@@ -224,7 +228,7 @@ fn offset_and_its_errors() {
 
 #[test]
 fn fillet_and_chamfer_forms() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = line(&mut s, [0.0, 0.0], [1000.0, 0.0]);
     let b = line(&mut s, [0.0, 0.0], [0.0, 1000.0]);
     let p = rect(&mut s, 5000.0, 0.0, 6000.0, 1000.0);
@@ -325,7 +329,7 @@ fn fillet_and_chamfer_forms() {
 
 #[test]
 fn trim_extend_split() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let t = line(&mut s, [0.0, 0.0], [1000.0, 0.0]);
     let c1 = line(&mut s, [300.0, -50.0], [300.0, 50.0]);
     let c2 = line(&mut s, [700.0, -50.0], [700.0, 50.0]);
@@ -392,7 +396,7 @@ fn trim_extend_split() {
 
 #[test]
 fn surfaces() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = rect(&mut s, 0.0, 0.0, 1000.0, 1000.0);
     let b = rect(&mut s, 500.0, 500.0, 1500.0, 1500.0);
     let area = |s: &mut Session| -> f64 {
@@ -457,7 +461,11 @@ fn surfaces() {
         ("surface.add", json!({}), -32602),
         ("surface.subtract", json!({"base": a}), -32602),
         ("surface.subtract", json!({"cutters": [b]}), -32602),
-        ("surface.add", json!({"ids": [999, 998]}), 2),
+        (
+            "surface.add",
+            json!({"ids": ["00000000-0000-0000-0000-0000000003e7", "00000000-0000-0000-0000-0000000003e6"]}),
+            2,
+        ),
     ] {
         assert_eq!(fail(&mut s, m, p.clone()).0, code, "{m} {p}");
     }
@@ -465,7 +473,7 @@ fn surfaces() {
 
 #[test]
 fn query_by_criteria() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r1 = rect(&mut s, 0.0, 0.0, 1000.0, 1000.0);
     let r2 = rect(&mut s, 0.0, 0.0, 5000.0, 5000.0);
     circle(&mut s, 0.0, 0.0, 500.0);
@@ -486,7 +494,11 @@ fn query_by_criteria() {
     assert_eq!(q["truncated"], true);
     assert_eq!(q["rows"][0]["values"], json!(["rect"]));
     assert_eq!(call(&mut s, "selection.get", json!({}))["ids"], json!([r1]));
-    let q = call(&mut s, "objects.query", json!({"layer": 1, "class": 0}));
+    let q = call(
+        &mut s,
+        "objects.query",
+        json!({"layer": "00000000-0000-0000-0000-000000000001", "class": "00000000-0000-0000-0000-000000000000"}),
+    );
     assert_eq!(q["count"], 3);
     let q = call(
         &mut s,
@@ -513,7 +525,7 @@ fn query_by_criteria() {
 
 #[test]
 fn snapping_settings_and_queries() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     line(&mut s, [0.0, 0.0], [1000.0, 0.0]);
     let g = call(&mut s, "snap.get", json!({}));
     assert_eq!(g["set"]["grid"], true);
@@ -600,7 +612,7 @@ fn snapping_settings_and_queries() {
 
 #[test]
 fn smart_points_and_edges() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     line(&mut s, [0.0, 0.0], [1000.0, 0.0]);
     call(
         &mut s,
@@ -670,20 +682,20 @@ fn smart_points_and_edges() {
 
 #[test]
 fn visibility_modes() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let layer = call(
         &mut s,
         "execute",
         json!({"command": {"op": "add_layer", "name": "Survey", "elevation": 0}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let v = call(
         &mut s,
         "visibility.set",
-        json!({"mode": "grey", "layers": [layer], "classes": [0]}),
+        json!({"mode": "grey", "layers": [layer], "classes": ["00000000-0000-0000-0000-000000000000"]}),
     );
-    let mode = |v: &Value, key: &str, id: u64| -> Value {
+    let mode = |v: &Value, key: &str, id: cadektor_core::uid::Uid| -> Value {
         v[key]
             .as_array()
             .unwrap()
@@ -693,7 +705,10 @@ fn visibility_modes() {
             .clone()
     };
     assert_eq!(mode(&v, "layers", layer), "grey");
-    assert_eq!(mode(&v, "classes", 0), "grey");
+    assert_eq!(
+        mode(&v, "classes", cadektor_core::uid::Uid::from_num(0)),
+        "grey"
+    );
     assert_eq!(
         call(&mut s, "document.summary", json!({}))["grey"]["layers"],
         json!([layer])
@@ -705,12 +720,24 @@ fn visibility_modes() {
     );
     assert_eq!(mode(&v, "layers", layer), "invisible");
     let v = call(&mut s, "visibility.get", json!({}));
-    assert_eq!(mode(&v, "layers", 1), "visible");
+    assert_eq!(
+        mode(&v, "layers", cadektor_core::uid::Uid::from_num(1)),
+        "visible"
+    );
     for (p, code) in [
-        (json!({"mode": "pink", "layers": [1]}), -32602),
-        (json!({"layers": [1]}), -32602),
+        (
+            json!({"mode": "pink", "layers": ["00000000-0000-0000-0000-000000000001"]}),
+            -32602,
+        ),
+        (
+            json!({"layers": ["00000000-0000-0000-0000-000000000001"]}),
+            -32602,
+        ),
         (json!({"mode": "grey"}), 3),
-        (json!({"mode": "grey", "layers": [999]}), 2),
+        (
+            json!({"mode": "grey", "layers": ["00000000-0000-0000-0000-0000000003e7"]}),
+            2,
+        ),
     ] {
         assert_eq!(fail(&mut s, "visibility.set", p.clone()).0, code, "{p}");
     }
@@ -718,7 +745,7 @@ fn visibility_modes() {
 
 #[test]
 fn the_command_schema_and_the_screenshot_error() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let plain = call(&mut s, "describe", json!({}));
     assert!(plain.get("command_schema").is_none());
     assert!(
@@ -742,20 +769,20 @@ fn the_command_schema_and_the_screenshot_error() {
 
 #[test]
 fn grey_objects_cannot_be_selected_or_edited_but_they_can_cut() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let survey = call(
         &mut s,
         "execute",
         json!({"command": {"op": "add_layer", "name": "Survey", "elevation": 0}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let t = call(
         &mut s,
         "execute",
         json!({"command": {"op": "add_object", "layer": survey, "shape": {"kind": "line", "a": [0, 0], "b": [1000, 0]}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let plain = line(&mut s, [0.0, 100.0], [1000.0, 100.0]);
     call(
@@ -767,7 +794,7 @@ fn grey_objects_cannot_be_selected_or_edited_but_they_can_cut() {
     let (code, msg) = fail(
         &mut s,
         "visibility.set",
-        json!({"mode": "grey", "layers": [1]}),
+        json!({"mode": "grey", "layers": ["00000000-0000-0000-0000-000000000001"]}),
     );
     assert_eq!(code, 3);
     assert!(msg.contains("active layer"), "{msg}");
@@ -798,14 +825,14 @@ fn grey_objects_cannot_be_selected_or_edited_but_they_can_cut() {
         "execute",
         json!({"command": {"op": "add_class", "name": "Existing"}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let wall = call(
         &mut s,
         "execute",
         json!({"command": {"op": "add_object", "class": class, "shape": {"kind": "line", "a": [400, -500], "b": [400, 500]}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     call(
         &mut s,

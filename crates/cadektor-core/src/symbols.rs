@@ -553,10 +553,11 @@ pub fn is_used_by_objects(doc: &Document, symbol: ResourceId) -> bool {
 /// Repairs a document after a load: an instance that is marked as being edited, but whose edit group
 /// is gone, is shown again.
 pub fn repair_edits(doc: &mut Document) {
-    let editing: std::collections::HashSet<u64> = doc
+    use crate::uid::AsUid;
+    let editing: std::collections::HashSet<crate::uid::Uid> = doc
         .objects
         .values()
-        .filter_map(|g| g.data.get(EDIT_GROUP_KEY)?.get("instance")?.as_u64())
+        .filter_map(|g| g.data.get(EDIT_GROUP_KEY)?.get("instance")?.as_uid())
         .collect();
     for o in doc.objects.values_mut() {
         if o.data.contains_key(EDITING_KEY) && !editing.contains(&o.id.0) {
@@ -981,7 +982,7 @@ mod tests {
         );
         assert_eq!(instance_ids(ed.doc(), outer), vec![id]);
         assert!(is_used_by_objects(ed.doc(), outer));
-        assert!(!is_used_by_objects(ed.doc(), ResourceId(9999)));
+        assert!(!is_used_by_objects(ed.doc(), ResourceId::from_num(9999)));
     }
 
     #[test]
@@ -1064,11 +1065,11 @@ mod tests {
     fn missing_symbols_draw_nothing() {
         let mut ed = Editor::default();
         let o = Object::new(
-            ObjectId(50),
+            ObjectId::from_num(50),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Symbol {
-                symbol: ResourceId(77),
+                symbol: ResourceId::from_num(77),
                 at: v(3.0, 4.0),
                 rotation: 0.0,
                 scale: 1.0,
@@ -1149,7 +1150,7 @@ mod tests {
             xs.iter().cloned().fold(f64::INFINITY, f64::min) == -10.0
                 && xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max) == 10.0
         );
-        assert!(symbol_polylines(&ed.doc().resources, ResourceId(5555), 1.0).is_empty());
+        assert!(symbol_polylines(&ed.doc().resources, ResourceId::from_num(5555), 1.0).is_empty());
         assert!(
             shape_polylines(&Shape::Arc {
                 center: DVec2::ZERO,
@@ -1174,7 +1175,7 @@ mod tests {
     fn a_plant_symbol_fits_the_canopy() {
         let (ed, sym) = doc_with_symbol();
         let plant = Object::new(
-            ObjectId(90),
+            ObjectId::from_num(90),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Plant {
@@ -1193,8 +1194,15 @@ mod tests {
         );
         assert!(((b.1 - b.0).max_element() - 40.0).abs() < 1e-6);
         assert!(
-            plant_symbol_objects(ed.doc(), &plant, ResourceId(7777), DVec2::ZERO, 40.0, 0.0)
-                .is_empty()
+            plant_symbol_objects(
+                ed.doc(),
+                &plant,
+                ResourceId::from_num(7777),
+                DVec2::ZERO,
+                40.0,
+                0.0
+            )
+            .is_empty()
         );
         assert!(plant_symbol_objects(ed.doc(), &plant, sym, DVec2::ZERO, 0.0, 0.0).is_empty());
     }
@@ -1245,7 +1253,7 @@ mod tests {
         assert!(
             transform_shape(
                 &Shape::Symbol {
-                    symbol: ResourceId(1),
+                    symbol: ResourceId::from_num(1),
                     at: DVec2::ZERO,
                     rotation: 0.0,
                     scale: 1.0,
@@ -1294,7 +1302,7 @@ mod tests {
         assert!(close(lo, v(4.0, 4.0)) && close(hi, v(6.0, 6.0)));
         // A group with no members has no bounds.
         let empty = Object::new(
-            ObjectId(77),
+            ObjectId::from_num(77),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Group {
@@ -1327,7 +1335,7 @@ mod tests {
     #[test]
     fn a_loop_in_a_damaged_file_stops_at_the_depth_limit() {
         let mut doc = Document::default();
-        let me = ResourceId(5);
+        let me = ResourceId::from_num(5);
         let def = SymbolDef {
             items: vec![
                 SymbolItem {
@@ -1377,7 +1385,7 @@ mod tests {
             ..Default::default()
         };
         doc.resources.push(crate::resource::Resource {
-            id: ResourceId(10),
+            id: ResourceId::from_num(10),
             name: "L0".into(),
             body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(leaf))),
         });
@@ -1385,7 +1393,7 @@ mod tests {
             let items = (0..300)
                 .map(|k| SymbolItem {
                     shape: Shape::Symbol {
-                        symbol: ResourceId(9 + level),
+                        symbol: ResourceId(crate::uid::Uid::from_num(9 + level)),
                         at: v(k as f64, 0.0),
                         rotation: 0.0,
                         scale: 1.0,
@@ -1400,21 +1408,25 @@ mod tests {
                 ..Default::default()
             };
             doc.resources.push(crate::resource::Resource {
-                id: ResourceId(10 + level),
+                id: ResourceId(crate::uid::Uid::from_num(10 + level)),
                 name: format!("L{level}"),
                 body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))),
             });
         }
         let t = std::time::Instant::now();
-        let (out, truncated) = expand_report(&doc.resources, ResourceId(14), &DAffine2::IDENTITY);
+        let (out, truncated) = expand_report(
+            &doc.resources,
+            ResourceId::from_num(14),
+            &DAffine2::IDENTITY,
+        );
         assert!(truncated && out.is_empty());
         assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
         let obj = Object::new(
-            ObjectId(50),
+            ObjectId::from_num(50),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Symbol {
-                symbol: ResourceId(14),
+                symbol: ResourceId::from_num(14),
                 at: DVec2::ZERO,
                 rotation: 0.0,
                 scale: 1.0,
@@ -1428,7 +1440,7 @@ mod tests {
     fn marks_get_no_pattern_and_symbols_in_paper_units_keep_their_size() {
         let (mut ed, sym) = doc_with_symbol();
         let owner = Object::new(
-            ObjectId(60),
+            ObjectId::from_num(60),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Line {
@@ -1447,7 +1459,7 @@ mod tests {
         );
         assert!(m.data.contains_key(NO_PATTERN_KEY));
         let mut with_pattern = m.clone();
-        with_pattern.attrs.fill_pattern = Some(ResourceId(1));
+        with_pattern.attrs.fill_pattern = Some(ResourceId::from_num(1));
         assert!(
             crate::pattern::decorate(ed.doc(), &with_pattern, &with_pattern.attrs, 1.0).is_none()
         );

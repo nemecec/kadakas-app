@@ -170,7 +170,7 @@ pub fn describe() -> Value {
                 {"method": "worksheet.set_cell", "params": {"id": "Plants", "address": "L1", "input": "=SUM(G2:G20)", "decimals": 0}},
                 {"method": "worksheet.evaluate", "params": {"id": "Plants"}},
                 {"method": "worksheet.export", "params": {"id": "Plants", "format": "csv"}},
-                {"method": "worksheet.place", "params": {"id": "Plants", "at": [10, 280], "layer": 5}}
+                {"method": "worksheet.place", "params": {"id": "Plants", "at": [10, 280], "layer": "00000000-0000-0000-0000-000000000005"}}
             ],
             "templates": templates::TEMPLATES.iter().map(|t| json!({"id": t.id, "title": t.title, "description": t.description})).collect::<Vec<_>>(),
             "functions": cadektor_sheet::eval::FUNCTIONS.iter().map(|(n, d)| json!({"name": n, "doc": d})).collect::<Vec<_>>(),
@@ -225,16 +225,19 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
 /// A reference to a resource of one type: an ID, or a name.
 fn resource_ref(doc: &Document, v: &Value, ty: &str) -> Result<ResourceId, RpcError> {
     let found = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId).filter(|id| {
-            doc.resources
-                .get(*id)
-                .is_some_and(|r| r.body.type_name() == ty)
-        }),
-        Value::String(name) => doc
-            .resources
-            .iter()
-            .find(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(name.trim()))
-            .map(|r| r.id),
+        Value::String(name) => cadektor_core::uid::Uid::parse(name.trim())
+            .map(ResourceId)
+            .filter(|id| {
+                doc.resources
+                    .get(*id)
+                    .is_some_and(|r| r.body.type_name() == ty)
+            })
+            .or_else(|| {
+                doc.resources
+                    .iter()
+                    .find(|r| r.body.type_name() == ty && r.name.eq_ignore_ascii_case(name.trim()))
+                    .map(|r| r.id)
+            }),
         _ => None,
     };
     found.ok_or_else(|| bad(format!("no {} {v}", ty.replace('_', " "))))

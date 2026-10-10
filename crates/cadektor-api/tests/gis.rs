@@ -2,6 +2,7 @@
 
 mod common;
 
+use cadektor_core::uid::AsUid;
 use std::sync::{Arc, Mutex};
 
 use cadektor_api::Session;
@@ -29,7 +30,7 @@ fn own_cache() -> std::path::PathBuf {
 }
 
 fn session_for(m: &Mock) -> Session {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.gis.urls = UrlPolicy::allow_list([m.base.clone()]);
     s.gis.cache_dir = Some(own_cache());
     s
@@ -92,7 +93,7 @@ fn set_crs(s: &mut Session) {
 
 #[test]
 fn the_default_policy_allows_no_address() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let m = services();
     let e = err(
         &mut s,
@@ -189,7 +190,7 @@ fn wms_underlay_in_the_document_and_refresh() {
         "gis.wms.add",
         json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 200000, 100000], "max_px": 400, "name": "Aerial", "opacity": 0.8}),
     );
-    let id = r["id"].as_u64().unwrap();
+    let id = r["id"].as_uid().unwrap();
     assert_eq!(
         (r["width"].as_u64().unwrap(), r["height"].as_u64().unwrap()),
         (400, 200)
@@ -233,7 +234,7 @@ fn wms_underlay_in_the_document_and_refresh() {
         "gis.wms.refresh",
         json!({"id": id, "bbox": [0, 0, 100000, 100000], "max_px": 200}),
     );
-    assert_eq!(r2["id"].as_u64().unwrap(), id);
+    assert_eq!(r2["id"].as_uid().unwrap(), id);
     let o = s
         .editor
         .doc()
@@ -253,9 +254,16 @@ fn wms_underlay_in_the_document_and_refresh() {
         "only the capabilities were asked again: {before} {after}"
     );
     // Errors.
-    let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert!(err(&mut s, "gis.wms.refresh", json!({"id": c})).contains("not an underlay"));
-    assert!(err(&mut s, "gis.wms.refresh", json!({"id": 9999})).contains("does not exist"));
+    assert!(
+        err(
+            &mut s,
+            "gis.wms.refresh",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .contains("does not exist")
+    );
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 10, 10], "opacity": 3})).contains("opacity"));
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["nope"], "bbox": [0, 0, 1000, 1000]})).contains("no layer named nope"));
     assert!(err(&mut s, "gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 1000, 1000], "layer": "Missing"})).contains("no layer named Missing"));
@@ -321,7 +329,7 @@ fn jobs_do_not_wait_when_blocking_is_off() {
 fn user_dialog_jobs_apply_through_the_poll() {
     let m = services();
     // The agent policy is empty, but the user's own dialog is trusted.
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.gis.cache_dir = Some(own_cache());
     set_crs(&mut s);
     let r = s
@@ -372,7 +380,7 @@ fn wfs_import_then_massing_from_shapes() {
         .find(|o| o.data.get("name") == Some(&json!("Tall")))
         .unwrap();
     assert_eq!(tall.data["height"], json!(12.5));
-    let ids: Vec<u64> = s.editor.doc().objects.keys().map(|k| k.0).collect();
+    let ids: Vec<cadektor_core::uid::Uid> = s.editor.doc().objects.keys().map(|k| k.0).collect();
     let dry = ok(
         &mut s,
         "massing.from_shapes",
@@ -460,13 +468,13 @@ fn wfs_import_then_massing_from_shapes() {
 
 #[test]
 fn massing_methods() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let r = ok(
         &mut s,
         "massing.add",
         json!({"footprint": [[0, 0], [12000, 0], [12000, 8000], [0, 8000]], "floors": 3, "floor_height": 2800, "roof": "hip", "pitch": 30, "name": "House"}),
     );
-    let id = r["id"].as_u64().unwrap();
+    let id = r["id"].as_uid().unwrap();
     let q = &r["quantities"];
     assert_eq!(q["floors"], 3);
     assert!((q["gross_floor_area_m2"].as_f64().unwrap() - 288.0).abs() < 1e-6);
@@ -535,10 +543,22 @@ fn massing_methods() {
     assert!(err(&mut s, "massing.set", json!({"id": id, "floors": 0})).contains("floors"));
     assert!(err(&mut s, "massing.set", json!({})).contains("id or ids"));
     assert!(
-        err(&mut s, "massing.set", json!({"id": 99999, "roof": "flat"})).contains("does not exist")
+        err(
+            &mut s,
+            "massing.set",
+            json!({"id": "00000000-0000-0000-0000-00000001869f", "roof": "flat"})
+        )
+        .contains("does not exist")
     );
-    assert!(err(&mut s, "massing.get", json!({"id": 99999})).contains("does not exist"));
-    let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    assert!(
+        err(
+            &mut s,
+            "massing.get",
+            json!({"id": "00000000-0000-0000-0000-00000001869f"})
+        )
+        .contains("does not exist")
+    );
+    let c = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert!(err(&mut s, "massing.get", json!({"id": c})).contains("not a massing"));
     assert!(err(&mut s, "massing.set", json!({"id": c, "roof": "flat"})).contains("not a massing"));
     assert!(err(&mut s, "massing.add", json!([1])).contains("object"));
@@ -548,12 +568,12 @@ fn massing_methods() {
         "execute",
         json!({"command": {"op": "add_object", "shape": {"kind": "massing", "footprint": [[0, 0], [5000, 0], [5000, 5000]], "height": 4000}}}),
     );
-    assert!(r["created"][0].as_u64().is_some());
+    assert!(r["created"][0].as_uid().is_some());
 }
 
 #[test]
 fn reproject_and_coords_through_the_api() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert!(err(&mut s, "gis.coords", json!({"x": 0, "y": 0})).contains("no CRS"));
     assert!(err(&mut s, "gis.reproject", json!({"crs": "EPSG:32635"})).contains("no CRS"));
     assert!(err(&mut s, "gis.georef.set", json!({"crs": "EPSG:4326"})).contains("projected"));
@@ -597,7 +617,7 @@ fn geoimage_import_follows_the_path_policy() {
     std::fs::write(dir.join("plan.png"), png(10, 10, [200, 30, 30, 255])).unwrap();
     std::fs::write(dir.join("plan.pgw"), "2\n0\n0\n-2\n385001\n6672009\n").unwrap();
     std::fs::write(dir.join("note.txt"), "x").unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // Into a document without a georeference: it gets one.
     let r = ok(
         &mut s,
@@ -606,7 +626,7 @@ fn geoimage_import_follows_the_path_policy() {
     );
     assert_eq!(r["georeference"]["crs"], "EPSG:3067");
     assert_eq!(r["width"], 10);
-    let id = r["id"].as_u64().unwrap();
+    let id = r["id"].as_uid().unwrap();
     assert!(
         s.editor
             .doc()
@@ -614,7 +634,7 @@ fn geoimage_import_follows_the_path_policy() {
             .is_some()
     );
     // Without a CRS anywhere there is a hint.
-    let mut s2 = Session::default();
+    let mut s2 = Session::with_sequential_ids();
     let e = err(
         &mut s2,
         "gis.geoimage.import",
@@ -622,7 +642,7 @@ fn geoimage_import_follows_the_path_policy() {
     );
     assert!(e.contains("Name the CRS"), "{e}");
     // A restricted session only reads allowed folders and picture types.
-    let mut s3 = Session::default();
+    let mut s3 = Session::with_sequential_ids();
     s3.paths = cadektor_api::PathPolicy::restricted([dir.clone()]);
     ok(
         &mut s3,
@@ -660,7 +680,7 @@ fn geoimage_import_follows_the_path_policy() {
         err(
             &mut s,
             "gis.geoimage.import",
-            json!({"path": dir.join("plan.png"), "layer": 9999})
+            json!({"path": dir.join("plan.png"), "layer": "00000000-0000-0000-0000-00000000270f"})
         )
         .contains("does not exist")
     );
@@ -670,7 +690,7 @@ fn geoimage_import_follows_the_path_policy() {
 
 #[test]
 fn describe_lists_the_new_methods_and_examples() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     let names: Vec<&str> = d["methods"]
         .as_array()
@@ -723,7 +743,7 @@ fn describe_lists_the_new_methods_and_examples() {
 
 #[test]
 fn replacing_the_document_keeps_the_network_policy() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.gis.urls = UrlPolicy::allow_list(["maps.example.org".to_string()]);
     s.replace_document(cadektor_core::model::Document::default());
     assert_eq!(s.gis.urls.entries(), ["maps.example.org".to_string()]);
@@ -802,7 +822,7 @@ fn wmts_through_the_api_and_refresh() {
         json!({"url": format!("{}/wmts", m.base), "layer": "base", "max_px": 256, "layer_name": "Maps", "opacity": 0.6, "name": "Base map"}),
     );
     assert_eq!(r["stats"]["service"], "wmts");
-    let id = r["id"].as_u64().unwrap();
+    let id = r["id"].as_uid().unwrap();
     let o = s
         .editor
         .doc()
@@ -850,7 +870,7 @@ fn wmts_through_the_api_and_refresh() {
 
 #[test]
 fn georef_set_checks_its_values() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert!(
         err(
             &mut s,
@@ -875,27 +895,27 @@ fn georef_set_checks_its_values() {
 
 #[test]
 fn massing_in_a_group_and_report_filters() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let a = ok(
         &mut s,
         "massing.add",
         json!({"footprint": [[0, 0], [5000, 0], [5000, 5000]], "name": "A"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let b = ok(
         &mut s,
         "massing.add",
         json!({"footprint": [[9000, 0], [14000, 0], [14000, 5000]], "name": "B"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let g = ok(
         &mut s,
         "execute",
         json!({"command": {"op": "group", "ids": [a]}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     // A new model in the group joins it.
     let c = ok(
@@ -903,7 +923,7 @@ fn massing_in_a_group_and_report_filters() {
         "massing.add",
         json!({"footprint": [[0, 9000], [5000, 9000], [5000, 14000]], "parent": g}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         s.editor
@@ -927,7 +947,7 @@ fn massing_in_a_group_and_report_filters() {
     let bad = err(
         &mut s,
         "massing.set",
-        json!({"ids": [b, 99999], "height": 1}),
+        json!({"ids": [b, cadektor_core::uid::Uid::from_num(99999)], "height": 1}),
     );
     assert!(bad.contains("does not exist"));
     assert_eq!(

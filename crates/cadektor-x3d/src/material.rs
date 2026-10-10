@@ -224,9 +224,9 @@ mod tests {
     fn base_colors_ignore_the_object() {
         let doc = Document::default();
         let obj = Object::new(
-            cadektor_core::model::ObjectId(1),
-            cadektor_core::model::LayerId(1),
-            cadektor_core::model::ClassId(1),
+            cadektor_core::model::ObjectId::from_num(1),
+            cadektor_core::model::LayerId::from_num(1),
+            cadektor_core::model::ClassId::from_num(1),
             cadektor_core::model::Shape::Locus3d {
                 p: glam::DVec3::ZERO,
             },

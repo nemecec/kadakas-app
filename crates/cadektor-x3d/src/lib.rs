@@ -49,7 +49,7 @@ pub struct ExportStats {
     pub textures: usize,
     pub bytes: usize,
     /// Objects that were left out, with the reason.
-    pub skipped: Vec<(u64, String)>,
+    pub skipped: Vec<(cadektor_core::uid::Uid, String)>,
 }
 
 /// A `.gltf` file as text.

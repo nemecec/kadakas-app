@@ -110,11 +110,22 @@ class StdioClient:
                 pass
 
 
+def uid(n: int) -> str:
+    """The ID that has the small number `n`. With `--sequential-ids` the server gives out these IDs
+    in order (2, 3, ...), and the layer 1 and the class 0 of a new document have them always."""
+    return "00000000-0000-0000-0000-%012x" % n
+
+
 class JsonRpc(StdioClient):
-    """`cadektor serve` client. `rpc` checks that the response id matches the request id."""
+    """`cadektor serve` client. `rpc` checks that the response id matches the request id.
+
+    A `serve` process runs with `--sequential-ids`: new IDs count 2, 3, 4, so a test can name them."""
 
     def __init__(self, args=("serve",), **kw):
-        super().__init__(list(args), **kw)
+        args = list(args)
+        if args and args[0] == "serve" and "--connect" not in args:
+            args.insert(1, "--sequential-ids")
+        super().__init__(args, **kw)
 
     def rpc(self, method, params=None) -> dict:
         req_id = self._next_id

@@ -4,6 +4,7 @@
 //! Methods: `survey.import_points`, `tree.import_survey`, `site.check`, `site.simplify`,
 //! `georef.survey_point`.
 
+use cadektor_core::uid::AsUid;
 use glam::{DVec2, DVec3};
 use serde_json::{Map, Value, json};
 
@@ -45,7 +46,7 @@ pub fn describe() -> Value {
             {"method": "survey.import_points", "params": {"text": "1,6672000.5,385000.25,12.5,TREE\n2,6672001,385001,12.75,KERB", "crs": "EPSG:3067"}},
             {"method": "survey.import_points", "params": {"path": "/data/points.txt", "columns": ["P", "E", "N", "Z", "C"], "delimiter": "space"}},
             {"method": "tree.import_survey", "params": {"text": "ID,E,N,Species,DBH (cm),Height (m),Spread (m),Condition,Action\nT1,10,20,Quercus robur,55,16,9,good,retain"}},
-            {"method": "site.check", "params": {"id": 5}},
+            {"method": "site.check", "params": {"id": "00000000-0000-0000-0000-000000000005"}},
             {"method": "georef.survey_point", "params": {"model": [0, 0], "map": [385000, 6672000], "crs": "EPSG:3067"}}
         ],
     })
@@ -236,8 +237,8 @@ fn import_points(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcEr
             georef: Some(g.clone()),
         });
     }
-    let first = doc.next_id();
-    let mut id = first;
+    let mut plan = doc.id_plan();
+    let (mut first, mut last) = (None, None);
     let mut n = 0usize;
     for (row, p) in parsed.rows.iter().zip(&positions) {
         let shape = Shape::Locus3d { p: *p };
@@ -256,12 +257,14 @@ fn import_points(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcEr
         if !row.description.is_empty() {
             set.insert("description".to_string(), json!(row.description));
         }
+        let id = plan.take();
+        first.get_or_insert(id);
+        last = Some(id);
         cmds.push(Command::SetData {
             id: ObjectId(id),
             set,
             remove: Vec::new(),
         });
-        id += 1;
         n += 1;
     }
     if n == 0 {
@@ -282,7 +285,7 @@ fn import_points(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcEr
         "skipped_count": skipped.len(),
         "georeference": new_georef,
         "ids_from": first,
-        "ids_to": id - 1,
+        "ids_to": last,
     }))
 }
 
@@ -318,8 +321,8 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
             georef: Some(g.clone()),
         });
     }
-    let first = doc.next_id();
-    let mut id = first;
+    let mut plan = doc.id_plan();
+    let (mut first, mut last) = (None, None);
     let mut n = 0usize;
     let mut bad_rows: Vec<(usize, String)> = Vec::new();
     for (t, p) in parsed.rows.iter().zip(&positions) {
@@ -352,12 +355,14 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         if !t.note.is_empty() {
             set.insert("note".to_string(), json!(t.note));
         }
+        let id = plan.take();
+        first.get_or_insert(id);
+        last = Some(id);
         cmds.push(Command::SetData {
             id: ObjectId(id),
             set,
             remove: Vec::new(),
         });
-        id += 1;
         n += 1;
     }
     if n == 0 {
@@ -375,7 +380,7 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         "skipped_count": skipped.len(),
         "georeference": new_georef,
         "ids_from": first,
-        "ids_to": id - 1,
+        "ids_to": last,
     }))
 }
 
@@ -385,7 +390,7 @@ fn site_sources(
 ) -> Result<(ObjectId, Vec<DVec3>, Vec<cadektor_core::site::SiteLine>), RpcError> {
     let id = m
         .get("id")
-        .and_then(Value::as_u64)
+        .and_then(AsUid::as_uid)
         .map(ObjectId)
         .ok_or_else(|| bad("give id: the ID of a site model"))?;
     let obj = s
@@ -519,7 +524,7 @@ fn known_point(s: &Session, v: &Value) -> Result<(DVec2, DVec2), RpcError> {
             _ => Err(bad(format!("{what} must be [x, y] with finite numbers"))),
         }
     };
-    let model = if let Some(id) = v.get("object").and_then(Value::as_u64) {
+    let model = if let Some(id) = v.get("object").and_then(AsUid::as_uid) {
         let o = s
             .editor
             .doc()
@@ -591,7 +596,7 @@ mod tests {
 
     #[test]
     fn point_files_become_loci_with_codes_and_a_georeference() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(
             &mut s,
             "survey.import_points",
@@ -613,7 +618,7 @@ mod tests {
 
     #[test]
     fn column_order_delimiter_and_units_are_options() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(
             &mut s,
             "survey.import_points",
@@ -640,7 +645,7 @@ mod tests {
 
     #[test]
     fn a_tree_survey_makes_existing_trees() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(
             &mut s,
             "tree.import_survey",
@@ -659,7 +664,7 @@ mod tests {
         );
     }
 
-    fn site_with_problems(s: &mut Session) -> u64 {
+    fn site_with_problems(s: &mut Session) -> cadektor_core::uid::Uid {
         let mut ids = Vec::new();
         for x in 0..6 {
             for y in 0..6 {
@@ -669,7 +674,7 @@ mod tests {
                     "execute",
                     json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x * 1000, y * 1000, z]}}}),
                 );
-                ids.push(r["created"][0].as_u64().unwrap());
+                ids.push(r["created"][0].as_uid().unwrap());
             }
         }
         let r = ok(
@@ -677,15 +682,15 @@ mod tests {
             "execute",
             json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [1000, 1000, 900]}}}),
         );
-        ids.push(r["created"][0].as_u64().unwrap());
+        ids.push(r["created"][0].as_uid().unwrap());
         ok(s, "site.create", json!({"source_ids": ids}))["id"]
-            .as_u64()
+            .as_uid()
             .unwrap()
     }
 
     #[test]
     fn site_check_reports_and_simplify_changes_the_source_in_one_step() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = site_with_problems(&mut s);
         let c = ok(&mut s, "site.check", json!({"id": id}));
         assert_eq!(c["clean"], false);
@@ -723,7 +728,7 @@ mod tests {
         );
         for bad_params in [
             json!({}),
-            json!({"id": 9999}),
+            json!({"id": "00000000-0000-0000-0000-00000000270f"}),
             json!({"id": id, "tolerance": 0}),
             json!({"id": id, "tolerance": "x"}),
         ] {
@@ -733,12 +738,18 @@ mod tests {
             s.handle("site.check", json!({"id": id, "z_tolerance": -1}))
                 .is_err()
         );
-        assert!(s.handle("site.check", json!({"id": 1})).is_err());
+        assert!(
+            s.handle(
+                "site.check",
+                json!({"id": "00000000-0000-0000-0000-000000000001"})
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn the_survey_point_sets_the_origin_and_two_points_set_the_rotation() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(
             &mut s,
             "georef.survey_point",
@@ -772,7 +783,7 @@ mod tests {
             json!({}),
             json!({"model": [0, 0]}),
             json!({"model": [0, "x"], "map": [0, 0]}),
-            json!({"object": 999, "map": [0, 0]}),
+            json!({"object": "00000000-0000-0000-0000-0000000003e7", "map": [0, 0]}),
             json!({"model": [0, 0], "map": [0, 0], "second": {"model": [0, 0], "map": [1, 1]}}),
         ] {
             assert!(s.handle("georef.survey_point", bad_params).is_err());
@@ -781,7 +792,7 @@ mod tests {
 
     #[test]
     fn bad_tree_rows_are_skipped_and_headers_decide_the_columns() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let r = ok(
             &mut s,
             "tree.import_survey",

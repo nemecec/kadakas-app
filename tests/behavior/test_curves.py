@@ -5,7 +5,7 @@ import math
 import pytest
 from pytest import approx
 
-from helpers import parse_svg
+from helpers import parse_svg, uid
 
 
 def arc(x, y, radius):
@@ -70,9 +70,9 @@ def test_set_vertex_changes_a_vertex_and_undo_restores_it(cad):
 
 
 @pytest.mark.parametrize("command", [
-    {"op": "set_vertex", "id": 2, "index": 9, "kind": {"kind": "corner"}},
-    {"op": "set_vertex", "id": 2, "index": 0, "kind": {"kind": "arc", "radius": -5}},
-    {"op": "set_vertex", "id": 99, "index": 0, "p": [0, 0]},
+    {"op": "set_vertex", "id": uid(2), "index": 9, "kind": {"kind": "corner"}},
+    {"op": "set_vertex", "id": uid(2), "index": 0, "kind": {"kind": "arc", "radius": -5}},
+    {"op": "set_vertex", "id": uid(99), "index": 0, "p": [0, 0]},
 ])
 def test_set_vertex_errors_are_reported_and_change_nothing(cad, command):
     cad.execute({"op": "add_object", "shape": {"kind": "hardscape", "boundary": rounded_square(2000, 100),
@@ -103,7 +103,7 @@ def test_svg_uses_true_arc_commands_for_curves(cad):
 
 def test_old_files_with_plain_points_load(cad):
     old = cad.doc()
-    old["objects"] = [{"id": 2, "layer": 1, "class": 0, "attrs": {},
+    old["objects"] = [{"id": uid(2), "layer": uid(1), "class": uid(0), "attrs": {},
                        "shape": {"kind": "hardscape", "boundary": [[0, 0], [3000, 0], [3000, 1200], [0, 1200]],
                                  "material": "Granite setts"}}]
     old["next_id"] = 3

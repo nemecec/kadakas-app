@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from helpers import rect_cmd
+from helpers import rect_cmd, uid
 
 # JSON-RPC protocol errors: the request is malformed.
 PROTOCOL_ERRORS = {"parse": -32700, "invalid_request": -32600, "method_not_found": -32601, "invalid_params": -32602}
@@ -67,18 +67,18 @@ def test_bad_params_are_invalid_params(cad, method, params):
     ("landscape area with two points", {"op": "add_object", "shape": {"kind": "landscape_area", "boundary": [[0, 0], [1, 1]], "name": "x"}}),
     ("plant with zero spread", {"op": "add_object", "shape": {"kind": "plant", "at": [0, 0], "species": "Oak", "spread": 0, "height": 1}}),
     ("text with zero height", {"op": "add_object", "shape": {"kind": "text", "at": [0, 0], "text": "a", "height": 0}}),
-    ("unknown layer", rect_cmd(0, 0, 1, 1, layer=999)),
-    ("unknown class", rect_cmd(0, 0, 1, 1, **{"class": 999})),
-    ("move unknown object", {"op": "move_objects", "ids": [999], "delta": [1, 0]}),
-    ("delete unknown object", {"op": "delete_objects", "ids": [999]}),
-    ("modify unknown object", {"op": "modify_object", "id": 999, "attrs": {}}),
-    ("modify layer unknown id", {"op": "modify_layer", "id": 999, "visible": False}),
-    ("modify class unknown id", {"op": "modify_class", "id": 999, "visible": False}),
-    ("delete unknown layer", {"op": "delete_layer", "id": 999}),
-    ("set active unknown layer", {"op": "set_active", "layer": 999}),
-    ("set active unknown class", {"op": "set_active", "class": 999}),
-    ("modify layer with zero scale", {"op": "modify_layer", "id": 1, "scale": 0}),
-    ("modify layer with negative scale", {"op": "modify_layer", "id": 1, "scale": -2}),
+    ("unknown layer", rect_cmd(0, 0, 1, 1, layer=uid(999))),
+    ("unknown class", rect_cmd(0, 0, 1, 1, **{"class": uid(999)})),
+    ("move unknown object", {"op": "move_objects", "ids": [uid(999)], "delta": [1, 0]}),
+    ("delete unknown object", {"op": "delete_objects", "ids": [uid(999)]}),
+    ("modify unknown object", {"op": "modify_object", "id": uid(999), "attrs": {}}),
+    ("modify layer unknown id", {"op": "modify_layer", "id": uid(999), "visible": False}),
+    ("modify class unknown id", {"op": "modify_class", "id": uid(999), "visible": False}),
+    ("delete unknown layer", {"op": "delete_layer", "id": uid(999)}),
+    ("set active unknown layer", {"op": "set_active", "layer": uid(999)}),
+    ("set active unknown class", {"op": "set_active", "class": uid(999)}),
+    ("modify layer with zero scale", {"op": "modify_layer", "id": uid(1), "scale": 0}),
+    ("modify layer with negative scale", {"op": "modify_layer", "id": uid(1), "scale": -2}),
 ])
 def test_invalid_commands_are_application_errors_and_change_nothing(cad, label, command):
     before = cad.doc()
@@ -90,8 +90,8 @@ def test_invalid_commands_are_application_errors_and_change_nothing(cad, label, 
 
 
 @pytest.mark.parametrize(("method", "params", "expected_text"), [
-    ("objects.get", {"id": 999}, "999"),
-    ("selection.set", {"ids": [999]}, "999"),
+    ("objects.get", {"id": uid(999)}, uid(999)),
+    ("selection.set", {"ids": [uid(999)]}, uid(999)),
 ])
 def test_references_to_unknown_objects_are_application_errors(cad, method, params, expected_text):
     error = cad.error(method, params)
@@ -128,7 +128,7 @@ def test_add_layer_rejects_non_positive_scale(cad, scale):
 
 def test_new_objects_never_reuse_an_id_after_document_load(cad):
     doc = cad.doc()
-    doc["objects"] = [{"id": 5, "layer": 1, "class": 0, "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}, "attrs": {}}]
+    doc["objects"] = [{"id": uid(5), "layer": uid(1), "class": uid(0), "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}, "attrs": {}}]
     doc["next_id"] = 2
     cad.result("document.load", {"document": doc})
     new_ids = [cad.execute(rect_cmd(i, i, i + 1, i + 1))[0] for i in range(4)]  # ids 2, 3, 4, 5 would collide
@@ -138,9 +138,9 @@ def test_new_objects_never_reuse_an_id_after_document_load(cad):
 
 
 @pytest.mark.parametrize(("command", "code", "kind"), [
-    ({"op": "delete_objects", "ids": [999]}, 2, "not_found"),
+    ({"op": "delete_objects", "ids": [uid(999)]}, 2, "not_found"),
     ({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": -1}}, 3, "validation"),
-    ({"op": "delete_layer", "id": 1}, 3, "validation"),
+    ({"op": "delete_layer", "id": uid(1)}, 3, "validation"),
 ])
 def test_commands_fail_with_distinct_codes_and_a_stable_kind(cad, command, code, kind):
     error = cad.error("execute", {"command": command})

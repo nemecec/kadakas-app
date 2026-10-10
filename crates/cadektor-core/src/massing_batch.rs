@@ -198,7 +198,7 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
         skipped: Vec::new(),
     };
     let mut commands = Vec::new();
-    let mut next = doc.next_id();
+    let mut next = doc.id_plan();
     let mut seen = std::collections::HashSet::new();
     let defaults = Attributes {
         fill: Some(PLAN_FILL),
@@ -272,8 +272,7 @@ pub fn from_shapes(doc: &Document, ids: &[ObjectId], opts: &FromShapesOptions) -
                 attrs,
             },
         });
-        let new_id = ObjectId(next);
-        next += 1;
+        let new_id = ObjectId(next.take());
         // The data of the shape (the properties of the feature) goes along.
         if !o.data.is_empty() {
             commands.push(Command::SetData {
@@ -375,7 +374,7 @@ mod tests {
             roof: RoofStyle::Gable,
             ..Default::default()
         };
-        let made = from_shapes(ed.doc(), &[a, b, c, d, a, ObjectId(999)], &opts);
+        let made = from_shapes(ed.doc(), &[a, b, c, d, a, ObjectId::from_num(999)], &opts);
         assert_eq!(made.created.len(), 3);
         assert_eq!(made.skipped.len(), 2);
         assert!(made.skipped[0].1.contains("not a closed shape"));

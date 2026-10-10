@@ -68,7 +68,7 @@ pub struct Demand {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Node {
     /// The ID of the drawing object, if the node comes from one.
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     pub label: String,
     pub poc: Option<Poc>,
     pub valve: Option<ValveSpec>,
@@ -98,7 +98,7 @@ pub struct Edge {
     pub inner_diameter_mm: f64,
     /// Hazen-Williams coefficient.
     pub c: f64,
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     /// A mainline passes a valve: it is not on the lateral side of the valve.
     pub through: bool,
     pub drip: Option<DripInfo>,
@@ -169,7 +169,7 @@ impl WarningKind {
 pub struct Warning {
     pub kind: WarningKind,
     /// The drawing object, when the warning is about one.
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     pub zone: Option<u32>,
     pub message: String,
 }
@@ -178,7 +178,7 @@ pub struct Warning {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeResult {
     pub edge: usize,
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     pub length_m: f64,
     pub flow_lpm: f64,
     pub velocity_ms: f64,
@@ -189,7 +189,7 @@ pub struct EdgeResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutletResult {
     pub node: NodeId,
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     pub label: String,
     pub flow_lpm: f64,
     pub pressure_kpa: f64,
@@ -202,7 +202,7 @@ pub struct OutletResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PathStep {
     pub node: NodeId,
-    pub object: Option<u64>,
+    pub object: Option<cadektor_core::uid::Uid>,
     pub label: String,
     /// Pressure at the node (after a valve there), in kPa.
     pub pressure_kpa: f64,
@@ -484,7 +484,7 @@ fn solve_zone(
     };
     let add_outlet = |res: &mut ZoneResult,
                       i: NodeId,
-                      object: Option<u64>,
+                      object: Option<cadektor_core::uid::Uid>,
                       label: String,
                       flow: f64,
                       min: f64| {
@@ -634,14 +634,16 @@ mod tests {
             length_m,
             inner_diameter_mm: d,
             c: 150.0,
-            object: Some(100 + a as u64 * 10 + b as u64),
+            object: Some(cadektor_core::uid::Uid::from_num(
+                100 + a as u64 * 10 + b as u64,
+            )),
             ..Edge::default()
         }
     }
 
     fn outlet(label: &str, flow: f64, min: f64, object: u64) -> Node {
         Node {
-            object: Some(object),
+            object: Some(cadektor_core::uid::Uid::from_num(object)),
             label: label.into(),
             demand: Some(Demand {
                 flow_lpm: flow,
@@ -746,7 +748,10 @@ mod tests {
         let z = sol.zone(1).unwrap();
         assert_eq!(z.warnings.len(), 1);
         assert_eq!(z.warnings[0].kind, WarningKind::LowPressure);
-        assert_eq!(z.warnings[0].object, Some(1));
+        assert_eq!(
+            z.warnings[0].object,
+            Some(cadektor_core::uid::Uid::from_num(1))
+        );
         assert!(z.outlets[0].margin_kpa < 0.0);
         assert_eq!(sol.all_warnings().len(), 1);
     }

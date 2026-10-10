@@ -64,7 +64,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             let doc = session.editor.doc();
             let rules = doc.drawing.view_rules.clone();
             let georeferenced = doc.georef.is_some();
-            let selection: Vec<u64> = session.selection.iter().map(|i| i.0).collect();
+            let selection: Vec<cadektor_core::uid::Uid> = session.selection.iter().map(|i| i.0).collect();
 
             ui.strong("Northing/easting grid");
             ui.horizontal(|ui| {

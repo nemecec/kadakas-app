@@ -204,12 +204,12 @@ mod tests {
             matches!(add_res(&mut ed, "Bad", symbol_with(wrong, circle())), Err(CommandError::Invalid(m)) if m.contains("hatch or tile"))
         );
         let missing = Attributes {
-            line_type: Some(ResourceId(999)),
+            line_type: Some(ResourceId::from_num(999)),
             ..Default::default()
         };
         assert_eq!(
             add_res(&mut ed, "Bad2", symbol_with(missing, circle())),
-            Err(CommandError::NoResource(ResourceId(999)))
+            Err(CommandError::NoResource(ResourceId::from_num(999)))
         );
         let tile = |s| {
             GraphicResource::Tile(TileDef {
@@ -257,8 +257,12 @@ mod tests {
         };
         assert!(add_obj(&mut ed, inst(sym), Attributes::default()).is_ok());
         assert_eq!(
-            add_obj(&mut ed, inst(ResourceId(777)), Attributes::default()),
-            Err(CommandError::NoResource(ResourceId(777)))
+            add_obj(
+                &mut ed,
+                inst(ResourceId::from_num(777)),
+                Attributes::default()
+            ),
+            Err(CommandError::NoResource(ResourceId::from_num(777)))
         );
         assert!(
             matches!(add_obj(&mut ed, inst(h), Attributes::default()), Err(CommandError::Invalid(m)) if m.contains("not a symbol"))
@@ -301,11 +305,11 @@ mod tests {
                 &mut ed,
                 circle(),
                 Attributes {
-                    line_type: Some(ResourceId(55)),
+                    line_type: Some(ResourceId::from_num(55)),
                     ..Default::default()
                 }
             ),
-            Err(CommandError::NoResource(ResourceId(55)))
+            Err(CommandError::NoResource(ResourceId::from_num(55)))
         );
         assert!(
             matches!(add_obj(&mut ed, Shape::Symbol { symbol: sym, at: v(0.0, 0.0), rotation: 0.0, scale: 0.0, scale_y: None }, Attributes::default()), Err(CommandError::Invalid(m)) if m.contains("zero"))
@@ -327,7 +331,7 @@ mod tests {
             ed.execute(&Command::AddClass {
                 name: "C".into(),
                 attrs: Attributes {
-                    fill_pattern: Some(ResourceId(404)),
+                    fill_pattern: Some(ResourceId::from_num(404)),
                     ..Default::default()
                 }
             })
@@ -430,9 +434,9 @@ mod tests {
         assert_eq!(
             ed.execute(&Command::DeleteResource {
                 id: h1,
-                reassign: Some(ResourceId(999))
+                reassign: Some(ResourceId::from_num(999))
             }),
-            Err(CommandError::NoResource(ResourceId(999)))
+            Err(CommandError::NoResource(ResourceId::from_num(999)))
         );
         let before = ed.doc().clone();
         ed.execute(&Command::DeleteResource {

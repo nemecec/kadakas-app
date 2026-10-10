@@ -5,6 +5,7 @@
 //!   sheet that show the cut through the 3D model (or an elevation) with cut faces and
 //!   the objects beyond.
 
+use cadektor_core::uid::AsUid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -123,7 +124,7 @@ pub(crate) fn describe() -> Value {
                 {"method": "section_viewport.line_add", "params": {"a": [0, 5000], "b": [20000, 5000], "name": "A", "look": "left"}},
                 {"method": "section_viewport.line_add", "params": {"a": [0, 0], "b": [20000, 0], "name": "North elevation", "mode": "elevation", "depth": 30000}},
                 {"method": "section_viewport.create", "params": {"sheet": "Sections", "line": 12, "scale": "fit"}},
-                {"method": "section_viewport.get", "params": {"id": 12}}
+                {"method": "section_viewport.get", "params": {"id": "00000000-0000-0000-0000-00000000000c"}}
             ]
         }
     })
@@ -152,7 +153,7 @@ fn point(m: &mut Map<String, Value>, key: &str) -> Result<Option<DVec2>, RpcErro
 
 fn id_of(m: &mut Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
     m.remove(key)
-        .and_then(|v| v.as_u64())
+        .and_then(|v| v.as_uid())
         .map(ObjectId)
         .ok_or_else(|| bad(format!("'{key}' is required (an object ID)")))
 }
@@ -228,7 +229,7 @@ impl Session {
         }
         only_known(&m, &LINE_KEYS)?;
         let s = patched(&SectionLine::default(), &m)?;
-        let id = ObjectId(doc.next_id());
+        let id = ObjectId(doc.next_ids(1)[0]);
         let add = Command::AddObject {
             shape: Shape::Line { a, b },
             layer,
@@ -493,7 +494,7 @@ impl Session {
         let mut next: Viewport = serde_json::from_value(v).map_err(bad)?;
         let mut sv = vp.section.clone().expect("checked");
         if let Some(l) = m.get("line") {
-            let l = ObjectId(l.as_u64().ok_or_else(|| bad("line is an object ID"))?);
+            let l = ObjectId(l.as_uid().ok_or_else(|| bad("line is an object ID"))?);
             if doc.object(l).and_then(SectionSpec::from_line).is_none() {
                 return Err(bad(format!("object {l} is not a section line")));
             }

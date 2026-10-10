@@ -69,6 +69,23 @@ pub fn derive(project: &str, tag: &str, id: u64) -> String {
     encode(((hi as u128) << 64) | lo as u128)
 }
 
+/// The GUID that goes with an object, layer, class or resource ID.
+///
+/// With the tag `obj`, the GUID is the ID itself: the 128 bits of the UUID in the IFC alphabet.
+/// The same object has the same GlobalId in every export and in every document that it is copied
+/// to, and it does not depend on the project. For other tags (the property set of an object, its
+/// quantities, the storey of a layer) the GUID comes from the project GUID, the tag and the ID.
+pub fn derive_uid(project: &str, tag: &str, id: crate::uid::Uid) -> String {
+    if tag == "obj" {
+        return encode(id.as_u128());
+    }
+    let id = id.as_u128().to_le_bytes();
+    let parts: [&[u8]; 3] = [project.as_bytes(), tag.as_bytes(), &id];
+    let hi = fnv(0xcbf2_9ce4_8422_2325, &parts);
+    let lo = fnv(0x9e37_79b9_7f4a_7c15, &parts);
+    encode(((hi as u128) << 64) | lo as u128)
+}
+
 /// A new GUID that differs in every call and every process.
 pub fn random() -> String {
     use std::hash::{BuildHasher, Hasher};
@@ -92,6 +109,24 @@ pub fn random() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guid_from_an_id_is_the_id_for_objects_and_derived_for_the_rest() {
+        let id = crate::uid::Uid::from_u128(0x0190_f1c2_7a3b_7c1d_8e2f_1234_5678_9abc);
+        // The object GUID is the ID, whatever the project.
+        assert_eq!(derive_uid("p", "obj", id), encode(id.as_u128()));
+        assert_eq!(derive_uid("q", "obj", id), derive_uid("p", "obj", id));
+        assert_eq!(decode(&derive_uid("p", "obj", id)), Some(id.as_u128()));
+        // Other tags depend on the tag, the project and the ID, and are stable.
+        let other = crate::uid::Uid::from_u128(id.as_u128() + 1);
+        let a = derive_uid("p", "pset:X", id);
+        assert_eq!(a, derive_uid("p", "pset:X", id));
+        assert_ne!(a, derive_uid("p", "pset:Y", id));
+        assert_ne!(a, derive_uid("q", "pset:X", id));
+        assert_ne!(a, derive_uid("p", "pset:X", other));
+        assert_ne!(a, derive_uid("p", "obj", id));
+        assert!(is_valid(&a));
+    }
 
     #[test]
     fn known_values() {

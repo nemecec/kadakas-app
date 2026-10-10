@@ -12,7 +12,7 @@ def test_serve_saves_and_opens_cdk_and_cdk_json(cad, make_serve, tmp_path):
     for name in ("plan.cdk", "plan.cdk.json"):
         f = tmp_path / name
         assert cad.result("file.save", {"path": str(f)}) == {"ok": True}
-        assert json.loads(f.read_text())["format_version"] == 2
+        assert json.loads(f.read_text())["format_version"] == 3
         other = make_serve()
         assert other.result("file.open", {"path": str(f)}) == {"ok": True}
         assert other.result("document.summary")["object_count"] == 1

@@ -11,7 +11,7 @@ fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
 }
 
-fn exec(ed: &mut Editor, c: Command) -> Result<Vec<u64>, CommandError> {
+fn exec(ed: &mut Editor, c: Command) -> Result<Vec<cadektor_core::uid::Uid>, CommandError> {
     ed.execute(&c).map(|o| o.created)
 }
 
@@ -126,7 +126,7 @@ proptest! {
     ) {
         let mut doc = Document::default();
         doc.classes[0].attrs = Attributes { pen: class_pen.map(Color), fill: None, line_weight: class_w, ..Default::default() };
-        let mut o = Object::new(ObjectId(40), FIRST_LAYER, NONE_CLASS, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
+        let mut o = Object::new(ObjectId::from_num(40), FIRST_LAYER, NONE_CLASS, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
         o.attrs = Attributes { pen: obj_pen.map(Color), fill: None, line_weight: obj_w, ..Default::default() };
         let mut vp = viewport(vec![FIRST_LAYER]);
         vp.class_overrides.insert(NONE_CLASS, ClassOverride { pen: ov_pen.map(Color), line_weight: ov_w, ..Default::default() });
@@ -301,7 +301,7 @@ fn viewports_and_title_blocks_go_on_sheet_layers_only() {
     assert!(matches!(
         add_on(
             &mut ed,
-            Shape::Viewport(Box::new(viewport(vec![LayerId(999)]))),
+            Shape::Viewport(Box::new(viewport(vec![LayerId::from_num(999)]))),
             s
         ),
         Err(CommandError::NoLayer(_))
@@ -310,7 +310,7 @@ fn viewports_and_title_blocks_go_on_sheet_layers_only() {
     let mut with_class = viewport(vec![]);
     with_class
         .class_overrides
-        .insert(ClassId(77), ClassOverride::default());
+        .insert(ClassId::from_num(77), ClassOverride::default());
     assert!(matches!(
         add_on(&mut ed, Shape::Viewport(Box::new(with_class)), s),
         Err(CommandError::NoClass(_))
@@ -318,7 +318,7 @@ fn viewports_and_title_blocks_go_on_sheet_layers_only() {
     let mut with_layer_override = viewport(vec![]);
     with_layer_override
         .layer_overrides
-        .insert(LayerId(999), true);
+        .insert(LayerId::from_num(999), true);
     assert!(add_on(&mut ed, Shape::Viewport(Box::new(with_layer_override)), s).is_err());
     let mut bad_scale = viewport(vec![]);
     bad_scale.scale = 0.0;
@@ -545,22 +545,22 @@ fn project_and_saved_views() {
     assert!(ed.execute(&named(&|v| v.zoom = Some(-1.0))).is_err());
     assert!(matches!(
         ed.execute(&named(&|v| {
-            v.layers.insert(LayerId(500), true);
+            v.layers.insert(LayerId::from_num(500), true);
         })),
         Err(CommandError::NoLayer(_))
     ));
     assert!(matches!(
         ed.execute(&named(&|v| {
-            v.classes.insert(ClassId(500), true);
+            v.classes.insert(ClassId::from_num(500), true);
         })),
         Err(CommandError::NoClass(_))
     ));
     assert!(matches!(
-        ed.execute(&named(&|v| v.active_layer = Some(LayerId(500)))),
+        ed.execute(&named(&|v| v.active_layer = Some(LayerId::from_num(500)))),
         Err(CommandError::NoLayer(_))
     ));
     assert!(matches!(
-        ed.execute(&named(&|v| v.active_class = Some(ClassId(500)))),
+        ed.execute(&named(&|v| v.active_class = Some(ClassId::from_num(500)))),
         Err(CommandError::NoClass(_))
     ));
     assert!(

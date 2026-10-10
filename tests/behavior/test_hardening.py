@@ -3,7 +3,7 @@
 import json
 import math
 
-from helpers import line_cmd, rect_cmd
+from helpers import line_cmd, rect_cmd, uid
 
 
 def ids(cad):
@@ -83,15 +83,15 @@ def test_set_data_merges_removes_and_undoes(cad):
     assert "data" not in cad.result("objects.get", {"id": a})
 
 
-def test_old_files_without_next_id_load_and_never_reuse_ids(make_serve, tmp_path):
+def test_a_loaded_document_never_gets_an_id_twice(make_serve, tmp_path):
     doc = make_serve().doc()
-    del doc["next_id"]
-    doc["objects"] = [{"id": 2, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
+    assert "next_id" not in doc, "the file has no counter: new IDs are UUIDs"
+    doc["objects"] = [{"id": uid(2), "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
     old = tmp_path / "old.json"
     old.write_text(json.dumps(doc))
     cad = make_serve(old)
     (new,) = cad.execute(rect_cmd(0, 0, 1, 1))
-    assert new != 2
+    assert new != uid(2)
 
 
 def test_saving_twice_keeps_the_previous_file_as_bak(make_serve, tmp_path):
@@ -108,16 +108,16 @@ def test_saving_twice_keeps_the_previous_file_as_bak(make_serve, tmp_path):
 def test_a_new_layer_can_be_a_sheet(cad):
     (lid,) = cad.execute({"op": "add_layer", "name": "A1 sheet", "kind": "sheet"})
     kinds = {l["id"]: l["kind"] for l in cad.doc()["layers"]}
-    assert kinds[lid] == "sheet" and kinds[1] == "design"
+    assert kinds[lid] == "sheet" and kinds[uid(1)] == "design"
 
 
-def test_ids_beyond_32_bits_survive_a_round_trip(make_serve, tmp_path):
+def test_ids_of_any_value_survive_a_round_trip(make_serve, tmp_path):
     doc = make_serve().doc()
-    big = 2**32 + 5
-    doc["objects"] = [{"id": big, "layer": 1, "class": 0, "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
+    big = "0190f1c2-7a3b-7c1d-8e2f-123456789abc"
+    doc["objects"] = [{"id": big, "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
     p = tmp_path / "big-id.json"
     p.write_text(json.dumps(doc))
     cad = make_serve(p)
     (lid,) = cad.execute({"op": "add_layer", "name": "L"})
-    assert lid > big
+    assert lid != big
     assert cad.result("objects.get", {"id": big})["id"] == big

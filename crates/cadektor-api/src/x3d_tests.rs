@@ -1,5 +1,6 @@
 //! `export.file` with gltf, glb and obj, and the `section_viewport.*` methods.
 
+use cadektor_core::uid::AsUid;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -27,13 +28,13 @@ pub(crate) fn slab(
     y1: i64,
     thickness: i64,
     top: i64,
-) -> u64 {
+) -> cadektor_core::uid::Uid {
     ok(
         s,
         "execute",
         json!({"command": {"op": "add_object", "shape": {"kind": "hardscape", "boundary": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "material": "Stone", "thickness": thickness, "elevation": top}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
@@ -56,7 +57,7 @@ fn export_writes_gltf_glb_and_obj() {
     let dir = tmp("formats");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     slab(&mut s, 0, 0, 4000, 3000, 150, 0);
     for i in 0..4 {
         plant(&mut s, 6000 + i * 4000, 1000);
@@ -135,7 +136,7 @@ fn export_writes_gltf_glb_and_obj() {
         .code,
         -32602
     );
-    let mut empty = Session::default();
+    let mut empty = Session::with_sequential_ids();
     let e = fail(
         &mut empty,
         "export.file",
@@ -156,7 +157,7 @@ fn export_follows_the_path_policy() {
     std::fs::create_dir_all(&outside).unwrap();
     let mut s = Session {
         paths: crate::PathPolicy::restricted([inside.clone()]),
-        ..Session::default()
+        ..Session::with_sequential_ids()
     };
     slab(&mut s, 0, 0, 4000, 3000, 150, 0);
     assert_eq!(
@@ -200,19 +201,19 @@ fn export_follows_the_path_policy() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-fn sheet(s: &mut Session) -> u64 {
+fn sheet(s: &mut Session) -> cadektor_core::uid::Uid {
     ok(
         s,
         "sheet.create",
         json!({"name": "Sections", "paper": "a3"}),
     )["layer"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
 #[test]
 fn section_viewports_follow_the_model() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     // A slab 4000 by 1000, 300 thick, top at 0; the line crosses it at y = 500.
     slab(&mut s, 0, 0, 4000, 1000, 300, 0);
     let line = ok(
@@ -220,7 +221,7 @@ fn section_viewports_follow_the_model() {
         "section_viewport.line_add",
         json!({"a": [-1000, 500], "b": [5000, 500], "name": "A"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     // One undo step makes the line and its settings.
     let n = s.editor.doc().objects.len();
@@ -249,7 +250,7 @@ fn section_viewports_follow_the_model() {
         "section_viewport.create",
         json!({"sheet": sh, "line": line, "scale": "fit", "min": [10, 10], "max": [400, 280]}),
     );
-    let vid = vp["id"].as_u64().unwrap();
+    let vid = vp["id"].as_uid().unwrap();
     assert_eq!(vp["view"], "section");
     assert_eq!(vp["section"]["line"], line);
     assert_eq!(vp["name"], "A");
@@ -345,7 +346,7 @@ fn section_viewports_follow_the_model() {
 
 #[test]
 fn terrain_sections_match_the_site_model() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let mut ids = Vec::new();
     for i in 0..11 {
         for j in 0..11 {
@@ -354,18 +355,18 @@ fn terrain_sections_match_the_site_model() {
                 "execute",
                 json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [i * 1000, j * 1000, i * 100 + (i % 3) * 40]}}}),
             );
-            ids.push(out["created"][0].as_u64().unwrap());
+            ids.push(out["created"][0].as_uid().unwrap());
         }
     }
     let site = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let line = ok(
         &mut s,
         "section_viewport.line_add",
         json!({"a": [0, 5200], "b": [10000, 5200], "name": "T"}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(
         &mut s,
@@ -400,7 +401,7 @@ fn terrain_sections_match_the_site_model() {
         "section.add",
         json!({"a": [0, 5200], "b": [10000, 5200]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let site_profile = ok(&mut s, "section.profile", json!({"id": sec}));
     let run = site_profile["existing"][0].as_array().unwrap();
@@ -428,7 +429,7 @@ fn terrain_sections_match_the_site_model() {
 
 #[test]
 fn bad_section_requests_are_refused() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     slab(&mut s, 0, 0, 4000, 1000, 300, 0);
     assert_eq!(
         fail(&mut s, "section_viewport.line_add", json!({"a": [0, 0]})).code,
@@ -498,7 +499,7 @@ fn bad_section_requests_are_refused() {
         "section_viewport.line_add",
         json!({"a": [0, 500], "b": [4000, 500]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         fail(
@@ -513,7 +514,7 @@ fn bad_section_requests_are_refused() {
         fail(
             &mut s,
             "section_viewport.line_set",
-            json!({"id": 9999, "name": "x"})
+            json!({"id": "00000000-0000-0000-0000-00000000270f", "name": "x"})
         )
         .code,
         2
@@ -532,7 +533,12 @@ fn bad_section_requests_are_refused() {
         -32602
     );
     assert_eq!(
-        fail(&mut s, "section_viewport.get", json!({"id": 9999})).code,
+        fail(
+            &mut s,
+            "section_viewport.get",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .code,
         2
     );
     assert_eq!(fail(&mut s, "section_viewport.get", json!({})).code, -32602);
@@ -564,7 +570,7 @@ fn bad_section_requests_are_refused() {
         fail(
             &mut s,
             "section_viewport.create",
-            json!({"sheet": 1, "line": line})
+            json!({"sheet": "00000000-0000-0000-0000-000000000001", "line": line})
         )
         .code,
         -32602
@@ -616,7 +622,7 @@ fn bad_section_requests_are_refused() {
     );
     assert_eq!(vid["scale"], 50.0);
     assert_eq!(vid["center"][0], 1000.0);
-    let vid = vid["id"].as_u64().unwrap();
+    let vid = vid["id"].as_uid().unwrap();
     assert_eq!(
         fail(&mut s, "section_viewport.update", json!({"id": slab_id})).code,
         3
@@ -666,7 +672,7 @@ fn bad_section_requests_are_refused() {
         "section_viewport.line_add",
         json!({"a": [0, 300], "b": [4000, 300]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let u = ok(
         &mut s,
@@ -676,7 +682,7 @@ fn bad_section_requests_are_refused() {
     assert_eq!(u["section"]["line"], other);
     // A plain viewport is not a section viewport.
     let plain = ok(&mut s, "viewport.create", json!({"sheet": sh}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(
         fail(&mut s, "section_viewport.get", json!({"id": plain})).code,
@@ -729,7 +735,7 @@ fn bad_section_requests_are_refused() {
 
 #[test]
 fn plants_and_objects_beyond_show_in_a_section() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     plant(&mut s, 2000, 500);
     plant(&mut s, 2000, 6000);
     slab(&mut s, 0, 3000, 4000, 4000, 300, 500);
@@ -738,7 +744,7 @@ fn plants_and_objects_beyond_show_in_a_section() {
         "section_viewport.line_add",
         json!({"a": [0, 500], "b": [4000, 500]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let got = ok(&mut s, "section_viewport.get", json!({"id": line}));
     assert_eq!(got["silhouettes"].as_array().unwrap().len(), 1);

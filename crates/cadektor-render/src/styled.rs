@@ -146,7 +146,7 @@ mod tests {
         );
         // An ID that is not a render style falls back to the default.
         assert_eq!(
-            resolve_style(ed.doc(), Some(ResourceId(999))),
+            resolve_style(ed.doc(), Some(ResourceId::from_num(999))),
             RenderStyle::default()
         );
     }

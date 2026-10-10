@@ -333,9 +333,9 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].bottom, 160.0, "the copied thickness stays");
         let line = Object::new(
-            ObjectId(77),
-            crate::model::LayerId(1),
-            crate::model::ClassId(0),
+            ObjectId::from_num(77),
+            crate::model::LayerId::from_num(1),
+            crate::model::ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,
@@ -377,9 +377,9 @@ mod tests {
         .unwrap();
         assert!(svg_extras(ed.doc(), ed.doc().object(id).unwrap(), 100.0, "black").is_empty());
         let line = Object::new(
-            ObjectId(77),
-            crate::model::LayerId(1),
-            crate::model::ClassId(0),
+            ObjectId::from_num(77),
+            crate::model::LayerId::from_num(1),
+            crate::model::ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,
@@ -402,9 +402,9 @@ mod tests {
             Some(Color([9, 9, 9, 255]))
         );
         let line = Object::new(
-            ObjectId(77),
-            crate::model::LayerId(1),
-            crate::model::ClassId(0),
+            ObjectId::from_num(77),
+            crate::model::LayerId::from_num(1),
+            crate::model::ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,

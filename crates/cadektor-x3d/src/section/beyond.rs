@@ -253,7 +253,7 @@ pub fn edges(
     // Triangles at or behind the plane, and not wholly beyond the far clip. Section space is
     // (u, v, w); the scene is (u, w, v), which keeps the winding.
     let mut scene = Scene::default();
-    let mut depth: BTreeMap<u64, f64> = BTreeMap::new();
+    let mut depth: BTreeMap<cadektor_core::uid::Uid, f64> = BTreeMap::new();
     let mut lo = DVec2::splat(f64::INFINITY);
     let mut hi = DVec2::splat(f64::NEG_INFINITY);
     let mut push_tri = |scene: &mut Scene, object: ObjectId, p: [DVec3; 3]| {
@@ -309,7 +309,7 @@ pub fn edges(
             push_tri(&mut scene, f.object, p);
         }
     }
-    let mut seg_depth: BTreeMap<u64, (f64, usize)> = BTreeMap::new();
+    let mut seg_depth: BTreeMap<cadektor_core::uid::Uid, (f64, usize)> = BTreeMap::new();
     for s in segs {
         let (wa, wb) = (s.a.z, s.b.z);
         if wa.max(wb) < 0.0 || wa.min(wb) > region.depth {

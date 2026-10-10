@@ -1,4 +1,5 @@
 use super::*;
+use cadektor_core::uid::AsUid;
 
 fn ok(s: &mut Session, method: &str, params: Value) -> Value {
     s.handle(method, params)
@@ -11,8 +12,8 @@ fn fail(s: &mut Session, method: &str, params: Value) -> (i64, String) {
 }
 
 /// A site model of 11 by 11 loci, 1 m apart, rising toward +X by 10 percent.
-fn session_with_site() -> (Session, u64) {
-    let mut s = Session::default();
+fn session_with_site() -> (Session, cadektor_core::uid::Uid) {
+    let mut s = Session::with_sequential_ids();
     let mut ids = Vec::new();
     for i in 0..11 {
         for j in 0..11 {
@@ -21,23 +22,23 @@ fn session_with_site() -> (Session, u64) {
                 "execute",
                 json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [i * 1000, j * 1000, i * 100]}}}),
             );
-            ids.push(out["created"][0].as_u64().unwrap());
+            ids.push(out["created"][0].as_uid().unwrap());
         }
     }
     let id = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     (s, id)
 }
 
-fn data_of(s: &mut Session, id: u64, key: &str) -> Value {
+fn data_of(s: &mut Session, id: cadektor_core::uid::Uid, key: &str) -> Value {
     ok(s, "objects.get", json!({"id": id}))["data"][key].clone()
 }
 
 #[test]
 fn wall_styles_crud() {
-    let mut s = Session::default();
-    let id = ok(&mut s, "wall_style.create", json!({"name": "Block", "components": [{"name": "Block", "material": "Concrete", "thickness": 200}, {"name": "Render", "material": "Lime", "thickness": 20}], "coping": {"height": 50, "overhang": 20}}))["id"].as_u64().unwrap();
+    let mut s = Session::with_sequential_ids();
+    let id = ok(&mut s, "wall_style.create", json!({"name": "Block", "components": [{"name": "Block", "material": "Concrete", "thickness": 200}, {"name": "Render", "material": "Lime", "thickness": 20}], "coping": {"height": 50, "overhang": 20}}))["id"].as_uid().unwrap();
     let list = ok(&mut s, "wall_style.list", json!(null));
     assert_eq!(list["styles"][0]["name"], "Block");
     assert_eq!(list["styles"][0]["total_thickness"], 220.0);
@@ -100,9 +101,9 @@ fn wall_styles_crud() {
         "wall_style.create",
         json!({"name": "Stone", "thickness": 400}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
-    let wall = ok(&mut s, "wall.add", json!({"path": [[0, 0], [4000, 0]], "style": "Block wall", "top": {"mode": "fixed", "elevation": 1000}}))["id"].as_u64().unwrap();
+    let wall = ok(&mut s, "wall.add", json!({"path": [[0, 0], [4000, 0]], "style": "Block wall", "top": {"mode": "fixed", "elevation": 1000}}))["id"].as_uid().unwrap();
     assert_eq!(
         ok(&mut s, "wall_style.list", json!({}))["styles"][0]["used_by"],
         1
@@ -153,7 +154,7 @@ fn wall_styles_crud() {
 
 #[test]
 fn wall_on_flat_ground_has_exact_quantities() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let w = ok(
         &mut s,
         "wall.add",
@@ -193,7 +194,7 @@ fn wall_follows_the_ground_and_changes() {
     assert_eq!(q["bottom_end_mm"], 500.0);
     assert!((q["volume_m3"].as_f64().unwrap() - 5.0 * 0.7 * 0.3).abs() < 1e-9);
     assert_eq!(q["outside_model"], 0);
-    let id = w["id"].as_u64().unwrap();
+    let id = w["id"].as_uid().unwrap();
     // Set: a slope top, a new path and a bottom on the proposed ground.
     ok(
         &mut s,
@@ -237,7 +238,15 @@ fn wall_follows_the_ground_and_changes() {
         -32602
     );
     assert_eq!(fail(&mut s, "wall.set", json!({"ids": []})).0, -32602);
-    assert_eq!(fail(&mut s, "wall.set", json!({"id": 9999})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "wall.set",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
     assert_eq!(
         fail(&mut s, "wall.set", json!({"id": id, "path": "x"})).0,
         -32602
@@ -276,14 +285,22 @@ fn wall_follows_the_ground_and_changes() {
         .0,
         -32602
     );
-    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert_eq!(
         fail(&mut s, "wall.set", json!({"id": circle, "thickness": 5})).0,
         3
     );
     assert_eq!(fail(&mut s, "wall.report", json!({"ids": [circle]})).0, 3);
     assert_eq!(fail(&mut s, "wall.report", json!({"ids": "x"})).0, -32602);
-    assert_eq!(fail(&mut s, "wall.report", json!({"ids": [9999]})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "wall.report",
+            json!({"ids": ["00000000-0000-0000-0000-00000000270f"]})
+        )
+        .0,
+        2
+    );
 }
 
 #[test]
@@ -296,7 +313,7 @@ fn wall_as_site_modifier_breaks_the_proposed_surface() {
         "wall.add",
         json!({"path": [[2000, 5000], [8000, 5000]], "thickness": 500, "top": {"mode": "fixed", "elevation": 1500}, "site_modifier": true}),
     );
-    let id = w["id"].as_u64().unwrap();
+    let id = w["id"].as_uid().unwrap();
     let after = ok(&mut s, "site.cut_fill", json!({"id": site}));
     assert!(after["fill_m3"].as_f64().unwrap() > 0.0, "{after}");
     // The wall is a retaining edge. The ground behind it (left of the path, +Y) is at the top, under
@@ -367,7 +384,7 @@ fn grade_objects() {
         "grade.add",
         json!({"a": [0, 0], "b": [10000, 0], "elevation_a": 1000, "slope": {"ratio": -50}}),
     );
-    let id = g["id"].as_u64().unwrap();
+    let id = g["id"].as_uid().unwrap();
     assert!((g["grade"]["percent"].as_f64().unwrap() + 2.0).abs() < 1e-9);
     assert_eq!(g["grade"]["elevation_b"], 800.0);
     assert_eq!(g["grade"]["falls"], true);
@@ -487,17 +504,33 @@ fn grade_objects() {
         fail(&mut s, "grade.set", json!({"id": id, "bogus": 1})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "grade.set", json!({"id": 9999})).0, 2);
-    assert_eq!(fail(&mut s, "grade.get", json!({"id": 9999})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.set",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "grade.get",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
     assert_eq!(fail(&mut s, "grade.get", json!({})).0, -32602);
-    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
+    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "grade.get", json!({"id": line})).0, 3);
     assert_eq!(fail(&mut s, "grade.set", json!({"id": line})).0, 3);
-    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "grade.get", json!({"id": circle})).0, 3);
     assert_eq!(fail(&mut s, "grade.set", json!({"id": circle})).0, 3);
     // A grade without a site model cannot snap.
-    let mut empty = Session::default();
+    let mut empty = Session::with_sequential_ids();
     assert_eq!(
         fail(
             &mut empty,
@@ -534,7 +567,7 @@ fn analysis_bands_and_legend() {
         "site.analysis",
         json!({"id": site, "legend": {"rect": [[12000, 0], [16000, 6000]], "show_areas": true, "title": "Slope"}}),
     );
-    assert!(lg["legend"].as_u64().is_some());
+    assert!(lg["legend"].as_uid().is_some());
     let svg = ok(&mut s, "render.svg", json!({}))["svg"]
         .as_str()
         .unwrap()
@@ -606,12 +639,20 @@ fn analysis_bands_and_legend() {
         fail(&mut s, "site.analysis", json!({"id": site, "legend": 5})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "site.analysis", json!({"id": 9999})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "site.analysis",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
     assert_eq!(fail(&mut s, "site.analysis", json!({})).0, -32602);
-    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "site.analysis", json!({"id": circle})).0, 3);
     // A site model that cannot make a surface cannot be analyzed.
-    let few = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "site_model", "points": [[0, 0, 0]]}}}))["created"][0].as_u64().unwrap();
+    let few = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "site_model", "points": [[0, 0, 0]]}}}))["created"][0].as_uid().unwrap();
     assert_eq!(
         fail(&mut s, "site.analysis", json!({"id": few, "mode": "slope"})).0,
         1
@@ -633,7 +674,7 @@ fn spot_elevations_and_stakes() {
     assert_eq!(spot["reading"]["label"], "TC 0.30");
     ok(&mut s, "execute", pad);
     // The reading is live: the pad changes the proposed height.
-    let id = spot["id"].as_u64().unwrap();
+    let id = spot["id"].as_uid().unwrap();
     let got = ok(&mut s, "spot.get", json!({"id": id}));
     assert_eq!(
         (
@@ -696,25 +737,46 @@ fn spot_elevations_and_stakes() {
         fail(&mut s, "spot.set", json!({"id": id, "show": "all"})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "spot.set", json!({"id": 9999})).0, 2);
-    assert_eq!(fail(&mut s, "spot.get", json!({"id": 9999})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "spot.set",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "spot.get",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
     assert_eq!(fail(&mut s, "spot.get", json!({})).0, -32602);
     assert_eq!(
         fail(&mut s, "spot.get", json!({"at": [0, 0], "site": "x"})).0,
         -32602
     );
     assert_eq!(
-        fail(&mut s, "spot.get", json!({"at": [0, 0], "site": 9999})).0,
+        fail(
+            &mut s,
+            "spot.get",
+            json!({"at": [0, 0], "site": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
         2
     );
-    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "spot.get", json!({"id": circle})).0, 3);
     assert_eq!(fail(&mut s, "spot.set", json!({"id": circle})).0, 3);
-    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_u64().unwrap();
+    let line = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [1, 1]}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "spot.get", json!({"id": line})).0, 3);
     assert_eq!(fail(&mut s, "spot.set", json!({"id": line})).0, 3);
     // Without a site model a spot has no height. A point read needs a site model.
-    let mut empty = Session::default();
+    let mut empty = Session::with_sequential_ids();
     let sp = ok(&mut empty, "spot.add", json!({"at": [0, 0]}));
     assert_eq!(sp["reading"]["label"], "no site model");
     assert_eq!(fail(&mut empty, "spot.get", json!({"at": [0, 0]})).0, 1);
@@ -739,7 +801,7 @@ fn sections_profile_and_placement() {
         "section.add",
         json!({"a": [0, 5000], "b": [10000, 5000], "name": "A", "exaggeration": 3}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let p = ok(&mut s, "section.profile", json!({"id": sec}));
     assert_eq!(p["length_mm"], 10000.0);
@@ -761,7 +823,7 @@ fn sections_profile_and_placement() {
     assert_eq!(p["plants"].as_array().unwrap().len(), 1);
     // Place it on a sheet layer at 1:100 (paper mm).
     let sheet = ok(&mut s, "sheet.create", json!({"name": "S1", "paper": "a3"}));
-    let sheet_layer = sheet["layer"].as_u64().unwrap();
+    let sheet_layer = sheet["layer"].as_uid().unwrap();
     let _ = sheet_layer;
     let placed = ok(
         &mut s,
@@ -770,7 +832,7 @@ fn sections_profile_and_placement() {
     );
     let ids = placed["ids"].as_array().unwrap();
     assert!(ids.len() >= 5);
-    let tag = data_of(&mut s, ids[0].as_u64().unwrap(), "site_section_profile");
+    let tag = data_of(&mut s, ids[0].as_uid().unwrap(), "site_section_profile");
     assert_eq!(tag["section"], sec);
     // 10 m at 1:100 is 100 mm on paper.
     let axis = ok(&mut s, "objects.get", json!({"id": ids[0]}));
@@ -801,7 +863,7 @@ fn sections_profile_and_placement() {
 #[test]
 fn sections_on_a_design_layer_and_errors() {
     let (mut s, _) = session_with_site();
-    let sec = ok(&mut s, "section.add", json!({"a": [0, 5000], "b": [10000, 5000], "walls": false, "hardscapes": false, "plants": false}))["id"].as_u64().unwrap();
+    let sec = ok(&mut s, "section.add", json!({"a": [0, 5000], "b": [10000, 5000], "walls": false, "hardscapes": false, "plants": false}))["id"].as_uid().unwrap();
     ok(
         &mut s,
         "section.set",
@@ -849,14 +911,30 @@ fn sections_on_a_design_layer_and_errors() {
         fail(&mut s, "section.set", json!({"id": sec, "step": 1})).0,
         -32602
     );
-    assert_eq!(fail(&mut s, "section.set", json!({"id": 9999})).0, 2);
-    assert_eq!(fail(&mut s, "section.profile", json!({"id": 9999})).0, 2);
+    assert_eq!(
+        fail(
+            &mut s,
+            "section.set",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
+    assert_eq!(
+        fail(
+            &mut s,
+            "section.profile",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .0,
+        2
+    );
     assert_eq!(fail(&mut s, "section.place", json!({"id": sec})).0, -32602);
     assert_eq!(
         fail(
             &mut s,
             "section.place",
-            json!({"id": sec, "at": [0, 0], "layer": 999})
+            json!({"id": sec, "at": [0, 0], "layer": "00000000-0000-0000-0000-0000000003e7"})
         )
         .0,
         2
@@ -879,23 +957,23 @@ fn sections_on_a_design_layer_and_errors() {
         .0,
         -32602
     );
-    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_u64().unwrap();
+    let circle = ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 5}}}))["created"][0].as_uid().unwrap();
     assert_eq!(fail(&mut s, "section.set", json!({"id": circle})).0, 3);
     assert_eq!(fail(&mut s, "section.profile", json!({"id": circle})).0, 3);
-    let mut empty = Session::default();
+    let mut empty = Session::with_sequential_ids();
     let e = ok(
         &mut empty,
         "section.add",
         json!({"a": [0, 0], "b": [10, 0]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     assert_eq!(fail(&mut empty, "section.profile", json!({"id": e})).0, 1);
 }
 
 #[test]
 fn describe_has_grading_examples_and_methods_are_routed() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!(null));
     assert!(d["grading"]["examples"].as_array().unwrap().len() >= 8);
     for m in [
@@ -950,7 +1028,7 @@ fn walls_and_sections_off_the_model_take_the_nearest_edge_height() {
         "section.add",
         json!({"a": [-2000, 5000], "b": [12000, 5000]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let p = ok(&mut s, "section.profile", json!({"id": sec}));
     let off = p["off_model"].as_array().unwrap();
@@ -974,7 +1052,7 @@ fn a_curved_grade_has_one_slope_along_the_curve_and_can_change_the_ground() {
         "grade.add",
         json!({"path": path, "elevation_a": 5000, "slope": {"percent": 2}}),
     );
-    let id = r["id"].as_u64().unwrap();
+    let id = r["id"].as_uid().unwrap();
     let arc = 4000.0 * std::f64::consts::FRAC_PI_2;
     assert!(
         (r["grade"]["length_mm"].as_f64().unwrap() - arc).abs() < 10.0,
@@ -998,7 +1076,7 @@ fn a_curved_grade_has_one_slope_along_the_curve_and_can_change_the_ground() {
         "grade.add",
         json!({"a": [1000, 8000], "b": [9000, 8000], "elevation_a": 7000, "elevation_b": 7000, "site_modifier": true, "width": 1000}),
     );
-    assert!(g["id"].is_u64());
+    assert!(g["id"].is_string());
     let z = ok(
         &mut s,
         "site.elevation",

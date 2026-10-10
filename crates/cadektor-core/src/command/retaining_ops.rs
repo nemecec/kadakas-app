@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::site::ModifierKind;
+use crate::uid::AsUid;
 
 /// The data key of the pad.
 pub const PAD_KEY: &str = "retaining_edge";
@@ -24,7 +25,7 @@ impl Tx<'_> {
                     .filter(|o| {
                         o.data
                             .get(WALL_KEY)
-                            .and_then(Value::as_u64)
+                            .and_then(AsUid::as_uid)
                             .is_some_and(|p| gone.contains(&ObjectId(p)))
                             && !gone.contains(&o.id)
                     })
@@ -65,7 +66,7 @@ impl Tx<'_> {
         let Some(link) = o.data.get(PAD_KEY) else {
             return;
         };
-        let Some(wall) = link.get("wall").and_then(Value::as_u64).map(ObjectId) else {
+        let Some(wall) = link.get("wall").and_then(AsUid::as_uid).map(ObjectId) else {
             return;
         };
         let top_offset = link
@@ -75,7 +76,7 @@ impl Tx<'_> {
         let fill = link.get("mode").and_then(Value::as_str) != Some("cut");
         let (level, boundary) = (*elevation, boundary.clone());
         let ok = self.doc.object(wall).is_some_and(|w| {
-            w.data.get(WALL_KEY).and_then(Value::as_u64) == Some(pad.0)
+            w.data.get(WALL_KEY).and_then(AsUid::as_uid) == Some(pad.0)
                 && matches!(w.shape, Shape::Polyline { .. })
         });
         if !ok {

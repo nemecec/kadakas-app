@@ -349,9 +349,9 @@ mod tests {
         assert_eq!(q.thickness_mm, 150.0);
         assert!(!q.draped);
         let line = Object::new(
-            ObjectId(99),
-            crate::model::LayerId(1),
-            crate::model::ClassId(0),
+            ObjectId::from_num(99),
+            crate::model::LayerId::from_num(1),
+            crate::model::ClassId::from_num(0),
             Shape::Line {
                 a: DVec2::ZERO,
                 b: DVec2::X,

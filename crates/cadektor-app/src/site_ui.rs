@@ -42,7 +42,7 @@ pub fn create_site_model(session: &mut Session) -> Result<ObjectId, String> {
     let r = session
         .handle("site.create", json!({ "source_ids": ids }))
         .map_err(|e| e.message)?;
-    let id = ObjectId(r["id"].as_u64().unwrap_or(0));
+    let id = ObjectId(cadektor_core::uid::AsUid::as_uid(&r["id"]).unwrap_or_default());
     session.selection = vec![id];
     Ok(id)
 }
@@ -382,7 +382,7 @@ mod tests {
         );
         // One locus alone is accepted. The missing surface is reported when the model is used.
         let a = locus(&mut s, 5.0, 5.0, 0.0);
-        s.selection = vec![a, ObjectId(9999)];
+        s.selection = vec![a, ObjectId::from_num(9999)];
         assert!(create_site_model(&mut s).is_ok());
     }
 
@@ -406,7 +406,7 @@ mod tests {
             },
         );
         assert_eq!(
-            source_ids(s.editor.doc(), &[t, l, p, ObjectId(77)]),
+            source_ids(s.editor.doc(), &[t, l, p, ObjectId::from_num(77)]),
             vec![l, p]
         );
     }
@@ -449,7 +449,7 @@ mod tests {
                 assert!(!modifier_fields(ui, &mut grade, &b));
             });
             cut_fill_readout(ui, &s, id);
-            cut_fill_readout(ui, &s, ObjectId(4242));
+            cut_fill_readout(ui, &s, ObjectId::from_num(4242));
         });
         // A site model without a surface shows its error.
         let mut bad = Session::default();

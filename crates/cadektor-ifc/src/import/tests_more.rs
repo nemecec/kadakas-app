@@ -41,7 +41,7 @@ fn extr(n: u64, profile: &str, h: f64) -> String {
 }
 
 fn run(data: &str, opts: &IfcImportOptions) -> (Editor, Report) {
-    run_in(Document::default(), "IFC4", data, opts)
+    run_in(Document::with_sequential_ids(), "IFC4", data, opts)
 }
 
 fn run_in(doc: Document, schema: &str, data: &str, opts: &IfcImportOptions) -> (Editor, Report) {
@@ -666,7 +666,7 @@ fn georeference_cases() {
         );
     }
     // The file's frame turned against a document that is turned too.
-    let mut doc = Document::default();
+    let mut doc = Document::with_sequential_ids();
     doc.georef = Some(cadektor_core::georef::Georeference {
         crs: "EPSG:3067".into(),
         origin: DVec2::new(1000.0, 2000.0),
@@ -685,7 +685,7 @@ fn georeference_cases() {
     let (lo, hi) = m.bounds3();
     assert!(hi.x - lo.x > 120.0, "{lo} {hi}");
     // A document with a georeference without CRS keeps local coordinates.
-    let mut doc = Document::default();
+    let mut doc = Document::with_sequential_ids();
     doc.georef = Some(cadektor_core::georef::Georeference {
         crs: String::new(),
         origin: DVec2::new(5.0, 5.0),
@@ -705,7 +705,7 @@ fn georeference_cases() {
     );
     // IFC2x3 has no map conversion.
     let (_, r) = run_in(
-        Document::default(),
+        Document::with_sequential_ids(),
         "IFC2X3",
         &body,
         &IfcImportOptions::default(),
@@ -736,7 +736,7 @@ fn georeference_cases() {
 
 #[test]
 fn layer_and_class_reuse_and_unnamed_storeys() {
-    let mut ed0 = Editor::new(Document::default());
+    let mut ed0 = Editor::new(Document::with_sequential_ids());
     ed0.execute(&cadektor_core::command::Command::AddLayer {
         name: "Ground".into(),
         elevation: 123.0,
@@ -1041,7 +1041,7 @@ fn ifc2x3_reads_the_map_conversion_property_sets() {
         slab(50, "#41")
     );
     let (ed, r) = run_in(
-        Document::default(),
+        Document::with_sequential_ids(),
         "IFC2X3",
         &data,
         &IfcImportOptions::default(),
@@ -1057,7 +1057,7 @@ fn ifc2x3_reads_the_map_conversion_property_sets() {
 fn the_species_comes_back_from_our_own_export() {
     use cadektor_core::command::Command;
     use cadektor_core::plants::style::PlantStyle;
-    let mut ed = Editor::default();
+    let mut ed = Editor::with_sequential_ids();
     let style = ed
         .execute(&Command::AddResource {
             name: "Maple".into(),
@@ -1084,8 +1084,13 @@ fn the_species_comes_back_from_our_own_export() {
     .unwrap();
     let _ = style;
     let (bytes, _) = crate::export_bytes(ed.doc(), &crate::IfcOptions::default()).unwrap();
-    let r = import_bytes(bytes, &Document::default(), &IfcImportOptions::default()).unwrap();
-    let mut back = Editor::new(Document::default());
+    let r = import_bytes(
+        bytes,
+        &Document::with_sequential_ids(),
+        &IfcImportOptions::default(),
+    )
+    .unwrap();
+    let mut back = Editor::new(Document::with_sequential_ids());
     back.execute(&r.command).unwrap();
     let Shape::Plant { species, .. } = &objs(&back)[0].shape else {
         panic!("{}", objs(&back)[0].shape.kind())

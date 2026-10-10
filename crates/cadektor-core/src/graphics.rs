@@ -781,7 +781,7 @@ mod tests {
         );
         assert!(
             bad(Shape::Symbol {
-                symbol: ResourceId(1),
+                symbol: ResourceId::from_num(1),
                 at: DVec2::ZERO,
                 rotation: 0.0,
                 scale: 0.0,
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn tile_line_type_and_texture_rules() {
         let tile = TileDef {
-            symbol: ResourceId(1),
+            symbol: ResourceId::from_num(1),
             width: 10.0,
             height: 5.0,
             row_shift: 5.0,
@@ -987,7 +987,7 @@ mod tests {
             lt(vec![
                 LineElement::Gap { length: 1.0 },
                 LineElement::Mark {
-                    symbol: ResourceId(2),
+                    symbol: ResourceId::from_num(2),
                     scale: 0.0,
                     rotate: true
                 }
@@ -999,7 +999,7 @@ mod tests {
             elements: vec![
                 LineElement::Dash { length: 3.0 },
                 LineElement::Mark {
-                    symbol: ResourceId(2),
+                    symbol: ResourceId::from_num(2),
                     scale: 1.0,
                     rotate: true,
                 },
@@ -1036,7 +1036,7 @@ mod tests {
             GraphicResource::Texture(tex),
             GraphicResource::Hatch(HatchDef::default()),
             GraphicResource::Tile(TileDef {
-                symbol: ResourceId(1),
+                symbol: ResourceId::from_num(1),
                 width: 1.0,
                 height: 1.0,
                 row_shift: 0.0,
@@ -1058,12 +1058,12 @@ mod tests {
     #[test]
     fn refs_and_remap() {
         let attrs = Attributes {
-            fill_pattern: Some(ResourceId(3)),
-            line_type: Some(ResourceId(4)),
+            fill_pattern: Some(ResourceId::from_num(3)),
+            line_type: Some(ResourceId::from_num(4)),
             ..Default::default()
         };
         let nested = Shape::Symbol {
-            symbol: ResourceId(5),
+            symbol: ResourceId::from_num(5),
             at: DVec2::ZERO,
             rotation: 0.0,
             scale: 1.0,
@@ -1084,18 +1084,21 @@ mod tests {
         assert_eq!(
             refs,
             vec![
-                (ResourceId(3), RefKind::Pattern),
-                (ResourceId(4), RefKind::LineType),
-                (ResourceId(5), RefKind::Symbol)
+                (ResourceId::from_num(3), RefKind::Pattern),
+                (ResourceId::from_num(4), RefKind::LineType),
+                (ResourceId::from_num(5), RefKind::Symbol)
             ]
         );
-        sym.remap(&|r| ResourceId(r.0 + 10));
+        sym.remap(&|r| ResourceId::from_num(r.0.low_u64() + 10));
         assert_eq!(
-            sym.refs().iter().map(|(r, _)| r.0).collect::<Vec<_>>(),
+            sym.refs()
+                .iter()
+                .map(|(r, _)| r.0.low_u64())
+                .collect::<Vec<_>>(),
             vec![13, 14, 15]
         );
         let mut tile = GraphicResource::Tile(TileDef {
-            symbol: ResourceId(1),
+            symbol: ResourceId::from_num(1),
             width: 1.0,
             height: 1.0,
             row_shift: 0.0,
@@ -1103,26 +1106,29 @@ mod tests {
             scale: 1.0,
             units: PatternUnits::Paper,
         });
-        tile.remap(&|r| ResourceId(r.0 + 1));
-        assert_eq!(tile.refs(), vec![(ResourceId(2), RefKind::Symbol)]);
+        tile.remap(&|r| ResourceId::from_num(r.0.low_u64() + 1));
+        assert_eq!(
+            tile.refs(),
+            vec![(ResourceId::from_num(2), RefKind::Symbol)]
+        );
         let mut lt = GraphicResource::LineType(LineTypeDef {
             units: PatternUnits::Paper,
             elements: vec![
                 LineElement::Dash { length: 1.0 },
                 LineElement::Mark {
-                    symbol: ResourceId(7),
+                    symbol: ResourceId::from_num(7),
                     scale: 1.0,
                     rotate: false,
                 },
             ],
         });
-        lt.remap(&|_| ResourceId(8));
-        assert_eq!(lt.refs(), vec![(ResourceId(8), RefKind::Symbol)]);
+        lt.remap(&|_| ResourceId::from_num(8));
+        assert_eq!(lt.refs(), vec![(ResourceId::from_num(8), RefKind::Symbol)]);
         let mut h = GraphicResource::Hatch(HatchDef {
             units: PatternUnits::Paper,
             lines: vec![HatchLine::solid(0.0, 1.0)],
         });
-        h.remap(&|_| ResourceId(1));
+        h.remap(&|_| ResourceId::from_num(1));
         assert!(h.refs().is_empty());
         assert_eq!(RefKind::Pattern.label(), "hatch or tile");
         for k in [RefKind::Symbol, RefKind::LineType, RefKind::PlantStyle] {
@@ -1144,7 +1150,7 @@ mod tests {
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["type"], "hatch");
         assert_eq!(serde_json::from_value::<GraphicResource>(v).unwrap(), h);
-        let v = serde_json::json!({"type": "line_type", "elements": [{"kind": "dash", "length": 3}, {"kind": "mark", "symbol": 4}]});
+        let v = serde_json::json!({"type": "line_type", "elements": [{"kind": "dash", "length": 3}, {"kind": "mark", "symbol": "00000000-0000-0000-0000-000000000004"}]});
         let lt: GraphicResource = serde_json::from_value(v).unwrap();
         let GraphicResource::LineType(l) = &lt else {
             panic!()
@@ -1153,7 +1159,7 @@ mod tests {
         assert_eq!(
             l.elements[1],
             LineElement::Mark {
-                symbol: ResourceId(4),
+                symbol: ResourceId::from_num(4),
                 scale: 1.0,
                 rotate: true
             }

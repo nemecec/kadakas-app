@@ -43,8 +43,8 @@ pub fn describe() -> Value {
         "massing": "A massing model (shape kind 'massing') is a simple building: a closed footprint polygon (curves allowed), an eave height (or floors times a floor height), and a flat, gable or hip roof with a pitch. It is drawn in 2D with its roof lines, in 3D as a closed solid, and stands on the site model of its layer (the lowest ground height under the footprint) unless base is set. Quantities: gross floor area (footprint times floors), volume of the solid. IFC export writes an IfcBuildingElementProxy (option massing_as_building: IfcBuilding) with Qto quantities and a Cadektor_Massing property set.",
         "examples": [
             {"method": "massing.add", "params": {"footprint": [[0, 0], [12000, 0], [12000, 8000], [0, 8000]], "floors": 3, "floor_height": 2800, "roof": "gable", "pitch": 35, "name": "House"}},
-            {"method": "massing.set", "params": {"id": 21, "roof": "hip", "height": 7500, "floors": null}},
-            {"method": "massing.from_shapes", "params": {"ids": [30, 31, 32], "height_field": "height", "roof": "flat", "default_height": 6000}},
+            {"method": "massing.set", "params": {"id": "00000000-0000-0000-0000-000000000015", "roof": "hip", "height": 7500, "floors": null}},
+            {"method": "massing.from_shapes", "params": {"ids": ["00000000-0000-0000-0000-00000000001e", "00000000-0000-0000-0000-00000000001f", "00000000-0000-0000-0000-000000000020"], "height_field": "height", "roof": "flat", "default_height": 6000}},
             {"method": "massing.report", "params": {"format": "csv"}}
         ]
     })

@@ -1,6 +1,6 @@
 """Scenario: a designer selects objects, then edits the drawing. The selection must follow the objects that still exist."""
 
-from helpers import rect_cmd
+from helpers import rect_cmd, uid
 
 
 def test_selection_starts_empty_and_round_trips(cad):
@@ -14,7 +14,7 @@ def test_selection_starts_empty_and_round_trips(cad):
 def test_selection_set_with_unknown_id_fails_and_keeps_old_selection(cad):
     a = cad.execute(rect_cmd(0, 0, 1, 1))[0]
     cad.result("selection.set", {"ids": [a]})
-    error = cad.error("selection.set", {"ids": [a, 999]})
+    error = cad.error("selection.set", {"ids": [a, uid(999)]})
     assert error["code"] == 2
     assert cad.result("selection.get") == {"ids": [a]}
 

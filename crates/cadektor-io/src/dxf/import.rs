@@ -1429,7 +1429,7 @@ mod tests {
     }
 
     fn run(text: &str, opts: &ImportOptions) -> (Document, crate::Report) {
-        let doc = Document::default();
+        let doc = Document::with_sequential_ids();
         let src = Source {
             name: "t".into(),
             data: text.as_bytes().to_vec(),
@@ -1862,7 +1862,7 @@ mod tests {
         let (doc, report) = run(&dxf_text("", "", "", &ents), &opts);
         assert_eq!(doc.objects.len(), 3);
         assert!(report.notes.iter().any(|n| n.contains("limit")));
-        let _ = ObjectId(0);
+        let _ = ObjectId::from_num(0);
     }
 
     #[test]
@@ -1923,7 +1923,7 @@ mod tests {
         assert_eq!(report.skipped_total(), 2);
         assert!(doc.georef.is_none());
         // A document with a georeference keeps its own origin.
-        let mut base = Document::default();
+        let mut base = Document::with_sequential_ids();
         base.georef = Some(Georeference {
             crs: "EPSG:3301".into(),
             origin: DVec2::new(6_589_000.0, 540_000.0),
@@ -1958,7 +1958,7 @@ mod tests {
         let ents = "0\nINSERT\n2\nA\n70\n100\n71\n100\n44\n300\n45\n300\n";
         let text = dxf_text("", "", blocks, ents);
         assert!(text.len() < 500);
-        let doc = Document::default();
+        let doc = Document::with_sequential_ids();
         let src = Source {
             name: "t".into(),
             data: text.into_bytes(),
@@ -1984,6 +1984,6 @@ mod tests {
             data: small.into_bytes(),
             extra: Default::default(),
         };
-        assert!(import(&src, &Context::of(&Document::default()), &opts).is_err());
+        assert!(import(&src, &Context::of(&Document::with_sequential_ids()), &opts).is_err());
     }
 }

@@ -1,6 +1,7 @@
 //! Tests of the care fields of plant styles: image, maintenance, irrigation, plant tag format
 //! and the hydrozone report.
 
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -10,7 +11,7 @@ fn ok(s: &mut Session, method: &str, p: Value) -> Value {
         .unwrap_or_else(|e| panic!("{method}: {}", e.message))
 }
 
-fn style(s: &mut Session, name: &str, need: &str, zone: &str) -> u64 {
+fn style(s: &mut Session, name: &str, need: &str, zone: &str) -> cadektor_core::uid::Uid {
     ok(
         s,
         "plant_style.create",
@@ -22,23 +23,23 @@ fn style(s: &mut Session, name: &str, need: &str, zone: &str) -> u64 {
             "maintenance": {"interval": "monthly", "hours_per_year": 0.5, "pruning": "spring"},
         }),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
-fn plant(s: &mut Session, style: u64, x: i64) -> u64 {
+fn plant(s: &mut Session, style: cadektor_core::uid::Uid, x: i64) -> cadektor_core::uid::Uid {
     ok(
         s,
         "plants.place",
         json!({"mode": "single", "style": style, "at": [x, 0]}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
 #[test]
 fn styles_keep_maintenance_irrigation_and_an_image() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = style(&mut s, "Lavender", "low", "Z1");
     let got = ok(&mut s, "plant_style.get", json!({"id": id}));
     assert_eq!(got["irrigation"]["water_need"], "low");
@@ -50,7 +51,7 @@ fn styles_keep_maintenance_irrigation_and_an_image() {
         "execute",
         json!({"command": {"op": "add_resource", "name": "Lavender photo", "body": {"type": "texture", "color": [150, 140, 200, 255]}}}),
     )["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     ok(
         &mut s,
@@ -90,7 +91,7 @@ fn styles_keep_maintenance_irrigation_and_an_image() {
         .unwrap()
         .to_string();
     assert!(csv.contains("water_need") && csv.contains("hydrozone") && csv.contains("low,Z1"));
-    let mut t = Session::default();
+    let mut t = Session::with_sequential_ids();
     let r = ok(&mut t, "plant_style.import_csv", json!({"csv": csv}));
     assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
     let list = ok(&mut t, "plant_style.list", json!({}));
@@ -100,14 +101,14 @@ fn styles_keep_maintenance_irrigation_and_an_image() {
 
 #[test]
 fn plant_tags_have_three_levels_and_an_id_bubble() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = style(&mut s, "Lavender", "low", "Z1");
     let r = ok(
         &mut s,
         "plants.place",
         json!({"mode": "single", "style": id, "at": [0, 0], "tag": true}),
     );
-    let tag = r["tag"].as_u64().expect("a tag");
+    let tag = r["tag"].as_uid().expect("a tag");
     let svg = |s: &mut Session| {
         let v = ok(s, "render.svg", json!({}));
         v["svg"]
@@ -149,7 +150,7 @@ fn plant_tags_have_three_levels_and_an_id_bubble() {
         json!({"ids": []}),
         json!({"ids": [tag], "levels": 4}),
         json!({"ids": [tag], "bubble": "yes"}),
-        json!({"ids": [9999]}),
+        json!({"ids": ["00000000-0000-0000-0000-00000000270f"]}),
     ] {
         assert!(s.handle("plant_tag.set", bad).is_err());
     }
@@ -160,7 +161,7 @@ fn plant_tags_have_three_levels_and_an_id_bubble() {
 
 #[test]
 fn the_hydrozone_report_links_plants_to_irrigation_zones() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let lav = style(&mut s, "Lavender", "low", "Z1");
     let hyd = style(&mut s, "Hydrangea", "high", "Z1");
     let box_ = style(&mut s, "Box", "moderate", "Z2");
@@ -234,14 +235,14 @@ fn the_hydrozone_report_links_plants_to_irrigation_zones() {
 
 #[test]
 fn plants_without_a_hydrozone_are_reported() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let st = style(&mut s, "Aster", "moderate", "");
     plant(&mut s, st, 0);
     let r = ok(&mut s, "irrigation.report.hydrozones", json!({}));
     assert!(r["warnings"][0].as_str().unwrap().contains("no hydrozone"));
 }
 
-fn tilted_site(s: &mut Session) -> u64 {
+fn tilted_site(s: &mut Session) -> cadektor_core::uid::Uid {
     // A plane that rises 10 mm per m along X, from 100 mm.
     let mut ids = Vec::new();
     for x in 0..5 {
@@ -251,17 +252,17 @@ fn tilted_site(s: &mut Session) -> u64 {
                 "execute",
                 json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x * 5000, y * 5000, 100 + x * 50]}}}),
             );
-            ids.push(r["created"][0].as_u64().unwrap());
+            ids.push(r["created"][0].as_uid().unwrap());
         }
     }
     ok(s, "site.create", json!({"source_ids": ids}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap()
 }
 
 #[test]
 fn plants_stand_on_the_terrain_when_placed_and_when_draped() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     tilted_site(&mut s);
     let st = style(&mut s, "Lavender", "low", "Z1");
     let r = ok(
@@ -269,14 +270,14 @@ fn plants_stand_on_the_terrain_when_placed_and_when_draped() {
         "plants.place",
         json!({"mode": "path", "style": st, "path": [[0, 2000], [10000, 2000]], "spacing": 5000, "on_terrain": true}),
     );
-    let ids: Vec<u64> = r["created"]
+    let ids: Vec<cadektor_core::uid::Uid> = r["created"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v.as_u64().unwrap())
+        .map(|v| v.as_uid().unwrap())
         .collect();
     assert_eq!(ids.len(), 3);
-    let z = |s: &mut Session, id: u64| {
+    let z = |s: &mut Session, id: cadektor_core::uid::Uid| {
         ok(s, "objects.get", json!({"id": id}))["data"]["ground_z"].as_f64()
     };
     assert!((z(&mut s, ids[0]).unwrap() - 100.0).abs() < 1e-6);
@@ -305,8 +306,8 @@ fn plants_stand_on_the_terrain_when_placed_and_when_draped() {
     );
     assert_eq!(z(&mut s, p), None);
     for bad in [
-        json!({"ids": [9999]}),
-        json!({"ids": [1]}),
+        json!({"ids": ["00000000-0000-0000-0000-00000000270f"]}),
+        json!({"ids": ["00000000-0000-0000-0000-000000000001"]}),
         json!({"ids": "x"}),
     ] {
         assert!(s.handle("plants.drape", bad).is_err());
@@ -322,7 +323,7 @@ fn plants_stand_on_the_terrain_when_placed_and_when_draped() {
 
 #[test]
 fn a_hedgerow_is_a_placement_mode() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let st = style(&mut s, "Beech", "moderate", "Z1");
     let r = ok(
         &mut s,

@@ -241,7 +241,8 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
-        let with_tris: std::collections::BTreeSet<u64> = tris.iter().map(|t| t.object.0).collect();
+        let with_tris: std::collections::BTreeSet<cadektor_core::uid::Uid> =
+            tris.iter().map(|t| t.object.0).collect();
         let l = &scene.lines;
         for s in 0..l.segment_count() {
             let object = l.objects[s];
@@ -279,7 +280,8 @@ fn cut_faces(
     plant_of: &dyn Fn(ObjectId) -> bool,
 ) {
     // The trunk of a plant is cut on its own: it is a solid, the canopy only gives a silhouette.
-    let mut by_object: BTreeMap<(u64, bool), Vec<(DVec2, DVec2)>> = BTreeMap::new();
+    let mut by_object: BTreeMap<(cadektor_core::uid::Uid, bool), Vec<(DVec2, DVec2)>> =
+        BTreeMap::new();
     for t in tris {
         let w = [t.p[0].z, t.p[1].z, t.p[2].z];
         let side = [w[0] >= 0.0, w[1] >= 0.0, w[2] >= 0.0];

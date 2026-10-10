@@ -822,11 +822,11 @@ mod tests {
             ..Default::default()
         };
         res.push(Resource {
-            id: ResourceId(7),
+            id: ResourceId::from_num(7),
             name: "Cross".into(),
             body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))),
         });
-        (res, ResourceId(7))
+        (res, ResourceId::from_num(7))
     }
 
     #[test]
@@ -885,7 +885,7 @@ mod tests {
             tile_segments(
                 &res,
                 &TileDef {
-                    symbol: ResourceId(99),
+                    symbol: ResourceId::from_num(99),
                     ..def.clone()
                 },
                 std::slice::from_ref(&ring),
@@ -906,7 +906,7 @@ mod tests {
     fn fill_segments_picks_by_type() {
         let (mut res, sym) = with_cross_symbol();
         res.push(Resource {
-            id: ResourceId(8),
+            id: ResourceId::from_num(8),
             name: "H".into(),
             body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(hatch(
                 vec![HatchLine::solid(0.0, 10.0)],
@@ -914,7 +914,7 @@ mod tests {
             )))),
         });
         res.push(Resource {
-            id: ResourceId(9),
+            id: ResourceId::from_num(9),
             name: "T".into(),
             body: ResourceBody::Graphic(Box::new(GraphicResource::Tile(TileDef {
                 symbol: sym,
@@ -927,13 +927,13 @@ mod tests {
             }))),
         });
         let ring = [square(0.0, 0.0, 100.0)];
-        assert!(!fill_segments(&res, ResourceId(8), &ring, 1.0).is_empty());
-        assert!(!fill_segments(&res, ResourceId(9), &ring, 1.0).is_empty());
+        assert!(!fill_segments(&res, ResourceId::from_num(8), &ring, 1.0).is_empty());
+        assert!(!fill_segments(&res, ResourceId::from_num(9), &ring, 1.0).is_empty());
         assert!(
             fill_segments(&res, sym, &ring, 1.0).is_empty(),
             "a symbol is not a pattern"
         );
-        assert!(fill_segments(&res, ResourceId(1234), &ring, 1.0).is_empty());
+        assert!(fill_segments(&res, ResourceId::from_num(1234), &ring, 1.0).is_empty());
     }
 
     fn line_type(elements: Vec<LineElement>) -> LineTypeDef {
@@ -1018,7 +1018,7 @@ mod tests {
         // A mark of a symbol that is gone is left out.
         let gone = line_type(vec![
             LineElement::Mark {
-                symbol: ResourceId(404),
+                symbol: ResourceId::from_num(404),
                 scale: 1.0,
                 rotate: true,
             },
@@ -1098,7 +1098,7 @@ mod tests {
             ])),
         );
         let rect = Object::new(
-            crate::model::ObjectId(900),
+            crate::model::ObjectId::from_num(900),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Rect {
@@ -1140,7 +1140,7 @@ mod tests {
             doc,
             &rect,
             &Attributes {
-                line_type: Some(ResourceId(999)),
+                line_type: Some(ResourceId::from_num(999)),
                 ..Default::default()
             },
             1.0,
@@ -1149,7 +1149,7 @@ mod tests {
         assert!(!gone.replaces_outline);
         // An open line has no fill. A plant has neither.
         let line = Object::new(
-            crate::model::ObjectId(901),
+            crate::model::ObjectId::from_num(901),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Line {
@@ -1159,7 +1159,7 @@ mod tests {
         );
         assert!(decorate(doc, &line, &both, 1.0).unwrap().fill.is_empty());
         let plant = Object::new(
-            crate::model::ObjectId(902),
+            crate::model::ObjectId::from_num(902),
             crate::model::FIRST_LAYER,
             crate::model::NONE_CLASS,
             Shape::Plant {

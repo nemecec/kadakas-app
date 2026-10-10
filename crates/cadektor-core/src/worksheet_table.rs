@@ -89,21 +89,21 @@ mod tests {
         set_data(
             &mut o,
             &TableData {
-                worksheet: ResourceId(5),
+                worksheet: ResourceId::from_num(5),
                 text_height: 3.0,
             },
         );
         assert_eq!(
             data(&o),
             Some(TableData {
-                worksheet: ResourceId(5),
+                worksheet: ResourceId::from_num(5),
                 text_height: 3.0
             })
         );
         set_data(
             &mut o,
             &TableData {
-                worksheet: ResourceId(5),
+                worksheet: ResourceId::from_num(5),
                 text_height: -1.0,
             },
         );
@@ -111,7 +111,7 @@ mod tests {
         set_data(
             &mut o,
             &TableData {
-                worksheet: ResourceId(5),
+                worksheet: ResourceId::from_num(5),
                 text_height: 3.0,
             },
         );
@@ -167,7 +167,7 @@ mod tests {
             validate(
                 ed.doc(),
                 &TableData {
-                    worksheet: ResourceId(999),
+                    worksheet: ResourceId::from_num(999),
                     ..ok
                 }
             )

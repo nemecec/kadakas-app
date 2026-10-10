@@ -1,3 +1,4 @@
+from helpers import uid
 """Scenario: an agent asks `describe` for the JSON Schema of commands and checks its commands with it.
 
 The checker below is a small validator for the parts of JSON Schema that the schema uses
@@ -103,10 +104,10 @@ def test_every_command_example_fits_the_schema(cad, schema):
 def test_the_schema_lists_the_ops_and_rejects_bad_commands(schema):
     ops = {o["properties"]["op"]["const"] for o in schema["oneOf"]}
     assert {"add_object", "move_objects", "transform_objects", "array_objects", "set_visibility", "batch"} <= ops
-    assert validate(schema, {"op": "move_objects", "ids": [1], "delta": [1, 2]}) == []
-    assert validate(schema, {"op": "move_objects", "ids": [1]})  # delta is missing
-    assert validate(schema, {"op": "move_objects", "ids": [1], "delta": [1]})  # a point has two numbers
-    assert validate(schema, {"op": "move_objects", "ids": ["a"], "delta": [1, 2]})
+    assert validate(schema, {"op": "move_objects", "ids": [uid(1)], "delta": [1, 2]}) == []
+    assert validate(schema, {"op": "move_objects", "ids": [uid(1)]})  # delta is missing
+    assert validate(schema, {"op": "move_objects", "ids": [uid(1)], "delta": [1]})  # a point has two numbers
+    assert validate(schema, {"op": "move_objects", "ids": [1], "delta": [1, 2]})
     assert validate(schema, {"op": "no_such_command"})
     assert validate(schema, {"op": "add_object", "shape": {"kind": "teapot"}})
     assert validate(schema, {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [1, 1]}}) == []
@@ -114,15 +115,15 @@ def test_the_schema_lists_the_ops_and_rejects_bad_commands(schema):
 
 def test_new_commands_fit_the_schema(cad, schema):
     cmds = [
-        {"op": "transform_objects", "ids": [2], "transform": {"type": "scale", "center": [0, 0], "sx": 2}, "copy": True},
-        {"op": "array_objects", "ids": [2], "array": {"shape": "circular", "count": 3, "center": [0, 0], "retain": False}},
-        {"op": "set_visibility", "layers": [1], "mode": "grey"},
-        {"op": "batch", "commands": [{"op": "delete_objects", "ids": [2]}, {"op": "set_visibility", "classes": [0], "mode": "invisible"}]},
+        {"op": "transform_objects", "ids": [uid(2)], "transform": {"type": "scale", "center": [0, 0], "sx": 2}, "copy": True},
+        {"op": "array_objects", "ids": [uid(2)], "array": {"shape": "circular", "count": 3, "center": [0, 0], "retain": False}},
+        {"op": "set_visibility", "layers": [uid(1)], "mode": "grey"},
+        {"op": "batch", "commands": [{"op": "delete_objects", "ids": [uid(2)]}, {"op": "set_visibility", "classes": [uid(0)], "mode": "invisible"}]},
     ]
     for c in cmds:
         assert validate(schema, c) == [], c
     assert validate(schema, {"op": "set_visibility", "mode": "pink"})
-    assert validate(schema, {"op": "transform_objects", "ids": [2], "transform": {"type": "tilt"}})
+    assert validate(schema, {"op": "transform_objects", "ids": [uid(2)], "transform": {"type": "tilt"}})
     # What the schema accepts, the server runs.
     cad.execute({"op": "add_object", "shape": {"kind": "circle", "center": [10, 0], "radius": 2}})
     # The active layer cannot be grey: the visibility command works on a second layer.

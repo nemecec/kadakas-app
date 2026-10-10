@@ -548,7 +548,11 @@ mod tests {
             thumbnail(ed.doc(), tex).paths[0].fill,
             Some([120, 80, 40, 255])
         );
-        assert!(thumbnail(ed.doc(), ResourceId(9999)).paths.is_empty());
+        assert!(
+            thumbnail(ed.doc(), ResourceId::from_num(9999))
+                .paths
+                .is_empty()
+        );
         assert_eq!(Thumbnail::default().to_svg(10).matches("<path").count(), 0);
     }
 

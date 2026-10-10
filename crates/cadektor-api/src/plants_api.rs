@@ -4,6 +4,7 @@
 //! `plants.place`, `plants.set_style`, `report.plants`, `report.plant_schedule`, `report.existing_trees`.
 //! Existing trees and plant tags are shapes (`existing_tree`, `plant_tag`) that `execute` adds.
 
+use cadektor_core::uid::AsUid;
 use serde_json::{Map, Value, json};
 
 use cadektor_core::DVec2;
@@ -94,7 +95,7 @@ pub fn describe() -> Value {
         "examples": [
             {"method": "plant_style.create", "params": {"name": "Field maple", "botanical_name": "Acer campestre", "id_code": "AC", "category": "tree", "spread": 7000, "height": 12000, "graphic": "cloud", "price": 185}},
             {"method": "plants.place", "params": {"mode": "fill", "style": "Field maple", "boundary": [[0,0],[20000,0],[20000,10000],[0,10000]], "spacing": 5000, "tag": true}},
-            {"method": "plants.place", "params": {"mode": "path", "style": 2, "path": [[0,0],[10000,0]], "spacing": 1500}}
+            {"method": "plants.place", "params": {"mode": "path", "style": "00000000-0000-0000-0000-000000000002", "path": [[0,0],[10000,0]], "spacing": 1500}}
         ],
     })
 }
@@ -106,8 +107,10 @@ fn object(p: &Value) -> Result<&Map<String, Value>, RpcError> {
 /// A style reference: an ID, or a style name.
 fn style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
     let id = match v {
-        Value::Number(n) => n.as_u64().map(ResourceId),
-        Value::String(s) => doc.resources.find_plant_style(s),
+        Value::String(s) => cadektor_core::uid::Uid::parse(s.trim())
+            .map(ResourceId)
+            .filter(|id| doc.resources.plant_style(*id).is_some())
+            .or_else(|| doc.resources.find_plant_style(s)),
         _ => None,
     };
     id.filter(|id| doc.resources.plant_style(*id).is_some())
@@ -646,11 +649,11 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Some(Value::Object(o)) => o.clone(),
         Some(_) => return Err(bad("'overrides' must be an object")),
     };
-    let id_of = |k: &str| -> Result<Option<u64>, RpcError> {
+    let id_of = |k: &str| -> Result<Option<cadektor_core::uid::Uid>, RpcError> {
         m.get(k)
             .filter(|v| !v.is_null())
             .map(|v| {
-                v.as_u64()
+                v.as_uid()
                     .ok_or_else(|| bad(format!("'{k}' must be an ID")))
             })
             .transpose()
@@ -700,13 +703,13 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     if on_terrain {
         use cadektor_core::ground::GroundSource;
-        let first = doc.next_id();
+        let planned = doc.next_ids(positions.len());
         let probe_layer = layer.unwrap_or(doc.active_layer);
         let terrain = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);
         let mut sets = Vec::new();
         for (i, p) in positions.iter().enumerate() {
             let probe = Object::new(
-                ObjectId(0),
+                ObjectId::from_num(0),
                 probe_layer,
                 class.unwrap_or(doc.active_class),
                 Shape::Plant {
@@ -718,7 +721,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             );
             if let Some(z) = terrain.elevation(&probe, *p) {
                 sets.push(Command::SetData {
-                    id: ObjectId(first + i as u64),
+                    id: ObjectId(planned[i]),
                     set: [(link::GROUND_Z_KEY.to_string(), json!(z))].into(),
                     remove: Vec::new(),
                 });
@@ -751,15 +754,15 @@ mod tests {
         s.handle(method, params).expect_err(method)
     }
 
-    fn maple(s: &mut Session) -> u64 {
+    fn maple(s: &mut Session) -> cadektor_core::uid::Uid {
         ok(s, "plant_style.create", json!({"name": "Field maple", "botanical_name": "Acer campestre", "id_code": "AC", "category": "tree", "spread": 7000, "height": 12000, "graphic": "cloud", "price": 100}))["id"]
-            .as_u64()
+            .as_uid()
             .unwrap()
     }
 
     #[test]
     fn style_crud() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let list = ok(&mut s, "plant_style.list", json!({}));
         assert_eq!(list["styles"][0]["name"], "Field maple");
@@ -819,7 +822,7 @@ mod tests {
 
     #[test]
     fn style_errors() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         assert_eq!(
             fail(&mut s, "plant_style.create", json!({"name": "Field maple"})).code,
@@ -861,7 +864,12 @@ mod tests {
             -32602
         );
         assert_eq!(
-            fail(&mut s, "plant_style.get", json!({"id": 999})).code,
+            fail(
+                &mut s,
+                "plant_style.get",
+                json!({"id": "00000000-0000-0000-0000-0000000003e7"})
+            )
+            .code,
             -32602
         );
         assert_eq!(
@@ -908,14 +916,14 @@ mod tests {
 
     #[test]
     fn delete_in_use_is_refused_and_reassign_works() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let a = maple(&mut s);
         let b = ok(
             &mut s,
             "plant_style.create",
             json!({"name": "Birch", "spread": 3000}),
         )["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         ok(
             &mut s,
@@ -944,7 +952,7 @@ mod tests {
 
     #[test]
     fn place_in_every_mode() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let count = |s: &mut Session, params: Value| {
             ok(s, "plants.place", params)["count"].as_u64().unwrap()
@@ -1040,14 +1048,14 @@ mod tests {
 
     #[test]
     fn placement_is_one_undo_step_with_overrides_and_layers() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let layer = ok(
             &mut s,
             "execute",
             json!({"command": {"op": "add_layer", "name": "Planting"}}),
         )["created"][0]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let r = ok(
             &mut s,
@@ -1055,7 +1063,7 @@ mod tests {
             json!({"mode": "fill", "style": id, "boundary": square(3000.0), "spacing": 1000, "overrides": {"price": 10, "height": 999}, "layer": layer, "tag": true}),
         );
         let n = r["count"].as_u64().unwrap();
-        assert!(n > 4 && r["tag"].is_u64());
+        assert!(n > 4 && r["tag"].is_string());
         let objs = ok(&mut s, "objects.list", json!({"kind": "plant"}));
         assert_eq!(objs.as_array().unwrap().len() as u64, n);
         assert!(
@@ -1092,13 +1100,13 @@ mod tests {
 
     #[test]
     fn spacing_can_be_the_spread_and_fill_can_have_holes() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = ok(
             &mut s,
             "plant_style.create",
             json!({"name": "Box", "spread": 500}),
         )["id"]
-            .as_u64()
+            .as_uid()
             .unwrap();
         let n = |s: &mut Session, p: Value| ok(s, "plants.place", p)["count"].as_u64().unwrap();
         assert_eq!(
@@ -1146,7 +1154,7 @@ mod tests {
             fail(
                 &mut s,
                 "plants.place",
-                json!({"mode": "path", "style": 999, "path": [[0, 0], [9, 0]], "spacing": "spread"})
+                json!({"mode": "path", "style": "00000000-0000-0000-0000-0000000003e7", "path": [[0, 0], [9, 0]], "spacing": "spread"})
             )
             .code,
             -32602
@@ -1164,8 +1172,8 @@ mod tests {
 
     #[test]
     fn variation_locked_fields_area_and_zone_through_the_api() {
-        let mut s = Session::default();
-        let id = ok(&mut s, "plant_style.create", json!({"name": "Oak", "category": "tree", "spread": 6000, "height": 9000, "trunk_diameter": 400, "protection_zone": true, "locked": ["price"], "price": 50}))["id"].as_u64().unwrap();
+        let mut s = Session::with_sequential_ids();
+        let id = ok(&mut s, "plant_style.create", json!({"name": "Oak", "category": "tree", "spread": 6000, "height": 9000, "trunk_diameter": 400, "protection_zone": true, "locked": ["price"], "price": 50}))["id"].as_uid().unwrap();
         let r = ok(
             &mut s,
             "plants.place",
@@ -1251,7 +1259,7 @@ mod tests {
             (1, json!(8))
         );
         // Quantity by area.
-        let gc = ok(&mut s, "plant_style.create", json!({"name": "Thyme", "category": "groundcover", "spread": 1000, "price": 10, "quantity": "area"}))["id"].as_u64().unwrap();
+        let gc = ok(&mut s, "plant_style.create", json!({"name": "Thyme", "category": "groundcover", "spread": 1000, "price": 10, "quantity": "area"}))["id"].as_uid().unwrap();
         ok(
             &mut s,
             "plants.place",
@@ -1279,7 +1287,7 @@ mod tests {
 
     #[test]
     fn place_from_a_source_object() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let add = |s: &mut Session, shape: Value| {
             ok(
@@ -1371,7 +1379,7 @@ mod tests {
 
     #[test]
     fn place_errors() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let code = |s: &mut Session, p: Value| fail(s, "plants.place", p).code;
         assert_eq!(code(&mut s, json!({"style": id})), -32602);
@@ -1384,7 +1392,7 @@ mod tests {
         assert_eq!(
             code(
                 &mut s,
-                json!({"mode": "single", "at": [0, 0], "style": 999})
+                json!({"mode": "single", "at": [0, 0], "style": "00000000-0000-0000-0000-0000000003e7"})
             ),
             -32602
         );
@@ -1416,7 +1424,7 @@ mod tests {
         assert_eq!(
             code(
                 &mut s,
-                json!({"mode": "single", "at": [0, 0], "layer": 999})
+                json!({"mode": "single", "at": [0, 0], "layer": "00000000-0000-0000-0000-0000000003e7"})
             ),
             2
         );
@@ -1450,7 +1458,7 @@ mod tests {
 
     #[test]
     fn set_style_links_and_unlinks() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let id = maple(&mut s);
         let r = ok(
             &mut s,
@@ -1502,7 +1510,7 @@ mod tests {
 
     #[test]
     fn csv_import_export_round_trip() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let sample = ok(&mut s, "plant_style.sample_csv", json!({}))["csv"]
             .as_str()
             .unwrap()
@@ -1515,7 +1523,7 @@ mod tests {
             .unwrap()
             .to_string();
         // Importing again into a new session gives equal styles.
-        let mut t = Session::default();
+        let mut t = Session::with_sequential_ids();
         ok(&mut t, "plant_style.import_csv", json!({"csv": exported}));
         let a = ok(&mut s, "plant_style.list", json!({}));
         let b = ok(&mut t, "plant_style.list", json!({}));
@@ -1567,7 +1575,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(one.lines().count(), 2);
-        let mut u = Session::default();
+        let mut u = Session::with_sequential_ids();
         ok(
             &mut u,
             "plant_style.import_csv",
@@ -1581,7 +1589,7 @@ mod tests {
 
     #[test]
     fn csv_errors() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         let code = |s: &mut Session, m: &str, p: Value| fail(s, m, p).code;
         assert_eq!(code(&mut s, "plant_style.import_csv", json!({})), -32602);
         assert_eq!(
@@ -1629,7 +1637,11 @@ mod tests {
             -32602
         );
         assert_eq!(
-            code(&mut s, "plant_style.export_csv", json!({"ids": [999]})),
+            code(
+                &mut s,
+                "plant_style.export_csv",
+                json!({"ids": ["00000000-0000-0000-0000-0000000003e7"]})
+            ),
             -32602
         );
         assert_eq!(
@@ -1644,7 +1656,7 @@ mod tests {
 
     #[test]
     fn schedule_csv_and_existing_trees() {
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         maple(&mut s);
         ok(
             &mut s,
@@ -1696,7 +1708,7 @@ mod tests {
         ] {
             assert!(crate::METHODS.iter().any(|(n, _)| *n == m), "{m}");
         }
-        let mut s = Session::default();
+        let mut s = Session::with_sequential_ids();
         assert!(handle(&mut s, "nothing", Value::Null).is_none());
         assert!(handle(&mut s, "plant_style.list", Value::Null).is_some());
     }

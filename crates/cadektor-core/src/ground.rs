@@ -78,9 +78,9 @@ mod tests {
 
     fn object() -> Object {
         Object::new(
-            ObjectId(1),
-            LayerId(1),
-            ClassId(0),
+            ObjectId::from_num(1),
+            LayerId::from_num(1),
+            ClassId::from_num(0),
             Shape::Circle {
                 center: DVec2::ZERO,
                 radius: 1.0,

@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn symbols_and_unsupported_shapes() {
         let sym = Shape::Symbol {
-            symbol: crate::resource::ResourceId(1),
+            symbol: crate::resource::ResourceId::from_num(1),
             at: v(1.0, 0.0),
             rotation: 0.5,
             scale: 2.0,

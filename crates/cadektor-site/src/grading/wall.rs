@@ -1052,7 +1052,7 @@ mod tests {
         .unwrap();
         let id = ed.doc().resources.iter().next().unwrap().id;
         assert_eq!(style_of(ed.doc(), id), Some(s.clone()));
-        assert!(style_of(ed.doc(), ResourceId(999)).is_none());
+        assert!(style_of(ed.doc(), ResourceId::from_num(999)).is_none());
         ed.execute(&cadektor_core::command::Command::AddResource {
             name: "Other".into(),
             body: ResourceBody::Unknown(json!({"type": "x"})),
@@ -1162,7 +1162,7 @@ mod tests {
         assert!(centerline(ed.doc().object(circle).unwrap()).is_none());
         // A wall with a missing style gets the thickness of its own settings.
         let d2 = WallData {
-            style: Some(ResourceId(77)),
+            style: Some(ResourceId::from_num(77)),
             thickness: 123.0,
             ..d
         };

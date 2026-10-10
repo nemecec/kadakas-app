@@ -2,6 +2,7 @@
 //! unknown shapes in the API.
 
 use cadektor_api::{PathPolicy, Session};
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -34,32 +35,42 @@ fn err(s: &mut Session, method: &str, params: Value) -> (i64, String, String) {
     )
 }
 
-fn circle(s: &mut Session) -> u64 {
+fn circle(s: &mut Session) -> cadektor_core::uid::Uid {
     let r = ok(
         s,
         "execute",
         json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}),
     );
-    r["created"][0].as_u64().unwrap()
+    r["created"][0].as_uid().unwrap()
 }
 
 #[allow(clippy::field_reassign_with_default)]
 fn restricted(dir: &Path) -> Session {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     s.paths = PathPolicy::restricted([dir.to_path_buf()]);
     s
 }
 
 #[test]
 fn errors_have_distinct_codes_and_a_stable_kind() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(
-        err(&mut s, "objects.get", json!({"id": 999})).0,
+        err(
+            &mut s,
+            "objects.get",
+            json!({"id": "00000000-0000-0000-0000-0000000003e7"})
+        )
+        .0,
         2,
         "not found"
     );
     assert_eq!(
-        err(&mut s, "objects.get", json!({"id": 999})).1,
+        err(
+            &mut s,
+            "objects.get",
+            json!({"id": "00000000-0000-0000-0000-0000000003e7"})
+        )
+        .1,
         "not_found"
     );
     let (c, k, _) = err(
@@ -74,11 +85,11 @@ fn errors_have_distinct_codes_and_a_stable_kind() {
     assert_eq!((c, k.as_str()), (-32602, "invalid_params"));
     // A layer that still has objects is a conflict.
     let id = circle(&mut s);
-    assert!(id > 0);
+    assert_ne!(id, cadektor_core::uid::Uid::NIL);
     let (c, k, _) = err(
         &mut s,
         "execute",
-        json!({"command": {"op": "delete_layer", "id": 1}}),
+        json!({"command": {"op": "delete_layer", "id": "00000000-0000-0000-0000-000000000001"}}),
     );
     assert!(matches!(c, 3 | 5), "{c} {k}");
     // A parse error has a kind, too.
@@ -89,7 +100,7 @@ fn errors_have_distinct_codes_and_a_stable_kind() {
 
 #[test]
 fn describe_documents_the_error_codes() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = ok(&mut s, "describe", json!({}));
     let codes = d["errors"]["codes"].as_array().unwrap();
     let have: Vec<i64> = codes.iter().map(|c| c["code"].as_i64().unwrap()).collect();
@@ -163,7 +174,7 @@ fn the_dwg_converter_is_off_for_agents_unless_allowed() {
         .unwrap_or_default();
     assert!(!e.contains("--allow-converters"), "{e}");
     // A library session (no policy) is not limited either.
-    assert!(Session::default().paths.converters_allowed());
+    assert!(Session::with_sequential_ids().paths.converters_allowed());
 }
 
 #[test]
@@ -210,7 +221,7 @@ fn library_and_favorites_cannot_be_redirected() {
 #[test]
 fn worksheet_csv_export_is_atomic_keeps_a_bak_and_defuses_formulas() {
     let dir = tmp("csv");
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = ok(
         &mut s,
         "worksheet.create",
@@ -254,7 +265,7 @@ fn worksheet_csv_export_is_atomic_keeps_a_bak_and_defuses_formulas() {
 #[test]
 fn glb_export_keeps_a_bak() {
     let dir = tmp("glb");
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
         "execute",
@@ -269,7 +280,7 @@ fn glb_export_keeps_a_bak() {
 
 #[test]
 fn render_svg_is_one_function() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     circle(&mut s);
     let via_method = ok(&mut s, "render.svg", json!({"width": 500}))["svg"]
         .as_str()
@@ -282,7 +293,7 @@ fn render_svg_is_one_function() {
 
 #[test]
 fn unknown_shapes_are_listed_and_only_deletable() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let id = circle(&mut s);
     let mut doc = ok(&mut s, "document.get", json!({}));
     doc["objects"][0]["shape"] = json!({"kind": "spiral", "turns": 2});

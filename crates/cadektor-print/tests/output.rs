@@ -22,7 +22,7 @@ fn v(x: f64, y: f64) -> DVec2 {
 
 const RED: Color = Color([200, 0, 0, 255]);
 
-fn run(ed: &mut Editor, c: Command) -> Vec<u64> {
+fn run(ed: &mut Editor, c: Command) -> Vec<cadektor_core::uid::Uid> {
     ed.execute(&c).unwrap().created
 }
 
@@ -784,7 +784,11 @@ fn pages_are_built_once_per_revision() {
     assert_eq!(cache.builds, 3);
     assert_eq!(d.prims, a.prims);
     assert!(cache.page(ed.doc(), ed.revision(), FIRST_LAYER).is_err());
-    assert!(cache.page(ed.doc(), ed.revision(), LayerId(999)).is_err());
+    assert!(
+        cache
+            .page(ed.doc(), ed.revision(), LayerId::from_num(999))
+            .is_err()
+    );
 }
 
 #[test]
@@ -795,7 +799,7 @@ fn errors_name_the_problem() {
         PrintError::NoSheet(FIRST_LAYER)
     );
     assert!(
-        PrintError::NoSheet(LayerId(4))
+        PrintError::NoSheet(LayerId::from_num(4))
             .to_string()
             .contains("not a sheet layer")
     );

@@ -227,7 +227,7 @@ mod tests {
         );
         // Another layer has no ground.
         let mut other = o.clone();
-        other.layer = LayerId(77);
+        other.layer = LayerId::from_num(77);
         assert_eq!(t.elevation(&other, DVec2::new(3000.0, 3000.0)), None);
     }
 

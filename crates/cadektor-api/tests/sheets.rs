@@ -2,6 +2,7 @@
 //! saved views and output.
 
 use cadektor_api::{METHODS, Session};
+use cadektor_core::uid::AsUid;
 use serde_json::{Value, json};
 
 fn call(s: &mut Session, m: &str, p: Value) -> Value {
@@ -24,7 +25,7 @@ fn exec(s: &mut Session, cmd: Value) -> Value {
 
 /// A session with a drawing on the first layer and a class "Trees".
 fn model() -> Session {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     exec(
         &mut s,
         json!({"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [20000, 10000]}, "attrs": {"pen": [200, 0, 0, 255]}}),
@@ -35,13 +36,13 @@ fn model() -> Session {
     );
     exec(
         &mut s,
-        json!({"op": "add_object", "class": 3, "shape": {"kind": "circle", "center": [5000, 5000], "radius": 1500}}),
+        json!({"op": "add_object", "class": "00000000-0000-0000-0000-000000000003", "shape": {"kind": "circle", "center": [5000, 5000], "radius": 1500}}),
     );
     s
 }
 
 /// The class override of one class in a viewport JSON. The viewport stores the visibility of every class.
-fn class_ov(vp: &Value, class: u64) -> Value {
+fn class_ov(vp: &Value, class: cadektor_core::uid::Uid) -> Value {
     vp["class_overrides"]
         .as_array()
         .unwrap()
@@ -83,7 +84,7 @@ fn every_method_is_listed_and_described() {
     ] {
         assert!(names.contains(&m), "{m} is not in METHODS");
     }
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     let d = call(&mut s, "describe", json!({}));
     assert!(
         d["sheets"]["override_precedence"]
@@ -108,7 +109,7 @@ fn sheets_are_created_listed_and_changed() {
         "sheet.create",
         json!({"name": "Planting plan", "paper": "A1", "number": "L-101", "title": "Planting"}),
     );
-    let layer = r["layer"].as_u64().unwrap();
+    let layer = r["layer"].as_uid().unwrap();
     let list = call(&mut s, "sheet.list", json!({}));
     let sheet = &list["sheets"][0];
     assert_eq!(
@@ -207,7 +208,14 @@ fn sheets_are_created_listed_and_changed() {
         )
         .contains("paper side")
     );
-    assert!(fail(&mut s, "sheet.set", json!({"layer": 1})).contains("not a sheet"));
+    assert!(
+        fail(
+            &mut s,
+            "sheet.set",
+            json!({"layer": "00000000-0000-0000-0000-000000000001"})
+        )
+        .contains("not a sheet")
+    );
     assert!(fail(&mut s, "sheet.set", json!({"layer": "nowhere"})).contains("no layer"));
     assert!(fail(&mut s, "sheet.set", json!({"layer": true})).contains("no layer"));
     assert!(fail(&mut s, "sheet.set", json!({})).contains("no layer"));
@@ -215,7 +223,7 @@ fn sheets_are_created_listed_and_changed() {
 
 #[test]
 fn project_data() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert_eq!(call(&mut s, "project.get", json!({}))["name"], "");
     let r = call(
         &mut s,
@@ -238,14 +246,14 @@ fn project_data() {
 fn viewports_fit_the_model_and_update_live() {
     let mut s = model();
     let sheet = call(&mut s, "sheet.create", json!({"name": "S", "paper": "a3"}))["layer"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let vp = call(
         &mut s,
         "viewport.create",
         json!({"sheet": sheet, "name": "Main"}),
     );
-    let id = vp["id"].as_u64().unwrap();
+    let id = vp["id"].as_uid().unwrap();
     // 20 m by 10 m in a 390 mm by 227 mm frame: 1:75 fits (20000/75 = 267).
     assert_eq!(vp["scale"], 75.0);
     assert_eq!(vp["center"], json!([10000.0, 5000.0]));
@@ -253,11 +261,11 @@ fn viewports_fit_the_model_and_update_live() {
         (
             vp["view"].as_str(),
             vp["name"].as_str(),
-            vp["sheet"].as_u64()
+            vp["sheet"].as_uid()
         ),
         (Some("plan"), Some("Main"), Some(sheet))
     );
-    assert_eq!(vp["layers"], json!([1]));
+    assert_eq!(vp["layers"], json!([cadektor_core::uid::Uid::from_num(1)]));
     assert_eq!(
         call(&mut s, "viewport.get", json!({"id": id}))["scale"],
         75.0
@@ -303,11 +311,11 @@ fn viewports_fit_the_model_and_update_live() {
     let r = call(
         &mut s,
         "viewport.update",
-        json!({"id": id, "view": "plan", "fit": true, "layers": ["Layer 1", 1]}),
+        json!({"id": id, "view": "plan", "fit": true, "layers": ["Layer 1", "00000000-0000-0000-0000-000000000001"]}),
     );
-    assert_eq!(r["layers"], json!([1]));
+    assert_eq!(r["layers"], json!(["00000000-0000-0000-0000-000000000001"]));
     let l2 = exec(&mut s, json!({"op": "add_layer", "name": "Planting"}))["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = call(
         &mut s,
@@ -330,14 +338,14 @@ fn viewports_fit_the_model_and_update_live() {
     assert_eq!(call(&mut s, "undo", json!({}))["done"], true);
     assert_eq!(
         call(&mut s, "viewport.get", json!({"id": id}))["layers"],
-        json!([1])
+        json!(["00000000-0000-0000-0000-000000000001"])
     );
 
     // Explicit frames.
     let r = call(
         &mut s,
         "viewport.create",
-        json!({"sheet": "S", "at": [10, 10], "size": [100, 80], "scale": 200, "center": [1, 2], "layers": [1], "view": "top", "mode": "wireframe", "dpi": 100, "show_frame": true, "crop": {"type": "polygon", "points": [[10, 10], [110, 10], [60, 90]]}}),
+        json!({"sheet": "S", "at": [10, 10], "size": [100, 80], "scale": 200, "center": [1, 2], "layers": ["00000000-0000-0000-0000-000000000001"], "view": "top", "mode": "wireframe", "dpi": 100, "show_frame": true, "crop": {"type": "polygon", "points": [[10, 10], [110, 10], [60, 90]]}}),
     );
     assert_eq!(
         (
@@ -361,7 +369,14 @@ fn viewports_fit_the_model_and_update_live() {
     assert!(r["scale"].as_f64().unwrap() >= 100.0);
 
     // Errors.
-    assert!(fail(&mut s, "viewport.create", json!({"sheet": 1})).contains("not a sheet"));
+    assert!(
+        fail(
+            &mut s,
+            "viewport.create",
+            json!({"sheet": "00000000-0000-0000-0000-000000000001"})
+        )
+        .contains("not a sheet")
+    );
     assert!(
         fail(
             &mut s,
@@ -423,9 +438,30 @@ fn viewports_fit_the_model_and_update_live() {
     );
     assert!(fail(&mut s, "viewport.update", json!({"id": id, "scale": true})).contains("scale"));
     assert!(fail(&mut s, "viewport.get", json!({})).contains("id"));
-    assert!(fail(&mut s, "viewport.get", json!({"id": 2})).contains("not a viewport"));
-    assert!(fail(&mut s, "viewport.get", json!({"id": 9999})).contains("does not exist"));
-    assert!(fail(&mut s, "viewport.list", json!({"sheet": 1})).contains("not a sheet"));
+    assert!(
+        fail(
+            &mut s,
+            "viewport.get",
+            json!({"id": "00000000-0000-0000-0000-000000000002"})
+        )
+        .contains("not a viewport")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "viewport.get",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .contains("does not exist")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "viewport.list",
+            json!({"sheet": "00000000-0000-0000-0000-000000000001"})
+        )
+        .contains("not a sheet")
+    );
 }
 
 #[test]
@@ -433,7 +469,7 @@ fn overrides_and_annotations() {
     let mut s = model();
     call(&mut s, "sheet.create", json!({"name": "S"}));
     let id = call(&mut s, "viewport.create", json!({"sheet": "S"}))["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let base = call(&mut s, "sheet.render", json!({"sheet": "S"}))["svg"]
         .as_str()
@@ -446,7 +482,10 @@ fn overrides_and_annotations() {
         "viewport.set_override",
         json!({"id": id, "classes": {"Trees": {"pen": [10, 20, 30, 255], "line_weight": 0.7}}}),
     );
-    assert_eq!(class_ov(&r, 3)["line_weight"], 0.7);
+    assert_eq!(
+        class_ov(&r, cadektor_core::uid::Uid::from_num(3))["line_weight"],
+        0.7
+    );
     let svg = call(&mut s, "sheet.render", json!({"sheet": "S"}))["svg"]
         .as_str()
         .unwrap()
@@ -456,10 +495,10 @@ fn overrides_and_annotations() {
     call(
         &mut s,
         "viewport.set_override",
-        json!({"id": id, "classes": {"3": {"visible": false, "pen": null}}}),
+        json!({"id": id, "classes": {"00000000-0000-0000-0000-000000000003": {"visible": false, "pen": null}}}),
     );
     let r = call(&mut s, "viewport.get", json!({"id": id}));
-    let ov = &class_ov(&r, 3);
+    let ov = &class_ov(&r, cadektor_core::uid::Uid::from_num(3));
     assert_eq!(
         (ov["visible"].as_bool(), ov["line_weight"].as_f64()),
         (Some(false), Some(0.7))
@@ -490,12 +529,12 @@ fn overrides_and_annotations() {
     );
     assert_eq!(
         call(&mut s, "viewport.get", json!({"id": id}))["layer_overrides"],
-        json!([[1, false]])
+        json!([["00000000-0000-0000-0000-000000000001", false]])
     );
     call(
         &mut s,
         "viewport.set_override",
-        json!({"id": id, "layers": {"1": null}}),
+        json!({"id": id, "layers": {"00000000-0000-0000-0000-000000000001": null}}),
     );
     assert_eq!(
         call(&mut s, "viewport.get", json!({"id": id}))["layer_overrides"],
@@ -506,11 +545,17 @@ fn overrides_and_annotations() {
         "viewport.set_override",
         json!({"id": id, "classes": {"Trees": null}}),
     );
-    assert!(class_ov(&call(&mut s, "viewport.get", json!({"id": id})), 3).is_null());
+    assert!(
+        class_ov(
+            &call(&mut s, "viewport.get", json!({"id": id})),
+            cadektor_core::uid::Uid::from_num(3)
+        )
+        .is_null()
+    );
     call(
         &mut s,
         "viewport.set_override",
-        json!({"id": id, "layers": {"1": true}, "classes": {"Trees": {}}}),
+        json!({"id": id, "layers": {"00000000-0000-0000-0000-000000000001": true}, "classes": {"Trees": {}}}),
     );
     call(
         &mut s,
@@ -526,7 +571,7 @@ fn overrides_and_annotations() {
         fail(
             &mut s,
             "viewport.set_override",
-            json!({"id": id, "layers": [1]})
+            json!({"id": id, "layers": ["00000000-0000-0000-0000-000000000001"]})
         )
         .contains("object")
     );
@@ -534,7 +579,7 @@ fn overrides_and_annotations() {
         fail(
             &mut s,
             "viewport.set_override",
-            json!({"id": id, "layers": {"1": "yes"}})
+            json!({"id": id, "layers": {"00000000-0000-0000-0000-000000000001": "yes"}})
         )
         .contains("true, false or null")
     );
@@ -684,7 +729,7 @@ fn title_blocks_resolve_their_fields() {
         "title_block.create",
         json!({"sheet": "S", "grid_columns": 4, "grid_rows": 3, "fields": {"zone": "7b"}}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = call(&mut s, "title_block.resolve", json!({"id": id}));
     let cells = r["cells"].as_array().unwrap();
@@ -742,7 +787,14 @@ fn title_blocks_resolve_their_fields() {
         )
         .contains("26 columns")
     );
-    assert!(fail(&mut s, "title_block.create", json!({"sheet": 1})).contains("not a sheet"));
+    assert!(
+        fail(
+            &mut s,
+            "title_block.create",
+            json!({"sheet": "00000000-0000-0000-0000-000000000001"})
+        )
+        .contains("not a sheet")
+    );
     assert!(
         !fail(
             &mut s,
@@ -751,9 +803,30 @@ fn title_blocks_resolve_their_fields() {
         )
         .is_empty()
     );
-    assert!(fail(&mut s, "title_block.update", json!({"id": 2})).contains("not a title block"));
-    assert!(fail(&mut s, "title_block.update", json!({"id": 9999})).contains("does not exist"));
-    assert!(fail(&mut s, "title_block.resolve", json!({"id": 2})).contains("not a title block"));
+    assert!(
+        fail(
+            &mut s,
+            "title_block.update",
+            json!({"id": "00000000-0000-0000-0000-000000000002"})
+        )
+        .contains("not a title block")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "title_block.update",
+            json!({"id": "00000000-0000-0000-0000-00000000270f"})
+        )
+        .contains("does not exist")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "title_block.resolve",
+            json!({"id": "00000000-0000-0000-0000-000000000002"})
+        )
+        .contains("not a title block")
+    );
     assert!(
         fail(
             &mut s,
@@ -768,13 +841,13 @@ fn title_blocks_resolve_their_fields() {
 fn viewports_and_title_blocks_work_through_execute_too() {
     let mut s = model();
     let sheet = call(&mut s, "sheet.create", json!({"name": "S"}))["layer"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = exec(
         &mut s,
-        json!({"op": "add_object", "layer": sheet, "shape": {"kind": "viewport", "min": [10, 10], "max": [200, 150], "center": [0, 0], "scale": 100, "layers": [1]}}),
+        json!({"op": "add_object", "layer": sheet, "shape": {"kind": "viewport", "min": [10, 10], "max": [200, 150], "center": [0, 0], "scale": 100, "layers": ["00000000-0000-0000-0000-000000000001"]}}),
     );
-    let id = r["created"][0].as_u64().unwrap();
+    let id = r["created"][0].as_uid().unwrap();
     exec(
         &mut s,
         json!({"op": "move_objects", "ids": [id], "delta": [5, 5]}),
@@ -798,7 +871,7 @@ fn viewports_and_title_blocks_work_through_execute_too() {
 fn saved_views_store_and_restore_the_visibility_and_the_view() {
     let mut s = model();
     let l2 = exec(&mut s, json!({"op": "add_layer", "name": "Planting"}))["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let r = call(
         &mut s,
@@ -809,9 +882,13 @@ fn saved_views_store_and_restore_the_visibility_and_the_view() {
         (
             r["zoom"].as_f64(),
             r["view"].as_str(),
-            r["active_layer"].as_u64()
+            r["active_layer"].as_uid()
         ),
-        (Some(0.25), Some("plan"), Some(1))
+        (
+            Some(0.25),
+            Some("plan"),
+            Some(cadektor_core::uid::Uid::from_num(1))
+        )
     );
     // Change visibility, the active layer and the 3D view, then restore.
     exec(
@@ -820,7 +897,7 @@ fn saved_views_store_and_restore_the_visibility_and_the_view() {
     );
     exec(
         &mut s,
-        json!({"op": "modify_class", "id": 3, "visible": false}),
+        json!({"op": "modify_class", "id": "00000000-0000-0000-0000-000000000003", "visible": false}),
     );
     exec(&mut s, json!({"op": "set_active", "layer": l2}));
     call(
@@ -832,7 +909,7 @@ fn saved_views_store_and_restore_the_visibility_and_the_view() {
     let r = call(&mut s, "saved_view.restore", json!({"name": "everything"}));
     assert_eq!(r["name"], "Everything");
     let sum = call(&mut s, "document.summary", json!({}));
-    assert_eq!(sum["active_layer"], 1);
+    assert_eq!(sum["active_layer"], cadektor_core::uid::Uid::from_num(1));
     assert!(sum["layers"][1]["visible"] == true && sum["classes"][1]["visible"] == true);
     let v = call(&mut s, "view.list", json!({}));
     assert_eq!(
@@ -1049,7 +1126,7 @@ fn sheet_exports_follow_the_path_policy() {
 
 #[test]
 fn unknown_sheet_methods_are_unknown() {
-    let mut s = Session::default();
+    let mut s = Session::with_sequential_ids();
     assert!(fail(&mut s, "sheet.explode", json!({})).contains("unknown method"));
     assert!(fail(&mut s, "viewport.get", json!(null)).contains("id"));
 }
@@ -1061,14 +1138,14 @@ fn a_viewport_keeps_its_own_visibility() {
     // The document hides the class before the viewport exists: the viewport stores that.
     exec(
         &mut s,
-        json!({"op": "modify_class", "id": 3, "visible": false}),
+        json!({"op": "modify_class", "id": "00000000-0000-0000-0000-000000000003", "visible": false}),
     );
     let id = call(
         &mut s,
         "viewport.create",
         json!({"sheet": "S", "scale": 100, "center": [10000, 5000]}),
     )["id"]
-        .as_u64()
+        .as_uid()
         .unwrap();
     let svg = |s: &mut Session| {
         call(s, "sheet.render", json!({"sheet": "S"}))["svg"]
@@ -1078,19 +1155,22 @@ fn a_viewport_keeps_its_own_visibility() {
     };
     assert!(!svg(&mut s).contains("rgb(0,0,255)"));
     assert_eq!(
-        class_ov(&call(&mut s, "viewport.get", json!({"id": id})), 3)["visible"],
+        class_ov(
+            &call(&mut s, "viewport.get", json!({"id": id})),
+            cadektor_core::uid::Uid::from_num(3)
+        )["visible"],
         false
     );
     // Showing the class in the document later does not show it in the viewport.
     exec(
         &mut s,
-        json!({"op": "modify_class", "id": 3, "visible": true}),
+        json!({"op": "modify_class", "id": "00000000-0000-0000-0000-000000000003", "visible": true}),
     );
     assert!(!svg(&mut s).contains("rgb(0,0,255)"));
     // Hiding a layer in the document does not hide it in the viewport either.
     exec(
         &mut s,
-        json!({"op": "modify_layer", "id": 1, "visible": false}),
+        json!({"op": "modify_layer", "id": "00000000-0000-0000-0000-000000000001", "visible": false}),
     );
     assert!(svg(&mut s).contains("rgb(200,0,0)") || svg(&mut s).contains("stroke"));
     call(
@@ -1101,7 +1181,7 @@ fn a_viewport_keeps_its_own_visibility() {
     assert!(svg(&mut s).contains("rgb(0,0,255)"));
     // A class made later shows in the viewport.
     let c = exec(&mut s, json!({"op": "add_class", "name": "Later"}))["created"][0]
-        .as_u64()
+        .as_uid()
         .unwrap();
     exec(
         &mut s,

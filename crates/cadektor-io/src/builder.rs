@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::{Context, ImportResult, Report};
 
 pub struct Builder {
-    next_id: u64,
+    ids: cadektor_core::uid::IdGen,
     cmds: Vec<Command>,
     layers: Vec<(String, LayerId)>,
     classes: Vec<(String, ClassId)>,
@@ -25,7 +25,7 @@ pub struct Builder {
     pub default_layer: LayerId,
     pub default_class: ClassId,
     full: bool,
-    last_id: u64,
+    last_id: cadektor_core::uid::Uid,
     /// Probe mode: shapes are not stored, only their bounds (mm) are collected.
     probe: Option<(DVec2, DVec2)>,
     /// Shift (mm) that every added shape gets. Imports use it to keep geometry near the origin.
@@ -75,7 +75,7 @@ pub fn check_shape(shape: &Shape) -> Result<(), &'static str> {
 impl Builder {
     pub fn new(ctx: &Context, format: &str, max_objects: usize) -> Builder {
         Builder {
-            next_id: ctx.next_id,
+            ids: ctx.ids.clone(),
             cmds: Vec::new(),
             layers: ctx
                 .layers
@@ -89,16 +89,14 @@ impl Builder {
             default_layer: ctx.active_layer,
             default_class: ctx.active_class,
             full: false,
-            last_id: 0,
+            last_id: cadektor_core::uid::Uid::NIL,
             probe: None,
             offset: DVec2::ZERO,
         }
     }
 
-    fn take_id(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+    fn take_id(&mut self) -> cadektor_core::uid::Uid {
+        self.ids.take()
     }
 
     /// The layer with this name. A layer is created if no unlocked layer has the name.
@@ -200,7 +198,7 @@ impl Builder {
     }
 
     /// ID of the object that the last successful `add` made.
-    pub fn last_id(&self) -> u64 {
+    pub fn last_id(&self) -> cadektor_core::uid::Uid {
         self.last_id
     }
 
@@ -284,7 +282,7 @@ mod tests {
 
     #[test]
     fn plan_matches_real_ids() {
-        let doc = Document::default();
+        let doc = Document::with_sequential_ids();
         let mut b = Builder::new(&Context::of(&doc), "test", 100);
         let l = b.layer("Site", false);
         assert_eq!(b.layer("Site", true), l);
@@ -354,7 +352,7 @@ mod tests {
 
     #[test]
     fn locked_layers_are_not_reused_and_limit_stops() {
-        let mut doc = Document::default();
+        let mut doc = Document::with_sequential_ids();
         doc.layers[0].locked = true;
         let mut b = Builder::new(&Context::of(&doc), "test", 1);
         let l = b.layer("Layer 1", true);

@@ -425,7 +425,7 @@ mod tests {
         let (_, r3) = v.selection_lines(&scene, rev + 1, &[id]);
         assert_ne!(r2, r3, "a new scene revision recomputes");
         // Unknown objects add nothing.
-        let (c, _) = v.selection_lines(&scene, rev + 1, &[ObjectId(999)]);
+        let (c, _) = v.selection_lines(&scene, rev + 1, &[ObjectId::from_num(999)]);
         assert!(c.is_empty());
         // The box is the object's box.
         let (lo, hi) = scene.object_bounds(id).unwrap();
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn clicks_change_the_selection() {
-        let (a, b) = (ObjectId(1), ObjectId(2));
+        let (a, b) = (ObjectId::from_num(1), ObjectId::from_num(2));
         assert_eq!(click_selection(&[a], Some(b), false), vec![b]);
         assert_eq!(click_selection(&[a], Some(b), true), vec![a, b]);
         assert_eq!(click_selection(&[a, b], Some(a), true), vec![b]);
