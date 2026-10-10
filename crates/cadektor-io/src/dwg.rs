@@ -20,7 +20,6 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use cadektor_core::model::Document;
@@ -246,52 +245,11 @@ impl RunOptions {
     }
 }
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
+use cadektor_sys::tmp::PrivateTempDir as TempDir;
 
 /// A private temporary folder that is removed when it goes out of scope.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Result<TempDir, DwgError> {
-        let base = std::env::temp_dir();
-        for _ in 0..100 {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.subsec_nanos());
-            let dir = base.join(format!(
-                "cadektor-dwg-{}-{}-{nanos}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::Relaxed)
-            ));
-            let mut b = fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                b.mode(0o700);
-            }
-            match b.create(&dir) {
-                Ok(()) => return Ok(TempDir(dir)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => {
-                    return Err(DwgError::Io(format!(
-                        "cannot make a temporary folder in {}: {e}",
-                        base.display()
-                    )));
-                }
-            }
-        }
-        Err(DwgError::Io("cannot make a temporary folder".into()))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+fn temp_dir() -> Result<TempDir, DwgError> {
+    TempDir::new("cadektor-dwg").map_err(|e| DwgError::Io(e.to_string()))
 }
 
 fn tail(text: &str) -> String {
@@ -327,7 +285,7 @@ fn run(
         .stdout(Stdio::from(open(&out_path)?))
         .stderr(Stdio::from(open(&err_path)?));
     // The converter leads its own process group, so a stop reaches the programs that it started too.
-    cadektor_script::exec::own_group(&mut cmd);
+    cadektor_sys::process::own_group(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| DwgError::Failed {
         tool: tool.into(),
         detail: format!("cannot start {}: {e}", program.display()),
@@ -337,7 +295,7 @@ fn run(
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) if started.elapsed() >= timeout => {
-                cadektor_script::exec::kill_tree(&mut child);
+                cadektor_sys::process::kill_tree(&mut child);
                 let _ = child.wait();
                 return Err(DwgError::Timeout {
                     tool: tool.into(),
@@ -390,7 +348,7 @@ pub fn dwg_to_dxf(
     if !dwg.is_file() {
         return Err(DwgError::Io(format!("cannot read {}", dwg.display())));
     }
-    let tmp = TempDir::new()?;
+    let tmp = temp_dir()?;
     let input = tmp.path().join("in");
     let output = tmp.path().join("out");
     for d in [&input, &output] {
@@ -440,7 +398,7 @@ pub fn dxf_to_dwg(
     conv: &Converter,
     run_opts: &RunOptions,
 ) -> Result<(), DwgError> {
-    let tmp = TempDir::new()?;
+    let tmp = temp_dir()?;
     let input = tmp.path().join("in");
     let output = tmp.path().join("out");
     for d in [&input, &output] {
@@ -488,7 +446,7 @@ pub fn dxf_to_dwg(
             detail: "it made an empty DWG file".into(),
         });
     }
-    cadektor_core::fsio::write_atomic(dest, &bytes)
+    cadektor_sys::fsio::write_atomic(dest, &bytes)
         .map_err(|e| DwgError::Io(format!("cannot write {}: {e}", dest.display())))
 }
 
@@ -575,7 +533,7 @@ mod tests {
 
     impl Stubs {
         fn new() -> Stubs {
-            Stubs(TempDir::new().unwrap())
+            Stubs(temp_dir().unwrap())
         }
 
         fn script(&self, name: &str, body: &str) -> PathBuf {
@@ -908,7 +866,7 @@ mod tests {
     fn the_temporary_folder_is_removed() {
         let dir;
         {
-            let t = TempDir::new().unwrap();
+            let t = temp_dir().unwrap();
             dir = t.path().to_path_buf();
             fs::write(dir.join("x"), "x").unwrap();
             assert!(dir.exists());
@@ -994,19 +952,13 @@ mod group_tests {
     }
 
     fn alive(pid: i32) -> bool {
-        // SAFETY: signal 0 only checks that the process exists.
-        unsafe { libc_kill(pid, 0) == 0 }
-    }
-
-    unsafe extern "C" {
-        #[link_name = "kill"]
-        fn libc_kill(pid: i32, sig: i32) -> i32;
+        cadektor_sys::process::pid_alive(pid as u32)
     }
 
     #[test]
     fn a_timeout_stops_the_programs_that_the_converter_started() {
-        let work = TempDir::new().unwrap();
-        let stubs = TempDir::new().unwrap();
+        let work = temp_dir().unwrap();
+        let stubs = temp_dir().unwrap();
         let pidfile = work.path().join("child.pid");
         // The converter starts a child that sleeps, writes its ID, and waits for it.
         script(

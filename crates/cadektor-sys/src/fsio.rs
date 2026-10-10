@@ -1,19 +1,24 @@
-//! File helpers shared by the CLI and the desktop app: safe saves, and the
-//! runtime file that tells agent clients how to reach a running app.
+//! Safe file writes: a temporary file in the same folder, a flush to disk, then a rename.
 
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 /// The path for a sibling of `path`: same folder, `prefix` + file name + `suffix`.
-fn sibling(path: &Path, prefix: &str, suffix: &str) -> PathBuf {
+pub fn sibling(path: &Path, prefix: &str, suffix: &str) -> PathBuf {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     path.with_file_name(format!("{prefix}{name}{suffix}"))
+}
+
+/// Who may read a file that [`write_durable`] makes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Access {
+    /// Mode 0600 on Unix.
+    Private,
+    /// The mode of the file that is replaced, if there is one.
+    KeepExisting,
 }
 
 /// Writes `bytes` to a temporary file in the same folder, flushes it, and
@@ -67,60 +72,88 @@ pub fn replace_with_backup(tmp: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(tmp, target)
 }
 
-/// Saves a document file atomically and keeps the previous version as `<path>.bak`.
+/// Saves a file atomically and keeps the previous version as `<path>.bak`.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_replacing(path, bytes, true, false)
 }
 
-/// How to reach a running app: its port and the secret that clients must send first.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentInfo {
-    pub port: u16,
-    pub token: String,
+/// Like [`write_atomic`], with no backup and owner-only permissions (Unix).
+pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_replacing(path, bytes, false, true)
 }
 
-/// Where the running app publishes its `AgentInfo`.
-/// Windows: `%LOCALAPPDATA%\cadektor\agent.json`. Elsewhere `$XDG_RUNTIME_DIR/cadektor/agent.json`,
-/// or `~/Library/Application Support/cadektor/agent.json` on macOS,
-/// or `~/.local/state/cadektor/agent.json`.
-pub fn agent_info_path() -> Option<PathBuf> {
-    agent_info_path_for(std::env::consts::OS, |k| std::env::var_os(k))
-}
-
-fn agent_info_path_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let var = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let dir = if os == "windows" {
-        var("LOCALAPPDATA")?
-    } else if let Some(x) = var("XDG_RUNTIME_DIR") {
-        x
-    } else if os == "macos" {
-        var("HOME")?.join("Library").join("Application Support")
-    } else {
-        var("HOME")?.join(".local").join("state")
-    };
-    Some(dir.join("cadektor").join("agent.json"))
-}
-
-/// Writes the runtime file with owner-only permissions (0600, in a 0700 folder).
-pub fn write_agent_info(path: &Path, info: &AgentInfo) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        let mut b = std::fs::DirBuilder::new();
-        b.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            b.mode(0o700);
-        }
-        b.create(dir)?;
+/// Creates the folder (and parents). The last folder gets mode 0700 on Unix.
+pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
     }
-    let text = serde_json::to_vec(info).map_err(std::io::Error::other)?;
-    write_replacing(path, &text, false, true)
+    b.create(dir)
 }
 
-pub fn read_agent_info(path: &Path) -> Result<AgentInfo, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+/// Flushes a folder, so a rename in it survives a power failure. Not needed on Windows.
+pub fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Creates a new file that must not exist yet. On Unix the mode is 0600.
+pub fn create_new_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::File::options();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// Writes a file atomically: temporary file, flush, rename, flush of the folder.
+/// The temporary file is `<path><tmp_suffix>`. It is deleted again if anything fails.
+pub fn write_durable(
+    path: &Path,
+    bytes: &[u8],
+    access: Access,
+    tmp_suffix: &str,
+) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(tmp_suffix);
+    let tmp = PathBuf::from(tmp);
+    let result = (|| {
+        let mut opts = std::fs::File::options();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if access == Access::Private {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        if access == Access::KeepExisting
+            && let Ok(m) = std::fs::metadata(path)
+        {
+            f.set_permissions(m.permissions())?;
+        }
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)?;
+        if let Some(dir) = path.parent() {
+            sync_dir(dir);
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -201,97 +234,40 @@ mod tests {
     }
 
     #[test]
-    fn agent_info_path_per_platform() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |k: &str| {
-                pairs
-                    .iter()
-                    .find(|(n, _)| *n == k)
-                    .map(|(_, v)| OsString::from(*v))
-            }
-        };
-        let tail = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
-        assert_eq!(
-            tail(agent_info_path_for(
-                "linux",
-                env(&[("XDG_RUNTIME_DIR", "/run/user/1"), ("HOME", "/h")])
-            ))
-            .as_deref(),
-            Some("/run/user/1/cadektor/agent.json")
-        );
-        assert_eq!(
-            tail(agent_info_path_for("linux", env(&[("HOME", "/h")]))).as_deref(),
-            Some("/h/.local/state/cadektor/agent.json")
-        );
-        assert_eq!(
-            tail(agent_info_path_for("macos", env(&[("HOME", "/Users/me")]))).as_deref(),
-            Some("/Users/me/Library/Application Support/cadektor/agent.json")
-        );
-        assert!(
-            tail(agent_info_path_for(
-                "macos",
-                env(&[("XDG_RUNTIME_DIR", ""), ("HOME", "/h")])
-            ))
-            .unwrap()
-            .contains("Library")
-        );
-        assert_eq!(
-            tail(agent_info_path_for(
-                "windows",
-                env(&[("LOCALAPPDATA", "C:/Users/me/AppData/Local")])
-            ))
-            .as_deref(),
-            Some("C:/Users/me/AppData/Local/cadektor/agent.json")
-        );
-        assert_eq!(agent_info_path_for("linux", env(&[])), None);
-        assert_eq!(agent_info_path_for("windows", env(&[("HOME", "/h")])), None);
-        assert!(agent_info_path().is_some() || std::env::var_os("HOME").is_none());
+    fn replace_with_backup_keeps_the_old_file() {
+        let dir = temp_dir("rwb");
+        let target = dir.join("t.ifc");
+        std::fs::write(&target, "old").unwrap();
+        let tmp = dir.join(".t.tmp");
+        std::fs::write(&tmp, "new").unwrap();
+        replace_with_backup(&tmp, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::read(dir.join("t.ifc.bak")).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn agent_info_round_trips_and_is_private() {
-        let dir = temp_dir("info");
-        let f = dir.join("sub").join("agent.json");
-        let info = AgentInfo {
-            port: 4242,
-            token: "ab".repeat(32),
-        };
-        write_agent_info(&f, &info).unwrap();
-        assert_eq!(read_agent_info(&f).unwrap(), info);
-        assert_eq!(
-            std::fs::read_to_string(&f).unwrap(),
-            format!(r#"{{"port":4242,"token":"{}"}}"#, info.token)
-        );
+    fn durable_write_and_private_files() {
+        let dir = temp_dir("durable");
+        let f = dir.join("v.json");
+        write_durable(&f, b"1", Access::Private, ".tmp").unwrap();
+        write_durable(&f, b"2", Access::KeepExisting, ".tmp").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"2");
+        assert!(!dir.join("v.json.tmp").exists());
+        write_private(&dir.join("p.json"), b"p").unwrap();
+        let sub = dir.join("a").join("b");
+        create_private_dir(&sub).unwrap();
+        let lock = sub.join("l");
+        drop(create_new_private(&lock).unwrap());
+        assert!(create_new_private(&lock).is_err());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            assert_eq!(
-                std::fs::metadata(f.parent().unwrap())
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir.join("p.json")), 0o600);
+            assert_eq!(mode(&sub), 0o700);
+            assert_eq!(mode(&lock), 0o600);
         }
-        // Writing again replaces the file.
-        let info2 = AgentInfo {
-            port: 1,
-            token: "cd".repeat(32),
-        };
-        write_agent_info(&f, &info2).unwrap();
-        assert_eq!(read_agent_info(&f).unwrap(), info2);
-        assert!(
-            read_agent_info(&dir.join("none"))
-                .unwrap_err()
-                .contains("cannot read")
-        );
-        std::fs::write(dir.join("bad"), "{").unwrap();
-        assert!(read_agent_info(&dir.join("bad")).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

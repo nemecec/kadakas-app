@@ -583,6 +583,7 @@ dependencies = [
  "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
+ "cadektor-sys",
  "cadektor-x3d",
  "glam",
  "png",
@@ -607,6 +608,7 @@ dependencies = [
  "cadektor-script",
  "cadektor-sheet",
  "cadektor-site",
+ "cadektor-sys",
  "eframe",
  "egui",
  "egui_dock",
@@ -628,6 +630,7 @@ version = "0.1.0"
 dependencies = [
  "cadektor-api",
  "cadektor-core",
+ "cadektor-sys",
  "clap",
  "serde_json",
 ]
@@ -670,6 +673,7 @@ dependencies = [
  "cadektor-core",
  "cadektor-io",
  "cadektor-site",
+ "cadektor-sys",
  "glam",
  "i_overlay",
  "proptest",
@@ -684,8 +688,8 @@ version = "0.1.0"
 dependencies = [
  "cadektor-annot",
  "cadektor-core",
- "cadektor-script",
  "cadektor-site",
+ "cadektor-sys",
  "encoding_rs",
  "proj4rs",
  "proptest",
@@ -715,6 +719,7 @@ dependencies = [
  "cadektor-render",
  "cadektor-sheet",
  "cadektor-site",
+ "cadektor-sys",
  "cadektor-x3d",
  "epaint_default_fonts",
  "glam",
@@ -745,7 +750,7 @@ name = "cadektor-script"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
- "libc",
+ "cadektor-sys",
  "serde",
  "serde_json",
  "sha2",
@@ -773,6 +778,15 @@ dependencies = [
  "serde_json",
  "spade",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "cadektor-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

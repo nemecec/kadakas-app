@@ -11,6 +11,7 @@ description = "Sheet composition and output: PDF, SVG and PNG. Native only."
 ab_glyph = "0.2.32"
 base64 = "0.22.1"
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-sys = { version = "0.1.0", path = "../cadektor-sys" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }
 cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-sheet = { version = "0.1.0", path = "../cadektor-sheet" }

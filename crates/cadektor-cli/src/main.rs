@@ -18,8 +18,9 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 
 use cadektor_api::Session;
-use cadektor_core::fsio::{self, AgentInfo};
 use cadektor_core::model::Document;
+use cadektor_sys::agent::{self as sys_agent, AgentInfo};
+use cadektor_sys::fsio;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
@@ -124,7 +125,8 @@ enum Backend {
 impl Backend {
     fn new(file: Option<PathBuf>, remote: RemoteArgs) -> Result<Self, String> {
         if let Some(connect) = remote.connect {
-            let info = fsio::agent_info_path().and_then(|p| fsio::read_agent_info(&p).ok());
+            let info =
+                sys_agent::agent_info_path().and_then(|p| sys_agent::read_agent_info(&p).ok());
             let (addr, token) = resolve_remote(&connect, remote.token.as_deref(), info)?;
             return connect_remote(&addr, &token).map(Backend::Remote);
         }

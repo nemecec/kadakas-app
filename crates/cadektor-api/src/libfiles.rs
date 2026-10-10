@@ -19,9 +19,8 @@ pub fn library_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("CADEKTOR_LIBRARY_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     Some(
-        PathBuf::from(home)
+        cadektor_sys::dirs::home_dir()?
             .join(".config")
             .join("cadektor")
             .join("library"),
@@ -159,7 +158,7 @@ fn write_favorites(list: &[Value]) -> Result<(), RpcError> {
             p.display()
         )));
     }
-    cadektor_core::fsio::write_atomic(
+    cadektor_sys::fsio::write_atomic(
         &p,
         serde_json::to_string_pretty(list).map_err(app)?.as_bytes(),
     )
@@ -248,7 +247,7 @@ pub(crate) fn run(
                 std::fs::create_dir_all(dir).map_err(app)?;
             }
             let text = serde_json::to_string_pretty(out.doc()).map_err(app)?;
-            cadektor_core::fsio::write_atomic(&path, text.as_bytes())
+            cadektor_sys::fsio::write_atomic(&path, text.as_bytes())
                 .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
             Ok(json!({ "path": path, "count": plan.items.len() }))
         }

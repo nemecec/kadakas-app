@@ -1535,7 +1535,7 @@ fn export_file(name: &str, ext: &str, label: &str, bytes: Vec<u8>) -> String {
     else {
         return String::new();
     };
-    match cadektor_core::fsio::write_atomic(&path, &bytes) {
+    match cadektor_sys::fsio::write_atomic(&path, &bytes) {
         Ok(()) => format!("Exported {}", path.display()),
         Err(e) => format!("Cannot write {}: {e}", path.display()),
     }

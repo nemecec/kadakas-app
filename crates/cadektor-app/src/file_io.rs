@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use cadektor_api::Session;
-use cadektor_core::fsio;
 use cadektor_core::model::Document;
+use cadektor_sys::fsio;
 use serde_json::Value;
 
 pub fn parse_document(text: &str) -> Result<Document, String> {

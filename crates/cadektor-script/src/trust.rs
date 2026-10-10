@@ -79,19 +79,7 @@ pub struct TrustStore {
 
 /// The config folder of the user, for the trust file.
 pub fn default_path() -> Option<PathBuf> {
-    let var = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    let base = if cfg!(windows) {
-        var("APPDATA")?
-    } else if cfg!(target_os = "macos") {
-        var("HOME")?.join("Library").join("Application Support")
-    } else {
-        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))?
-    };
-    Some(base.join("cadektor").join("trusted_plugins.json"))
+    Some(cadektor_sys::dirs::config_dir()?.join("trusted_plugins.json"))
 }
 
 impl TrustStore {

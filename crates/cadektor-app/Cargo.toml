@@ -14,6 +14,7 @@ cadektor-api = { version = "0.1.0", path = "../cadektor-api" }
 cadektor-irrigation = { version = "0.1.0", path = "../cadektor-irrigation" }
 cadektor-print = { version = "0.1.0", path = "../cadektor-print" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-sys = { version = "0.1.0", path = "../cadektor-sys" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }
 cadektor-sheet = { version = "0.1.0", path = "../cadektor-sheet" }
 cadektor-site = { version = "0.1.0", path = "../cadektor-site" }

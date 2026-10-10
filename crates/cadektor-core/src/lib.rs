@@ -8,7 +8,6 @@ pub mod csv;
 pub mod curve;
 pub mod datamap;
 pub mod edit2d;
-pub mod fsio;
 pub mod geom;
 pub mod georef;
 pub mod graphics;

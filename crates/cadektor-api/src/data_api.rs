@@ -1061,7 +1061,7 @@ fn write_export(
             path.display()
         )));
     }
-    cadektor_core::fsio::write_atomic(&path, bytes)
+    cadektor_sys::fsio::write_atomic(&path, bytes)
         .map_err(|e| app(format!("cannot write {}: {e}", path.display())))?;
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }

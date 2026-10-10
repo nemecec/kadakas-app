@@ -116,31 +116,7 @@ fn collect(sink: &Sink, until: Instant) -> Vec<u8> {
     std::mem::take(&mut *sink.bytes.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-/// Kills the process and its whole process group (on Unix), so child processes of the script die too.
-pub fn kill_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        // The child leads its own group (see `own_group`), so the group ID is its process ID.
-        if let Ok(pid) = i32::try_from(child.id()) {
-            // SAFETY: killpg only sends a signal.
-            unsafe {
-                libc::killpg(pid, libc::SIGKILL);
-            }
-        }
-    }
-    let _ = child.kill();
-}
-
-/// Makes the command start its own process group, so `kill_tree` reaches child processes of the child.
-pub fn own_group(cmd: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    #[cfg(not(unix))]
-    let _ = cmd;
-}
+pub use cadektor_sys::process::{kill_tree, own_group};
 
 /// Runs the command to the end, within the limits.
 pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, ExecError> {

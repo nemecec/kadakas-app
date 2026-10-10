@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
-cadektor-script = { version = "0.1.0", path = "../cadektor-script" }
+cadektor-sys = { version = "0.1.0", path = "../cadektor-sys" }
 cadektor-site = { version = "0.1.0", path = "../cadektor-site" }
 encoding_rs = "0.8.42"
 proj4rs = { version = "0.2.1", features = ["crs-definitions"] }

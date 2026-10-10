@@ -546,30 +546,10 @@ impl Keymap {
 
 /// `keymap.json` in the per-user config directory. `CADEKTOR_KEYMAP` overrides the path.
 pub fn user_file() -> Option<std::path::PathBuf> {
-    user_file_for(std::env::consts::OS, |k| {
-        std::env::var_os(k).filter(|v| !v.is_empty())
-    })
-}
-
-fn user_file_for(
-    os: &str,
-    env: impl Fn(&str) -> Option<std::ffi::OsString>,
-) -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    if let Some(p) = env("CADEKTOR_KEYMAP") {
-        return Some(PathBuf::from(p));
+    if let Some(p) = std::env::var_os("CADEKTOR_KEYMAP").filter(|v| !v.is_empty()) {
+        return Some(std::path::PathBuf::from(p));
     }
-    let dir = match os {
-        "windows" => PathBuf::from(env("APPDATA")?),
-        "macos" => PathBuf::from(env("HOME")?)
-            .join("Library")
-            .join("Application Support"),
-        _ => match env("XDG_CONFIG_HOME") {
-            Some(x) => PathBuf::from(x),
-            None => PathBuf::from(env("HOME")?).join(".config"),
-        },
-    };
-    Some(dir.join("cadektor").join("keymap.json"))
+    Some(cadektor_sys::dirs::config_dir()?.join("keymap.json"))
 }
 
 #[cfg(test)]
@@ -810,37 +790,14 @@ mod tests {
     }
 
     #[test]
-    fn user_file_location() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |k: &str| {
-                pairs
-                    .iter()
-                    .find(|(n, _)| *n == k)
-                    .map(|(_, v)| std::ffi::OsString::from(v))
-            }
-        };
-        let tail =
-            |p: Option<std::path::PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
-        assert_eq!(
-            tail(user_file_for("macos", env(&[("HOME", "/Users/me")]))).as_deref(),
-            Some("/Users/me/Library/Application Support/cadektor/keymap.json")
-        );
-        assert_eq!(
-            tail(user_file_for("linux", env(&[("HOME", "/h")]))).as_deref(),
-            Some("/h/.config/cadektor/keymap.json")
-        );
-        assert_eq!(
-            tail(user_file_for("windows", env(&[("APPDATA", "C:/A")]))).as_deref(),
-            Some("C:/A/cadektor/keymap.json")
-        );
-        assert_eq!(
-            tail(user_file_for(
-                "linux",
-                env(&[("CADEKTOR_KEYMAP", "/x.json")])
-            ))
-            .as_deref(),
-            Some("/x.json")
-        );
+    fn user_file_is_keymap_json() {
+        // The folders per platform are tested in `cadektor_sys::dirs`.
+        if let Some(p) = user_file() {
+            assert!(
+                p.to_string_lossy().ends_with("keymap.json")
+                    || std::env::var_os("CADEKTOR_KEYMAP").is_some()
+            );
+        }
     }
 
     /// The doc table and the default keymap must not drift apart.

@@ -163,7 +163,7 @@ impl CadektorApp {
         app.autosave.begin();
         if let Some(port) = agent_port {
             let ctx = cc.egui_ctx.clone();
-            let info_path = cadektor_core::fsio::agent_info_path();
+            let info_path = cadektor_sys::agent::agent_info_path();
             match crate::agent::start(
                 port,
                 std::sync::Arc::new(move || ctx.request_repaint()),

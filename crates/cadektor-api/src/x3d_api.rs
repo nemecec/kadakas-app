@@ -642,7 +642,7 @@ impl Session {
             e => app(e),
         };
         let write = |p: &Path, bytes: &[u8]| {
-            cadektor_core::fsio::write_atomic(p, bytes)
+            cadektor_sys::fsio::write_atomic(p, bytes)
                 .map_err(|e| app(format!("{}: {e}", p.display())))
         };
         let mut files = vec![checked_paths[0].clone()];

@@ -212,22 +212,10 @@ pub fn is_gis_method(method: &str) -> bool {
 
 /// Default folder of the tile cache.
 pub fn default_cache_dir() -> PathBuf {
-    let var = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(d) = var("CADEKTOR_GIS_CACHE") {
-        return d;
+    if let Some(d) = std::env::var_os("CADEKTOR_GIS_CACHE").filter(|v| !v.is_empty()) {
+        return PathBuf::from(d);
     }
-    let base = if cfg!(target_os = "macos") {
-        var("HOME").map(|h| h.join("Library").join("Caches"))
-    } else {
-        var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|h| h.join(".cache")))
-    };
-    base.unwrap_or_else(std::env::temp_dir)
-        .join("cadektor")
-        .join("tiles")
+    cadektor_sys::dirs::cache_dir().join("tiles")
 }
 
 impl Session {

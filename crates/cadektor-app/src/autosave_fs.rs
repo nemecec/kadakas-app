@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cadektor_core::fsio;
 use cadektor_core::model::Document;
+use cadektor_sys::fsio;
 use serde_json::{Value, json};
 
 use crate::autosave::AutosaveSettings;
@@ -68,29 +68,10 @@ pub fn manual_saves(path: &Path) -> u64 {
 /// macOS: `~/Library/Application Support/cadektor/recovery`.
 /// Elsewhere: `$XDG_STATE_HOME/cadektor/recovery` or `~/.local/state/cadektor/recovery`.
 pub fn recovery_dir() -> Option<PathBuf> {
-    recovery_dir_for(std::env::consts::OS, |k| {
-        std::env::var_os(k).filter(|v| !v.is_empty())
-    })
-}
-
-pub(crate) fn recovery_dir_for(
-    os: &str,
-    env: impl Fn(&str) -> Option<std::ffi::OsString>,
-) -> Option<PathBuf> {
-    if let Some(p) = env("CADEKTOR_RECOVERY_DIR") {
+    if let Some(p) = std::env::var_os("CADEKTOR_RECOVERY_DIR").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    let dir = match os {
-        "windows" => PathBuf::from(env("LOCALAPPDATA")?),
-        "macos" => PathBuf::from(env("HOME")?)
-            .join("Library")
-            .join("Application Support"),
-        _ => match env("XDG_STATE_HOME") {
-            Some(x) => PathBuf::from(x),
-            None => PathBuf::from(env("HOME")?).join(".local").join("state"),
-        },
-    };
-    Some(dir.join("cadektor").join("recovery"))
+    Some(cadektor_sys::dirs::state_dir()?.join("recovery"))
 }
 
 /// The file for the preferences of this user: next to the keymap file.
@@ -126,76 +107,7 @@ fn meta_name(id: &str) -> String {
     format!("{id}.meta.json")
 }
 
-/// Creates the folder (and parents). The last folder gets mode 0700 on Unix.
-fn create_private_dir(dir: &Path) -> io::Result<()> {
-    let mut b = std::fs::DirBuilder::new();
-    b.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        b.mode(0o700);
-    }
-    b.create(dir)
-}
-
-/// Flushes a folder, so a rename in it survives a power failure. Not needed on Windows.
-fn sync_dir(dir: &Path) {
-    #[cfg(unix)]
-    if let Ok(d) = File::open(dir) {
-        let _ = d.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = dir;
-}
-
-/// Who may read a file that `write_durable` makes.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum Access {
-    /// Mode 0600: recovery files.
-    Private,
-    /// The mode of the file that is replaced, if there is one: the file of the user.
-    KeepExisting,
-}
-
-/// Writes a file atomically: temporary file, flush, rename, flush of the folder.
-/// The temporary file is `<path><tmp_suffix>`. It is deleted again if anything fails.
-pub(crate) fn write_durable(
-    path: &Path,
-    bytes: &[u8],
-    access: Access,
-    tmp_suffix: &str,
-) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(tmp_suffix);
-    let tmp = PathBuf::from(tmp);
-    let result = (|| {
-        let mut opts = File::options();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        if access == Access::Private {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        if access == Access::KeepExisting
-            && let Ok(m) = std::fs::metadata(path)
-        {
-            f.set_permissions(m.permissions())?;
-        }
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, path)?;
-        if let Some(dir) = path.parent() {
-            sync_dir(dir);
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
+use cadektor_sys::fsio::{Access, create_private_dir, write_durable};
 
 /// The versions of a session in the folder, oldest first, as (sequence number, path).
 pub(crate) fn list_versions(dir: &Path, id: &str) -> Vec<(u64, PathBuf)> {
@@ -316,14 +228,7 @@ impl Recovery {
         let pid = std::process::id();
         let id = format!("{nanos:x}-{pid}");
         // `create_new` fails if the name exists: two apps never share a lock file.
-        let mut opts = File::options();
-        opts.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut lock = opts.open(dir.join(lock_name(&id)))?;
+        let mut lock = cadektor_sys::fsio::create_new_private(&dir.join(lock_name(&id)))?;
         let content = json!({"pid": pid, "started_unix": now_unix()}).to_string();
         lock.write_all(content.as_bytes())?;
         lock.sync_all()?;
@@ -455,30 +360,7 @@ impl Crashed {
     }
 }
 
-/// Best effort: is a process with this id running? Unknown counts as running.
-fn pid_alive(pid: u32) -> bool {
-    use std::process::{Command, Stdio};
-    #[cfg(unix)]
-    let out = Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success());
-    #[cfg(windows)]
-    let out = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .split_whitespace()
-                .any(|w| w == pid.to_string())
-        });
-    #[cfg(not(any(unix, windows)))]
-    let out: io::Result<bool> = Err(io::Error::other("unknown"));
-    out.unwrap_or(true)
-}
+use cadektor_sys::process::pid_alive;
 
 /// Finds the sessions that ended without a clean exit, with the default grace time.
 pub fn find_crashed(dir: &Path) -> Vec<Crashed> {
@@ -633,48 +515,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timed out");
-    }
-
-    #[test]
-    fn recovery_dir_per_system() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |k: &str| {
-                pairs
-                    .iter()
-                    .find(|(n, _)| *n == k)
-                    .map(|(_, v)| std::ffi::OsString::from(v))
-            }
-        };
-        let tail = |p: Option<PathBuf>| p.map(|p| p.to_string_lossy().replace('\\', "/"));
-        assert_eq!(
-            tail(recovery_dir_for("macos", env(&[("HOME", "/Users/me")]))).as_deref(),
-            Some("/Users/me/Library/Application Support/cadektor/recovery")
-        );
-        assert_eq!(
-            tail(recovery_dir_for("linux", env(&[("HOME", "/h")]))).as_deref(),
-            Some("/h/.local/state/cadektor/recovery")
-        );
-        assert_eq!(
-            tail(recovery_dir_for("linux", env(&[("XDG_STATE_HOME", "/s")]))).as_deref(),
-            Some("/s/cadektor/recovery")
-        );
-        assert_eq!(
-            tail(recovery_dir_for(
-                "windows",
-                env(&[("LOCALAPPDATA", "C:/L")])
-            ))
-            .as_deref(),
-            Some("C:/L/cadektor/recovery")
-        );
-        assert_eq!(
-            tail(recovery_dir_for(
-                "linux",
-                env(&[("CADEKTOR_RECOVERY_DIR", "/x")])
-            ))
-            .as_deref(),
-            Some("/x")
-        );
-        assert!(recovery_dir_for("linux", env(&[])).is_none());
     }
 
     #[test]

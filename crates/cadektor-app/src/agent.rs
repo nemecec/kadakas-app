@@ -5,7 +5,7 @@
 //! Security: the server listens on 127.0.0.1 only, but any local program or
 //! web page can reach that. So every connection must prove it knows a random
 //! 256-bit token, which the app writes to a runtime file that only the current
-//! user can read (see `cadektor_core::fsio::agent_info_path`). The first line
+//! user can read (see `cadektor_sys::agent::agent_info_path`). The first line
 //! on a connection must be `{"jsonrpc":"2.0","id":..,"method":"auth","params":{"token":".."}}`.
 //! A connection whose first byte is not `{` (for example an HTTP request from a
 //! browser) is closed at once, and nothing it sent is run.
@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cadektor_core::fsio::{self, AgentInfo};
+use cadektor_sys::agent::{self as sys_agent, AgentInfo};
 use serde_json::{Value, json};
 
 /// Time that the UI thread spends on agent requests in one frame.
@@ -171,7 +171,7 @@ impl Drop for AgentServer {
     fn drop(&mut self) {
         if let Some(path) = &self.info_path {
             // Delete the runtime file, unless another app instance has replaced it.
-            if fsio::read_agent_info(path).is_ok_and(|i| i.token == self.token) {
+            if sys_agent::read_agent_info(path).is_ok_and(|i| i.token == self.token) {
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -209,7 +209,7 @@ pub fn start_with(
     let addr = listener.local_addr()?;
     let token = random_token()?;
     if let Some(path) = &info_path {
-        fsio::write_agent_info(
+        sys_agent::write_agent_info(
             path,
             &AgentInfo {
                 port: addr.port(),
@@ -962,7 +962,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("cadektor").join("agent.json");
         let server = start(0, Arc::new(|| {}), Some(path.clone())).unwrap();
-        let info = fsio::read_agent_info(&path).unwrap();
+        let info = sys_agent::read_agent_info(&path).unwrap();
         assert_eq!(
             info,
             AgentInfo {
@@ -984,7 +984,7 @@ mod tests {
 
         // A file that another instance wrote is left alone.
         let server = start(0, Arc::new(|| {}), Some(path.clone())).unwrap();
-        fsio::write_agent_info(
+        sys_agent::write_agent_info(
             &path,
             &AgentInfo {
                 port: 1,
@@ -993,7 +993,7 @@ mod tests {
         )
         .unwrap();
         drop(server);
-        assert_eq!(fsio::read_agent_info(&path).unwrap().token, "other");
+        assert_eq!(sys_agent::read_agent_info(&path).unwrap().token, "other");
         // After the server is dropped the port stops accepting real clients.
         thread::sleep(Duration::from_millis(100));
         let mut c = TcpStream::connect(addr).ok().inspect(|s| {

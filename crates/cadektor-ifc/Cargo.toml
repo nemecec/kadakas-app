@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-sys = { version = "0.1.0", path = "../cadektor-sys" }
 cadektor-io = { version = "0.1.0", path = "../cadektor-io" }
 cadektor-site = { version = "0.1.0", path = "../cadektor-site" }
 i_overlay = "9.0.1"

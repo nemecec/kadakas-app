@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use cadektor_core::fsio;
 use cadektor_core::model::{Document, LoadError};
+use cadektor_sys::fsio;
 use serde_json::{Value, json};
 
 use crate::{RpcError, Session};

@@ -10,6 +10,7 @@ repository.workspace = true
 base64 = "0.22.1"
 cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+cadektor-sys = { version = "0.1.0", path = "../cadektor-sys" }
 cadektor-irrigation = { version = "0.1.0", path = "../cadektor-irrigation" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }
 cadektor-sheet = { version = "0.1.0", path = "../cadektor-sheet" }

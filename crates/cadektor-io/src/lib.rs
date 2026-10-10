@@ -243,7 +243,7 @@ pub fn export_file(
         .ok_or_else(|| IoError::Format(format!("export to {} is not supported", format.name())))?;
     let out = ex.export(doc, opts)?;
     // Atomic: a crash never leaves a half-written file. An old file stays as `<name>.bak`.
-    cadektor_core::fsio::write_atomic(path, &out.bytes)
+    cadektor_sys::fsio::write_atomic(path, &out.bytes)
         .map_err(|e| IoError::File(format!("cannot write {}: {e}", path.display())))?;
     Ok(out.report)
 }
