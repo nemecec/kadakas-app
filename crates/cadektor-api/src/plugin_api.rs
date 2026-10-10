@@ -18,7 +18,7 @@ use cadektor_script::plugin::{
     self as plug, Generated, Geometry, PluginDef, ResetError, ResetLimits,
 };
 use cadektor_script::python::{self, Interpreter};
-use cadektor_script::trust::TrustStore;
+use cadektor_script::trust::{Permit, TrustStore};
 
 use crate::{RpcError, Session};
 
@@ -528,7 +528,12 @@ fn run_script(
     geometry: &Geometry,
 ) -> Result<Vec<Generated>, ResetError> {
     let (py, limits) = runner(s, def).map_err(ResetError::Protocol)?;
-    plug::reset(&py, name, def, params, geometry, &limits)
+    let permit = s
+        .scripting
+        .trust
+        .permit(&def.script, s.scripting.allow_agent_scripts)
+        .ok_or_else(|| ResetError::Refused("this script is not trusted".into()))?;
+    plug::reset(&permit, &py, name, def, params, geometry, &limits)
 }
 
 fn allowed(s: &Session, def: &PluginDef) -> Result<(), RpcError> {
@@ -634,6 +639,8 @@ pub struct ResetJob {
     children: Vec<ObjectId>,
     interpreter: Option<Interpreter>,
     limits: ResetLimits,
+    /// The right to run this exact script. It was made when the job was prepared.
+    permit: Permit,
 }
 
 impl ResetJob {
@@ -645,6 +652,7 @@ impl ResetJob {
             )
         })?;
         plug::reset(
+            &self.permit,
             py,
             &self.found.name,
             &self.found.def,
@@ -661,6 +669,7 @@ fn prepare_reset(
     id: ObjectId,
     f: &Found,
     new_params: Option<&Map<String, Value>>,
+    permit: Permit,
 ) -> Result<ResetJob, RpcError> {
     let doc = s.editor.doc();
     let obj = doc
@@ -707,6 +716,7 @@ fn prepare_reset(
         children,
         interpreter,
         limits,
+        permit,
     })
 }
 
@@ -774,7 +784,12 @@ fn plan_reset(
     f: &Found,
     new_params: Option<&Map<String, Value>>,
 ) -> Result<(Command, Outcome), RpcError> {
-    let job = prepare_reset(s, id, f, new_params)?;
+    let permit = s
+        .scripting
+        .trust
+        .permit(&f.def.script, s.scripting.allow_agent_scripts)
+        .ok_or_else(forbidden)?;
+    let job = prepare_reset(s, id, f, new_params, permit)?;
     let result = job.run();
     Ok(finish_reset(&job, result))
 }
@@ -864,6 +879,7 @@ fn object_info(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         "trusted": s.scripting.trust.is_trusted(&f.def.script),
         "origin": s.scripting.trust.origin(&f.def.script).name(),
         "script": f.def.script,
+        "script_hash": cadektor_script::trust::hash(&f.def.script),
     }))
 }
 
@@ -1021,10 +1037,13 @@ pub fn user_prepare(
     new: &Map<String, Value>,
 ) -> Result<ResetJob, RpcError> {
     let f = instance_def(s, id)?;
-    if !s.scripting.trust.is_trusted(&f.def.script) {
-        return Err(untrusted());
-    }
-    prepare_reset(s, id, &f, Some(new))
+    // The flag for agents does not count for a user action.
+    let permit = s
+        .scripting
+        .trust
+        .permit(&f.def.script, false)
+        .ok_or_else(untrusted)?;
+    prepare_reset(s, id, &f, Some(new), permit)
 }
 
 /// Applies the result of a job from [`user_prepare`] as one undo step. Returns `{id, ok, error?}`.
@@ -1063,10 +1082,14 @@ pub fn user_set_params(
     user_finish(s, job, result)
 }
 
-/// The user trusts the exact script of the definition that this plug-in object uses. This is the
-/// only way to add trust. There is no API method for it.
-pub fn trust_plugin(s: &mut Session, id: ObjectId) -> Result<(), String> {
+/// The user trusts the script that the dialog showed. `shown_hash` is the hash (`script_hash` of
+/// [`instance_info`]) of the text on the screen. If the script has changed since, nothing is
+/// trusted. This is the only way to add trust. There is no API method for it.
+pub fn trust_plugin(s: &mut Session, id: ObjectId, shown_hash: &str) -> Result<(), String> {
     let f = instance_def(s, id).map_err(|e| e.message)?;
+    if cadektor_script::trust::hash(&f.def.script) != shown_hash {
+        return Err("the script changed after you read it. Review it again".into());
+    }
     s.scripting
         .trust
         .trust(&f.def.script, &f.name)

@@ -9,6 +9,7 @@ cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11.0"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

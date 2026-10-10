@@ -162,7 +162,7 @@ If the app has no agent server yet, the palette starts one on a free port the fi
 
 1. The program in `CADEKTOR_PYTHON`. Use this to choose your own.
 2. `python3` on PATH.
-3. `uv run --no-project python`. This applies only when `uv` is on PATH.
+3. `uv run --no-config --no-project python`. This applies only when `uv` is on PATH. The app clears variables such as `UV_PYTHON`, `VIRTUAL_ENV` and `PYTHONHOME` first, and runs plug-in scripts in an empty private folder, so a planted `.python-version` or config file changes nothing.
 
 The app puts the folder with the `cadektor` package on `PYTHONPATH`. It looks for `python/cadektor` next to the program, and in the folder where you started it. Set `CADEKTOR_PYTHON_DIR` to point to it. You need none of this when you installed the package with `pip`.
 

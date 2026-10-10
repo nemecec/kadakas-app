@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::python;
+use crate::trust::{Permit, TrustStore};
 
 fn def(script: &str) -> PluginDef {
     PluginDef {
@@ -35,7 +36,15 @@ fn run(script: &str, limits: ResetLimits) -> Result<Vec<Generated>, ResetError> 
     let py = python::discover().expect("python3 is needed for the tests");
     let d = def(script);
     let params = d.resolve_params(&Map::new()).unwrap();
-    reset(&py, "Stub", &d, &params, &point(), &limits)
+    reset(
+        &Permit::for_test(script),
+        &py,
+        "Stub",
+        &d,
+        &params,
+        &point(),
+        &limits,
+    )
 }
 
 fn quick() -> ResetLimits {
@@ -450,4 +459,156 @@ fn a_background_process_does_not_stall_the_reset() {
         "{:?}",
         t.elapsed()
     );
+}
+
+fn marker_interpreter(name: &str) -> (std::path::PathBuf, python::Interpreter) {
+    let dir = std::env::temp_dir().join(format!("cadektor-exec-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let prog = dir.join("spy.sh");
+    std::fs::write(
+        &prog,
+        format!(
+            "#!/bin/sh\ntouch {m}\npwd > {c}\nenv > {e}\nexit 1\n",
+            m = dir.join("started").display(),
+            c = dir.join("cwd").display(),
+            e = dir.join("env").display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    (
+        dir,
+        python::Interpreter {
+            program: prog,
+            prefix: vec![],
+        },
+    )
+}
+
+#[test]
+fn the_executor_refuses_an_untrusted_script_by_itself() {
+    // A caller that skips every check still cannot run an untrusted script: no permit can be made.
+    let (dir, spy) = marker_interpreter("untrusted");
+    let store = TrustStore::in_memory();
+    let evil = "def reset(p, g):\n    return []\n";
+    assert!(store.permit(evil, false).is_none());
+    let d = def(evil);
+    let params = d.resolve_params(&Map::new()).unwrap();
+    // A permit for another text does not help.
+    let other = store
+        .permit(&crate::examples::all()[0].1.script, false)
+        .unwrap();
+    let e = reset(
+        &other,
+        &spy,
+        "X",
+        &d,
+        &params,
+        &point(),
+        &ResetLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(e, ResetError::Refused(_)), "{e:?}");
+    assert!(
+        !dir.join("started").exists(),
+        "the executor started an untrusted script"
+    );
+    // A script with a hidden character is refused even with a fitting permit.
+    let sneaky = "def reset(p, g):\n    return []  # docs\rimport os\n";
+    let d = def(sneaky);
+    let permit = TrustStore::in_memory().permit(sneaky, true).unwrap();
+    let e = reset(
+        &permit,
+        &spy,
+        "X",
+        &d,
+        &params,
+        &point(),
+        &ResetLimits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(e, ResetError::Refused(_)), "{e:?}");
+    assert!(!dir.join("started").exists());
+    // A fitting permit runs it, in an empty private folder, without the interpreter variables.
+    let ok = def(evil);
+    let permit = store.permit(evil, true).unwrap();
+    let _ = reset(
+        &permit,
+        &spy,
+        "X",
+        &ok,
+        &params,
+        &point(),
+        &ResetLimits::default(),
+    );
+    assert!(dir.join("started").exists());
+    let cwd = std::fs::read_to_string(dir.join("cwd")).unwrap();
+    assert!(
+        cwd.contains("tmp") || cwd.contains("T/") || cwd.contains("var"),
+        "{cwd}"
+    );
+    assert!(
+        !cwd.trim().ends_with(&format!("{}", std::process::id())) || !cwd.contains("cadektor-exec")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn planted_interpreter_variables_are_not_passed_on() {
+    let (dir, spy) = marker_interpreter("env");
+    // Set in this process: the child must not see them.
+    // SAFETY: only this test sets these names, and no other test reads them.
+    unsafe {
+        std::env::set_var("UV_PYTHON", "/tmp/evil-python");
+        std::env::set_var("PYTHONSTARTUP", "/tmp/evil.py");
+    }
+    let script = "def reset(p, g):\n    return []\n";
+    let d = def(script);
+    let params = d.resolve_params(&Map::new()).unwrap();
+    let permit = Permit::for_test(script);
+    let _ = reset(
+        &permit,
+        &spy,
+        "X",
+        &d,
+        &params,
+        &point(),
+        &ResetLimits::default(),
+    );
+    let env = std::fs::read_to_string(dir.join("env")).unwrap();
+    assert!(
+        !env.contains("UV_PYTHON") && !env.contains("PYTHONSTARTUP"),
+        "{env}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn hidden_and_control_characters_are_rejected_and_crlf_is_normal() {
+    assert!(check_script_text("def reset(p, g):\r\n    return []\r\n").is_ok());
+    assert!(check_script_text("a = 1\tb\n").is_ok());
+    for bad in [
+        "x = 1  # docs\rimport os",
+        "x = '\u{202E}'",
+        "x = 1\u{200B}",
+        "x = 1\u{FEFF}",
+        "x = 1\u{2066}",
+        "x = 1\u{0}",
+        "x = 1\u{1b}[2K",
+        "x = 1\u{85}",
+        "x = 1\u{2028}",
+        "x = 1\u{200F}",
+    ] {
+        assert!(check_script_text(bad).is_err(), "{bad:?}");
+        let mut d = def(bad);
+        d.script = bad.into();
+        assert!(d.validate().is_err(), "{bad:?}");
+    }
+    // \r\n and \n give the same hash, so the trust does not depend on the line ending.
+    assert_eq!(crate::trust::hash("a\r\nb"), crate::trust::hash("a\nb"));
+    assert_ne!(crate::trust::hash("a\rb"), crate::trust::hash("a\nb"));
 }

@@ -153,7 +153,7 @@ fn own_scripts_need_the_flag() {
     let err =
         user_set_params(&mut s, ObjectId(gid), json!({"n": 2}).as_object().unwrap()).unwrap_err();
     assert_eq!(err.code, UNTRUSTED_CODE);
-    trust_plugin(&mut s, ObjectId(gid)).unwrap();
+    trust_it(&mut s, ObjectId(gid));
     let r = user_set_params(&mut s, ObjectId(gid), json!({"n": 2}).as_object().unwrap()).unwrap();
     assert_eq!(r["ok"], true);
     assert_eq!(centers(&s, gid).len(), 2);
@@ -844,7 +844,7 @@ fn an_untrusted_definition_never_starts_python() {
     }
     assert!(!spy.started(), "an untrusted script started Python");
     // Trust is by the exact text. The user trusts it; now Python starts (the spy fails the run).
-    trust_plugin(&mut s, gid).unwrap();
+    trust_it(&mut s, gid);
     let r = user_set_params(&mut s, gid, one).unwrap();
     assert_eq!(r["ok"], false);
     assert!(spy.started());
@@ -856,7 +856,7 @@ fn changing_a_script_through_the_api_drops_trust() {
     let spy = Spy::new("update");
     let (mut s, def, g) = downloaded(&spy);
     let gid = ObjectId(g);
-    trust_plugin(&mut s, gid).unwrap();
+    trust_it(&mut s, gid);
     assert_eq!(instance_info(&s, gid).unwrap()["trusted"], true);
     // Any agent can edit a definition (it is data) but the new text has a new hash.
     ok(
@@ -980,4 +980,54 @@ fn text_and_radius_limits_apply_to_generated_shapes() {
         )
         .contains("at most")
     );
+}
+
+/// What the dialog does: trust the hash of the text on the screen.
+fn trust_it(s: &mut Session, id: ObjectId) {
+    let hash = instance_info(s, id).unwrap()["script_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    trust_plugin(s, id, &hash).unwrap();
+}
+
+#[test]
+fn trust_is_only_for_the_hash_the_dialog_showed() {
+    let spy = Spy::new("hash");
+    let (mut s, def, g) = downloaded(&spy);
+    let gid = ObjectId(g);
+    let shown = instance_info(&s, gid).unwrap()["script_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // After the user looked at the dialog, an agent swaps the script.
+    ok(
+        &mut s,
+        "plugin.update",
+        json!({"id": def, "script": "import os\ndef reset(p, g):\n    return []\n"}),
+    );
+    let e = trust_plugin(&mut s, gid, &shown).unwrap_err();
+    assert!(e.contains("changed"), "{e}");
+    assert!(s.scripting.trust.is_empty());
+    assert_eq!(
+        user_set_params(&mut s, gid, &serde_json::Map::new())
+            .unwrap_err()
+            .code,
+        UNTRUSTED_CODE
+    );
+    assert!(trust_plugin(&mut s, gid, "not a hash").is_err());
+    assert!(!spy.started());
+    std::fs::remove_dir_all(&spy.dir).unwrap();
+}
+
+#[test]
+fn a_script_with_a_hidden_return_cannot_be_defined() {
+    let mut s = open_session();
+    let e = fail(
+        &mut s,
+        "plugin.define",
+        json!({"name": "Sneaky", "shape_type": "point",
+               "script": "def reset(p, g):\n    return []  # docs\rimport os\n"}),
+    );
+    assert!(e.contains("U+000D"), "{e}");
 }

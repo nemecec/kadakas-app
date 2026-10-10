@@ -312,6 +312,7 @@ impl ScriptUi {
             .show(ctx, |ui| {
                 ui.strong(info["name"].as_str().unwrap_or(""));
                 ui.label(format!("Comes from: {}", info["origin"].as_str().unwrap_or("")));
+                ui.small(format!("Script hash (SHA-256): {}", info["script_hash"].as_str().unwrap_or("")));
                 ui.colored_label(
                     Color32::from_rgb(200, 40, 40),
                     "This is a Python program. If you trust it, it runs with your rights, on your files and your network, each time the object is regenerated. Read it first.",
@@ -334,7 +335,8 @@ impl ScriptUi {
             });
         match decision {
             Some(true) => {
-                if let Err(e) = cadektor_api::trust_plugin(session, id) {
+                let shown = info["script_hash"].as_str().unwrap_or("").to_string();
+                if let Err(e) = cadektor_api::trust_plugin(session, id, &shown) {
                     *status = e;
                 }
                 self.review = None;

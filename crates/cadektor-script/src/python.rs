@@ -9,6 +9,24 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Variables that select an interpreter or run code before the script.
+pub const UNSAFE_ENV: &[&str] = &[
+    "UV_PYTHON",
+    "UV_PYTHON_PREFERENCE",
+    "UV_CONFIG_FILE",
+    "UV_PROJECT",
+    "UV_PROJECT_ENVIRONMENT",
+    "UV_ENV_FILE",
+    "VIRTUAL_ENV",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONINSPECT",
+    "PYTHONEXECUTABLE",
+    "PYTHONUSERBASE",
+    "PYTHONBREAKPOINT",
+    "PYTHONPATH",
+];
+
 /// A program and the arguments that come before the script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Interpreter {
@@ -18,9 +36,15 @@ pub struct Interpreter {
 
 impl Interpreter {
     /// A command that runs this interpreter. Add the script and its arguments after it.
+    ///
+    /// The environment variables that choose an interpreter or run code at start are removed, so
+    /// a planted value cannot change what runs. The caller may set `PYTHONPATH` after this.
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.program);
         c.args(&self.prefix);
+        for name in UNSAFE_ENV {
+            c.env_remove(name);
+        }
         c
     }
 
@@ -69,7 +93,7 @@ pub fn discover_with(env_python: Option<&str>, path_var: &std::ffi::OsStr) -> Op
     }
     find_on_path("uv", path_var).map(|uv| Interpreter {
         program: uv,
-        prefix: ["run", "--no-project", "python"]
+        prefix: ["run", "--no-config", "--no-project", "python"]
             .iter()
             .map(OsString::from)
             .collect(),
@@ -152,9 +176,18 @@ mod tests {
         std::fs::write(d.join("uv"), "").unwrap();
         let i = discover_with(None, d.as_os_str()).unwrap();
         assert!(i.program.ends_with("uv"));
-        assert_eq!(i.prefix, ["run", "--no-project", "python"]);
-        assert!(i.describe().contains("run --no-project python"));
-        let _ = i.command();
+        assert_eq!(i.prefix, ["run", "--no-config", "--no-project", "python"]);
+        assert!(i.describe().contains("run --no-config --no-project python"));
+        // The command clears the variables that choose an interpreter.
+        let cmd = i.command();
+        for name in UNSAFE_ENV {
+            assert!(
+                cmd.get_envs().any(|(k, v)| k == *name && v.is_none()),
+                "{name} is not cleared"
+            );
+        }
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args[..2], ["run", "--no-config"]);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

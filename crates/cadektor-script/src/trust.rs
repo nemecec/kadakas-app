@@ -13,11 +13,39 @@ use sha2::{Digest, Sha256};
 use crate::examples;
 
 /// The SHA-256 of a script, as lower case hex.
+///
+/// A line ending `\r\n` counts as `\n`, so the hash does not depend on the system of the author.
 pub fn hash(script: &str) -> String {
-    Sha256::digest(script.as_bytes())
+    Sha256::digest(normalize(script).as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// The script text with `\r\n` changed to `\n`.
+pub fn normalize(script: &str) -> String {
+    script.replace("\r\n", "\n")
+}
+
+/// The right to run one exact script. Only [`TrustStore::permit`] makes one, and the executor of
+/// plug-in resets (`plugin::reset`) refuses to run without one that fits the script. A caller that
+/// forgot to check trust therefore cannot run anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Permit {
+    hash: String,
+}
+
+impl Permit {
+    /// True if this permit is for exactly this script.
+    pub fn allows(&self, script: &str) -> bool {
+        self.hash == hash(script)
+    }
+
+    /// A permit for any text, for tests of the executor only.
+    #[cfg(test)]
+    pub fn for_test(script: &str) -> Permit {
+        Permit { hash: hash(script) }
+    }
 }
 
 /// Where a script comes from, for the "Trust this plug-in?" dialog.
@@ -107,6 +135,12 @@ impl TrustStore {
     /// True if this exact script may run.
     pub fn is_trusted(&self, script: &str) -> bool {
         self.origin(script) != Origin::Document
+    }
+
+    /// The right to run this script, if it is trusted or `allow_all` is set (the host allows
+    /// agent scripts). `None` means the script must not run.
+    pub fn permit(&self, script: &str, allow_all: bool) -> Option<Permit> {
+        (allow_all || self.is_trusted(script)).then(|| Permit { hash: hash(script) })
     }
 
     /// Trusts this exact script text. Only the dialog of the app calls this. Saves the file.

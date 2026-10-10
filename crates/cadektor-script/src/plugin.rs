@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 
 use crate::exec::{self, ExecError, Limits};
 use crate::python::Interpreter;
+use crate::trust::Permit;
 
 /// The runner script. It is also part of the Python package.
 pub const RUNNER: &str = include_str!("../../../python/cadektor/plugin_runner.py");
@@ -299,6 +300,7 @@ impl PluginDef {
         if self.script.len() > MAX_SCRIPT {
             return Err(format!("the script is longer than {MAX_SCRIPT} bytes"));
         }
+        check_script_text(&self.script)?;
         if self.params.len() > MAX_PARAMS {
             return Err(format!("a definition has at most {MAX_PARAMS} parameters"));
         }
@@ -548,6 +550,8 @@ pub enum ResetError {
     Protocol(String),
     /// The answer holds shapes that break the rules.
     Shapes(String),
+    /// The executor did not start the script: no permit, or a permit for another text.
+    Refused(String),
 }
 
 impl std::fmt::Display for ResetError {
@@ -555,9 +559,31 @@ impl std::fmt::Display for ResetError {
         match self {
             ResetError::Exec(e) => e.fmt(f),
             ResetError::Script { error, .. } => write!(f, "the script failed: {error}"),
-            ResetError::Protocol(e) | ResetError::Shapes(e) => f.write_str(e),
+            ResetError::Protocol(e) | ResetError::Shapes(e) | ResetError::Refused(e) => {
+                f.write_str(e)
+            }
         }
     }
+}
+
+/// Rejects script text that hides code from a reader. The dialog of the app shows the text, but
+/// some characters are drawn as nothing, or move the text: `\r` alone (Python reads it as a
+/// line end), other control characters, and the invisible and direction-changing characters of
+/// Unicode. `\r\n` is a normal line end. Tab and `\n` are fine.
+pub fn check_script_text(script: &str) -> Result<(), String> {
+    let text = script.replace("\r\n", "\n");
+    for (i, c) in text.chars().enumerate() {
+        let hidden = matches!(c,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            | '\u{2028}' | '\u{2029}' | '\u{FEFF}' | '\u{00AD}' | '\u{2060}'..='\u{2064}');
+        if (c.is_control() && c != '\n' && c != '\t') || hidden {
+            return Err(format!(
+                "the script has the hidden or control character U+{:04X} at position {i}. Remove it",
+                c as u32
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The request of the reset protocol.
@@ -614,8 +640,11 @@ pub fn parse_answer(
     parse_shapes(&answer["shapes"], limits).map_err(ResetError::Shapes)
 }
 
-/// Runs the reset protocol once with the given interpreter.
+/// Runs the reset protocol once with the given interpreter. The `permit` must be for exactly the
+/// script of `def` ([`crate::trust::TrustStore::permit`]), and the script text must be clean
+/// ([`check_script_text`]). Python runs in an empty private folder.
 pub fn reset(
+    permit: &Permit,
     interpreter: &Interpreter,
     name: &str,
     def: &PluginDef,
@@ -623,8 +652,17 @@ pub fn reset(
     geometry: &Geometry,
     limits: &ResetLimits,
 ) -> Result<Vec<Generated>, ResetError> {
+    if !permit.allows(&def.script) {
+        return Err(ResetError::Refused(
+            "this script is not trusted, so it did not run".into(),
+        ));
+    }
+    check_script_text(&def.script).map_err(ResetError::Refused)?;
     let request = reset_request(name, def, params, geometry).to_string();
+    // The folder is empty and private: a file next to the current folder cannot change which Python runs.
+    let cwd = tempfile::tempdir().map_err(|e| ResetError::Protocol(e.to_string()))?;
     let mut cmd = interpreter.command();
+    cmd.current_dir(cwd.path());
     cmd.args(["-I", "-c", RUNNER]);
     let out = exec::run(
         cmd,
