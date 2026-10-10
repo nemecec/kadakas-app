@@ -363,8 +363,8 @@ as canonical JSON text, are equal.
    - `op_id` above the mark: check and order it.
 7. **Per-connection FIFO.** The server handles the submits of one connection in the order they
    come. If it refuses a submit with a **retry** error (`rate_limited`, `internal`), it must refuse
-   every later submit of that connection with the same code, until the refused number comes again.
-   Otherwise a later transaction could be ordered before the refused one, and edits that depend on
+   every later submit of that connection with the same code, until a submit with the refused number, or a lower
+   one, comes again. Otherwise a later transaction could be ordered before the refused one, and edits that depend on
    it would be lost. A `blob_put` refused with a retry error blocks the later submits of the
    connection with the same code, until that blob is put again. (Otherwise the next submit would
    fail as `invalid_txn`, a reject, and the edit would be lost.) The error of such a `blob_put`
