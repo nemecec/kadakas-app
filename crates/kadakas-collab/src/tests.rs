@@ -2030,3 +2030,35 @@ fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
         }
     ));
 }
+
+#[test]
+fn undo_restores_the_value_that_was_really_underneath_in_server_order() {
+    let mut net = Net::new(2);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    net.clients[0].edit(vec![create(1, 0)]).unwrap();
+    net.settle();
+    // B sets a=2 and A sets a=3 before either hears of the other. The server orders B first.
+    net.clients[1].edit(vec![set(1, "a", 2)]).unwrap();
+    net.clients[0].edit(vec![set(1, "a", 3)]).unwrap();
+    net.flush(1);
+    net.flush(0);
+    net.settle();
+    net.all_equal();
+    assert_eq!(net.value(0, 1, "a"), Some(json!(3)));
+    // A's inverse was made from a view that had a=0 underneath. The server had a=2 there.
+    let report = net.clients[0].undo();
+    assert_eq!(report.applied, 1);
+    net.settle();
+    net.all_equal();
+    assert_eq!(
+        net.value(1, 1, "a"),
+        Some(json!(2)),
+        "B's value, not the stale 0"
+    );
+    // Redo puts A's value back.
+    net.clients[0].redo();
+    net.settle();
+    assert_eq!(net.value(1, 1, "a"), Some(json!(3)));
+}

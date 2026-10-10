@@ -547,25 +547,8 @@ impl Client {
             client: self.client,
             op: op_id,
         };
-        let mut applied = Vec::new();
-        let mut inverse = Vec::new();
         let total = ops.len();
-        let mut created: Vec<crate::op::Target> = Vec::new();
-        for op in ops {
-            let (out, inv) = self.view.apply_inverse(w, &op);
-            if out.is_applied() {
-                // The key of a new thing is part of its creation: undo deletes the thing, and the
-                // key goes with it.
-                let own_key = op.prop() == Some("order") && created.contains(&op.target());
-                if let Op::Create { target, .. } = &op {
-                    created.push(*target);
-                }
-                applied.push(op);
-                if !own_key {
-                    inverse.extend(inv);
-                }
-            }
-        }
+        let (applied, inverse) = apply_with_inverse(&mut self.view, w, ops);
         if applied.len() < total {
             // The merge rules dropped some operations (a delete of a thing that cannot go, an
             // edit of a deleted thing). The host's document has them, so it must be built again
@@ -575,7 +558,6 @@ impl Client {
         if applied.is_empty() {
             return Err(EditError::NoEffect);
         }
-        inverse.reverse();
         self.last_op = op_id;
         if self.state == ConnState::Online {
             self.outbox.push(ClientMsg::Submit {
@@ -861,7 +843,11 @@ impl Client {
                 client: e.author,
                 op: e.op_id,
             };
-            self.confirmed.apply_all(w, &e.ops);
+            if e.author == self.client {
+                self.confirm_own(w, e.ops.clone());
+            } else {
+                self.confirmed.apply_all(w, &e.ops);
+            }
             self.confirmed_seq = e.seq;
             self.head_seq = self.head_seq.max(e.seq);
             // While syncing, `finish_sync` builds the view. Only live entries touch it here.
@@ -907,7 +893,7 @@ impl Client {
             client: self.client,
             op: op_id,
         };
-        self.confirmed.apply_all(w, &txn.ops);
+        self.confirm_own(w, txn.ops);
         self.confirmed_seq = seq;
         self.head_seq = self.head_seq.max(seq);
         if i != 0 {
@@ -915,6 +901,23 @@ impl Client {
             self.rebuild_view();
         }
         self.save_journal();
+    }
+
+    /// Puts a transaction of this client into `confirmed`, and makes its undo step again from the
+    /// state that was *really* underneath it in the server order. The inverse that was made when
+    /// the edit was shown to the user came from the view, which may not have had a write of another
+    /// user that the server ordered before this transaction. Undo then restores the value that
+    /// was underneath, not a stale one.
+    fn confirm_own(&mut self, w: Writer, ops: Vec<Op>) {
+        let (_, inverse) = apply_with_inverse(&mut self.confirmed, w, ops);
+        for u in self
+            .undo
+            .iter_mut()
+            .chain(self.redo.iter_mut())
+            .filter(|u| u.of_op == w.op)
+        {
+            u.inverse = inverse.clone();
+        }
     }
 
     fn on_error(&mut self, code: ErrorCode, message: String, op_id: Option<u64>, now_ms: u64) {
@@ -1130,4 +1133,28 @@ fn trim(stack: &mut Vec<UndoEntry>) {
     if stack.len() > MAX_STEPS {
         stack.drain(..stack.len() - MAX_STEPS);
     }
+}
+
+/// Applies operations to a replica and returns the ones that had an effect, and the inverse
+/// operations in the order to apply them. The key of a new thing is part of its creation: undo
+/// deletes the thing, and the key goes with it.
+fn apply_with_inverse(r: &mut Replica, w: Writer, ops: Vec<Op>) -> (Vec<Op>, Vec<Op>) {
+    let mut applied = Vec::new();
+    let mut inverse = Vec::new();
+    let mut created: Vec<crate::op::Target> = Vec::new();
+    for op in ops {
+        let (out, inv) = r.apply_inverse(w, &op);
+        if out.is_applied() {
+            let own_key = op.prop() == Some("order") && created.contains(&op.target());
+            if let Op::Create { target, .. } = &op {
+                created.push(*target);
+            }
+            applied.push(op);
+            if !own_key {
+                inverse.extend(inv);
+            }
+        }
+    }
+    inverse.reverse();
+    (applied, inverse)
 }
