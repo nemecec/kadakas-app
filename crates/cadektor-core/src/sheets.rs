@@ -259,6 +259,9 @@ pub struct Drawing {
     pub project: ProjectInfo,
     #[serde(default)]
     pub saved_views: Vec<SavedView>,
+    /// Materials in use, the sun and the render style (see `crate::present`).
+    #[serde(default)]
+    pub presentation: crate::present::Presentation,
 }
 
 impl Drawing {
@@ -439,9 +442,12 @@ pub struct Viewport {
     /// `plan` (Top/Plan, vector) or a 3D standard view id such as `right_isometric` (raster image).
     #[serde(default = "default_view")]
     pub view: String,
-    /// Render mode of 3D views: `shaded` or `wireframe`.
+    /// Render mode of 3D views: `shaded`, `wireframe`, `hidden_line` or `dashed_hidden_line`.
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// A render style resource for 3D views. It replaces `mode`. Hidden-line styles draw vector lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_style: Option<crate::resource::ResourceId>,
     /// Resolution of 3D views, in dots per inch.
     #[serde(default = "default_dpi")]
     pub dpi: f64,
@@ -495,6 +501,7 @@ impl Viewport {
             layers,
             view: default_view(),
             mode: default_mode(),
+            render_style: None,
             dpi: DEFAULT_DPI,
             crop: None,
             layer_overrides: BTreeMap::new(),
@@ -533,8 +540,10 @@ impl Viewport {
         if !(30.0..=1200.0).contains(&self.dpi) {
             return Some("dpi must be 30 to 1200".into());
         }
-        if !matches!(self.mode.as_str(), "shaded" | "wireframe") {
-            return Some("mode must be shaded or wireframe".into());
+        if crate::present::RenderMode::from_name(&self.mode).is_none() {
+            return Some(
+                "mode must be shaded, wireframe, hidden_line or dashed_hidden_line".into(),
+            );
         }
         if self.view.trim().is_empty() {
             return Some("view must not be empty".into());

@@ -8,6 +8,7 @@ use glam::{DVec2, DVec3};
 use super::data::{HardscapeData, Mode, Slope};
 use crate::mesh::{SceneSink, clean_ring, triangulate};
 use crate::model::{Object, Shape};
+use crate::present::PART_LAYER;
 
 /// Ground height at a point, or `None` outside the terrain. Same frame as the layer.
 pub type Terrain<'a> = &'a dyn Fn(DVec2) -> Option<f64>;
@@ -319,6 +320,7 @@ pub fn emit_solid(
     let z = |p| surface.z(p);
     let step = surface.is_draped().then_some(DRAPE_STEP);
     let (points, indices) = top_surface(&ring, &z, step);
+    sink.set_part(PART_LAYER);
     sink.mesh(&points, &indices, layers[0].color);
     // Points along the outline. A draped outline gets extra points so it follows the ground.
     let n = ring.len();
@@ -331,7 +333,8 @@ pub fn emit_solid(
         }
     }
     let m = outline.len();
-    for layer in layers {
+    for (li, layer) in layers.iter().enumerate() {
+        sink.set_part(PART_LAYER + li.min(200) as u8);
         let (mut pos, mut idx) = (Vec::with_capacity(m * 4), Vec::with_capacity(m * 6));
         for i in 0..m {
             let (p, q) = (outline[i], outline[(i + 1) % m]);
@@ -348,6 +351,7 @@ pub fn emit_solid(
         }
         sink.mesh(&pos, &idx, shade(layer.color, 0.82));
     }
+    sink.set_part(0);
     let top: Vec<DVec3> = outline.iter().map(|p| p.extend(z(*p))).collect();
     sink.polyline(&top, true, edge);
     let depth = layers.iter().map(|l| l.bottom).fold(0.0, f64::max);

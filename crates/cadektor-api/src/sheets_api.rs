@@ -49,7 +49,7 @@ pub const PROJECT_SET: (&str, &str) = (
 );
 pub const VIEWPORT_CREATE: (&str, &str) = (
     "viewport.create",
-    "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe, 3D only), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images. Returns the viewport with its id.",
+    "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.",
 );
 pub const VIEWPORT_GET: (&str, &str) = (
     "viewport.get",
@@ -61,7 +61,7 @@ pub const VIEWPORT_LIST: (&str, &str) = (
 );
 pub const VIEWPORT_UPDATE: (&str, &str) = (
     "viewport.update",
-    "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.",
+    "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.",
 );
 pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = (
     "viewport.set_override",
@@ -460,6 +460,7 @@ struct CreateViewport {
     center: Option<DVec2>,
     view: Option<String>,
     mode: Option<String>,
+    render_style: Option<Value>,
     dpi: Option<f64>,
     name: Option<String>,
     crop: Option<Crop>,
@@ -508,7 +509,10 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
         vp.view = norm_view(v)?;
     }
     if let Some(m) = c.mode {
-        vp.mode = m;
+        vp.mode = RenderMode::from_name(&m).map_or(m, |x| x.id().to_string());
+    }
+    if let Some(v) = c.render_style.filter(|v| !v.is_null()) {
+        vp.render_style = Some(crate::present_api::document_style(doc, &v)?);
     }
     if let Some(d) = c.dpi {
         vp.dpi = d;
@@ -574,6 +578,25 @@ fn viewport_update(s: &mut Session, p: &Value) -> Res {
         ] {
             if let Some(x) = p.get(key) {
                 obj.insert(key.into(), x.clone());
+            }
+        }
+        if let Some(x) = p
+            .get("mode")
+            .and_then(Value::as_str)
+            .and_then(RenderMode::from_name)
+        {
+            obj.insert("mode".into(), json!(x.id()));
+        }
+        match p.get("render_style") {
+            None => {}
+            Some(Value::Null) => {
+                obj.remove("render_style");
+            }
+            Some(x) => {
+                obj.insert(
+                    "render_style".into(),
+                    json!(crate::present_api::document_style(doc, x)?),
+                );
             }
         }
         if let Some(x) = p.get("view") {

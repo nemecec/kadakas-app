@@ -173,6 +173,10 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
                 .on_hover_text(keys.hint(Action::ViewWireframe));
             ui.selectable_value(&mut v.mode, RenderMode::Shaded, "Shaded")
                 .on_hover_text(keys.hint(Action::ViewShaded));
+            ui.selectable_value(&mut v.mode, RenderMode::HiddenLine, "Hidden Line")
+                .on_hover_text(keys.hint(Action::ViewHiddenLine));
+            ui.selectable_value(&mut v.mode, RenderMode::DashedHiddenLine, "Dashed")
+                .on_hover_text(keys.hint(Action::ViewDashedHiddenLine));
         });
     });
 }

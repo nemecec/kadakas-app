@@ -15,6 +15,7 @@ mod irrigation_api;
 mod libfiles;
 mod massing_api;
 mod plants_api;
+mod present_api;
 mod sheets_api;
 mod symbols_api;
 
@@ -24,6 +25,7 @@ use serde_json::{Value, json};
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::mesh::{MeshCache, Scene};
 use cadektor_core::model::*;
+use cadektor_core::present::RenderStyle;
 use cadektor_core::sheets::SavedView;
 #[cfg(not(target_arch = "wasm32"))]
 mod ifc_api;
@@ -151,7 +153,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.png",
-        "PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode, render_style}.",
     ),
     (
         "view.list",
@@ -226,6 +228,27 @@ pub const METHODS: &[(&str, &str)] = &[
     data_api::WORKSHEET_EXPORT,
     data_api::WORKSHEET_PLACE,
     data_api::WORKSHEET_FIT,
+    // Materials, render styles and the sun (see present_api.rs).
+    present_api::MATERIAL_LIST,
+    present_api::MATERIAL_GET,
+    present_api::MATERIAL_CREATE,
+    present_api::MATERIAL_UPDATE,
+    present_api::MATERIAL_DUPLICATE,
+    present_api::MATERIAL_DELETE,
+    present_api::MATERIAL_ADD_DEFAULTS,
+    present_api::MATERIAL_IMPORT_TEXTURE,
+    present_api::MATERIAL_ASSIGN,
+    present_api::MATERIAL_SLOTS,
+    present_api::RENDER_STYLE_LIST,
+    present_api::RENDER_STYLE_GET,
+    present_api::RENDER_STYLE_CREATE,
+    present_api::RENDER_STYLE_UPDATE,
+    present_api::RENDER_STYLE_DUPLICATE,
+    present_api::RENDER_STYLE_DELETE,
+    present_api::RENDER_STYLE_SET_ACTIVE,
+    present_api::SUN_SET,
+    present_api::SUN_GET,
+    present_api::RENDER_HIDDEN_LINE,
     // GIS services, coordinate conversion and massing models (see gis_api.rs and massing_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
     gis_api::GIS_SOURCES,
@@ -601,6 +624,7 @@ impl Session {
                 "plants": plants_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
+                "presentation": present_api::describe(),
                 "massing": massing_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
@@ -738,6 +762,8 @@ impl Session {
                     height: Option<u32>,
                     projection: Option<String>,
                     mode: Option<String>,
+                    render_style: Option<Value>,
+                    samples: Option<u32>,
                 }
                 let P {
                     view,
@@ -745,37 +771,82 @@ impl Session {
                     height,
                     projection,
                     mode,
+                    render_style,
+                    samples,
                 } = params(p)?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = image_size(width.unwrap_or(800), height.unwrap_or(600));
                 let scene = self.scene();
+                let doc = self.editor.doc();
                 let mut camera = Camera::standard(settings.view, settings.projection);
                 camera.fit(scene.bounds, width as f32 / height as f32);
-                let img = cadektor_render::render(
-                    &scene,
-                    &camera,
-                    &RenderOptions {
+                // A named style, else the active style of the document, else none.
+                let style = match render_style.filter(|v| !v.is_null()) {
+                    Some(v) => Some(present_api::style_param(doc, &v)?),
+                    None => doc
+                        .drawing
+                        .presentation
+                        .active_style
+                        .and_then(|id| cadektor_core::present::render_style(doc, id))
+                        .cloned(),
+                };
+                let slots = cadektor_core::present::SlotIndex::new(doc);
+                let plain = style.is_none()
+                    && slots.is_empty()
+                    && matches!(settings.mode, RenderMode::Shaded | RenderMode::Wireframe);
+                let mut used_style = RenderStyle::default();
+                let (img, used_mode) = if plain {
+                    let img = cadektor_render::render(
+                        &scene,
+                        &camera,
+                        &RenderOptions {
+                            width,
+                            height,
+                            mode: settings.mode,
+                            ..Default::default()
+                        },
+                    );
+                    (img, settings.mode)
+                } else {
+                    let mut st = style.clone().unwrap_or_default();
+                    // A mode in the request, or a mode chosen with view.set, wins over a style without
+                    // a name in the request. A named style keeps its own mode unless the request gives one.
+                    if mode.is_some() || style.is_none() {
+                        st.mode = settings.mode;
+                    }
+                    let img = cadektor_render::styled::render_styled(
+                        doc,
+                        &scene,
+                        &camera,
+                        &st,
                         width,
                         height,
-                        mode: settings.mode,
-                        ..Default::default()
-                    },
-                );
+                        samples.unwrap_or(1),
+                    );
+                    let mode = st.mode;
+                    used_style = st;
+                    (img, mode)
+                };
                 use base64::Engine;
-                json!({
+                let mut out = json!({
                     "png_base64": base64::engine::general_purpose::STANDARD.encode(img.to_png()),
                     "width": width,
                     "height": height,
                     "view": settings.view.id(),
                     "projection": settings.projection.id(),
-                    "mode": settings.mode.id(),
-                })
+                    "mode": used_mode.id(),
+                });
+                // The settings of the style are only given when materials or a style were used.
+                if !plain {
+                    out["render_style"] = present_api::style_summary(&used_style);
+                }
+                out
             }
             "view.list" => json!({
                 "views": StandardView::ALL.iter().map(|v| json!({"id": v.id(), "label": v.label()})).collect::<Vec<_>>(),
                 "projections": [Projection::Orthographic.id(), Projection::Perspective.id()],
-                "modes": [RenderMode::Shaded.id(), RenderMode::Wireframe.id()],
+                "modes": RenderMode::ALL.map(|m| m.id()),
                 "current": view_json(self.view),
             }),
             "view.set" => {
@@ -820,6 +891,9 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             "export.file" => self.export_file(p)?,
             _ => {
+                if let Some(r) = present_api::handle(self, method, p.clone()) {
+                    return r;
+                }
                 if let Some(r) = hardscape_api::handle(self, method, p.clone()) {
                     return r;
                 }
@@ -867,7 +941,10 @@ impl Session {
         }
         if let Some(n) = mode {
             v.mode = RenderMode::from_name(n).ok_or_else(|| {
-                RpcError::invalid_params(format!("unknown mode '{n}'. Use shaded or wireframe"))
+                RpcError::invalid_params(format!(
+                    "unknown mode '{n}'. Use {}",
+                    RenderMode::ALL.map(|m| m.id()).join(", ")
+                ))
             })?;
         }
         Ok(v)

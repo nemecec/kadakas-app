@@ -381,6 +381,62 @@ fn wkt_to_proj(wkt: &str) -> Result<String, String> {
     }
 }
 
+/// Where a georeference puts the model origin on the earth, and where true north lies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeoPlace {
+    /// Latitude and longitude of the model origin in degrees, if the CRS is known.
+    pub lat_lon: Option<(f64, f64)>,
+    /// True north as a direction in the model frame (x, y). It includes the rotation of the model and the
+    /// meridian convergence of the CRS at the origin. Without a known projected CRS it is grid north.
+    pub true_north: cadektor_core::DVec2,
+}
+
+impl GeoPlace {
+    /// Degrees clockwise from the model +Y axis to true north (a drawing with north to the right has 90).
+    pub fn north_angle(&self) -> f64 {
+        self.true_north.x.atan2(self.true_north.y).to_degrees()
+    }
+}
+
+/// The place of a georeference on the earth. `None` if the document names no CRS or the numbers are bad.
+/// Used by the IFC export and by the sun.
+pub fn place_of(g: &cadektor_core::georef::Georeference) -> Option<GeoPlace> {
+    use cadektor_core::DVec2;
+    let text = g.crs.trim();
+    if text.is_empty() || !g.is_finite() {
+        return None;
+    }
+    let parsed = Crs::parse(text).ok();
+    let lat_lon = parsed.as_ref().and_then(|crs| {
+        let wgs = Crs::from_epsg(4326).ok()?;
+        let (lon, lat, _) = Transformer::new(crs, &wgs)
+            .apply(g.origin.x, g.origin.y, 0.0)
+            .ok()?;
+        Some((lat, lon))
+    });
+    // True north: move a little north on the earth and see where that goes on the map.
+    let grid_north = DVec2::from_angle(-g.rotation).rotate(DVec2::Y);
+    let true_north = parsed
+        .as_ref()
+        .filter(|crs| !crs.is_geographic())
+        .and_then(|crs| {
+            let wgs = Crs::from_epsg(4326).ok()?;
+            let (lon, lat, _) = Transformer::new(crs, &wgs)
+                .apply(g.origin.x, g.origin.y, 0.0)
+                .ok()?;
+            let (nx, ny, _) = Transformer::new(&wgs, crs)
+                .apply(lon, (lat + 1.0e-4).min(89.9), 0.0)
+                .ok()?;
+            let d = DVec2::new(nx - g.origin.x, ny - g.origin.y).normalize_or_zero();
+            (d != DVec2::ZERO).then(|| DVec2::from_angle(-g.rotation).rotate(d))
+        })
+        .unwrap_or(grid_north);
+    Some(GeoPlace {
+        lat_lon,
+        true_north,
+    })
+}
+
 /// Converts points between two CRSs.
 pub struct Transformer<'a> {
     from: &'a Crs,
@@ -426,6 +482,47 @@ impl<'a> Transformer<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn place_of_gives_latitude_and_meridian_convergence() {
+        use cadektor_core::DVec2;
+        use cadektor_core::georef::Georeference;
+        let g = |crs: &str, rotation: f64| Georeference {
+            crs: crs.into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            rotation,
+            user_origin: DVec2::ZERO,
+        };
+        // Helsinki in ETRS-TM35FIN: 24.9 E, with the central meridian at 27 E. The convergence is
+        // (lon - lon0) * sin(lat) = -1.8 degrees. West of the central meridian the meridians lean
+        // toward it, so true north lies 1.8 degrees clockwise (east) of grid north.
+        let p = place_of(&g("EPSG:3067", 0.0)).unwrap();
+        let (lat, lon) = p.lat_lon.unwrap();
+        assert!(
+            (60.1..60.3).contains(&lat) && (24.8..25.1).contains(&lon),
+            "{lat} {lon}"
+        );
+        let conv = -(lon - 27.0) * lat.to_radians().sin();
+        assert!(
+            (p.north_angle() - conv).abs() < 0.15,
+            "{} vs {conv}",
+            p.north_angle()
+        );
+        // The rotation of the model adds to it.
+        let r = place_of(&g("EPSG:3067", 0.5)).unwrap();
+        assert!((r.north_angle() - (conv + 0.5f64.to_degrees())).abs() < 0.15);
+        // A geographic CRS has no convergence: only the rotation counts.
+        let geo = place_of(&Georeference {
+            origin: DVec2::new(24.9, 60.2),
+            ..g("EPSG:4326", 0.0)
+        })
+        .unwrap();
+        assert!(geo.north_angle().abs() < 1e-9);
+        // No CRS, or an unknown one: grid north, no latitude.
+        assert!(place_of(&g("", 0.0)).is_none());
+        let odd = place_of(&g("nonsense", 0.2)).unwrap();
+        assert!(odd.lat_lon.is_none() && (odd.north_angle() - 0.2f64.to_degrees()).abs() < 1e-9);
+    }
+
     use super::*;
 
     const TM35FIN_PRJ: &str = "PROJCS[\"ETRS_1989_TM35FIN\",GEOGCS[\"GCS_ETRS_1989\",DATUM[\"D_ETRS_1989\",SPHEROID[\"GRS_1980\",6378137.0,298.257222101]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"False_Easting\",500000.0],PARAMETER[\"False_Northing\",0.0],PARAMETER[\"Central_Meridian\",27.0],PARAMETER[\"Scale_Factor\",0.9996],PARAMETER[\"Latitude_Of_Origin\",0.0],UNIT[\"Meter\",1.0]]";

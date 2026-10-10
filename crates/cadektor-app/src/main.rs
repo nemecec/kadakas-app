@@ -20,6 +20,7 @@ mod keymap;
 mod panels;
 mod plant_draw;
 mod plant_ui;
+mod present_ui;
 mod resource_ui;
 mod sheets_ui;
 mod site_ui;
