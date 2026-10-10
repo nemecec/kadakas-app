@@ -277,18 +277,21 @@ impl ScriptUi {
                 }
             }
         }
-        if self.running.is_none() {
-            if let Some(job) = self.queue.pop_front() {
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let result = job.run();
-                    let _ = tx.send((job, result));
-                });
-                self.running = Some(RunningReset {
-                    started: Instant::now(),
-                    rx,
-                });
-            }
+        let next = if self.running.is_none() {
+            self.queue.pop_front()
+        } else {
+            None
+        };
+        if let Some(job) = next {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = job.run();
+                let _ = tx.send((job, result));
+            });
+            self.running = Some(RunningReset {
+                started: Instant::now(),
+                rx,
+            });
         }
         if self.running.is_some() || !self.queue.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -724,7 +727,7 @@ mod tests {
         let ctx = egui::Context::default();
         for _ in 0..300 {
             ui_state.tick(&ctx, s, status);
-            if !(ui_state.running.is_some() || !ui_state.queue.is_empty()) {
+            if ui_state.running.is_none() && ui_state.queue.is_empty() {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -879,10 +882,9 @@ mod tests {
         );
         assert!(
             !s.scripting.trust.is_trusted(
-                &cadektor_api::instance_info(&s, id).unwrap()["script"]
+                cadektor_api::instance_info(&s, id).unwrap()["script"]
                     .as_str()
                     .unwrap()
-                    .to_string()
             )
         );
         assert!(!dir.join("started").exists());
