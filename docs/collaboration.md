@@ -7,6 +7,17 @@ crate for the merge rules and the checks, or it may follow this text and write i
 
 Protocol version: **1**.
 
+**Compatibility.** The changes since the first text are all optional, so the version stays 1. New
+things are an extra error code (`document_full`; a client reads any code it does not know as a retry
+error, see section 4.6), the `hash` of an `error`, `hello.last_hash`, and `chain` in `ack`, `Entry`
+and `snapshot`. A new client with an old server: the old server leaves the new fields out, and the
+client works as before. An old client with a new server: it ignores fields it does not know (and an
+old client may stop on an error code that it does not know, so a new server sends `document_full`
+only to a client that can read it, or accepts that an old client treats it as a bad message). A
+new server must read a `hello` and a `submit` without the new fields. Rules 3 (one user per client
+ID), 6 (the hash is `ops_digest`) and 7 (the end of the block) tighten the text of the server side;
+they do not change any message.
+
 ## 1. The idea
 
 - A shared document is a **log of transactions**. The server puts them in one order and gives
