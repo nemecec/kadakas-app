@@ -166,3 +166,33 @@ def test_import_of_3d_entities_from_ezdxf(cad, tmp_path):
     assert len(cad.result("objects.list", {"kind": "polyline3d"})) == 1
     merged = [m for m in meshes if len(m["shape"]["triangles"]) == 3 and len(m["shape"]["vertices"]) == 6]
     assert merged, [len(m["shape"]["vertices"]) for m in meshes]
+
+
+def test_rotated_geodata_matches_the_file_coordinates_and_round_trips(cad, make_serve, tmp_path):
+    import math
+
+    cad.execute({"op": "set_georeference", "georef": {"crs": "EPSG:3067", "origin": [385000, 6672000], "rotation": 0.5}})
+    cad.execute({"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [10000, 0]}})
+    for i, options in enumerate(({"unit": "m"}, {"unit": "m", "origin": "document"})):
+        doc, _ = export(cad, tmp_path, f"rot{i}.dxf", options)
+        (g,) = doc.objects.query("GEODATA")
+        (line,) = doc.modelspace().query("LINE")
+        theta = math.atan2(g.dxf.north_direction[0], g.dxf.north_direction[1])
+        assert theta == __import__("pytest").approx(0.5)
+
+        def to_map(p):
+            dx, dy = p[0] - g.dxf.design_point[0], p[1] - g.dxf.design_point[1]
+            return (g.dxf.reference_point[0] + dx * math.cos(theta) - dy * math.sin(theta),
+                    g.dxf.reference_point[1] + dx * math.sin(theta) + dy * math.cos(theta))
+
+        end = to_map(line.dxf.end)
+        assert end[0] == __import__("pytest").approx(385000 + 10 * math.cos(0.5), abs=1e-6)
+        assert end[1] == __import__("pytest").approx(6672000 + 10 * math.sin(0.5), abs=1e-6)
+    # Import reads the GEODATA back: the CRS, the rotation and the geometry come back.
+    other = make_serve()
+    other.result("import.file", {"path": str(tmp_path / "rot0.dxf"), "options": {"unit": "m"}})
+    g = other.result("document.summary")["georeference"]
+    assert g["crs"] == "EPSG:3067" and g["rotation"] == __import__("pytest").approx(0.5)
+    assert g["origin"] == __import__("pytest").approx([385000, 6672000])
+    (ln,) = other.result("objects.list", {"kind": "line"})
+    assert ln["shape"]["b"] == __import__("pytest").approx([10000, 0])

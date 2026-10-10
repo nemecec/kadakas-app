@@ -107,6 +107,43 @@ fn pad_parts(s: &Session, id: ObjectId) -> Result<(f64, Vec<Vertex>), RpcError> 
 impl Session {
     /// The commands that build (or replace) the retaining edge of a pad. The wall gets the next ID
     /// after the ones in `ahead` (objects that the same batch creates first).
+    /// `cut` if the existing ground along the edge is higher than the pad everywhere (the wall holds the
+    /// ground back and its top is the ground), else `fill`. Without a site model: `fill`.
+    fn edge_mode(
+        &self,
+        layer: Option<cadektor_core::model::LayerId>,
+        level: f64,
+        boundary: &[Vertex],
+    ) -> (&'static str, f64) {
+        use cadektor_site::grading::{self, Follow, GroundSource};
+        let doc = self.editor.doc();
+        let layer = layer.unwrap_or(doc.active_layer);
+        let Some(site) = grading::host(doc, &self.site_cache, self.editor.revision(), layer, None)
+        else {
+            return ("fill", 0.0);
+        };
+        let ground = grading::SiteGround::new(&site);
+        let (mut above, mut below, mut sum, mut n) = (0, 0, 0.0, 0);
+        for p in cadektor_core::curve::flatten(boundary, true, 100.0) {
+            if let Some(z) = ground.exact(p, Follow::Existing) {
+                sum += z;
+                n += 1;
+                if z > level + 1.0 {
+                    above += 1;
+                } else if z < level - 1.0 {
+                    below += 1;
+                }
+            }
+        }
+        if above > 0 && below == 0 {
+            // The wall goes from the pad up to the ground: its depth below the ground is the mean
+            // height of the ground over the pad.
+            ("cut", sum / n as f64 - level)
+        } else {
+            ("fill", 0.0)
+        }
+    }
+
     fn edge_commands(
         &self,
         pad: ObjectId,
@@ -124,11 +161,25 @@ impl Session {
         };
         let mut wall_data = Map::new();
         wall_data.insert("thickness".into(), json!(edge.thickness));
-        wall_data.insert(
-            "top".into(),
-            json!({"mode": "fixed", "elevation": level + edge.top_offset}),
-        );
-        wall_data.insert("embed".into(), json!(edge.embed));
+        let layer_of_pad = layer.or_else(|| doc.object(pad).map(|o| o.layer));
+        let (mode, depth) = self.edge_mode(layer_of_pad, level, &boundary);
+        if mode == "cut" {
+            // The wall holds back ground that is higher than the pad: its top is the ground, and
+            // it reaches down to the pad (a constant depth: the mean height of the ground over the pad).
+            wall_data.insert(
+                "top".into(),
+                json!({"mode": "terrain", "offset": edge.top_offset}),
+            );
+            wall_data.insert("embed".into(), json!(edge.embed + depth));
+        } else {
+            wall_data.insert(
+                "top".into(),
+                json!({"mode": "fixed", "elevation": level + edge.top_offset}),
+            );
+        }
+        if mode != "cut" {
+            wall_data.insert("embed".into(), json!(edge.embed));
+        }
         if let Some(st) = &edge.style {
             wall_data.insert("style".into(), st.clone());
             resolve_style(doc, &mut wall_data)?;
@@ -177,7 +228,7 @@ impl Session {
             id: pad,
             set: BTreeMap::from([(
                 PAD_KEY.to_string(),
-                json!({"wall": wall_id, "thickness": edge.thickness, "top_offset": edge.top_offset}),
+                json!({"wall": wall_id, "thickness": edge.thickness, "top_offset": edge.top_offset, "mode": mode}),
             )]),
             remove: Vec::new(),
         });
@@ -448,5 +499,76 @@ mod tests {
             json!({"boundary": SQUARE, "elevation": 100, "retaining_edge": true}),
         );
         assert!(with_true["wall"].is_u64());
+    }
+
+    #[test]
+    fn a_cut_pad_gets_a_wall_from_the_pad_up_to_the_ground() {
+        let mut s = Session::default();
+        site(&mut s);
+        let r = ok(
+            &mut s,
+            "pad.add",
+            json!({"boundary": SQUARE, "elevation": -1000, "retaining_edge": true}),
+        );
+        let q = &r["quantities"];
+        assert!(
+            (q["max_height_mm"].as_f64().unwrap() - 1000.0).abs() < 1.0,
+            "{q}"
+        );
+        assert!(
+            (q["min_height_mm"].as_f64().unwrap() - 1000.0).abs() < 1.0,
+            "{q}"
+        );
+        assert!(
+            q["face_area_m2"].as_f64().unwrap() > 30.0 && q["volume_m3"].as_f64().unwrap() > 0.0
+        );
+        let w = ok(&mut s, "objects.get", json!({"id": r["wall"]}));
+        assert_eq!(w["data"]["landscape_wall"]["top"]["mode"], "terrain");
+        let pad = ok(&mut s, "objects.get", json!({"id": r["id"]}));
+        assert_eq!(pad["data"]["retaining_edge"]["mode"], "cut");
+    }
+
+    #[test]
+    fn the_wall_follows_its_pad_and_goes_with_it() {
+        let mut s = Session::default();
+        site(&mut s);
+        let r = ok(
+            &mut s,
+            "pad.add",
+            json!({"boundary": SQUARE, "elevation": 800, "retaining_edge": {"top_offset": 100}}),
+        );
+        let (pad, wall) = (r["id"].as_u64().unwrap(), r["wall"].as_u64().unwrap());
+        // Moving the pad moves the wall (also when only the pad is moved).
+        ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "move_objects", "ids": [pad], "delta": [1000, 2000]}}),
+        );
+        let w = ok(&mut s, "objects.get", json!({"id": wall}));
+        assert_eq!(w["shape"]["points"][0], json!([6000.0, 7000.0]));
+        // Changing the level of the pad changes the top of the wall.
+        let mut shape = ok(&mut s, "objects.get", json!({"id": pad}))["shape"].clone();
+        shape["modifier"]["elevation"] = json!(1500);
+        ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "modify_object", "id": pad, "shape": shape}}),
+        );
+        let w = ok(&mut s, "objects.get", json!({"id": wall}));
+        assert_eq!(w["data"]["landscape_wall"]["top"]["elevation"], 1600.0);
+        // Deleting the pad deletes the wall. One undo brings both back.
+        ok(
+            &mut s,
+            "execute",
+            json!({"command": {"op": "delete_objects", "ids": [pad]}}),
+        );
+        assert!(s.handle("objects.get", json!({"id": wall})).is_err());
+        assert!(ok(&mut s, "undo", json!({}))["done"].as_bool().unwrap());
+        assert!(s.handle("objects.get", json!({"id": wall})).is_ok());
+        assert!(s.handle("objects.get", json!({"id": pad})).is_ok());
+        // Undoing the edit undoes the wall too.
+        ok(&mut s, "undo", json!({}));
+        let w = ok(&mut s, "objects.get", json!({"id": wall}));
+        assert_eq!(w["data"]["landscape_wall"]["top"]["elevation"], 900.0);
     }
 }

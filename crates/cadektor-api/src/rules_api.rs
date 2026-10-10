@@ -604,4 +604,45 @@ mod tests {
             assert!(s.handle("visualization.auto", bad).is_err());
         }
     }
+
+    #[test]
+    fn hiding_a_phase_never_changes_the_terrain_results() {
+        let mut s = Session::default();
+        let mut ids = Vec::new();
+        for x in 0..5 {
+            for y in 0..5 {
+                ids.push(
+                    ok(&mut s, "execute", json!({"command": {"op": "add_object", "shape": {"kind": "locus3d", "p": [x * 5000, y * 5000, 0]}}}))["created"][0]
+                        .as_u64()
+                        .unwrap(),
+                );
+            }
+        }
+        let site = ok(&mut s, "site.create", json!({"source_ids": ids}))["id"]
+            .as_u64()
+            .unwrap();
+        let pad = ok(&mut s, "pad.add", json!({"boundary": [[5000, 5000], [15000, 5000], [15000, 15000], [5000, 15000]], "elevation": 2000}))["id"]
+            .as_u64()
+            .unwrap();
+        let before = ok(&mut s, "site.cut_fill", json!({"id": site}));
+        assert!(before["fill_m3"].as_f64().unwrap() > 100.0);
+        ok(
+            &mut s,
+            "phase.set",
+            json!({"ids": [pad], "phase": "demolished"}),
+        );
+        ok(
+            &mut s,
+            "phase.display",
+            json!({"demolished": {"visible": false}}),
+        );
+        assert_eq!(ok(&mut s, "site.cut_fill", json!({"id": site})), before);
+        let svg = ok(&mut s, "render.svg", json!({}));
+        let svg = svg["svg"]
+            .as_str()
+            .or_else(|| svg.as_str())
+            .unwrap()
+            .to_string();
+        assert!(!svg.contains(&format!(r#"data-id="{pad}""#)));
+    }
 }

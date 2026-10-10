@@ -570,7 +570,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     // Tag counts are made once per frame, not once per tag.
     let counts = tag_counts(f.doc);
     // Map underlays are drawn first, below the vector objects.
-    let visible = || f.doc.objects.values().filter(|o| f.doc.is_visible(o));
+    let visible = || f.doc.objects.values().filter(|o| f.doc.is_displayed(o));
     let is_under = |o: &&Object| matches!(o.shape, Shape::Underlay(_));
     for o in visible()
         .filter(is_under)

@@ -59,6 +59,30 @@ pub fn import(src: &Source, ctx: &Context, opts: &ImportOptions) -> Result<Impor
     // Real-world drawings (survey grids in meters) are far from (0, 0). A probe pass finds the extent,
     // and the shift goes into the document georeference so that the geometry stays near the origin.
     let doc_has_georef = ctx.georef.is_some();
+    // A GEODATA object with an EPSG code gives the georeference. The design point becomes the origin
+    // of the model, and the grid north gives the rotation.
+    if !doc_has_georef
+        && opts.origin == OriginMode::Center
+        && let Some(gd) = &dxf.geodata
+        && let Some(crs) = gd.epsg()
+        && gd.design.iter().chain(&gd.reference).all(|v| v.is_finite())
+        && gd.reference.iter().all(|v| v.abs() < 1.0e9)
+        && gd.design.iter().all(|v| (v * scale).abs() < 1.0e12)
+    {
+        b.set_offset(DVec2::from(gd.design) * scale);
+        b.set_georef(Georeference {
+            crs: crs.clone(),
+            origin: DVec2::from(gd.reference),
+            rotation: gd.north[0].atan2(gd.north[1]),
+            user_origin: DVec2::ZERO,
+        });
+        b.report.georeferenced = true;
+        b.report.note(&format!(
+            "the file has a GEODATA object: the drawing is placed in {crs}"
+        ));
+        walk(&dxf, opts, &mut b, scale)?;
+        return Ok(b.finish());
+    }
     if doc_has_georef || opts.origin == OriginMode::Center {
         let mut probe = Builder::new(ctx, "dxf", opts.max_objects);
         probe.set_probe();

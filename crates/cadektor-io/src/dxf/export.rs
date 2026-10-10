@@ -801,12 +801,12 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         match native::epsg_of(g) {
             Some(epsg) => {
                 let unit_mm = opts.unit.mm_per_unit();
-                let (design, north) = match opts.origin {
-                    ExportOrigin::File => (g.origin * 1000.0 / unit_mm, DVec2::Y),
-                    ExportOrigin::Document => (
-                        DVec2::ZERO,
-                        DVec2::new(g.rotation.sin(), g.rotation.cos()),
-                    ),
+                // The drawing axes are the model axes in both modes (a rotation is not applied to the
+                // coordinates), so grid north is turned by the rotation of the georeference.
+                let north = DVec2::new(g.rotation.sin(), g.rotation.cos());
+                let design = match opts.origin {
+                    ExportOrigin::File => g.origin * 1000.0 / unit_mm,
+                    ExportOrigin::Document => DVec2::ZERO,
                 };
                 native::geodata(
                     &mut objects,

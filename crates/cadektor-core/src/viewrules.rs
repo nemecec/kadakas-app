@@ -783,7 +783,8 @@ mod tests {
             .demolished
             .visible = false;
         assert!(hidden_by_phase(&doc, &o));
-        assert!(!doc.is_visible(&o));
+        assert!(doc.is_visible(&o), "calculations still see the object");
+        assert!(!doc.is_displayed(&o));
         // Switched off: nothing happens.
         doc.drawing.view_rules.phases.as_mut().unwrap().enabled = false;
         assert!(!hidden_by_phase(&doc, &o));

@@ -25,6 +25,28 @@ pub(super) struct AnonBlock {
 
 /// The most faces of one polyface mesh (the file format counts them with 16 bits).
 const MAX_FACES: usize = 30_000;
+/// The most vertices of one polyface mesh (16 bits, and the face records name them with a sign).
+const MAX_VERTICES: usize = 30_000;
+
+/// Cuts the triangles into runs that fit in one polyface mesh: at most `MAX_FACES` faces and
+/// `MAX_VERTICES` different vertices.
+fn polyface_runs(triangles: &[[u32; 3]]) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let (mut start, mut seen) = (0, std::collections::HashSet::new());
+    for (i, t) in triangles.iter().enumerate() {
+        let new = t.iter().filter(|v| !seen.contains(*v)).count();
+        if i > start && (i - start >= MAX_FACES || seen.len() + new > MAX_VERTICES) {
+            runs.push(start..i);
+            start = i;
+            seen.clear();
+        }
+        seen.extend(t.iter().copied());
+    }
+    if start < triangles.len() {
+        runs.push(start..triangles.len());
+    }
+    runs
+}
 
 /// Writes the primitives of a dimension block: lines, closed outlines and text. The pen is BYBLOCK,
 /// so the entities take the color of the dimension.
@@ -378,7 +400,8 @@ pub(super) fn mesh(
         }
         return;
     }
-    for chunk in triangles.chunks(MAX_FACES) {
+    for run in polyface_runs(triangles) {
+        let chunk = &triangles[run];
         // The vertices of this piece, numbered again from 1.
         let mut map = std::collections::HashMap::new();
         let mut used: Vec<u32> = Vec::new();
@@ -494,4 +517,27 @@ pub(super) fn geodata(
     );
     objects.pair(93, 0);
     objects.pair(96, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runs_respect_the_face_and_vertex_limits() {
+        // Disjoint triangles: three new vertices each, so the vertex limit comes first.
+        let tris: Vec<[u32; 3]> = (0..12_000u32)
+            .map(|i| [3 * i, 3 * i + 1, 3 * i + 2])
+            .collect();
+        let runs = polyface_runs(&tris);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].len(), 10_000);
+        // Shared vertices: the face limit comes first.
+        let strip: Vec<[u32; 3]> = (0..65_000u32)
+            .map(|i| [0, 1 + i % 100, 2 + i % 100])
+            .collect();
+        assert_eq!(polyface_runs(&strip).len(), 3);
+        assert!(polyface_runs(&[]).is_empty());
+        assert_eq!(polyface_runs(&tris[..1]).len(), 1);
+    }
 }

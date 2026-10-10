@@ -153,7 +153,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     // Underlays (map backgrounds) go below everything else.
-    let visible = || doc.objects.values().filter(|o| doc.is_visible(o));
+    let visible = || doc.objects.values().filter(|o| doc.is_displayed(o));
     for o in visible().filter(|o| matches!(o.shape, Shape::Underlay(_))) {
         draw_object(doc, o, &mut s, &tag_counts, ext, 0);
     }

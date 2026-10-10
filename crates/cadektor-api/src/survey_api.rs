@@ -103,7 +103,7 @@ fn text_of(s: &Session, m: &Map<String, Value>) -> Result<String, RpcError> {
         }
         let bytes = std::fs::read(&path)
             .map_err(|e| RpcError::not_found(format!("{}: {e}", path.display())))?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        return Ok(cadektor_io::decode_text(&bytes));
     }
     let _ = s;
     Err(bad("give text (the file content) or path"))
@@ -208,6 +208,7 @@ fn import_points(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcEr
             .iter()
             .map(|n| Column::from_name(n).ok_or_else(|| bad(format!("unknown column '{n}'"))))
             .collect::<Result<_, _>>()?;
+        opts.columns_given = true;
     }
     opts.skip_lines = m
         .get("skip_lines")
@@ -323,6 +324,7 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
     let first = doc.next_id();
     let mut id = first;
     let mut n = 0usize;
+    let mut bad_rows: Vec<(usize, String)> = Vec::new();
     for (t, p) in parsed.rows.iter().zip(&positions) {
         let shape = Shape::ExistingTree {
             at: *p,
@@ -335,7 +337,11 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
             rpz_factor: None,
             rpz_cap: None,
         };
-        if !shape.is_finite() || !shape.is_in_range() {
+        if !shape.is_finite() || !shape.is_in_range() || shape.problem().is_some() {
+            bad_rows.push((
+                0,
+                format!("tree '{}': position or size is out of range", t.id),
+            ));
             continue;
         }
         cmds.push(Command::AddObject {
@@ -364,10 +370,12 @@ fn import_trees(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErr
         .execute(&Command::Batch { commands: cmds })
         .map_err(RpcError::from)?;
     s.prune_selection();
+    let mut skipped = parsed.skipped;
+    skipped.extend(bad_rows);
     Ok(json!({
         "imported": n,
-        "skipped": skipped_json(&parsed.skipped),
-        "skipped_count": parsed.skipped.len(),
+        "skipped": skipped_json(&skipped),
+        "skipped_count": skipped.len(),
         "georeference": new_georef,
         "ids_from": first,
         "ids_to": id - 1,
@@ -772,5 +780,38 @@ mod tests {
         ] {
             assert!(s.handle("georef.survey_point", bad_params).is_err());
         }
+    }
+
+    #[test]
+    fn bad_tree_rows_are_skipped_and_headers_decide_the_columns() {
+        let mut s = Session::default();
+        let r = ok(
+            &mut s,
+            "tree.import_survey",
+            json!({"text": "ID,E,N,DBH (cm),Height (m)\nA,1,2,40,9\nB,1e12,2,40,9\nC,x,2,40,9\nD,3,4,,\n"}),
+        );
+        assert_eq!(r["imported"], 2);
+        assert_eq!(r["skipped_count"], 2);
+        let rows = ok(&mut s, "report.existing_trees", json!({}));
+        assert_eq!(
+            rows["rows"][1]["dbh"], 300.0,
+            "a missing size gets the default"
+        );
+        // A header with Easting before Northing is read by name.
+        let r = ok(
+            &mut s,
+            "survey.import_points",
+            json!({"text": "Point,Easting,Northing,Z\n1,100,200,5\n"}),
+        );
+        let o = ok(&mut s, "objects.get", json!({"id": r["ids_from"]}));
+        assert_eq!(o["shape"]["p"], json!([100000.0, 200000.0, 5000.0]));
+        // An order that contradicts the header is refused.
+        assert!(
+            s.handle(
+                "survey.import_points",
+                json!({"text": "Point,Easting,Northing,Z\n1,100,200,5\n", "columns": ["P", "N", "E", "Z"]})
+            )
+            .is_err()
+        );
     }
 }

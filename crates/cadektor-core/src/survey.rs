@@ -52,22 +52,39 @@ impl Delimiter {
 /// The delimiter that the first lines use most (outside quotes).
 pub fn detect_delimiter(text: &str) -> Delimiter {
     let mut counts = [0usize; 4];
+    // Commas between two digits can be decimal commas (`1,5`). They count only if no semicolon is there.
+    let (mut digit_commas, mut other_commas) = (0usize, 0usize);
     let lines = text
         .lines()
         .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
         .take(5);
     for line in lines {
         let mut quoted = false;
-        for c in line.chars() {
+        let chars: Vec<char> = line.chars().collect();
+        for (i, c) in chars.iter().enumerate() {
             match c {
                 '"' => quoted = !quoted,
-                ',' if !quoted => counts[0] += 1,
+                ',' if !quoted => {
+                    counts[0] += 1;
+                    let digit = |j: Option<usize>| {
+                        j.and_then(|j| chars.get(j))
+                            .is_some_and(|c| c.is_ascii_digit())
+                    };
+                    if digit(i.checked_sub(1)) && digit(Some(i + 1)) {
+                        digit_commas += 1;
+                    } else {
+                        other_commas += 1;
+                    }
+                }
                 ';' if !quoted => counts[1] += 1,
                 '\t' if !quoted => counts[2] += 1,
                 '|' if !quoted => counts[3] += 1,
                 _ => {}
             }
         }
+    }
+    if counts[1] > 0 && other_commas == 0 && digit_commas > 0 {
+        return Delimiter::Semicolon;
     }
     let list = [
         Delimiter::Comma,
@@ -212,8 +229,11 @@ pub const DEFAULT_ORDER: [Column; 5] = [
 #[derive(Clone, Debug)]
 pub struct PointOptions {
     pub delimiter: Delimiter,
-    /// The columns in file order. Extra fields at the end of a line are ignored.
+    /// The columns in file order. Extra fields at the end of a line are ignored. A header line
+    /// that names the columns decides the order, unless `columns_given` is set.
     pub columns: Vec<Column>,
+    /// True if the caller chose `columns`. A header that disagrees is an error then.
+    pub columns_given: bool,
     /// Lines to skip at the start. `None`: skip the first line if its coordinates are not numbers.
     pub skip_lines: Option<usize>,
     /// Meters per unit of the northing and easting. Default 1 (meters).
@@ -229,6 +249,7 @@ impl Default for PointOptions {
         PointOptions {
             delimiter: Delimiter::Auto,
             columns: DEFAULT_ORDER.to_vec(),
+            columns_given: false,
             skip_lines: None,
             xy_unit_m: 1.0,
             z_unit_m: 1.0,
@@ -267,17 +288,58 @@ impl<T> Default for Parsed<T> {
 
 /// Reads a point file. A line needs a northing, an easting and an elevation as numbers.
 pub fn parse_points(text: &str, opts: &PointOptions) -> Result<Parsed<SurveyPoint>, String> {
-    let col = |c: Column| opts.columns.iter().position(|x| *x == c);
-    let (Some(ni), Some(ei)) = (col(Column::Northing), col(Column::Easting)) else {
-        return Err("the column order needs a northing (N) and an easting (E)".into());
-    };
-    let zi = col(Column::Elevation);
     for u in [opts.xy_unit_m, opts.z_unit_m] {
         if !(u.is_finite() && u > 0.0) {
             return Err("units must be positive numbers".into());
         }
     }
-    let mut rows = split_rows(text, opts.delimiter).into_iter();
+    let all = split_rows(text, opts.delimiter);
+    // A header names the columns. It decides the order, and a given order must agree with it.
+    let mut columns = opts.columns.clone();
+    let mut has_header = false;
+    if opts.skip_lines.is_none()
+        && let Some((_, f)) = all.first()
+    {
+        let named: Vec<Option<Column>> = f.iter().map(|h| Column::from_name(h)).collect();
+        let has = |c: Column| named.contains(&Some(c));
+        let numeric = f.iter().filter(|h| parse_number(h).is_some()).count();
+        if numeric == 0 && has(Column::Northing) && has(Column::Easting) {
+            has_header = true;
+            let from_header: Vec<Column> = named
+                .into_iter()
+                .map(|c| c.unwrap_or(Column::Skip))
+                .collect();
+            if opts.columns_given {
+                for c in [Column::Northing, Column::Easting, Column::Elevation] {
+                    let (a, b) = (
+                        from_header.iter().position(|x| *x == c),
+                        opts.columns.iter().position(|x| *x == c),
+                    );
+                    if let Some(a) = a
+                        && Some(a) != b
+                    {
+                        return Err(format!(
+                            "the header puts the {} in column {}, but the column order puts it in column {}",
+                            c.id(),
+                            a + 1,
+                            b.map_or("none".to_string(), |b| (b + 1).to_string())
+                        ));
+                    }
+                }
+            } else {
+                columns = from_header;
+            }
+        }
+    }
+    let col = |c: Column| columns.iter().position(|x| *x == c);
+    let (Some(ni), Some(ei)) = (col(Column::Northing), col(Column::Easting)) else {
+        return Err("the column order needs a northing (N) and an easting (E)".into());
+    };
+    let zi = col(Column::Elevation);
+    let mut rows = all.into_iter();
+    if has_header {
+        rows.next();
+    }
     let mut out = Parsed::default();
     let mut first = true;
     let mut to_skip = opts.skip_lines;
@@ -305,6 +367,11 @@ pub fn parse_points(text: &str, opts: &PointOptions) -> Result<Parsed<SurveyPoin
             ));
             continue;
         };
+        if e.abs().max(n.abs()) * opts.xy_unit_m > MAX_MAP_M {
+            out.skipped
+                .push((line, "a coordinate is out of range".into()));
+            continue;
+        }
         if out.rows.len() >= opts.max_points {
             out.skipped.push((line, "too many points".into()));
             continue;
@@ -390,6 +457,8 @@ enum TreeCol {
     Northing,
     Species,
     Dbh,
+    /// Circumference of the trunk: the diameter is this over pi.
+    Girth,
     Height,
     Spread,
     Condition,
@@ -432,9 +501,8 @@ fn tree_col(h: &str) -> Option<TreeCol> {
         "species" | "latin" | "botanical" | "latin name" | "taxon" | "common name" => {
             TreeCol::Species
         }
-        "dbh" | "trunk" | "trunk diameter" | "diameter" | "stem" | "stem diameter" | "girth" => {
-            TreeCol::Dbh
-        }
+        "dbh" | "trunk" | "trunk diameter" | "diameter" | "stem" | "stem diameter" => TreeCol::Dbh,
+        "girth" | "circumference" | "trunk girth" => TreeCol::Girth,
         "height" | "h" | "tree height" => TreeCol::Height,
         "spread" | "crown" | "canopy" | "crown spread" | "canopy spread" | "crown diameter" => {
             TreeCol::Spread
@@ -462,6 +530,14 @@ pub struct SurveyTree {
     pub action: TreeAction,
     pub note: String,
 }
+
+/// The largest map coordinate in meters. Rows beyond it are skipped, so one typo does not move the survey.
+pub const MAX_MAP_M: f64 = 1.0e8;
+
+/// The sizes of a tree whose survey row has none (mm).
+pub const DEFAULT_DBH: f64 = 300.0;
+pub const DEFAULT_HEIGHT: f64 = 8000.0;
+pub const DEFAULT_SPREAD: f64 = 5000.0;
 
 /// How to read a tree survey.
 #[derive(Clone, Debug)]
@@ -537,8 +613,9 @@ pub fn parse_trees(text: &str, opts: &TreeOptions) -> Result<Parsed<SurveyTree>,
             .and_then(|(_, u)| *u)
             .unwrap_or(default)
     };
-    let (dbh_u, h_u, s_u) = (
+    let (dbh_u, girth_u, h_u, s_u) = (
         unit_of(TreeCol::Dbh, opts.dbh_unit_m),
+        unit_of(TreeCol::Girth, opts.dbh_unit_m),
         unit_of(TreeCol::Height, opts.size_unit_m),
         unit_of(TreeCol::Spread, opts.size_unit_m),
     );
@@ -553,6 +630,11 @@ pub fn parse_trees(text: &str, opts: &TreeOptions) -> Result<Parsed<SurveyTree>,
                 .push((line, "easting or northing is not a number".into()));
             continue;
         };
+        if e.abs().max(n.abs()) * opts.xy_unit_m > MAX_MAP_M {
+            out.skipped
+                .push((line, "a coordinate is out of range".into()));
+            continue;
+        }
         if out.rows.len() >= opts.max_trees {
             out.skipped.push((line, "too many trees".into()));
             continue;
@@ -566,8 +648,9 @@ pub fn parse_trees(text: &str, opts: &TreeOptions) -> Result<Parsed<SurveyTree>,
                     .ok_or(()),
             }
         };
-        let (Ok(dbh), Ok(height), Ok(spread)) = (
+        let (Ok(dbh), Ok(girth), Ok(height), Ok(spread)) = (
             size(TreeCol::Dbh, dbh_u),
+            size(TreeCol::Girth, girth_u),
             size(TreeCol::Height, h_u),
             size(TreeCol::Spread, s_u),
         ) else {
@@ -575,6 +658,18 @@ pub fn parse_trees(text: &str, opts: &TreeOptions) -> Result<Parsed<SurveyTree>,
                 .push((line, "a size is not a positive number".into()));
             continue;
         };
+        // The girth is the circumference of the trunk. A missing size gets a default, so a
+        // survey with gaps still imports.
+        let pick = |v: f64, default: f64| if v > 0.0 { v } else { default };
+        let dbh = pick(
+            if dbh > 0.0 {
+                dbh
+            } else {
+                girth / std::f64::consts::PI
+            },
+            DEFAULT_DBH,
+        );
+        let (height, spread) = (pick(height, DEFAULT_HEIGHT), pick(spread, DEFAULT_SPREAD));
         let condition = match get(TreeCol::Condition)
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -866,5 +961,52 @@ mod tests {
                 prop_assert_eq!(r.z, *z);
             }
         }
+    }
+
+    #[test]
+    fn a_header_decides_the_column_order() {
+        let t = "Point,Easting,Northing,Z\n1,100,200,5\n";
+        let p = parse_points(t, &PointOptions::default()).unwrap();
+        assert_eq!(
+            (p.rows[0].easting, p.rows[0].northing, p.rows[0].z),
+            (100.0, 200.0, 5.0)
+        );
+        assert_eq!(p.rows[0].id, "1");
+        // A given order must agree with the header.
+        let given = PointOptions {
+            columns_given: true,
+            ..PointOptions::default()
+        };
+        let e = parse_points(t, &given).unwrap_err();
+        assert!(e.contains("header"), "{e}");
+        let agree = PointOptions {
+            columns: vec![
+                Column::Id,
+                Column::Easting,
+                Column::Northing,
+                Column::Elevation,
+            ],
+            columns_given: true,
+            ..PointOptions::default()
+        };
+        assert_eq!(parse_points(t, &agree).unwrap().rows.len(), 1);
+        // A header with unknown names does not change the order.
+        let p = parse_points("a,b,c,d,e\n1,2,3,4,X\n", &PointOptions::default()).unwrap();
+        assert_eq!(p.rows[0].code, "X");
+        assert_eq!(p.skipped.len(), 0);
+    }
+
+    #[test]
+    fn decimal_commas_with_semicolons_and_girth() {
+        assert_eq!(detect_delimiter("1;2,5;3,25"), Delimiter::Semicolon);
+        assert_eq!(detect_delimiter("1,2,3"), Delimiter::Comma);
+        let t = parse_trees("x,y,girth (cm)\n1,2,157.08\n", &TreeOptions::default()).unwrap();
+        assert!((t.rows[0].dbh - 500.0).abs() < 0.1);
+        // Missing sizes get defaults.
+        let t = parse_trees("x,y\n1,2\n", &TreeOptions::default()).unwrap();
+        assert_eq!(
+            (t.rows[0].dbh, t.rows[0].height, t.rows[0].spread),
+            (DEFAULT_DBH, DEFAULT_HEIGHT, DEFAULT_SPREAD)
+        );
     }
 }

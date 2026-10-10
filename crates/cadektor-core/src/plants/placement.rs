@@ -416,6 +416,48 @@ pub fn along_path(
         .collect())
 }
 
+/// The path moved `d` to the left (negative: right). Corners are mitered, and a closed path
+/// (first point equal to the last) stays closed. The miter is limited, as in wall offsets.
+fn offset_path(pts: &[DVec2], d: f64) -> Vec<DVec2> {
+    let n = pts.len();
+    let closed = n > 3 && pts[0].distance_squared(pts[n - 1]) < 1e-9;
+    let perp = |v: DVec2| DVec2::new(-v.y, v.x);
+    (0..n)
+        .map(|i| {
+            let prev = if i > 0 {
+                Some(pts[i - 1])
+            } else if closed {
+                Some(pts[n - 2])
+            } else {
+                None
+            };
+            let next = if i + 1 < n {
+                Some(pts[i + 1])
+            } else if closed {
+                Some(pts[1])
+            } else {
+                None
+            };
+            let d1 = prev.map(|q| (pts[i] - q).normalize_or_zero());
+            let d2 = next.map(|q| (q - pts[i]).normalize_or_zero());
+            let normal = match (d1, d2) {
+                (Some(a), Some(b)) => {
+                    let m = perp(a + b).normalize_or_zero();
+                    if m == DVec2::ZERO {
+                        perp(a)
+                    } else {
+                        m / m.dot(perp(a)).max(0.35)
+                    }
+                }
+                (Some(a), None) => perp(a),
+                (None, Some(b)) => perp(b),
+                (None, None) => DVec2::ZERO,
+            };
+            pts[i] + normal * d
+        })
+        .collect()
+}
+
 /// Rows of plants along a path. Row `k` lies `(k - (rows - 1) / 2) * row_spacing` to the left of
 /// the path (negative: right). With `stagger`, odd rows start half a spacing along the path.
 pub fn hedgerow(
@@ -465,17 +507,22 @@ pub fn hedgerow(
         } else {
             0.0
         };
+        // The row is the path moved sideways (corners mitered). Plants stand along the row, so
+        // the spacing holds on the row, also at corners.
+        let row = offset_path(&pts, offset);
+        let mut rcum = vec![0.0];
+        for w in row.windows(2) {
+            rcum.push(rcum.last().unwrap() + w[0].distance(w[1]));
+        }
+        let rlen = *rcum.last().unwrap();
         // A closed row keeps a full spacing between its last plant and its first.
-        let limit = if closed { len - spacing + shift } else { len } + 1e-6;
+        let limit = if closed { rlen - spacing + shift } else { rlen } + 1e-6;
         let mut d = shift;
-        while d <= limit && d < len + 1e-6 && out.len() <= MAX_POINTS {
-            if closed && d >= len - 1e-6 {
+        while d <= limit && d < rlen + 1e-6 && out.len() <= MAX_POINTS {
+            if closed && d >= rlen - 1e-6 {
                 break;
             }
-            let i = cum.partition_point(|c| *c < d).clamp(1, pts.len() - 1);
-            let dir = (pts[i] - pts[i - 1]).normalize_or_zero();
-            let normal = DVec2::new(-dir.y, dir.x);
-            out.push(point_at(&pts, &cum, d.min(len)) + normal * offset);
+            out.push(point_at(&row, &rcum, d.min(rlen)));
             d += spacing;
         }
     }
@@ -1630,5 +1677,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn hedgerow_rows_follow_corners_without_doubled_plants() {
+        let l = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(3000.0, 0.0),
+            DVec2::new(3000.0, 3000.0),
+        ];
+        let pts = hedgerow(&l, false, 1000.0, 3, Some(500.0), false).unwrap();
+        // The outer row (right of the path) is 500 mm away from the path everywhere, mitered at the corner.
+        for (i, a) in pts.iter().enumerate() {
+            for b in &pts[i + 1..] {
+                assert!(a.distance(*b) > 1.0, "doubled plant at {a:?}");
+            }
+        }
+        // Every plant is 0 or 500 mm from the path: the rows are the path moved sideways.
+        let dist = |p: DVec2| {
+            l.windows(2)
+                .map(|w| {
+                    let d = w[1] - w[0];
+                    let t = ((p - w[0]).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                    p.distance(w[0] + d * t)
+                })
+                .fold(f64::MAX, f64::min)
+        };
+        for p in &pts {
+            let d = dist(*p);
+            assert!(
+                d < 1.0 || (d - 500.0).abs() < 1.0,
+                "{p:?} is {d} from the path"
+            );
+        }
+        // Rows keep going around the corner: plants stand beyond it on both legs.
+        assert!(pts.iter().any(|p| p.x > 3400.0 && p.y > 400.0));
     }
 }

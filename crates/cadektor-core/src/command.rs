@@ -20,6 +20,7 @@ mod group_ops;
 mod plant_ops;
 mod present_ops;
 mod record_ops;
+mod retaining_ops;
 mod table_ops;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1080,6 +1081,7 @@ impl<'a> Tx<'a> {
             }
         }
         self.annot_after(cmd)?;
+        self.retaining_after(cmd)?;
         self.present_prune();
         Ok(())
     }
