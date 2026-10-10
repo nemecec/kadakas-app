@@ -18,8 +18,9 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 | `cadektor-io` | DXF, Shapefile and GeoJSON import and export, CRS conversion (native only) | core |
 | `cadektor-annot` | Data tags, legends and annotation output on top of the worksheet code | core, sheet |
 | `cadektor-ifc` | IFC4 export, STEP writer and parser (native only) | core, io, site |
+| `cadektor-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core |
 | `cadektor-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
-| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, annot, irrigation (native only for io and ifc) |
+| `cadektor-api` | JSON-RPC session and methods for agents | core, render, io, ifc, annot, irrigation (native only for io, ifc, print and x3d) |
 | `cadektor-cli` | `serve`, `mcp`, `render` | api |
 | `cadektor-app` | egui and wgpu desktop app | api, render, core |
 
@@ -43,7 +44,7 @@ This guide gives the rules for all work on Cadektor, by people and by AI agents.
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot --target wasm32-unknown-unknown
+cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot -p cadektor-x3d --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior -q
 ```
 

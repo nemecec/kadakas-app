@@ -1,0 +1,17 @@
+[package]
+name = "cadektor-x3d"
+version = "0.1.0"
+edition = "2024"
+description = "3D output: glTF, GLB and OBJ writers, and section and elevation drawings from the 3D model. Pure Rust, no file access."
+
+[dependencies]
+base64 = "0.22.1"
+cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
+glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+gltf = { version = "1", default-features = false, features = ["extras", "names", "utils"] }
+proptest = "1.11.0"

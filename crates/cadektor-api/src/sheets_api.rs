@@ -223,7 +223,7 @@ fn object_id(p: &Value) -> Result<(ObjectId, ()), RpcError> {
 }
 
 /// A layer from an ID or a name.
-fn layer_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
+pub(crate) fn layer_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
     let found = match v {
         Value::Number(n) => n.as_u64().and_then(|i| doc.layer(LayerId(i))).map(|l| l.id),
         Value::String(t) => t
@@ -241,7 +241,7 @@ fn layer_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
     found.ok_or_else(|| bad(format!("no layer {v}. Use a layer ID or name")))
 }
 
-fn sheet_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
+pub(crate) fn sheet_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
     let id = layer_ref(doc, v)?;
     match doc.layer(id) {
         Some(l) if l.kind == LayerKind::Sheet => Ok(id),
@@ -249,7 +249,7 @@ fn sheet_ref(doc: &Document, v: &Value) -> Result<LayerId, RpcError> {
     }
 }
 
-fn class_ref(doc: &Document, v: &Value) -> Result<ClassId, RpcError> {
+pub(crate) fn class_ref(doc: &Document, v: &Value) -> Result<ClassId, RpcError> {
     let found = match v {
         Value::Number(n) => n.as_u64().and_then(|i| doc.class(ClassId(i))).map(|c| c.id),
         Value::String(t) => t
@@ -395,7 +395,7 @@ fn project_set(s: &mut Session, p: &Value) -> Res {
 
 // ---------------------------------------------------------------- viewports
 
-fn viewport_json(doc: &Document, id: ObjectId) -> Res {
+pub(crate) fn viewport_json(doc: &Document, id: ObjectId) -> Res {
     let (o, vp) = find_viewport(doc, id)?;
     let mut v = serde_json::to_value(vp).unwrap();
     v["id"] = json!(o.id);
@@ -431,7 +431,7 @@ fn viewport_list(s: &Session, p: &Value) -> Res {
     Ok(json!({"viewports": rows}))
 }
 
-fn layer_list(doc: &Document, v: &Value) -> Result<Vec<LayerId>, RpcError> {
+pub(crate) fn layer_list(doc: &Document, v: &Value) -> Result<Vec<LayerId>, RpcError> {
     let arr = v
         .as_array()
         .ok_or_else(|| bad("layers must be a list of layer IDs or names"))?;

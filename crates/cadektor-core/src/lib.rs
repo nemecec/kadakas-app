@@ -23,6 +23,7 @@ pub mod plants;
 pub mod props;
 pub mod record;
 pub mod resource;
+pub mod section;
 pub mod sheets;
 pub mod site;
 pub mod svg;

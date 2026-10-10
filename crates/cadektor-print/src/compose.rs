@@ -176,7 +176,9 @@ pub fn viewport_prims(
     let clip = vp.clip_polygon();
     if clip.len() >= 3 {
         out.push(Prim::PushClip(clip.clone()));
-        if vp.is_plan() {
+        if let Some(sv) = &vp.section {
+            crate::section::section_prims(doc, vp, sv, tables, out);
+        } else if vp.is_plan() {
             plan_view(doc, vp, counts, tables, out);
         } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));

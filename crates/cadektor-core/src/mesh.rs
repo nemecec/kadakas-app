@@ -25,6 +25,7 @@ use indexmap::IndexMap;
 
 use crate::curve;
 use crate::model::{Color, Document, Layer, LayerKind, Object, ObjectId, Shape, arc_sweep};
+use crate::plants::form3d::{self, Detail};
 use crate::plants::link;
 use crate::plants::style::PlantForm;
 
@@ -480,6 +481,30 @@ const SPHERE_DETAIL: (usize, usize) = (12, 8);
 const SPHERE_COARSE: (usize, usize) = (8, 4);
 /// More plants than this get the coarse canopy.
 pub const COARSE_PLANT_COUNT: usize = 1500;
+/// More plants than this become billboards (two crossed quads each).
+pub const BILLBOARD_PLANT_COUNT: usize = 20_000;
+/// The key in `Object::data` that makes an open or closed polyline a hedge:
+/// `{"width": mm, "height": mm}`.
+pub const HEDGE_KEY: &str = "hedge";
+const HEDGE_DEFAULT: [u8; 4] = [48, 112, 52, 255];
+
+/// Width and height of a hedge path, in mm, from `data["hedge"]`. Bad numbers give the default 600 x 1500.
+pub fn hedge_size(obj: &Object) -> (f64, f64) {
+    let get = |k: &str, d: f64| {
+        obj.data
+            .get(HEDGE_KEY)
+            .and_then(|v| v.get(k))
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0e5)
+            .unwrap_or(d)
+    };
+    (get("width", 600.0), get("height", 1500.0))
+}
+
+/// Radius of the edge ring of a plant that is not one of the old forms.
+fn r_edge(spread: f64) -> f64 {
+    spread / 2.0
+}
 
 impl UnitSphere {
     /// A sphere of `segments` around and `rings` from pole to pole. `segments` must divide by 4 or be even.
@@ -538,6 +563,7 @@ struct Builder<'a> {
     origin: DVec3,
     scene: Scene,
     sphere: UnitSphere,
+    detail: Detail,
 }
 
 impl Builder<'_> {
@@ -569,6 +595,10 @@ impl Builder<'_> {
                 self.scene
                     .lines
                     .polyline(&pts, false, pen.unwrap_or([0, 0, 0, 255]), id);
+            }
+            Shape::Polyline { points, closed } if obj.data.contains_key(HEDGE_KEY) => {
+                let ring = curve::flatten(points, *closed, FLATTEN_TOLERANCE);
+                self.hedge(&ring, *closed, obj, fill, edge, z);
             }
             Shape::Polyline {
                 points,
@@ -655,6 +685,7 @@ impl Builder<'_> {
                     form: look.form,
                     color,
                     trunk_radius: None,
+                    seed: form3d::seed_for(id.0, species),
                 };
                 self.plant(&build, z, edge, id);
             }
@@ -673,6 +704,7 @@ impl Builder<'_> {
                     form: PlantForm::Tree,
                     color: fill.unwrap_or_else(|| species_color(species)),
                     trunk_radius: Some(dbh / 2.0),
+                    seed: form3d::seed_for(id.0, species),
                 };
                 self.plant(&build, z, edge, id);
             }
@@ -855,6 +887,47 @@ impl Builder<'_> {
         }
     }
 
+    /// Adds a form mesh with its foot at `base`.
+    fn append_form(&mut self, f: &form3d::FormMesh, base: Vec3, id: ObjectId) {
+        let mesh = &mut self.scene.mesh;
+        let first = mesh.positions.len() as u32;
+        for ((p, n), c) in f.positions.iter().zip(&f.normals).zip(&f.colors) {
+            mesh.vertex(base + *p, *n, *c);
+        }
+        for t in f.indices.chunks_exact(3) {
+            mesh.tri(first + t[0], first + t[1], first + t[2], id);
+        }
+    }
+
+    /// A hedge along a path: a block with a chamfered top.
+    fn hedge(
+        &mut self,
+        ring: &[DVec2],
+        closed: bool,
+        obj: &Object,
+        fill: Option<[u8; 4]>,
+        edge: [u8; 4],
+        z: f64,
+    ) {
+        let (width, height) = hedge_size(obj);
+        let o = self.origin;
+        let rel: Vec<DVec2> = ring.iter().map(|p| *p - o.truncate()).collect();
+        let mut mesh = form3d::FormMesh::default();
+        let color = fill.unwrap_or(HEDGE_DEFAULT);
+        form3d::hedge_along(
+            &rel,
+            closed,
+            width,
+            height,
+            color,
+            Vec3::new(0.0, 0.0, (z - o.z) as f32),
+            &mut mesh,
+        );
+        self.append_form(&mesh, Vec3::ZERO, obj.id);
+        let top: Vec<Vec3> = ring.iter().map(|p| v3(o, *p, z + height)).collect();
+        self.scene.lines.polyline(&top, closed, edge, obj.id);
+    }
+
     /// A plant: a trunk and a canopy whose outline depends on the form (see `PlantForm`).
     /// The canopy is the unit sphere, moved vertex by vertex into the form.
     fn plant(&mut self, p: &PlantBuild, z: f64, edge: [u8; 4], id: ObjectId) {
@@ -865,11 +938,41 @@ impl Builder<'_> {
             form,
             color,
             trunk_radius,
+            seed,
         } = *p;
         if !(spread > 0.0 && height > 0.0) {
             return;
         }
         let o = self.origin;
+        let old_form = matches!(
+            form,
+            PlantForm::Tree
+                | PlantForm::Columnar
+                | PlantForm::Conical
+                | PlantForm::Spreading
+                | PlantForm::ShrubMound
+        );
+        if !old_form || self.detail == Detail::Billboard {
+            let mesh = form3d::build(&form3d::Params {
+                form,
+                spread,
+                height,
+                color,
+                trunk_color: TRUNK,
+                trunk_radius,
+                seed,
+                detail: self.detail,
+            });
+            let base = v3(o, at, z);
+            self.append_form(&mesh, base, id);
+            // Edge: the canopy at its widest.
+            let ring: Vec<Vec3> = circle_points(DVec2::ZERO, r_edge(spread))
+                .into_iter()
+                .map(|q| base + Vec3::new(q.x as f32, q.y as f32, (height * 0.5) as f32))
+                .collect();
+            self.scene.lines.polyline(&ring, true, edge, id);
+            return;
+        }
         let r = spread / 2.0;
         // Where the canopy starts (as a fraction of the height), and where the trunk ends.
         let (bottom_frac, trunk_frac) = match form {
@@ -878,6 +981,8 @@ impl Builder<'_> {
             PlantForm::Conical => (0.08, 0.2),
             PlantForm::Spreading => (0.5, 0.6),
             PlantForm::ShrubMound => (0.0, 0.0),
+            // The other forms are built by `form3d` above.
+            _ => (0.0, 0.0),
         };
         let canopy_bottom = z + height * bottom_frac;
         let canopy_h = height * (1.0 - bottom_frac);
@@ -972,6 +1077,8 @@ struct PlantBuild {
     color: [u8; 4],
     /// Trunk radius, or `None` for a size that follows the spread.
     trunk_radius: Option<f64>,
+    /// Seed of the plant, for the forms that vary.
+    seed: u64,
 }
 
 /// A canopy color from the species name, so that species look different.
@@ -1028,16 +1135,33 @@ pub fn build_at(doc: &Document, origin: DVec3) -> Scene {
 /// Like `build_at`, with an extension that draws site models. Without one, a site model has no
 /// 3D geometry.
 pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> Scene {
-    // Many plants get a coarser canopy, to keep the scene small.
-    let plants = doc
+    build_with_detail(doc, origin, ext, None)
+}
+
+/// Like `build_with`, with the detail of the plants given. `None` picks it from the number of
+/// plants: coarse above `COARSE_PLANT_COUNT`, and billboards above `BILLBOARD_PLANT_COUNT`.
+pub fn build_with_detail(
+    doc: &Document,
+    origin: DVec3,
+    ext: Option<SceneExt<'_>>,
+    plants: Option<Detail>,
+) -> Scene {
+    let count = doc
         .objects
         .values()
         .filter(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
         .count();
-    let detail = if plants > COARSE_PLANT_COUNT {
-        SPHERE_COARSE
+    let level = plants.unwrap_or(if count > BILLBOARD_PLANT_COUNT {
+        Detail::Billboard
+    } else if count > COARSE_PLANT_COUNT {
+        Detail::Coarse
     } else {
+        Detail::Fine
+    });
+    let detail = if level == Detail::Fine {
         SPHERE_DETAIL
+    } else {
+        SPHERE_COARSE
     };
     let mut b = Builder {
         ext,
@@ -1048,6 +1172,7 @@ pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> S
             ..Scene::default()
         },
         sphere: UnitSphere::new(detail),
+        detail: level,
     };
     b.scene.ranges.reserve(doc.objects.len());
     for (obj, layer) in visible_objects(doc) {
@@ -2014,5 +2139,183 @@ mod tests {
         })
         .unwrap();
         assert!(build(ed.doc()).mesh.triangle_count() == 0);
+    }
+
+    fn triangles_of(scene: &Scene, id: ObjectId) -> usize {
+        scene.mesh.tri_object.iter().filter(|o| **o == id).count()
+    }
+
+    #[test]
+    fn a_hedge_path_is_an_extruded_block() {
+        let mut ed = Editor::default();
+        let id = add(
+            &mut ed,
+            Shape::Polyline {
+                points: curve::corners(&[
+                    DVec2::new(0.0, 0.0),
+                    DVec2::new(5000.0, 0.0),
+                    DVec2::new(5000.0, 3000.0),
+                ]),
+                closed: false,
+            },
+        );
+        ed.execute(&Command::SetData {
+            id,
+            set: [(
+                HEDGE_KEY.to_string(),
+                serde_json::json!({"width": 800, "height": 1800}),
+            )]
+            .into(),
+            remove: vec![],
+        })
+        .unwrap();
+        let scene = build(ed.doc());
+        let (lo, hi) = world_bounds(&scene, id);
+        assert!(
+            lo.z.abs() < 1e-3 && (hi.z - 1800.0).abs() < 1e-3,
+            "{lo} {hi}"
+        );
+        assert!(
+            lo.x.abs() < 1.0 && hi.x > 5000.0 + 399.0 && hi.y > 2999.0,
+            "{lo} {hi}"
+        );
+        assert!(scene.mesh.triangle_count() > 10);
+        assert!(scene.lines.segment_count() >= 2, "the top outline");
+        // Bad numbers fall back to the default size.
+        assert_eq!(hedge_size(ed.doc().object(id).unwrap()), (800.0, 1800.0));
+        ed.execute(&Command::SetData {
+            id,
+            set: [(
+                HEDGE_KEY.to_string(),
+                serde_json::json!({"width": -1, "height": "x"}),
+            )]
+            .into(),
+            remove: vec![],
+        })
+        .unwrap();
+        assert_eq!(hedge_size(ed.doc().object(id).unwrap()), (600.0, 1500.0));
+        // A closed path makes a ring of hedge.
+        ed.execute(&Command::ModifyObject {
+            id,
+            shape: Some(Shape::Polyline {
+                points: curve::corners(&rect_pts(4000.0, 3000.0)),
+                closed: true,
+            }),
+            layer: None,
+            class: None,
+            attrs: None,
+        })
+        .unwrap();
+        assert_eq!(triangles_of(&build(ed.doc()), id), 4 * 6 * 2);
+    }
+
+    #[test]
+    fn plant_detail_levels_keep_their_budgets() {
+        use crate::plants::form3d::{
+            Detail, MAX_BILLBOARD_TRIANGLES, MAX_COARSE_TRIANGLES, MAX_FINE_TRIANGLES,
+        };
+        for form in PlantForm::ALL {
+            let (ed, id) = styled_plant(form, 3000.0, 6000.0);
+            let doc = ed.doc();
+            for (detail, max) in [
+                (Detail::Fine, MAX_FINE_TRIANGLES),
+                (Detail::Coarse, MAX_COARSE_TRIANGLES),
+                (Detail::Billboard, MAX_BILLBOARD_TRIANGLES),
+            ] {
+                let scene = build_with_detail(doc, scene_origin(doc), None, Some(detail));
+                let n = triangles_of(&scene, id);
+                assert!(n > 0 && n <= max, "{form:?} {detail:?}: {n} triangles");
+                let (lo, hi) = world_bounds(&scene, id);
+                assert!(
+                    lo.z.abs() < 1.0 && (hi.z - 6000.0).abs() < 1.0,
+                    "{form:?} {detail:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn many_plants_turn_into_billboards_and_the_scene_is_deterministic() {
+        let mut ed = Editor::default();
+        let positions: Vec<DVec2> = (0..40)
+            .map(|i| DVec2::new(i as f64 * 4000.0, 0.0))
+            .collect();
+        let cmds: Vec<Command> = positions
+            .iter()
+            .map(|p| Command::AddObject {
+                shape: Shape::Plant {
+                    at: *p,
+                    spread: 3000.0,
+                    height: 6000.0,
+                    species: "Acer".into(),
+                },
+                layer: None,
+                class: None,
+                attrs: crate::model::Attributes::default(),
+            })
+            .collect();
+        ed.execute(&Command::Batch { commands: cmds }).unwrap();
+        let doc = ed.doc();
+        let full = build(doc);
+        let again = build(doc);
+        assert_eq!(full.mesh.positions, again.mesh.positions);
+        let bill = build_with_detail(doc, scene_origin(doc), None, Some(Detail::Billboard));
+        assert!(bill.mesh.triangle_count() * 4 < full.mesh.triangle_count());
+        // The count rule: below the limits nothing changes.
+        assert_eq!(
+            full.mesh.triangle_count(),
+            40 * triangles_of(&full, *doc.objects.keys().next().unwrap())
+        );
+    }
+
+    #[test]
+    fn new_forms_differ_between_plants_but_not_between_builds() {
+        use crate::plants::style::PlantStyle;
+        use crate::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::default();
+        let style = PlantStyle {
+            form: PlantForm::MultiStem,
+            spread: 3000.0,
+            height: 6000.0,
+            ..PlantStyle::default()
+        };
+        let sid = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "S".into(),
+                body: ResourceBody::plant_style(style),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let out = ed
+            .execute(&Command::AddPlants {
+                style: Some(sid),
+                overrides: Default::default(),
+                positions: vec![DVec2::new(0.0, 0.0), DVec2::new(10_000.0, 0.0)],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
+        let (a, b) = (ObjectId(out.created[0]), ObjectId(out.created[1]));
+        let scene = build(ed.doc());
+        let shape_of = |id: ObjectId| -> Vec<Vec3> {
+            let (lo, _) = scene.object_bounds(id).unwrap();
+            (0..scene.mesh.triangle_count())
+                .filter(|t| scene.mesh.tri_object[*t] == id)
+                .flat_map(|t| scene.mesh.triangle(t))
+                .map(|p| p - lo)
+                .map(|p| {
+                    Vec3::new(
+                        (p.x * 10.0).round(),
+                        (p.y * 10.0).round(),
+                        (p.z * 10.0).round(),
+                    )
+                })
+                .collect()
+        };
+        assert_ne!(shape_of(a), shape_of(b), "the seed comes from the object");
+        let again = build(ed.doc());
+        assert_eq!(scene.mesh.positions, again.mesh.positions);
     }
 }

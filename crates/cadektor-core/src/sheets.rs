@@ -458,6 +458,10 @@ pub struct Viewport {
     pub show_frame: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
+    /// A section or elevation through the 3D model. The viewport then uses its `center` as a point
+    /// (distance along the section line, height) in mm, and shows no plan or 3D image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<crate::section::SectionView>,
 }
 
 pub const PLAN_VIEW: &str = "plan";
@@ -501,6 +505,7 @@ impl Viewport {
             class_overrides: BTreeMap::new(),
             show_frame: false,
             annotations: Vec::new(),
+            section: None,
         }
     }
 
@@ -550,6 +555,9 @@ impl Viewport {
                 return Some("numbers must be finite".into());
             }
             _ => {}
+        }
+        if self.section.as_ref().is_some_and(|s| !s.is_finite()) {
+            return Some("section line weights must be zero or more".into());
         }
         if self.class_overrides.values().any(|c| !c.is_finite()) {
             return Some("line weights must be zero or more".into());

@@ -29,10 +29,14 @@ mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
+mod x3d_api;
+#[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;
 mod site;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod x3d_tests;
 
 use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardView, ViewSettings};
 
@@ -62,6 +66,9 @@ pub struct Session {
     /// Display lists of sheets, by document revision (see `sheet.render`).
     #[cfg(not(target_arch = "wasm32"))]
     sheet_cache: cadektor_print::SheetCache,
+    /// Section drawings by document revision (see x3d_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    section_cache: cadektor_x3d::section::SectionCache,
     /// The saved view that `saved_view.restore` applied last, until the host takes it.
     applied_view: Option<SavedView>,
 }
@@ -263,6 +270,17 @@ pub const METHODS: &[(&str, &str)] = &[
     grading_api::SECTION_SET,
     grading_api::SECTION_PROFILE,
     grading_api::SECTION_PLACE,
+    // Section and elevation viewports (see x3d_api.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::LINE_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::LINE_SET,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::CREATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::UPDATE,
+    #[cfg(not(target_arch = "wasm32"))]
+    x3d_api::GET,
     // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
     symbols_api::GROUP_CREATE,
     symbols_api::GROUP_UNGROUP,
@@ -427,6 +445,8 @@ impl Session {
             worksheet_cache: cadektor_sheet::SheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             sheet_cache: cadektor_print::SheetCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            section_cache: Default::default(),
             applied_view: None,
         }
     }
@@ -520,6 +540,10 @@ impl Session {
         }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if x3d_api::knows(method) {
+            return self.handle_x3d(method, p);
         }
         let doc = self.editor.doc();
         Ok(match method {

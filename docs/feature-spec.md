@@ -207,7 +207,7 @@ Non-goals
 | PLT-16 | Plant images, maintenance and irrigation fields in plant styles. | P1 | planned |
 | PLT-17 | Plant tags with three levels of fields and an ID bubble. | P1 | planned |
 | PLT-18 | Plant style spreadsheet view for batch editing. | P1 | planned |
-| PLT-19 | 3D plants from symbols and billboards. | P2 | planned |
+| PLT-19 | 3D plants from symbols and billboards. | P2 | partial: five more parametric forms (weeping, palm, columnar conifer, multi-stem, hedge), a level of detail with billboards (see X3D-07 to X3D-09). Plants from 3D symbols are missing. |
 | PLT-20 | Copy plant data from partner nursery sites. | P2 | planned |
 
 ### 4.7 Landscape areas
@@ -319,7 +319,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | SHT-05 | Annotation space in a viewport (paper units, relative to the frame): line, text, dimension, any 2D shape. `viewport.annotate`. Annotation objects can sit in the space too (`AnnotationItem::Shape`, see ANN-10). | P1 | done |
 | SHT-06 | PDF export of sheets (`pdf-writer`): vector lines with weights, fills, arcs as curves, Helvetica text, 3D viewports as images. Also SVG and PNG per sheet. File > Export PDF, `export.file` with format `pdf`. | P1 | done |
 | SHT-07 | Batch print / publish. | P2 | planned |
-| SHT-08 | Section and elevation viewports. | P2 | planned |
+| SHT-08 | Section and elevation viewports. | P2 | done: see X3D-10 to X3D-16. |
 | SHT-09 | Design layer viewports. | P2 | planned |
 | SHT-10 | Title block border: parametric object with border, grid reference and a title block with fields from project and sheet data. Standard layout or JSON layout. `title_block.*`, `project.*`. | P1 | done |
 | SHT-11 | North arrow and scale bar: see ANN-08 and ANN-09. | P1 | done |
@@ -337,7 +337,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | 3D-06 | Textures and materials. | P2 | planned |
 | 3D-07 | Lights, sun position by georeference and date. | P2 | planned |
 | 3D-08 | Raster render styles. | P2 | planned |
-| 3D-09 | Export OBJ and STL. | P2 | planned |
+| 3D-09 | Export OBJ and STL. | P2 | partial: OBJ with MTL, glTF and GLB are done (X3D-01 to X3D-06). STL is missing. |
 
 ### 4.15 Architecture (P1/P2)
 
@@ -350,7 +350,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | ARC-05 | Space object with area. | P2 | planned |
 | ARC-06 | Stairs. | P2 | planned |
 | ARC-07 | Columns and beams. | P2 | planned |
-| ARC-08 | Section viewports from the model. | P2 | planned |
+| ARC-08 | Section viewports from the model. | P2 | done (X3D-10 to X3D-16: cuts through any 3D object) |
 | ARC-09 | Massing model. | P2 | planned |
 
 ### 4.16 Interop
@@ -368,7 +368,7 @@ Crate `cadektor-irrigation` (pure, wasm-compatible) holds the hydraulic model. T
 | IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | planned |
 | IOP-10 | DWG import and export. | P2 | planned |
-| IOP-11 | OBJ, STL, STEP. | P2 | planned |
+| IOP-11 | OBJ, STL, STEP. | P2 | partial: OBJ done (X3D-03). STL and STEP are missing. FBX and 3DS are out of scope. |
 | IOP-12 | Point cloud import. | P2 | planned |
 | IOP-13 | Native `.vwx`. | Deferred | planned |
 | IOP-14 | Import report that lists dropped or approximated items. | P1 | done |
@@ -491,3 +491,29 @@ Annotation objects are `Shape::Annotation` (module `cadektor_core::annot`, crate
 | ANN-11 | Output: canvas, SVG, sheet PDF/SVG/PNG, DXF (exploded into lines and text; native DIMENSION, MTEXT and LEADER entities are missing). | P1 | partial |
 | ANN-12 | App tools: Dimension (modes), Callout, Data Tag, North Arrow, Scale Bar, Revision Cloud, Graphic Legend command, Object Info fields. No editor windows for the styles (use the API). | P1 | partial |
 | ANN-13 | API: `*_style.*`, `notes_db.*`, `dimension.add`, `callout.add`, `data_tag.*`, `legend.add`, `north_arrow.add`, `scale_bar.add`, `revision_cloud.add`, `annotation.*`, `revision.list`. | P1 | done |
+
+### 4.20 3D output and section drawings
+
+Crate `cadektor-x3d` (pure Rust, no file access, builds for wasm). It writes glTF, GLB and OBJ from the 3D scene of the document, and cuts the scene for section and elevation viewports. FBX and 3DS are out of scope.
+
+| ID | Feature | Pri | Status |
+|---|---|---|---|
+| X3D-01 | glTF 2.0 (`.gltf` with an embedded buffer) and GLB. `export.file` with format `gltf` or `glb`. One node for each object with a name, a mesh, a base color material and `extras` {id, kind, name, layer, class, data}. Lines become line primitives. The Khronos validator reports no errors or warnings; pygltflib, trimesh and the `gltf` crate read the files. | P1 | done |
+| X3D-02 | Axes and units: Y up and metres (the glTF convention) by default. Options `y_up: false` and `units: mm` keep the model axes and unit. Positions stay local (near the scene origin). The extension `CADEKTOR_georeference` holds the CRS, the map position of the model origin and the model position of the local origin. | P1 | done |
+| X3D-03 | OBJ with MTL, with the same options (grouping, axes, unit, objects). The georeference is a comment in the header. | P2 | done |
+| X3D-04 | Grouping: a node for each object, or for each layer or class with the meshes joined (`grouping`). A list of object IDs limits the export (`objects`). | P1 | done |
+| X3D-05 | Instancing: objects with the same shape (plants, symbols) share one mesh and have their own nodes (glTF). Shapes that differ by less than `instance_tolerance` (1 mm) count as equal. The output is the same every time. | P1 | done |
+| X3D-06 | Materials hook: the writers ask a `MaterialSource` for each group of triangles. The default gives the base color of the scene. A source with PBR values and a base color texture plugs in without a change to the writers (glTF PBR metallic roughness, images and textures, texture coordinates by box projection, MTL `map_Kd`). The material resources of the document are not connected yet. | P1 | partial |
+| X3D-07 | More plant forms: weeping, palm, columnar conifer, multi-stem and hedge (`PlantForm`). A seed from the object ID and the species makes each plant a little different, and the same every time. Every form fits its spread and height. | P1 | done |
+| X3D-08 | Hedge along a path: an open or closed polyline with `data.hedge` {width, height} becomes a block with a chamfered top, mitered at the corners. | P1 | done |
+| X3D-09 | Level of detail of plants: fine, coarse and billboard (two crossed quads with the outline of the plant), with triangle budgets (400, 200 and 40). The scene builder picks the level from the number of plants (`build_with_detail` sets it), and `lod_for` picks it from the distance for a renderer. The GPU renderer does not use it yet. | P1 | partial |
+| X3D-10 | Section line: a line object with `data.section_line` {name, look, mode, depth, beyond}. `section_viewport.line_add`, `section_viewport.line_set`. | P1 | done |
+| X3D-11 | Section viewport on a sheet: the plane under the line cuts all visible 3D objects (terrain, walls, slabs, massing, trunks). Cut faces of solids are filled with the fill and the hatch of the class of the object. Surfaces (terrain) give a profile line. Plants show as outlines. The cut is limited to the length of the line. `section_viewport.create|update|get`. | P1 | done |
+| X3D-12 | Objects beyond the cut are thin lines: silhouettes, creases and borders of the meshes (plants: silhouettes only), with hidden lines removed by depth tests against all triangles and the cut faces. This is a CPU hidden-line pass in `cadektor-x3d` (the render branch adds a hidden-line renderer; this can use it later). | P1 | done |
+| X3D-13 | Elevation viewport: a section line in mode `elevation` cuts nothing and shows the lines of everything in front of the far clip (`depth`). | P1 | done |
+| X3D-14 | Line weights of the cut and of the lines beyond are settings of the viewport (`cut_weight`, `beyond_weight`). | P2 | done |
+| X3D-15 | Live update: sheets are cached by document revision (`SheetCache`), and section drawings by revision and viewport (`SectionCache`). A change of the model, the line or the class reaches the viewport. | P1 | done |
+| X3D-16 | Output: the viewport prints through `cadektor-print` (sheet render, SVG, PNG, PDF) as vector lines and fills. The terrain profile equals `site.elevation` and the site section of `section.profile`. | P1 | done |
+| X3D-17 | Elevation benchmarks (level marks) and automatic labels on section and elevation viewports. Use annotations in the viewport for now. | P2 | planned |
+| X3D-18 | Section and elevation of 2D symbols and of objects that are only 2D (no 3D geometry). | P2 | planned |
+
