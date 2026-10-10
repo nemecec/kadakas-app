@@ -22,6 +22,7 @@ mod gis_ui;
 mod gpu3d;
 mod grading_ui;
 mod hit;
+mod icons;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;
 mod irrigation_ui;
