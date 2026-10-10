@@ -71,6 +71,9 @@ pub struct KadakasApp {
     shots: Vec<screenshot::Pending>,
     shot_key: u64,
     status: String,
+    /// The workspace profile from `--profile NAME` or `KADAKAS_PROFILE` (PLAT-06). Stored only: it changes nothing yet.
+    #[allow(dead_code)]
+    profile: String,
     path: Option<std::path::PathBuf>,
     /// The window title must be set in the next frame.
     title_dirty: bool,
@@ -136,6 +139,8 @@ impl KadakasApp {
         let mut app = Self::blank();
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         let args: Vec<String> = std::env::args().collect();
+        app.profile =
+            crate::agent::parse_profile(&args, std::env::var("KADAKAS_PROFILE").ok().as_deref());
         // Agents start a DWG converter only with --allow-converters (default: off). The file dialogs are not limited.
         app.session.paths = kadakas_api::PathPolicy::restricted(allow_dirs)
             .with_converters(args.iter().any(|a| a == "--allow-converters"));
@@ -217,6 +222,7 @@ impl KadakasApp {
 
     fn blank() -> Self {
         KadakasApp {
+            profile: String::new(),
             session: Session::default(),
             view: View::default(),
             needs_fit: true,

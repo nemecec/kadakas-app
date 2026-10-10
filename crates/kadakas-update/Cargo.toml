@@ -1,0 +1,26 @@
+[package]
+name = "kadakas-update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Update logic for the Kadakas launcher: signed manifests (ed25519), checked downloads, versioned installs with rollback. Native only. It holds no private keys."
+
+[features]
+# Signing code for the CI tool `sign-manifest`. The launcher does not enable it.
+sign = []
+
+[dependencies]
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+flate2 = "1.1.10"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+tar = { version = "0.4.44", default-features = false }
+thiserror = "2.0.21"
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+
+[dev-dependencies]
+proptest = "1.11.0"

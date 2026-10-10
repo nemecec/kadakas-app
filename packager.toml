@@ -1,12 +1,14 @@
 # Installer settings for cargo-packager. See docs/release.md.
 #
 #   cargo install cargo-packager --locked
-#   cargo build --release -p kadakas-app -p kadakas-cli
+#   cargo build --release -p kadakas-app -p kadakas-cli -p kadakas-launcher
 #   cargo packager --release --formats app,dmg          # macOS
 #   cargo packager --release --formats nsis,wix         # Windows
 #   cargo packager --release --formats appimage,deb     # Linux
 #
-# Nothing is signed. Signing is a TODO (docs/release.md).
+# The installers are not signed. Signing is a TODO (docs/release.md). The launcher's update
+# archives are different: the launcher checks them with an ed25519-signed manifest
+# (.github/workflows/update-manifest.yml, docs/release.md).
 
 # The package name. Set here so cargo-packager need not look for a Cargo.toml.
 name = "kadakas"
@@ -26,9 +28,13 @@ binaries-dir = "target/release"
 
 # The app is the main binary. The `kadakas` command line tool (the MCP server and the renderer)
 # is installed next to it, so agents can find it at a fixed place on every system.
+# The launcher (PLAT-06) is installed next to them too. It finds the app in its own folder, then
+# keeps newer versions in the user's state folder. It is not the main binary: shortcuts and
+# the .kad file type still start the app. Making the launcher the entry point is a later choice.
 binaries = [
   { path = "kadakas-app", main = true },
   { path = "kadakas" },
+  { path = "kadakas-launcher" },
 ]
 
 # The license texts of Kadakas and of all libraries in it. Every installer ships these files
