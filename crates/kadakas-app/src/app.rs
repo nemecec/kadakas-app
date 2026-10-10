@@ -1028,7 +1028,7 @@ impl KadakasApp {
         self.send(Input::Press { p, shift: false });
         self.entry.clear_text();
         if was_anchored && !self.machine.is_busy() {
-            self.entry.release(ctx);
+            databar::release(&mut self.entry, ctx);
         } else {
             self.entry.want_focus = true;
         }

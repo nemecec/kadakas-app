@@ -10,6 +10,7 @@
 
 pub mod annot_pick;
 pub mod area;
+pub mod databar;
 pub mod grading;
 pub mod hit;
 pub mod keymap;
