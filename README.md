@@ -9,6 +9,7 @@ serializable, undoable command. The desktop app, scripts and AI agents all send 
 - `crates/kadakas-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. Reads and writes DWG through a converter that you install (`docs/dwg.md`). The core never parses files.
 - `crates/kadakas-ifc`: IFC4 export and IFC2x3, IFC4 and IFC4x3 import (a streaming STEP reader, geometry, mapping).
 - `crates/kadakas-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.
+- `crates/kadakas-plugin-abi` and `crates/kadakas-plugin`: sandboxed WebAssembly plug-ins. The ABI for plug-in authors, and the host with limits and trust (`docs/plugins.md`). `plugins/raised-planter` is the example.
 - `python/kadakas`: the Python package for scripts and automation (`import kadakas`).
 - `crates/kadakas-cli`: the `kadakas` command for scripts and agents (JSON-RPC over stdio, MCP server, SVG render).
 - `crates/kadakas-app`: the desktop app (egui). It can also serve the API over TCP to agents.
@@ -188,7 +189,7 @@ with kadakas.open() as doc:                 # or kadakas.connect() for the runni
     doc.render_svg("plan.svg")
 ```
 
-See `docs/scripting.md`.
+See `docs/scripting.md`. For plug-in objects that run in a sandbox, in the same way on every system, see `docs/plugins.md`.
 
 ## Keyboard shortcuts
 
