@@ -452,16 +452,6 @@ pub fn offset_through(shape: &Shape, through: DVec2) -> Result<(f64, Side), Stri
     }
 }
 
-/// The corners of a polygon after an offset, for tests: the polygon area function used by callers.
-pub fn polygon_area(points: &[DVec2]) -> f64 {
-    let n = points.len();
-    (0..n)
-        .map(|i| points[i].perp_dot(points[(i + 1) % n]))
-        .sum::<f64>()
-        .abs()
-        / 2.0
-}
-
 /// Flattened corners of a closed shape (used to measure the area of offsets).
 pub fn outline_points(shape: &Shape) -> Option<Vec<DVec2>> {
     match shape {
@@ -483,6 +473,7 @@ pub fn outline_points(shape: &Shape) -> Option<Vec<DVec2>> {
 mod tests {
     use super::*;
     use crate::curve::{Vertex, VertexKind, corners};
+    use crate::geom::polygon_area;
 
     fn v(x: f64, y: f64) -> DVec2 {
         DVec2::new(x, y)

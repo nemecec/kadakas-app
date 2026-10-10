@@ -3,7 +3,7 @@
 //! The result is a list of output lines (header, detail, subtotal and total rows). `compute`
 //! places them in the grid.
 
-use cadektor_core::hardscape::{NoTerrain, TerrainSource};
+use cadektor_core::ground::{GroundSource, NoTerrain};
 use cadektor_core::landscape::plant_list::{PlantListRow, plant_list};
 use cadektor_core::model::{Document, Object};
 use cadektor_core::props::{self, Prop};
@@ -43,7 +43,7 @@ pub struct ObjEnv<'a> {
     pub doc: &'a Document,
     pub obj: &'a Object,
     /// The ground, for draped hardscapes and landscape areas.
-    pub ground: &'a dyn TerrainSource,
+    pub ground: &'a dyn GroundSource,
 }
 
 /// Environment of one row of the plant list.
@@ -179,7 +179,7 @@ fn select(
     doc: &Document,
     db: &DatabaseDef,
     label: &str,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
     out: &mut DbOutput,
 ) -> Vec<Vec<Value>> {
     let criteria: Option<Expr> = if db.criteria.trim().is_empty() {
@@ -281,7 +281,7 @@ pub fn query_objects(
     doc: &Document,
     criteria: &str,
     columns: &[String],
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
 ) -> Result<QueryResult, String> {
     let crit: Option<Expr> = if criteria.trim().is_empty() {
         None
@@ -321,7 +321,7 @@ pub fn run_on(
     doc: &Document,
     db: &DatabaseDef,
     index: usize,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
 ) -> DbOutput {
     let label = if db.name.trim().is_empty() {
         format!("database {}", index + 1)

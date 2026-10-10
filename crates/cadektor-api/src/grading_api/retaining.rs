@@ -115,7 +115,8 @@ impl Session {
         level: f64,
         boundary: &[Vertex],
     ) -> (&'static str, f64) {
-        use cadektor_site::grading::{self, Follow, GroundSource};
+        use cadektor_core::ground::GroundSource;
+        use cadektor_site::grading::{self, Follow};
         let doc = self.editor.doc();
         let layer = layer.unwrap_or(doc.active_layer);
         let Some(site) = grading::host(doc, &self.site_cache, self.editor.revision(), layer, None)
@@ -125,7 +126,7 @@ impl Session {
         let ground = grading::SiteGround::new(&site);
         let (mut above, mut below, mut sum, mut n) = (0, 0, 0.0, 0);
         for p in cadektor_core::curve::flatten(boundary, true, 100.0) {
-            if let Some(z) = ground.exact(p, Follow::Existing) {
+            if let Some(z) = ground.exact(None, p, Follow::Existing) {
                 sum += z;
                 n += 1;
                 if z > level + 1.0 {

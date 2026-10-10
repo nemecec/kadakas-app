@@ -3,6 +3,7 @@
 //! This crate has no UI dependencies and compiles to native and WebAssembly.
 
 pub mod annot;
+pub mod cache;
 pub mod command;
 pub mod csv;
 pub mod curve;
@@ -11,6 +12,7 @@ pub mod edit2d;
 pub mod geom;
 pub mod georef;
 pub mod graphics;
+pub mod ground;
 pub mod group;
 pub mod guid;
 pub mod hardscape;

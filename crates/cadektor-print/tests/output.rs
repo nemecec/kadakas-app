@@ -2,7 +2,7 @@
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::curve::corners;
-use cadektor_core::hardscape::NoTerrain;
+use cadektor_core::ground::NoTerrain;
 use cadektor_core::model::*;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::sheets::*;
@@ -10,7 +10,7 @@ use cadektor_print::compose::{MAX_RASTER_PIXELS, compose_page_limited};
 use cadektor_print::display::*;
 use cadektor_print::png as sheet_png;
 use cadektor_print::{
-    PrintError, SheetCache, compose_page, export_pdf, select_sheets, svg, write_file,
+    PageCache, PrintError, compose_page, export_pdf, select_sheets, svg, write_file,
 };
 use glam::{DVec2, DVec3};
 use lopdf::Object as PdfObject;
@@ -760,7 +760,7 @@ fn long_title_block_text_shrinks_to_fit() {
 #[test]
 fn pages_are_built_once_per_revision() {
     let (mut ed, sheet, _) = project();
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     let a = cache.page(ed.doc(), ed.revision(), sheet).unwrap();
     let b = cache.page(ed.doc(), ed.revision(), sheet).unwrap();
     assert_eq!(cache.builds, 1);
@@ -823,7 +823,7 @@ fn errors_name_the_problem() {
 // ---------------------------------------------------------------- PDF
 
 fn pdf_of(ed: &Editor, sheets: &[LayerId]) -> Vec<u8> {
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     export_pdf(ed.doc(), ed.revision(), &mut cache, sheets).unwrap()
 }
 
@@ -1682,9 +1682,9 @@ fn raster_viewports_keep_the_frame_proportions_and_the_budget() {
         .sum();
     assert!(total <= budget, "{total}");
     assert!(total > budget / 2, "the budget is used: {total}");
-    assert_eq!(SheetCache::default().raster_pixels(), MAX_RASTER_PIXELS);
+    assert_eq!(PageCache::default().raster_pixels(), MAX_RASTER_PIXELS);
     // The export refuses a set of sheets with more image pixels than the limit.
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     cache.raster_limit = Some(2_000_000);
     let ids: Vec<LayerId> = (0..3)
         .map(|k| {
@@ -1737,7 +1737,7 @@ fn the_cache_keeps_a_few_pages_and_forgets_the_oldest() {
             )
         })
         .collect();
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     let rev = ed.revision();
     for id in &ids {
         cache.page(ed.doc(), rev, *id).unwrap();

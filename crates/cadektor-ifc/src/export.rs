@@ -16,7 +16,8 @@ pub use schema::Schema;
 
 use cadektor_core::curve;
 use cadektor_core::datamap::{self, DataMap, IfcType, IfcValue, Mapped};
-use cadektor_core::hardscape::{self, TerrainSource, surface};
+use cadektor_core::ground::GroundSource;
+use cadektor_core::hardscape::{self, surface};
 use cadektor_core::landscape;
 use cadektor_core::model::{
     Class, ClassId, Document, LayerId, LayerKind, NONE_CLASS, Object, Shape, arc_sweep,

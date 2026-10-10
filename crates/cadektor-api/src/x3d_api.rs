@@ -543,7 +543,11 @@ impl Session {
             .faces
             .iter()
             .map(|f| {
-                let area: f64 = f.rings.iter().map(|r| ring_area(r)).sum();
+                let area: f64 = f
+                    .rings
+                    .iter()
+                    .map(|r| cadektor_core::geom::signed_area(r))
+                    .sum();
                 let rings: Vec<Value> = f.rings.iter().map(|r| pts(r)).collect();
                 json!({"object": f.object, "area_m2": area / 1.0e6, "rings": rings})
             })
@@ -703,11 +707,6 @@ impl Session {
             "report": stats,
         }))
     }
-}
-
-fn ring_area(r: &[DVec2]) -> f64 {
-    let n = r.len();
-    (0..n).map(|i| r[i].perp_dot(r[(i + 1) % n])).sum::<f64>() / 2.0
 }
 
 /// Centers the drawing in the frame and, with `scale`, picks the largest standard scale that fits.

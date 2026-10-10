@@ -209,7 +209,7 @@ pub fn solve_path(
     }
     let (mid, tangent) = point_along(path, length / 2.0);
     let (za, zb) = match (d.snap, ground) {
-        (Some(f), Some(g)) => match (g.exact(a, f), g.exact(b, f)) {
+        (Some(f), Some(g)) => match (g.exact(None, a, f), g.exact(None, b, f)) {
             (Some(za), Some(zb)) => (za, zb),
             _ => {
                 return Err(

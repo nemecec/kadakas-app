@@ -1,16 +1,17 @@
 //! The site model as the ground under hardscapes and landscape areas.
 //!
 //! Core knows hardscapes and landscape areas but not terrain. It asks for the ground through
-//! `TerrainSource`, and this module answers with the site models on the layer of the object.
+//! `GroundSource`, and this module answers with the site models on the layer of the object.
 //! A hardscape can also act as a pad on the site model (see `pad_of`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use glam::{DVec2, DVec3};
 
-use cadektor_core::hardscape::{self, TerrainSource};
+use cadektor_core::ground::GroundSource;
+use cadektor_core::hardscape;
 use cadektor_core::model::{Document, LayerId, Object, Shape};
 use cadektor_core::site::boundary_points;
 
@@ -25,38 +26,25 @@ pub struct SiteTerrain<'a> {
     hosts: RefCell<HashMap<LayerId, Vec<Arc<Host>>>>,
 }
 
-/// A site model with the edge of its surface, for points outside the model.
+/// A site model with the edge of its surfaces, for points outside the model.
 struct Host {
     result: Arc<SiteResult>,
-    edges: Vec<[DVec3; 2]>,
+    edges: [OnceLock<Vec<[DVec3; 2]>>; 2],
 }
 
 impl Host {
     fn new(result: Arc<SiteResult>) -> Self {
-        let tin = result.surface(Surface::Proposed);
-        let edges = tin
-            .boundary_edges()
-            .into_iter()
-            .map(|(a, b)| [tin.vertices[a as usize], tin.vertices[b as usize]])
-            .collect();
-        Host { result, edges }
+        Host {
+            result,
+            edges: [OnceLock::new(), OnceLock::new()],
+        }
     }
 
-    /// The height of the model at the nearest point of its edge.
-    fn edge_height(&self, p: DVec2) -> Option<(f64, f64)> {
-        self.edges
-            .iter()
-            .map(|[a, b]| {
-                let ab = (b - a).truncate();
-                let t = if ab.length_squared() == 0.0 {
-                    0.0
-                } else {
-                    ((p - a.truncate()).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
-                };
-                let q = a.truncate() + ab * t;
-                (p.distance_squared(q), a.z + (b.z - a.z) * t)
-            })
-            .min_by(|x, y| x.0.total_cmp(&y.0))
+    /// The height of the model at the nearest point of its edge, with the squared distance.
+    fn edge_height(&self, p: DVec2, which: Surface) -> Option<(f64, f64)> {
+        let edges = self.edges[which as usize]
+            .get_or_init(|| crate::grading::boundary_edges(self.result.surface(which)));
+        crate::grading::nearest_edge_height(edges, p)
     }
 }
 
@@ -122,26 +110,25 @@ impl SiteTerrain<'_> {
     }
 }
 
-impl TerrainSource for SiteTerrain<'_> {
+impl GroundSource for SiteTerrain<'_> {
+    fn exact(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<f64> {
+        self.hosts(obj?.layer)
+            .iter()
+            .find_map(|h| h.result.surface(which).elevation_at(p))
+    }
+
     /// The height of the ground. Outside every site model on the layer it is the height of the
     /// nearest edge of the nearest model, so a hardscape that reaches over the edge stays level
     /// with the edge there.
-    fn elevation(&self, obj: &Object, p: DVec2) -> Option<f64> {
-        let hosts = self.hosts(obj.layer);
-        if let Some(z) = hosts.iter().find_map(|h| h.result.elevation_at(p)) {
+    fn clamped(&self, obj: Option<&Object>, p: DVec2, which: Surface) -> Option<f64> {
+        if let Some(z) = self.exact(obj, p, which) {
             return Some(z);
         }
-        hosts
+        self.hosts(obj?.layer)
             .iter()
-            .filter_map(|h| h.edge_height(p))
+            .filter_map(|h| h.edge_height(p, which))
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, z)| z)
-    }
-
-    fn covered(&self, obj: &Object, p: DVec2) -> bool {
-        self.hosts(obj.layer)
-            .iter()
-            .any(|h| h.result.elevation_at(p).is_some())
     }
 }
 

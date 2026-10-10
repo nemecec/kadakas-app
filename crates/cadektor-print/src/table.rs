@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use cadektor_core::hardscape::TerrainSource;
+use cadektor_core::ground::GroundSource;
 use cadektor_core::model::Document;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::worksheet_table::TableData;
@@ -35,7 +35,7 @@ pub struct Tables {
 
 impl Tables {
     /// Calculates the worksheets of all table objects in the document.
-    pub fn build(doc: &Document, ground: &dyn TerrainSource) -> Tables {
+    pub fn build(doc: &Document, ground: &dyn GroundSource) -> Tables {
         let mut map = HashMap::new();
         for o in doc.objects.values() {
             let Some(d) = cadektor_core::worksheet_table::data(o) else {
@@ -161,7 +161,7 @@ mod tests {
     use super::*;
     use crate::compose::{compose_page, compose_page_on};
     use cadektor_core::command::{Command, Editor};
-    use cadektor_core::hardscape::NoTerrain;
+    use cadektor_core::ground::NoTerrain;
     use cadektor_core::model::{LayerId, ObjectId};
     use cadektor_core::resource::ResourceId;
     use cadektor_sheet::compute;
@@ -292,8 +292,13 @@ mod tests {
     /// A hill: the ground rises with x.
     struct Hill;
 
-    impl TerrainSource for Hill {
-        fn elevation(&self, _: &cadektor_core::model::Object, p: DVec2) -> Option<f64> {
+    impl GroundSource for Hill {
+        fn exact(
+            &self,
+            _: Option<&cadektor_core::model::Object>,
+            p: DVec2,
+            _: cadektor_core::ground::Surface,
+        ) -> Option<f64> {
             Some(p.x * 0.5)
         }
     }
@@ -373,7 +378,7 @@ mod tests {
         assert_eq!(t_flat, vec!["16".to_string()]);
         assert_eq!(t_hill, vec![cadektor_sheet::value::format_number(on_hill)]);
         // The page cache and the PDF take the ground too.
-        let mut cache = crate::SheetCache::default();
+        let mut cache = crate::PageCache::default();
         let page = cache.page_on(ed.doc(), 1, sheet, &Hill).unwrap();
         assert_eq!(texts(&page.prims), t_hill);
         let pdf = crate::export_pdf_on(ed.doc(), 2, &mut cache, &[sheet], &Hill).unwrap();

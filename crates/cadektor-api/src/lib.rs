@@ -104,10 +104,10 @@ pub struct Session {
     /// Annotation primitives and legend rows by document revision (see `render.svg`).
     annot_cache: cadektor_annot::AnnotCache,
     /// Worksheet results by document revision.
-    worksheet_cache: cadektor_sheet::SheetCache,
+    worksheet_cache: cadektor_sheet::WorksheetCache,
     /// Display lists of sheets, by document revision (see `sheet.render`).
     #[cfg(not(target_arch = "wasm32"))]
-    sheet_cache: cadektor_print::SheetCache,
+    sheet_cache: cadektor_print::PageCache,
     /// Section drawings by document revision (see x3d_api.rs).
     #[cfg(not(target_arch = "wasm32"))]
     section_cache: cadektor_x3d::section::SharedSections,
@@ -608,7 +608,7 @@ impl Session {
     fn blank() -> Self {
         // The sheets and the API share the section drawings.
         #[cfg(not(target_arch = "wasm32"))]
-        let sheet_cache = cadektor_print::SheetCache::default();
+        let sheet_cache = cadektor_print::PageCache::default();
         #[cfg(not(target_arch = "wasm32"))]
         let sections = sheet_cache.sections.clone();
         Session {
@@ -630,7 +630,7 @@ impl Session {
             gis: GisState::default(),
             site_cache: cadektor_site::SiteCache::default(),
             annot_cache: cadektor_annot::AnnotCache::default(),
-            worksheet_cache: cadektor_sheet::SheetCache::default(),
+            worksheet_cache: cadektor_sheet::WorksheetCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             sheet_cache,
             #[cfg(not(target_arch = "wasm32"))]

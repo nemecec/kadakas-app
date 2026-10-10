@@ -347,7 +347,7 @@ pub fn for_site(site: &SiteResult, spec: &AnalysisSpec) -> Option<Arc<AnalysisRe
     if let Some(r) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Some(r.clone());
     }
-    let tin = site.surface(spec.surface.surface());
+    let tin = site.surface(spec.surface);
     let breaks = resolve_breaks(spec, tin);
     let mut r = analyze(tin, spec.mode, &breaks, &spec.colors);
     r.surface = spec.surface;

@@ -1,9 +1,9 @@
 //! Builds the display list of a sheet layer: paper-space shapes, viewports and title blocks.
 
-use std::collections::HashMap;
+use cadektor_core::cache::RevCache;
 use std::sync::Arc;
 
-use cadektor_core::hardscape::{NoTerrain, TerrainSource};
+use cadektor_core::ground::{GroundSource, NoTerrain};
 use cadektor_core::mesh;
 use cadektor_core::model::{Class, Document, Layer, LayerId, LayerKind, Object, Shape};
 use cadektor_core::plants::schedule;
@@ -28,12 +28,8 @@ const MAX_CACHED_PAGES: usize = 8;
 /// Display lists by sheet layer, valid for one document revision. A new revision clears them,
 /// so a sheet is built again only after the document changed. Rasters of 3D viewports are kept
 /// in the same way.
-#[derive(Default)]
-pub struct SheetCache {
-    revision: Option<u64>,
-    pages: HashMap<LayerId, Arc<Page>>,
-    /// Layers in the order of use, the oldest first.
-    used: std::collections::VecDeque<LayerId>,
+pub struct PageCache {
+    pages: RevCache<LayerId, Arc<Page>>,
     /// Number of pages built so far. Tests use it to see that the cache works.
     pub builds: u64,
     /// The section drawings of the pages. Share them with the API so that a section is computed once.
@@ -43,7 +39,18 @@ pub struct SheetCache {
     pub raster_limit: Option<u64>,
 }
 
-impl SheetCache {
+impl Default for PageCache {
+    fn default() -> Self {
+        PageCache {
+            pages: RevCache::new(MAX_CACHED_PAGES),
+            builds: 0,
+            sections: Default::default(),
+            raster_limit: None,
+        }
+    }
+}
+
+impl PageCache {
     /// The limit for the pixels of 3D viewport images in force for this cache.
     pub fn raster_pixels(&self) -> u64 {
         self.raster_limit.unwrap_or(MAX_RASTER_PIXELS)
@@ -66,17 +73,10 @@ impl SheetCache {
         doc: &Document,
         revision: u64,
         layer: LayerId,
-        ground: &dyn TerrainSource,
+        ground: &dyn GroundSource,
     ) -> Result<Arc<Page>, PrintError> {
-        if self.revision != Some(revision) {
-            self.pages.clear();
-            self.used.clear();
-            self.revision = Some(revision);
-        }
-        if let Some(p) = self.pages.get(&layer) {
-            self.used.retain(|l| *l != layer);
-            self.used.push_back(layer);
-            return Ok(p.clone());
+        if let Some(p) = self.pages.get(revision, &layer) {
+            return Ok(p);
         }
         let page = Arc::new(compose_page_limited(
             doc,
@@ -87,14 +87,7 @@ impl SheetCache {
         )?);
         self.builds += 1;
         // Pages hold images, so the cache keeps a few of them only.
-        while self.pages.len() >= MAX_CACHED_PAGES {
-            match self.used.pop_front() {
-                Some(old) => self.pages.remove(&old),
-                None => break,
-            };
-        }
-        self.pages.insert(layer, page.clone());
-        self.used.push_back(layer);
+        self.pages.insert(revision, layer, page.clone());
         Ok(page)
     }
 }
@@ -109,7 +102,7 @@ pub fn compose_page(doc: &Document, layer: LayerId) -> Result<Page, PrintError> 
 pub fn compose_page_on(
     doc: &Document,
     layer: LayerId,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
 ) -> Result<Page, PrintError> {
     compose_page_shared(doc, layer, ground, None)
 }
@@ -118,7 +111,7 @@ pub fn compose_page_on(
 pub fn compose_page_shared(
     doc: &Document,
     layer: LayerId,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
     sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
 ) -> Result<Page, PrintError> {
     compose_page_limited(doc, layer, ground, sections, MAX_RASTER_PIXELS)
@@ -129,7 +122,7 @@ pub fn compose_page_shared(
 pub fn compose_page_limited(
     doc: &Document,
     layer: LayerId,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
     sections: Option<(cadektor_x3d::section::SharedSections, u64)>,
     max_pixels: u64,
 ) -> Result<Page, PrintError> {

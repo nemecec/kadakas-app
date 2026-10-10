@@ -1,5 +1,6 @@
 //! Geometry helpers for the IFC bodies. Units are mm.
 
+pub use cadektor_core::geom::{clean_ring, signed_area};
 use cadektor_core::hardscape::surface::{self, DRAPE_STEP};
 use glam::{DVec2, DVec3};
 use i_overlay::core::fill_rule::FillRule;
@@ -13,44 +14,6 @@ pub fn r4(x: f64) -> f64 {
     } else {
         0.0
     }
-}
-
-/// Twice the signed area of a ring: positive for counterclockwise.
-pub fn signed_area(ring: &[DVec2]) -> f64 {
-    let n = ring.len();
-    if n < 3 {
-        return 0.0;
-    }
-    let o = ring[0];
-    (0..n)
-        .map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % n] - o))
-        .sum::<f64>()
-        / 2.0
-}
-
-/// Removes repeated points and the closing point, and turns the ring counterclockwise.
-/// Returns an empty ring if fewer than 3 points or no area remain.
-pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
-    let mut ring: Vec<DVec2> = Vec::with_capacity(points.len());
-    for p in points {
-        if !p.is_finite() {
-            return Vec::new();
-        }
-        if ring.last().is_none_or(|l| l.distance_squared(*p) > 1.0e-12) {
-            ring.push(*p);
-        }
-    }
-    while ring.len() > 1 && ring[0].distance_squared(ring[ring.len() - 1]) <= 1.0e-12 {
-        ring.pop();
-    }
-    let area = signed_area(&ring);
-    if ring.len() < 3 || area.abs() < 1.0e-6 {
-        return Vec::new();
-    }
-    if area < 0.0 {
-        ring.reverse();
-    }
-    ring
 }
 
 /// Splits a ring with holes into simple polygons without holes. It cuts the area into horizontal

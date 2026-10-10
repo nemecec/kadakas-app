@@ -4,6 +4,7 @@
 use super::*;
 use crate::command::{Command, CommandError, Editor};
 use crate::curve::{self, Vertex};
+use crate::ground::{GroundSource, Surface};
 use crate::model::{Attributes, ObjectId};
 use crate::resource::{ResourceBody, ResourceId};
 
@@ -373,20 +374,20 @@ fn edge_elevations_follow_an_outline_edit() {
 /// A ground that exists for x below a limit only, and levels off beyond it.
 struct HalfGround;
 
-impl TerrainSource for HalfGround {
-    fn elevation(&self, _obj: &Object, p: DVec2) -> Option<f64> {
-        Some(p.x.min(1000.0) / 10.0)
+impl GroundSource for HalfGround {
+    fn exact(&self, _obj: Option<&Object>, p: DVec2, _: Surface) -> Option<f64> {
+        (p.x <= 1000.0).then(|| p.x / 10.0)
     }
 
-    fn covered(&self, _obj: &Object, p: DVec2) -> bool {
-        p.x <= 1000.0
+    fn clamped(&self, _obj: Option<&Object>, p: DVec2, _: Surface) -> Option<f64> {
+        Some(p.x.min(1000.0) / 10.0)
     }
 }
 
 struct NoGround;
 
-impl TerrainSource for NoGround {
-    fn elevation(&self, _obj: &Object, _p: DVec2) -> Option<f64> {
+impl GroundSource for NoGround {
+    fn exact(&self, _obj: Option<&Object>, _p: DVec2, _: Surface) -> Option<f64> {
         None
     }
 }
@@ -425,8 +426,8 @@ fn a_hardscape_half_on_the_ground_is_partially_draped() {
 
 struct Everywhere;
 
-impl TerrainSource for Everywhere {
-    fn elevation(&self, _obj: &Object, p: DVec2) -> Option<f64> {
+impl GroundSource for Everywhere {
+    fn exact(&self, _obj: Option<&Object>, p: DVec2, _: Surface) -> Option<f64> {
         Some(p.x / 10.0)
     }
 }

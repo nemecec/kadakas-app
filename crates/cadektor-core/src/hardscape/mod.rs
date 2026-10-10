@@ -4,7 +4,7 @@
 //! The hardscape style is a resource (see `crate::resource`). A hardscape object keeps its
 //! settings in `Object::data["hardscape"]` (see `data`), so older files and objects without a
 //! style stay valid. Everything here is pure geometry or reads the document. The ground of a
-//! site model comes in through [`TerrainSource`], so core does not depend on the site crate.
+//! site model comes in through [`GroundSource`](crate::ground::GroundSource), so core does not depend on the site crate.
 
 pub mod data;
 pub mod joints;
@@ -32,28 +32,6 @@ pub const DEFAULT_COLOR: [u8; 4] = [160, 156, 150, 255];
 const EDGE_COLOR: [u8; 4] = [40, 40, 40, 255];
 /// Flattening tolerance for 3D, in mm.
 const FLATTEN_TOLERANCE: f64 = 2.0;
-
-/// The ground under objects. A reports and the 3D view ask it for heights. The site crate
-/// implements it with the site model of the layer.
-pub trait TerrainSource {
-    /// Height of the ground at `p` for this object, or `None` if there is no ground there.
-    fn elevation(&self, obj: &Object, p: DVec2) -> Option<f64>;
-
-    /// True if the point lies on the ground itself. Outside, `elevation` may still give the height
-    /// of the nearest edge.
-    fn covered(&self, obj: &Object, p: DVec2) -> bool {
-        self.elevation(obj, p).is_some()
-    }
-}
-
-/// No ground: nothing drapes.
-pub struct NoTerrain;
-
-impl TerrainSource for NoTerrain {
-    fn elevation(&self, _obj: &Object, _p: DVec2) -> Option<f64> {
-        None
-    }
-}
 
 /// True if the object asks to be draped on the site model (a hardscape or a landscape area).
 pub fn wants_drape(obj: &Object) -> bool {
@@ -244,6 +222,7 @@ pub fn svg_extras(doc: &Document, obj: &Object, scale: f64, stroke: &str) -> Str
 mod tests {
     use super::*;
     use crate::command::{Command, Editor};
+    use crate::ground::GroundSource as _;
     use crate::mesh;
     use crate::model::ObjectId;
     use crate::resource::{ResourceBody, ResourceId};
@@ -448,7 +427,7 @@ mod tests {
         })
         .unwrap();
         assert!(wants_drape(ed2.doc().object(id).unwrap()));
-        assert_eq!(NoTerrain.elevation(&line, DVec2::ZERO), None);
+        assert_eq!(crate::ground::NoTerrain.elevation(&line, DVec2::ZERO), None);
     }
 
     #[test]

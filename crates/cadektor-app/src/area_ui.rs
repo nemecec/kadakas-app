@@ -356,7 +356,7 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     }
     // Quantities.
     let terrain = SiteTerrain::new(session.site_cache(), session.editor.revision(), doc);
-    use cadektor_core::hardscape::TerrainSource;
+    use cadektor_core::ground::GroundSource;
     let at = |p: DVec2| terrain.elevation(obj, p);
     let rev = session.editor.revision();
     let cached = QUANTITIES.with(|c| {

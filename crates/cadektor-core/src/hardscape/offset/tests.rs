@@ -1,5 +1,5 @@
 use super::*;
-use crate::geom::polygon_area;
+use crate::geom::{polygon_area, signed_area};
 
 fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
@@ -7,15 +7,6 @@ fn v(x: f64, y: f64) -> DVec2 {
 
 fn open(pts: &[DVec2], w: f64, j: Join) -> Vec<DVec2> {
     path_outline(pts, w, j, false)
-}
-
-/// The signed area of a ring, which may have a bridge to a hole.
-fn signed_area(r: &[DVec2]) -> f64 {
-    let o = r[0];
-    (0..r.len())
-        .map(|i| (r[i] - o).perp_dot(r[(i + 1) % r.len()] - o))
-        .sum::<f64>()
-        / 2.0
 }
 
 /// Area of the points within `h` of the path, without the parts beyond the two ends: the

@@ -69,27 +69,14 @@ pub fn on_edge(poly: &[DVec2], p: DVec2) -> bool {
     })
 }
 
-/// True if `p` is inside the polygon (even-odd rule). The result for a point on an edge is not defined.
-fn winding_inside(poly: &[DVec2], p: DVec2) -> bool {
-    let n = poly.len();
-    let mut inside = false;
-    for i in 0..n {
-        let (a, b) = (poly[i], poly[(i + 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
 /// True if `p` is inside the polygon or on its edge.
 pub fn inside_or_on(poly: &[DVec2], p: DVec2) -> bool {
-    on_edge(poly, p) || winding_inside(poly, p)
+    on_edge(poly, p) || cadektor_core::geom::point_in_polygon(p, poly)
 }
 
 /// True if `p` is inside the polygon and not on its edge.
 fn strictly_inside(poly: &[DVec2], p: DVec2) -> bool {
-    !on_edge(poly, p) && winding_inside(poly, p)
+    !on_edge(poly, p) && cadektor_core::geom::point_in_polygon(p, poly)
 }
 
 struct Pad<'a> {

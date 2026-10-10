@@ -331,7 +331,7 @@ fn slab_cuts(doc: &Document, base: f64, a: DVec2, b: DVec2, ground: Ground<'_>) 
             raise
                 + if drapes {
                     ground
-                        .clamped(a.lerp(b, t), Follow::Proposed)
+                        .clamped(None, a.lerp(b, t), Follow::Proposed)
                         .unwrap_or(0.0)
                 } else {
                     dz
@@ -380,7 +380,7 @@ fn plant_cuts(
                 offset,
                 spread,
                 height,
-                base: ground.clamped(at, Follow::Proposed).unwrap_or(0.0),
+                base: ground.clamped(None, at, Follow::Proposed).unwrap_or(0.0),
             })
         })
         .collect()
@@ -407,7 +407,7 @@ pub fn profile(doc: &Document, obj: &Object, site: &SiteResult) -> Option<Profil
     }
     let ground = SiteGround::new(site);
     let ground_ref = &ground;
-    let clamp = |which: Follow| move |p: DVec2| ground_ref.clamped(p, which);
+    let clamp = |which: Follow| move |p: DVec2| ground_ref.clamped(None, p, which);
     let (existing, off_model) = sample(
         site.surface(crate::Surface::Existing),
         &clamp(Follow::Existing),

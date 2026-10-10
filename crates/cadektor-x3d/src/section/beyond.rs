@@ -144,7 +144,9 @@ fn cap(face: &CutFace) -> Vec<[DVec2; 3]> {
         face.rings
             .iter()
             .filter(|r| r.len() >= 3)
-            .fold(false, |acc, r| acc ^ inside_ring(c, r))
+            .fold(false, |acc, r| {
+                acc ^ cadektor_core::geom::point_in_polygon(c, r)
+            })
     };
     let mut out = Vec::new();
     for f in cdt.inner_faces() {
@@ -160,19 +162,6 @@ fn cap(face: &CutFace) -> Vec<[DVec2; 3]> {
         out.push(if area > 0.0 { [a, b, c] } else { [a, c, b] });
     }
     out
-}
-
-fn inside_ring(p: DVec2, ring: &[DVec2]) -> bool {
-    let mut c = false;
-    let mut j = ring.len() - 1;
-    for i in 0..ring.len() {
-        let (a, b) = (ring[i], ring[j]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
-            c = !c;
-        }
-        j = i;
-    }
-    c
 }
 
 /// The clip segments on a grid, to find the ones near a point without testing all of them.

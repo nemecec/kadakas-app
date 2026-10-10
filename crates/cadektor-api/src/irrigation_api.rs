@@ -210,7 +210,7 @@ fn analysis(s: &Session, m: &Map<String, Value>) -> Result<Analysis, RpcError> {
         &ExtractOptions {
             tolerance: tolerance(m)?,
             fittings_pct,
-            ground: use_site.then_some(&terrain as &dyn cadektor_core::hardscape::TerrainSource),
+            ground: use_site.then_some(&terrain as &dyn cadektor_core::ground::GroundSource),
         },
     ))
 }

@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use glam::DVec3;
 
-use cadektor_core::hardscape::TerrainSource;
+use cadektor_core::ground::GroundSource;
 use cadektor_core::mesh::SceneSink;
 use cadektor_core::model::{Color, Document, Object, Shape};
 use cadektor_core::site::{Display3d, SurfaceDisplay};
@@ -66,7 +66,7 @@ pub fn draw_3d_with(
         if site.proposed.is_none() {
             Surface::Existing
         } else {
-            a.surface.surface()
+            a.surface
         }
     });
     for which in shown_surfaces(site, site.settings.surface_3d) {

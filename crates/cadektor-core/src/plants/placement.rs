@@ -28,6 +28,7 @@ use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use crate::curve::{self, Vertex};
+use crate::geom::dist_to_segment;
 
 /// The smallest spacing, in mm.
 pub const MIN_SPACING: f64 = 10.0;
@@ -603,17 +604,6 @@ pub fn triangular_grid(
 
 // ---------------------------------------------------------------------------
 // Fill
-
-fn dist_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let l2 = ab.length_squared();
-    let t = if l2 <= 0.0 {
-        0.0
-    } else {
-        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
-    };
-    p.distance(a + ab * t)
-}
 
 /// A closed ring with an index for fast point tests. The edges are sorted into horizontal
 /// bands, so a test looks at a few edges and not at all of them.

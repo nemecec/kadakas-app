@@ -21,12 +21,7 @@ use crate::overlay::crop;
 use crate::tin::{SlopeAspect, SourceData, SourceLine, Tin};
 use crate::volume::{CutFill, cut_fill};
 
-/// Which surface to ask about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Surface {
-    Existing,
-    Proposed,
-}
+pub use cadektor_core::ground::Surface;
 
 /// The source data of a site model shape.
 pub fn source_data(shape: &Shape) -> Option<SourceData> {

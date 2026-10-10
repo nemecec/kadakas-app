@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use cadektor_core::model::{Document, LayerId};
 
-pub use compose::{SheetCache, compose_page, compose_page_on};
+pub use compose::{PageCache, compose_page, compose_page_on};
 pub use display::{Page, Prim};
 
 /// Why an output could not be made.
@@ -67,7 +67,7 @@ pub fn select_sheets(doc: &Document, ids: Option<&[LayerId]>) -> Result<Vec<Laye
 pub fn export_pdf(
     doc: &Document,
     revision: u64,
-    cache: &mut SheetCache,
+    cache: &mut PageCache,
     sheets: &[LayerId],
 ) -> Result<Vec<u8>, PrintError> {
     export_pdf_on(
@@ -75,7 +75,7 @@ pub fn export_pdf(
         revision,
         cache,
         sheets,
-        &cadektor_core::hardscape::NoTerrain,
+        &cadektor_core::ground::NoTerrain,
     )
 }
 
@@ -83,9 +83,9 @@ pub fn export_pdf(
 pub fn export_pdf_on(
     doc: &Document,
     revision: u64,
-    cache: &mut SheetCache,
+    cache: &mut PageCache,
     sheets: &[LayerId],
-    ground: &dyn cadektor_core::hardscape::TerrainSource,
+    ground: &dyn cadektor_core::ground::GroundSource,
 ) -> Result<Vec<u8>, PrintError> {
     let pages = sheets
         .iter()

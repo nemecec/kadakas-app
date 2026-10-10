@@ -1465,15 +1465,7 @@ fn cap(out: &mut MeshData, cut: &[(DVec3, DVec3)], _origin: DVec3, keep: DVec3) 
 }
 
 fn inside(poly: &[DVec2], p: DVec2) -> bool {
-    let mut c = false;
-    let n = poly.len();
-    for i in 0..n {
-        let (a, b) = (poly[i], poly[(i + n - 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
-            c = !c;
-        }
-    }
-    c
+    cadektor_core::geom::point_in_polygon(p, poly)
 }
 
 #[cfg(test)]

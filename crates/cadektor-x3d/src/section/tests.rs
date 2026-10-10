@@ -53,7 +53,10 @@ fn cutting_a_box_gives_the_expected_rectangle() {
     );
     assert!((lo.y + 300.0).abs() < 0.1 && hi.y.abs() < 0.1, "{lo} {hi}");
     assert!((d.cut_area() - 2000.0 * 300.0).abs() < 1.0);
-    assert!(cut::area2(&f.rings[0]) > 0.0, "outer ring counterclockwise");
+    assert!(
+        cadektor_core::geom::signed_area(&f.rings[0]) > 0.0,
+        "outer ring counterclockwise"
+    );
     assert_eq!(d.bounds.unwrap().0.x.round(), 1000.0);
 }
 

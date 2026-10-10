@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 use cadektor_api::Session;
 use cadektor_core::command::Command;
+use cadektor_core::geom::dist_to_segment;
 use cadektor_core::irrigation::{IrrigationShape, LineType, sector_points, zone_color};
 use cadektor_core::model::{Document, ObjectId, Shape};
 use cadektor_irrigation::report::{self, WarningRow, ZonePressure};
@@ -138,17 +139,6 @@ pub fn draw(painter: &Painter, view: &View, i: &IrrigationShape, st: Style, offs
             );
         }
     }
-}
-
-fn dist_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let l2 = ab.length_squared();
-    let t = if l2 == 0.0 {
-        0.0
-    } else {
-        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
-    };
-    p.distance(a + ab * t)
 }
 
 /// True if `p` picks the object: a line within `tol`, other objects near their symbol.

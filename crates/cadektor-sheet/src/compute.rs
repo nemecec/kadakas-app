@@ -170,7 +170,7 @@ fn dependencies(expr: &Expr, cells: &BTreeMap<Pos, Cell>) -> Vec<Pos> {
 
 /// Calculates a worksheet against a document, with no ground.
 pub fn compute(def: &WorksheetDef, doc: &Document) -> Computed {
-    compute_with(def, doc, &cadektor_core::hardscape::NoTerrain)
+    compute_with(def, doc, &cadektor_core::ground::NoTerrain)
 }
 
 /// Calculates a worksheet against a document and the ground of its site models, so draped
@@ -178,7 +178,7 @@ pub fn compute(def: &WorksheetDef, doc: &Document) -> Computed {
 pub fn compute_with(
     def: &WorksheetDef,
     doc: &Document,
-    ground: &dyn cadektor_core::hardscape::TerrainSource,
+    ground: &dyn cadektor_core::ground::GroundSource,
 ) -> Computed {
     let mut result = Computed::default();
     let mut cells: BTreeMap<Pos, Cell> = BTreeMap::new();

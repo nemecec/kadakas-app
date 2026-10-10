@@ -176,7 +176,7 @@ pub fn has_record(obj: &Object, name: &str) -> bool {
 
 /// Reads a property with no ground: a draped hardscape or area is measured flat.
 pub fn property(doc: &Document, obj: &Object, path: &[&str]) -> Prop {
-    property_on(doc, obj, path, &crate::hardscape::NoTerrain)
+    property_on(doc, obj, path, &crate::ground::NoTerrain)
 }
 
 /// Reads a property. `path` has one name (`Area`), or two or more names: `Plant` and a style
@@ -187,7 +187,7 @@ pub fn property_on(
     doc: &Document,
     obj: &Object,
     path: &[&str],
-    ground: &dyn crate::hardscape::TerrainSource,
+    ground: &dyn crate::ground::GroundSource,
 ) -> Prop {
     match path {
         [] => Prop::Unknown,
@@ -258,7 +258,7 @@ fn plant_field(doc: &Document, obj: &Object, rest: &[&str]) -> Prop {
 fn landscape_area(
     doc: &Document,
     obj: &Object,
-    ground: &dyn crate::hardscape::TerrainSource,
+    ground: &dyn crate::ground::GroundSource,
 ) -> Option<(f64, f64, f64)> {
     let q = crate::landscape::quantities(doc, obj)?;
     let ratio = match crate::landscape::surface_area_on(obj, ground) {
@@ -320,7 +320,7 @@ fn builtin(
     doc: &Document,
     obj: &Object,
     name: &str,
-    ground: &dyn crate::hardscape::TerrainSource,
+    ground: &dyn crate::ground::GroundSource,
 ) -> Prop {
     let shape = &obj.shape;
     if let Shape::Irrigation(i) = shape
@@ -779,8 +779,9 @@ mod tests {
 
     #[test]
     fn hardscape_and_landscape_values_agree_with_the_reports() {
+        use crate::ground::NoTerrain;
         use crate::hardscape::style::{Component, HardscapeStyle};
-        use crate::hardscape::{HardscapePatch, NoTerrain, report};
+        use crate::hardscape::{HardscapePatch, report};
         use crate::landscape::LandscapePatch;
         use crate::landscape::style::{LandscapeAreaStyle, MixEntry};
         use crate::model::ObjectId;
@@ -854,9 +855,14 @@ mod tests {
         .unwrap();
         let hill = |_: &Object, p: DVec2| Some(p.x * 0.5);
         struct Hill(fn(&Object, DVec2) -> Option<f64>);
-        impl crate::hardscape::TerrainSource for Hill {
-            fn elevation(&self, o: &Object, p: DVec2) -> Option<f64> {
-                (self.0)(o, p)
+        impl crate::ground::GroundSource for Hill {
+            fn exact(
+                &self,
+                o: Option<&Object>,
+                p: DVec2,
+                _: crate::ground::Surface,
+            ) -> Option<f64> {
+                o.and_then(|o| (self.0)(o, p))
             }
         }
         let ground = Hill(hill);
@@ -1048,7 +1054,7 @@ mod tests {
                 ed.doc(),
                 ed.doc().object(a).unwrap(),
                 n,
-                &crate::hardscape::NoTerrain
+                &crate::ground::NoTerrain
             ),
             Prop::Unknown
         )));

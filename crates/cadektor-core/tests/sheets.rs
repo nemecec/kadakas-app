@@ -1,6 +1,7 @@
 //! Sheets, viewports, overrides, title blocks and saved views in the core.
 
 use cadektor_core::command::{Command, CommandError, Editor};
+use cadektor_core::geom::signed_area;
 use cadektor_core::model::*;
 use cadektor_core::sheets::*;
 use glam::DVec2;

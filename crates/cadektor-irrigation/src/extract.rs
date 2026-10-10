@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use cadektor_core::DVec2;
-use cadektor_core::hardscape::TerrainSource;
+use cadektor_core::ground::GroundSource;
 use cadektor_core::irrigation::{IrrigationShape, LineType};
 use cadektor_core::model::{Document, Object};
 
@@ -190,7 +190,7 @@ pub struct ExtractOptions<'a> {
     /// Allowance for fittings as a percentage of the pipe losses.
     pub fittings_pct: f64,
     /// The ground (site model): nodes take their height from it, and water has to climb.
-    pub ground: Option<&'a dyn TerrainSource>,
+    pub ground: Option<&'a dyn GroundSource>,
 }
 
 impl Default for ExtractOptions<'_> {
@@ -1283,8 +1283,13 @@ mod tests {
     fn fittings_and_ground_change_the_pressure() {
         use cadektor_core::model::Object;
         struct Slope;
-        impl TerrainSource for Slope {
-            fn elevation(&self, _: &Object, p: DVec2) -> Option<f64> {
+        impl GroundSource for Slope {
+            fn exact(
+                &self,
+                _: Option<&Object>,
+                p: DVec2,
+                _: cadektor_core::ground::Surface,
+            ) -> Option<f64> {
                 // 1 m rise per 10 m along X, in mm.
                 Some(p.x / 10.0)
             }

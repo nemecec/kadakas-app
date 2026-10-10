@@ -6,12 +6,12 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use serde::Serialize;
 
-use super::TerrainSource;
 use super::data::{self, HardscapeData, Mode, TOLERANCE};
 use super::offset;
 use super::style::HardscapeStyle;
 use super::surface::{self, Terrain};
 use crate::curve;
+use crate::ground::GroundSource;
 use crate::mesh::DEFAULT_SLAB_THICKNESS;
 use crate::model::{Document, Object, ObjectId, Shape};
 use crate::resource::ResourceId;
@@ -203,7 +203,7 @@ pub struct Report {
 pub fn quantities_on(
     doc: &Document,
     obj: &Object,
-    ground: &dyn TerrainSource,
+    ground: &dyn GroundSource,
 ) -> Option<Quantities> {
     if !matches!(obj.shape, Shape::Hardscape { .. }) {
         return None;
@@ -223,7 +223,7 @@ pub fn quantities_on(
 }
 
 /// The report of all hardscapes in the document, in document order.
-pub fn report(doc: &Document, ground: &dyn TerrainSource) -> Report {
+pub fn report(doc: &Document, ground: &dyn GroundSource) -> Report {
     let mut rows = Vec::new();
     let mut totals: BTreeMap<(&'static str, String), (f64, f64)> = BTreeMap::new();
     for obj in doc.objects.values() {
@@ -273,7 +273,7 @@ pub fn report(doc: &Document, ground: &dyn TerrainSource) -> Report {
 mod tests {
     use super::*;
     use crate::command::{Command, Editor};
-    use crate::hardscape::NoTerrain;
+    use crate::ground::NoTerrain;
     use crate::hardscape::data::{HardscapePatch, Slope};
     use crate::hardscape::style::{Border, Component, Sides};
     use crate::model::Attributes;

@@ -331,8 +331,8 @@ pub fn profile(
     let follow = d.follow();
     st.into_iter()
         .map(|(s, p)| {
-            let g = ground.exact(p, follow);
-            let base = g.or_else(|| ground.clamped(p, follow)).unwrap_or(0.0);
+            let g = ground.exact(None, p, follow);
+            let base = g.or_else(|| ground.clamped(None, p, follow)).unwrap_or(0.0);
             let top = match d.top {
                 Top::Fixed { elevation } => elevation + dz,
                 Top::Terrain { offset } => base + offset,

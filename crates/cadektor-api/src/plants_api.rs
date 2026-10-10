@@ -534,7 +534,7 @@ fn spread_of(doc: &Document, m: &Map<String, Value>) -> Result<f64, RpcError> {
 
 /// Plants and existing trees on the terrain. `ids`: default all of them.
 fn drape(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
-    use cadektor_core::hardscape::TerrainSource;
+    use cadektor_core::ground::GroundSource;
     let release = m.get("release").and_then(Value::as_bool).unwrap_or(false);
     let doc = s.editor.doc();
     let ids: Vec<ObjectId> = match m.get("ids").filter(|v| !v.is_null()) {
@@ -693,7 +693,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         Some(_) => return Err(bad("'on_terrain' must be true or false")),
     };
     if on_terrain {
-        use cadektor_core::hardscape::TerrainSource;
+        use cadektor_core::ground::GroundSource;
         let first = doc.next_id();
         let probe_layer = layer.unwrap_or(doc.active_layer);
         let terrain = cadektor_site::SiteTerrain::new(s.site_cache(), s.editor.revision(), doc);

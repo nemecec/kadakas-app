@@ -4,6 +4,7 @@
 //! repeated first point. They may be concave but must not have holes.
 
 use cadektor_core::DVec2;
+use cadektor_core::geom::{dist_to_segment, point_in_polygon};
 
 /// Most points one call returns.
 pub const MAX_POINTS: usize = 100_000;
@@ -57,22 +58,10 @@ fn check_spacing(spacing: f64) -> Result<(), String> {
     }
 }
 
-/// Distance from `p` to the segment `a`-`b`.
-fn segment_distance(p: DVec2, a: DVec2, b: DVec2) -> f64 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    let t = if len2 == 0.0 {
-        0.0
-    } else {
-        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-    };
-    p.distance(a + ab * t)
-}
-
 /// Distance from `p` to the boundary of the polygon.
 pub fn boundary_distance(p: DVec2, poly: &[DVec2]) -> f64 {
     (0..poly.len())
-        .map(|i| segment_distance(p, poly[i], poly[(i + 1) % poly.len()]))
+        .map(|i| dist_to_segment(p, poly[i], poly[(i + 1) % poly.len()]))
         .fold(f64::INFINITY, f64::min)
 }
 
@@ -81,25 +70,7 @@ pub fn contains(poly: &[DVec2], p: DVec2) -> bool {
     if boundary_distance(p, poly) <= EPS {
         return true;
     }
-    let mut inside = false;
-    let n = poly.len();
-    for i in 0..n {
-        let (a, b) = (poly[i], poly[(i + 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
-/// Area of a polygon in mm2.
-pub fn polygon_area(poly: &[DVec2]) -> f64 {
-    let n = poly.len();
-    (0..n)
-        .map(|i| poly[i].perp_dot(poly[(i + 1) % n]))
-        .sum::<f64>()
-        .abs()
-        / 2.0
+    point_in_polygon(p, poly)
 }
 
 /// Head positions that fill a polygon.
@@ -300,6 +271,7 @@ pub fn drip_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cadektor_core::geom::polygon_area;
     use proptest::prelude::*;
 
     fn rect(w: f64, h: f64) -> Vec<DVec2> {
@@ -552,7 +524,7 @@ mod tests {
         assert_eq!(boundary_distance(DVec2::new(5.0, 5.0), &r), 5.0);
         // A zero-length edge does not break the distance.
         assert_eq!(
-            segment_distance(DVec2::new(3.0, 4.0), DVec2::ZERO, DVec2::ZERO),
+            dist_to_segment(DVec2::new(3.0, 4.0), DVec2::ZERO, DVec2::ZERO),
             5.0
         );
         assert_eq!(path_length(&r, true), 40.0);
@@ -611,7 +583,7 @@ mod tests {
                 // On the path: distance to some segment is 0.
                 let segs = if closed { path.len() } else { path.len() - 1 };
                 let d = (0..segs)
-                    .map(|i| segment_distance(h.at, path[i], path[(i + 1) % path.len()]))
+                    .map(|i| dist_to_segment(h.at, path[i], path[(i + 1) % path.len()]))
                     .fold(f64::INFINITY, f64::min);
                 prop_assert!(d < 1e-6);
             }

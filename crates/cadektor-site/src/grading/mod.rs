@@ -19,55 +19,14 @@ use std::sync::Arc;
 
 use glam::DVec2;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 
+use cadektor_core::ground::{GroundSource, Surface};
 use cadektor_core::model::{Document, Object, ObjectId, Shape};
 
-use crate::model::{SiteCache, SiteResult, Surface};
+use crate::model::{SiteCache, SiteResult};
 
 /// Which surface of the site model an object follows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Follow {
-    #[default]
-    Existing,
-    Proposed,
-}
-
-impl Follow {
-    pub fn surface(self) -> Surface {
-        match self {
-            Follow::Existing => Surface::Existing,
-            Follow::Proposed => Surface::Proposed,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Follow::Existing => "existing",
-            Follow::Proposed => "proposed",
-        }
-    }
-}
-
-/// The ground that an object stands on. `exact` is the height of the site model, `None` outside
-/// it. `clamped` also answers outside the model: there the ground has the height of the nearest
-/// edge of the model, as hardscapes do. An object that follows the ground uses `clamped` and says
-/// that it is partly off the model. Snapping picks up only `exact` heights.
-pub trait GroundSource {
-    fn exact(&self, p: DVec2, which: Follow) -> Option<f64>;
-
-    fn clamped(&self, p: DVec2, which: Follow) -> Option<f64> {
-        self.exact(p, which)
-    }
-}
-
-/// A closure is a ground without an edge (`clamped` is `exact`).
-impl<F: Fn(DVec2, Follow) -> Option<f64>> GroundSource for F {
-    fn exact(&self, p: DVec2, which: Follow) -> Option<f64> {
-        self(p, which)
-    }
-}
+pub type Follow = Surface;
 
 /// The ground of an object: a source of heights.
 pub type Ground<'a> = &'a dyn GroundSource;
@@ -88,38 +47,45 @@ impl<'a> SiteGround<'a> {
 }
 
 impl GroundSource for SiteGround<'_> {
-    fn exact(&self, p: DVec2, which: Follow) -> Option<f64> {
-        self.site.surface(which.surface()).elevation_at(p)
+    fn exact(&self, _obj: Option<&Object>, p: DVec2, which: Follow) -> Option<f64> {
+        self.site.surface(which).elevation_at(p)
     }
 
-    fn clamped(&self, p: DVec2, which: Follow) -> Option<f64> {
-        if let Some(z) = self.exact(p, which) {
+    fn clamped(&self, obj: Option<&Object>, p: DVec2, which: Follow) -> Option<f64> {
+        if let Some(z) = self.exact(obj, p, which) {
             return Some(z);
         }
-        let tin = self.site.surface(which.surface());
-        let edges = self.edges[which as usize].get_or_init(|| {
-            tin.boundary_edges()
-                .into_iter()
-                .map(|(a, b)| [tin.vertices[a as usize], tin.vertices[b as usize]])
-                .collect()
-        });
-        edges
-            .iter()
-            .map(|[a, b]| {
-                let ab = (b - a).truncate();
-                let t = if ab.length_squared() == 0.0 {
-                    0.0
-                } else {
-                    ((p - a.truncate()).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
-                };
-                (
-                    p.distance_squared(a.truncate() + ab * t),
-                    a.z + (b.z - a.z) * t,
-                )
-            })
-            .min_by(|x, y| x.0.total_cmp(&y.0))
-            .map(|(_, z)| z)
+        let tin = self.site.surface(which);
+        let edges = self.edges[which as usize].get_or_init(|| boundary_edges(tin));
+        nearest_edge_height(edges, p).map(|(_, z)| z)
     }
+}
+
+/// The edges of the boundary of a surface, with their heights.
+pub(crate) fn boundary_edges(tin: &crate::tin::Tin) -> Vec<[glam::DVec3; 2]> {
+    tin.boundary_edges()
+        .into_iter()
+        .map(|(a, b)| [tin.vertices[a as usize], tin.vertices[b as usize]])
+        .collect()
+}
+
+/// The squared distance to the nearest point of the edges, and the height of the edge there.
+pub(crate) fn nearest_edge_height(edges: &[[glam::DVec3; 2]], p: DVec2) -> Option<(f64, f64)> {
+    edges
+        .iter()
+        .map(|[a, b]| {
+            let ab = (b - a).truncate();
+            let t = if ab.length_squared() == 0.0 {
+                0.0
+            } else {
+                ((p - a.truncate()).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+            };
+            (
+                p.distance_squared(a.truncate() + ab * t),
+                a.z + (b.z - a.z) * t,
+            )
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
 }
 
 /// The settings under `key` of an object, if present and valid.
@@ -227,7 +193,7 @@ mod tests {
             ("existing", "proposed")
         );
         assert_eq!(
-            (Follow::Existing.surface(), Follow::Proposed.surface()),
+            (Follow::Existing, Follow::Proposed),
             (Surface::Existing, Surface::Proposed)
         );
         assert!(finite("x", 1.0).is_ok() && finite("x", f64::NAN).unwrap_err().contains('x'));
@@ -261,30 +227,30 @@ mod tests {
         assert!(host(ed.doc(), &cache, ed.revision(), obj.layer, Some(circle)).is_none());
         let g = SiteGround::new(&found);
         assert_eq!(
-            g.exact(DVec2::new(5000.0, 5000.0), Follow::Proposed),
+            g.exact(None, DVec2::new(5000.0, 5000.0), Follow::Proposed),
             Some(5000.0)
         );
-        assert_eq!(g.exact(DVec2::new(-5.0, 0.0), Follow::Existing), None);
+        assert_eq!(g.exact(None, DVec2::new(-5.0, 0.0), Follow::Existing), None);
         // Outside the model the ground has the height of the nearest edge. The edge list is made once.
         assert_eq!(
-            g.clamped(DVec2::new(-500.0, 3000.0), Follow::Existing),
+            g.clamped(None, DVec2::new(-500.0, 3000.0), Follow::Existing),
             Some(0.0)
         );
         assert_eq!(
-            g.clamped(DVec2::new(20_000.0, 3000.0), Follow::Existing),
+            g.clamped(None, DVec2::new(20_000.0, 3000.0), Follow::Existing),
             Some(10_000.0)
         );
         assert_eq!(
-            g.clamped(DVec2::new(20_000.0, 3000.0), Follow::Proposed),
+            g.clamped(None, DVec2::new(20_000.0, 3000.0), Follow::Proposed),
             Some(10_000.0)
         );
         assert_eq!(
-            g.clamped(DVec2::new(5000.0, 5000.0), Follow::Proposed),
+            g.clamped(None, DVec2::new(5000.0, 5000.0), Follow::Proposed),
             Some(5000.0)
         );
         // A closure is a ground without an edge.
         let flat = |_: DVec2, _: Follow| Some(7.0);
-        assert_eq!(flat.clamped(DVec2::ZERO, Follow::Existing), Some(7.0));
+        assert_eq!(flat.clamped(None, DVec2::ZERO, Follow::Existing), Some(7.0));
         assert!(read::<wall::WallData>(ed.doc().object(circle).unwrap(), "nothing").is_none());
     }
 }

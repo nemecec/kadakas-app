@@ -11,6 +11,8 @@ use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use serde::{Deserialize, Serialize};
 
+use crate::geom;
+
 /// How the outer side of a bend is joined.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,13 +53,7 @@ const SAME: f64 = 1e-6;
 
 /// Removes points that repeat the one before.
 pub fn dedupe(points: &[DVec2]) -> Vec<DVec2> {
-    let mut out: Vec<DVec2> = Vec::with_capacity(points.len());
-    for &p in points {
-        if out.last().is_none_or(|q| q.distance(p) > SAME) {
-            out.push(p);
-        }
-    }
-    out
+    geom::dedupe_points(points, SAME)
 }
 
 /// Length of a polyline.
@@ -373,7 +369,7 @@ pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
     // clipping. A clockwise hole cuts a slit, and a counterclockwise piece adds a thin strip.
     let to = hole[j] - outer[i];
     let side = DVec2::new(-to.y, to.x).normalize_or_zero() * (to.length() * BRIDGE_WIDTH);
-    let shift = if signed_area(&hole) < 0.0 {
+    let shift = if geom::signed_area(&hole) < 0.0 {
         -side
     } else {
         side
@@ -391,14 +387,6 @@ pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
 
 /// Width of a bridge, as a fraction of its length. The area that this adds or takes is negligible.
 const BRIDGE_WIDTH: f64 = 1e-7;
-
-fn signed_area(ring: &[DVec2]) -> f64 {
-    let o = ring[0];
-    (0..ring.len())
-        .map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o))
-        .sum::<f64>()
-        / 2.0
-}
 
 #[cfg(test)]
 mod tests;

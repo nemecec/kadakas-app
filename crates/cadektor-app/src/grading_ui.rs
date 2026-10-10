@@ -331,7 +331,7 @@ fn analysis_mesh(
     site: &cadektor_site::SiteResult,
     a: &analysis::AnalysisResult,
 ) -> Mesh {
-    let tin = site.surface(a.surface.surface());
+    let tin = site.surface(a.surface);
     let mut mesh = Mesh::default();
     let colors: Vec<Color32> = a
         .bands

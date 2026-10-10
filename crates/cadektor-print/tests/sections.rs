@@ -8,7 +8,7 @@ use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::section::{KEY, SectionView};
 use cadektor_core::sheets::Viewport;
 use cadektor_print::display::{PSeg, PathPrim, Prim};
-use cadektor_print::{SheetCache, compose_page, export_pdf, select_sheets, svg};
+use cadektor_print::{PageCache, compose_page, export_pdf, select_sheets, svg};
 use glam::DVec2;
 use serde_json::json;
 
@@ -249,7 +249,7 @@ fn looking_the_other_way_shows_the_other_side() {
 #[test]
 fn the_sheet_follows_the_model_and_is_cached_by_revision() {
     let mut p = project("left");
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     let a = cache.page(p.ed.doc(), 1, p.sheet).unwrap();
     let b = cache.page(p.ed.doc(), 1, p.sheet).unwrap();
     assert!(std::sync::Arc::ptr_eq(&a, &b));
@@ -347,7 +347,7 @@ fn sections_print_to_svg_and_pdf() {
         text.contains("<path") && text.contains("rgb(200,200,190)") || text.contains("200,200,190")
     );
     let sheets = select_sheets(p.ed.doc(), None).unwrap();
-    let mut cache = SheetCache::default();
+    let mut cache = PageCache::default();
     let bytes = export_pdf(p.ed.doc(), 1, &mut cache, &sheets).unwrap();
     assert!(bytes.starts_with(b"%PDF"));
     assert!(bytes.len() > 500);

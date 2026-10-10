@@ -1,6 +1,6 @@
 use super::*;
 use crate::command::{Command, Editor};
-use crate::hardscape::NoTerrain;
+use crate::ground::NoTerrain;
 use crate::model::Attributes;
 use crate::plants::style::{PlantCategory, PlantStyle};
 use crate::resource::ResourceBody;
@@ -850,8 +850,8 @@ fn report_lists_areas_with_fields() {
         },
     );
     struct Ramp;
-    impl crate::hardscape::TerrainSource for Ramp {
-        fn elevation(&self, _: &Object, p: DVec2) -> Option<f64> {
+    impl crate::ground::GroundSource for Ramp {
+        fn exact(&self, _: Option<&Object>, p: DVec2, _: crate::ground::Surface) -> Option<f64> {
             Some(p.x)
         }
     }

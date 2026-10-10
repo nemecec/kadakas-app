@@ -9,7 +9,7 @@ use cadektor_core::model::*;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::sheets::Viewport;
 use cadektor_print::display::{PSeg, Prim};
-use cadektor_print::{SheetCache, compose_page, export_pdf, select_sheets, svg};
+use cadektor_print::{PageCache, compose_page, export_pdf, select_sheets, svg};
 use glam::DVec2;
 
 fn v(x: f64, y: f64) -> DVec2 {
@@ -137,7 +137,7 @@ fn a_line_type_replaces_the_outline_with_dashes_and_the_pdf_has_them() {
         "the plain outline lost its stroke"
     );
     let sheets = select_sheets(ed.doc(), None).unwrap();
-    let pdf = export_pdf(ed.doc(), ed.revision(), &mut SheetCache::default(), &sheets).unwrap();
+    let pdf = export_pdf(ed.doc(), ed.revision(), &mut PageCache::default(), &sheets).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
 }
 

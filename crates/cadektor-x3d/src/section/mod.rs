@@ -134,7 +134,7 @@ impl SectionDrawing {
         self.faces
             .iter()
             .flat_map(|f| &f.rings)
-            .map(|r| cut::area2(r) / 2.0)
+            .map(|r| cadektor_core::geom::signed_area(r))
             .sum()
     }
 
@@ -340,13 +340,23 @@ fn cut_faces(
 /// one that needs a drawing computes it, the others get the same one.
 pub type SharedSections = Arc<Mutex<SectionCache>>;
 
+/// Most sections that the cache keeps.
+const MAX_SECTIONS: usize = 256;
+
 /// Keeps the section of each key for one revision of the document. A viewer can ask every frame.
-#[derive(Default)]
 pub struct SectionCache {
-    revision: Option<u64>,
-    map: BTreeMap<u64, Arc<SectionDrawing>>,
+    map: cadektor_core::cache::RevCache<u64, Arc<SectionDrawing>>,
     /// How often a section was computed.
     pub builds: u64,
+}
+
+impl Default for SectionCache {
+    fn default() -> Self {
+        SectionCache {
+            map: cadektor_core::cache::RevCache::new(MAX_SECTIONS),
+            builds: 0,
+        }
+    }
 }
 
 impl SectionCache {
@@ -357,22 +367,17 @@ impl SectionCache {
         key: u64,
         make: impl FnOnce() -> SectionDrawing,
     ) -> Arc<SectionDrawing> {
-        if self.revision != Some(revision) {
-            self.map.clear();
-            self.revision = Some(revision);
-        }
-        if let Some(d) = self.map.get(&key) {
-            return d.clone();
+        if let Some(d) = self.map.get(revision, &key) {
+            return d;
         }
         self.builds += 1;
         let d = Arc::new(make());
-        self.map.insert(key, d.clone());
+        self.map.insert(revision, key, d.clone());
         d
     }
 
     /// Forgets everything.
     pub fn clear(&mut self) {
-        self.revision = None;
         self.map.clear();
     }
 }

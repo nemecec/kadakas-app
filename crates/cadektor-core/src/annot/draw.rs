@@ -583,7 +583,7 @@ fn scale_bar(doc: &Document, b: &ScaleBar, ctx: &Ctx) -> Vec<Prim> {
 /// The scallops of a revision cloud around the points.
 pub fn cloud_outline(points: &[DVec2], bump: f64) -> Vec<DVec2> {
     let mut pts: Vec<DVec2> = points.to_vec();
-    if crate::sheets::signed_area(&pts) < 0.0 {
+    if crate::geom::signed_area(&pts) < 0.0 {
         pts.reverse();
     }
     let mut out = Vec::new();

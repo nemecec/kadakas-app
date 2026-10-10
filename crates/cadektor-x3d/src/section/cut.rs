@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use cadektor_core::geom::{point_in_polygon, signed_area};
 use glam::DVec2;
 
 /// Points closer than this (mm) are one point.
@@ -135,32 +136,12 @@ pub fn simplify(points: &[DVec2], closed: bool, tol: f64) -> Vec<DVec2> {
     }
 }
 
-/// Twice the signed area of a ring: positive when it runs counterclockwise.
-pub fn area2(ring: &[DVec2]) -> f64 {
-    let n = ring.len();
-    (0..n).map(|i| ring[i].perp_dot(ring[(i + 1) % n])).sum()
-}
-
-fn inside(p: DVec2, ring: &[DVec2]) -> bool {
-    let n = ring.len();
-    let mut c = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let (a, b) = (ring[i], ring[j]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
-            c = !c;
-        }
-        j = i;
-    }
-    c
-}
-
 /// Sets the winding of each ring from how deep it lies in the others: outer rings run
 /// counterclockwise, holes run clockwise. Rings with no area are dropped.
 pub fn orient(rings: Vec<Vec<DVec2>>) -> Vec<Vec<DVec2>> {
     let rings: Vec<Vec<DVec2>> = rings
         .into_iter()
-        .filter(|r| r.len() >= 3 && area2(r).abs() > 1e-6)
+        .filter(|r| r.len() >= 3 && signed_area(r).abs() > 5e-7)
         .collect();
     // Nesting is only worked out for a sensible number of rings.
     let nest = rings.len() <= 2000;
@@ -171,7 +152,7 @@ pub fn orient(rings: Vec<Vec<DVec2>>) -> Vec<Vec<DVec2>> {
             let depth = if nest {
                 // A point of the ring that is not shared: the middle of its first edge.
                 let probe = (r[0] + r[1]) / 2.0 + (r[1] - r[0]).perp().normalize_or_zero() * 1e-6;
-                let probe = if inside(probe, r) {
+                let probe = if point_in_polygon(probe, r) {
                     probe
                 } else {
                     (r[0] + r[1]) / 2.0 - (r[1] - r[0]).perp().normalize_or_zero() * 1e-6
@@ -179,13 +160,13 @@ pub fn orient(rings: Vec<Vec<DVec2>>) -> Vec<Vec<DVec2>> {
                 rings
                     .iter()
                     .enumerate()
-                    .filter(|(j, o)| *j != i && inside(probe, o))
+                    .filter(|(j, o)| *j != i && point_in_polygon(probe, o))
                     .count()
             } else {
                 0
             };
             let mut r = r.clone();
-            let ccw = area2(&r) > 0.0;
+            let ccw = signed_area(&r) > 0.0;
             if ccw != (depth % 2 == 0) {
                 r.reverse();
             }
@@ -305,7 +286,7 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert!(c[0].closed);
         assert_eq!(c[0].points.len(), 4);
-        assert!((area2(&c[0].points).abs() / 2.0 - 100.0).abs() < 0.5);
+        assert!((signed_area(&c[0].points).abs() - 100.0).abs() < 0.5);
     }
 
     #[test]
@@ -357,15 +338,15 @@ mod tests {
         let cw_outer: Vec<DVec2> = outer.iter().rev().copied().collect();
         let rings = orient(vec![cw_outer, hole, vec![v(0.0, 0.0), v(1.0, 1.0)]]);
         assert_eq!(rings.len(), 2);
-        assert!(area2(&rings[0]) > 0.0);
-        assert!(area2(&rings[1]) < 0.0);
+        assert!(signed_area(&rings[0]) > 0.0);
+        assert!(signed_area(&rings[1]) < 0.0);
     }
 
     #[test]
     fn rings_clip_to_the_width() {
         let r = vec![v(-5.0, 0.0), v(5.0, 0.0), v(5.0, 10.0), v(-5.0, 10.0)];
         let c = clip_ring(&r, 3.0);
-        let a = area2(&c).abs() / 2.0;
+        let a = signed_area(&c).abs();
         assert!((a - 30.0).abs() < 1e-9);
         assert!(clip_ring(&r, -1.0).is_empty());
         assert!(clip_ring(&[], 1.0).is_empty());

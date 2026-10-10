@@ -328,15 +328,7 @@ impl MeshCache {
 /// Removes repeated points and points that lie on a straight run, and returns the ring
 /// counterclockwise. Fewer than three points left means the ring has no area.
 pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
-    let mut pts: Vec<DVec2> = Vec::with_capacity(points.len());
-    for &p in points {
-        if pts.last().is_none_or(|q| q.distance_squared(p) > 1e-18) {
-            pts.push(p);
-        }
-    }
-    while pts.len() > 1 && pts[0].distance_squared(pts[pts.len() - 1]) <= 1e-18 {
-        pts.pop();
-    }
+    let mut pts = crate::geom::open_ring(points, 1e-9);
     // Drop points where the ring does not turn. Repeat, because a drop can expose another.
     loop {
         let n = pts.len();

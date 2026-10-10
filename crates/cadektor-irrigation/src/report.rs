@@ -168,16 +168,7 @@ fn path_midpoint(p: &[DVec2]) -> DVec2 {
 
 fn polyline_distance(q: DVec2, p: &[DVec2]) -> f64 {
     p.windows(2)
-        .map(|w| {
-            let ab = w[1] - w[0];
-            let l2 = ab.length_squared();
-            let t = if l2 == 0.0 {
-                0.0
-            } else {
-                ((q - w[0]).dot(ab) / l2).clamp(0.0, 1.0)
-            };
-            q.distance(w[0] + ab * t)
-        })
+        .map(|w| cadektor_core::geom::dist_to_segment(q, w[0], w[1]))
         .fold(f64::INFINITY, f64::min)
 }
 

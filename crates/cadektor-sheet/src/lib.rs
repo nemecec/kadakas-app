@@ -18,7 +18,7 @@ pub mod layout;
 pub mod templates;
 pub mod value;
 
-pub use cache::SheetCache;
+pub use cache::WorksheetCache;
 pub use compute::{Computed, compute, compute_with};
 pub use def::{
     CellDef, CellFormat, ColumnDef, DatabaseDef, GroupMode, RowSource, SortKey, Summary,

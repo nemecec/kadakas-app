@@ -17,7 +17,7 @@ use cadektor_core::annot::Annot;
 use cadektor_core::annot::draw::{self, Ctx, LegendRow, Prim, TextSource};
 use cadektor_core::annot::style::TagStyle;
 use cadektor_core::annot::{DataTag, Legend};
-use cadektor_core::hardscape::NoTerrain;
+use cadektor_core::ground::NoTerrain;
 use cadektor_core::model::{Color, Document, Object, Shape};
 use cadektor_core::plants::link;
 use cadektor_sheet::db::ObjEnv;

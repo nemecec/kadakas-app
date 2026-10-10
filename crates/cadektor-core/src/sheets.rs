@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
+use crate::geom::{ccw, point_in_polygon_closed};
 use crate::model::{Attributes, ClassId, Document, LayerId, LayerKind, Object, Shape};
 
 /// Pen, fill and weight used when neither the object nor its class sets them.
@@ -631,7 +632,7 @@ impl Viewport {
 
     /// True if the paper point is inside the visible area.
     pub fn shows_paper(&self, p: DVec2) -> bool {
-        point_in_polygon(p, &self.clip_polygon())
+        point_in_polygon_closed(p, &self.clip_polygon())
     }
 
     /// Stores the document visibility of all design layers and classes in the viewport.
@@ -820,21 +821,6 @@ pub fn rect_polygon(min: DVec2, max: DVec2) -> Vec<DVec2> {
     vec![min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)]
 }
 
-/// Signed area of a polygon, positive when counterclockwise.
-pub fn signed_area(p: &[DVec2]) -> f64 {
-    let n = p.len();
-    (0..n).map(|i| p[i].perp_dot(p[(i + 1) % n])).sum::<f64>() / 2.0
-}
-
-/// The polygon in counterclockwise order.
-pub fn ccw(p: &[DVec2]) -> Vec<DVec2> {
-    let mut v = p.to_vec();
-    if signed_area(&v) < 0.0 {
-        v.reverse();
-    }
-    v
-}
-
 /// Cuts a polygon at a rectangle (Sutherland-Hodgman). The result is empty when nothing is left.
 pub fn clip_polygon_to_rect(poly: &[DVec2], min: DVec2, max: DVec2) -> Vec<DVec2> {
     // Each edge keeps the points with `dot(p, n) <= c`.
@@ -859,31 +845,6 @@ pub fn clip_polygon_to_rect(poly: &[DVec2], min: DVec2, max: DVec2) -> Vec<DVec2
         }
     }
     if out.len() < 3 { Vec::new() } else { out }
-}
-
-/// True if the point is inside the polygon or on its border (ray casting, border counts as inside).
-pub fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
-    let n = poly.len();
-    if n < 3 {
-        return false;
-    }
-    let mut inside = false;
-    for i in 0..n {
-        let (a, b) = (poly[i], poly[(i + 1) % n]);
-        let d = b - a;
-        let t = if d.length_squared() > 0.0 {
-            ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        if (a + d * t).distance(p) < 1e-9 {
-            return true;
-        }
-        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            inside = !inside;
-        }
-    }
-    inside
 }
 
 // ---------------------------------------------------------------- title block
@@ -1239,6 +1200,7 @@ pub fn title_block_geometry(tb: &TitleBlock, fields: &Fields, page: DVec2) -> Ti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geom::signed_area;
     use crate::model::{Class, Color, FIRST_LAYER, NONE_CLASS};
 
     fn v(x: f64, y: f64) -> DVec2 {
@@ -1385,14 +1347,14 @@ mod tests {
         cw.reverse();
         assert_eq!(signed_area(&ccw(&cw)), 4.0);
         assert!(
-            point_in_polygon(v(1.0, 1.0), &sq)
-                && point_in_polygon(v(2.0, 1.0), &sq)
-                && !point_in_polygon(v(3.0, 1.0), &sq)
+            point_in_polygon_closed(v(1.0, 1.0), &sq)
+                && point_in_polygon_closed(v(2.0, 1.0), &sq)
+                && !point_in_polygon_closed(v(3.0, 1.0), &sq)
         );
-        assert!(!point_in_polygon(v(1.0, 1.0), &sq[..2]));
+        assert!(!point_in_polygon_closed(v(1.0, 1.0), &sq[..2]));
         assert!(clip_polygon_to_rect(&sq, v(5.0, 5.0), v(6.0, 6.0)).is_empty());
         let degenerate = [v(0.0, 0.0), v(0.0, 0.0), v(0.0, 0.0)];
-        assert!(!point_in_polygon(v(1.0, 1.0), &degenerate));
+        assert!(!point_in_polygon_closed(v(1.0, 1.0), &degenerate));
     }
 
     #[test]

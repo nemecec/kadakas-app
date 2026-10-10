@@ -3,7 +3,8 @@
 
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::curve;
-use cadektor_core::hardscape::{self, HardscapePatch, TerrainSource};
+use cadektor_core::ground::GroundSource;
+use cadektor_core::hardscape::{self, HardscapePatch};
 use cadektor_core::landscape::{self, LandscapePatch};
 use cadektor_core::mesh;
 use cadektor_core::model::{Attributes, ObjectId, Shape, SiteSettings};
