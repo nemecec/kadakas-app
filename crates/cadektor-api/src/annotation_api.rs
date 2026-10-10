@@ -41,7 +41,7 @@ pub const CALLOUT_ADD: (&str, &str) = ("callout.add", "Add a callout: text with 
 pub const DATA_TAG_ADD: (&str, &str) = ("data_tag.add", "Tag one object. params: {style, object, offset?: [dx, dy] (paper mm from the object, default [8, 8]), layer?, viewport?}. The tag shows the lines of the tag style, calculated live from the object. Returns {id, lines}.");
 pub const DATA_TAG_TAG_ALL: (&str, &str) = ("data_tag.tag_all", "Tag every object that matches the criteria, as one undo step. params: {style, criteria?, layer?, offset?}. criteria is a worksheet expression such as Kind = \"plant\". Objects that have a tag of this style are left out. Returns {tagged, ids, skipped}.");
 pub const LEGEND_ADD: (&str, &str) = ("legend.add", "Add a graphic legend that updates live. params: {at (top left), title?, criteria?, group_by? (expression, default Style), show_count?, swatch_mm?, style?, layer?, class?, viewport?}. Returns {id, rows: [{label, count}]}.");
-pub const NORTH_ARROW_ADD: (&str, &str) = ("north_arrow.add", "Add a north arrow. params: {at, size_mm?, rotation_deg?, use_georef?, style?: arrow|compass|simple, layer?, class?, viewport?}. Returns {id, rotation_deg}.");
+pub const NORTH_ARROW_ADD: (&str, &str) = ("north_arrow.add", "Add a north arrow. params: {at, size_mm?, rotation_deg?, use_georef?, arrow_style?: arrow|compass|simple, layer?, class?, viewport?}. Returns {id, rotation_deg}.");
 pub const SCALE_BAR_ADD: (&str, &str) = ("scale_bar.add", "Add a scale bar that follows the scale of the layer or viewport. params: {at, unit?: m|mm|ft, segment? (length of one segment in the unit, default 5), segments?, height_mm?, scale? (denominator, instead of the one of the layer), style?, layer?, class?, viewport?}. Returns {id, length_mm, length_paper_mm}.");
 pub const REVISION_CLOUD_ADD: (&str, &str) = ("revision_cloud.add", "Add a revision cloud around changes. params: {points: [[x, y]], bump_mm?, revision, date?, description?, author?, mark?, layer?, class?, viewport?}. Returns {id}.");
 pub const ANNOTATION_TEXT: (&str, &str) = ("annotation.text", "Add text with a text style. The size is paper mm, so it follows the scale. params: {at, text, style?, layer?, class?, viewport?}. Lines are separated by a newline. Returns {id}.");
@@ -390,6 +390,16 @@ fn prep_callout(doc: &Document, j: &mut Map<String, Value>) -> Result<(), RpcErr
 
 /// Resolves the resource names of the params into IDs.
 fn resolve_refs(doc: &Document, ty: &str, j: &mut Map<String, Value>) -> Result<(), RpcError> {
+    // The style of a north arrow is its look (arrow, compass, simple), not a resource.
+    // The API calls it `arrow_style`.
+    if ty == "north_arrow" {
+        if let Some(a) = j.remove("arrow_style") {
+            j.insert("style".into(), a);
+        } else if j.get("style").is_some_and(Value::is_number) {
+            return Err(bad("a north arrow has no resource style. Use arrow_style: arrow, compass or simple"));
+        }
+        return Ok(());
+    }
     if let Some(v) = j.get("style").filter(|v| !v.is_null()).cloned() {
         j.insert("style".into(), json!(resource_ref(doc, &v, style_type_of(ty))?));
     }
@@ -496,9 +506,9 @@ fn computed(doc: &Document, a: &Annot, ctx: &Ctx) -> Value {
         Annot::Dimension(d) => {
             let style = draw::dimension_style(doc, d);
             let vals: Vec<f64> = dim::values(d).iter().map(|v| if matches!(d.mode, DimMode::Angular) { *v } else { v / ctx.real }).collect();
-            json!({"mode": d.mode.name(), "values": vals, "texts": dim::texts(d, &style, ctx), "points": d.points})
+            json!({"mode": d.mode.name(), "detached": d.detached, "values": vals, "texts": dim::texts(d, &style, ctx), "points": d.points})
         }
-        Annot::Callout(c) => json!({"text": draw::callout_text(doc, c)}),
+        Annot::Callout(c) => json!({"text": draw::callout_text(doc, c), "detached": c.detached}),
         Annot::DataTag(t) => {
             let lines = doc.resources.tag_style(t.style).map(|st| annot::tag_lines(doc, t, st)).unwrap_or_default();
             json!({"lines": lines, "object_exists": doc.object(t.object).is_some()})
@@ -512,8 +522,7 @@ fn computed(doc: &Document, a: &Annot, ctx: &Ctx) -> Value {
             json!({"length_mm": b.real_length_mm(), "length_drawing": len, "length_paper_mm": len / ctx.paper})
         }
         Annot::NorthArrow(n) => {
-            let rot = n.rotation_deg + if n.use_georef { doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees()) } else { 0.0 };
-            json!({"rotation_deg": rot})
+            json!({"rotation_deg": draw::north_rotation_deg(doc, n)})
         }
         Annot::RevisionCloud(r) => json!({"revision": r.revision, "points": r.points.len()}),
         Annot::Text(t) => json!({"text": t.text}),

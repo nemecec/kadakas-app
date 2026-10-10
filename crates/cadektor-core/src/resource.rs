@@ -92,7 +92,8 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 .map(|s| ResourceBody::LandscapeAreaStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
             _ => match crate::annot::style::AnnotResource::from_json(&v) {
-                Some(r) => r.map(|a| ResourceBody::Annot(Box::new(a))).map_err(serde::de::Error::custom),
+                // A value from a newer app (a unit this version does not know): keep the raw JSON and save it again.
+                Some(r) => Ok(r.map_or_else(|_| ResourceBody::Unknown(v.clone()), |a| ResourceBody::Annot(Box::new(a)))),
                 None => Ok(ResourceBody::Unknown(v)),
             },
         }

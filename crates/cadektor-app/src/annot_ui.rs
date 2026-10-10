@@ -13,12 +13,28 @@ use crate::canvas::{Style, color32};
 use crate::tools::{DimToolMode, Tool, ToolSettings};
 use crate::view::View;
 
+thread_local! {
+    /// Primitives and legend rows by document revision, so a frame or a click does not read the
+    /// whole document again for every tag and legend.
+    static CACHE: (std::cell::Cell<u64>, cadektor_annot::AnnotCache) = Default::default();
+}
+
+/// Tells the cache which document revision is current. The canvas calls it before it draws or picks.
+pub fn set_revision(revision: u64) {
+    CACHE.with(|c| c.0.set(revision));
+}
+
+/// The primitives of an annotation object (from the cache).
+fn object_prims(doc: &Document, o: &Object) -> std::sync::Arc<Vec<Prim>> {
+    CACHE.with(|c| c.1.prims(doc, o, c.0.get()))
+}
+
 /// Draws an annotation object. `offset` is added to every point (drag ghosts).
 pub fn draw_object(painter: &Painter, view: &View, doc: &Document, o: &Object, st: Style, offset: DVec2) {
     if !matches!(o.shape, Shape::Annotation(_)) {
         return;
     }
-    draw_prims(painter, view, &cadektor_annot::prims(doc, o), st, offset);
+    draw_prims(painter, view, &object_prims(doc, o), st, offset);
 }
 
 /// Draws the preview of an annotation that a tool is making (on the active layer).
@@ -58,7 +74,7 @@ fn draw_prims(painter: &Painter, view: &View, prims: &[Prim], st: Style, offset:
 
 /// True if `p` is within `tol` of a line of the annotation or inside the box of its text.
 pub fn hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
-    cadektor_annot::prims(doc, o).iter().any(|prim| match prim {
+    object_prims(doc, o).iter().any(|prim| match prim {
         Prim::Poly { pts, closed, .. } => {
             let n = pts.len();
             let segs = if *closed { n } else { n.saturating_sub(1) };
@@ -73,7 +89,7 @@ pub fn hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
 
 /// The box around what an annotation draws.
 pub fn bounds(doc: &Document, o: &Object) -> (DVec2, DVec2) {
-    prims_bounds(&cadektor_annot::prims(doc, o)).unwrap_or_else(|| o.shape.bounds())
+    prims_bounds(&object_prims(doc, o)).unwrap_or_else(|| o.shape.bounds())
 }
 
 /// The command that adds a graphic legend at `at` (the top left corner), on the active layer.
@@ -210,6 +226,11 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
             ui.label("Associative");
             ui.label(format!("{} of {} points", d.anchors.iter().flatten().count(), d.points.len()));
             ui.end_row();
+            if d.detached {
+                ui.label("Detached");
+                ui.label("An anchored vertex or edge is gone. The dimension keeps its last place.");
+                ui.end_row();
+            }
         }
         Annot::Text(t) => {
             ui.label("Text");
@@ -223,6 +244,11 @@ pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
             commit |= r.lost_focus();
             ui.end_row();
             num(ui, &mut commit, "Shoulder (paper mm)", &mut c.shoulder_mm, 0.5);
+            if c.detached {
+                ui.label("Detached");
+                ui.label("A leader lost its vertex or edge.");
+                ui.end_row();
+            }
         }
         Annot::DataTag(t) => {
             let mut x = t.offset.x;

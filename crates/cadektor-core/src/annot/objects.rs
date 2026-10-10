@@ -38,6 +38,17 @@ fn half() -> f64 {
 pub struct Anchor {
     pub object: ObjectId,
     pub target: AnchorTarget,
+    /// The number of vertices that the object had when the anchor was last applied. If the count
+    /// changes, the anchor binds again to the vertex that is still where it was, or lets go
+    /// (see `sync`). `None` before the first sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+impl Anchor {
+    pub fn new(object: ObjectId, target: AnchorTarget) -> Anchor {
+        Anchor { object, target, count: None }
+    }
 }
 
 /// The direction in which a linear dimension measures.
@@ -180,6 +191,9 @@ pub struct Dimension {
     /// Text that replaces the measured value (of a single dimension).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// True when an anchor let go because its vertex or edge is gone. The point keeps its place.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
 }
 
 /// Text with a text style. The size is paper mm, so it follows the scale of the layer.
@@ -223,6 +237,9 @@ pub struct Callout {
     pub shoulder_mm: f64,
     #[serde(default)]
     pub terminator: Terminator,
+    /// True when the anchor of a leader let go because its vertex or edge is gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
 }
 
 fn default_shoulder() -> f64 {

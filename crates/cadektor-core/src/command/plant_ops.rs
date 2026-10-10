@@ -23,6 +23,13 @@ impl Tx<'_> {
 
     /// A landscape area style may only use plant styles that exist.
     fn check_body_refs(&self, body: &ResourceBody) -> Result<(), CommandError> {
+        // An annotation resource that could not be read (a value this version does not know) is
+        // kept when a file is loaded. A new one must be valid.
+        if let ResourceBody::Unknown(v) = body
+            && let Some(Err(e)) = crate::annot::style::AnnotResource::from_json(v)
+        {
+            return Err(invalid(format!("invalid {}: {e}", v["type"].as_str().unwrap_or("resource"))));
+        }
         if let ResourceBody::LandscapeAreaStyle(s) = body {
             for e in &s.mix {
                 if self.doc.resources.plant_style(e.plant).is_none() {

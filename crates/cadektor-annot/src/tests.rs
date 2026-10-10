@@ -135,3 +135,52 @@ fn svg_has_lines_and_text() {
     svg::object_svg(ed.doc(), ed.doc().object(line).unwrap(), "", &mut none);
     assert!(none.is_empty());
 }
+
+#[test]
+fn the_cache_keeps_primitives_per_revision() {
+    let mut ed = Editor::default();
+    let style = tag_style(&mut ed, &["{Species}"]);
+    let p = plant(&mut ed, 0.0, "Oak");
+    let tag = add(&mut ed, Shape::Annotation(Box::new(Annot::DataTag(DataTag { style, object: p, offset: DVec2::new(5.0, 5.0), at: DVec2::ZERO, anchor: DVec2::ZERO }))));
+    let legend = add(&mut ed, Shape::Annotation(Box::new(Annot::Legend(Legend { at: DVec2::ZERO, title: String::new(), criteria: "Kind = \"plant\"".into(), group_by: "Species".into(), show_count: true, swatch_mm: 6.0, style: None }))));
+    let other = add(&mut ed, Shape::Annotation(Box::new(Annot::Legend(Legend { at: DVec2::new(5.0, 5.0), title: String::new(), criteria: "Kind = \"plant\"".into(), group_by: "Species".into(), show_count: true, swatch_mm: 6.0, style: None }))));
+    let cache = AnnotCache::default();
+    let doc = ed.doc();
+    let first = cache.prims(doc, doc.object(tag).unwrap(), 7);
+    let again = cache.prims(doc, doc.object(tag).unwrap(), 7);
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "same revision: the same primitives");
+    assert!(cache.prims(doc, doc.object(legend).unwrap(), 7).iter().any(|x| matches!(x, Prim::Text { text, .. } if text == "Oak")));
+    assert!(!cache.prims(doc, doc.object(other).unwrap(), 7).is_empty(), "the second legend shares the rows");
+    // A new revision starts again; revision 0 keeps nothing.
+    let next = cache.prims(doc, doc.object(tag).unwrap(), 8);
+    assert!(!std::sync::Arc::ptr_eq(&first, &next));
+    let zero = cache.prims(doc, doc.object(tag).unwrap(), 0);
+    assert!(!std::sync::Arc::ptr_eq(&zero, &cache.prims(doc, doc.object(tag).unwrap(), 0)));
+    assert!(cache.prims(doc, doc.object(p).unwrap(), 8).is_empty(), "not an annotation");
+    let a = Annot::Text(StyledText { at: DVec2::ZERO, text: "x".into(), style: None });
+    assert_eq!(prims_in(doc, &a, &cadektor_core::annot::draw::Ctx { paper: 1.0, real: 1.0, view: None }).len(), 1);
+}
+
+#[test]
+fn legends_cap_their_rows_and_use_the_style_colors_of_plants() {
+    let mut ed = Editor::default();
+    let cmds: Vec<Command> = (0..600)
+        .map(|i| Command::AddObject { shape: Shape::Plant { at: DVec2::new(i as f64, 0.0), species: format!("S{i:04}"), spread: 10.0, height: 10.0 }, layer: None, class: None, attrs: Attributes::default() })
+        .collect();
+    ed.execute(&Command::Batch { commands: cmds }).unwrap();
+    let l = Legend { at: DVec2::ZERO, title: String::new(), criteria: String::new(), group_by: "Species".into(), show_count: true, swatch_mm: 6.0, style: None };
+    let rows = legend_rows(ed.doc(), &l);
+    assert_eq!(rows.len(), MAX_LEGEND_ROWS + 1);
+    assert_eq!(rows[MAX_LEGEND_ROWS].label, "... 100 more");
+    assert_eq!(rows[MAX_LEGEND_ROWS].count, 100);
+    // A plant with a style shows the colors of the style.
+    let mut ed = Editor::default();
+    let style = cadektor_core::plants::style::PlantStyle { fill: Some(cadektor_core::model::Color([10, 200, 10, 255])), ..Default::default() };
+    let sid = ed.execute(&Command::AddResource { name: "Oak".into(), body: ResourceBody::plant_style(style) }).unwrap().created[0];
+    ed.execute(&Command::AddPlants { style: Some(ResourceId(sid)), overrides: Default::default(), positions: vec![DVec2::ZERO], layer: None, class: None, variation: None }).unwrap();
+    let rows = legend_rows(ed.doc(), &Legend { group_by: "Style".into(), ..l.clone() });
+    assert_eq!(rows[0].fill, Some(cadektor_core::model::Color([10, 200, 10, 255])));
+    // Objects without a value for the group are left out.
+    ed.execute(&Command::AddObject { shape: Shape::Line { a: DVec2::ZERO, b: DVec2::X }, layer: None, class: None, attrs: Attributes::default() }).unwrap();
+    assert_eq!(legend_rows(ed.doc(), &Legend { group_by: "Style".into(), ..l }).len(), 1);
+}

@@ -65,6 +65,21 @@ pub fn offset_for(mode: DimMode, p: &[DVec2], through: DVec2, paper: f64) -> f64
     (through - p[0]).dot(direction(axis, p).perp()) / paper
 }
 
+/// Rounds to a number of decimals, halves away from zero (2.5 gives 3, -2.5 gives -3).
+pub fn round_half_away(x: f64, decimals: usize) -> f64 {
+    let k = 10f64.powi(decimals as i32);
+    let r = (x * k).round() / k;
+    if r.is_finite() { r } else { x }
+}
+
+/// Puts the two ray points of an angular dimension in the order that measures the angle the user
+/// meant, like the click order in a CAD program: clicks that turn clockwise measure the
+/// same (smaller) angle as clicks that turn counterclockwise. The angle is at most 180 degrees.
+pub fn angular_order(vertex: DVec2, p1: DVec2, p2: DVec2) -> (DVec2, DVec2) {
+    let sweep = ((p2 - vertex).to_angle() - (p1 - vertex).to_angle()).rem_euclid(TAU);
+    if sweep > std::f64::consts::PI { (p2, p1) } else { (p1, p2) }
+}
+
 fn trim_number(s: String) -> String {
     if s.starts_with('-') && s[1..].chars().all(|c| c == '0' || c == '.') { s[1..].to_string() } else { s }
 }
@@ -72,6 +87,10 @@ fn trim_number(s: String) -> String {
 /// A length in real mm as text in the units of the style.
 pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
     let p = style.precision as usize;
+    let mm = match style.round_to {
+        Some(inc) if inc > 0.0 => (mm / inc).round() * inc,
+        _ => mm,
+    };
     match style.unit {
         LengthUnit::FtIn => {
             let total = mm / 25.4;
@@ -79,8 +98,7 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
             let total = total.abs();
             let mut feet = (total / 12.0).floor();
             let mut inches = total - feet * 12.0;
-            let scale = 10f64.powi(p as i32);
-            inches = (inches * scale).round() / scale;
+            inches = round_half_away(inches, p);
             if inches >= 12.0 {
                 feet += 1.0;
                 inches -= 12.0;
@@ -95,7 +113,7 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
                 LengthUnit::In => 25.4,
                 _ => 304.8,
             };
-            let n = trim_number(format!("{:.p$}", mm / k));
+            let n = trim_number(format!("{:.p$}", round_half_away(mm / k, p)));
             if style.show_unit { format!("{n}{}", unit.suffix()) } else { n }
         }
     }
@@ -103,12 +121,12 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
 
 /// An angle in degrees as text.
 pub fn format_angle(deg: f64, style: &DimensionStyle) -> String {
-    format!("{}\u{b0}", trim_number(format!("{:.*}", style.angle_precision as usize, deg)))
+    format!("{}\u{b0}", trim_number(format!("{:.*}", style.angle_precision as usize, round_half_away(deg, style.angle_precision as usize))))
 }
 
 fn tolerance_text(style: &DimensionStyle) -> String {
     let Some(t) = style.tolerance else { return String::new() };
-    let num = |x: f64| trim_number(format!("{:.*}", style.precision as usize, x));
+    let num = |x: f64| trim_number(format!("{:.*}", style.precision as usize, round_half_away(x, style.precision as usize)));
     if t.plus == t.minus { format!(" \u{b1}{}", num(t.plus)) } else { format!(" +{}/-{}", num(t.plus), num(t.minus)) }
 }
 

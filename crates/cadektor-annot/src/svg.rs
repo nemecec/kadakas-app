@@ -56,10 +56,15 @@ pub fn prims_svg(prims: &[Prim], stroke: &str, weight: f64, group_attrs: &str) -
 /// The SVG of an annotation object, as `cadektor_core::svg::render_with` wants it from an
 /// extension: it gets the document, the object, the attribute string of the object and the output.
 pub fn object_svg(doc: &Document, obj: &Object, style: &str, out: &mut String) {
+    object_svg_with(doc, obj, style, out, &crate::AnnotCache::default(), 0);
+}
+
+/// Like `object_svg`, with the primitives from a cache (see `AnnotCache`).
+pub fn object_svg_with(doc: &Document, obj: &Object, style: &str, out: &mut String, cache: &crate::AnnotCache, revision: u64) {
     let Shape::Annotation(a) = &obj.shape else { return };
     let stroke = attr(style, "stroke").unwrap_or("rgba(0,0,0,1.000)");
     let weight: f64 = attr(style, "stroke-width").and_then(|w| w.parse().ok()).unwrap_or(1.0);
-    let prims = crate::prims(doc, obj);
+    let prims = cache.prims(doc, obj, revision);
     let group = format!(r#"data-kind="annotation" data-type="{}" data-id="{}""#, a.type_name(), obj.id);
-    out.push_str(&prims_svg(&prims, stroke, weight, &group));
+    out.push_str(&prims_svg(prims.as_slice(), stroke, weight, &group));
 }

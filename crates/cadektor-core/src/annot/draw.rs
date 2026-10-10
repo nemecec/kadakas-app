@@ -316,9 +316,15 @@ fn rotate(p: DVec2, deg: f64) -> DVec2 {
     DVec2::from_angle(deg.to_radians()).rotate(p)
 }
 
+/// The counterclockwise angle of the north arrow on the page. The georeference maps the model to
+/// the map by a turn of `rotation`, so true north lies at minus that angle in the model.
+pub fn north_rotation_deg(doc: &Document, n: &NorthArrow) -> f64 {
+    n.rotation_deg - if n.use_georef { doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees()) } else { 0.0 }
+}
+
 fn north_arrow(doc: &Document, n: &NorthArrow, ctx: &Ctx) -> Vec<Prim> {
     let s = n.size_mm * ctx.paper;
-    let rot = n.rotation_deg + if n.use_georef { doc.georef.as_ref().map_or(0.0, |g| g.rotation.to_degrees()) } else { 0.0 };
+    let rot = north_rotation_deg(doc, n);
     let at = |x: f64, y: f64| n.at + rotate(DVec2::new(x, y) * s, rot);
     let mut out = Vec::new();
     match n.style {

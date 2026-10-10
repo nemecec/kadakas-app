@@ -170,7 +170,7 @@ fn anchor_at(doc: &Document, p: DVec2, tol: f64) -> Option<Anchor> {
         .flat_map(|o| shape_vertices(&o.shape).into_iter().enumerate().map(move |(i, v)| (o.id, i, v.distance(p))))
         .filter(|(_, _, d)| *d <= tol * 0.1)
         .min_by(|a, b| a.2.total_cmp(&b.2))
-        .map(|(object, index, _)| Anchor { object, target: AnchorTarget::Vertex { index } })
+        .map(|(object, index, _)| Anchor::new(object, AnchorTarget::Vertex { index }))
 }
 
 fn dimension(mode: DimMode, points: Vec<DVec2>, anchors: Vec<Option<Anchor>>, offset: f64, style: Option<ResourceId>) -> Annot {
@@ -178,7 +178,7 @@ fn dimension(mode: DimMode, points: Vec<DVec2>, anchors: Vec<Option<Anchor>>, of
     while anchors.last().is_some_and(Option::is_none) {
         anchors.pop();
     }
-    Annot::Dimension(Dimension { mode, points, anchors: if anchors.iter().all(Option::is_none) { Vec::new() } else { anchors }, offset, style, text: None })
+    Annot::Dimension(Dimension { mode, points, anchors: if anchors.iter().all(Option::is_none) { Vec::new() } else { anchors }, offset, style, text: None, detached: false })
 }
 
 impl ToolMachine {
@@ -256,7 +256,7 @@ impl ToolMachine {
                     Shape::Arc { center, radius, start, end } => (*center, *radius, Some((*start, *end))),
                     _ => return vec![Effect::Notice("Click a circle or an arc".into())],
                 };
-                let center_anchor = Some(Anchor { object: obj.id, target: AnchorTarget::Center });
+                let center_anchor = Some(Anchor::new(obj.id, AnchorTarget::Center));
                 let dir = (p - center).normalize_or(DVec2::X);
                 let a = match mode {
                     DimToolMode::ArcLength => {
@@ -283,6 +283,8 @@ impl ToolMachine {
                 }
                 pts.push(p);
                 if mode == DimToolMode::Angular && pts.len() == 3 {
+                    let (a, b) = annot::dim::angular_order(pts[0], pts[1], pts[2]);
+                    pts = vec![pts[0], a, b];
                     let anchors = pts.iter().map(|q| anchor_at(cx.doc, *q, cx.tol)).collect();
                     return vec![add(dimension(DimMode::Angular, pts, anchors, 0.0, s.dim_style))];
                 }
@@ -318,6 +320,7 @@ impl ToolMachine {
                     leaders: vec![Leader { points: vec![pts[0]], anchor }],
                     shoulder_mm: 5.0,
                     terminator: Default::default(),
+                    detached: false,
                 }))]
             }
             _ => {
@@ -370,6 +373,10 @@ impl ToolMachine {
                 }
                 let mut all = pts;
                 all.push(cursor);
+                if mode == DimToolMode::Angular && all.len() == 3 {
+                    let (a, b) = annot::dim::angular_order(all[0], all[1], all[2]);
+                    all = vec![all[0], a, b];
+                }
                 (all.len() >= lo).then(|| dimension(m, all, vec![], s.offset_mm, s.dim_style)).and_then(shape)
             }
             Tool::NorthArrow => shape(Annot::NorthArrow(NorthArrow { at: cursor, size_mm: s.north_size_mm, rotation_deg: 0.0, use_georef: false, style: Default::default() })),
@@ -396,6 +403,7 @@ impl ToolMachine {
                 leaders: vec![Leader { points: vec![pts[0]], anchor: None }],
                 shoulder_mm: 5.0,
                 terminator: Default::default(),
+                detached: false,
             })),
             _ => None,
         }
@@ -411,5 +419,83 @@ impl ToolMachine {
             Tool::ScaleBar => "Click to place the scale bar. It follows the scale of the layer.",
             _ => "Click the corners around the changes. Enter or double-click finishes.",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolSettings;
+
+    fn click(m: &mut ToolMachine, doc: &Document, s: &ToolSettings, p: DVec2) -> Vec<Effect> {
+        let cx = Ctx { doc, selection: &[], settings: s, tol: 1.0 };
+        m.handle(Input::Press { p, shift: false }, &cx)
+    }
+
+    fn made(fx: &[Effect]) -> Annot {
+        let Some(Effect::Exec(Command::AddObject { shape: Shape::Annotation(a), .. })) = fx.first() else { panic!("{fx:?}") };
+        (**a).clone()
+    }
+
+    #[test]
+    fn clockwise_angular_clicks_measure_the_small_angle() {
+        let doc = Document::default();
+        let mut s = ToolSettings::default();
+        s.annot.dim_mode = DimToolMode::Angular;
+        for (p1, p2) in [(DVec2::new(1000.0, 0.0), DVec2::new(0.0, 1000.0)), (DVec2::new(0.0, 1000.0), DVec2::new(1000.0, 0.0))] {
+            let mut m = ToolMachine::default();
+            m.set_tool(Tool::Dimension);
+            assert!(click(&mut m, &doc, &s, DVec2::ZERO).is_empty());
+            assert!(click(&mut m, &doc, &s, p1).is_empty());
+            let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, p2)) else { panic!() };
+            assert!((annot::dim::values(&d)[0] - 90.0).abs() < 1e-9, "both click orders give 90 degrees");
+        }
+    }
+
+    #[test]
+    fn the_tools_make_annotations() {
+        let doc = Document::default();
+        let s = ToolSettings::default();
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::Dimension);
+        click(&mut m, &doc, &s, DVec2::ZERO);
+        click(&mut m, &doc, &s, DVec2::new(5000.0, 0.0));
+        assert!(m.preview(DVec2::new(100.0, 1000.0), &Ctx { doc: &doc, selection: &[], settings: &s, tol: 1.0 }) != Preview::None);
+        let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, DVec2::new(2000.0, 1000.0))) else { panic!() };
+        assert_eq!(d.offset, 10.0, "1000 units at 1:100 are 10 paper mm");
+        for (tool, kind) in [(Tool::NorthArrow, "north_arrow"), (Tool::ScaleBar, "scale_bar")] {
+            let mut m = ToolMachine::default();
+            m.set_tool(tool);
+            assert_eq!(made(&click(&mut m, &doc, &s, DVec2::ZERO)).type_name(), kind);
+        }
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::RevisionCloud);
+        for p in [DVec2::ZERO, DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0)] {
+            click(&mut m, &doc, &s, p);
+        }
+        let cx = Ctx { doc: &doc, selection: &[], settings: &s, tol: 1.0 };
+        assert!(m.preview(DVec2::new(0.0, 10.0), &cx) != Preview::None);
+        assert_eq!(made(&m.handle(Input::Enter, &cx)).type_name(), "revision_cloud");
+        // A data tag needs a tag style and an object.
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::DataTag);
+        assert!(matches!(click(&mut m, &doc, &s, DVec2::ZERO)[0], Effect::Notice(_)));
+        // A callout takes two clicks.
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::Callout);
+        assert!(click(&mut m, &doc, &s, DVec2::ZERO).is_empty());
+        assert!(m.preview(DVec2::new(5.0, 5.0), &cx) != Preview::None);
+        assert_eq!(made(&click(&mut m, &doc, &s, DVec2::new(500.0, 500.0))).type_name(), "callout");
+        // Radial needs a circle.
+        let mut s2 = s.clone();
+        s2.annot.dim_mode = DimToolMode::Radial;
+        let mut m = ToolMachine::default();
+        m.set_tool(Tool::Dimension);
+        assert!(matches!(click(&mut m, &doc, &s2, DVec2::ZERO)[0], Effect::Notice(_)));
+        for mode in DimToolMode::ALL {
+            assert!(!mode.label().is_empty() && !mode.help().is_empty());
+            assert_ne!(mode.next(), mode);
+        }
+        assert!(!m.annot_hint(&s2).is_empty());
     }
 }

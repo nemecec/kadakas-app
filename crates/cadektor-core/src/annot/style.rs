@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::Color;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
+/// Most notes in one notes database.
+pub const MAX_NOTES: usize = 2000;
+
 /// Largest size of a text in paper mm.
 pub const MAX_TEXT_MM: f64 = 200.0;
 
@@ -132,6 +135,9 @@ pub struct DimensionStyle {
     pub suffix: String,
     pub tolerance: Option<Tolerance>,
     pub color: Option<Color>,
+    /// Round lengths to a multiple of this many real mm (for example 0.5 or 5) before they are
+    /// shown. `None`: round to `precision` decimals only.
+    pub round_to: Option<f64>,
 }
 
 impl Default for DimensionStyle {
@@ -153,6 +159,7 @@ impl Default for DimensionStyle {
             suffix: String::new(),
             tolerance: None,
             color: None,
+            round_to: None,
         }
     }
 }
@@ -174,6 +181,12 @@ impl DimensionStyle {
         }
         if self.font.trim().is_empty() {
             return Err("a dimension style needs a font".into());
+        }
+        if self.prefix.chars().count() > super::MAX_TEXT_CHARS || self.suffix.chars().count() > super::MAX_TEXT_CHARS {
+            return Err("the prefix and suffix are too long".into());
+        }
+        if self.round_to.is_some_and(|r| !r.is_finite() || r <= 0.0 || r > 1.0e6) {
+            return Err("round_to must be a positive number of mm".into());
         }
         Ok(())
     }
@@ -235,6 +248,9 @@ impl TagStyle {
         }
         let mut open = 0i32;
         for line in &self.lines {
+            if line.chars().count() > super::MAX_TEXT_CHARS {
+                return Err("a tag line is too long".into());
+            }
             for c in line.chars() {
                 match c {
                     '{' => open += 1,
@@ -273,11 +289,18 @@ impl NotesDb {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for (i, n) in self.notes.iter().enumerate() {
+        if self.notes.len() > MAX_NOTES {
+            return Err(format!("a notes database holds at most {MAX_NOTES} notes"));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.notes.len());
+        for n in &self.notes {
             if n.key.trim().is_empty() {
                 return Err("a note needs a key".into());
             }
-            if self.notes[..i].iter().any(|o| o.key.eq_ignore_ascii_case(n.key.trim())) {
+            if n.key.chars().count() > 200 || n.text.chars().count() > super::MAX_TEXT_CHARS {
+                return Err(format!("note '{}' is too long", n.key.chars().take(20).collect::<String>()));
+            }
+            if !seen.insert(n.key.trim().to_lowercase()) {
                 return Err(format!("two notes have the key '{}'", n.key.trim()));
             }
         }

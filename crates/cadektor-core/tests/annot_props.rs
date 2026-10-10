@@ -1,6 +1,7 @@
 //! Property tests: dimension values match the geometry after any moves, and scale bars are right at any scale.
 
 use cadektor_core::annot::draw::{Ctx, scale_bar_length};
+use cadektor_core::curve::{Vertex, VertexKind};
 use cadektor_core::annot::*;
 use cadektor_core::command::{Command, Editor};
 use cadektor_core::model::{Attributes, ObjectId, Shape};
@@ -21,9 +22,9 @@ proptest! {
         let a = DVec2::new(x, y);
         let b = a + DVec2::new(len, 0.0);
         let l = add(&mut ed, Shape::Line { a, b });
-        let anchor = |i| Some(Anchor { object: l, target: AnchorTarget::Vertex { index: i } });
+        let anchor = |i| Some(Anchor { object: l, target: AnchorTarget::Vertex { index: i }, count: None });
         let d = add(&mut ed, Shape::Annotation(Box::new(Annot::Dimension(Dimension {
-            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![a, b], anchors: vec![anchor(0), anchor(1)], offset: 5.0, style: None, text: None,
+            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![a, b], anchors: vec![anchor(0), anchor(1)], offset: 5.0, style: None, text: None, detached: false,
         }))));
         for (dx, dy) in moves {
             ed.execute(&Command::MoveObjects { ids: vec![l], delta: DVec2::new(dx, dy) }).unwrap();
@@ -45,5 +46,57 @@ proptest! {
         // A layer at 1:scale: the bar is the real length in model units, which is real / scale paper mm.
         let layer = Ctx { paper: scale, real: 1.0, view: None };
         prop_assert!((scale_bar_length(&bar, &layer) / layer.paper - real / scale).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchored_dimensions_agree_with_a_model_after_random_edits(
+        edits in proptest::collection::vec((0u8..3, 0usize..8, 0.0..3.0f64, -500.0..500.0f64), 1..25),
+        ia in 0usize..4, ib in 0usize..4,
+    ) {
+        // Vertices have identities. A model tracks where each one is; the dimension must agree with it.
+        let mut next_id = 0u32;
+        let mut verts: Vec<(u32, DVec2)> = Vec::new();
+        let mut fresh = |y: f64, verts: &mut Vec<(u32, DVec2)>, at: usize| {
+            let id = next_id;
+            next_id += 1;
+            verts.insert(at.min(verts.len()), (id, DVec2::new(id as f64 * 10.0, y)));
+            id
+        };
+        for i in 0..4 { fresh(i as f64, &mut verts, i); }
+        let shape = |verts: &[(u32, DVec2)]| Shape::Polyline { points: verts.iter().map(|(_, p)| Vertex::new(*p, VertexKind::Corner)).collect(), closed: false };
+        let mut ed = Editor::default();
+        let pl = add(&mut ed, shape(&verts));
+        let (ia, ib) = (ia, if ib == ia { (ib + 1) % 4 } else { ib });
+        let (ida, idb) = (verts[ia].0, verts[ib].0);
+        let (pa, pb) = (verts[ia].1, verts[ib].1);
+        let anchor = |i| Some(Anchor::new(pl, AnchorTarget::Vertex { index: i }));
+        let d = add(&mut ed, Shape::Annotation(Box::new(Annot::Dimension(Dimension {
+            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![pa, pb], anchors: vec![anchor(ia), anchor(ib)], offset: 5.0, style: None, text: None, detached: false,
+        }))));
+        let mut last = [pa, pb];
+        let mut attached = [true, true];
+        for (kind, at, jitter, y) in edits {
+            match kind {
+                0 => { fresh(y, &mut verts, at); }
+                1 if verts.len() > 3 => { verts.remove(at % verts.len()); }
+                _ => { let i = at % verts.len(); let id = verts[i].0; verts[i].1 = DVec2::new(id as f64 * 10.0 + jitter, y); }
+            }
+            ed.execute(&Command::ModifyObject { id: pl, shape: Some(shape(&verts)), layer: None, class: None, attrs: None }).unwrap();
+            for (k, id) in [ida, idb].into_iter().enumerate() {
+                match verts.iter().find(|(v, _)| *v == id) {
+                    Some((_, p)) if attached[k] => last[k] = *p,
+                    Some(_) => {}
+                    None => attached[k] = false,
+                }
+            }
+            let Shape::Annotation(an) = &ed.doc().object(d).unwrap().shape else { panic!() };
+            let Annot::Dimension(dm) = &**an else { panic!() };
+            prop_assert_eq!(dm.points[0], last[0]);
+            prop_assert_eq!(dm.points[1], last[1]);
+            prop_assert_eq!(dm.detached, !(attached[0] && attached[1]));
+        }
+        // Undo all edits: the dimension is as it was.
+        while ed.undo() {}
+        prop_assert!(ed.doc().object(d).is_none());
     }
 }

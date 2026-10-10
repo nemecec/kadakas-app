@@ -150,3 +150,21 @@ def test_pdf_has_dimension_tag_and_scale_bar_text(cad, tmp_path):
     text = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, check=True).stdout
     assert "4000" in text, text  # 40 paper mm at 1:100
     assert "10 m" in text and "Planting notes" in text
+
+
+@pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext is not installed")
+def test_pdf_tags_do_not_overlap_when_the_viewport_scale_differs_from_the_layer_scale(cad, tmp_path):
+    import re
+
+    cad.result("tag_style.create", {"name": "Name", "lines": ["{Species}"], "leader": False})
+    for x, name in [(0, "Alpha"), (3000, "Beta")]:
+        cad.execute({"op": "add_object", "shape": {"kind": "plant", "at": [x, 0], "species": name, "spread": 500, "height": 500}})
+    cad.result("data_tag.tag_all", {"style": "Name", "criteria": 'Kind = "plant"', "offset": [0, 6]})
+    sheet = cad.result("sheet.create", {"name": "Plan", "paper": "a3"})["layer"]
+    cad.result("viewport.create", {"sheet": sheet, "scale": 500, "view": "plan"})
+    path = tmp_path / "t.pdf"
+    cad.result("export.file", {"format": "pdf", "path": str(path)})
+    boxes = subprocess.run(["pdftotext", "-bbox", str(path), "-"], capture_output=True, text=True, check=True).stdout
+    words = {m[4]: tuple(float(x) for x in m[:4]) for m in re.findall(r'xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(\w+)<', boxes)}
+    a, b = words["Alpha"], words["Beta"]
+    assert a[2] <= b[0] or b[2] <= a[0], f"labels overlap: {a} {b}"

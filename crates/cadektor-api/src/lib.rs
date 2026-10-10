@@ -47,6 +47,8 @@ pub struct Session {
     #[cfg(not(target_arch = "wasm32"))]
     pub doc_dir: Option<std::path::PathBuf>,
     site_cache: cadektor_site::SiteCache,
+    /// Annotation primitives and legend rows by document revision (see `render.svg`).
+    annot_cache: cadektor_annot::AnnotCache,
     /// Worksheet results by document revision.
     worksheet_cache: cadektor_sheet::SheetCache,
     /// Display lists of sheets, by document revision (see `sheet.render`).
@@ -413,10 +415,11 @@ impl Session {
                     width: Option<u32>,
                 }
                 let P { width } = params(p)?;
-                let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, self.editor.revision());
+                let revision = self.editor.revision();
+                let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, revision);
                 let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
                     site_ext(d, o, style, out);
-                    cadektor_annot::svg::object_svg(d, o, style, out);
+                    cadektor_annot::svg::object_svg_with(d, o, style, out, &self.annot_cache, revision);
                 };
                 json!({ "svg": cadektor_core::svg::render_with(doc, width.unwrap_or(800).clamp(16, 8192), Some(&ext)) })
             }

@@ -11,6 +11,8 @@
 //!
 //! The crate is pure (no files, no threads), so it also builds for WebAssembly.
 
+use std::collections::HashMap;
+
 use cadektor_core::annot::Annot;
 use cadektor_core::annot::draw::{self, Ctx, LegendRow, Prim, TextSource};
 use cadektor_core::annot::style::TagStyle;
@@ -23,9 +25,11 @@ use cadektor_sheet::eval::eval;
 use cadektor_sheet::formula::{self, Expr};
 use cadektor_sheet::value::Value;
 
+mod cache;
 mod tags;
 pub mod svg;
 
+pub use cache::AnnotCache;
 pub use tags::{RevisionInfo, revisions, tag_all};
 
 /// The environment of an object: names are its properties (the same as in worksheet databases).
@@ -101,13 +105,17 @@ fn swatch(doc: &Document, obj: &Object) -> (Option<Color>, Option<Color>) {
     (solid(a.fill), solid(a.pen).or(Some(Color::BLACK)))
 }
 
+/// Most rows that a legend shows. The rest is one row, `... N more`.
+pub const MAX_LEGEND_ROWS: usize = 500;
+
 /// The rows of a legend: the objects that match the criteria, grouped by the group expression
 /// (text, ignoring case), sorted by label. Each row has the label, the number of objects and the
-/// colors of the first object of the group.
+/// colors of the first object of the group. After `MAX_LEGEND_ROWS` rows, one row counts the rest.
 pub fn legend_rows(doc: &Document, legend: &Legend) -> Vec<LegendRow> {
     let Ok(criteria) = parse_criteria(&legend.criteria) else { return Vec::new() };
     let Ok(group) = formula::parse(if legend.group_by.trim().is_empty() { "Style" } else { &legend.group_by }) else { return Vec::new() };
     let mut rows: Vec<LegendRow> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for obj in doc.objects.values().filter(|o| is_subject(doc, o) && matches(doc, o, &criteria)) {
         let key = match eval(&group, &env(doc, obj)) {
             Value::Empty | Value::Error(_) => continue,
@@ -116,15 +124,20 @@ pub fn legend_rows(doc: &Document, legend: &Legend) -> Vec<LegendRow> {
         if key.trim().is_empty() {
             continue;
         }
-        match rows.iter_mut().find(|r| r.label.eq_ignore_ascii_case(&key)) {
-            Some(r) => r.count += 1,
+        match index.get(&key.to_lowercase()) {
+            Some(&i) => rows[i].count += 1,
             None => {
                 let (fill, stroke) = swatch(doc, obj);
+                index.insert(key.to_lowercase(), rows.len());
                 rows.push(LegendRow { label: key, count: 1, fill, stroke });
             }
         }
     }
-    rows.sort_by_key(|r| r.label.to_lowercase());
+    rows.sort_by_cached_key(|r| r.label.to_lowercase());
+    if rows.len() > MAX_LEGEND_ROWS {
+        let rest = rows.split_off(MAX_LEGEND_ROWS);
+        rows.push(LegendRow { label: format!("... {} more", rest.len()), count: rest.iter().map(|r| r.count).sum(), fill: None, stroke: None });
+    }
     rows
 }
 

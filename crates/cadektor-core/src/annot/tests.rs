@@ -35,7 +35,7 @@ fn annot_of(ed: &Editor, id: ObjectId) -> Annot {
 }
 
 fn dim(mode: DimMode, points: Vec<DVec2>) -> Dimension {
-    Dimension { mode, points, anchors: vec![], offset: 8.0, style: None, text: None }
+    Dimension { mode, points, anchors: vec![], offset: 8.0, style: None, text: None, detached: false }
 }
 
 fn horiz() -> DimMode {
@@ -47,7 +47,7 @@ fn line(ed: &mut Editor, a: DVec2, b: DVec2) -> ObjectId {
 }
 
 fn vertex(object: ObjectId, index: usize) -> Option<Anchor> {
-    Some(Anchor { object, target: AnchorTarget::Vertex { index } })
+    Some(Anchor::new(object, AnchorTarget::Vertex { index }))
 }
 
 fn all_kinds() -> Vec<Annot> {
@@ -63,6 +63,7 @@ fn all_kinds() -> Vec<Annot> {
             leaders: vec![Leader { points: vec![v(0.0, 0.0), v(2.0, 2.0)], anchor: None }],
             shoulder_mm: 5.0,
             terminator: Terminator::Arrow,
+            detached: false,
         }),
         Annot::DataTag(DataTag { style: ResourceId(1), object: ObjectId(2), offset: v(1.0, 1.0), at: v(3.0, 3.0), anchor: v(2.0, 2.0) }),
         Annot::Legend(Legend { at: v(1.0, 1.0), title: String::new(), criteria: String::new(), group_by: "Style".into(), show_count: true, swatch_mm: 6.0, style: None }),
@@ -220,14 +221,14 @@ fn anchors_resolve_to_points() {
     let mut ed = Editor::default();
     let l = line(&mut ed, v(0.0, 0.0), v(10.0, 0.0));
     let doc = ed.doc();
-    let a = |target| Anchor { object: l, target };
+    let a = |target| Anchor { object: l, target, count: None };
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Vertex { index: 1 })), Some(v(10.0, 0.0)));
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Vertex { index: 2 })), None);
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Edge { index: 0, t: 0.25 })), Some(v(2.5, 0.0)));
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Edge { index: 0, t: 7.0 })), Some(v(10.0, 0.0)));
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Edge { index: 3, t: 0.5 })), None);
     assert_eq!(anchor_point(doc, &a(AnchorTarget::Center)), Some(v(5.0, 0.0)));
-    assert_eq!(anchor_point(doc, &Anchor { object: ObjectId(99), target: AnchorTarget::Center }), None);
+    assert_eq!(anchor_point(doc, &Anchor { object: ObjectId(99), target: AnchorTarget::Center, count: None }), None);
     let json = serde_json::json!({"object": 5, "target": {"at": "edge", "index": 1}});
     let back: Anchor = serde_json::from_value(json).unwrap();
     assert_eq!(back.target, AnchorTarget::Edge { index: 1, t: 0.5 });
@@ -278,7 +279,10 @@ fn resources_validate_and_look_up() {
     assert_eq!(&back, ed.doc());
     // A bad resource body is refused, and other types stay unknown.
     let bad = serde_json::json!({"type": "text_style", "size_mm": "big"});
-    assert!(serde_json::from_value::<ResourceBody>(bad).is_err());
+    // A file keeps a resource that it cannot read; a command refuses it.
+    let kept: ResourceBody = serde_json::from_value(bad.clone()).unwrap();
+    assert!(matches!(kept, ResourceBody::Unknown(_)));
+    assert!(ed.execute(&Command::AddResource { name: "Kept".into(), body: kept }).is_err());
     assert!(AnnotResource::from_json(&serde_json::json!({"type": "hatch"})).is_none());
     assert!(AnnotResource::from_json(&serde_json::json!(5)).is_none());
     assert!(ed.execute(&Command::AddResource { name: "Bad".into(), body: ResourceBody::annot(AnnotResource::TextStyle(TextStyle { size_mm: -1.0, ..Default::default() })) }).is_err());
@@ -513,7 +517,7 @@ fn radial_and_arc_length_follow_circles_and_arcs() {
     let c = add(&mut ed, Shape::Circle { center: v(0.0, 0.0), radius: 1000.0 });
     let r = add_annot(
         &mut ed,
-        Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: c, target: AnchorTarget::Center })], ..dim(DimMode::Radial, vec![v(0.0, 0.0), v(0.0, 1000.0)]) }),
+        Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: c, target: AnchorTarget::Center, count: None })], ..dim(DimMode::Radial, vec![v(0.0, 0.0), v(0.0, 1000.0)]) }),
     );
     ed.execute(&Command::ModifyObject { id: c, shape: Some(Shape::Circle { center: v(500.0, 0.0), radius: 2000.0 }), layer: None, class: None, attrs: None }).unwrap();
     let Annot::Dimension(x) = annot_of(&ed, r) else { panic!() };
@@ -523,14 +527,14 @@ fn radial_and_arc_length_follow_circles_and_arcs() {
     let arc = add(&mut ed, Shape::Arc { center: v(0.0, 0.0), radius: 1000.0, start: 0.0, end: std::f64::consts::FRAC_PI_2 });
     let al = add_annot(
         &mut ed,
-        Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: arc, target: AnchorTarget::Center })], ..dim(DimMode::ArcLength, vec![v(0.0, 0.0), v(1000.0, 0.0), v(0.0, 1000.0)]) }),
+        Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: arc, target: AnchorTarget::Center, count: None })], ..dim(DimMode::ArcLength, vec![v(0.0, 0.0), v(1000.0, 0.0), v(0.0, 1000.0)]) }),
     );
     ed.execute(&Command::ModifyObject { id: arc, shape: Some(Shape::Arc { center: v(0.0, 0.0), radius: 2000.0, start: 0.0, end: std::f64::consts::PI }), layer: None, class: None, attrs: None }).unwrap();
     let Annot::Dimension(x) = annot_of(&ed, al) else { panic!() };
     assert!((dim::values(&x)[0] - 2000.0 * std::f64::consts::PI).abs() < 1e-6);
     // A center anchor on another kind of object changes nothing.
     let l = line(&mut ed, v(0.0, 0.0), v(1.0, 0.0));
-    let odd = add_annot(&mut ed, Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: l, target: AnchorTarget::Center })], ..dim(DimMode::Radial, vec![v(0.0, 0.0), v(0.0, 5.0)]) }));
+    let odd = add_annot(&mut ed, Annot::Dimension(Dimension { anchors: vec![Some(Anchor { object: l, target: AnchorTarget::Center, count: None })], ..dim(DimMode::Radial, vec![v(0.0, 0.0), v(0.0, 5.0)]) }));
     ed.execute(&Command::MoveObjects { ids: vec![l], delta: v(1.0, 1.0) }).unwrap();
     let Annot::Dimension(x) = annot_of(&ed, odd) else { panic!() };
     assert_eq!(x.points[1], v(0.0, 5.0));
@@ -549,9 +553,10 @@ fn callouts_follow_their_anchors_and_show_notes() {
             note: Some("N1".into()),
             notes_db: Some(db),
             style: None,
-            leaders: vec![Leader { points: vec![v(100.0, 0.0)], anchor: Some(Anchor { object: l, target: AnchorTarget::Vertex { index: 1 } }) }],
+            leaders: vec![Leader { points: vec![v(100.0, 0.0)], anchor: Some(Anchor { object: l, target: AnchorTarget::Vertex { index: 1 }, count: None }) }],
             shoulder_mm: 5.0,
             terminator: Terminator::Arrow,
+            detached: false,
         }),
     );
     ed.execute(&Command::MoveObjects { ids: vec![l], delta: v(10.0, 10.0) }).unwrap();
@@ -684,7 +689,7 @@ fn bar_default() -> ScaleBar {
 }
 
 fn callout_default() -> Callout {
-    Callout { at: v(5.0, 5.0), text: "n".into(), note: None, notes_db: None, style: None, leaders: vec![Leader { points: vec![v(0.0, 0.0)], anchor: None }], shoulder_mm: 5.0, terminator: Terminator::Arrow }
+    Callout { at: v(5.0, 5.0), text: "n".into(), note: None, notes_db: None, style: None, leaders: vec![Leader { points: vec![v(0.0, 0.0)], anchor: None }], shoulder_mm: 5.0, terminator: Terminator::Arrow, detached: false }
 }
 
 #[test]
@@ -840,17 +845,6 @@ fn annotations_draw_primitives() {
 }
 
 #[test]
-fn georef_rotates_the_north_arrow() {
-    let mut ed = Editor::default();
-    ed.execute(&Command::SetGeoreference { georef: Some(crate::georef::Georeference { crs: String::new(), origin: DVec2::ZERO, rotation: std::f64::consts::FRAC_PI_2, user_origin: DVec2::ZERO }) }).unwrap();
-    let n = Annot::NorthArrow(NorthArrow { at: v(0.0, 0.0), size_mm: 10.0, rotation_deg: 0.0, use_georef: true, style: NorthStyle::Simple });
-    let plain = Annot::NorthArrow(NorthArrow { at: v(0.0, 0.0), size_mm: 10.0, rotation_deg: 90.0, use_georef: false, style: NorthStyle::Simple });
-    let a = draw::prims(ed.doc(), &n, &ctx100(), &PlainSource);
-    let b = draw::prims(ed.doc(), &plain, &ctx100(), &PlainSource);
-    assert_eq!(a, b);
-}
-
-#[test]
 fn cloud_outline_bulges_outward_whatever_the_winding() {
     let ccw = [v(0.0, 0.0), v(100.0, 0.0), v(100.0, 100.0), v(0.0, 100.0)];
     let cw: Vec<DVec2> = ccw.iter().rev().copied().collect();
@@ -874,3 +868,5 @@ fn model_hooks_cover_the_annotation_shape() {
     assert_ne!(moved, shape);
     assert!(crate::sheets::allowed_on_sheet(&shape));
 }
+
+mod more;

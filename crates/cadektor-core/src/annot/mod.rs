@@ -187,7 +187,7 @@ impl Annot {
                 if !(0.0..=100.0).contains(&c.shoulder_mm) {
                     return Some("the shoulder is 0 to 100 mm".into());
                 }
-                if long(&c.text, MAX_TEXT_CHARS) {
+                if long(&c.text, MAX_TEXT_CHARS) || c.note.as_deref().is_some_and(|n| long(n, 200)) {
                     return Some("text is too long".into());
                 }
             }

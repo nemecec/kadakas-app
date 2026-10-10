@@ -9,10 +9,22 @@ impl Tx<'_> {
     /// Brings the annotations that depend on changed objects up to date.
     pub(super) fn annot_after(&mut self, cmd: &Command) -> Result<(), CommandError> {
         match cmd {
+            // A new annotation only needs its own anchors applied. This stays cheap in a batch.
             Command::AddObject { .. } => {
-                if let Some(id) = self.added.last().copied() {
-                    self.annot_sync(&[id].into_iter().collect(), false);
+                if let Some(id) = self.added.last().copied()
+                    && let Some(o) = self.doc.object(id)
+                    && let Shape::Annotation(a) = &o.shape
+                {
+                    let paper = self.doc.layer(o.layer).map_or(1.0, |l| l.scale);
+                    if let Some(new) = sync::resync(self.doc, a, paper, false) {
+                        self.doc.object_mut(id).expect("exists").shape = Shape::Annotation(Box::new(new));
+                    }
                 }
+            }
+            // Label positions of data tags are paper offsets, so a new scale moves them.
+            Command::ModifyLayer { id, scale: Some(_), .. } => {
+                let ids: HashSet<ObjectId> = self.doc.objects.values().filter(|o| o.layer == *id && matches!(o.shape, Shape::Annotation(_))).map(|o| o.id).collect();
+                self.annot_sync(&ids, false);
             }
             Command::MoveObjects { ids, .. } => self.annot_sync(&ids.iter().copied().collect(), true),
             Command::ModifyObject { id, .. } | Command::SetVertex { id, .. } => self.annot_sync(&[*id].into_iter().collect(), false),
