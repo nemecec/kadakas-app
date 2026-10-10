@@ -520,6 +520,69 @@ mod tests {
     }
 
     #[test]
+    fn replicas_are_compared_for_a_server_that_went_back() {
+        let ed = editor();
+        let mut base = replica_of(ed.doc());
+        let mut mine = base.clone();
+        let w = crate::op::Writer::BASELINE;
+        let t = Target::new(Kind::Object, Uid::from_num(900));
+        let props: Map<String, Value> = serde_json::from_value(json!({"a": 1})).unwrap();
+        let create = |target| Op::Create {
+            target,
+            props: props.clone().into_iter().collect(),
+        };
+        mine.apply(w, &create(t));
+        // A thing that only the snapshot has is left alone; a thing I deleted goes.
+        let theirs = Target::new(Kind::Object, Uid::from_num(901));
+        base.apply(w, &create(theirs));
+        let gone = Target::new(Kind::Object, Uid::from_num(902));
+        base.apply(w, &create(gone));
+        mine.apply(w, &create(gone));
+        mine.apply(w, &Op::Delete { target: gone });
+        mine.apply(
+            w,
+            &Op::Set {
+                target: Target::DOCUMENT,
+                prop: "georef".into(),
+                value: json!(1),
+            },
+        );
+        let ops = diff_replicas(&base, &mine);
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, Op::Create { target, .. } if *target == t))
+        );
+        assert!(ops.contains(&Op::Delete { target: gone }));
+        assert!(!ops.iter().any(|o| o.target() == theirs));
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, Op::Set { prop, .. } if prop == "georef"))
+        );
+    }
+
+    #[test]
+    fn splitting_keeps_order_and_limits() {
+        let ops: Vec<Op> = (0..(CHUNK_OPS as u64 * 2 + 1))
+            .map(|i| Op::Delete {
+                target: Target::new(Kind::Object, Uid::from_num(i)),
+            })
+            .collect();
+        let chunks = split(ops.clone());
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|c| c.len() <= CHUNK_OPS));
+        assert_eq!(chunks.concat(), ops);
+        assert!(split(Vec::new()).is_empty());
+        // Big values: a transaction is cut by size too.
+        let big = |i: u64| Op::Set {
+            target: Target::new(Kind::Object, Uid::from_num(i)),
+            prop: "shape".into(),
+            value: json!("x".repeat(crate::op::MAX_VALUE_BYTES / 2)),
+        };
+        let chunks = split(vec![big(1), big(2), big(3)]);
+        assert!(chunks.len() >= 2);
+    }
+
+    #[test]
     fn settings_travel_as_a_thing() {
         let mut base = Document::default();
         base.drawing.project.name = "Garden".into();

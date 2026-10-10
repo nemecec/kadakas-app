@@ -89,7 +89,8 @@ pub enum ErrorClass {
     /// The server could not take the transaction now. The client keeps it and sends it again
     /// after a time that grows.
     Retry,
-    /// The client gives the transaction (and the ones after it) new numbers and sends them again.
+    /// The client goes offline. At the next sign-in it gives its waiting transactions new
+    /// numbers above everything the server knows, and sends them.
     Renumber,
 }
 

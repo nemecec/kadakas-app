@@ -31,14 +31,23 @@ fn has(s: &Session, id: &str) -> bool {
     s.editor.doc().objects.contains_key(&id)
 }
 
+fn sorted<T: Ord>(it: impl Iterator<Item = T>) -> Vec<T> {
+    let mut v: Vec<T> = it.collect();
+    v.sort();
+    v
+}
+
 /// The same content, not looking at the order of the objects (the z-order is not shared).
 fn same(a: &Session, b: &Session) -> bool {
     let (x, y) = (a.editor.doc(), b.editor.doc());
     x.objects.len() == y.objects.len()
         && x.objects.iter().all(|(k, v)| y.objects.get(k) == Some(v))
-        && x.layers == y.layers
-        && x.classes == y.classes
-        && x.resources == y.resources
+        && sorted(x.layers.iter().map(|l| (l.id.0, format!("{l:?}"))))
+            == sorted(y.layers.iter().map(|l| (l.id.0, format!("{l:?}"))))
+        && sorted(x.classes.iter().map(|c| (c.id.0, format!("{c:?}"))))
+            == sorted(y.classes.iter().map(|c| (c.id.0, format!("{c:?}"))))
+        && sorted(x.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
+            == sorted(y.resources.iter().map(|r| (r.id.0, format!("{r:?}"))))
         && x.drawing == y.drawing
 }
 
@@ -630,4 +639,212 @@ fn waiting_edits_of_one_user_are_not_dropped_for_another() {
     );
     assert_eq!(st["state"], "online");
     assert_eq!(st["pending"], 0);
+}
+
+// ----- real commands on two sessions -----
+
+mod real_commands {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[derive(Clone, Debug)]
+    enum Act {
+        AddRect { s: bool, x: i32 },
+        AddLayer { s: bool, n: u8 },
+        Delete { s: bool, i: u8 },
+        Move { s: bool, i: u8 },
+        Group { s: bool, i: u8, j: u8 },
+        Ungroup { s: bool, i: u8 },
+        ToLayer { s: bool, i: u8, l: u8 },
+        DeleteLayer { s: bool, l: u8 },
+        RenameLayer { s: bool, l: u8, n: u8 },
+        AddResource { s: bool, n: u8 },
+        Data { s: bool, i: u8, v: u8 },
+        Sync { s: bool },
+        Offline { s: bool },
+        Online { s: bool },
+    }
+
+    fn act() -> impl Strategy<Value = Act> {
+        prop_oneof![
+            4 => (any::<bool>(), -500i32..500).prop_map(|(s, x)| Act::AddRect { s, x }),
+            1 => (any::<bool>(), 0u8..4).prop_map(|(s, n)| Act::AddLayer { s, n }),
+            2 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Delete { s, i }),
+            2 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Move { s, i }),
+            2 => (any::<bool>(), any::<u8>(), any::<u8>()).prop_map(|(s, i, j)| Act::Group { s, i, j }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, i)| Act::Ungroup { s, i }),
+            1 => (any::<bool>(), any::<u8>(), any::<u8>()).prop_map(|(s, i, l)| Act::ToLayer { s, i, l }),
+            1 => (any::<bool>(), any::<u8>()).prop_map(|(s, l)| Act::DeleteLayer { s, l }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, l, n)| Act::RenameLayer { s, l, n }),
+            1 => (any::<bool>(), 0u8..2).prop_map(|(s, n)| Act::AddResource { s, n }),
+            1 => (any::<bool>(), any::<u8>(), 0u8..3).prop_map(|(s, i, v)| Act::Data { s, i, v }),
+            5 => any::<bool>().prop_map(|s| Act::Sync { s }),
+            1 => any::<bool>().prop_map(|s| Act::Offline { s }),
+            2 => any::<bool>().prop_map(|s| Act::Online { s }),
+        ]
+    }
+
+    fn object_ids(s: &Session) -> Vec<String> {
+        s.editor
+            .doc()
+            .objects
+            .keys()
+            .map(|k| k.0.to_string())
+            .collect()
+    }
+
+    fn layer_ids(s: &Session) -> Vec<String> {
+        s.editor
+            .doc()
+            .layers
+            .iter()
+            .map(|l| l.id.0.to_string())
+            .collect()
+    }
+
+    fn pick(v: &[String], i: u8) -> Option<String> {
+        (!v.is_empty()).then(|| v[i as usize % v.len()].clone())
+    }
+
+    fn exec(s: &mut Session, cmd: Value) {
+        // A command may fail (an ID is gone, a layer is not empty): this is normal.
+        let _ = s.handle("execute", json!({"command": cmd}));
+    }
+
+    fn apply(sessions: &mut [Session; 2], hub: &Hub, now: &mut u64, a: &Act) {
+        *now += 100;
+        hub.set_time(*now);
+        let idx = |s: bool| usize::from(s);
+        match a {
+            Act::AddRect { s, x } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_object", "shape": {"kind": "rect",
+                    "min": [x, 0], "max": [x + 100, 50]}}),
+            ),
+            Act::AddLayer { s, n } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_layer", "name": format!("L{n}")}),
+            ),
+            Act::Delete { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&object_ids(ss), *i) {
+                    exec(ss, json!({"op": "delete_objects", "ids": [id]}));
+                }
+            }
+            Act::Move { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&object_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "move_objects", "ids": [id], "delta": [10, 5]}),
+                    );
+                }
+            }
+            Act::Group { s, i, j } => {
+                let ss = &mut sessions[idx(*s)];
+                let ids = object_ids(ss);
+                if let (Some(p), Some(q)) = (pick(&ids, *i), pick(&ids, *j)) {
+                    exec(ss, json!({"op": "group", "ids": [p, q]}));
+                }
+            }
+            Act::Ungroup { s, i } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&object_ids(ss), *i) {
+                    exec(ss, json!({"op": "ungroup", "ids": [id]}));
+                }
+            }
+            Act::ToLayer { s, i, l } => {
+                let ss = &mut sessions[idx(*s)];
+                if let (Some(id), Some(layer)) =
+                    (pick(&object_ids(ss), *i), pick(&layer_ids(ss), *l))
+                {
+                    exec(ss, json!({"op": "modify_object", "id": id, "layer": layer}));
+                }
+            }
+            Act::DeleteLayer { s, l } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(layer) = pick(&layer_ids(ss), *l) {
+                    exec(ss, json!({"op": "delete_layer", "id": layer}));
+                }
+            }
+            Act::RenameLayer { s, l, n } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(layer) = pick(&layer_ids(ss), *l) {
+                    exec(
+                        ss,
+                        json!({"op": "modify_layer", "id": layer, "name": format!("R{n}")}),
+                    );
+                }
+            }
+            Act::AddResource { s, n } => exec(
+                &mut sessions[idx(*s)],
+                json!({"op": "add_resource", "name": format!("W{n}"), "body": {"type": "worksheet"}}),
+            ),
+            Act::Data { s, i, v } => {
+                let ss = &mut sessions[idx(*s)];
+                if let Some(id) = pick(&object_ids(ss), *i) {
+                    exec(
+                        ss,
+                        json!({"op": "set_data", "id": id, "set": {format!("k{v}"): v}}),
+                    );
+                }
+            }
+            Act::Sync { s } => {
+                let _ = sessions[idx(*s)].handle("collab.sync", json!({"now_ms": *now}));
+            }
+            Act::Offline { s } => {
+                let _ = sessions[idx(*s)].handle("collab.disconnect", json!({}));
+            }
+            Act::Online { s } => {
+                let _ = sessions[idx(*s)].handle("collab.connect", json!({"now_ms": *now}));
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(25))]
+
+        #[test]
+        fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
+            let a = Session::default();
+            let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+            let mut sessions = [a, Session::default()];
+            for s in &mut sessions {
+                s.set_collab_endpoint(Box::new(hub.endpoint()));
+                let r = s.handle("collab.connect", json!({"now_ms": 1}));
+                prop_assert!(r.is_ok());
+            }
+            let mut now = 1_000;
+            for a in &acts {
+                apply(&mut sessions, &hub, &mut now, a);
+            }
+            // Everybody comes back and the network settles.
+            for s in &mut sessions {
+                let _ = s.handle("collab.connect", json!({"now_ms": now}));
+            }
+            for _ in 0..8 {
+                for s in &mut sessions {
+                    now += 100;
+                    hub.set_time(now);
+                    let r = s.handle("collab.sync", json!({"now_ms": now}));
+                    prop_assert!(r.is_ok());
+                }
+            }
+            for s in &mut sessions {
+                prop_assert_eq!(s.collab_client().unwrap().pending().len(), 0);
+                // The document is valid for the core.
+                let mut doc = s.editor.doc().clone();
+                prop_assert!(doc.validate().is_ok(), "{:?}", doc.validate());
+            }
+            prop_assert!(same(&sessions[0], &sessions[1]));
+            // Both match the server. Every acked transaction is in the log: the server state
+            // equals what each client confirmed.
+            let server = hub.with(|s| s.replica().canonical_text());
+            for s in &sessions {
+                let c = s.collab_client().unwrap();
+                prop_assert_eq!(c.confirmed().canonical_text(), server.clone());
+                prop_assert_eq!(c.view().canonical_text(), server.clone());
+            }
+        }
+    }
 }

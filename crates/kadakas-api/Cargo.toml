@@ -33,4 +33,5 @@ tempfile = "3"
 
 [dev-dependencies]
 png = "0.18"
+proptest = "1.11.0"
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }

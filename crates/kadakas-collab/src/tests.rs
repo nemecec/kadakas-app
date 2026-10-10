@@ -1868,3 +1868,103 @@ fn a_big_import_is_split_into_transactions_and_arrives() {
     // The split keeps the order: nothing in a later transaction is needed by an earlier one.
     let _ = c2;
 }
+
+fn set_op(target: Target, prop: &str, value: Value) -> Op {
+    Op::Set {
+        target,
+        prop: prop.into(),
+        value,
+    }
+}
+
+#[test]
+fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    let conn = s.open();
+    let other = s.open();
+    for (c, u) in [(conn, 1), (other, 2)] {
+        s.receive(
+            c,
+            ClientMsg::Hello {
+                protocol: PROTOCOL_VERSION,
+                user: Uid::from_num(u),
+                client: Uid::from_num(u),
+                name: "x".into(),
+                token: String::new(),
+                last_seq: None,
+                log_id: None,
+            },
+            0,
+        );
+    }
+    let obj_props = |shape: Value| -> std::collections::BTreeMap<String, Value> {
+        let mut m: std::collections::BTreeMap<String, Value> = Default::default();
+        m.insert("layer".into(), json!(kadakas_core::model::FIRST_LAYER.0));
+        m.insert("class".into(), json!(kadakas_core::model::NONE_CLASS.0));
+        m.insert("shape".into(), shape);
+        m
+    };
+    let good = json!({"kind": "rect", "min": [0, 0], "max": [5, 5]});
+    let submit = |op_id, ops| ClientMsg::Submit { op_id, ops };
+    let create_obj = |n, shape| Op::Create {
+        target: obj(n),
+        props: obj_props(shape),
+    };
+    assert!(matches!(
+        s.receive(conn, submit(1, vec![create_obj(1, good.clone())]), 0)[0].msg,
+        ServerMsg::Ack { .. }
+    ));
+    // A bad shape is refused when it is created, set or removed; an edit of a thing that is not
+    // there is a drop in the merge, not an error.
+    let bad = json!({"kind": "rect", "min": "x"});
+    for (id, op) in [
+        (2, create_obj(2, bad.clone())),
+        (3, set_op(obj(1), "shape", bad.clone())),
+        (
+            4,
+            Op::Unset {
+                target: obj(1),
+                prop: "shape".into(),
+            },
+        ),
+    ] {
+        assert!(
+            matches!(
+                s.receive(conn, submit(id, vec![op]), 0)[0].msg,
+                ServerMsg::Error {
+                    code: ErrorCode::InvalidTxn,
+                    ..
+                }
+            ),
+            "{id}"
+        );
+    }
+    assert!(matches!(
+        s.receive(
+            conn,
+            submit(5, vec![set_op(obj(77), "shape", bad.clone())]),
+            0
+        )[0]
+        .msg,
+        ServerMsg::Ack { .. }
+    ));
+    // Presence: the second update is held, and sent by `tick` when the time has come.
+    let p = |x| ClientMsg::Presence {
+        state: PresenceState {
+            cursor: Some([x, 0.0]),
+            ..Default::default()
+        },
+    };
+    assert_eq!(s.receive(conn, p(1.0), 1_000).len(), 1);
+    assert!(s.receive(conn, p(2.0), 1_010).is_empty());
+    assert!(s.receive(conn, p(3.0), 1_020).is_empty());
+    assert!(s.tick(1_030).is_empty());
+    let late = s.tick(1_060);
+    assert_eq!(late.len(), 1);
+    assert_eq!(late[0].conn, other);
+    assert!(matches!(
+        &late[0].msg,
+        ServerMsg::Presence { state, .. } if state.cursor == Some([3.0, 0.0])
+    ));
+    assert!(s.tick(2_000).is_empty());
+}

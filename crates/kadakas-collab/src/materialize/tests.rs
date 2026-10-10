@@ -474,3 +474,144 @@ fn a_hostile_state_never_fails_and_is_the_same_for_every_order() {
     };
     assert_eq!(parents(&a.doc), parents(&b.doc));
 }
+
+#[test]
+fn the_last_way_out_names_the_thing_that_the_core_refuses() {
+    let group = |id| {
+        Object::new(
+            ObjectId(n(id)),
+            FIRST_LAYER,
+            NONE_CLASS,
+            kadakas_core::model::Shape::Group {
+                name: String::new(),
+            },
+        )
+    };
+    let mut doc = base();
+    doc.objects.insert(ObjectId(n(5)), group(5));
+    doc.resources.push(Resource {
+        id: ResourceId(n(6)),
+        name: "W".into(),
+        body: ResourceBody::Worksheet(json!({})),
+    });
+    let mut cx = Ctx {
+        quarantined: Vec::new(),
+        repairs: Vec::new(),
+    };
+    blame(&mut doc, format!("object {} is wrong", n(5)), &mut cx);
+    assert!(doc.objects.is_empty());
+    blame(&mut doc, format!("resource {} is wrong", n(6)), &mut cx);
+    assert_eq!(doc.resources.len(), 0);
+    // A message without an ID: all objects go.
+    doc.objects.insert(ObjectId(n(7)), group(7));
+    blame(&mut doc, "nothing to name".into(), &mut cx);
+    assert!(doc.objects.is_empty());
+    assert_eq!(cx.quarantined.len(), 3);
+}
+
+#[test]
+fn users_who_change_different_attributes_and_keys_both_keep_their_change() {
+    let mut r = replica_of(&base());
+    let mut o = rect(FIRST_LAYER.0);
+    o["attrs.pen"] = json!([1, 2, 3, 255]);
+    o["data.owner"] = json!("x");
+    make(&mut r, w(1, 1), Kind::Object, 5, o);
+    // Properties are cut: attrs.pen, data.owner.
+    let e = r.alive(Target::new(Kind::Object, n(5))).unwrap();
+    assert!(e.get("attrs.pen").is_some() && e.get("data.owner").is_some());
+    assert!(e.get("attrs").is_none());
+    set(
+        &mut r,
+        w(1, 2),
+        Kind::Object,
+        5,
+        "attrs.fill",
+        json!([9, 9, 9, 255]),
+    );
+    set(
+        &mut r,
+        w(2, 1),
+        Kind::Object,
+        5,
+        "attrs.line_weight",
+        json!(0.5),
+    );
+    set(&mut r, w(2, 2), Kind::Object, 5, "data.phase", json!("new"));
+    let m = run(&r);
+    let o = m.doc.object(ObjectId(n(5))).unwrap();
+    assert!(o.attrs.pen.is_some() && o.attrs.fill.is_some());
+    assert_eq!(o.attrs.line_weight, Some(0.5));
+    assert_eq!(o.data.len(), 2);
+}
+
+#[test]
+fn the_drawing_data_is_cut_into_parts_and_sheets_by_layer() {
+    let mut ed = kadakas_core::command::Editor::with_sequential_ids();
+    ed.execute(&serde_json::from_value(json!({"op": "add_sheet", "name": "A1"})).unwrap())
+        .unwrap();
+    ed.execute(
+        &serde_json::from_value(json!({"op": "set_project", "name": "Garden", "client": "Ann"}))
+            .unwrap(),
+    )
+    .unwrap();
+    let doc = ed.doc().clone();
+    let r = replica_of(&doc);
+    let settings = r.alive(Target::DOCUMENT).unwrap();
+    assert!(settings.get("drawing.project.name").is_some());
+    assert!(settings.get("drawing.project.client").is_some());
+    assert!(
+        settings
+            .visible()
+            .keys()
+            .any(|k| k.starts_with("drawing.sheets."))
+    );
+    let m = materialize(&r, &Document::default());
+    assert_eq!(m.doc.drawing, doc.drawing);
+    // Two users: one changes the project name, the other the client. Both stay.
+    let mut r = r;
+    set(
+        &mut r,
+        w(1, 1),
+        Kind::Document,
+        0,
+        "drawing.project.name",
+        json!("Park"),
+    );
+    set(
+        &mut r,
+        w(2, 1),
+        Kind::Document,
+        0,
+        "drawing.project.client",
+        json!("Bo"),
+    );
+    let m = materialize(&r, &doc);
+    assert_eq!(m.doc.drawing.project.name, "Park");
+    assert_eq!(m.doc.drawing.project.client, "Bo");
+}
+
+#[test]
+fn an_older_whole_property_and_a_cut_one_merge() {
+    // A client that writes `attrs` whole (an older version) and one that writes `attrs.pen`.
+    let mut r = replica_of(&base());
+    make(&mut r, w(1, 1), Kind::Object, 5, rect(FIRST_LAYER.0));
+    set(
+        &mut r,
+        w(1, 2),
+        Kind::Object,
+        5,
+        "attrs",
+        json!({"fill": [1, 1, 1, 255]}),
+    );
+    set(
+        &mut r,
+        w(2, 1),
+        Kind::Object,
+        5,
+        "attrs.pen",
+        json!([2, 2, 2, 255]),
+    );
+    let m = run(&r);
+    let o = m.doc.object(ObjectId(n(5))).unwrap();
+    assert!(o.attrs.fill.is_some() && o.attrs.pen.is_some());
+}

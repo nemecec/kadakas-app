@@ -256,14 +256,14 @@ fn open_store(s: &Session, base: &str) -> Result<FileStore, RpcError> {
 
 fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let now = now_ms(m)?;
-    if s.sequential_ids {
-        return Err(RpcError::policy(
-            "a session with predictable (sequential) IDs cannot join a shared document: its IDs would meet the IDs of other users",
-        ));
-    }
     if s.collab.endpoint.is_none() {
         return Err(RpcError::policy(
             "this session has no collaboration endpoint: the host has not set one",
+        ));
+    }
+    if s.sequential_ids {
+        return Err(RpcError::policy(
+            "a session with predictable (sequential) IDs cannot join a shared document: its IDs would meet the IDs of other users",
         ));
     }
     if is_connected(s) {

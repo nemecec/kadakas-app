@@ -549,12 +549,19 @@ impl Client {
         };
         let mut applied = Vec::new();
         let mut inverse = Vec::new();
+        let total = ops.len();
         for op in ops {
             let (out, inv) = self.view.apply_inverse(w, &op);
             if out.is_applied() {
                 applied.push(op);
                 inverse.extend(inv);
             }
+        }
+        if applied.len() < total {
+            // The merge rules dropped some operations (a delete of a thing that cannot go, an
+            // edit of a deleted thing). The host's document has them, so it must be built again
+            // from the view.
+            self.changed = true;
         }
         if applied.is_empty() {
             return Err(EditError::NoEffect);

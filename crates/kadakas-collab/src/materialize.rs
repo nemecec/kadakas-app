@@ -220,21 +220,7 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
         match out.validate() {
             Ok(()) => break,
             Err(msg) => {
-                let blamed = find_uid(&msg);
-                if let Some(id) = blamed.filter(|id| out.objects.contains_key(&ObjectId(*id))) {
-                    out.objects.shift_remove(&ObjectId(id));
-                    cx.quarantine(Kind::Object, id, msg);
-                } else if let Some(id) =
-                    blamed.filter(|id| out.resources.get(ResourceId(*id)).is_some())
-                {
-                    out.resources.remove(ResourceId(id));
-                    cx.quarantine(Kind::Resource, id, msg);
-                } else {
-                    // No thing to blame: keep the layers and classes and leave the rest out.
-                    for (id, _) in out.objects.drain(..) {
-                        cx.quarantine(Kind::Object, id.0, format!("the document failed: {msg}"));
-                    }
-                }
+                blame(&mut out, msg, &mut cx);
                 pending = std::mem::take(&mut out.objects).into_values().collect();
             }
         }
@@ -248,6 +234,23 @@ pub fn materialize(view: &Replica, base: &Document) -> Materialized {
         doc: out,
         quarantined: cx.quarantined,
         repairs: cx.repairs,
+    }
+}
+
+/// The core refused the document with this message. Leaves out the thing that the message names
+/// (an object, or a resource); if it names none, leaves out all objects.
+fn blame(out: &mut Document, msg: String, cx: &mut Ctx) {
+    let blamed = find_uid(&msg);
+    if let Some(id) = blamed.filter(|id| out.objects.contains_key(&ObjectId(*id))) {
+        out.objects.shift_remove(&ObjectId(id));
+        cx.quarantine(Kind::Object, id, msg);
+    } else if let Some(id) = blamed.filter(|id| out.resources.get(ResourceId(*id)).is_some()) {
+        out.resources.remove(ResourceId(id));
+        cx.quarantine(Kind::Resource, id, msg);
+    } else {
+        for (id, _) in out.objects.drain(..) {
+            cx.quarantine(Kind::Object, id.0, format!("the document failed: {msg}"));
+        }
     }
 }
 

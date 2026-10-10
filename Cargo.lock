@@ -2312,6 +2312,7 @@ dependencies = [
  "kadakas-sys",
  "kadakas-x3d",
  "png",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

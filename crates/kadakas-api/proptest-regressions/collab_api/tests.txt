@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 41c6754161b9a730281590eded654616027f6317af4f6f14ccc5bc27e879015d # shrinks to acts = [AddLayer { s: false, n: 0 }, DeleteLayer { s: false, l: 12 }]

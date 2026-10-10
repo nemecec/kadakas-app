@@ -1953,13 +1953,13 @@ class Api:
         return self._call("revision.list", params or None)
 
     def collab_status(self, **params: Any) -> Any:
-        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, name, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other users), can_undo, can_redo}.
+        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
 
         JSON-RPC method ``collab.status``."""
         return self._call("collab.status", params or None)
 
     def collab_connect(self, **params: Any) -> Any:
-        """Connect to the endpoint that the host gave this session. params: {user? (UUID text; default: a new one, kept for later calls), name? (shown to others), token? (for the server), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.
+        """Connect to the endpoint that the host gave this session. Refused in a session with predictable IDs (sequential ids). params: {user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), token? (for the server), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.
 
         JSON-RPC method ``collab.connect``."""
         return self._call("collab.connect", params or None)
@@ -1971,25 +1971,25 @@ class Api:
         return self._call("collab.disconnect", params or None)
 
     def collab_sync(self, **params: Any) -> Any:
-        """Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (number of the transaction sent, or null), received, sent, document_changed, events, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed.
+        """Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (numbers of the transactions sent), problems (changes that could not be shared, as texts), received, sent, document_changed, events, quarantined, repairs, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed, store_corrupt, regressed, renumbered, reconnect.
 
         JSON-RPC method ``collab.sync``."""
         return self._call("collab.sync", params or None)
 
     def collab_presence(self, **params: Any) -> Any:
-        """Set what others see of you and list the others. params: {cursor? [x, y] in mm, selection? [object ids], viewport? {center: [x, y], scale (mm per pixel), size: [w, h]}, clear? (true: show nothing), now_ms?}. Without cursor, selection, viewport and clear it only reads. Presence is not saved in the document, goes at most 20 times a second, and is forgotten after 15 seconds of silence. Returns {own, peers: [{user, name, cursor, selection, viewport}]}.
+        """Set what others see of you and list the others. params: {cursor? [x, y] in mm, selection? [object ids], viewport? {center: [x, y], scale (mm per pixel), size: [w, h]}, clear? (true: show nothing), now_ms?}. Without cursor, selection, viewport and clear it only reads. Presence is not saved in the document, goes at most 20 times a second, and is forgotten after 15 seconds of silence. Returns {own, peers: [{client, user, name, cursor, selection, viewport}]}.
 
         JSON-RPC method ``collab.presence``."""
         return self._call("collab.presence", params or None)
 
     def collab_undo(self, **params: Any) -> Any:
-        """Undo your own last edit in the shared document. Other users' work stays: a property that another user changed after you is skipped. Returns {done, op_id, applied, skipped: [{target, prop, reason (changed_by_other | gone)}], document_changed}.
+        """Undo your own last edit in the shared document. Other users' work stays: a property that another user changed after you is skipped, and so is an object that others use. Returns {done, op_id, applied, skipped: [{target, prop, reason (changed_by_other | gone | referenced)}], document_changed}.
 
         JSON-RPC method ``collab.undo``."""
         return self._call("collab.undo", params or None)
 
     def collab_redo(self, **params: Any) -> Any:
-        """Redo what collab.undo took back. Same result as collab.undo.
+        """Redo what collab.undo took back. Edits of other users do not clear the redo steps; an edit of your own does. Same result as collab.undo.
 
         JSON-RPC method ``collab.redo``."""
         return self._call("collab.redo", params or None)
