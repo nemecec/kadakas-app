@@ -214,6 +214,11 @@ impl Sequencer {
             c.user = Some(user);
             c.name = name;
         }
+        let announce = ServerMsg::Presence {
+            user,
+            name: self.conns[&conn].name.clone(),
+            state: PresenceState::default(),
+        };
         let peers = self
             .joined()
             .filter(|(id, _)| **id != conn)
@@ -223,7 +228,8 @@ impl Sequencer {
                 state: c.presence.clone(),
             })
             .collect();
-        let mut out = vec![Out {
+        let mut out = self.to_others(conn, announce);
+        out.push(Out {
             conn,
             msg: ServerMsg::Welcome {
                 protocol: PROTOCOL_VERSION,
@@ -231,7 +237,7 @@ impl Sequencer {
                 your_last_op: self.last_op.get(&user).copied().unwrap_or(0),
                 peers,
             },
-        }];
+        });
         let can_resume = last_seq.is_some_and(|n| n >= self.log_start && n <= self.seq);
         out.push(Out {
             conn,

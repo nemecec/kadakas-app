@@ -31,7 +31,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-gis` | WMS, WMTS and WFS services, geoimages, tile cache, document CRS change, coordinate readout (native only; has the HTTP client) | core, crs, io |
 | `kadakas-ifc` | IFC4 export, IFC2x3/IFC4/IFC4x3 import, STEP writer and streaming reader (native only) | core, crs, sys, io, site |
 | `kadakas-print` | Sheet composition and output: PDF, SVG and PNG pages from sheet layers | core, sys, render, sheet, annot, site, x3d |
-| `kadakas-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs; native only: sys, io, ifc, gis, print, script, x3d. Also: `SessionLimits`, the event hub (`events`) |
+| `kadakas-api` | JSON-RPC session and methods for agents (`Session`, `METHODS`, `describe`) | core, render, sheet, annot, site, irrigation, plants, crs, collab; native only: sys, io, ifc, gis, print, script, x3d. Also: `SessionLimits`, the event hub (`events`) |
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
 | `kadakas-app` | egui and wgpu desktop app and web build | core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
 
@@ -48,7 +48,7 @@ core            sys
   |
   io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
   script (sys)
-  api  = everything above;  cli = core, sys, api;  app = api and the UI crates
+  api  = everything above (collab: core only);  cli = core, sys, api;  app = api and the UI crates
 ```
 
 Nothing below `api` depends on `script` any more: `io` runs its converter through `sys`.

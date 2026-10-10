@@ -2159,6 +2159,7 @@ dependencies = [
  "base64 0.22.1",
  "glam",
  "kadakas-annot",
+ "kadakas-collab",
  "kadakas-core",
  "kadakas-crs",
  "kadakas-gis",

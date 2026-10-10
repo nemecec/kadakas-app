@@ -1952,6 +1952,48 @@ class Api:
         JSON-RPC method ``revision.list``."""
         return self._call("revision.list", params or None)
 
+    def collab_status(self, **params: Any) -> Any:
+        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, name, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other users), can_undo, can_redo}.
+
+        JSON-RPC method ``collab.status``."""
+        return self._call("collab.status", params or None)
+
+    def collab_connect(self, **params: Any) -> Any:
+        """Connect to the endpoint that the host gave this session. params: {user? (UUID text; default: a new one, kept for later calls), name? (shown to others), token? (for the server), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.
+
+        JSON-RPC method ``collab.connect``."""
+        return self._call("collab.connect", params or None)
+
+    def collab_disconnect(self, **params: Any) -> Any:
+        """Say goodbye and close the connection. The client keeps its state, so you can go on editing offline and connect again. Returns the status.
+
+        JSON-RPC method ``collab.disconnect``."""
+        return self._call("collab.disconnect", params or None)
+
+    def collab_sync(self, **params: Any) -> Any:
+        """Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (number of the transaction sent, or null), received, sent, document_changed, events, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed.
+
+        JSON-RPC method ``collab.sync``."""
+        return self._call("collab.sync", params or None)
+
+    def collab_presence(self, **params: Any) -> Any:
+        """Set what others see of you and list the others. params: {cursor? [x, y] in mm, selection? [object ids], viewport? {center: [x, y], scale (mm per pixel), size: [w, h]}, clear? (true: show nothing), now_ms?}. Without cursor, selection, viewport and clear it only reads. Presence is not saved in the document, goes at most 20 times a second, and is forgotten after 15 seconds of silence. Returns {own, peers: [{user, name, cursor, selection, viewport}]}.
+
+        JSON-RPC method ``collab.presence``."""
+        return self._call("collab.presence", params or None)
+
+    def collab_undo(self, **params: Any) -> Any:
+        """Undo your own last edit in the shared document. Other users' work stays: a property that another user changed after you is skipped. Returns {done, op_id, applied, skipped: [{target, prop, reason (changed_by_other | gone)}], document_changed}.
+
+        JSON-RPC method ``collab.undo``."""
+        return self._call("collab.undo", params or None)
+
+    def collab_redo(self, **params: Any) -> Any:
+        """Redo what collab.undo took back. Same result as collab.undo.
+
+        JSON-RPC method ``collab.redo``."""
+        return self._call("collab.redo", params or None)
+
     def events_subscribe(self, **params: Any) -> Any:
         """Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: "events.change", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.
 
@@ -2294,6 +2336,13 @@ METHOD_NAMES: tuple[str, ...] = (
     "annotation.evaluate",
     "annotation.apply_text_style",
     "revision.list",
+    "collab.status",
+    "collab.connect",
+    "collab.disconnect",
+    "collab.sync",
+    "collab.presence",
+    "collab.undo",
+    "collab.redo",
     "events.subscribe",
     "events.unsubscribe",
     "events.poll",

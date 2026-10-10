@@ -202,7 +202,6 @@ impl Client {
         }
         c.store = Some(store);
         c.rebuild_view();
-        c.changed = false;
         c
     }
 
@@ -254,6 +253,11 @@ impl Client {
         &self.peers
     }
 
+    /// True once the client has a confirmed state: from a sync, a checkpoint or `with_state`.
+    pub fn has_state(&self) -> bool {
+        self.has_state
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -262,8 +266,10 @@ impl Client {
         !self.redo.is_empty()
     }
 
-    /// True if the view changed since the last call. A host that shows the document checks it
-    /// and builds the document again (see `docsync::materialize`).
+    /// True if the view changed since the last call by something other than an edit that the
+    /// host made itself: a change of another user, a rebase, or an undo or redo. The host builds
+    /// the document again then (see `docsync::materialize`). Edits made with [`Client::edit`] do
+    /// not set it, because the host's document has them already.
     pub fn take_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
     }
@@ -389,7 +395,6 @@ impl Client {
         }
         inverse.reverse();
         self.last_op = op_id;
-        self.changed = true;
         if self.state == ConnState::Online {
             self.outbox.push(ClientMsg::Submit {
                 op_id,
@@ -446,6 +451,8 @@ impl Client {
         }
         match self.commit(keep) {
             Ok((op_id, inverse)) => {
+                // The host's document does not have this change yet.
+                self.changed = true;
                 report.op_id = Some(op_id);
                 report.applied = self.pending.back().map_or(0, |t| t.ops.len());
                 (

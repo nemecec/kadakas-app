@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 base64 = "0.22.1"
 kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-collab = { version = "0.1.0", path = "../kadakas-collab" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
@@ -32,3 +33,4 @@ tempfile = "3"
 
 [dev-dependencies]
 png = "0.18"
+kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
