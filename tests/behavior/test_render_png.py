@@ -169,7 +169,7 @@ def test_view_list_names_the_standard_views(cad):
     assert ids[0] == "plan" and "top" in ids
     assert {"front", "back", "left", "right", "left_isometric", "right_isometric", "left_rear_isometric", "right_rear_isometric"} <= set(ids)
     assert set(v["projections"]) == {"ortho", "perspective"}
-    assert set(v["modes"]) == {"shaded", "wireframe"}
+    assert set(v["modes"]) == {"shaded", "wireframe", "hidden_line", "dashed_hidden_line"}
     assert v["current"] == {"view": "plan", "projection": "ortho", "mode": "shaded"}
 
 

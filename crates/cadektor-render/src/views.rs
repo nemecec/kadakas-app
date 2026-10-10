@@ -151,36 +151,7 @@ impl Projection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RenderMode {
-    #[default]
-    Shaded,
-    Wireframe,
-}
-
-impl RenderMode {
-    pub fn id(self) -> &'static str {
-        match self {
-            RenderMode::Shaded => "shaded",
-            RenderMode::Wireframe => "wireframe",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<RenderMode> {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "shaded" => Some(RenderMode::Shaded),
-            "wireframe" => Some(RenderMode::Wireframe),
-            _ => None,
-        }
-    }
-
-    pub fn toggled(self) -> RenderMode {
-        match self {
-            RenderMode::Shaded => RenderMode::Wireframe,
-            RenderMode::Wireframe => RenderMode::Shaded,
-        }
-    }
-}
+pub use cadektor_core::present::RenderMode;
 
 /// The view that the user, or an agent through `view.set`, has chosen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

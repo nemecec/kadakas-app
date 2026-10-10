@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use cadektor_core::mesh::{Bounds3, Scene};
-use cadektor_core::model::ObjectId;
+use cadektor_core::model::{Document, ObjectId};
+use cadektor_render::look::{Look, TextureCache};
 use cadektor_render::{Camera, StandardView, ViewSettings, pick};
 use glam::{Vec2, Vec3};
 
@@ -38,6 +39,16 @@ pub struct View3d {
     fit_pending: bool,
     selection_cache: Option<SelectionCache>,
     overlay_rev: u64,
+    look_cache: Option<LookCache>,
+    texture_cache: TextureCache,
+    geometry: Option<(u64, u64)>,
+}
+
+/// The materials of the scene for one document revision.
+struct LookCache {
+    scene_rev: u64,
+    textures: bool,
+    look: Arc<Look>,
 }
 
 struct SelectionCache {
@@ -58,11 +69,56 @@ impl Default for View3d {
             fit_pending: true,
             selection_cache: None,
             overlay_rev: 0,
+            look_cache: None,
+            texture_cache: TextureCache::new(),
+            geometry: None,
         }
     }
 }
 
 impl View3d {
+    /// The materials of the scene. They are resolved again only when the document revision or the
+    /// texture setting changes, and decoded textures are kept between looks.
+    pub fn look(
+        &mut self,
+        doc: &Document,
+        scene: &Scene,
+        scene_rev: u64,
+        textures: bool,
+    ) -> Arc<Look> {
+        if let Some(c) = &self.look_cache
+            && c.scene_rev == scene_rev
+            && c.textures == textures
+        {
+            return c.look.clone();
+        }
+        let look = Arc::new(Look::build_cached(
+            doc,
+            scene,
+            textures,
+            &mut self.texture_cache,
+        ));
+        self.look_cache = Some(LookCache {
+            scene_rev,
+            textures,
+            look: look.clone(),
+        });
+        look
+    }
+
+    /// A fingerprint of the geometry of the scene. An edit that does not change the geometry keeps
+    /// it, so the GPU does not upload the mesh or draw the shadow map again.
+    pub fn geometry_key(&mut self, scene: &Scene, scene_rev: u64) -> u64 {
+        match self.geometry {
+            Some((rev, key)) if rev == scene_rev => key,
+            _ => {
+                let key = cadektor_render::look::scene_key(scene);
+                self.geometry = Some((scene_rev, key));
+                key
+            }
+        }
+    }
+
     /// Makes the camera follow `settings`. A change of the standard view turns the camera
     /// to that view and keeps target and zoom. `force` does that even without a change,
     /// as after `view.set`, which also resets an orbit that the user did.
@@ -166,14 +222,11 @@ fn box_lines(lo: Vec3, hi: Vec3, out: &mut Vec<LineVertex>) {
     for i in 0..8usize {
         for bit in [1, 2, 4] {
             if i & bit == 0 {
-                out.push(LineVertex {
-                    pos: corner(i).to_array(),
-                    color: SELECTION,
-                });
-                out.push(LineVertex {
-                    pos: corner(i | bit).to_array(),
-                    color: SELECTION,
-                });
+                out.extend(LineVertex::segment(
+                    corner(i).to_array(),
+                    corner(i | bit).to_array(),
+                    SELECTION,
+                ));
             }
         }
     }

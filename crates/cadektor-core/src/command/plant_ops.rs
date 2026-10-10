@@ -184,6 +184,9 @@ impl Tx<'_> {
                 if self.graphic_delete(*id, *reassign)? {
                     return Ok(());
                 }
+                if self.present_delete(*id)? {
+                    return Ok(());
+                }
                 let current = self
                     .doc
                     .resources

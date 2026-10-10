@@ -27,6 +27,7 @@ use crate::curve;
 use crate::model::{Color, Document, Layer, LayerKind, Object, ObjectId, Shape, arc_sweep};
 use crate::plants::link;
 use crate::plants::style::PlantForm;
+use crate::present::{PART_CANOPY, PART_MAIN, PART_SIDE, PART_TRUNK};
 
 /// Thickness of a hardscape slab when the shape does not say.
 pub const DEFAULT_SLAB_THICKNESS: f64 = 150.0;
@@ -47,6 +48,10 @@ pub struct Mesh {
     pub indices: Vec<u32>,
     /// The object of each triangle.
     pub tri_object: Vec<ObjectId>,
+    /// The part of the object of each triangle (`PART_*` in `crate::present`), for materials.
+    pub tri_part: Vec<u8>,
+    /// The part that new triangles get.
+    pub part: u8,
 }
 
 impl Mesh {
@@ -74,6 +79,7 @@ impl Mesh {
     fn tri(&mut self, a: u32, b: u32, c: u32, object: ObjectId) {
         self.indices.extend_from_slice(&[a, b, c]);
         self.tri_object.push(object);
+        self.tri_part.push(self.part);
     }
 }
 
@@ -189,6 +195,11 @@ pub struct SceneSink<'a> {
 }
 
 impl SceneSink<'_> {
+    /// Sets the part (`PART_*` in `crate::present`) of the triangles that follow.
+    pub fn set_part(&mut self, part: u8) {
+        self.scene.mesh.part = part;
+    }
+
     fn local(&self, p: DVec3) -> Vec3 {
         let o = self.scene.origin;
         Vec3::new(
@@ -843,6 +854,7 @@ impl Builder<'_> {
         }
         // Side walls: the ring is counterclockwise, so the outside is on the right of each edge.
         let side = shade(color, 0.82);
+        mesh.part = PART_SIDE;
         for i in 0..n {
             let (p, q) = (ring[i], ring[(i + 1) % n]);
             let d = q - p;
@@ -855,6 +867,7 @@ impl Builder<'_> {
             mesh.tri(a, b, c, id);
             mesh.tri(a, c, e, id);
         }
+        mesh.part = PART_MAIN;
         // Edges: both outlines, and a vertical edge at each sharp corner.
         let ring_at = |z: f64| -> Vec<Vec3> { ring.iter().map(|p| v3(o, *p, z)).collect() };
         self.scene.lines.polyline(&ring_at(top), true, edge, id);
@@ -892,29 +905,37 @@ impl Builder<'_> {
             PlantForm::Columnar => (0.1, 0.3),
             PlantForm::Conical => (0.08, 0.2),
             PlantForm::Spreading => (0.5, 0.6),
-            PlantForm::ShrubMound => (0.0, 0.0),
+            // A short stub inside the mound, so that every form has a trunk and a canopy part.
+            PlantForm::ShrubMound => (0.0, 0.08),
         };
         let canopy_bottom = z + height * bottom_frac;
         let canopy_h = height * (1.0 - bottom_frac);
         let center_z = canopy_bottom + canopy_h / 2.0;
 
         let mesh = &mut self.scene.mesh;
+        mesh.part = PART_TRUNK;
         if trunk_frac > 0.0 {
             // Trunk: a prism from the ground into the canopy.
             let trunk_r = trunk_radius
                 .unwrap_or((spread * 0.04).clamp(15.0, 300.0))
                 .min(r * 0.5);
             let trunk_top = z + height * trunk_frac;
+            // A stub inside a mound needs few sides.
+            let sides = if form == PlantForm::ShrubMound {
+                4
+            } else {
+                TRUNK_SIDES
+            };
             let base = mesh.positions.len() as u32;
-            for s in 0..TRUNK_SIDES {
-                let a = std::f64::consts::TAU * s as f64 / TRUNK_SIDES as f64;
+            for s in 0..sides {
+                let a = std::f64::consts::TAU * s as f64 / sides as f64;
                 let dir = DVec2::from_angle(a);
                 let n = Vec3::new(dir.x as f32, dir.y as f32, 0.0);
                 mesh.vertex(v3(o, at + dir * trunk_r, z), n, TRUNK);
                 mesh.vertex(v3(o, at + dir * trunk_r, trunk_top), n, TRUNK);
             }
-            for s in 0..TRUNK_SIDES {
-                let s2 = (s + 1) % TRUNK_SIDES;
+            for s in 0..sides {
+                let s2 = (s + 1) % sides;
                 let (b0, t0, b1, t1) = (
                     base + 2 * s as u32,
                     base + 2 * s as u32 + 1,
@@ -955,6 +976,7 @@ impl Builder<'_> {
                 _ => (center + p * radii, (p / radii).normalize_or_zero()),
             }
         };
+        mesh.part = PART_CANOPY;
         let base = mesh.positions.len() as u32;
         for p in &self.sphere.verts {
             let (pos, n) = place(*p);
@@ -963,6 +985,7 @@ impl Builder<'_> {
         for [a, b, c] in &self.sphere.tris {
             mesh.tri(base + a, base + b, base + c, id);
         }
+        mesh.part = PART_MAIN;
         // Edges: the canopy at its widest.
         let (segments, rings) = (self.sphere.segments, self.sphere.rings);
         let ring_index = if form == PlantForm::Conical {
@@ -1066,6 +1089,7 @@ pub fn build_with(doc: &Document, origin: DVec3, ext: Option<SceneExt<'_>>) -> S
     };
     b.scene.ranges.reserve(doc.objects.len());
     for (obj, layer) in visible_objects(doc) {
+        b.scene.mesh.part = PART_MAIN;
         let (t0, s0) = (b.scene.mesh.triangle_count(), b.scene.lines.segment_count());
         b.add_object(obj, layer);
         if let (Some(ext), true) = (b.ext, crate::site::carries_extra(obj)) {

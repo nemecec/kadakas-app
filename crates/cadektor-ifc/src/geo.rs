@@ -1,8 +1,7 @@
 //! Georeference to IFC: the map conversion, the projected CRS and the site latitude and longitude.
 
 use cadektor_core::georef::Georeference;
-use cadektor_io::crs::{Crs, Transformer};
-use glam::DVec2;
+use cadektor_io::crs::Crs;
 
 /// What the IFC file says about the position on the earth.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,30 +36,8 @@ impl GeoInfo {
             Some(code) => (format!("EPSG:{code}"), None),
             None => ("Custom".to_string(), Some(text.to_string())),
         };
-        let lat_lon = parsed.as_ref().and_then(|crs| {
-            let wgs = Crs::from_epsg(4326).ok()?;
-            let (lon, lat, _) = Transformer::new(crs, &wgs)
-                .apply(g.origin.x, g.origin.y, 0.0)
-                .ok()?;
-            Some((lat, lon))
-        });
-        // True north: move a little north on the earth and see where that goes on the map.
-        let grid_north = DVec2::from_angle(-g.rotation).rotate(DVec2::Y);
-        let true_north = parsed
-            .as_ref()
-            .filter(|crs| !crs.is_geographic())
-            .and_then(|crs| {
-                let wgs = Crs::from_epsg(4326).ok()?;
-                let (lon, lat, _) = Transformer::new(crs, &wgs)
-                    .apply(g.origin.x, g.origin.y, 0.0)
-                    .ok()?;
-                let (nx, ny, _) = Transformer::new(&wgs, crs)
-                    .apply(lon, (lat + 1.0e-4).min(89.9), 0.0)
-                    .ok()?;
-                let d = DVec2::new(nx - g.origin.x, ny - g.origin.y).normalize_or_zero();
-                (d != DVec2::ZERO).then(|| DVec2::from_angle(-g.rotation).rotate(d))
-            })
-            .unwrap_or(grid_north);
+        let place = cadektor_io::crs::place_of(g)?;
+        let (lat_lon, true_north) = (place.lat_lon, place.true_north);
         Some(GeoInfo {
             true_north: [true_north.x, true_north.y],
             crs_name,
@@ -107,6 +84,7 @@ pub fn compound_angle(deg: f64) -> [i64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec2;
     fn geo(crs: &str) -> Georeference {
         Georeference {
             crs: crs.into(),

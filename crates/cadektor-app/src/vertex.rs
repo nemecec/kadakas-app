@@ -3,6 +3,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use cadektor_core::mesh::Scene;
+use cadektor_render::look::{Look, object_ranks};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -10,23 +11,80 @@ pub struct SurfaceVertex {
     pub pos: [f32; 3],
     pub normal: [f32; 3],
     pub color: [u8; 4],
+    /// Texture coordinates in repeats.
+    pub uv: [f32; 2],
+    /// Index into the material table, or `NO_MATERIAL`.
+    pub material: u32,
+    /// Place of the object in the drawing order (capped). Later objects move toward the viewer by
+    /// `order * DEPTH_RANK_STEP`, so coplanar surfaces of different objects do not flicker.
+    pub order: f32,
 }
+
+/// The material index of a vertex without material.
+pub const NO_MATERIAL: u32 = u32::MAX;
+
+/// Most materials the shaders know. Vertices of other materials keep their vertex color.
+pub const MAX_MATERIALS: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct LineVertex {
     pub pos: [f32; 3],
     pub color: [u8; 4],
+    /// The first end point of the segment that this vertex belongs to. Dashes are measured from it.
+    pub start: [f32; 3],
 }
 
-/// The vertices of the scene's triangles.
-pub fn surface_vertices(scene: &Scene) -> Vec<SurfaceVertex> {
+impl LineVertex {
+    /// The two vertices of one segment.
+    pub fn segment(a: [f32; 3], b: [f32; 3], color: [u8; 4]) -> [LineVertex; 2] {
+        [
+            LineVertex {
+                pos: a,
+                color,
+                start: a,
+            },
+            LineVertex {
+                pos: b,
+                color,
+                start: a,
+            },
+        ]
+    }
+}
+
+/// The vertices of the scene's triangles. With a look, vertices carry texture coordinates and the
+/// index of their material.
+pub fn surface_vertices(scene: &Scene, look: Option<&Look>) -> Vec<SurfaceVertex> {
     let m = &scene.mesh;
+    let ranks = object_ranks(scene);
+    // The object of each vertex: the object of the first triangle that uses it.
+    let mut owner = vec![None; m.positions.len()];
+    for t in 0..m.triangle_count() {
+        for k in 0..3 {
+            owner[m.indices[t * 3 + k] as usize].get_or_insert(m.tri_object[t]);
+        }
+    }
     (0..m.positions.len())
-        .map(|i| SurfaceVertex {
-            pos: m.positions[i].to_array(),
-            normal: m.normals[i].to_array(),
-            color: m.colors[i],
+        .map(|i| {
+            let material = look
+                .and_then(|l| l.vertex_material.get(i).copied())
+                .filter(|m| (*m as usize) < MAX_MATERIALS)
+                .unwrap_or(NO_MATERIAL);
+            SurfaceVertex {
+                pos: m.positions[i].to_array(),
+                normal: m.normals[i].to_array(),
+                color: m.colors[i],
+                uv: if material == NO_MATERIAL {
+                    [0.0, 0.0]
+                } else {
+                    look.map_or([0.0, 0.0], |l| l.uvs[i])
+                },
+                material,
+                order: owner[i]
+                    .and_then(|o| ranks.get(&o))
+                    .map_or(0.0, |r| *r as f32),
+            }
         })
         .collect()
 }
@@ -38,6 +96,7 @@ pub fn line_vertices(scene: &Scene) -> Vec<LineVertex> {
         .map(|i| LineVertex {
             pos: l.positions[i].to_array(),
             color: l.colors[i / 2],
+            start: l.positions[i - i % 2].to_array(),
         })
         .collect()
 }
@@ -67,14 +126,15 @@ mod tests {
         })
         .unwrap();
         let scene = build(ed.doc());
-        let s = surface_vertices(&scene);
+        let s = surface_vertices(&scene, None);
         assert_eq!(s.len(), scene.mesh.positions.len());
         assert_eq!(s[0].color, [1, 2, 3, 255]);
         assert_eq!(s[0].normal, [0.0, 0.0, 1.0]);
         let l = line_vertices(&scene);
         assert_eq!(l.len(), scene.lines.positions.len());
         assert_eq!(l[0].color, l[1].color);
-        assert_eq!(std::mem::size_of::<SurfaceVertex>(), 28);
-        assert_eq!(std::mem::size_of::<LineVertex>(), 16);
+        assert_eq!(std::mem::size_of::<SurfaceVertex>(), 44);
+        assert_eq!(s[0].material, NO_MATERIAL);
+        assert_eq!(std::mem::size_of::<LineVertex>(), 28);
     }
 }

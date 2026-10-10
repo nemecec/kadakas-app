@@ -88,7 +88,7 @@ class Api:
         return self._call("render.svg", params or None)
 
     def render_png(self, **params: Any) -> Any:
-        """PNG image of the 3D model (flat shading and edges). params: {view?, width?, height?, projection?, mode?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded or wireframe, size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode}.
+        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. Returns {png_base64, width, height, view, projection, mode, render_style}.
 
         JSON-RPC method ``render.png``."""
         return self._call("render.png", params or None)
@@ -398,6 +398,126 @@ class Api:
 
         JSON-RPC method ``worksheet.fit``."""
         return self._call("worksheet.fit", params or None)
+
+    def material_list(self, **params: Any) -> Any:
+        """Materials of the document with the number of slots that use each. Returns {materials: [{id, name, base_color, texture, mapping, roughness, metallic, opacity, used_by}]}. Image data is not returned.
+
+        JSON-RPC method ``material.list``."""
+        return self._call("material.list", params or None)
+
+    def material_get(self, **params: Any) -> Any:
+        """One material. params: {id} (the ID or the name).
+
+        JSON-RPC method ``material.get``."""
+        return self._call("material.get", params or None)
+
+    def material_create(self, **params: Any) -> Any:
+        """Create a material resource. params: {name, base_color? ([r,g,b] or [r,g,b,a]), texture? (null | "grass" | {procedural: grass|gravel|pavers|mulch|water|brick|timber|noise, seed?} | {png_base64} | {jpeg_base64} | {path} of a PNG or JPEG file, max_side? (default 1024)), mapping? ({kind: planar|box|cylindrical, scale: mm of one repeat as a number or [u, v], rotation: degrees, offset: [x, y] mm}), roughness? (0 to 1), metallic? (0 to 1), opacity? (0 to 1; below 1 is see-through, for water and glass)}. An image is stored in the document, scaled to at most 2048 px per side and 3 MB. Returns {id}.
+
+        JSON-RPC method ``material.create``."""
+        return self._call("material.create", params or None)
+
+    def material_update(self, **params: Any) -> Any:
+        """Change a material. params: {id, name? (renames), ...fields as in material.create}. Objects that use the material follow.
+
+        JSON-RPC method ``material.update``."""
+        return self._call("material.update", params or None)
+
+    def material_duplicate(self, **params: Any) -> Any:
+        """Copy a material. params: {id, name?}. Returns {id}.
+
+        JSON-RPC method ``material.duplicate``."""
+        return self._call("material.duplicate", params or None)
+
+    def material_delete(self, **params: Any) -> Any:
+        """Delete a material. Its slots are cleared. params: {id}.
+
+        JSON-RPC method ``material.delete``."""
+        return self._call("material.delete", params or None)
+
+    def material_add_defaults(self, **params: Any) -> Any:
+        """Add the built-in materials that the document lacks: Grass, Gravel, Concrete pavers, Bark mulch, Water, Brick, Timber (generated textures, no image files). Returns {added: [{id, name}], existing: [name]}.
+
+        JSON-RPC method ``material.add_defaults``."""
+        return self._call("material.add_defaults", params or None)
+
+    def material_import_texture(self, **params: Any) -> Any:
+        """Put a PNG or JPEG image into a material as its texture. params: {id, path | png_base64 | jpeg_base64, max_side? (default 1024, at most 2048)}. Returns {width, height, bytes}.
+
+        JSON-RPC method ``material.import_texture``."""
+        return self._call("material.import_texture", params or None)
+
+    def material_assign(self, **params: Any) -> Any:
+        """Put a material on a slot, or clear it with material null. params: {material, and one target: object | objects ([ids]) with slot? (a part, like trunk or canopy for plants, surface or component:0 for hardscapes), or style (plant style or hardscape style, ID or name) with slot (trunk | canopy | surface | component:N), or class (ID)}. The material of a part comes from the part of the object, the whole object, the part of its style, then its class (in that order). Returns {assigned}.
+
+        JSON-RPC method ``material.assign``."""
+        return self._call("material.assign", params or None)
+
+    def material_slots(self, **params: Any) -> Any:
+        """All material assignments. Returns {slots: [{target: {kind, ...}, material, material_name}]}.
+
+        JSON-RPC method ``material.slots``."""
+        return self._call("material.slots", params or None)
+
+    def render_style_list(self, **params: Any) -> Any:
+        """Render styles of the document, the built-in ones, and the active one. Returns {styles: [{id, name, ...fields}], builtin: [{name, ...fields}], active}.
+
+        JSON-RPC method ``render_style.list``."""
+        return self._call("render_style.list", params or None)
+
+    def render_style_get(self, **params: Any) -> Any:
+        """One render style. params: {id} (the ID or the name).
+
+        JSON-RPC method ``render_style.get``."""
+        return self._call("render_style.get", params or None)
+
+    def render_style_create(self, **params: Any) -> Any:
+        """Create a render style resource. params: {name, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), edges? (draw edges on shaded surfaces), shadows? (needs sun), sun? (light with the sun of the document, see sun.set), textures?, background? ([r,g,b]), line_weight? (mm on paper, for hidden line)}. Returns {id}. Use it with render.png {render_style}, render_style.set_active, or in a viewport.
+
+        JSON-RPC method ``render_style.create``."""
+        return self._call("render_style.create", params or None)
+
+    def render_style_update(self, **params: Any) -> Any:
+        """Change a render style. params: {id, name? (renames), ...fields as in render_style.create}.
+
+        JSON-RPC method ``render_style.update``."""
+        return self._call("render_style.update", params or None)
+
+    def render_style_duplicate(self, **params: Any) -> Any:
+        """Copy a render style. params: {id, name?}. Returns {id}.
+
+        JSON-RPC method ``render_style.duplicate``."""
+        return self._call("render_style.duplicate", params or None)
+
+    def render_style_delete(self, **params: Any) -> Any:
+        """Delete a render style. params: {id}. Viewports that used it fall back to their mode.
+
+        JSON-RPC method ``render_style.delete``."""
+        return self._call("render_style.delete", params or None)
+
+    def render_style_set_active(self, **params: Any) -> Any:
+        """Choose the render style of the 3D view and of render.png. params: {id | null} (a document style, or null for the built-in shaded style).
+
+        JSON-RPC method ``render_style.set_active``."""
+        return self._call("render_style.set_active", params or None)
+
+    def sun_set(self, **params: Any) -> Any:
+        """Set the sun of the document (like a heliodon). Fields you give replace the old ones. params: {latitude? (degrees north), longitude? (degrees east), from_georef? (take latitude and longitude from the georeference), date? ("YYYY-MM-DD"), time? ("HH:MM" local clock time), tz_offset? (standard time, hours from UTC; default: the nominal zone of the longitude), dst? (true when summer time is in force: the clock is one hour ahead of tz_offset), north_angle? (degrees clockwise from the model +Y axis to true north; from_georef uses the rotation of the georeference and the meridian convergence of its coordinate system), off? (true removes the sun)}. Render styles with sun on use it; with shadows on, objects cast shadows. Returns the settings and the sun position.
+
+        JSON-RPC method ``sun.set``."""
+        return self._call("sun.set", params or None)
+
+    def sun_get(self, **params: Any) -> Any:
+        """The sun of the document and its position. params: {times? (list of "HH:MM" for a sun path on the same date)}. Returns {sun, position: {azimuth, elevation, declination, equation_of_time, above_horizon}, day: {sunrise, solar_noon, sunset, always_up}, path?}. Azimuth is degrees clockwise from true north.
+
+        JSON-RPC method ``sun.get``."""
+        return self._call("sun.get", params or None)
+
+    def render_hidden_line(self, **params: Any) -> Any:
+        """Vector drawing of the visible edges of the 3D model, with the covered edges removed. params: {view?, projection?, width?, height? (px, as render.png), dashed? (also return the covered edges, dashed and gray), mesh_edges? (add silhouettes and creases of the surfaces; default true), segments? (also return the segments)}. Returns {svg, visible_edges, width, height, view, projection, segments?: [{a: [x, y], b: [x, y], hidden, color, object}]}. The sheet viewport mode hidden_line uses the same algorithm.
+
+        JSON-RPC method ``render.hidden_line``."""
+        return self._call("render.hidden_line", params or None)
 
     def gis_sources(self, **params: Any) -> Any:
         """The network policy and the tile cache. Returns {allowed_urls: [..], restricted, cache: {dir, limit_bytes, files, bytes}, blocking}. Agents may fetch only addresses on allowed_urls (the owner sets them with --allow-url; the default is none).
@@ -1264,7 +1384,7 @@ class Api:
         return self._call("project.new_guid", params or None)
 
     def viewport_create(self, **params: Any) -> Any:
-        """Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or "fit" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe, 3D only), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images. Returns the viewport with its id.
+        """Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or "fit" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.
 
         JSON-RPC method ``viewport.create``."""
         return self._call("viewport.create", params or None)
@@ -1282,7 +1402,7 @@ class Api:
         return self._call("viewport.list", params or None)
 
     def viewport_update(self, **params: Any) -> Any:
-        """Change a viewport. params: {id, and any of name, min, max, center, scale (number or "fit"), layers, view, mode, dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.
+        """Change a viewport. params: {id, and any of name, min, max, center, scale (number or "fit"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.
 
         JSON-RPC method ``viewport.update``."""
         return self._call("viewport.update", params or None)
@@ -1611,6 +1731,26 @@ METHOD_NAMES: tuple[str, ...] = (
     "worksheet.export",
     "worksheet.place",
     "worksheet.fit",
+    "material.list",
+    "material.get",
+    "material.create",
+    "material.update",
+    "material.duplicate",
+    "material.delete",
+    "material.add_defaults",
+    "material.import_texture",
+    "material.assign",
+    "material.slots",
+    "render_style.list",
+    "render_style.get",
+    "render_style.create",
+    "render_style.update",
+    "render_style.duplicate",
+    "render_style.delete",
+    "render_style.set_active",
+    "sun.set",
+    "sun.get",
+    "render.hidden_line",
     "gis.sources",
     "gis.cache.clear",
     "gis.georef.set",

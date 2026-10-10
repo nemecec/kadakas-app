@@ -2,8 +2,13 @@
 //! of `cadektor-core`. No GPU and no window, so it also compiles to WebAssembly.
 
 pub mod camera;
+pub mod hlr;
+pub mod look;
 pub mod pick;
 pub mod raster;
+pub mod shade;
+pub mod styled;
+pub mod texture;
 pub mod views;
 
 pub use camera::{Camera, FOV_Y};
