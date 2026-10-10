@@ -140,3 +140,26 @@ fn detached_dimensions_say_so() {
     assert_eq!(e["computed"]["detached"], true);
     assert_eq!(e["computed"]["texts"], json!(["2000"]));
 }
+
+#[test]
+fn annotations_made_in_an_entered_group_become_members() {
+    let mut s = Session::default();
+    let a = exec(
+        &mut s,
+        json!({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 100}}),
+    )["created"][0]
+        .clone();
+    let g = call(&mut s, "group.create", json!({"ids": [a]}));
+    let gid = g["id"].clone();
+    call(&mut s, "group.enter", json!({"id": gid}));
+    let t = call(
+        &mut s,
+        "annotation.text",
+        json!({"at": [0, 0], "text": "inside"}),
+    );
+    let members = call(&mut s, "group.members", json!({"id": gid}));
+    assert!(
+        members.to_string().contains(&t["id"].to_string()),
+        "{members}"
+    );
+}

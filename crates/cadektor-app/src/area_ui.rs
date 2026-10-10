@@ -509,6 +509,10 @@ thread_local! {
 
 /// Tells the drawing which document revision it draws. With it, the extras are computed again
 /// only after the document changed. Without it (`None`), the object and the styles are compared.
+pub fn current_revision() -> Option<u64> {
+    REVISION.with(|r| r.get())
+}
+
 pub fn set_revision(revision: Option<u64>) {
     REVISION.with(|r| r.set(revision));
 }

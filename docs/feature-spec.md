@@ -92,8 +92,8 @@ Non-goals
 | DOC-12 | Class and layer visibility modes: visible, grey, invisible. | P1 | planned |
 | DOC-13 | Saved views: layer and class visibility, active layer and class, zoom and pan, 3D view. Palette list, `saved_view.*`. | P1 | done |
 | DOC-14 | Phases (existing, new, demolished). | P1 | planned |
-| DOC-15 | Symbols and symbol definitions. | P1 | planned |
-| DOC-16 | Resource library files (shared styles and symbols). | P1 | planned |
+| DOC-15 | Symbols and symbol definitions: a resource with 2D components and optional 3D components (hybrid), an insertion point, and instances (`Shape::Symbol`) with position, rotation, symmetric or asymmetric scale and a class. Editing the definition changes all instances at once. Convert to group, Edit 2D components in place (`edit_symbol`, `exit_symbol_edit`), nested symbols (loops are refused). Plug-in object symbols (red and blue) are out of scope. | P1 | done |
+| DOC-16 | Resource libraries: import resources of any type from another `.cdk.json` file by type and name, with what they need (a tile brings its symbol, which brings its hatch), classes of symbol components by name, rename on a name clash (or reuse, or replace), one undo step. Classes and design layers can be imported by name. A per-user library folder (`CADEKTOR_LIBRARY_DIR`, default `~/.config/cadektor/library`), favorites, export of a library file. File access follows the path policy. | P1 | done |
 | DOC-17 | Project sharing, file merge. | P2 | planned |
 | DOC-18 | Document health check. | P2 | planned |
 
@@ -115,9 +115,11 @@ Non-goals
 | DRF-17 | `set_vertex` command: change the kind, radius or position of one vertex, undoable. | P1 | done |
 | DRF-18 | Vertex mode buttons in the tool bar for Polyline, Landscape Area and Hardscape: Corner, Bézier, Cubic, Tangent arc, Point on arc, Arc. The Arc radius is a default that stays until changed. | P1 | done |
 | DRF-19 | Object Info vertex list: index, X, Y, kind and radius, all editable. Selected paths show vertex markers. | P1 | done |
-| DRF-10 | Fill, pen, line type, hatch attributes. | P1 | planned |
+| DRF-10 | Fill, pen, line type, hatch attributes. Attributes `fill_pattern` (a hatch or tile) and `line_type` on objects and classes. Hatches (line families with angle, spacing, offset, dash, color and weight, in paper or model units), tiles (a symbol repeated on a grid with row shift and angle) and line types (dashes, gaps, symbols along the line) are clipped to the shape (holes included) in the canvas, SVG, PDF and PNG sheet output, and written to DXF as plain LINE entities. Textures exist as a resource type only. | P1 | done |
 | DRF-11 | Dimensions: see ANN-01 to ANN-03. Area dimensions are missing. | P1 | partial |
-| DRF-12 | Groups and select-similar. | P1 | planned |
+| DRF-12 | Groups: group and ungroup (one level), nested groups, enter and exit a group (edit context), move, rotate and copy a group as a unit, delete with members, all undoable. A click selects the top group, and inside a group it selects the members. Select-similar is planned. Rotating hardscapes, landscape areas and site models is not built yet. | P1 | done |
+| DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
+| DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
 | DRF-13 | Compose, clip, add/subtract surfaces. | P1 | planned |
 | DRF-14 | Pan, zoom, zoom to fit, view history. | P0 | planned |
 
@@ -145,7 +147,7 @@ Non-goals
 | UI-02 | Tool palettes grouped as tool sets. | P0 | planned |
 | UI-03 | Object Info palette (Shape, Data, Render tabs). | P0 | planned |
 | UI-04 | Navigation palette (classes, layers, sheets, viewports, views). | P0 | planned |
-| UI-05 | Resource Manager palette (plant styles; other resource types follow). | P1 | done |
+| UI-05 | Resource Manager palette (plant styles; all other resource types in the section "Resources (all types)", see DRF-20). | P1 | done |
 | UI-06 | Quick search for commands. | P1 | planned |
 | UI-07 | Dockable, saveable layouts. | P1 | planned |
 | UI-08 | Workspaces: editable menus, tool sets, shortcuts. | P2 | planned |
@@ -386,6 +388,9 @@ Non-goals
 | API-18 | Import/export methods (DXF, IFC, GIS). | P1 | planned |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
 | API-41 | Data and report methods: `record_format.*`, `record.attach`, `record.detach`, `record.set`, `record.get`, `data_manager.*` (list, get, create, update, delete, check, evaluate, apply, properties), `worksheet.*` (list, templates, create, get, rename, delete, set_cell, set_cells, set_database, remove_database, evaluate, export, place, fit). Examples in `describe`. | P0 | done |
+| API-30 | `group.*` (create, ungroup, enter, exit, context, members, move, rotate, copy) and `selection.click`. | P1 | done |
+| API-31 | `symbol.*` (list, get, create, from_objects, place, set, convert_to_group, edit, edit_end). | P1 | done |
+| API-32 | `resource.*` (list, get, create, update, rename, duplicate, delete, purge_unused, thumbnail, list_file, import_from_file, export_to_file), `pattern.segments`, `library.*` (list, favorites). `describe.resources` has examples. | P1 | done |
 
 ### 4.18 Scripting
 
@@ -456,15 +461,15 @@ Later (P2)
 - Plant data and symbol libraries must have a clear, open license.
 - Research notes cite public pages only. Mark unverified items as such.
 
-### 4.15 Annotation
+### 4.19 Annotation
 
 Annotation objects are `Shape::Annotation` (module `cadektor_core::annot`, crate `cadektor-annot` for worksheet expressions). Sizes are paper mm and follow the scale of the layer or viewport.
 
 | ID | Feature | Pri | Status |
 |---|---|---|---|
-| ANN-01 | Associative dimensions: horizontal, vertical, aligned, angular, radial, diameter, arc length. Points tie to vertices, edges or centers of objects by ID and index. They follow moves and edits, and stay at the last position when the object is deleted (one undo step). `dimension.add`. | P1 | done |
+| ANN-01 | Associative dimensions: horizontal, vertical, aligned, angular, radial, diameter, arc length. Points tie to vertices, edges or centers of objects by ID and index. They follow moves and edits, and stay at the last position when the object is deleted (one undo step). An anchor re-binds to the vertex that is still in place when vertices are inserted or deleted, and detaches (flag `detached`) when its vertex is gone. `dimension.add`. | P1 | done |
 | ANN-02 | Chain, baseline and ordinate dimension groups. | P1 | done |
-| ANN-03 | Dimension standards (dimension style resource): font, text size, units (mm, cm, m, in, ft, ft-in), precision, unit suffix, terminators, extension gaps, baseline spacing, prefix, suffix, tolerance. Area dimensions are missing. | P1 | done |
+| ANN-03 | Dimension standards (dimension style resource): font, text size, units (mm, cm, m, in, ft, ft-in), precision, round to an increment (half away from zero), unit suffix, terminators, extension gaps, baseline spacing, prefix, suffix, tolerance. Area dimensions are missing. | P1 | done |
 | ANN-04 | Text styles (resource) for styled text, callouts, legends and scale bars. `annotation.text`, `annotation.apply_text_style`. Paper-size text. Font family is stored, the output uses the sheet font. | P1 | done |
 | ANN-05 | Callouts with one or more leaders, shoulder, terminator, and a notes database resource (note key; a change of the note reaches all callouts). Leaders follow anchored objects. | P1 | done |
 | ANN-06 | Data tags: tag style resource (lines with `{expression}` fields over object properties, plant style fields and record fields, frame, leader). Tags follow their object and go with it when it is deleted. `data_tag.add`, `data_tag.tag_all`. Subpart tags are missing. | P1 | done |

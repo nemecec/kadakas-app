@@ -440,6 +440,7 @@ mod tests {
                     selection: &self.s.selection,
                     settings: &self.settings,
                     tol: 5.0,
+                    context: self.s.edit_context(),
                 };
                 self.m.handle(input, &cx)
             };
@@ -478,6 +479,7 @@ mod tests {
                 selection: &self.s.selection,
                 settings: &self.settings,
                 tol: 5.0,
+                context: self.s.edit_context(),
             };
             self.m.preview(at, &cx)
         }

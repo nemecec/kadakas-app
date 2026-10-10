@@ -206,7 +206,7 @@ fn plan_view(
     let xf = Xf::of(vp);
     let (lo, hi) = vp.model_window();
     for obj in doc.objects.values().filter(|o| vp.shows(doc, o)) {
-        let (a, b) = obj.shape.bounds();
+        let (a, b) = doc.object_bounds(obj);
         if !(a.is_finite() && b.is_finite()) || b.x < lo.x || a.x > hi.x || b.y < lo.y || a.y > hi.y
         {
             continue;

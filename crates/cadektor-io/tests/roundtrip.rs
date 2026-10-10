@@ -288,6 +288,7 @@ fn classes_and_layers_round_trip_by_name() {
             pen: Some(cadektor_core::model::Color([200, 10, 30, 255])),
             fill: None,
             line_weight: Some(0.5),
+            ..Default::default()
         },
     });
     add(

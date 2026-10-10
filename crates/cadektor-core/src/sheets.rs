@@ -666,6 +666,7 @@ impl Viewport {
                 .or(ov.and_then(|o| o.line_weight))
                 .or(class.and_then(|c| c.line_weight))
                 .or(Some(DEFAULT_WEIGHT)),
+            ..obj.attrs.over(&class.cloned().unwrap_or_default())
         }
     }
 
@@ -688,6 +689,7 @@ impl Viewport {
                 .line_weight
                 .or(class.and_then(|c| c.line_weight))
                 .or(Some(DEFAULT_WEIGHT)),
+            ..a.attrs.over(&class.cloned().unwrap_or_default())
         }
     }
 
@@ -762,6 +764,8 @@ pub fn allowed_on_sheet(shape: &Shape) -> bool {
             | Shape::Viewport(_)
             | Shape::TitleBlock(_)
             | Shape::Annotation(_)
+            | Shape::Group { .. }
+            | Shape::Symbol { .. }
     )
 }
 
@@ -1453,6 +1457,7 @@ mod tests {
                 pen: Some(Color([0, 128, 0, 255])),
                 fill: Some(Color([0, 255, 0, 255])),
                 line_weight: Some(0.5),
+                ..Default::default()
             },
         });
         let mut o = Object::new(

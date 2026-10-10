@@ -742,15 +742,14 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
             json!({"viewport": vid, "annotation": aid})
         }
         None => {
-            let out = s
-                .editor
-                .execute(&Command::AddObject {
-                    shape: Shape::Annotation(Box::new(a.clone())),
-                    layer: Some(layer),
-                    class,
-                    attrs: Attributes::default(),
-                })
-                .map_err(app)?;
+            // In a group you have entered, the annotation becomes a member of the group.
+            let cmd = s.in_context(Command::AddObject {
+                shape: Shape::Annotation(Box::new(a.clone())),
+                layer: Some(layer),
+                class,
+                attrs: Attributes::default(),
+            });
+            let out = s.editor.execute(&cmd).map_err(app)?;
             json!(out.created[0])
         }
     };

@@ -118,6 +118,8 @@ pub struct Look {
     pub zone: Option<f64>,
     /// Rotation of the plan graphic in radians.
     pub rotation: f64,
+    /// A symbol that draws the plant in plan (see `PlantStyle::plan_symbol`).
+    pub symbol: Option<crate::resource::ResourceId>,
 }
 
 /// How a plant looks: graphic, form and colors, from its style and overrides. A plant without a
@@ -143,6 +145,7 @@ pub fn look(doc: &Document, obj: &Object) -> Look {
         pen: base.pen,
         zone: None,
         rotation,
+        symbol: base.plan_symbol,
     };
     // A bad override value is ignored here, like `effective` ignores a bad override set.
     // Overrides of locked fields have no effect.
@@ -155,6 +158,9 @@ pub fn look(doc: &Document, obj: &Object) -> Look {
     }
     if let Some(v) = get("fill") {
         look.fill = serde_json::from_value(v.clone()).ok().flatten();
+    }
+    if let Some(v) = get("plan_symbol") {
+        look.symbol = serde_json::from_value(v.clone()).ok().flatten();
     }
     if let Some(v) = get("pen") {
         look.pen = serde_json::from_value(v.clone()).ok().flatten();

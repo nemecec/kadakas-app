@@ -2,7 +2,7 @@
 
 use cadektor_api::Session;
 use cadektor_core::command::Command;
-use cadektor_core::model::{Document, ObjectId};
+use cadektor_core::model::{Document, ObjectId, Shape};
 use cadektor_render::{RenderMode, StandardView};
 use egui::{Key, Sense};
 use glam::DVec2;
@@ -16,6 +16,7 @@ use crate::gpu3d::Gpu3d;
 use crate::keymap::{self, Action, Keymap};
 use crate::panels::{self, InfoEdit, MenuAction, NavState};
 use crate::plant_ui::{self, PlantUi};
+use crate::resource_ui::{self, ResourceUi};
 use crate::snap::{self, SnapConfig, SnapResult};
 use crate::tools::{
     Ctx, DimToolMode, Effect, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
@@ -50,6 +51,7 @@ pub struct CadektorApp {
     info: InfoEdit,
     nav: NavState,
     plant_ui: PlantUi,
+    resource_ui: ResourceUi,
     keys: Keymap,
     entry: DataEntry,
     /// Cursor before Data bar values are applied.
@@ -134,6 +136,7 @@ impl CadektorApp {
             info: InfoEdit::default(),
             nav: NavState::default(),
             plant_ui: PlantUi::default(),
+            resource_ui: ResourceUi::default(),
             keys: Keymap::defaults(),
             entry: DataEntry::default(),
             live_cursor: DVec2::ZERO,
@@ -197,6 +200,116 @@ impl CadektorApp {
         if !self.session.selection.is_empty() {
             let ids = self.session.selection.clone();
             self.exec(&Command::DeleteObjects { ids });
+        }
+    }
+
+    /// Group the selection and select the group.
+    fn group_selection(&mut self) {
+        if self.session.selection.is_empty() {
+            return;
+        }
+        let ids = self.session.selection.clone();
+        match self
+            .session
+            .editor
+            .execute(&Command::Group { ids, name: None })
+        {
+            Ok(out) => {
+                self.session.selection = out.created.into_iter().map(ObjectId).collect();
+                self.status = "Grouped".into();
+            }
+            Err(e) => self.status = format!("Error: {e}"),
+        }
+    }
+
+    fn ungroup_selection(&mut self) {
+        let groups: Vec<ObjectId> = self
+            .session
+            .selection
+            .iter()
+            .copied()
+            .filter(|i| self.session.editor.doc().is_group(*i))
+            .collect();
+        if groups.is_empty() {
+            self.status = "Select a group to ungroup".into();
+            return;
+        }
+        let members: Vec<ObjectId> = groups
+            .iter()
+            .flat_map(|g| self.session.editor.doc().children(*g))
+            .collect();
+        match self
+            .session
+            .editor
+            .execute(&Command::Ungroup { ids: groups })
+        {
+            Ok(_) => {
+                self.session.selection = members;
+                self.status = "Ungrouped".into();
+            }
+            Err(e) => self.status = format!("Error: {e}"),
+        }
+    }
+
+    /// Edit group: enter the selected group so that clicks select its members. A selected symbol
+    /// instance is edited in place instead.
+    fn enter_group(&mut self) {
+        let doc = self.session.editor.doc();
+        let Some(&id) = self
+            .session
+            .selection
+            .first()
+            .filter(|_| self.session.selection.len() == 1)
+        else {
+            self.status = "Select one group or symbol to edit".into();
+            return;
+        };
+        if doc.is_group(id) {
+            self.session.context.push(id);
+            self.session.selection.clear();
+            self.status = "Editing group. Exit with the Exit group key".into();
+        } else if matches!(doc.object(id).map(|o| &o.shape), Some(Shape::Symbol { .. })) {
+            match self.session.editor.execute(&Command::EditSymbol { id }) {
+                Ok(out) => {
+                    self.session.context.push(ObjectId(out.created[0]));
+                    self.session.selection.clear();
+                    self.status =
+                        "Editing the symbol. Exit to apply the changes to all instances".into();
+                }
+                Err(e) => self.status = format!("Error: {e}"),
+            }
+        } else {
+            self.status = "Select one group or symbol to edit".into();
+        }
+    }
+
+    /// Exit group. Leaving the edit group of a symbol applies the changes to the definition.
+    fn exit_group(&mut self) {
+        let Some(g) = self.session.edit_context() else {
+            self.status = "You are not in a group".into();
+            return;
+        };
+        let editing = self
+            .session
+            .editor
+            .doc()
+            .object(g)
+            .is_some_and(|o| o.data.contains_key(cadektor_core::symbols::EDIT_GROUP_KEY));
+        if editing {
+            if let Err(e) = self
+                .session
+                .editor
+                .execute(&Command::ExitSymbolEdit { group: g })
+            {
+                self.status = format!("Error: {e}");
+                return;
+            }
+            self.session.context.pop();
+            self.session.selection.clear();
+            self.status = "Symbol updated".into();
+        } else {
+            self.session.context.pop();
+            self.session.selection = vec![g];
         }
     }
 
@@ -379,7 +492,8 @@ impl CadektorApp {
         let at = self.canvas_rect.map_or(DVec2::ZERO, |r| {
             self.view.to_model(r.left_top() + egui::vec2(40.0, 40.0))
         });
-        self.exec(&crate::annot_ui::legend_command(at));
+        let cmd = self.session.in_context(crate::annot_ui::legend_command(at));
+        self.exec(&cmd);
     }
 
     fn nudge(&mut self, dir: DVec2) {
@@ -396,7 +510,7 @@ impl CadektorApp {
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
         // The dimension keys pick the mode too: N is a linear dimension, `.` angular and `,` radial.
-        let linear = |m: crate::tools::DimToolMode| {
+        let linear = |m: DimToolMode| {
             matches!(
                 m,
                 DimToolMode::Horizontal
@@ -443,6 +557,10 @@ impl CadektorApp {
             Action::Delete if self.machine.is_busy() => self.machine.pop_point(),
             Action::Delete if self.machine.tool() == Tool::Select => self.delete_selection(),
             Action::SelectAll => self.select_all(),
+            Action::Group => self.group_selection(),
+            Action::Ungroup => self.ungroup_selection(),
+            Action::EnterGroup => self.enter_group(),
+            Action::ExitGroup => self.exit_group(),
             Action::Cancel => {
                 if self.machine.is_busy() {
                     self.machine.cancel();
@@ -626,6 +744,7 @@ impl CadektorApp {
                 selection: &self.session.selection,
                 settings: &self.settings,
                 tol: self.tol(),
+                context: self.session.edit_context(),
             };
             self.machine.handle(input, &cx)
         };
@@ -634,9 +753,11 @@ impl CadektorApp {
                 Effect::SetSelection(s) => self.session.selection = s,
                 Effect::Notice(m) => self.status = m,
                 Effect::Exec(cmd) => {
+                    let cmd = self.session.in_context(cmd);
                     let is_add = matches!(
                         cmd,
                         Command::AddObject { .. }
+                            | Command::AddObjectIn { .. }
                             | Command::AddHardscape { .. }
                             | Command::AddLandscapeArea { .. }
                     );
@@ -781,6 +902,7 @@ impl CadektorApp {
             selection: &self.session.selection,
             settings: &self.settings,
             tol: self.tol(),
+            context: self.session.edit_context(),
         };
         let preview = if resp.hovered() || self.machine.is_busy() {
             self.machine.preview(self.cursor, &cx)
@@ -955,6 +1077,12 @@ impl eframe::App for CadektorApp {
                         &mut self.status,
                     );
                     crate::data_ui::resource_sections(ui, &mut self.session, &mut self.status);
+                    resource_ui::section(
+                        ui,
+                        &mut self.session,
+                        &mut self.resource_ui,
+                        &mut self.status,
+                    );
                     ui.add_space(12.0);
                     plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
                 });

@@ -45,6 +45,7 @@ fn project() -> (Editor, LayerId, ObjectId) {
         pen: Some(RED),
         fill: Some(Color([0, 200, 0, 255])),
         line_weight: Some(0.5),
+        ..Default::default()
     };
     add(
         &mut ed,
@@ -401,6 +402,7 @@ fn visibility_and_graphic_overrides_change_the_drawing() {
                     pen: Some(Color([0, 0, 255, 255])),
                     fill: None,
                     line_weight: Some(0.1),
+                    ..Default::default()
                 },
             },
         )[0],

@@ -266,6 +266,7 @@ impl Walker<'_> {
                     pen: Some(pen.unwrap_or(Color::BLACK)),
                     fill: Some(Color::NONE),
                     line_weight: Some(weight.unwrap_or(0.25)),
+                    ..Default::default()
                 };
                 let class = self.b.class(&decode_percent(name), &attrs, visible);
                 (self.target_layer, class, Attributes::default())
@@ -279,6 +280,7 @@ impl Walker<'_> {
                         pen,
                         fill: None,
                         line_weight: weight,
+                        ..Default::default()
                     },
                 )
             }
@@ -354,6 +356,7 @@ impl Walker<'_> {
             pen,
             fill: defaults.fill,
             line_weight,
+            ..Default::default()
         }
     }
 

@@ -17,7 +17,8 @@ pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
     doc.objects
         .values()
         .filter(|o| doc.is_visible(o))
-        .map(|o| o.shape.bounds())
+        .map(|o| doc.object_bounds(o))
+        .filter(|(a, b)| a.is_finite() && b.is_finite())
         .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
 }
 
@@ -120,269 +121,387 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
-        let a = crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
-        let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
-        let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
-        let fill = a.fill.unwrap_or(Color::NONE).to_css();
-        let sw = a.line_weight.unwrap_or(0.25) * scale;
-        let style = format!(
-            r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
-            o.id
-        );
-        let _ = match &o.shape {
-            Shape::Line { a, b } => writeln!(
-                s,
-                r#"<line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#,
-                a.x, -a.y, b.x, -b.y
-            ),
-            Shape::Rect { min, max } => {
-                let (p, q) = (min.min(*max), min.max(*max));
-                writeln!(
-                    s,
-                    r#"<rect x="{}" y="{}" width="{}" height="{}" {style}/>"#,
-                    p.x,
-                    -q.y,
-                    q.x - p.x,
-                    q.y - p.y
-                )
-            }
-            Shape::Circle { center, radius } => {
-                writeln!(
-                    s,
-                    r#"<circle cx="{}" cy="{}" r="{radius}" {style}/>"#,
-                    center.x, -center.y
-                )
-            }
-            Shape::Arc {
-                center,
-                radius,
-                start,
-                end,
-            } => {
-                let sweep = arc_sweep(*start, *end);
-                let p0 = *center + DVec2::from_angle(*start) * *radius;
-                if sweep >= std::f64::consts::TAU {
-                    // One SVG arc cannot draw a full circle, so draw two halves.
-                    let p1 = *center - DVec2::from_angle(*start) * *radius;
-                    writeln!(
-                        s,
-                        r#"<path d="M {} {} A {radius} {radius} 0 1 0 {} {} A {radius} {radius} 0 1 0 {} {}" {style}/>"#,
-                        p0.x, -p0.y, p1.x, -p1.y, p0.x, -p0.y
-                    )
-                } else {
-                    let p1 = *center + DVec2::from_angle(*start + sweep) * *radius;
-                    let large = (sweep > std::f64::consts::PI) as u8;
-                    // Y is flipped, so a counterclockwise arc has sweep-flag 0.
-                    writeln!(
-                        s,
-                        r#"<path d="M {} {} A {radius} {radius} 0 {large} 0 {} {}" {style}/>"#,
-                        p0.x, -p0.y, p1.x, -p1.y
-                    )
-                }
-            }
-            Shape::Polyline { points, closed } if !curve::all_straight(points) => {
-                // Curved: exact arcs and Bezier curves in one path.
-                writeln!(
-                    s,
-                    r#"<path d="{}" {style}/>"#,
-                    curve::path(points, *closed).svg_d()
-                )
-            }
-            Shape::Polyline { points, closed } => {
-                let points = &curve::positions(points);
-                let tag = if *closed { "polygon" } else { "polyline" };
-                writeln!(s, r#"<{tag} points="{}" {style}/>"#, points_attr(points))
-            }
-            Shape::Locus3d { p } => {
-                let h = crate::model::LOCUS_MARKER_HALF;
-                writeln!(
-                    s,
-                    r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} data-kind="locus3d"/>"#,
-                    p.x - h,
-                    -p.y,
-                    p.x + h,
-                    -p.y,
-                    p.x,
-                    -p.y - h,
-                    p.x,
-                    -p.y + h
-                )
-            }
-            Shape::Polyline3d { points, closed } => {
-                let points = points.iter().map(|p| p.truncate()).collect::<Vec<_>>();
-                let tag = if *closed { "polygon" } else { "polyline" };
-                writeln!(
-                    s,
-                    r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#,
-                    points_attr(&points)
-                )
-            }
-            Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
-            // Annotations come from the extension, which has the worksheet code for tags and legends.
-            Shape::Annotation(_) => {
-                if let Some(ext) = ext {
-                    ext(doc, o, &style, &mut s);
-                }
-                Ok(())
-            }
-            Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
-                let outline = site_outline(&o.shape);
-                let res = writeln!(
-                    s,
-                    r#"<polygon points="{}" {style} data-kind="{}"/>"#,
-                    points_attr(&outline),
-                    o.shape.kind()
-                );
-                if let Some(ext) = ext {
-                    ext(doc, o, &style, &mut s);
-                }
-                res
-            }
-            Shape::Text { at, text, height } => writeln!(
-                s,
-                r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}" data-id="{}">{}</text>"#,
-                at.x,
-                -at.y,
-                o.id,
-                esc(text)
-            ),
-            Shape::Plant {
-                at,
-                spread,
-                species,
-                ..
-            } => {
-                // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
-                let look = link::look(doc, o);
-                let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
-                    let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
-                    let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
-                    format!(
-                        r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
-                        o.id
-                    )
-                } else {
-                    style
-                };
-                if let Some(zone) = look.zone {
-                    let dash = format!("{} {}", 4.0 * scale, 2.0 * scale);
-                    let _ = writeln!(
-                        s,
-                        r#"<circle cx="{}" cy="{}" r="{zone}" stroke="{stroke}" fill="none" stroke-width="{sw}" stroke-dasharray="{dash}" data-kind="tree_protection_zone" data-id="{}"/>"#,
-                        at.x, -at.y, o.id
-                    );
-                }
-                if look.graphic == PlantGraphic::Circle {
-                    writeln!(
-                        s,
-                        r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
-                        at.x,
-                        -at.y,
-                        spread / 2.0,
-                        esc(species)
-                    )
-                } else {
-                    let d = graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation)
-                        .iter()
-                        .map(path_d)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    writeln!(
-                        s,
-                        r#"<g data-kind="plant" data-graphic="{}"><path d="{d}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
-                        look.graphic.id(),
-                        esc(species)
-                    )
-                }
-            }
-            Shape::ExistingTree {
-                at,
-                species,
-                dbh,
-                spread,
-                condition,
-                action,
-                rpz_factor,
-                rpz_cap,
-                ..
-            } => {
-                let rpz = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
-                let fill_style = style.clone();
-                let style = format!(
-                    r#"stroke="{stroke}" fill="none" stroke-width="{sw}" data-id="{}""#,
-                    o.id
-                );
-                let removed = *action == TreeAction::Remove;
-                let dash = format!(r#"stroke-dasharray="{} {}""#, 4.0 * scale, 2.0 * scale);
-                let canopy_dash = if removed { dash.clone() } else { String::new() };
-                let cross = if removed {
-                    let r = spread / 2.0;
-                    format!(
-                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} {dash}/>"#,
-                        at.x - r,
-                        -at.y - r,
-                        at.x + r,
-                        -at.y + r,
-                        at.x - r,
-                        -at.y + r,
-                        at.x + r,
-                        -at.y - r
-                    )
-                } else {
-                    String::new()
-                };
-                writeln!(
-                    s,
-                    r#"<g data-kind="existing_tree" data-action="{}" data-condition="{}"><circle cx="{x}" cy="{y}" r="{rpz}" {style} {dash} data-part="rpz"/><circle cx="{x}" cy="{y}" r="{}" {fill_style} fill-opacity="0.2" {canopy_dash} data-part="canopy"/><circle cx="{x}" cy="{y}" r="{}" {style} data-part="trunk"/>{cross}<title>{}</title></g>"#,
-                    action.id(),
-                    condition.id(),
-                    spread / 2.0,
-                    dbh / 2.0,
-                    esc(species),
-                    x = at.x,
-                    y = -at.y
-                )
-            }
-            Shape::PlantTag {
-                at, anchor, height, ..
-            } => {
-                let text = schedule::tag_info_with(doc, o.id, &tag_counts)
-                    .map_or_else(|| "?".to_string(), |t| t.text());
-                writeln!(
-                    s,
-                    r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
-                    anchor.x,
-                    -anchor.y,
-                    at.x,
-                    -at.y,
-                    at.x,
-                    -at.y,
-                    esc(&text)
-                )
-            }
-            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
-                let res = if curve::all_straight(boundary) {
-                    writeln!(
-                        s,
-                        r#"<polygon points="{}" {style} data-kind="{}"/>"#,
-                        points_attr(&curve::positions(boundary)),
-                        o.shape.kind()
-                    )
-                } else {
-                    writeln!(
-                        s,
-                        r#"<path d="{}" {style} data-kind="{}"/>"#,
-                        curve::path(boundary, true).svg_d(),
-                        o.shape.kind()
-                    )
-                };
-                s.push_str(&crate::hardscape::object_svg_extras(doc, o, scale, &stroke));
-                res
-            }
-        };
+        draw_object(doc, o, &mut s, &tag_counts, ext, 0);
     }
     s.push_str("</svg>\n");
     s
+}
+
+/// Draws one object (and, for a symbol, the shapes of its definition). Symbols can contain symbols, so
+/// this calls itself, up to a depth that stops a loop.
+fn draw_object(
+    doc: &Document,
+    o: &Object,
+    s: &mut String,
+    tag_counts: &schedule::TagCounts,
+    ext: Option<SvgExt<'_>>,
+    depth: usize,
+) {
+    if depth > crate::symbols::MAX_DEPTH + 2 {
+        return;
+    }
+    let a = crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
+    let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
+    let fill = a.fill.unwrap_or(Color::NONE).to_css();
+    let sw = a.line_weight.unwrap_or(0.25) * scale;
+    let decor = crate::pattern::decorate(doc, o, &a, scale);
+    // A line type draws the outline itself, in dashes.
+    let line_stroke = if decor.as_ref().is_some_and(|d| d.replaces_outline) {
+        "none".to_string()
+    } else {
+        stroke.clone()
+    };
+    let style = format!(
+        r#"stroke="{line_stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
+        o.id
+    );
+    let _ = match &o.shape {
+        Shape::Group { .. } => Ok(()),
+        Shape::Symbol { .. } => {
+            for v in crate::symbols::instance_objects(doc, o) {
+                draw_object(doc, &v, s, tag_counts, ext, depth + 1);
+            }
+            Ok(())
+        }
+        Shape::Line { a, b } => writeln!(
+            s,
+            r#"<line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#,
+            a.x, -a.y, b.x, -b.y
+        ),
+        Shape::Rect { min, max } => {
+            let (p, q) = (min.min(*max), min.max(*max));
+            writeln!(
+                s,
+                r#"<rect x="{}" y="{}" width="{}" height="{}" {style}/>"#,
+                p.x,
+                -q.y,
+                q.x - p.x,
+                q.y - p.y
+            )
+        }
+        Shape::Circle { center, radius } => {
+            writeln!(
+                s,
+                r#"<circle cx="{}" cy="{}" r="{radius}" {style}/>"#,
+                center.x, -center.y
+            )
+        }
+        Shape::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => {
+            let sweep = arc_sweep(*start, *end);
+            let p0 = *center + DVec2::from_angle(*start) * *radius;
+            if sweep >= std::f64::consts::TAU {
+                // One SVG arc cannot draw a full circle, so draw two halves.
+                let p1 = *center - DVec2::from_angle(*start) * *radius;
+                writeln!(
+                    s,
+                    r#"<path d="M {} {} A {radius} {radius} 0 1 0 {} {} A {radius} {radius} 0 1 0 {} {}" {style}/>"#,
+                    p0.x, -p0.y, p1.x, -p1.y, p0.x, -p0.y
+                )
+            } else {
+                let p1 = *center + DVec2::from_angle(*start + sweep) * *radius;
+                let large = (sweep > std::f64::consts::PI) as u8;
+                // Y is flipped, so a counterclockwise arc has sweep-flag 0.
+                writeln!(
+                    s,
+                    r#"<path d="M {} {} A {radius} {radius} 0 {large} 0 {} {}" {style}/>"#,
+                    p0.x, -p0.y, p1.x, -p1.y
+                )
+            }
+        }
+        Shape::Polyline { points, closed } if !curve::all_straight(points) => {
+            // Curved: exact arcs and Bezier curves in one path.
+            writeln!(
+                s,
+                r#"<path d="{}" {style}/>"#,
+                curve::path(points, *closed).svg_d()
+            )
+        }
+        Shape::Polyline { points, closed } => {
+            let points = &curve::positions(points);
+            let tag = if *closed { "polygon" } else { "polyline" };
+            writeln!(s, r#"<{tag} points="{}" {style}/>"#, points_attr(points))
+        }
+        Shape::Locus3d { p } => {
+            let h = crate::model::LOCUS_MARKER_HALF;
+            writeln!(
+                s,
+                r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} data-kind="locus3d"/>"#,
+                p.x - h,
+                -p.y,
+                p.x + h,
+                -p.y,
+                p.x,
+                -p.y - h,
+                p.x,
+                -p.y + h
+            )
+        }
+        Shape::Polyline3d { points, closed } => {
+            let points = points.iter().map(|p| p.truncate()).collect::<Vec<_>>();
+            let tag = if *closed { "polygon" } else { "polyline" };
+            writeln!(
+                s,
+                r#"<{tag} points="{}" {style} data-kind="polyline3d"/>"#,
+                points_attr(&points)
+            )
+        }
+        Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
+        // Annotations come from the extension, which has the worksheet code for tags and legends.
+        Shape::Annotation(_) => {
+            if let Some(ext) = ext {
+                ext(doc, o, &style, s);
+            }
+            Ok(())
+        }
+        Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
+            let outline = site_outline(&o.shape);
+            let res = writeln!(
+                s,
+                r#"<polygon points="{}" {style} data-kind="{}"/>"#,
+                points_attr(&outline),
+                o.shape.kind()
+            );
+            if let Some(ext) = ext {
+                ext(doc, o, &style, s);
+            }
+            res
+        }
+        Shape::Text { at, text, height } => writeln!(
+            s,
+            r#"<text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}" data-id="{}">{}</text>"#,
+            at.x,
+            -at.y,
+            o.id,
+            esc(text)
+        ),
+        Shape::Plant {
+            at,
+            spread,
+            species,
+            ..
+        } => {
+            // A plant with a style draws the outline of its style, in the style colors unless the object sets its own.
+            let look = link::look(doc, o);
+            let style = if o.attrs.fill.is_none() && o.attrs.pen.is_none() {
+                let stroke = look.pen.map_or(stroke.clone(), |c| c.to_css());
+                let fill = look.fill.map_or(fill.clone(), |c| c.to_css());
+                format!(
+                    r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#,
+                    o.id
+                )
+            } else {
+                style
+            };
+            if let Some(zone) = look.zone {
+                let dash = format!("{} {}", 4.0 * scale, 2.0 * scale);
+                let _ = writeln!(
+                    s,
+                    r#"<circle cx="{}" cy="{}" r="{zone}" stroke="{stroke}" fill="none" stroke-width="{sw}" stroke-dasharray="{dash}" data-kind="tree_protection_zone" data-id="{}"/>"#,
+                    at.x, -at.y, o.id
+                );
+            }
+            let parts = look
+                .symbol
+                .map(|sym| {
+                    crate::symbols::plant_symbol_objects(doc, o, sym, *at, *spread, look.rotation)
+                })
+                .unwrap_or_default();
+            if !parts.is_empty() {
+                for v in &parts {
+                    draw_object(doc, v, s, tag_counts, ext, depth + 1);
+                }
+                writeln!(
+                    s,
+                    r#"<g data-kind="plant" data-graphic="symbol"><title>{}</title></g>"#,
+                    esc(species)
+                )
+            } else if look.graphic == PlantGraphic::Circle {
+                writeln!(
+                    s,
+                    r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
+                    at.x,
+                    -at.y,
+                    spread / 2.0,
+                    esc(species)
+                )
+            } else {
+                let d = graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation)
+                    .iter()
+                    .map(path_d)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                writeln!(
+                    s,
+                    r#"<g data-kind="plant" data-graphic="{}"><path d="{d}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
+                    look.graphic.id(),
+                    esc(species)
+                )
+            }
+        }
+        Shape::ExistingTree {
+            at,
+            species,
+            dbh,
+            spread,
+            condition,
+            action,
+            rpz_factor,
+            rpz_cap,
+            ..
+        } => {
+            let rpz = tree::rpz_radius(*dbh, *rpz_factor, *rpz_cap);
+            let fill_style = style.clone();
+            let style = format!(
+                r#"stroke="{stroke}" fill="none" stroke-width="{sw}" data-id="{}""#,
+                o.id
+            );
+            let removed = *action == TreeAction::Remove;
+            let dash = format!(r#"stroke-dasharray="{} {}""#, 4.0 * scale, 2.0 * scale);
+            let canopy_dash = if removed { dash.clone() } else { String::new() };
+            let cross = if removed {
+                let r = spread / 2.0;
+                format!(
+                    r#"<path d="M {} {} L {} {} M {} {} L {} {}" {style} {dash}/>"#,
+                    at.x - r,
+                    -at.y - r,
+                    at.x + r,
+                    -at.y + r,
+                    at.x - r,
+                    -at.y + r,
+                    at.x + r,
+                    -at.y - r
+                )
+            } else {
+                String::new()
+            };
+            writeln!(
+                s,
+                r#"<g data-kind="existing_tree" data-action="{}" data-condition="{}"><circle cx="{x}" cy="{y}" r="{rpz}" {style} {dash} data-part="rpz"/><circle cx="{x}" cy="{y}" r="{}" {fill_style} fill-opacity="0.2" {canopy_dash} data-part="canopy"/><circle cx="{x}" cy="{y}" r="{}" {style} data-part="trunk"/>{cross}<title>{}</title></g>"#,
+                action.id(),
+                condition.id(),
+                spread / 2.0,
+                dbh / 2.0,
+                esc(species),
+                x = at.x,
+                y = -at.y
+            )
+        }
+        Shape::PlantTag {
+            at, anchor, height, ..
+        } => {
+            let text = schedule::tag_info_with(doc, o.id, tag_counts)
+                .map_or_else(|| "?".to_string(), |t| t.text());
+            writeln!(
+                s,
+                r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
+                anchor.x,
+                -anchor.y,
+                at.x,
+                -at.y,
+                at.x,
+                -at.y,
+                esc(&text)
+            )
+        }
+        Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+            let res = if curve::all_straight(boundary) {
+                writeln!(
+                    s,
+                    r#"<polygon points="{}" {style} data-kind="{}"/>"#,
+                    points_attr(&curve::positions(boundary)),
+                    o.shape.kind()
+                )
+            } else {
+                writeln!(
+                    s,
+                    r#"<path d="{}" {style} data-kind="{}"/>"#,
+                    curve::path(boundary, true).svg_d(),
+                    o.shape.kind()
+                )
+            };
+            s.push_str(&crate::hardscape::object_svg_extras(doc, o, scale, &stroke));
+            res
+        }
+    };
+    if let Some(d) = &decor {
+        decor_svg(doc, d, &a, o, scale, s, tag_counts, ext, depth);
+    }
+}
+
+/// The fill pattern, dashes and marks of an object.
+#[allow(clippy::too_many_arguments)]
+fn decor_svg(
+    doc: &Document,
+    d: &crate::pattern::Decor,
+    a: &Attributes,
+    o: &Object,
+    scale: f64,
+    s: &mut String,
+    tag_counts: &schedule::TagCounts,
+    ext: Option<SvgExt<'_>>,
+    depth: usize,
+) {
+    let pen = a.pen.unwrap_or(Color::BLACK);
+    let sw = a.line_weight.unwrap_or(0.25) * scale;
+    // Pattern lines with the same color and weight share one path.
+    let mut groups: Vec<((Color, f64), String)> = Vec::new();
+    for seg in &d.fill {
+        let key = (
+            crate::pattern::pen_of(seg, pen),
+            seg.weight.map_or(sw, |w| w * scale),
+        );
+        let piece = format!("M {} {} L {} {} ", seg.a.x, -seg.a.y, seg.b.x, -seg.b.y);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, path)) => path.push_str(&piece),
+            None => groups.push((key, piece)),
+        }
+    }
+    for ((color, width), path) in groups {
+        let _ = writeln!(
+            s,
+            r#"<path d="{}" fill="none" stroke="{}" stroke-width="{width}" data-pattern="fill" data-id="{}"/>"#,
+            path.trim_end(),
+            color.to_css(),
+            o.id
+        );
+    }
+    if !d.strokes.is_empty() {
+        let path: String = d
+            .strokes
+            .iter()
+            .map(|st| {
+                st.iter()
+                    .enumerate()
+                    .map(|(i, q)| format!("{}{} {}", if i == 0 { "M " } else { " L " }, q.x, -q.y))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            s,
+            r#"<path d="{path}" fill="none" stroke="{}" stroke-width="{sw}" data-pattern="line_type" data-id="{}"/>"#,
+            pen.to_css(),
+            o.id
+        );
+    }
+    for m in &d.marks {
+        let inst = crate::symbols::mark_object(
+            o,
+            Some(pen),
+            a.line_weight,
+            m.symbol,
+            m.at,
+            m.angle,
+            m.scale,
+        );
+        draw_object(doc, &inst, s, tag_counts, ext, depth + 1);
+    }
 }
 
 #[cfg(test)]
@@ -612,6 +731,7 @@ mod tests {
                 pen: Some(Color([255, 0, 0, 255])),
                 fill: Some(Color([0, 0, 255, 128])),
                 line_weight: None,
+                ..Default::default()
             }),
         })
         .unwrap();

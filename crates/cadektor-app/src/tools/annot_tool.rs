@@ -318,7 +318,7 @@ impl ToolMachine {
         let mode = s.dim_mode;
         match input {
             Input::Press { p, .. } if mode.is_curve() => {
-                let Some(obj) = hit::hit_test(cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
+                let Some(obj) = hit::hit_object(cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
                 else {
                     return vec![Effect::Notice("Click a circle or an arc".into())];
                 };
@@ -462,7 +462,7 @@ impl ToolMachine {
                     .into(),
             )];
         };
-        let Some(obj) = hit::hit_test(doc, p, cx.tol)
+        let Some(obj) = hit::hit_object(doc, p, cx.tol)
             .and_then(|id| doc.object(id))
             .filter(|o| !matches!(o.shape, Shape::Annotation(_)))
         else {
@@ -593,6 +593,7 @@ mod tests {
             selection: &[],
             settings: s,
             tol: 1.0,
+            context: None,
         };
         m.handle(Input::Press { p, shift: false }, &cx)
     }
@@ -646,7 +647,8 @@ mod tests {
                     doc: &doc,
                     selection: &[],
                     settings: &s,
-                    tol: 1.0
+                    tol: 1.0,
+                    context: None
                 }
             ) != Preview::None
         );
@@ -675,6 +677,7 @@ mod tests {
             selection: &[],
             settings: &s,
             tol: 1.0,
+            context: None,
         };
         assert!(m.preview(DVec2::new(0.0, 10.0), &cx) != Preview::None);
         assert_eq!(

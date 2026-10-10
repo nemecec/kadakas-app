@@ -676,7 +676,7 @@ impl Builder<'_> {
                 };
                 self.plant(&build, z, edge, id);
             }
-            Shape::Text { .. } | Shape::PlantTag { .. } | Shape::Annotation(_) => {}
+            Shape::Text { .. } | Shape::PlantTag { .. } => {}
             Shape::Locus3d { p } => {
                 let h = crate::model::LOCUS_MARKER_HALF;
                 let c = pen.unwrap_or([0, 0, 0, 255]);
@@ -701,7 +701,28 @@ impl Builder<'_> {
                     .polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
-            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}
+            // A group draws through its members.
+            Shape::Group { .. } => {}
+            Shape::Symbol { .. } => {
+                // The 3D components if there are some. Otherwise the 2D components, flat at the layer.
+                let solids = crate::symbols::instance_solids(self.doc, obj);
+                if solids.is_empty() {
+                    for part in crate::symbols::instance_objects(self.doc, obj) {
+                        self.add_object(&part, layer);
+                    }
+                }
+                for (ring, base, height, color) in solids {
+                    self.slab(
+                        &ring,
+                        z + base + height,
+                        height,
+                        color.map(rgba).or(fill).unwrap_or(HARDSCAPE_DEFAULT),
+                        edge,
+                        id,
+                    );
+                }
+            }
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 if let Some(ext) = self.ext {
                     let mut sink = SceneSink {
@@ -1610,6 +1631,7 @@ mod tests {
                     pen: Some(Color([1, 2, 3, 255])),
                     fill: Some(Color([10, 20, 30, 255])),
                     line_weight: None,
+                    ..Default::default()
                 },
             })
             .unwrap();

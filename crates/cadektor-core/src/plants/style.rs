@@ -205,6 +205,8 @@ pub struct PlantStyle {
     pub rpz_factor: Option<f64>,
     /// Largest zone radius in mm (default 15 000).
     pub rpz_cap: Option<f64>,
+    /// A symbol resource that draws the plant in plan, scaled to the canopy. `None` uses `graphic`.
+    pub plan_symbol: Option<crate::resource::ResourceId>,
 }
 
 impl Default for PlantStyle {
@@ -231,6 +233,7 @@ impl Default for PlantStyle {
             protection_zone: false,
             rpz_factor: None,
             rpz_cap: None,
+            plan_symbol: None,
         }
     }
 }

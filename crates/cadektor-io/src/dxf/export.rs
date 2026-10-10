@@ -832,6 +832,7 @@ fn common(w: &mut W, kind: &str, layer: &str, o: &Object, hidden_layer: bool) {
             pen: o.attrs.pen,
             fill: None,
             line_weight: o.attrs.line_weight,
+            ..Default::default()
         },
         false,
     );
@@ -840,9 +841,61 @@ fn common(w: &mut W, kind: &str, layer: &str, o: &Object, hidden_layer: bool) {
     }
 }
 
-/// Writes the entities of an object. False for a kind of shape this writer does not know.
+/// Writes the entities of an object, and the lines of its hatch, tile or line type as plain LINE
+/// entities (exploded: every CAD program shows them the same). False for a kind of shape this writer does not know.
 fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -> bool {
+    let doc = cx.doc;
+    let attrs = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
+    let decor = cadektor_core::pattern::decorate(doc, o, &attrs, scale);
+    let replaces = decor.as_ref().is_some_and(|d| d.replaces_outline);
+    let ok = if replaces {
+        true
+    } else {
+        write_plain(w, cx, o, layer, hidden)
+    };
+    let Some(d) = decor else { return ok };
+    let line = |w: &mut W, cx: &mut Ctx, a: DVec2, b: DVec2| {
+        common(w, "LINE", layer, o, hidden);
+        w.pair(100, "AcDbLine");
+        cx.pt3(w, 10, a.x, a.y, 0.0);
+        cx.pt3(w, 11, b.x, b.y, 0.0);
+    };
+    for seg in &d.fill {
+        line(w, cx, seg.a, seg.b);
+    }
+    for stroke in &d.strokes {
+        for pair in stroke.windows(2) {
+            line(w, cx, pair[0], pair[1]);
+        }
+    }
+    for m in &d.marks {
+        let inst = cadektor_core::symbols::mark_object(
+            o,
+            o.attrs.pen,
+            o.attrs.line_weight,
+            m.symbol,
+            m.at,
+            m.angle,
+            m.scale,
+        );
+        write_plain(w, cx, &inst, layer, hidden);
+    }
+    ok || replaces
+}
+
+fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -> bool {
     match &o.shape {
+        // A group is its members, which are written on their own.
+        Shape::Group { .. } => {}
+        // A symbol is written exploded, as the plain entities of its definition.
+        Shape::Symbol { .. } => {
+            let doc = cx.doc;
+            for v in cadektor_core::symbols::instance_objects(doc, o) {
+                let lay = cx.layer_name(&v);
+                write_object(w, cx, &v, &lay, hidden);
+            }
+        }
         Shape::Line { a, b } => {
             common(w, "LINE", layer, o, hidden);
             w.pair(100, "AcDbLine");

@@ -308,29 +308,96 @@ fn path_pieces(pts: &[DVec2], h: f64, join: Join, closed: bool) -> Vec<Vec<[f64;
     out
 }
 
+/// True if the closed segment `p`-`q` meets the segment `a`-`b` anywhere.
+fn segments_meet(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> bool {
+    let (d1, d2) = (q - p, b - a);
+    let side = |o: DVec2, u: DVec2, x: DVec2| u.perp_dot(x - o);
+    let (o1, o2) = (side(p, d1, a), side(p, d1, b));
+    let (o3, o4) = (side(a, d2, p), side(a, d2, q));
+    if o1 == 0.0 && o2 == 0.0 {
+        // Parallel on one line: they meet if their extents overlap.
+        let (lo, hi) = (p.min(q), p.max(q));
+        let (alo, ahi) = (a.min(b), a.max(b));
+        return lo.cmple(ahi).all() && alo.cmple(hi).all();
+    }
+    o1 * o2 <= 0.0 && o3 * o4 <= 0.0
+}
+
+/// True if the bridge `p`-`q` crosses or touches an edge of the ring, apart from the edges that
+/// start or end at one of its two ends.
+fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
+    let n = ring.len();
+    (0..n).any(|k| {
+        let (a, b) = (ring[k], ring[(k + 1) % n]);
+        a != p && a != q && b != p && b != q && segments_meet(p, q, a, b)
+    })
+}
+
 /// Joins a hole to an outer ring with a bridge of zero width, so that the result is one ring
-/// with the same area (outer minus hole).
+/// with the same area (outer minus hole). The bridge joins the closest pair of points that see
+/// each other: it crosses no edge of the outer ring or of the hole. A bridge that crosses an
+/// edge would make a loop.
 fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
     if hole.len() < 3 {
         return outer;
     }
-    let mut best = (f64::INFINITY, 0, 0);
-    for (i, p) in outer.iter().enumerate() {
-        for (j, q) in hole.iter().enumerate() {
-            let d = p.distance_squared(*q);
-            if d < best.0 {
-                best = (d, i, j);
+    // The closest pairs first. Only a few are tried; the closest pair is the fallback.
+    let mut tried: Vec<(usize, usize)> = Vec::new();
+    let mut chosen = None;
+    for _ in 0..24 {
+        let mut best = (f64::INFINITY, usize::MAX, usize::MAX);
+        for (i, p) in outer.iter().enumerate() {
+            for (j, q) in hole.iter().enumerate() {
+                let d = p.distance_squared(*q);
+                if d < best.0 && !tried.contains(&(i, j)) {
+                    best = (d, i, j);
+                }
             }
         }
+        if best.1 == usize::MAX {
+            break;
+        }
+        let (_, i, j) = best;
+        if chosen.is_none() {
+            chosen = Some((i, j));
+        }
+        if !bridge_blocked(outer[i], hole[j], &outer) && !bridge_blocked(outer[i], hole[j], &hole) {
+            chosen = Some((i, j));
+            break;
+        }
+        tried.push((i, j));
     }
-    let (_, i, j) = best;
+    let Some((i, j)) = chosen else { return outer };
+    // The way back along the bridge is moved a hair to the side, away from the way out, so that
+    // the ring has no repeated points and is a simple polygon. A repeated point confuses ear
+    // clipping. A clockwise hole cuts a slit, and a counterclockwise piece adds a thin strip.
+    let to = hole[j] - outer[i];
+    let side = DVec2::new(-to.y, to.x).normalize_or_zero() * (to.length() * BRIDGE_WIDTH);
+    let shift = if signed_area(&hole) < 0.0 {
+        -side
+    } else {
+        side
+    };
     let mut out = Vec::with_capacity(outer.len() + hole.len() + 2);
     out.extend_from_slice(&outer[..=i]);
-    for k in 0..=hole.len() {
+    for k in 0..hole.len() {
         out.push(hole[(j + k) % hole.len()]);
     }
-    out.extend_from_slice(&outer[i..]);
+    out.push(hole[j] + shift);
+    out.push(outer[i] + shift);
+    out.extend_from_slice(&outer[i + 1..]);
     out
+}
+
+/// Width of a bridge, as a fraction of its length. The area that this adds or takes is negligible.
+const BRIDGE_WIDTH: f64 = 1e-7;
+
+fn signed_area(ring: &[DVec2]) -> f64 {
+    let o = ring[0];
+    (0..ring.len())
+        .map(|i| (ring[i] - o).perp_dot(ring[(i + 1) % ring.len()] - o))
+        .sum::<f64>()
+        / 2.0
 }
 
 #[cfg(test)]

@@ -74,6 +74,7 @@ fn attrs() -> impl Strategy<Value = Attributes> {
             pen,
             fill: None,
             line_weight,
+            ..Default::default()
         })
 }
 
@@ -121,6 +122,7 @@ fn command() -> impl Strategy<Value = Command> {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Step {
     Do(Command),
     Undo,

@@ -15,6 +15,8 @@ use crate::resource::{ResourceBody, ResourceId, Resources};
 mod annot_ops;
 mod area_ops;
 mod drawing_ops;
+mod graphic_ops;
+mod group_ops;
 mod plant_ops;
 mod record_ops;
 mod table_ops;
@@ -22,6 +24,7 @@ mod table_ops;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Command {
+    // Groups, copies and symbols are at the end of the list.
     /// Add an object. Missing layer or class means the active one.
     AddObject {
         shape: Shape,
@@ -307,6 +310,72 @@ pub enum Command {
         #[serde(default)]
         size: Option<DVec2>,
     },
+    /// Make a group of objects. They must be on one layer and in the same group (or in none).
+    /// A click on a group selects it as a whole. Returns the ID of the group in `created`.
+    Group {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Add an object as a member of a group (on the layer of the group). Use it when you draw inside a group
+    /// you have entered. Returns the ID of the object in `created`.
+    AddObjectIn {
+        parent: ObjectId,
+        shape: Shape,
+        #[serde(default)]
+        class: Option<ClassId>,
+        #[serde(default)]
+        attrs: Attributes,
+    },
+    /// Move objects into a group (`parent`) or out of all groups (no parent). The objects must be on the
+    /// layer of the group. A group that loses its last member goes.
+    SetParent {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        parent: Option<ObjectId>,
+    },
+    /// Dissolve groups by one level: the members stay (in the group above, if any) and the group object goes.
+    Ungroup {
+        ids: Vec<ObjectId>,
+    },
+    /// Turn objects about a point. A group turns as one unit. Angles are radians, counterclockwise.
+    /// Hardscapes, landscape areas and site models cannot be turned.
+    RotateObjects {
+        ids: Vec<ObjectId>,
+        center: DVec2,
+        angle: f64,
+    },
+    /// Copy objects and move the copies by `delta`. A group is copied with its members. Returns the
+    /// IDs of the copies of `ids` in `created`, then the IDs of copied members.
+    CopyObjects {
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        delta: DVec2,
+    },
+    /// Make a symbol definition from objects (groups count as their members). The insertion point is
+    /// in the drawing (default: the center of the objects). With `replace` the objects are replaced by one instance.
+    /// Returns the ID of the definition and then, with `replace`, the ID of the instance in `created`.
+    CreateSymbol {
+        name: String,
+        ids: Vec<ObjectId>,
+        #[serde(default)]
+        insertion: Option<DVec2>,
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Replace symbol instances by groups of plain objects.
+    ConvertSymbolToGroup {
+        ids: Vec<ObjectId>,
+    },
+    /// Edit the definition of a symbol in place: its 2D components become a group at the instance
+    /// (the instance is hidden meanwhile). Returns the ID of the group in `created`.
+    EditSymbol {
+        id: ObjectId,
+    },
+    /// End editing in place: the objects of the edit group become the 2D components of the definition.
+    ExitSymbolEdit {
+        group: ObjectId,
+    },
     /// Several commands as one undo step. Stops at the first error.
     Batch {
         commands: Vec<Command>,
@@ -563,6 +632,42 @@ impl<'a> Tx<'a> {
             .ok_or(CommandError::NoClass(id))
     }
 
+    /// Removes objects that exist and are editable. Objects made by this same command just disappear. Older ones are recorded.
+    fn remove_objects(&mut self, ids: Vec<ObjectId>) {
+        let new: HashSet<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.added_set.contains(id))
+            .collect();
+        let old: Vec<ObjectId> = ids.iter().copied().filter(|id| !new.contains(id)).collect();
+        let mut current: Vec<(usize, ObjectId)> = old
+            .iter()
+            .map(|&id| (self.doc.objects.get_index_of(&id).expect("checked"), id))
+            .collect();
+        current.sort_unstable();
+        let before_idx = indices_before(
+            &self.removed.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            &current.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        );
+        for &(_, id) in &current {
+            self.touch(id);
+        }
+        self.removed.extend(
+            before_idx
+                .into_iter()
+                .zip(current.iter().map(|(_, id)| *id)),
+        );
+        self.removed.sort_unstable();
+        self.added.retain(|id| !new.contains(id));
+        self.added_set.retain(|id| !new.contains(id));
+        if ids.len() == 1 {
+            self.doc.objects.shift_remove(&ids[0]);
+        } else if !ids.is_empty() {
+            let gone: HashSet<ObjectId> = ids.into_iter().collect();
+            self.doc.objects.retain(|id, _| !gone.contains(id));
+        }
+    }
+
     fn run(&mut self, cmd: &Command, out: &mut Outcome) -> Result<(), CommandError> {
         match cmd {
             Command::AddObject {
@@ -579,6 +684,7 @@ impl<'a> Tx<'a> {
                 self.check_shape_refs(shape)?;
                 self.check_sheet_rules(layer, shape, None)?;
                 validate_attrs(attrs)?;
+                self.check_attr_refs(attrs)?;
                 let id = ObjectId(self.alloc()?);
                 self.added.push(id);
                 self.added_set.insert(id);
@@ -593,40 +699,13 @@ impl<'a> Tx<'a> {
                 for &id in &ids {
                     self.editable(id)?;
                 }
-                // Objects made by this same command just disappear. Older ones are recorded.
-                let new: HashSet<ObjectId> = ids
-                    .iter()
-                    .copied()
-                    .filter(|id| self.added_set.contains(id))
-                    .collect();
-                let old: Vec<ObjectId> =
-                    ids.iter().copied().filter(|id| !new.contains(id)).collect();
-                let mut current: Vec<(usize, ObjectId)> = old
-                    .iter()
-                    .map(|&id| (self.doc.objects.get_index_of(&id).expect("checked"), id))
-                    .collect();
-                current.sort_unstable();
-                let before_idx = indices_before(
-                    &self.removed.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
-                    &current.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
-                );
-                for &(_, id) in &current {
-                    self.touch(id);
+                // A group goes with its members, and a group that loses its last member goes too.
+                let ids = self.with_group_members(&ids);
+                for &id in &ids {
+                    self.editable(id)?;
                 }
-                self.removed.extend(
-                    before_idx
-                        .into_iter()
-                        .zip(current.iter().map(|(_, id)| *id)),
-                );
-                self.removed.sort_unstable();
-                self.added.retain(|id| !new.contains(id));
-                self.added_set.retain(|id| !new.contains(id));
-                if ids.len() == 1 {
-                    self.doc.objects.shift_remove(&ids[0]);
-                } else if !ids.is_empty() {
-                    let gone: HashSet<ObjectId> = ids.into_iter().collect();
-                    self.doc.objects.retain(|id, _| !gone.contains(id));
-                }
+                self.release_edited(&ids);
+                self.remove_objects(ids);
             }
             Command::MoveObjects { ids, delta } => {
                 if !delta.is_finite() {
@@ -636,7 +715,14 @@ impl<'a> Tx<'a> {
                 for &id in &ids {
                     self.editable(id)?;
                 }
+                // A group moves with its members.
+                let ids = if ids.iter().any(|i| self.doc.is_group(*i)) {
+                    self.doc.leaves(&ids)
+                } else {
+                    ids
+                };
                 for id in ids {
+                    self.editable(id)?;
                     self.touch(id);
                     let o = self.doc.object_mut(id).expect("checked");
                     o.shape.translate(*delta);
@@ -667,9 +753,24 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
+                    self.check_attr_refs(a)?;
                 }
                 {
                     let o = self.doc.object(*id).expect("checked");
+                    // A member stays on the layer of its group, and a group with members on the layer of its members.
+                    if layer.is_some_and(|l| l != o.layer)
+                        && (o.parent.is_some() || self.doc.is_group(o.id))
+                    {
+                        return Err(CommandError::Invalid(
+                            "an object in a group or a group keeps its layer. Ungroup it first"
+                                .into(),
+                        ));
+                    }
+                    if shape.as_ref().is_some_and(|s| {
+                        matches!(s, Shape::Group { .. }) != matches!(o.shape, Shape::Group { .. })
+                    }) {
+                        return Err(CommandError::Invalid("a group cannot become another kind of object, and an object cannot become a group".into()));
+                    }
                     self.check_sheet_rules(
                         layer.unwrap_or(o.layer),
                         shape.as_ref().unwrap_or(&o.shape),
@@ -768,6 +869,7 @@ impl<'a> Tx<'a> {
                 }
                 if let Some(k) = set.keys().chain(remove.iter()).find(|k| {
                     crate::plants::link::RESERVED_DATA_KEYS.contains(&k.as_str())
+                        || crate::symbols::RESERVED_KEYS.contains(&k.as_str())
                         || k.as_str() == crate::worksheet_table::KEY
                 }) {
                     return Err(CommandError::Invalid(format!(
@@ -855,6 +957,7 @@ impl<'a> Tx<'a> {
             }
             Command::AddClass { name, attrs } => {
                 validate_attrs(attrs)?;
+                self.check_attr_refs(attrs)?;
                 let id = ClassId(self.alloc()?);
                 self.doc.classes.push(Class {
                     id,
@@ -872,6 +975,7 @@ impl<'a> Tx<'a> {
             } => {
                 if let Some(a) = attrs {
                     validate_attrs(a)?;
+                    self.check_attr_refs(a)?;
                 }
                 let c = self
                     .doc
@@ -913,6 +1017,16 @@ impl<'a> Tx<'a> {
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
             | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            Command::Group { .. }
+            | Command::Ungroup { .. }
+            | Command::AddObjectIn { .. }
+            | Command::SetParent { .. }
+            | Command::RotateObjects { .. }
+            | Command::CopyObjects { .. }
+            | Command::CreateSymbol { .. }
+            | Command::ConvertSymbolToGroup { .. }
+            | Command::EditSymbol { .. }
+            | Command::ExitSymbolEdit { .. } => self.run_group(cmd, out)?,
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
@@ -1074,6 +1188,9 @@ fn validate_shape(shape: &Shape) -> Result<(), CommandError> {
             }
         }
         Shape::PlantTag { height, .. } if *height <= 0.0 => bad("tag text height must be positive"),
+        Shape::Symbol { scale, scale_y, .. } if *scale == 0.0 || *scale_y == Some(0.0) => {
+            bad("the scale of a symbol must not be zero")
+        }
         Shape::Text { height, .. } if *height <= 0.0 => bad("text height must be positive"),
         Shape::Polyline { points, .. } if points.len() < 2 => {
             bad("polyline needs 2 or more points")
@@ -1691,6 +1808,7 @@ mod tests {
             pen: Some(Color([1, 2, 3, 255])),
             fill: None,
             line_weight: Some(0.7),
+            ..Default::default()
         };
         ed.execute(&Command::ModifyObject {
             id,
@@ -1927,6 +2045,7 @@ mod tests {
             pen: Some(Color([9, 9, 9, 255])),
             fill: None,
             line_weight: Some(1.0),
+            ..Default::default()
         };
         let cid = ClassId(
             ed.execute(&Command::AddClass {

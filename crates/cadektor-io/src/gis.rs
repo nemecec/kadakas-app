@@ -222,6 +222,7 @@ pub fn build(
         pen: Some(Color::BLACK),
         fill: Some(Color::NONE),
         line_weight: Some(0.25),
+        ..Default::default()
     };
     let to_model = |p: &Pt| -> Result<DVec3, String> {
         let (x, y, z) = match &transform {

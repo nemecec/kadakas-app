@@ -245,6 +245,8 @@ pub struct Ctx<'a> {
     pub settings: &'a ToolSettings,
     /// Pick distance in mm.
     pub tol: f64,
+    /// The group you are in (selection picks its members), if any.
+    pub context: Option<ObjectId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -562,7 +564,7 @@ impl ToolMachine {
 
     fn handle_select(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
         match input {
-            Input::Press { p, shift } => match hit::hit_test(cx.doc, p, cx.tol) {
+            Input::Press { p, shift } => match hit::hit_test_in(cx.doc, p, cx.tol, cx.context) {
                 Some(id) if shift => {
                     let mut sel = cx.selection.to_vec();
                     match sel.iter().position(|s| *s == id) {
@@ -625,7 +627,7 @@ impl ToolMachine {
                         return vec![];
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
-                    for id in hit::box_select(cx.doc, start, p, p.x < start.x) {
+                    for id in hit::box_select_in(cx.doc, start, p, p.x < start.x, cx.context) {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -744,17 +746,6 @@ impl ToolMachine {
     /// Hint for the status line.
     pub fn hint(&self) -> &'static str {
         match (self.tool, self.is_busy()) {
-            (
-                Tool::Dimension
-                | Tool::Callout
-                | Tool::DataTag
-                | Tool::NorthArrow
-                | Tool::ScaleBar
-                | Tool::RevisionCloud,
-                _,
-            ) => {
-                "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
-            }
             (Tool::Select, _) => {
                 "Click to select, Shift-click to toggle, drag to move or box select. Delete removes."
             }
@@ -765,6 +756,17 @@ impl ToolMachine {
             (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
             (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
+            }
+            (
+                Tool::Dimension
+                | Tool::Callout
+                | Tool::DataTag
+                | Tool::NorthArrow
+                | Tool::ScaleBar
+                | Tool::RevisionCloud,
+                _,
+            ) => {
+                "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
             }
             (Tool::Text, _) => "Click to place. Set values in the Data bar.",
             (Tool::Plant, _) => {
@@ -804,6 +806,7 @@ mod tests {
                     selection: &self.session.selection,
                     settings: &self.settings,
                     tol: 5.0,
+                    context: self.session.edit_context(),
                 };
                 self.m.handle(input, &cx)
             };
@@ -1192,6 +1195,7 @@ mod tests {
             selection: &[],
             settings: &f.settings,
             tol: 1.0,
+            context: None,
         };
         assert!(matches!(
             f.m.preview(DVec2::X, &cx),
@@ -1418,6 +1422,7 @@ mod tests {
             selection: &[],
             settings: &f.settings,
             tol: 1.0,
+            context: None,
         };
         let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else {
             panic!()
@@ -1447,6 +1452,7 @@ mod tests {
             selection: &[],
             settings: &f.settings,
             tol: 1.0,
+            context: None,
         };
         assert!(matches!(
             f.m.preview(DVec2::X, &cx),

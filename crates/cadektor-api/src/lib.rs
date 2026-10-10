@@ -7,8 +7,11 @@ use std::sync::Arc;
 mod annotation_api;
 mod data_api;
 mod hardscape_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod libfiles;
 mod plants_api;
 mod sheets_api;
+mod symbols_api;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,6 +38,8 @@ use cadektor_render::{Camera, Projection, RenderMode, RenderOptions, StandardVie
 pub struct Session {
     pub editor: Editor,
     pub selection: Vec<ObjectId>,
+    /// The groups you have entered, outermost first. A click selects members of the last one.
+    pub context: Vec<ObjectId>,
     /// The chosen 3D view. `view.set` changes it, and the app follows it.
     pub view: ViewSettings,
     replaced: bool,
@@ -218,6 +223,52 @@ pub const METHODS: &[(&str, &str)] = &[
     hardscape_api::REPORT_HARDSCAPE,
     hardscape_api::REPORT_LANDSCAPE_AREAS,
     hardscape_api::REPORT_PLANT_LIST,
+    // Groups, symbols, patterns and the Resource Manager (see symbols_api.rs).
+    symbols_api::GROUP_CREATE,
+    symbols_api::GROUP_UNGROUP,
+    symbols_api::GROUP_ENTER,
+    symbols_api::GROUP_EXIT,
+    symbols_api::GROUP_CONTEXT,
+    symbols_api::GROUP_MEMBERS,
+    symbols_api::GROUP_MOVE_INTO,
+    symbols_api::GROUP_MOVE_OUT,
+    symbols_api::GROUP_MOVE,
+    symbols_api::GROUP_ROTATE,
+    symbols_api::GROUP_COPY,
+    symbols_api::SELECTION_CLICK,
+    symbols_api::SYMBOL_LIST,
+    symbols_api::SYMBOL_GET,
+    symbols_api::SYMBOL_CREATE,
+    symbols_api::SYMBOL_FROM_OBJECTS,
+    symbols_api::SYMBOL_PLACE,
+    symbols_api::SYMBOL_SET,
+    symbols_api::SYMBOL_CONVERT_TO_GROUP,
+    symbols_api::SYMBOL_EDIT,
+    symbols_api::SYMBOL_EDIT_END,
+    symbols_api::RESOURCE_LIST,
+    symbols_api::RESOURCE_GET,
+    symbols_api::RESOURCE_CREATE,
+    symbols_api::RESOURCE_UPDATE,
+    symbols_api::RESOURCE_RENAME,
+    symbols_api::RESOURCE_DUPLICATE,
+    symbols_api::RESOURCE_DELETE,
+    symbols_api::RESOURCE_PURGE_UNUSED,
+    symbols_api::RESOURCE_THUMBNAIL,
+    symbols_api::PATTERN_SEGMENTS,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::RESOURCE_LIST_FILE,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::RESOURCE_IMPORT_FROM_FILE,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::RESOURCE_EXPORT_TO_FILE,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::LIBRARY_LIST,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::LIBRARY_FAVORITES,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::LIBRARY_FAVORITE_ADD,
+    #[cfg(not(target_arch = "wasm32"))]
+    symbols_api::LIBRARY_FAVORITE_REMOVE,
     (
         "site.create",
         "Create a site model (terrain) from 3D loci and 3D polylines. They move into the site model as its source data. params: {source_ids: [id], settings?}. settings: minor_interval, major_interval (mm), smooth_contours, label_contours, display_2d and surface_3d (existing | proposed | both), display_3d (mesh | contours | both), datum, existing_color, proposed_color, crop (closed ring [[x, y]], may be concave; only the surface inside stays; [] for none), auto_update (default true; false keeps the old proposed surface until site.refresh). Pads and grade limits are objects of kind site_modifier on the same layer. Where pads overlap, the later object wins. A pad without a grade limit has a vertical edge. Returns {id}.",
@@ -322,6 +373,7 @@ impl Session {
         Session {
             editor: Editor::default(),
             selection: Vec::new(),
+            context: Vec::new(),
             view: ViewSettings::default(),
             replaced: false,
             view_changed: false,
@@ -439,7 +491,8 @@ impl Session {
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                     "sheets": sheets_api::describe(),
-                    "annotation": annotation_api::describe(),
+                "resources": symbols_api::describe(),
+                "annotation": annotation_api::describe(),
                 });
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -453,6 +506,7 @@ impl Session {
                     command: Command,
                 }
                 let P { command } = params(p)?;
+                let command = self.in_context(command);
                 let out = self.editor.execute(&command).map_err(RpcError::app)?;
                 self.prune_selection();
                 serde_json::to_value(out).unwrap()
@@ -652,6 +706,7 @@ impl Session {
                 }
                 return plants_api::handle(self, method, p.clone())
                     .or_else(|| sheets_api::handle(self, method, p.clone()))
+                    .or_else(|| symbols_api::handle(self, method, p.clone()))
                     .or_else(|| annotation_api::handle(self, method, p.clone()))
                     .or_else(|| data_api::handle(self, method, p))
                     .unwrap_or_else(|| {
@@ -697,6 +752,43 @@ impl Session {
     pub fn prune_selection(&mut self) {
         let doc = self.editor.doc();
         self.selection.retain(|id| doc.object(*id).is_some());
+        // Leave groups that are gone.
+        if let Some(i) = self.context.iter().position(|g| !doc.is_group(*g)) {
+            self.context.truncate(i);
+        }
+    }
+
+    /// The group you are in, if any.
+    pub fn edit_context(&self) -> Option<ObjectId> {
+        self.context.last().copied()
+    }
+
+    /// The command to run for `cmd` while you are in a group: a new object becomes a member of the group
+    /// (also in the edit group of a symbol, so it is part of the symbol after you exit). Other commands,
+    /// and objects for another layer, are unchanged.
+    pub fn in_context(&self, cmd: Command) -> Command {
+        let doc = self.editor.doc();
+        match (
+            &cmd,
+            self.edit_context()
+                .and_then(|g| doc.object(g).map(|o| (g, o.layer))),
+        ) {
+            (
+                Command::AddObject {
+                    shape,
+                    layer,
+                    class,
+                    attrs,
+                },
+                Some((parent, group_layer)),
+            ) if layer.unwrap_or(doc.active_layer) == group_layer => Command::AddObjectIn {
+                parent,
+                shape: shape.clone(),
+                class: *class,
+                attrs: attrs.clone(),
+            },
+            _ => cmd,
+        }
     }
 
     /// Handles one JSON-RPC 2.0 request line and returns the response line.

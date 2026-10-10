@@ -35,6 +35,8 @@ pub enum ResourceBody {
     Worksheet(serde_json::Value),
     HardscapeStyle(Box<HardscapeStyle>),
     LandscapeAreaStyle(Box<LandscapeAreaStyle>),
+    /// A symbol, hatch, tile, line type or texture (see `crate::graphics`).
+    Graphic(Box<crate::graphics::GraphicResource>),
     /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
     Annot(Box<crate::annot::style::AnnotResource>),
     Unknown(serde_json::Value),
@@ -61,6 +63,7 @@ impl Serialize for ResourceBody {
                 v["type"] = "landscape_area_style".into();
                 v.serialize(s)
             }
+            ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
@@ -107,6 +110,14 @@ impl<'de> Deserialize<'de> for ResourceBody {
             Some("landscape_area_style") => serde_json::from_value::<LandscapeAreaStyle>(v)
                 .map(|s| ResourceBody::LandscapeAreaStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
+            Some(t) if crate::graphics::TYPE_NAMES.contains(&t) => {
+                // A hatch, symbol or the like in a shape that this version does not know (from an older or newer app) is kept as it is.
+                Ok(
+                    serde_json::from_value(v.clone()).map_or(ResourceBody::Unknown(v), |g| {
+                        ResourceBody::Graphic(Box::new(g))
+                    }),
+                )
+            }
             _ => match crate::annot::style::AnnotResource::from_json(&v) {
                 // A value from a newer app (a unit this version does not know): keep the raw JSON and save it again.
                 Some(r) => Ok(r.map_or_else(
@@ -134,6 +145,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => "worksheet",
             ResourceBody::HardscapeStyle(_) => "hardscape_style",
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
+            ResourceBody::Graphic(g) => g.type_name(),
             ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
@@ -151,6 +163,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => Ok(()),
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
+            ResourceBody::Graphic(g) => g.validate(),
             ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
@@ -290,6 +303,12 @@ impl Resources {
     /// Checks every resource: valid content, a non-empty name, and a name that no other
     /// resource of the same type has.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(id) = self.find_cycle() {
+            let name = self.get(id).map_or_else(String::new, |r| r.name.clone());
+            return Err(format!(
+                "resource {id} ('{name}') uses itself, directly or through other symbols, tiles or line types"
+            ));
+        }
         for (i, r) in self.0.iter().enumerate() {
             if r.name.trim().is_empty() {
                 return Err(format!("resource {} has no name", r.id));
@@ -368,7 +387,7 @@ mod tests {
 
     #[test]
     fn unknown_types_are_kept_and_saved_again() {
-        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hatch", "angle": 45, "rows": [1, 2]}});
+        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hologram", "angle": 45, "rows": [1, 2]}});
         let r: Resource = serde_json::from_value(j.clone()).unwrap();
         assert!(matches!(r.body, ResourceBody::Unknown(_)));
         assert_eq!(r.body.type_name(), "unknown");
@@ -455,6 +474,25 @@ mod tests {
     }
 
     #[test]
+    fn graphic_resources_round_trip_and_unreadable_ones_are_kept() {
+        let j = serde_json::json!({"id": 3, "name": "Diag", "body": {"type": "hatch", "units": "world", "lines": [{"angle": 45.0, "spacing": 2.0}]}});
+        let r: Resource = serde_json::from_value(j).unwrap();
+        assert!(matches!(&r.body, ResourceBody::Graphic(_)));
+        assert_eq!((r.body.type_name(), r.body.validate()), ("hatch", Ok(())));
+        let back: Resource = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
+        let mut store = Resources::default();
+        store.push(r);
+        assert!(store.hatch(ResourceId(3)).is_some() && store.symbol(ResourceId(3)).is_none());
+        assert!(store.find_graphic("hatch", "diag").is_some());
+        // A hatch in a shape that this version cannot read stays as it is.
+        let old = serde_json::json!({"id": 4, "name": "Old", "body": {"type": "hatch", "angle": 45, "rows": [1]}});
+        let r: Resource = serde_json::from_value(old.clone()).unwrap();
+        assert!(matches!(r.body, ResourceBody::Unknown(_)));
+        assert_eq!(serde_json::to_value(&r).unwrap(), old);
+    }
+
+    #[test]
     fn json_shape() {
         let j = serde_json::to_value(res(1, "Oak")).unwrap();
         assert_eq!(j["body"]["type"], "plant_style");
@@ -462,5 +500,54 @@ mod tests {
         let back: Resource = serde_json::from_value(j).unwrap();
         assert_eq!(back, res(1, "Oak"));
         assert_eq!(back.body.type_name(), "plant_style");
+    }
+
+    #[test]
+    fn a_file_with_a_resource_that_uses_itself_is_refused() {
+        use crate::graphics::{
+            GraphicResource, LineElement, LineTypeDef, PatternUnits, SymbolDef, SymbolItem,
+        };
+        let sym = |id: u64, line_type: u64| Resource {
+            id: ResourceId(id),
+            name: format!("S{id}"),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(SymbolDef {
+                items: vec![SymbolItem {
+                    shape: crate::model::Shape::Circle {
+                        center: glam::DVec2::ZERO,
+                        radius: 1.0,
+                    },
+                    attrs: crate::model::Attributes {
+                        line_type: Some(ResourceId(line_type)),
+                        ..Default::default()
+                    },
+                    class: None,
+                }],
+                ..Default::default()
+            }))),
+        };
+        // A symbol whose circle has a line type with a mark of the same symbol.
+        let lt = Resource {
+            id: ResourceId(2),
+            name: "Fence".into(),
+            body: ResourceBody::Graphic(Box::new(GraphicResource::LineType(LineTypeDef {
+                units: PatternUnits::Paper,
+                elements: vec![
+                    LineElement::Dash { length: 1.0 },
+                    LineElement::Mark {
+                        symbol: ResourceId(1),
+                        scale: 1.0,
+                        rotate: true,
+                    },
+                ],
+            }))),
+        };
+        let mut store = Resources::default();
+        store.push(sym(1, 2));
+        store.push(lt);
+        let e = store.validate().unwrap_err();
+        assert!(e.contains("uses itself"), "{e}");
+        let mut ok = Resources::default();
+        ok.push(sym(1, 99));
+        assert!(ok.validate().is_ok());
     }
 }

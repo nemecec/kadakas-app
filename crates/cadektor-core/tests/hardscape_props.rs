@@ -83,8 +83,16 @@ fn swept_reference(pts: &[DVec2], h: f64) -> f64 {
     count as f64 * cell.x * cell.y
 }
 
+/// Number of cases: 48, or the value of the environment variable PROPTEST_CASES (for long runs).
+fn cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(48)
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
 
     #[test]
     fn path_outlines_have_the_swept_area_and_no_loops((pts, width) in any_path()) {
@@ -337,5 +345,35 @@ proptest! {
         // Undo everything: the empty document comes back.
         while ed.undo() {}
         prop_assert!(ed.doc().objects.is_empty() && ed.doc().resources.is_empty());
+    }
+}
+
+/// Triangulating the ring must cover exactly its area: the ring has no loops.
+fn assert_no_loops(ring: &[DVec2]) {
+    let clean = cadektor_core::mesh::clean_ring(ring);
+    let covered: f64 = cadektor_core::mesh::triangulate(&clean)
+        .iter()
+        .map(|t| geom::polygon_area(&[clean[t[0]], clean[t[1]], clean[t[2]]]))
+        .sum();
+    let area = geom::polygon_area(&clean);
+    assert!(
+        (covered - area).abs() <= 1e-6 * area.max(1.0),
+        "loop in the outline: {covered} vs {area}"
+    );
+}
+
+/// Found by a long proptest run: a path that crosses itself and leaves a hole.
+#[test]
+fn a_self_crossing_path_with_a_hole_has_no_loops() {
+    let pts = [
+        DVec2::new(0.0, 0.0),
+        DVec2::new(-161.78369540821046, -511.82888088247375),
+        DVec2::new(376.8132964985902, -366.3318467365014),
+        DVec2::new(45.626269434437404, -669.1282409639796),
+        DVec2::new(-9.847401871396123, -299.6682345226489),
+        DVec2::new(-98.28213034500658, 289.315594785609),
+    ];
+    for j in [Join::Miter, Join::Round, Join::Bevel] {
+        assert_no_loops(&path_outline(&pts, 100.0, j, false));
     }
 }

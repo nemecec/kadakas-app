@@ -190,8 +190,10 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Duplicate | Cmd+D / Ctrl+D | Ctrl+D | planned |
 | Duplicate Array | Cmd+Shift+Option+D / Ctrl+Shift+Alt+D | Ctrl+Shift+Alt+D | planned |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
-| Group / Ungroup | Cmd+G / Cmd+U / Ctrl+G / Ctrl+U | Ctrl+G / Ctrl+U | planned |
-| Edit group / Exit group | Cmd+[ / Cmd+] / Ctrl+[ / Ctrl+] | Ctrl+[ / Ctrl+] | planned |
+| Group (`edit.group`) | Cmd+G / Ctrl+G | Cmd/Ctrl+G | done |
+| Ungroup (`edit.ungroup`) | Cmd+U / Ctrl+U | Cmd/Ctrl+U | done |
+| Edit group (`edit.enter_group`) | Cmd+[ / Ctrl+[ | Cmd/Ctrl+[ | done |
+| Exit group (`edit.exit_group`) | Cmd+] / Ctrl+] | Cmd/Ctrl+] | done |
 | Rotate left 90 / right 90 | Cmd+L / Cmd+Shift+R / Ctrl+L / Ctrl+Shift+R | Ctrl+L / Ctrl+Shift+R | planned |
 | Flip horizontal / vertical | Cmd+Shift+H / Cmd+Shift+V / Ctrl+Shift+H / Ctrl+Shift+V | Ctrl+Shift+H / Ctrl+Shift+V | planned |
 | Trim (command) | Cmd+T / Ctrl+T | Ctrl+T | planned |
