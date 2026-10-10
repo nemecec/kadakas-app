@@ -6,7 +6,8 @@
 //! three places:
 //!
 //! - a **server** can run it on the things that a transaction touches, after a tentative apply,
-//!   and refuse the transaction with `invalid_txn` (the test sequencer does this);
+//!   and refuse the transaction with `invalid_txn`. [`check_transaction`] does this, with the
+//!   check for duplicate IDs, and the test sequencer uses it;
 //! - [`crate::materialize::materialize`] runs it on every received thing and quarantines the ones
 //!   that fail, so one bad thing never blocks a client;
 //! - a client can run it on its own edits.
@@ -20,8 +21,10 @@ use kadakas_core::model::{
 use kadakas_core::resource::Resource;
 use kadakas_core::uid::Uid;
 use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::op::Kind;
+use crate::op::{Kind, Op, Target};
+use crate::replica::Replica;
 
 /// Reads a thing from its properties and its ID.
 pub(crate) fn with_id(id: Uid, props: &Map<String, Value>) -> Value {
@@ -121,6 +124,155 @@ pub fn validate_entity(kind: Kind, id: Uid, props: &Map<String, Value>) -> Resul
             Ok(())
         }
     }
+}
+
+/// Why a server refuses a transaction before it orders it.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CheckError {
+    /// A `create` without `merge` uses an ID that exists, existed, or is made twice in the
+    /// transaction. The server answers `duplicate_uid`.
+    #[error("the ID {0} is used")]
+    DuplicateUid(Uid),
+    /// A thing refers to a blob that the server does not have. The text names the hash. The
+    /// server answers `invalid_txn` (or a retry error with `hash`, if it wants the client to send
+    /// the blob again).
+    #[error("the blob {0} was not sent before the transaction")]
+    MissingBlob(String),
+    /// A thing would not be valid. The server answers `invalid_txn`.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+/// Checks that no `create` without `merge` uses an ID that exists or ever existed (deleted things
+/// count), or that the transaction makes twice. A `create` with `merge` is never a duplicate: the
+/// merge rules write it as `set` operations, or drop it when the thing is deleted.
+pub fn check_duplicates(r: &Replica, ops: &[Op]) -> Result<(), CheckError> {
+    let mut made: Vec<Target> = Vec::new();
+    for op in ops {
+        if let Op::Create { target, merge, .. } = op {
+            if (r.contains(*target) || made.contains(target)) && !*merge {
+                return Err(CheckError::DuplicateUid(target.id));
+            }
+            made.push(*target);
+        }
+    }
+    Ok(())
+}
+
+/// The properties of the things that the operations touch, as they will be after the operations
+/// (a tentative apply on copies), and the things in the order they were first touched. An edit of
+/// a thing that is not there or is deleted is left out: the merge drops it.
+///
+/// A `create` with `merge` of a living thing writes its properties over the current ones, so the
+/// result is the visible properties overlaid with the properties of the `create`.
+fn touched(r: &Replica, ops: &[Op]) -> (Vec<Target>, BTreeMap<Target, Map<String, Value>>) {
+    let mut props: BTreeMap<Target, Map<String, Value>> = BTreeMap::new();
+    let mut order: Vec<Target> = Vec::new();
+    for op in ops {
+        let t = op.target();
+        let current = || r.alive(t).map(|e| e.visible());
+        match op {
+            Op::Create {
+                props: p, merge, ..
+            } => {
+                let base = if *merge {
+                    props.remove(&t).or_else(current)
+                } else {
+                    None
+                };
+                let mut m = base.unwrap_or_default();
+                m.extend(p.iter().map(|(k, v)| (k.clone(), v.clone())));
+                props.insert(t, m);
+            }
+            Op::Set { prop, value, .. } => {
+                let Some(m) = working_copy(&mut props, t, current()) else {
+                    continue;
+                };
+                m.insert(prop.clone(), value.clone());
+            }
+            Op::Unset { prop, .. } => {
+                let Some(m) = working_copy(&mut props, t, current()) else {
+                    continue;
+                };
+                m.remove(prop);
+            }
+            _ => continue,
+        }
+        if !order.contains(&t) {
+            order.push(t);
+        }
+    }
+    (order, props)
+}
+
+/// The working copy of a thing: the one made before in this transaction, or the current one.
+fn working_copy(
+    props: &mut BTreeMap<Target, Map<String, Value>>,
+    t: Target,
+    current: Option<Map<String, Value>>,
+) -> Option<&mut Map<String, Value>> {
+    match props.entry(t) {
+        std::collections::btree_map::Entry::Occupied(e) => Some(e.into_mut()),
+        std::collections::btree_map::Entry::Vacant(v) => Some(v.insert(current?)),
+    }
+}
+
+/// The blobs that a server must have before it can check the transaction: the pictures of every
+/// thing the operations touch, as they will be after the operations (an edit of the opacity of an
+/// underlay needs the picture too). The list has no repeats.
+pub fn blobs_needed(r: &Replica, ops: &[Op]) -> Vec<String> {
+    let (order, props) = touched(r, ops);
+    let mut out: Vec<String> = Vec::new();
+    for t in order {
+        if let Some(h) = props[&t].get("shape").and_then(crate::blob::blob_ref)
+            && !out.iter().any(|o| o == h)
+        {
+            out.push(h.to_string());
+        }
+    }
+    out
+}
+
+/// All blobs that the replica refers to by any property of any thing, deleted things and removed
+/// properties included (an undo can bring them back). A server may drop a blob that is not in
+/// this set.
+pub fn referenced_blobs(r: &Replica) -> BTreeSet<String> {
+    r.things()
+        .flat_map(|(_, e)| e.props.values())
+        .filter_map(|slot| crate::blob::blob_ref(&slot.value).map(str::to_string))
+        .collect()
+}
+
+/// The check that a server runs on a transaction before it orders it, after `op::validate_ops`:
+///
+/// 1. no duplicate ID ([`check_duplicates`]);
+/// 2. each thing that the operations touch stays a valid thing: the operations are applied to
+///    copies of the properties, the pictures are put back (`blobs` gives the text of a blob by its
+///    hash, or `None` if the server does not have it), and [`validate_entity`] runs on the result.
+///
+/// An edit of a thing that is not there or is deleted is not an error: the merge drops it.
+pub fn check_transaction(
+    r: &Replica,
+    ops: &[Op],
+    blobs: &dyn Fn(&str) -> Option<String>,
+) -> Result<(), CheckError> {
+    check_duplicates(r, ops)?;
+    check_entities(r, ops, blobs)
+}
+
+/// The second part of [`check_transaction`]: the value checks of the touched things.
+pub fn check_entities(
+    r: &Replica,
+    ops: &[Op],
+    blobs: &dyn Fn(&str) -> Option<String>,
+) -> Result<(), CheckError> {
+    let (order, props) = touched(r, ops);
+    for t in order {
+        let full = crate::blob::inline_props(&props[&t], blobs).map_err(CheckError::MissingBlob)?;
+        validate_entity(t.kind, t.id, &full)
+            .map_err(|e| CheckError::Invalid(format!("{:?} {}: {e}", t.kind, t.id)))?;
+    }
+    Ok(())
 }
 
 /// Finds the first ID (UUID text) in a message.
@@ -224,6 +376,176 @@ mod tests {
         let mut l = layer.clone();
         l.insert("order".into(), json!("~"));
         assert!(validate_entity(Kind::Layer, id, &l).is_err());
+    }
+
+    fn create(id: u64, p: Map<String, Value>, merge: bool) -> Op {
+        Op::Create {
+            target: Target::new(Kind::Object, Uid::from_num(id)),
+            props: p.into_iter().collect(),
+            merge,
+        }
+    }
+
+    fn replica_with(id: u64) -> Replica {
+        let mut r = Replica::new();
+        r.apply(
+            crate::op::Writer {
+                client: Uid::from_num(9),
+                op: 1,
+            },
+            &create(id, rect(), false),
+        );
+        r
+    }
+
+    fn no_blobs(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn transactions_with_a_used_id_or_a_bad_thing_are_refused() {
+        let r = replica_with(5);
+        let ok = [create(6, rect(), false)];
+        assert_eq!(check_transaction(&r, &ok, &no_blobs), Ok(()));
+        // An ID that exists, or that the transaction makes twice.
+        let again = [create(5, rect(), false)];
+        assert_eq!(
+            check_transaction(&r, &again, &no_blobs),
+            Err(CheckError::DuplicateUid(Uid::from_num(5)))
+        );
+        let twice = [create(6, rect(), false), create(6, rect(), false)];
+        assert_eq!(
+            check_transaction(&r, &twice, &no_blobs),
+            Err(CheckError::DuplicateUid(Uid::from_num(6)))
+        );
+        // A deleted thing keeps its ID.
+        let mut gone = replica_with(5);
+        gone.apply(
+            crate::op::Writer {
+                client: Uid::from_num(9),
+                op: 2,
+            },
+            &Op::Delete {
+                target: Target::new(Kind::Object, Uid::from_num(5)),
+            },
+        );
+        assert!(check_transaction(&gone, &again, &no_blobs).is_err());
+        // With `merge` a repeat is fine, also for a deleted thing.
+        let merge = [create(5, rect(), true)];
+        assert_eq!(check_transaction(&r, &merge, &no_blobs), Ok(()));
+        assert_eq!(check_transaction(&gone, &merge, &no_blobs), Ok(()));
+        assert_eq!(check_duplicates(&r, &ok), Ok(()));
+        // A bad value, in a new thing and in an edit of an old one.
+        let mut far = rect();
+        far.insert(
+            "shape".into(),
+            json!({"kind": "rect", "min": [0, 0], "max": [5e12, 5]}),
+        );
+        assert!(matches!(
+            check_transaction(&r, &[create(7, far.clone(), false)], &no_blobs),
+            Err(CheckError::Invalid(_))
+        ));
+        let edit = [Op::Set {
+            target: Target::new(Kind::Object, Uid::from_num(5)),
+            prop: "shape".into(),
+            value: far["shape"].clone(),
+        }];
+        assert!(check_transaction(&r, &edit, &no_blobs).is_err());
+        // An edit of a thing that is not there is dropped by the merge, not refused.
+        let unknown = [Op::Set {
+            target: Target::new(Kind::Object, Uid::from_num(77)),
+            prop: "shape".into(),
+            value: far["shape"].clone(),
+        }];
+        assert_eq!(check_transaction(&r, &unknown, &no_blobs), Ok(()));
+        // A later edit in the same transaction sees the thing that was made before it.
+        let both = [
+            create(8, rect(), false),
+            Op::Set {
+                target: Target::new(Kind::Object, Uid::from_num(8)),
+                prop: "shape".into(),
+                value: far["shape"].clone(),
+            },
+        ];
+        assert!(check_transaction(&r, &both, &no_blobs).is_err());
+    }
+
+    #[test]
+    fn a_merge_create_of_a_living_thing_is_checked_on_top_of_its_properties() {
+        let r = replica_with(5);
+        // Alone, `{"order": "a0"}` is not an object. On top of the living thing it is fine.
+        let part: Map<String, Value> = props(json!({"order": "a0"}));
+        assert!(validate_entity(Kind::Object, Uid::from_num(5), &part).is_err());
+        assert_eq!(
+            check_transaction(&r, &[create(5, part.clone(), true)], &no_blobs),
+            Ok(())
+        );
+        // A bad value on top of it is still refused.
+        let bad = props(json!({"order": "~"}));
+        assert!(check_transaction(&r, &[create(5, bad, true)], &no_blobs).is_err());
+        // For a thing that does not exist yet, a merge create must be complete on its own.
+        assert!(check_transaction(&r, &[create(6, part, true)], &no_blobs).is_err());
+    }
+
+    fn underlay(hash: &str) -> Value {
+        json!({"kind": "underlay", "png": {"$blob": hash}})
+    }
+
+    #[test]
+    fn blobs_are_listed_and_checked() {
+        let mut p = rect();
+        p.insert("shape".into(), underlay("aa"));
+        let r = Replica::new();
+        let ops = [create(5, p.clone(), false), create(6, p, false)];
+        assert_eq!(blobs_needed(&r, &ops), vec!["aa".to_string()]);
+        assert_eq!(
+            check_transaction(&r, &ops, &no_blobs),
+            Err(CheckError::MissingBlob("aa".into()))
+        );
+        assert!(blobs_needed(&r, &[create(7, rect(), false)]).is_empty());
+
+        // An edit of another property of a thing with a picture needs the picture too.
+        let mut r = Replica::new();
+        let mut with = rect();
+        with.insert("shape".into(), underlay("bb"));
+        r.apply(
+            crate::op::Writer {
+                client: Uid::from_num(9),
+                op: 1,
+            },
+            &create(5, with, false),
+        );
+        let edit = [Op::Set {
+            target: Target::new(Kind::Object, Uid::from_num(5)),
+            prop: "order".into(),
+            value: json!("a0"),
+        }];
+        assert_eq!(blobs_needed(&r, &edit), vec!["bb".to_string()]);
+        assert_eq!(
+            check_transaction(&r, &edit, &no_blobs),
+            Err(CheckError::MissingBlob("bb".into()))
+        );
+        // A thing that is not there needs nothing.
+        let unknown = [Op::Set {
+            target: Target::new(Kind::Object, Uid::from_num(77)),
+            prop: "order".into(),
+            value: json!("a0"),
+        }];
+        assert!(blobs_needed(&r, &unknown).is_empty());
+
+        // Every blob that the replica holds, deleted things included.
+        assert_eq!(referenced_blobs(&r), BTreeSet::from(["bb".to_string()]));
+        r.apply(
+            crate::op::Writer {
+                client: Uid::from_num(9),
+                op: 2,
+            },
+            &Op::Delete {
+                target: Target::new(Kind::Object, Uid::from_num(5)),
+            },
+        );
+        assert_eq!(referenced_blobs(&r).len(), 1, "an undo can bring it back");
+        assert!(referenced_blobs(&Replica::new()).is_empty());
     }
 
     #[test]

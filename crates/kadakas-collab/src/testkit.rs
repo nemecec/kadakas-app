@@ -30,14 +30,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use kadakas_core::uid::Uid;
-use serde_json::{Map, Value};
 
-use crate::op::{Op, Target, Writer, validate_ops};
+use crate::op::{Op, Writer, validate_ops};
 use crate::presence::{self, Peer, PresenceState, Throttle};
 use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
 use crate::transport::{Endpoint, MemPeer, MemTransport, Transport, TransportError, mem_pair};
-use crate::validate::validate_entity;
+use crate::validate::{CheckError, check_duplicates, check_transaction};
 
 /// A connection number, made by [`Sequencer::open`].
 pub type ConnId = u64;
@@ -414,60 +413,6 @@ impl Sequencer {
         out
     }
 
-    /// Checks the things that the operations touch, as a server must: each thing must stay a
-    /// valid thing. It applies the operations to copies of the properties of the touched things.
-    /// An edit of a thing that is not there is not an error: the merge drops it.
-    fn check_things(&self, ops: &[Op]) -> Result<(), String> {
-        let mut props: BTreeMap<Target, Map<String, Value>> = BTreeMap::new();
-        let mut order: Vec<Target> = Vec::new();
-        for op in ops {
-            let t = op.target();
-            let current = |this: &Self| this.replica.alive(t).map(|e| e.visible());
-            match op {
-                Op::Create { props: p, .. } => {
-                    props.insert(t, p.clone().into_iter().collect());
-                }
-                Op::Set { prop, value, .. } => {
-                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
-                        continue;
-                    };
-                    m.insert(prop.clone(), value.clone());
-                }
-                Op::Unset { prop, .. } => {
-                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
-                        continue;
-                    };
-                    m.remove(prop);
-                }
-                _ => continue,
-            }
-            if !order.contains(&t) {
-                order.push(t);
-            }
-        }
-        for t in order {
-            // Pictures are in blobs: put them back to check the thing.
-            let full = crate::blob::inline_props(&props[&t], &|h| self.blobs.get(h).cloned())
-                .map_err(|h| format!("the blob {h} was not sent before the transaction"))?;
-            validate_entity(t.kind, t.id, &full)
-                .map_err(|e| format!("{:?} {}: {e}", t.kind, t.id))?;
-        }
-        Ok(())
-    }
-
-    /// The working copy of the properties of a thing: the one that was made before, or the
-    /// current ones. `None` if the thing is not there.
-    fn entry_props(
-        props: &mut BTreeMap<Target, Map<String, Value>>,
-        t: Target,
-        current: Option<Map<String, Value>>,
-    ) -> Option<&mut Map<String, Value>> {
-        match props.entry(t) {
-            std::collections::btree_map::Entry::Occupied(e) => Some(e.into_mut()),
-            std::collections::btree_map::Entry::Vacant(v) => Some(v.insert(current?)),
-        }
-    }
-
     fn submit(
         &mut self,
         conn: ConnId,
@@ -510,27 +455,18 @@ impl Sequencer {
         if let Err(e) = validate_ops(&ops) {
             return reply(error(ErrorCode::InvalidTxn, &e.to_string(), Some(op_id)));
         }
-        let mut made: Vec<Target> = Vec::new();
-        for op in &ops {
-            if let Op::Create { target, merge, .. } = op {
-                let again = self.replica.contains(*target) || made.contains(target);
-                // A derived ID may be made again with `merge`. If the thing was deleted, the
-                // operation is dropped by the merge (the thing stays deleted); the rest of the
-                // transaction is ordered as usual. Any other repeat is refused.
-                if again && !*merge {
-                    return reply(error(
-                        ErrorCode::DuplicateUid,
-                        &format!("the ID {} is used", target.id),
-                        Some(op_id),
-                    ));
-                }
-                made.push(*target);
-            }
-        }
-        if self.check_entities
-            && let Err(e) = self.check_things(&ops)
-        {
-            return reply(error(ErrorCode::InvalidTxn, &e, Some(op_id)));
+        let blobs = |h: &str| self.blobs.get(h).cloned();
+        let checked = if self.check_entities {
+            check_transaction(&self.replica, &ops, &blobs)
+        } else {
+            check_duplicates(&self.replica, &ops)
+        };
+        if let Err(e) = checked {
+            let code = match e {
+                CheckError::DuplicateUid(_) => ErrorCode::DuplicateUid,
+                _ => ErrorCode::InvalidTxn,
+            };
+            return reply(error(code, &e.to_string(), Some(op_id)));
         }
         self.seq += 1;
         self.replica.apply_all(Writer { client, op: op_id }, &ops);

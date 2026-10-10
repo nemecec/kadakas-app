@@ -1651,9 +1651,9 @@ fn a_transient_error_keeps_the_transaction_and_tries_again_later() {
 fn an_unknown_error_code_does_not_stop_the_client() {
     let unknown = |op: Option<u64>| {
         let text = match op {
-            Some(n) => format!(
-                r#"{{"type":"error","code":"quota_exceeded","message":"new","op_id":{n}}}"#
-            ),
+            Some(n) => {
+                format!(r#"{{"type":"error","code":"quota_exceeded","message":"new","op_id":{n}}}"#)
+            }
             None => r#"{"type":"error","code":"quota_exceeded","message":"new"}"#.to_string(),
         };
         serde_json::from_str::<ServerMsg>(&text).unwrap()

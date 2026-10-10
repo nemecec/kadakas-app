@@ -403,7 +403,12 @@ touches, as the core checks a command: apply the operations to a copy of the pro
 touched things and run `validate_entity` on the result. The check reads the properties as the type
 of the thing, requires finite numbers in range, and runs the checks of the file format for shapes
 (arcs, thickness, viewports and so on). A thing that does not pass makes the transaction
-`invalid_txn`. An edit of a thing that is not there or is deleted is not an error: the merge drops
+`invalid_txn`. A `create` with `merge` of a living thing is checked as the current visible properties
+of the thing with the properties of the `create` written over them. The crate has these checks as
+functions, so a server need not copy them: `validate::check_transaction(replica, ops, blobs)`
+(duplicate IDs and the value checks; `CheckError` tells which code to send),
+`validate::blobs_needed(replica, ops)` (the blobs that the server must have first) and
+`validate::referenced_blobs(replica)` (the blobs to keep, section 4.7). An edit of a thing that is not there or is deleted is not an error: the merge drops
 it. This check is the first defence; the quarantine of section 3.4 is the second one.
 
 A client that cannot read a frame from the server, or gets a value that is too deep, does not try
