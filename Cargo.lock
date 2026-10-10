@@ -586,6 +586,7 @@ dependencies = [
  "cadektor-annot",
  "cadektor-api",
  "cadektor-core",
+ "cadektor-gis",
  "cadektor-print",
  "cadektor-render",
  "cadektor-sheet",

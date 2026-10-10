@@ -32,6 +32,8 @@ mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::PathPolicy;
 #[cfg(not(target_arch = "wasm32"))]
+pub use cadektor_gis::http::UrlPolicy;
+#[cfg(not(target_arch = "wasm32"))]
 pub use gis_api::{GisState, JobInfo};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod io_tests;

@@ -27,6 +27,8 @@ pub enum Tool {
     Plant,
     LandscapeArea,
     Hardscape,
+    /// Massing models: a footprint with a height or floors and a roof.
+    Massing,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
     /// Dimensions: one tool with modes (see `DimToolMode`).
@@ -69,7 +71,7 @@ impl Tool {
         Tool::Text,
     ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
-    pub const SITE: [Tool; 1] = [Tool::SiteModifier];
+    pub const SITE: [Tool; 2] = [Tool::SiteModifier, Tool::Massing];
     pub const ANNOTATION: [Tool; 6] = [
         Tool::Dimension,
         Tool::Callout,
@@ -90,6 +92,7 @@ impl Tool {
             Tool::Plant => "Plant",
             Tool::LandscapeArea => "Landscape Area",
             Tool::Hardscape => "Hardscape",
+            Tool::Massing => "Massing Model",
             Tool::SiteModifier => "Site Modifiers",
             Tool::Dimension => "Dimension",
             Tool::Callout => "Callout",
@@ -108,7 +111,11 @@ pub const DEFAULT_ARC_RADIUS: f64 = 500.0;
 pub fn has_vertex_modes(tool: Tool) -> bool {
     matches!(
         tool,
-        Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier
+        Tool::Polyline
+            | Tool::LandscapeArea
+            | Tool::Hardscape
+            | Tool::SiteModifier
+            | Tool::Massing
     )
 }
 
@@ -211,6 +218,8 @@ pub struct ToolSettings {
     pub pad_direction_deg: f64,
     /// Style, path and width options of the Hardscape and Landscape Area tools.
     pub areas: crate::area_ui::AreaToolSettings,
+    /// Height, floors and roof of the Massing Model tool.
+    pub massing: crate::gis_ui::MassingToolSettings,
     /// Style and options of the annotation tools.
     pub annot: AnnotSettings,
 }
@@ -233,6 +242,7 @@ impl Default for ToolSettings {
             pad_end_elevation: None,
             pad_direction_deg: 0.0,
             areas: Default::default(),
+            massing: Default::default(),
             annot: Default::default(),
         }
     }
@@ -448,6 +458,7 @@ impl ToolMachine {
                 thickness: None,
                 elevation: None,
             },
+            Tool::Massing if pts.len() >= 3 => Shape::Massing(Box::new(s.massing.massing(pts))),
             Tool::SiteModifier if pts.len() >= 3 && s.modifier_mode == ModifierMode::Pad => {
                 let flat = cadektor_core::site::boundary_points(&pts);
                 let slope = s.pad_end_elevation.and_then(|end| {
@@ -490,7 +501,11 @@ impl ToolMachine {
             | Tool::NorthArrow
             | Tool::ScaleBar
             | Tool::RevisionCloud => self.handle_annot(input, cx),
-            Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier => {
+            Tool::Polyline
+            | Tool::LandscapeArea
+            | Tool::Hardscape
+            | Tool::SiteModifier
+            | Tool::Massing => {
                 match input {
                     Input::Press { p, .. } => {
                         let s = cx.settings;
@@ -754,7 +769,14 @@ impl ToolMachine {
             }
             (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",
             (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
-            (Tool::Polyline | Tool::LandscapeArea | Tool::Hardscape | Tool::SiteModifier, _) => {
+            (
+                Tool::Polyline
+                | Tool::LandscapeArea
+                | Tool::Hardscape
+                | Tool::SiteModifier
+                | Tool::Massing,
+                _,
+            ) => {
                 "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
             }
             (
@@ -1482,5 +1504,44 @@ mod tests {
         let f = Fixture::new(Tool::Polyline);
         assert!(f.m.hint().contains("vertex mode"));
         assert!(f.m.hint().contains("U cycles"));
+    }
+
+    #[test]
+    fn massing_tool_draws_a_building_block() {
+        let mut f = Fixture::new(Tool::Massing);
+        f.settings.massing.by_floors = true;
+        f.settings.massing.floors = 3;
+        f.settings.massing.floor_height = 2800.0;
+        f.settings.massing.roof = cadektor_core::massing::RoofStyle::Gable;
+        f.settings.vertex_mode = VertexMode::Arc;
+        for (x, y) in [(0.0, 0.0), (12000.0, 0.0), (12000.0, 8000.0), (0.0, 8000.0)] {
+            f.click(x, y);
+        }
+        f.send(Input::Enter);
+        let o = f.session.editor.doc().objects.values().next().unwrap().clone();
+        let Shape::Massing(m) = &o.shape else { panic!("{:?}", o.shape) };
+        assert_eq!((m.floors, m.floor_height, m.roof), (Some(3), 2800.0, cadektor_core::massing::RoofStyle::Gable));
+        assert_eq!(m.footprint.len(), 4);
+        assert!(m.footprint.iter().any(|v| matches!(v.kind, VertexKind::Arc { .. })), "vertex modes work");
+        assert_eq!(m.eave_height(), 8400.0);
+        // Two points are not a building.
+        let mut g = Fixture::new(Tool::Massing);
+        g.click(0.0, 0.0);
+        g.click(5000.0, 0.0);
+        g.send(Input::Enter);
+        assert!(g.session.editor.doc().objects.is_empty());
+        assert!(has_vertex_modes(Tool::Massing));
+        assert_eq!(Tool::Massing.name(), "Massing Model");
+        assert!(Tool::SITE.contains(&Tool::Massing));
+        // A height instead of floors.
+        let mut h = Fixture::new(Tool::Massing);
+        h.settings.massing.by_floors = false;
+        h.settings.massing.height = 7000.0;
+        for (x, y) in [(0.0, 0.0), (5000.0, 0.0), (5000.0, 5000.0)] {
+            h.click(x, y);
+        }
+        h.send(Input::Enter);
+        let Shape::Massing(m) = &h.session.editor.doc().objects.values().next().unwrap().shape else { panic!() };
+        assert_eq!((m.floors, m.height), (None, 7000.0));
     }
 }

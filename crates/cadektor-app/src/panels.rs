@@ -28,6 +28,10 @@ pub enum MenuAction {
     ExportPdf,
     Import,
     Export,
+    /// File > Map Sources: WMS, WMTS, WFS and geoimages.
+    MapSources,
+    /// File > Change CRS: convert the document.
+    ChangeCrs,
     Undo,
     Redo,
     Delete,
@@ -87,6 +91,9 @@ pub fn menu_bar(
                 ui.separator();
                 item(ui, "Import...", true, Import, &mut out);
                 item(ui, "Export...", true, Export, &mut out);
+                ui.separator();
+                item(ui, "Map Sources...", true, MapSources, &mut out);
+                item(ui, "Change CRS...", true, ChangeCrs, &mut out);
             }
         });
         ui.menu_button("Edit", |ui| {
@@ -186,6 +193,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::ExportSvg
         | MenuAction::Import
         | MenuAction::Export
+        | MenuAction::MapSources
+        | MenuAction::ChangeCrs
         | MenuAction::CreateSiteModel
         | MenuAction::UpdateSiteModel => return None,
     })
@@ -301,10 +310,23 @@ pub fn data_bar(
     cursor: DVec2,
     snap: Option<SnapResult>,
     snap_cfg: SnapConfig,
+    readout: Option<&str>,
+    lonlat: &mut bool,
 ) -> bool {
     let mut commit = false;
     ui.horizontal_wrapped(|ui| {
         ui.monospace(format!("X {:>10.1}  Y {:>10.1} mm", cursor.x, cursor.y));
+        if let Some(t) = readout {
+            ui.separator();
+            let label = egui::Label::new(egui::RichText::new(t).monospace()).sense(egui::Sense::click());
+            if ui
+                .add(label)
+                .on_hover_text("Map position of the cursor. Click to switch between N/E and lat/lon.")
+                .clicked()
+            {
+                *lonlat = !*lonlat;
+            }
+        }
         ui.separator();
         ui.label(format!("Tool: {}", m.tool().name()));
         ui.separator();
@@ -343,6 +365,7 @@ pub fn data_bar(
                 ui.label("Material");
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
             }
+            Tool::Massing => s.massing.bar(ui),
             Tool::SiteModifier => {
                 for mode in crate::tools::ModifierMode::ALL {
                     ui.selectable_value(&mut s.modifier_mode, mode, mode.name());

@@ -144,6 +144,7 @@ actions! {
     ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
     ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
+    ToolMassing => "tool.massing", "Massing Model tool", ["Alt+Shift+M"], true;
     ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
     ToolAngularDim => "tool.angular_dimension", "Angular Dimension tool", ["."], true;
     ToolRadialDim => "tool.radial_dimension", "Radial Dimension tool", [","], true;
@@ -223,6 +224,7 @@ impl Action {
             Action::ToolLandscapeArea => Tool::LandscapeArea,
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
+            Action::ToolMassing => Tool::Massing,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
                 Tool::Dimension
             }
@@ -247,6 +249,7 @@ impl Action {
             Tool::LandscapeArea => Action::ToolLandscapeArea,
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
+            Tool::Massing => Action::ToolMassing,
             Tool::Dimension => Action::ToolDimension,
             Tool::Callout => Action::ToolCallout,
             Tool::DataTag => Action::ToolDataTag,

@@ -20,6 +20,7 @@ serde_json = "1.0.151"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.15"
+cadektor-gis = { version = "0.1.0", path = "../cadektor-gis" }
 
 [dev-dependencies]
 pollster = "1.0.1"

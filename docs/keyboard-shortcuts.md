@@ -83,6 +83,7 @@ Tool keys switch the active tool.
 | Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
+| Massing Model tool (Cadektor) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
 | Data Tag tool (Cadektor) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
 | North Arrow tool (Cadektor) (`tool.north_arrow`) | none | Alt+Shift+N (no VW default) | done |
 | Scale Bar tool (Cadektor) (`tool.scale_bar`) | none | Alt+Shift+B (no VW default) | done |

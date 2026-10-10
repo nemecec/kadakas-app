@@ -95,6 +95,11 @@ struct RemoteArgs {
     /// The folder of the open document is always allowed. Not used with --connect: the app decides.
     #[arg(long = "allow-dir", value_name = "DIR")]
     allow_dir: Vec<PathBuf>,
+    /// A web address that agents may fetch for map services (WMS, WMTS, WFS): a host name
+    /// (`maps.example.org`), a pattern (`*.example.org`) or an address prefix
+    /// (`https://maps.example.org/wms/`). Repeat for more. Default: none, so agents cannot use the network.
+    #[arg(long = "allow-url", value_name = "URL")]
+    allow_url: Vec<String>,
 }
 
 /// Where requests go: a local document, or a running app over TCP.
@@ -118,6 +123,7 @@ impl Backend {
             remote.allow_dir
         };
         session.paths = cadektor_api::PathPolicy::restricted(dirs);
+        session.gis.urls = cadektor_api::UrlPolicy::allow_list(remote.allow_url);
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
             session.doc_dir = doc_dir_of(&f);

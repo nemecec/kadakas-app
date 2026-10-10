@@ -173,3 +173,129 @@ pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
     }
     commit
 }
+
+/// Settings of the Massing Model tool.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MassingToolSettings {
+    /// True: the height is floors times the floor height. False: an eave height.
+    pub by_floors: bool,
+    pub height: f64,
+    pub floors: u32,
+    pub floor_height: f64,
+    pub roof: RoofStyle,
+    pub pitch_deg: f64,
+}
+
+impl Default for MassingToolSettings {
+    fn default() -> Self {
+        MassingToolSettings {
+            by_floors: true,
+            height: cadektor_core::massing::DEFAULT_HEIGHT,
+            floors: 2,
+            floor_height: cadektor_core::massing::DEFAULT_FLOOR_HEIGHT,
+            roof: RoofStyle::Flat,
+            pitch_deg: cadektor_core::massing::DEFAULT_PITCH_DEG,
+        }
+    }
+}
+
+impl MassingToolSettings {
+    /// The massing model for a footprint drawn with the tool.
+    pub fn massing(&self, footprint: Vec<cadektor_core::curve::Vertex>) -> Massing {
+        let mut m = Massing::new(footprint, self.height.max(1.0));
+        m.floors = self.by_floors.then_some(self.floors.max(1));
+        m.floor_height = self.floor_height.max(1.0);
+        m.roof = self.roof;
+        m.pitch_deg = self.pitch_deg.clamp(0.0, cadektor_core::massing::MAX_PITCH_DEG);
+        m
+    }
+
+    /// The options in the Data bar.
+    pub fn bar(&mut self, ui: &mut Ui) {
+        ui.radio_value(&mut self.by_floors, false, "Height");
+        ui.radio_value(&mut self.by_floors, true, "Floors");
+        if self.by_floors {
+            let mut n = self.floors as i64;
+            ui.add(DragValue::new(&mut n).range(1..=300));
+            self.floors = n.clamp(1, 300) as u32;
+            ui.label("x");
+            ui.add(DragValue::new(&mut self.floor_height).speed(50.0).range(500.0..=20000.0).suffix(" mm"));
+        } else {
+            ui.add(DragValue::new(&mut self.height).speed(50.0).range(100.0..=500000.0).suffix(" mm"));
+        }
+        egui::ComboBox::from_id_salt("massing_tool_roof")
+            .selected_text(format!("Roof: {}", self.roof.name()))
+            .show_ui(ui, |ui| {
+                for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
+                    ui.selectable_value(&mut self.roof, r, r.name());
+                }
+            });
+        if self.roof != RoofStyle::Flat {
+            ui.add(DragValue::new(&mut self.pitch_deg).speed(1.0).range(1.0..=80.0).suffix("\u{b0}"));
+        }
+    }
+}
+
+/// The coordinate readout of the Data bar: prepared conversions that follow the georeference.
+#[derive(Default)]
+pub struct ReadoutState {
+    reader: Option<(cadektor_core::georef::Georeference, cadektor_gis::coords::Reader)>,
+    /// Show longitude and latitude instead of northing and easting.
+    pub lonlat: bool,
+}
+
+impl ReadoutState {
+    /// The text for the cursor position (model mm), or `None` if the document has no CRS.
+    pub fn text(&mut self, georef: Option<&cadektor_core::georef::Georeference>, cursor: DVec2) -> Option<String> {
+        let g = georef?;
+        if self.reader.as_ref().is_none_or(|(old, _)| old != g) {
+            self.reader = cadektor_gis::coords::Reader::new(g).map(|r| (g.clone(), r));
+        }
+        let (_, reader) = self.reader.as_ref()?;
+        reader.at(cursor).map(|r| r.text(self.lonlat))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadektor_core::curve::corners;
+    use cadektor_core::georef::Georeference;
+
+    #[test]
+    fn tool_settings_make_a_valid_model() {
+        let ring = corners(&[DVec2::ZERO, DVec2::new(5000.0, 0.0), DVec2::new(5000.0, 4000.0)]);
+        let mut s = MassingToolSettings::default();
+        let m = s.massing(ring.clone());
+        assert_eq!((m.floors, m.roof), (Some(2), RoofStyle::Flat));
+        assert!(m.problem().is_none());
+        s.by_floors = false;
+        s.roof = RoofStyle::Hip;
+        s.pitch_deg = 200.0;
+        s.height = 0.0;
+        let m = s.massing(ring);
+        assert_eq!((m.floors, m.pitch_deg), (None, cadektor_core::massing::MAX_PITCH_DEG));
+        assert!(m.height >= 1.0);
+    }
+
+    #[test]
+    fn the_readout_follows_the_georeference() {
+        let mut r = ReadoutState::default();
+        assert!(r.text(None, DVec2::ZERO).is_none());
+        let g = Georeference {
+            crs: "EPSG:3067".into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
+        assert_eq!(r.text(Some(&g), DVec2::new(1000.0, 2000.0)).unwrap(), "N 6672002.000  E 385001.000");
+        r.lonlat = true;
+        assert!(r.text(Some(&g), DVec2::ZERO).unwrap().starts_with("lat 60."));
+        // A new georeference is picked up.
+        let g2 = Georeference { origin: DVec2::new(386_000.0, 6_672_000.0), ..g.clone() };
+        r.lonlat = false;
+        assert_eq!(r.text(Some(&g2), DVec2::ZERO).unwrap(), "N 6672000.000  E 386000.000");
+        let none = Georeference { crs: String::new(), ..g };
+        assert!(r.text(Some(&none), DVec2::ZERO).is_none());
+    }
+}
