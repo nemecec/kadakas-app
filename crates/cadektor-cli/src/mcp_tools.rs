@@ -35,7 +35,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "document",
-        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility and the document files.",
+        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility, the document files and the change events (`events.poll`; MCP cannot receive the pushed messages).",
         prefixes: &[
             "execute",
             "document",
@@ -43,6 +43,7 @@ pub const DOMAINS: &[Domain] = &[
             "saved_view",
             "file",
             "visibility",
+            "events",
         ],
         read_only: false,
         open_world: false,

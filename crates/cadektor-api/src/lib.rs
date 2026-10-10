@@ -172,18 +172,6 @@ pub const METHODS: &[(&str, &str)] = &[
         "document.load",
         "Replace the document. params: {document}. Clears history.",
     ),
-    (
-        "events.subscribe",
-        "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
-    ),
-    (
-        "events.unsubscribe",
-        "Stop the change events. Returns {done}.",
-    ),
-    (
-        "events.poll",
-        "Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.",
-    ),
     ("objects.list", "Objects. params: {layer?, class?, kind?}."),
     ("objects.get", "One object. params: {id}."),
     ("selection.get", "Selected object IDs."),
@@ -612,6 +600,18 @@ pub const METHODS: &[(&str, &str)] = &[
     annotation_api::ANNOTATION_EVALUATE,
     annotation_api::ANNOTATION_APPLY_TEXT_STYLE,
     annotation_api::REVISION_LIST,
+    (
+        "events.subscribe",
+        "Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: \"events.change\", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.",
+    ),
+    (
+        "events.unsubscribe",
+        "Stop the change events. Returns {done}.",
+    ),
+    (
+        "events.poll",
+        "Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.",
+    ),
 ];
 
 impl Default for Session {

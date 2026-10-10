@@ -62,24 +62,6 @@ class Api:
         JSON-RPC method ``document.load``."""
         return self._call("document.load", params or None)
 
-    def events_subscribe(self, **params: Any) -> Any:
-        """Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: "events.change", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.
-
-        JSON-RPC method ``events.subscribe``."""
-        return self._call("events.subscribe", params or None)
-
-    def events_unsubscribe(self, **params: Any) -> Any:
-        """Stop the change events. Returns {done}.
-
-        JSON-RPC method ``events.unsubscribe``."""
-        return self._call("events.unsubscribe", params or None)
-
-    def events_poll(self, **params: Any) -> Any:
-        """Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.
-
-        JSON-RPC method ``events.poll``."""
-        return self._call("events.poll", params or None)
-
     def objects_list(self, **params: Any) -> Any:
         """Objects. params: {layer?, class?, kind?}.
 
@@ -1970,6 +1952,24 @@ class Api:
         JSON-RPC method ``revision.list``."""
         return self._call("revision.list", params or None)
 
+    def events_subscribe(self, **params: Any) -> Any:
+        """Get change events. params: {kinds?: [objects, layers, classes, resources, document]}. After each change the server sends a notification (no id) {method: "events.change", params: {revision, op, origin, added, changed, removed, document}}; added, changed and removed list IDs by kind. A replaced document gives events.reset {revision}. Over stdio and TCP only (not MCP). Over stdio a notification comes before the reply of the call that caused it; the app also sends the changes of the user at any time. Returns {revision, kinds}.
+
+        JSON-RPC method ``events.subscribe``."""
+        return self._call("events.subscribe", params or None)
+
+    def events_unsubscribe(self, **params: Any) -> Any:
+        """Stop the change events. Returns {done}.
+
+        JSON-RPC method ``events.unsubscribe``."""
+        return self._call("events.unsubscribe", params or None)
+
+    def events_poll(self, **params: Any) -> Any:
+        """Change sets after a revision. params: {since_revision, kinds?}. Returns {revision, truncated, changes}. If truncated is true, older changes were dropped: read the document again.
+
+        JSON-RPC method ``events.poll``."""
+        return self._call("events.poll", params or None)
+
 
 METHOD_NAMES: tuple[str, ...] = (
     "describe",
@@ -1979,9 +1979,6 @@ METHOD_NAMES: tuple[str, ...] = (
     "document.summary",
     "document.get",
     "document.load",
-    "events.subscribe",
-    "events.unsubscribe",
-    "events.poll",
     "objects.list",
     "objects.get",
     "selection.get",
@@ -2297,6 +2294,9 @@ METHOD_NAMES: tuple[str, ...] = (
     "annotation.evaluate",
     "annotation.apply_text_style",
     "revision.list",
+    "events.subscribe",
+    "events.unsubscribe",
+    "events.poll",
 )
 
 COMMAND_OPS_EXAMPLED: tuple[str, ...] = ('add_layer', 'add_object', 'add_resource', 'add_sheet', 'add_worksheet_table', 'attach_record', 'batch', 'detach_record', 'move_objects', 'restore_view', 'set_project', 'set_record_fields', 'set_vertex', 'set_worksheet_table')

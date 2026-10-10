@@ -22,6 +22,7 @@ impl PrivateTempDir {
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
+            #[allow(unused_mut)] // only unix sets the mode
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {

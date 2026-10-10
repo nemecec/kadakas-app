@@ -65,6 +65,10 @@ pub enum Reply {
 /// this is full, so a slow client cannot hold memory or the UI thread.
 const OUTBOX_LINES: usize = 4096;
 
+/// A request handler for [`AgentServer::poll_ext`]: the line, where to send the answer, and the
+/// connection that sent it.
+pub type Handler<'a> = dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply + 'a;
+
 /// The writers of the open connections, by connection ID.
 type Outboxes = Arc<Mutex<HashMap<u64, SyncSender<String>>>>;
 
@@ -146,18 +150,11 @@ impl AgentServer {
     /// Like `poll`, for a handler that can answer later: it gets the sender of the reply and
     /// returns `Reply::Later` to keep it. The client waits (up to `Limits::reply_timeout`) until
     /// the handler sends the answer line, or `None` for no answer.
-    pub fn poll_ext(
-        &self,
-        handle: &mut dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply,
-    ) -> usize {
+    pub fn poll_ext(&self, handle: &mut Handler) -> usize {
         self.poll_ext_for(FRAME_BUDGET, handle)
     }
 
-    pub fn poll_ext_for(
-        &self,
-        budget: Duration,
-        handle: &mut dyn FnMut(&str, &Sender<Option<String>>, u64) -> Reply,
-    ) -> usize {
+    pub fn poll_ext_for(&self, budget: Duration, handle: &mut Handler) -> usize {
         let start = Instant::now();
         let mut n = 0;
         let mut next = self
@@ -754,8 +751,7 @@ mod tests {
             let mut c = Client::connect(addr);
             c.auth(&token).unwrap();
             thread::sleep(Duration::from_millis(150));
-            let r = c.call(1, "execute");
-            r
+            c.call(1, "execute")
         });
         let mut session = Session::with_sequential_ids();
         let mut sent = false;
