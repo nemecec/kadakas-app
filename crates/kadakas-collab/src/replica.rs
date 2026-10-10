@@ -290,12 +290,33 @@ impl Replica {
     pub fn apply_inverse(&mut self, writer: Writer, op: &Op) -> (Outcome, Vec<Op>) {
         let drop = |d| (Outcome::Dropped(d), Vec::new());
         match op {
-            Op::Create { target, props } => {
+            Op::Create {
+                target,
+                props,
+                merge,
+            } => {
                 if target.kind == Kind::Document || props.contains_key("id") {
                     return drop(Drop::BadOp);
                 }
-                if self.things.contains_key(target) {
-                    return drop(Drop::DuplicateUid);
+                if let Some(e) = self.things.get_mut(target) {
+                    if !*merge {
+                        return drop(Drop::DuplicateUid);
+                    }
+                    if e.is_deleted() {
+                        return drop(Drop::TargetDeleted);
+                    }
+                    // The same thing, made again: the properties are written one by one.
+                    for (k, v) in props {
+                        e.props.insert(
+                            k.clone(),
+                            Slot {
+                                value: v.clone(),
+                                writer,
+                                removed: false,
+                            },
+                        );
+                    }
+                    return (Outcome::Applied, Vec::new());
                 }
                 let mut e = Entity::new(writer);
                 for (k, v) in props {
@@ -423,6 +444,7 @@ mod tests {
         Op::Create {
             target: obj(n),
             props: [("shape".to_string(), json!(shape))].into(),
+            merge: false,
         }
     }
 
@@ -445,6 +467,42 @@ mod tests {
         assert!(same_json(&json!("x"), &json!("x")));
         assert!(!same_json(&json!(1), &json!("1")));
         assert!(same_json(&json!(u64::MAX), &json!(u64::MAX)));
+    }
+
+    #[test]
+    fn a_merge_create_of_a_derived_id_writes_the_properties() {
+        let t = Target::new(Kind::Object, Uid::derive(Uid::from_num(1), 2, 0));
+        let make = |v: i64, merge| Op::Create {
+            target: t,
+            props: [("shape".to_string(), json!(v))].into(),
+            merge,
+        };
+        let mut r = Replica::new();
+        assert!(r.apply(w(1, 1), &make(1, true)).is_applied());
+        // The second maker writes over the first, property by property.
+        let (out, inv) = r.apply_inverse(w(2, 1), &make(2, true));
+        assert!(out.is_applied() && inv.is_empty());
+        let e = r.alive(t).unwrap();
+        assert_eq!(e.get("shape"), Some(&json!(2)));
+        assert_eq!(e.props["shape"].writer, w(2, 1));
+        assert_eq!(e.created_by, w(1, 1));
+        // Without the flag a repeat is refused; a deleted thing stays deleted.
+        assert_eq!(
+            r.apply(w(3, 1), &make(3, false)),
+            Outcome::Dropped(Drop::DuplicateUid)
+        );
+        r.apply(w(3, 2), &Op::Delete { target: t });
+        assert_eq!(
+            r.apply(w(4, 1), &make(4, true)),
+            Outcome::Dropped(Drop::TargetDeleted)
+        );
+        let text = serde_json::to_string(&make(1, true)).unwrap();
+        assert!(text.contains("merge"));
+        assert!(
+            !serde_json::to_string(&make(1, false))
+                .unwrap()
+                .contains("merge")
+        );
     }
 
     #[test]
@@ -539,11 +597,13 @@ mod tests {
         let doc = Op::Create {
             target: Target::DOCUMENT,
             props: BTreeMap::new(),
+            merge: false,
         };
         assert_eq!(r.apply(w(1, 1), &doc), Outcome::Dropped(Drop::BadOp));
         let with_id = Op::Create {
             target: obj(1),
             props: [("id".to_string(), json!(1))].into(),
+            merge: false,
         };
         assert_eq!(r.apply(w(1, 1), &with_id), Outcome::Dropped(Drop::BadOp));
         r.apply(w(1, 1), &create(1, 0));
@@ -596,6 +656,7 @@ mod tests {
             &Op::Create {
                 target: layer,
                 props: BTreeMap::new(),
+                merge: false,
             },
         );
         assert!(r.apply(w(1, 2), &Op::Delete { target: layer }).is_applied());
@@ -698,6 +759,7 @@ mod tests {
             &Op::Create {
                 target: layer,
                 props: BTreeMap::new(),
+                merge: false,
             },
         );
         assert_eq!(r.alive_of(Kind::Object).count(), 1);

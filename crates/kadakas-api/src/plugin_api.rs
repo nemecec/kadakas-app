@@ -755,6 +755,7 @@ fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (
                     shape: g.shape.clone(),
                     class: job.class,
                     attrs: g.attrs.clone(),
+                    id: None,
                 })
                 .collect();
             // New members first: a group that loses its last member would go.

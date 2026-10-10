@@ -103,6 +103,33 @@ impl Uid {
         Uid(ms << 80 | 0x7 << 76 | a << 64 | 0b10 << 62 | b)
     }
 
+    /// An ID that follows from a parent ID, a generation and an index: the same input always gives
+    /// the same ID, on every computer. Objects that a program makes again and again from one
+    /// source (the shapes of a plug-in object) use it, so two users who make them at the same time
+    /// make the same IDs. The version nibble is 8 (UUID "custom"), so these IDs are easy to tell
+    /// from the version 7 IDs of everything else ([`Uid::is_derived`]). The mix is two chains of
+    /// splitmix64; it is not a secret and not a hash for security.
+    pub fn derive(parent: Uid, generation: u64, index: u64) -> Uid {
+        let p = parent.0;
+        let words = [(p >> 64) as u64, p as u64, generation, index];
+        let mut h = [0x6b61_6461_6b61_7321u64, 0x636f_6c6c_6162_6f72u64];
+        for w in words {
+            for (i, x) in h.iter_mut().enumerate() {
+                *x = mix(*x ^ w.rotate_left(17 * (i as u32 + 1)));
+                *x = mix((*x).wrapping_add(w));
+            }
+        }
+        let v = (u128::from(h[0]) << 64) | u128::from(h[1]);
+        // Version 8 and the variant bits 10.
+        let v = (v & !(0xf << 76) & !(0b11 << 62)) | (0x8 << 76) | (0b10 << 62);
+        Uid(v)
+    }
+
+    /// True for an ID from [`Uid::derive`].
+    pub const fn is_derived(self) -> bool {
+        self.version() == 8
+    }
+
     /// Reads the canonical text form (case does not matter).
     pub fn parse(s: &str) -> Option<Uid> {
         let b = s.as_bytes();

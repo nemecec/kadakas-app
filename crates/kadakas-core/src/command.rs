@@ -449,6 +449,12 @@ pub enum Command {
         class: Option<ClassId>,
         #[serde(default)]
         attrs: Attributes,
+        /// The ID of the new object. Without one a new ID is made. A program that makes the same
+        /// objects again and again (the shapes of a plug-in object) gives IDs that follow from the
+        /// source (`Uid::derive`), so two users who do it at the same time make the same IDs. It
+        /// fails if an object with this ID exists.
+        #[serde(default)]
+        id: Option<ObjectId>,
     },
     /// Move objects into a group (`parent`) or out of all groups (no parent). The objects must be on the
     /// layer of the group. A group that loses its last member goes.
@@ -868,6 +874,33 @@ impl<'a> Tx<'a> {
             }
             Some(_) => Ok(()),
         }
+    }
+
+    /// Gives an object that this command made another ID.
+    fn rename_new(&mut self, old: ObjectId, new: ObjectId) -> Result<(), CommandError> {
+        if old == new {
+            return Ok(());
+        }
+        if self.doc.objects.contains_key(&new) {
+            return Err(CommandError::Invalid(format!(
+                "an object with the ID {new} exists"
+            )));
+        }
+        let at = self
+            .doc
+            .objects
+            .get_index_of(&old)
+            .expect("made by this command");
+        let (_, mut o) = self.doc.objects.shift_remove_index(at).expect("checked");
+        o.id = new;
+        self.doc.objects.shift_insert(at, new, o);
+        for id in self.added.iter_mut().filter(|i| **i == old) {
+            *id = new;
+        }
+        if self.added_set.remove(&old) {
+            self.added_set.insert(new);
+        }
+        Ok(())
     }
 
     fn alloc(&mut self) -> Result<Uid, CommandError> {

@@ -175,6 +175,7 @@ mod tests {
             &Op::Create {
                 target: obj(1),
                 props: [("a".to_string(), json!(1))].into(),
+                merge: false,
             },
         );
         r
@@ -266,6 +267,7 @@ mod tests {
         let create = Op::Create {
             target: obj(9),
             props: Default::default(),
+            merge: false,
         };
         assert_eq!(filter_inverse(&r, me, &[create]).1.len(), 1);
     }

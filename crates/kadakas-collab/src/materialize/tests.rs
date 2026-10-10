@@ -31,6 +31,7 @@ fn make(r: &mut Replica, who: Writer, kind: Kind, id: u64, props: Value) {
     let op = Op::Create {
         target: Target::new(kind, n(id)),
         props,
+        merge: false,
     };
     assert!(r.apply(who, &op).is_applied(), "create {id}");
 }

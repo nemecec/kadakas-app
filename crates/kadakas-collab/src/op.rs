@@ -18,6 +18,10 @@ use kadakas_core::uid::Uid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// The most operations in one transaction.
 pub const MAX_OPS: usize = 20_000;
 /// The longest property name.
@@ -117,6 +121,13 @@ pub enum Op {
     Create {
         target: Target,
         props: BTreeMap<String, Value>,
+        /// For things with a derived ID (`Uid::derive`), which a program makes again and again
+        /// from one source: if the thing exists already, the properties are written as `set`
+        /// operations (last writer wins) instead of the create being refused. Two users who make
+        /// the same thing at the same time then end with one thing, with the properties of the
+        /// writer who came last. For all other IDs the flag is false and a repeat is refused.
+        #[serde(default, skip_serializing_if = "is_false")]
+        merge: bool,
     },
     /// Deletes a thing. Edits that come after it are dropped.
     Delete { target: Target },
@@ -270,7 +281,7 @@ pub fn validate_ops(ops: &[Op]) -> Result<(), InvalidTxn> {
     let mut total = 0;
     for op in ops {
         match op {
-            Op::Create { target, props } => {
+            Op::Create { target, props, .. } => {
                 if target.kind == Kind::Document {
                     return Err(InvalidTxn::CreateDocument);
                 }
@@ -363,16 +374,19 @@ mod tests {
         let bad = Op::Create {
             target: t(1),
             props: [("".to_string(), json!(1))].into(),
+            merge: false,
         };
         assert!(matches!(validate_ops(&[bad]), Err(InvalidTxn::BadProp(_))));
         let doc = Op::Create {
             target: Target::DOCUMENT,
             props: BTreeMap::new(),
+            merge: false,
         };
         assert_eq!(validate_ops(&[doc]), Err(InvalidTxn::CreateDocument));
         let ok = Op::Create {
             target: t(1),
             props: [("shape".to_string(), json!({}))].into(),
+            merge: false,
         };
         assert_eq!(validate_ops(&[ok]), Ok(()));
         // Depth and size.

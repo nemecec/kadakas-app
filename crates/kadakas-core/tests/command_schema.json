@@ -2613,6 +2613,18 @@
           ],
           "default": null
         },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The ID of the new object. Without one a new ID is made. A program that makes the same\nobjects again and again (the shapes of a plug-in object) gives IDs that follow from the\nsource (`Uid::derive`), so two users who do it at the same time make the same IDs. It\nfails if an object with this ID exists."
+        },
         "op": {
           "const": "add_object_in",
           "type": "string"

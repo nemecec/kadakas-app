@@ -426,6 +426,7 @@ fn a_thing_that_cannot_be_built_is_quarantined_and_reported() {
     let bad = kadakas_collab::Op::Create {
         target: kadakas_collab::Target::new(kadakas_collab::Kind::Object, Uid::from_num(99)),
         props: [("shape".to_string(), json!({"kind": "rect", "min": "x"}))].into(),
+        merge: false,
     };
     link.client.edit(vec![bad]).unwrap();
     for t in 5..9 {
@@ -686,6 +687,94 @@ fn plug_in_objects_and_their_regeneration_flow_through_collab() {
     call(&mut b, "collab.sync", json!({"now_ms": 2_100}));
     assert!(same(&a, &b));
     assert_eq!(a.editor.doc().objects.len(), b.editor.doc().objects.len());
+}
+
+#[test]
+fn two_users_who_regenerate_one_plug_in_object_at_once_do_not_double_it() {
+    let (_hub, mut a, mut b) = pair();
+    let planter = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
+    );
+    for s in [&mut a, &mut b] {
+        s.scripting.allow_agent_scripts = true;
+        call(s, "plugins.install", json!({"path": planter}));
+    }
+    let placed = call(
+        &mut a,
+        "plugins.place",
+        json!({"plugin": "org.kadakas.raised-planter", "min": [0, 0], "max": [2000, 800]}),
+    );
+    let id = placed["id"].as_str().unwrap().to_string();
+    let count_after_place = a.editor.doc().objects.len();
+    for t in 0..2 {
+        call(&mut a, "collab.sync", json!({"now_ms": 2_000 + t}));
+        call(&mut b, "collab.sync", json!({"now_ms": 2_000 + t}));
+    }
+    assert!(same(&a, &b));
+    let sync_all = |a: &mut Session, b: &mut Session, from: u64| {
+        for t in 0..4 {
+            call(a, "collab.sync", json!({"now_ms": from + t}));
+            call(b, "collab.sync", json!({"now_ms": from + t}));
+        }
+    };
+
+    // Both regenerate with the same parameters at the same time: the same IDs, one set of shapes.
+    for s in [&mut a, &mut b] {
+        call(
+            s,
+            "plugins.set_params",
+            json!({"id": id, "params": {"wall": 150.0}}),
+        );
+    }
+    sync_all(&mut a, &mut b, 3_000);
+    assert!(same(&a, &b));
+    assert_eq!(a.editor.doc().objects.len(), count_after_place);
+    assert_eq!(b.editor.doc().objects.len(), count_after_place);
+
+    // Different parameters at the same time: the last writer wins on the parameters, and the
+    // shapes belong to the same regeneration. Nothing doubles.
+    call(
+        &mut a,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 120.0}}),
+    );
+    call(
+        &mut b,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 180.0}}),
+    );
+    sync_all(&mut a, &mut b, 4_000);
+    assert!(same(&a, &b));
+    assert_eq!(a.editor.doc().objects.len(), count_after_place);
+    let oid = ObjectId(Uid::parse(&id).unwrap());
+    let field = |s: &mut Session, f: &str| -> Value {
+        let o = s.editor.doc().object(oid).unwrap();
+        let data = o.data.values().find(|v| v.get("plugin").is_some()).unwrap();
+        if f == "wall" {
+            data["params"]["wall"].clone()
+        } else {
+            data[f].clone()
+        }
+    };
+    let wall = |s: &mut Session| field(s, "wall");
+    assert_eq!(wall(&mut a), wall(&mut b));
+    assert_eq!(
+        field(&mut a, "generation"),
+        json!(3),
+        "both made generation 3 from 2"
+    );
+    assert_eq!(field(&mut b, "generation"), json!(3));
+    // A further regeneration from either side goes on from the winning generation.
+    call(
+        &mut a,
+        "plugins.set_params",
+        json!({"id": id, "params": {"wall": 90.0}}),
+    );
+    sync_all(&mut a, &mut b, 5_000);
+    assert!(same(&a, &b));
+    assert_eq!(b.editor.doc().objects.len(), count_after_place);
+    assert_eq!(wall(&mut b), json!(90.0));
 }
 
 // ----- real commands on two sessions -----

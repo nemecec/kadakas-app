@@ -1358,6 +1358,7 @@ impl Session {
                 shape: shape.clone(),
                 class: *class,
                 attrs: attrs.clone(),
+                id: None,
             },
             _ => cmd,
         }

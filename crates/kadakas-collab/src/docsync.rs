@@ -257,6 +257,7 @@ pub fn diff_replicas(base: &Replica, target: &Replica) -> Vec<Op> {
             ops.push(Op::Create {
                 target: *t,
                 props: e.visible().into_iter().collect(),
+                merge: false,
             });
         }
     }
@@ -393,6 +394,8 @@ fn diff_thing(view: &Replica, target: Target, new: Option<Map<String, Value>>) -
                 vec![Op::Create {
                     target,
                     props: props.into_iter().collect(),
+                    // Shapes of a plug-in object have derived IDs, and two users may make them.
+                    merge: target.kind == Kind::Object && target.id.is_derived(),
                 }]
             }
         }
@@ -659,6 +662,7 @@ mod tests {
         let create = |target| Op::Create {
             target,
             props: props.clone().into_iter().collect(),
+            merge: false,
         };
         mine.apply(w, &create(t));
         // A thing that only the snapshot has is left alone; a thing I deleted goes.

@@ -476,8 +476,11 @@ impl Sequencer {
         }
         let mut made: Vec<Target> = Vec::new();
         for op in &ops {
-            if let Op::Create { target, .. } = op {
-                if self.replica.contains(*target) || made.contains(target) {
+            if let Op::Create { target, merge, .. } = op {
+                let again = self.replica.contains(*target) || made.contains(target);
+                // A derived ID may be made again; a thing that is deleted stays deleted.
+                let allowed = *merge && self.replica.alive(*target).is_some();
+                if again && !allowed && !(*merge && made.contains(target)) {
                     return reply(error(
                         ErrorCode::DuplicateUid,
                         &format!("the ID {} is used", target.id),

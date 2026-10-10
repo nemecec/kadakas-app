@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use kadakas_core::command::Command;
 use kadakas_core::model::{ClassId, LayerId, Object, ObjectId};
-use kadakas_core::uid::AsUid;
+use kadakas_core::uid::{AsUid, Uid};
 use kadakas_plugin::{Generated, Permit, Plugin, PluginError, Registry, trust};
 use kadakas_plugin_abi::{Geometry, Kind, ParamSchema};
 use serde_json::{Map, Value, json};
@@ -355,6 +355,12 @@ struct Instance<'a> {
     class: Option<ClassId>,
     /// The ids of the shapes that the plug-in made. Shapes of a user in the group are not listed.
     children: &'a [ObjectId],
+    /// The number of the last regeneration, 1 for the first. The ids of the shapes that a
+    /// regeneration makes follow from the id of the object, this number and the place in the
+    /// list (`Uid::derive`), so two users who regenerate the same object at the same time make the
+    /// same ids. The data of the instance is one property in a shared document, so the last
+    /// writer wins on the parameters, the number and the list together.
+    generation: u64,
     error: Option<&'a str>,
 }
 
@@ -371,6 +377,7 @@ impl Instance<'_> {
             "origin": self.origin,
             "class": self.class,
             "children": self.children,
+            "generation": self.generation,
             "error": self.error,
         })
     }
@@ -440,6 +447,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 origin,
                 class,
                 children: &members,
+                generation: 1,
                 error: None,
             }
             .json(),
@@ -533,7 +541,7 @@ fn plan_reset(
     s: &Session,
     id: ObjectId,
     new_params: Option<&Map<String, Value>>,
-    skip_ids: usize,
+    _skip_ids: usize,
 ) -> Result<(Command, Outcome), RpcError> {
     let doc = s.editor.doc();
     let obj = doc
@@ -569,53 +577,68 @@ fn plan_reset(
             .map_err(|e| app(format!("the moved object is out of range: {e}")))?;
     }
     let class = data["class"].as_uid().map(ClassId);
+    let generation = data["generation"].as_u64().unwrap_or(1);
+    // Shapes of a regeneration that another user made at the same time have derived ids and are
+    // not in the list that this copy holds. They go with the old ones.
+    let mut own = own;
+    for (i, c) in doc.children(id).into_iter().enumerate() {
+        let derived = (0..=i as u64 + doc.children(id).len() as u64)
+            .any(|k| c.0 == Uid::derive(id.0, generation, k));
+        if derived && !own.contains(&c) {
+            own.push(c);
+        }
+    }
     let merged = merged_params(&spec.params, data["params"].as_object(), new_params);
     let params = p.manifest().resolve_params(&merged).map_err(bad)?;
     let meta = Meta::of(p);
     let hash_changed = data["hash"].as_str() != Some(p.hash());
     let result = p.reset(&permit, &params, &geometry);
 
-    let set_data =
-        |origin: [f64; 2], children: &[ObjectId], error: Option<&str>| Command::SetData {
-            id,
-            set: [(
-                DATA_KEY.to_string(),
-                Instance {
-                    meta: &meta,
-                    params: &params,
-                    geometry: &geometry,
-                    origin,
-                    class,
-                    children,
-                    error,
-                }
-                .json(),
-            )]
-            .into(),
-            remove: vec![],
-        };
+    let set_data = |origin: [f64; 2],
+                    children: &[ObjectId],
+                    generation: u64,
+                    error: Option<&str>| Command::SetData {
+        id,
+        set: [(
+            DATA_KEY.to_string(),
+            Instance {
+                meta: &meta,
+                params: &params,
+                geometry: &geometry,
+                origin,
+                class,
+                children,
+                generation,
+                error,
+            }
+            .json(),
+        )]
+        .into(),
+        remove: vec![],
+    };
     Ok(match result {
         Ok(shapes) => {
             let origin = origin_of(shapes.iter().map(|g| g.shape.clone()));
-            let planned: Vec<ObjectId> = doc
-                .next_ids(skip_ids + shapes.len())
-                .into_iter()
-                .skip(skip_ids)
-                .map(ObjectId)
+            // The ids follow from the object, the new generation and the place in the list.
+            let next = generation + 1;
+            let planned: Vec<ObjectId> = (0..shapes.len() as u64)
+                .map(|k| ObjectId(Uid::derive(id.0, next, k)))
                 .collect();
             let mut commands: Vec<Command> = shapes
                 .iter()
-                .map(|g| Command::AddObjectIn {
+                .zip(&planned)
+                .map(|(g, new_id)| Command::AddObjectIn {
                     parent: id,
                     shape: g.shape.clone(),
                     class,
                     attrs: g.attrs.clone(),
+                    id: Some(*new_id),
                 })
                 .collect();
             // New members first: a group that loses its last member would go. Shapes that a user
             // added to the group are not in the list and stay.
             commands.push(Command::DeleteObjects { ids: own });
-            commands.push(set_data(origin, &planned, None));
+            commands.push(set_data(origin, &planned, next, None));
             (
                 Command::Batch { commands },
                 Outcome {
@@ -629,7 +652,7 @@ fn plan_reset(
         Err(e) => {
             let msg = e.to_string();
             (
-                set_data(now, &own, Some(&msg)),
+                set_data(now, &own, generation, Some(&msg)),
                 Outcome {
                     ok: false,
                     error: Some(msg),

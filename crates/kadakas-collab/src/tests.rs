@@ -25,6 +25,7 @@ fn create(n: u64, a: i64) -> Op {
     Op::Create {
         target: obj(n),
         props: [("a".to_string(), json!(a))].into(),
+        merge: false,
     }
 }
 
@@ -1230,6 +1231,7 @@ fn make_op(kind: u8, t: u8, p: u8, v: u8) -> Op {
         0 => Op::Create {
             target,
             props: [("a".to_string(), json!(v)), ("b".to_string(), json!(0))].into(),
+            merge: false,
         },
         1 => Op::Delete { target },
         2 => Op::Unset { target, prop },
@@ -1912,6 +1914,7 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
     let create_obj = |n, shape| Op::Create {
         target: obj(n),
         props: obj_props(shape),
+        merge: false,
     };
     assert!(matches!(
         s.receive(conn, submit(1, vec![create_obj(1, good.clone())]), 0)[0].msg,
@@ -1970,4 +1973,60 @@ fn the_sequencer_checks_things_and_holds_presence_for_the_trailing_edge() {
         ServerMsg::Presence { state, .. } if state.cursor == Some([3.0, 0.0])
     ));
     assert!(s.tick(2_000).is_empty());
+}
+
+#[test]
+fn the_sequencer_lets_a_derived_id_be_made_twice_but_not_other_ids() {
+    let mut s = Sequencer::new(Replica::new());
+    s.check_entities(false);
+    let conns: Vec<ConnId> = (1..=2)
+        .map(|u| {
+            let c = s.open();
+            s.receive(
+                c,
+                ClientMsg::Hello {
+                    protocol: PROTOCOL_VERSION,
+                    user: Uid::from_num(u),
+                    client: Uid::from_num(u),
+                    name: "x".into(),
+                    token: String::new(),
+                    last_seq: None,
+                    log_id: None,
+                },
+                0,
+            );
+            c
+        })
+        .collect();
+    let derived = Target::new(Kind::Object, Uid::derive(Uid::from_num(9), 2, 0));
+    let make = |target, merge| Op::Create {
+        target,
+        props: [("a".to_string(), json!(1))].into(),
+        merge,
+    };
+    let submit = |op_id, ops| ClientMsg::Submit { op_id, ops };
+    for (c, op_id) in [(conns[0], 1), (conns[1], 1)] {
+        assert!(matches!(
+            s.receive(c, submit(op_id, vec![make(derived, true)]), 0)[0].msg,
+            ServerMsg::Ack { .. }
+        ));
+    }
+    // Twice in one transaction is the same.
+    assert!(matches!(
+        s.receive(
+            conns[0],
+            submit(2, vec![make(derived, true), make(derived, true)]),
+            0
+        )[0]
+        .msg,
+        ServerMsg::Ack { .. }
+    ));
+    // An ordinary ID is refused, and so is a derived ID without the flag.
+    assert!(matches!(
+        s.receive(conns[0], submit(3, vec![make(derived, false)]), 0)[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::DuplicateUid,
+            ..
+        }
+    ));
 }
