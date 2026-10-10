@@ -105,7 +105,7 @@ Non-goals
 | DRF-02 | Move objects. | P0 | done |
 | DRF-03 | Shape validation (reject bad geometry). | P0 | done |
 | DRF-04 | Bounds and area calculation. | P0 | done |
-| DRF-05 | Selection tool: click, box select (window and crossing), shift-click to toggle. A lasso is not built. | P0 | done |
+| DRF-05 | Selection tool: click, box select (window and crossing), shift-click to toggle. A lasso is not built. | P0 | partial |
 | DRF-06 | Tools for the shapes above with live preview. | P0 | done |
 | DRF-07 | Rotate, scale, mirror, offset, duplicate array. | P0 | planned |
 | DRF-08 | Fillet, chamfer, trim, extend, split. | P1 | planned |
@@ -121,7 +121,7 @@ Non-goals
 | DRF-20 | Resource Manager for all resource types: thumbnails (SVG and egui paths from one list), search, type filter, duplicate, rename, delete, delete unused (frees what unused resources used), import from a file. API: `resource.*`, `library.*`. | P1 | done |
 | DRF-21 | A plant style can use a symbol as its plan graphic (`plan_symbol`), scaled to the canopy. | P1 | done |
 | DRF-13 | Compose, clip, add/subtract surfaces. | P1 | planned |
-| DRF-14 | Pan, zoom (wheel, zoom in and out keys), zoom to fit. A view history (previous view) is not built. | P0 | done |
+| DRF-14 | Pan, zoom (wheel, zoom in and out keys), zoom to fit. A view history (previous view) is not built. | P0 | partial |
 
 ### 4.3 Snapping and data bar
 
