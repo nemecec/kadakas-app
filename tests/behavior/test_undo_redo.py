@@ -69,7 +69,7 @@ def test_failed_command_leaves_document_and_undo_stack_unchanged(cad):
     cad.execute(rect_cmd(0, 0, 1, 1))
     before = cad.doc()
     error = cad.error("execute", {"command": {"op": "delete_objects", "ids": [999]}})
-    assert error["code"] == 1
+    assert error["code"] == 2
     assert cad.doc() == before
     assert cad.result("undo") == {"done": True}
     assert cad.result("undo") == {"done": False}

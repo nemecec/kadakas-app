@@ -854,7 +854,7 @@ impl Builder<'_> {
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}
             // A group draws through its members.
-            Shape::Group { .. } => {}
+            Shape::Group { .. } | Shape::Unknown { .. } => {}
             // Irrigation objects are flat and drawn in 2D only.
             Shape::Irrigation(_) => {}
             Shape::Symbol { .. } => {

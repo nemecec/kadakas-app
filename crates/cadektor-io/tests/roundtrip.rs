@@ -281,6 +281,7 @@ fn classes_and_layers_round_trip_by_name() {
     let mut doc = Document::default();
     let walls = cadektor_core::model::ClassId(doc.alloc_id().unwrap());
     doc.classes.push(cadektor_core::model::Class {
+        extra: Default::default(),
         id: walls,
         name: "Walls & fences".into(),
         visible: false,

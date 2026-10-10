@@ -15,7 +15,7 @@ def test_selection_set_with_unknown_id_fails_and_keeps_old_selection(cad):
     a = cad.execute(rect_cmd(0, 0, 1, 1))[0]
     cad.result("selection.set", {"ids": [a]})
     error = cad.error("selection.set", {"ids": [a, 999]})
-    assert error["code"] == 1
+    assert error["code"] == 2
     assert cad.result("selection.get") == {"ids": [a]}
 
 

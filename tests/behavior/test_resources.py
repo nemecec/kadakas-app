@@ -45,7 +45,7 @@ def test_groups_select_move_rotate_copy_and_undo(cad):
     cad.result("undo")
     assert len(cad.result("objects.list")) == 4
     assert cad.result("group.ungroup", {"ids": [g]})["members"] == [a, b]
-    assert cad.error("group.ungroup", {"ids": [a]})["code"] == 1
+    assert cad.error("group.ungroup", {"ids": [a]})["code"] == 3
 
 
 def test_nested_groups_undo_in_order(cad):
@@ -173,9 +173,9 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
     src.result("symbol.create", {"name": "Dot", "items": [{"shape": {"kind": "circle", "center": [0, 0], "radius": 5}, "attrs": {"fill_pattern": h}}]})
     src.result("resource.create", {"type": "texture", "name": "Bark", "color": [1, 2, 3, 255]})
     path = src.result("resource.export_to_file", {"library": "Garden", "overwrite": True})["path"]
-    assert path.endswith("Garden.cdk.json")
+    assert path.endswith("Garden.cdk")
     json.loads(open(path).read())
-    assert src.result("library.list")["files"] == [{"file": "Garden.cdk.json", "resources": 3}]
+    assert src.result("library.list")["files"] == [{"file": "Garden.cdk", "resources": 3}]
 
     dst = make_serve()
     listing = dst.result("resource.list_file", {"library": "Garden"})
@@ -202,7 +202,7 @@ def test_libraries_import_resources_with_what_they_need(make_serve, tmp_path, mo
 def test_import_follows_the_path_policy(cad, tmp_path):
     outside = "/etc/hosts.cdk.json"
     err = cad.error("resource.import_from_file", {"path": outside, "all": True})
-    assert err["code"] == 1
+    assert err["code"] == 4
     assert "cannot read" in err["message"] or "outside" in err["message"]
     assert cad.error("resource.import_from_file", {"library": "../x", "all": True})["code"] == -32602
     # A file that is not a Cadektor document is refused with a clear message.

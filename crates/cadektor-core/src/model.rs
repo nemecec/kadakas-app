@@ -106,9 +106,19 @@ impl Attributes {
 pub const MAX_COORD: f64 = 1.0e9;
 
 /// Geometry and parameters of an object. Coordinates are model units (mm).
+///
+/// `Unknown` holds a shape of a kind that this version does not know. It keeps the original JSON
+/// and writes it back unchanged. It is not drawn and it can only be deleted. The derive skips it:
+/// the `shape_serde` functions of `Object` read and write it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
+    /// A shape of an unknown kind, as in the file. `raw` is the whole shape object.
+    #[serde(skip)]
+    Unknown {
+        kind: String,
+        raw: Value,
+    },
     Line {
         a: DVec2,
         b: DVec2,
@@ -288,6 +298,7 @@ pub fn arc_sweep(start: f64, end: f64) -> f64 {
 impl Shape {
     pub fn kind(&self) -> &'static str {
         match self {
+            Shape::Unknown { .. } => "unknown",
             Shape::Line { .. } => "line",
             Shape::Rect { .. } => "rect",
             Shape::Circle { .. } => "circle",
@@ -345,7 +356,7 @@ impl Shape {
             Shape::Viewport(vp) => vp.problem().is_none(),
             Shape::TitleBlock(tb) => tb.problem().is_none(),
             Shape::Annotation(a) => a.is_finite(),
-            Shape::Group { .. } => true,
+            Shape::Group { .. } | Shape::Unknown { .. } => true,
             Shape::Massing(m) => m.is_finite(),
             Shape::Underlay(u) => u.is_finite(),
             Shape::Mesh3d(m) => m.is_finite(),
@@ -440,7 +451,10 @@ impl Shape {
         };
         match self {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
-            Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
+            Shape::Viewport(_)
+            | Shape::TitleBlock(_)
+            | Shape::Group { .. }
+            | Shape::Unknown { .. } => {}
             Shape::Irrigation(i) => i.for_each_number(f),
             Shape::Annotation(a) => a.numbers(f),
             Shape::Massing(m) => {
@@ -604,7 +618,7 @@ impl Shape {
                 mv(&mut u.min);
                 mv(&mut u.max);
             }
-            Shape::Group { .. } => {}
+            Shape::Group { .. } | Shape::Unknown { .. } => {}
             Shape::Mesh3d(m) => m.vertices.iter_mut().for_each(|p| {
                 p.x += d.x;
                 p.y += d.y;
@@ -676,7 +690,7 @@ impl Shape {
                 (lo.truncate(), hi.truncate())
             }
             // The size of these depends on the document. See `Document::object_bounds`.
-            Shape::Group { .. } => from_points(&[]),
+            Shape::Group { .. } | Shape::Unknown { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),
             Shape::Irrigation(i) => i.bounds(),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
@@ -792,6 +806,7 @@ pub struct Object {
     pub id: ObjectId,
     pub layer: LayerId,
     pub class: ClassId,
+    #[serde(with = "shape_serde")]
     pub shape: Shape,
     #[serde(default)]
     pub attrs: Attributes,
@@ -801,6 +816,9 @@ pub struct Object {
     /// The group that this object belongs to, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ObjectId>,
+    /// Fields that this version does not know (from a newer file). They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 impl Object {
@@ -813,6 +831,7 @@ impl Object {
             attrs: Attributes::default(),
             data: BTreeMap::new(),
             parent: None,
+            extra: Default::default(),
         }
     }
 
@@ -844,6 +863,9 @@ pub struct Layer {
     pub elevation: f64,
     /// Drawing scale denominator, for example 100 for 1:100.
     pub scale: f64,
+    /// Fields that this version does not know (from a newer file). They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 /// A class: a second grouping axis for visibility and default attributes.
@@ -853,6 +875,43 @@ pub struct Class {
     pub name: String,
     pub visible: bool,
     pub attrs: Attributes,
+    /// Fields that this version does not know (from a newer file). They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+/// Reads and writes `Object::shape`, with the fallback for unknown kinds.
+mod shape_serde {
+    use super::Shape;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::Value;
+
+    pub fn serialize<S: Serializer>(shape: &Shape, s: S) -> Result<S::Ok, S::Error> {
+        match shape {
+            Shape::Unknown { raw, .. } => raw.serialize(s),
+            other => other.serialize(s),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Shape, D::Error> {
+        let raw = Value::deserialize(d)?;
+        match Shape::deserialize(&raw) {
+            Ok(shape) => Ok(shape),
+            Err(e) => {
+                // Only a kind that we do not know becomes `Unknown`. A known kind with bad fields is an error.
+                let kind = raw.get("kind").and_then(Value::as_str);
+                match kind {
+                    Some(k) if e.to_string().starts_with(&format!("unknown variant `{k}`")) => {
+                        Ok(Shape::Unknown {
+                            kind: k.to_string(),
+                            raw,
+                        })
+                    }
+                    _ => Err(serde::de::Error::custom(e)),
+                }
+            }
+        }
+    }
 }
 
 /// Objects in z-order (first is at the bottom), found by ID in constant time.
@@ -901,6 +960,9 @@ pub struct Document {
     pub drawing: crate::sheets::Drawing,
     #[serde(default)]
     next_id: u64,
+    /// Fields that this version does not know (from a newer file). They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 /// Equality includes the z-order of the objects.
@@ -915,12 +977,14 @@ impl PartialEq for Document {
             && self.next_id == other.next_id
             && self.resources == other.resources
             && self.drawing == other.drawing
+            && self.extra == other.extra
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
     }
 }
 
-pub const FORMAT_VERSION: u32 = 1;
+/// The file format version. 2: unknown shape kinds and unknown fields are kept (no data changed from 1).
+pub const FORMAT_VERSION: u32 = 2;
 /// The class that every new document has. It cannot be deleted.
 pub const NONE_CLASS: ClassId = ClassId(0);
 /// The layer that every new document has.
@@ -932,7 +996,7 @@ pub enum LoadError {
     /// Not JSON, or not the shape of a document.
     #[error("not a Cadektor file: {0}")]
     Parse(String),
-    #[error("file format {0} is newer than this app")]
+    #[error("file was made by a newer Cadektor (format {0})")]
     Newer(u32),
     /// The document breaks a rule, for example a duplicate ID.
     #[error("{0}")]
@@ -941,11 +1005,23 @@ pub enum LoadError {
 
 /// Upgrades the JSON of an older format to the current one, in place.
 /// Add one step per format version here when the format changes.
-fn migrate(_doc: &mut Value, from: u32) -> Result<(), LoadError> {
-    match from {
-        0 => Err(LoadError::Invalid("unsupported format version 0".into())),
-        _ => Ok(()),
+///
+/// 1 to 2: no data changes. Version 2 only adds the rule that unknown shape kinds and unknown
+/// fields are kept, so the step records the new version and nothing else.
+fn migrate(doc: &mut Value, from: u32) -> Result<(), LoadError> {
+    if from == 0 {
+        return Err(LoadError::Invalid("unsupported format version 0".into()));
     }
+    let mut version = from;
+    while version < FORMAT_VERSION {
+        match version {
+            1 => {}
+            v => return Err(LoadError::Invalid(format!("no migration from format {v}"))),
+        }
+        version += 1;
+        doc["format_version"] = Value::from(version);
+    }
+    Ok(())
 }
 
 impl Default for Document {
@@ -953,6 +1029,7 @@ impl Default for Document {
         Document {
             format_version: FORMAT_VERSION,
             layers: vec![Layer {
+                extra: Default::default(),
                 id: FIRST_LAYER,
                 name: "Layer 1".into(),
                 kind: LayerKind::Design,
@@ -962,6 +1039,7 @@ impl Default for Document {
                 scale: 100.0,
             }],
             classes: vec![Class {
+                extra: Default::default(),
                 id: NONE_CLASS,
                 name: "None".into(),
                 visible: true,
@@ -979,6 +1057,7 @@ impl Default for Document {
             resources: Resources::default(),
             drawing: Default::default(),
             next_id: 2,
+            extra: Default::default(),
         }
     }
 }
@@ -1699,6 +1778,7 @@ mod tests {
     fn resolved_attrs_falls_back_to_class_then_object_overrides() {
         let mut doc = Document::default();
         doc.classes.push(Class {
+            extra: Default::default(),
             id: ClassId(5),
             name: "Trees".into(),
             visible: true,
@@ -1953,7 +2033,10 @@ mod tests {
         assert_eq!(e, LoadError::Newer(FORMAT_VERSION + 1));
         assert_eq!(
             e.to_string(),
-            format!("file format {} is newer than this app", FORMAT_VERSION + 1)
+            format!(
+                "file was made by a newer Cadektor (format {})",
+                FORMAT_VERSION + 1
+            )
         );
         // A newer file may have a different shape. It is refused before the shape is read.
         assert_eq!(

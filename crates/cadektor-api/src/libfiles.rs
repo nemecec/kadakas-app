@@ -11,21 +11,8 @@ use cadektor_core::library::{self, Conflict};
 use cadektor_core::model::Document;
 use cadektor_core::resource::ResourceId;
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
-}
 
 /// The per-user library folder: `CADEKTOR_LIBRARY_DIR`, else `~/.config/cadektor/library`.
 pub fn library_dir() -> Option<PathBuf> {
@@ -41,19 +28,30 @@ pub fn library_dir() -> Option<PathBuf> {
     )
 }
 
-/// A file in the library folder by name. The name has no folders. `.cdk.json` is added when it has no extension.
+/// True for the name of a document file: `.cdk` or the old `.cdk.json` (any `.json` is read, too).
+fn is_library_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".cdk") || lower.ends_with(".json")
+}
+
+/// A file in the library folder by name. The name has no folders. A name without an extension
+/// means the `.cdk` file, or the old `.cdk.json` file if only that one exists.
 fn library_file(name: &str) -> Result<PathBuf, RpcError> {
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         return Err(bad("a library name is a file name without folders"));
     }
     let dir =
         library_dir().ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?;
-    let file = if name.ends_with(".json") {
-        name.to_string()
+    if is_library_name(name) {
+        return Ok(dir.join(name));
+    }
+    let old = dir.join(format!("{name}.cdk.json"));
+    let new = dir.join(format!("{name}.cdk"));
+    Ok(if !new.exists() && old.exists() {
+        old
     } else {
-        format!("{name}.cdk.json")
-    };
-    Ok(dir.join(file))
+        new
+    })
 }
 
 /// The path of a request (`path` or `library`), checked by the path policy of the session.
@@ -66,13 +64,12 @@ fn request_path(s: &Session, m: &Map<String, Value>, write: bool) -> Result<Path
         (None, Some(l)) => library_file(l)?,
         _ => return Err(bad("give 'path' or 'library'")),
     };
-    s.check_path(&path, write, &["json"]).map_err(app)
+    s.check_path(&path, write, &crate::files::DOC_EXTS)
+        .map_err(RpcError::policy)
 }
 
 fn load(path: &Path) -> Result<Document, RpcError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| app(format!("cannot read {}: {e}", path.display())))?;
-    Document::from_json(&text).map_err(|e| app(format!("{}: {e}", path.display())))
+    crate::files::read_document(path)
 }
 
 /// Resource IDs of a source document for the `items` of a request.
@@ -133,6 +130,9 @@ fn names(m: &Map<String, Value>, key: &str) -> Result<Vec<String>, RpcError> {
     }
 }
 
+/// The favorites file. The path is fixed: the library folder of the host (`CADEKTOR_LIBRARY_DIR` or
+/// the config folder) and the name `favorites.json`. A request cannot change it, so agents cannot
+/// use the favorites calls to write anywhere else.
 fn favorites_path() -> Result<PathBuf, RpcError> {
     Ok(library_dir()
         .ok_or_else(|| app("there is no library folder: set CADEKTOR_LIBRARY_DIR"))?
@@ -151,6 +151,13 @@ fn write_favorites(list: &[Value]) -> Result<(), RpcError> {
     let p = favorites_path()?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(app)?;
+    }
+    // A link in the place of the file would send the write somewhere else.
+    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(RpcError::policy(format!(
+            "{} is a link. Favorites are written to the library folder only",
+            p.display()
+        )));
     }
     cadektor_core::fsio::write_atomic(
         &p,
@@ -198,7 +205,7 @@ pub(crate) fn run(
             let (lc, layers_added) =
                 library::import_layers_plan(scratch.doc(), &src, &layers).map_err(app)?;
             for c in [cc, lc].into_iter().flatten() {
-                scratch.execute(&c).map_err(app)?;
+                scratch.execute(&c).map_err(RpcError::from)?;
                 commands.push(c);
             }
             let plan = library::import_plan(scratch.doc(), &src, &picks, conflict).map_err(app)?;
@@ -206,7 +213,7 @@ pub(crate) fn run(
             if !commands.is_empty() {
                 s.editor
                     .execute(&Command::Batch { commands })
-                    .map_err(app)?;
+                    .map_err(RpcError::from)?;
                 s.prune_selection();
             }
             let imported: Vec<Value> = plan.items.iter().map(|i| json!({"name": i.name, "type": i.type_name, "id": i.dst, "status": i.status.id(), "dependency": i.dependency})).collect();
@@ -222,7 +229,7 @@ pub(crate) fn run(
                 && !m.get("overwrite").and_then(Value::as_bool).unwrap_or(false)
                 && s.paths.is_restricted()
             {
-                return Err(app(format!(
+                return Err(RpcError::conflict(format!(
                     "{} exists: pass \"overwrite\": true to replace it",
                     path.display()
                 )));
@@ -235,7 +242,7 @@ pub(crate) fn run(
             let mut out = Editor::default();
             let plan = library::import_plan(out.doc(), doc, &ids, Conflict::Rename).map_err(app)?;
             if let Some(c) = &plan.command {
-                out.execute(c).map_err(app)?;
+                out.execute(c).map_err(RpcError::from)?;
             }
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir).map_err(app)?;
@@ -252,7 +259,8 @@ pub(crate) fn run(
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {
                     let name = e.file_name().to_string_lossy().to_string();
-                    if name.ends_with(".cdk.json")
+                    if is_library_name(&name)
+                        && !name.eq_ignore_ascii_case("favorites.json")
                         && let Ok(doc) = std::fs::read_to_string(e.path())
                             .map_err(|e| e.to_string())
                             .and_then(|t| Document::from_json(&t).map_err(|e| e.to_string()))
@@ -297,8 +305,12 @@ mod tests {
         assert!(library_file(".hidden").is_err());
         assert!(library_file("").is_err());
         let p = library_file("Trees").unwrap();
-        assert!(p.to_string_lossy().ends_with("Trees.cdk.json"));
+        assert!(p.to_string_lossy().ends_with("Trees.cdk"));
         let q = library_file("Trees.cdk.json").unwrap();
-        assert_eq!(p, q);
+        assert!(q.to_string_lossy().ends_with("Trees.cdk.json"));
+        assert!(library_file("Trees.cdk").unwrap().ends_with("Trees.cdk"));
+        assert!(
+            is_library_name("A.CDK") && is_library_name("a.cdk.json") && !is_library_name("a.txt")
+        );
     }
 }

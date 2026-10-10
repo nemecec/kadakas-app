@@ -25,11 +25,23 @@ from .document import (
     connect,
     open,
 )
-from .errors import CadektorError, ConnectionFailed, RequestTimeout
+from .errors import (
+    CadektorError,
+    Conflict,
+    ConnectionFailed,
+    InvalidParams,
+    LimitExceeded,
+    NotFound,
+    PolicyRefused,
+    RequestTimeout,
+    UnknownMethod,
+    ValidationError,
+)
 from .plugins import Param, PluginObject, Run
 
 __all__ = [
-    "CadektorError", "Class", "ConnectionFailed", "Document", "Layer", "Obj", "Param", "Pending",
-    "PluginObject", "RequestTimeout", "Run", "connect", "open",
+    "CadektorError", "Class", "Conflict", "ConnectionFailed", "Document", "InvalidParams", "Layer",
+    "LimitExceeded", "NotFound", "Obj", "Param", "Pending", "PluginObject", "PolicyRefused",
+    "RequestTimeout", "Run", "UnknownMethod", "ValidationError", "connect", "open",
 ]
 __version__ = "0.1.0"

@@ -88,7 +88,7 @@ fn errors_are_reported() {
         call(&mut s, "export.file", json!({"path": "x.shp"}))
             .unwrap_err()
             .code,
-        1
+        3
     );
     assert_eq!(
         call(

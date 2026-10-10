@@ -47,8 +47,8 @@ def test_stepping_stones_example_runs_without_a_flag(cad):
 def test_own_scripts_are_refused_without_the_flag(cad):
     cad.result("plugin.define", DEFINITION)
     err = cad.error("plugin.place", {"definition": "Dot", "at": [0, 0]})
-    assert err["code"] == -32001 and "--allow-agent-scripts" in err["message"]
-    assert cad.error("script.run", {"source": "print(1)"})["code"] == -32001
+    assert err["code"] == 4 and "--allow-agent-scripts" in err["message"]
+    assert cad.error("script.run", {"source": "print(1)"})["code"] == 4
     assert cad.result("document.summary")["object_count"] == 0
 
 
@@ -76,7 +76,7 @@ def test_undo_takes_back_the_whole_placement(cad):
 def test_bad_input_is_refused(cad):
     cad.result("plugin.install_example", {"name": "Bench"})
     assert cad.error("plugin.place", {"definition": "Bench", "at": [0, 0], "params": {"slats": 100}})["code"] == -32602
-    assert cad.error("plugin.place", {"definition": "Nope", "at": [0, 0]})["code"] == 1
+    assert cad.error("plugin.place", {"definition": "Nope", "at": [0, 0]})["code"] == 2
     assert cad.error("plugin.define", {"name": "X", "shape_type": "blob", "script": ""})["code"] == -32602
     assert cad.error("plugin.install_example", {"name": "Nope"})["code"] == -32602
-    assert cad.error("script.status", {"run": 5})["code"] in (1, -32602)
+    assert cad.error("script.status", {"run": 5})["code"] in (1, 2, -32602)

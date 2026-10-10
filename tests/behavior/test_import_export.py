@@ -221,7 +221,7 @@ def test_export_geojson_with_georeference(cad, tmp_path):
 
 
 def test_errors(cad, tmp_path):
-    assert cad.error("import.file", {"path": str(tmp_path / "missing.dxf")})["code"] == 1
+    assert cad.error("import.file", {"path": str(tmp_path / "missing.dxf")})["code"] == 4
     assert cad.error("import.file", {"path": "x.dxf", "format": "png"})["code"] == -32602
     assert cad.error("import.file", {"path": "x.dxf", "options": {"unit": "parsec"}})["code"] == -32602
     bad = tmp_path / "bad.dxf"
@@ -230,8 +230,8 @@ def test_errors(cad, tmp_path):
     assert "not a DXF" in err["message"]
     garbage = tmp_path / "garbage.geojson"
     garbage.write_text("{" * 10)
-    assert cad.error("import.file", {"path": str(garbage)})["code"] == 1
-    assert cad.error("export.file", {"path": str(tmp_path / "x.shp")})["code"] == 1
+    assert cad.error("import.file", {"path": str(garbage)})["code"] == 3
+    assert cad.error("export.file", {"path": str(tmp_path / "x.shp")})["code"] == 3
     assert cad.result("document.summary")["object_count"] == 0
 
 

@@ -56,7 +56,7 @@ def libredwg(tmp_path, monkeypatch):
 
 
 def test_import_runs_the_converter_and_the_dxf_importer(make_serve, libredwg, tmp_path):
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     dwg = tmp_path / "survey.dwg"
     dwg.write_bytes(b"FAKEDWG\n")
     r = cad.result("import.file", {"path": str(dwg)})
@@ -71,7 +71,7 @@ def test_import_runs_the_converter_and_the_dxf_importer(make_serve, libredwg, tm
 
 
 def test_export_writes_dxf_and_converts_it(make_serve, libredwg, tmp_path):
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     cad.execute({"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [100, 0]}})
     out = tmp_path / "out.dwg"
     r = cad.result("export.file", {"path": str(out), "format": "dwg"})
@@ -84,7 +84,7 @@ def test_export_writes_dxf_and_converts_it(make_serve, libredwg, tmp_path):
 
 
 def test_converter_errors_are_reported(make_serve, libredwg, tmp_path):
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     bad = tmp_path / "bad.dwg"
     bad.write_bytes(b"this is not a drawing")
     err = cad.error("import.file", {"path": str(bad)})
@@ -98,7 +98,7 @@ def test_converter_errors_are_reported(make_serve, libredwg, tmp_path):
 
 def test_a_hanging_converter_is_stopped(make_serve, libredwg, tmp_path):
     script(libredwg, "dwg2dxf", "sleep 60")
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     dwg = tmp_path / "slow.dwg"
     dwg.write_bytes(b"FAKEDWG")
     err = cad.error("import.file", {"path": str(dwg), "options": {"converter_timeout_s": 1}})
@@ -114,7 +114,7 @@ def test_without_a_converter_the_error_says_how_to_fix_it(make_serve, tmp_path, 
     keep = [p for p in os.environ["PATH"].split(os.pathsep) if not any((Path(p) / n).exists() for n in ("dwg2dxf", "ODAFileConverter"))]
     monkeypatch.setenv("PATH", os.pathsep.join([str(empty)] + keep))
     monkeypatch.delenv("CADEKTOR_DWG_CONVERTER", raising=False)
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     dwg = tmp_path / "none.dwg"
     dwg.write_bytes(b"FAKEDWG")
     err = cad.error("import.file", {"path": str(dwg)})
@@ -126,14 +126,14 @@ def test_without_a_converter_the_error_says_how_to_fix_it(make_serve, tmp_path, 
 
 
 def test_describe_names_the_converter(make_serve, libredwg):
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     d = cad.result("describe")["io"]["dwg"]
     assert d["converter"]["name"] == "LibreDWG" and d["converter"]["can_write"] is True
     assert any("dwg" in f for f in cad.result("describe")["io"]["import_formats"])
 
 
 def test_the_path_must_be_allowed_and_end_in_dwg(make_serve, libredwg, tmp_path):
-    cad = make_serve()
+    cad = make_serve("--allow-converters")
     wrong = tmp_path / "survey.txt"
     wrong.write_bytes(b"FAKEDWG")
     err = cad.error("import.file", {"path": str(wrong), "format": "dwg"})

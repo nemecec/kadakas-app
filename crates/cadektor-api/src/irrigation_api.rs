@@ -23,6 +23,7 @@ use cadektor_irrigation::layout::{self, Pattern};
 use cadektor_irrigation::report;
 use cadektor_irrigation::{Analysis, zone_commands};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const OUTLET_ADD: (&str, &str) = (
@@ -117,20 +118,6 @@ pub fn describe() -> Value {
             {"method": "irrigation.report.pressure", "params": {}}
         ],
     })
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
 }
 
 fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcError> {
@@ -265,7 +252,7 @@ fn add_one(
     m: &Map<String, Value>,
 ) -> Result<Value, RpcError> {
     let cmd = s.in_context(add_cmd(shape, m)?);
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     Ok(json!({ "id": out.created[0] }))
 }
 
@@ -285,7 +272,7 @@ fn add_many(
     let out = s
         .editor
         .execute(&Command::Batch { commands: cmds })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(out.created)
 }
 
@@ -322,7 +309,7 @@ fn store_catalog(s: &mut Session, cat: &Catalog) -> Result<Value, RpcError> {
             body,
         },
     };
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     let id = out
         .created
         .first()
@@ -673,7 +660,7 @@ fn set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     s.editor
         .execute(&Command::Batch { commands: cmds })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({ "ids": ids }))
 }
 
@@ -703,7 +690,7 @@ fn calculate(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError>
         if !cmds.is_empty() {
             s.editor
                 .execute(&Command::Batch { commands: cmds })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
         }
     }
     let warnings = warnings_json(&a);
@@ -901,10 +888,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         | "irrigation.report.pipes"
         | "irrigation.report.pressure"
         | "irrigation.report.materials" => reports(s, method, m),
-        _ => Err(RpcError {
-            code: -32601,
-            message: format!("unknown method: {method}"),
-        }),
+        _ => Err(RpcError::method_not_found(method)),
     })
 }
 

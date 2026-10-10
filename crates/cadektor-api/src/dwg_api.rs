@@ -35,6 +35,7 @@ pub(crate) fn describe() -> Value {
             "converter_timeout_s": "seconds before the converter is stopped. Default 300",
             "dwg_version": "export: file version for the ODA File Converter, for example ACAD2018 (default), ACAD2013, ACAD2010, ACAD2007, ACAD2004, ACAD2000"
         },
+        "agent_policy": "Agents may use DWG only if the host started with --allow-converters (cadektor serve, cadektor mcp and the app). Default: off. The file dialogs of the app are not limited. Without the flag the call fails with error code 4 (kind policy).",
         "setup": "Install the ODA File Converter (free download, own license) or LibreDWG (GPL, a package of your system). Cadektor finds ODAFileConverter in its standard install folder or on PATH, then dwg2dxf and dxf2dwg on PATH. CADEKTOR_DWG_CONVERTER names a program explicitly. See docs/dwg.md. Without a converter the call fails with an error that says so.",
         "examples": [
             {"method": "import.file", "params": {"path": "/data/survey.dwg", "options": {"layer_mode": "layers"}}},
@@ -43,9 +44,18 @@ pub(crate) fn describe() -> Value {
     })
 }
 
+/// The error for an agent request that would start a converter while the host did not allow it.
+fn converters_off() -> RpcError {
+    RpcError::policy(
+        "DWG needs an external converter program, and this host does not let agents start one. The owner can allow it with --allow-converters",
+    )
+}
+
 fn rpc(e: DwgError) -> RpcError {
     match e {
         DwgError::Option(_) => RpcError::invalid_params(e),
+        DwgError::Timeout { .. } => RpcError::limit(e),
+        DwgError::Format(_) => RpcError::validation(e),
         e => RpcError::app(e),
     }
 }
@@ -64,11 +74,14 @@ impl Session {
         options: &Value,
         checked: bool,
     ) -> Result<Value, RpcError> {
+        if checked && !self.paths.converters_allowed() {
+            return Err(converters_off());
+        }
         let opts = ImportOptions::from_json(options).map_err(io_rpc)?;
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["dwg"])
-                .map_err(RpcError::app)?
+                .map_err(RpcError::policy)?
         } else {
             path
         };
@@ -76,7 +89,7 @@ impl Session {
             .map_err(rpc)?;
         self.editor
             .execute(&result.command)
-            .map_err(RpcError::app)?;
+            .map_err(RpcError::from)?;
         self.prune_selection();
         Ok(json!({
             "imported": result.report.total(),
@@ -93,16 +106,19 @@ impl Session {
         overwrite: bool,
         checked: bool,
     ) -> Result<Value, RpcError> {
+        if checked && !self.paths.converters_allowed() {
+            return Err(converters_off());
+        }
         let opts = ExportOptions::from_json(options).map_err(io_rpc)?;
         let run = RunOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, true, &["dwg"])
-                .map_err(RpcError::app)?
+                .map_err(RpcError::policy)?
         } else {
             path
         };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(RpcError::app(format!(
+            return Err(RpcError::conflict(format!(
                 "{} exists: pass \"overwrite\": true to replace it",
                 path.display()
             )));

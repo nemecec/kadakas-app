@@ -128,7 +128,7 @@ def test_undo_group_on_error_sends_nothing(doc):
 def test_errors_carry_code_and_method(doc):
     with pytest.raises(CadektorError) as e:
         doc.get(999)
-    assert e.value.code == 1 and "999" in str(e.value) and e.value.method == "objects.get"
+    assert e.value.code == 2 and "999" in str(e.value) and e.value.method == "objects.get"
     assert not e.value.is_forbidden
     with pytest.raises(CadektorError) as e:
         doc.call("nothing.here")

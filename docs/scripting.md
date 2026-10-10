@@ -322,7 +322,7 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 ## Security
 
 - **Scripts run only when a user starts them.** A drawing never runs code when you open it. The shapes of a plug-in object are stored, so they need no script.
-- **Programs and AI agents cannot run untrusted scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `-32001`. The host must opt in. Start `cadektor serve`, `cadektor mcp` or the app with `--allow-agent-scripts`.
+- **Programs and AI agents cannot run untrusted scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `4` (kind `policy`). The host must opt in. Start `cadektor serve`, `cadektor mcp` or the app with `--allow-agent-scripts`.
 - **A script from a drawing never runs until you trust it.** A plug-in object script is a Python program. A drawing that you download may hold one. When you select such an object, Object Info shows a warning and the button **Review script...**. The dialog **Trust this plug-in?** shows the full source and where it comes from. Nothing runs until you press **Trust this script**.
 - Trust is for the **exact text**. The app keeps the SHA-256 hash of each script you trusted in `trusted_plugins.json` in your config folder. If anyone changes the script, even by one character, the hash changes and the script is untrusted again. Putting the old text back makes it trusted again.
 - The two shipped examples are trusted by their hash. Their scripts are part of the program.
@@ -379,6 +379,7 @@ The text of every API method is the docstring of `doc.api.<method>`. Use `help(d
 | Flag | Where | Use |
 |---|---|---|
 | `--allow-agent-scripts` | `cadektor serve`, `cadektor mcp`, the app | Let agents run scripts of their own. Default: off. |
+| `--allow-converters` | `cadektor serve`, `cadektor mcp`, the app | Let agents start the DWG converter. Default: off. The file dialogs of the app are not limited. |
 | `CADEKTOR_PYTHON` | environment | The Python program to use. |
 | `CADEKTOR_PYTHON_DIR` | environment | The folder that holds the `cadektor` package. |
 | `CADEKTOR_BIN` | environment | The `cadektor` program, for the Python package. |

@@ -34,6 +34,7 @@ use cadektor_io::crs::Crs;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const GIS_SOURCES: (&str, &str) = (
@@ -191,23 +192,12 @@ pub struct JobInfo {
     pub running: bool,
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
-}
-
 fn gis_err(e: GisError) -> RpcError {
     match e {
-        GisError::Param(_) | GisError::Url(_) => bad(e),
+        GisError::Param(_) => bad(e),
+        GisError::Url(_) => RpcError::policy(e),
+        GisError::Limit(_) => RpcError::limit(e),
+        GisError::Format(_) | GisError::Crs(_) => RpcError::validation(e),
         e => app(e),
     }
 }
@@ -401,7 +391,9 @@ impl Session {
             Outcome::Features { fetched, options } => {
                 let ctx = cadektor_io::Context::of(self.editor.doc());
                 let result = wfs::import(&fetched, &ctx, &options).map_err(gis_err)?;
-                self.editor.execute(&result.command).map_err(app)?;
+                self.editor
+                    .execute(&result.command)
+                    .map_err(RpcError::from)?;
                 self.prune_selection();
                 Ok(json!({
                     "imported": result.report.total(),
@@ -448,7 +440,7 @@ impl Session {
                                     },
                                 ],
                             })
-                            .map_err(app)?;
+                            .map_err(RpcError::from)?;
                         id
                     }
                     None => {
@@ -469,7 +461,7 @@ impl Session {
                                     },
                                 ],
                             })
-                            .map_err(app)?;
+                            .map_err(RpcError::from)?;
                         next
                     }
                 };
@@ -531,10 +523,7 @@ impl Session {
                     None => Err(bad(format!("no job {id}"))),
                 }
             }
-            other => Err(RpcError {
-                code: -32601,
-                message: format!("unknown method: {other}"),
-            }),
+            other => Err(RpcError::method_not_found(other)),
         }
     }
 
@@ -601,7 +590,7 @@ impl Session {
             .execute(&Command::SetGeoreference {
                 georef: Some(g.clone()),
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({"georeference": g}))
     }
 
@@ -645,7 +634,7 @@ impl Session {
             cadektor_gis::reproject::plan(self.editor.doc(), &crs, &opts).map_err(gis_err)?;
         let mut applied = false;
         if let (false, Some(cmd)) = (dry_run, &plan.command) {
-            self.editor.execute(cmd).map_err(app)?;
+            self.editor.execute(cmd).map_err(RpcError::from)?;
             self.prune_selection();
             applied = true;
         }
@@ -995,7 +984,7 @@ impl Session {
             p.path.clone()
         } else {
             self.check_path(&p.path, false, &["png", "jpg", "jpeg", "tif", "tiff"])
-                .map_err(app)?
+                .map_err(RpcError::policy)?
         };
         let mut img =
             cadektor_gis::geoimage::load_file(&path, p.crs.as_deref()).map_err(gis_err)?;
@@ -1035,7 +1024,7 @@ impl Session {
         });
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         self.prune_selection();
         Ok(json!({
             "id": next,

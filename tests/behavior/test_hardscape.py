@@ -115,17 +115,17 @@ def test_curved_path_with_joins_and_a_one_sided_border(cad):
     assert values[0] > 0 and values[-1] < values[0] * 1.2  # the joins differ only a little
     # A path outline cannot be edited by vertex: the center line is the source.
     path_id = list(areas)[0]
-    assert cad.error("execute", {"command": {"op": "set_vertex", "id": path_id, "index": 0, "p": [1, 1]}})["code"] == 1
+    assert cad.error("execute", {"command": {"op": "set_vertex", "id": path_id, "index": 0, "p": [1, 1]}})["code"] == 3
 
 
 def test_path_input_is_checked(cad):
-    assert cad.error("hardscape.add", {"center": [[0, 0], [0, 0]]})["code"] == 1
-    assert cad.error("hardscape.add", {"center": [[0, 0], [10, 0]], "width": -5})["code"] == 1
+    assert cad.error("hardscape.add", {"center": [[0, 0], [0, 0]]})["code"] == 3
+    assert cad.error("hardscape.add", {"center": [[0, 0], [10, 0]], "width": -5})["code"] == 3
     assert cad.error("hardscape.add", {"center": [[0, 0], [10, 0]], "join": "square"})["code"] == -32602
     assert cad.error("hardscape.add", {"mode": "path", "boundary": SQUARE})["code"] == -32602
-    assert cad.error("hardscape.add", {})["code"] == 1
+    assert cad.error("hardscape.add", {})["code"] == 3
     assert cad.error("hardscape.add", {"boundary": SQUARE, "style": "none"})["code"] == -32602
-    assert cad.error("hardscape.add", {"boundary": SQUARE, "slope": {"type": "edges", "elevations": [0, 1]}})["code"] == 1
+    assert cad.error("hardscape.add", {"boundary": SQUARE, "slope": {"type": "edges", "elevations": [0, 1]}})["code"] == 3
     assert cad.result("objects.list", {"kind": "hardscape"}) == []
 
 
@@ -142,7 +142,7 @@ def test_slopes_make_the_surface_larger_than_the_plan(cad):
     assert row["surface_area_m2"] == approx(4 * math.sqrt(1.25))
     cad.result("hardscape.set", {"id": h, "slope": None})
     assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(4.0)
-    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "cross", "percent": 9999}})["code"] == 1
+    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "cross", "percent": 9999}})["code"] == 3
 
 
 # --- Site model: drape and pad ----------------------------------------------------------
@@ -212,7 +212,7 @@ def test_quantities_per_plant_come_from_the_mix_minus_holes(cad):
     pond = cad.execute({"op": "add_object", "shape": {"kind": "rect", "min": [5000, 5000], "max": [6000, 6000]}})[0]
     cad.result("landscape_area.set", {"id": area, "exclude": [pond]})
     assert cad.result("report.landscape_areas")["rows"][0]["net_area_m2"] == approx(99.0)
-    assert cad.error("landscape_area.set", {"id": area, "holes": [[[-5, 0], [10, 0], [10, 10]]]})["code"] == 1
+    assert cad.error("landscape_area.set", {"id": area, "holes": [[[-5, 0], [10, 0], [10, 10]]]})["code"] == 3
 
 
 def test_the_plant_list_adds_the_plants_of_areas_to_single_plants(cad):
@@ -230,7 +230,7 @@ def test_the_plant_list_adds_the_plants_of_areas_to_single_plants(cad):
     assert pl["csv"].splitlines()[0].startswith("Name,ID,Botanical name")
     # Plant styles count the mixes that use them, and cannot be deleted while a mix needs them.
     assert cad.result("plant_style.get", {"id": "Sedge"})["used_by"] == 1
-    assert cad.error("plant_style.delete", {"id": "Sedge"})["code"] == 1
+    assert cad.error("plant_style.delete", {"id": "Sedge"})["code"] == 5
     cad.result("plant_style.delete", {"id": "Sedge", "reassign": "Lavender"})
     style = cad.result("landscape_area_style.get", {"id": "Meadow"})
     assert [e["percent"] for e in style["mix"]] == [100.0]
@@ -339,8 +339,8 @@ def test_slope_by_angle_and_by_rise_and_run(cad):
     assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(4 * math.sqrt(2))
     cad.result("hardscape.set", {"id": h, "slope": {"type": "angle", "degrees": 30, "angle_deg": 90}})
     assert cad.result("report.hardscape")["rows"][0]["surface_area_m2"] == approx(4 * math.sqrt(1 + math.tan(math.radians(30)) ** 2))
-    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "rise_run", "rise": 1, "run": 0}})["code"] == 1
-    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "angle", "degrees": 80}})["code"] == 1
+    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "rise_run", "rise": 1, "run": 0}})["code"] == 3
+    assert cad.error("hardscape.set", {"id": h, "slope": {"type": "angle", "degrees": 80}})["code"] == 3
 
 
 def test_edge_elevations_survive_an_outline_edit(cad):

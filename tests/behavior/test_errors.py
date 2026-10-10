@@ -8,8 +8,9 @@ from helpers import rect_cmd
 
 # JSON-RPC protocol errors: the request is malformed.
 PROTOCOL_ERRORS = {"parse": -32700, "invalid_request": -32600, "method_not_found": -32601, "invalid_params": -32602}
-# Application errors (a well-formed request the document cannot accept) use code 1.
-APP_ERROR = 1
+# Application errors (a well-formed request the document cannot accept) have their own codes:
+# 1 generic, 2 not found, 3 validation, 4 policy refused, 5 conflict, 6 limit exceeded.
+APP_ERRORS = {1: "error", 2: "not_found", 3: "validation", 4: "policy", 5: "conflict", 6: "limit"}
 
 
 def raw_response(cad, line: str) -> dict:
@@ -82,7 +83,8 @@ def test_bad_params_are_invalid_params(cad, method, params):
 def test_invalid_commands_are_application_errors_and_change_nothing(cad, label, command):
     before = cad.doc()
     error = cad.error("execute", {"command": command})
-    assert error["code"] == APP_ERROR, label
+    assert error["code"] in APP_ERRORS, label
+    assert error["data"]["kind"] == APP_ERRORS[error["code"]], label
     assert isinstance(error["message"], str) and error["message"], label
     assert cad.doc() == before, label
 
@@ -93,7 +95,8 @@ def test_invalid_commands_are_application_errors_and_change_nothing(cad, label, 
 ])
 def test_references_to_unknown_objects_are_application_errors(cad, method, params, expected_text):
     error = cad.error(method, params)
-    assert error["code"] == APP_ERROR
+    assert error["code"] == 2
+    assert error["data"]["kind"] == "not_found"
     assert expected_text in error["message"]
 
 
@@ -119,7 +122,8 @@ def test_notification_that_changes_the_document_still_takes_effect(cad):
 @pytest.mark.parametrize("scale", [0, -5])
 def test_add_layer_rejects_non_positive_scale(cad, scale):
     error = cad.error("execute", {"command": {"op": "add_layer", "name": "Bad", "scale": scale}})
-    assert error["code"] == APP_ERROR
+    assert error["code"] == 3
+    assert error["data"]["kind"] == "validation"
 
 
 def test_new_objects_never_reuse_an_id_after_document_load(cad):
@@ -131,3 +135,25 @@ def test_new_objects_never_reuse_an_id_after_document_load(cad):
     all_ids = [o["id"] for o in cad.result("objects.list")]
     assert len(set(all_ids)) == len(all_ids), f"duplicate object ids: {all_ids}"
     assert 5 not in new_ids
+
+
+@pytest.mark.parametrize(("command", "code", "kind"), [
+    ({"op": "delete_objects", "ids": [999]}, 2, "not_found"),
+    ({"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": -1}}, 3, "validation"),
+    ({"op": "delete_layer", "id": 1}, 3, "validation"),
+])
+def test_commands_fail_with_distinct_codes_and_a_stable_kind(cad, command, code, kind):
+    error = cad.error("execute", {"command": command})
+    assert (error["code"], error["data"]["kind"]) == (code, kind)
+
+
+def test_protocol_errors_carry_a_kind_too(cad):
+    assert cad.error("no.such.method")["data"]["kind"] == "method_not_found"
+    assert cad.error("objects.get", {})["data"]["kind"] == "invalid_params"
+    assert raw_response(cad, "{nope")["error"]["data"]["kind"] == "parse_error"
+
+
+def test_describe_documents_the_error_codes(cad):
+    errors = cad.result("describe")["errors"]
+    assert {c["code"] for c in errors["codes"]} >= {1, 2, 3, 4, 5, 6, -32601, -32602}
+    assert "data.kind" in errors["shape"]

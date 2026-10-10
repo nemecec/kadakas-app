@@ -17,6 +17,7 @@ use cadektor_core::plants::schedule;
 use cadektor_core::plants::style::PlantStyle;
 use cadektor_core::resource::{ResourceBody, ResourceId};
 
+use crate::errors::bad;
 use crate::{RpcError, Session};
 
 /// Method descriptions. `METHODS` in the crate root lists them, so the CLI and MCP offer them.
@@ -86,20 +87,6 @@ pub fn describe() -> Value {
             {"method": "plants.place", "params": {"mode": "path", "style": 2, "path": [[0,0],[10000,0]], "spacing": 1500}}
         ],
     })
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
 }
 
 fn object(p: &Value) -> Result<&Map<String, Value>, RpcError> {
@@ -230,7 +217,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                     name,
                     body: ResourceBody::plant_style(style),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "plant_style.update" => {
@@ -250,7 +237,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                     name,
                     body: Some(ResourceBody::plant_style(style)),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(style_json(s.editor.doc(), id))
         }
         "plant_style.duplicate" => {
@@ -268,7 +255,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                     name,
                     body: ResourceBody::plant_style(style),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "id": out.created[0] }))
         }
         "plant_style.delete" => {
@@ -281,7 +268,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                 .transpose()?;
             s.editor
                 .execute(&Command::DeleteResource { id, reassign })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             s.prune_selection();
             Ok(json!({ "ok": true }))
         }
@@ -327,7 +314,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Result<Value, RpcError> {
                     overrides,
                     unlink,
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "ok": true }))
         }
         "report.plant_schedule" => {
@@ -418,7 +405,7 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     let out = s
         .editor
         .execute(&Command::Batch { commands })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(
         json!({ "created": out.created, "created_count": created, "updated": updated, "skipped": skipped, "warnings": result.warnings }),
     )
@@ -575,7 +562,7 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let out = s
         .editor
         .execute(&Command::Batch { commands })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     let mut created = out.created;
     let tag = if want_tag { created.pop() } else { None };
     Ok(json!({ "created": created, "count": count, "tag": tag }))
@@ -668,7 +655,7 @@ mod tests {
         let id = maple(&mut s);
         assert_eq!(
             fail(&mut s, "plant_style.create", json!({"name": "Field maple"})).code,
-            1
+            3
         );
         assert_eq!(
             fail(&mut s, "plant_style.create", json!({"spread": 10})).code,
@@ -720,7 +707,7 @@ mod tests {
         );
         assert_eq!(
             fail(&mut s, "plant_style.update", json!({"id": id, "name": ""})).code,
-            1
+            3
         );
         assert_eq!(
             fail(
@@ -738,7 +725,7 @@ mod tests {
                 json!({"id": id, "name": "Field maple"})
             )
             .code,
-            1
+            3
         );
         assert_eq!(
             fail(
@@ -1056,7 +1043,7 @@ mod tests {
                 json!({"mode": "single", "at": [0, 0], "variation": {"size": 5}})
             )
             .code,
-            1
+            3
         );
         assert_eq!(
             fail(
@@ -1075,7 +1062,7 @@ mod tests {
                 json!({"mode": "single", "style": id, "at": [0, 0], "overrides": {"price": 1}})
             )
             .code,
-            1
+            3
         );
         assert_eq!(
             fail(
@@ -1263,14 +1250,14 @@ mod tests {
                 &mut s,
                 json!({"mode": "single", "at": [0, 0], "layer": 999})
             ),
-            1
+            2
         );
         assert_eq!(
             code(
                 &mut s,
                 json!({"mode": "single", "at": [0, 0], "style": id, "overrides": {"bogus": 1}})
             ),
-            1
+            3
         );
         assert_eq!(code(&mut s, json!("x")), -32602);
         assert_eq!(
@@ -1327,7 +1314,7 @@ mod tests {
         );
         assert_eq!(
             fail(&mut s, "plants.set_style", json!({"ids": ids})).code,
-            1
+            3
         );
         assert_eq!(
             fail(&mut s, "plants.set_style", json!({"ids": "x"})).code,

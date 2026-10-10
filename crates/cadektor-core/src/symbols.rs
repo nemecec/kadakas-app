@@ -363,6 +363,7 @@ pub fn instance_objects_at(doc: &Document, obj: &Object, paper_scale: f64) -> Ve
                 data.insert(NO_PATTERN_KEY.to_string(), true.into());
             }
             Object {
+                extra: Default::default(),
                 id: obj.id,
                 layer: obj.layer,
                 class: e.class.unwrap_or(obj.class),
@@ -396,6 +397,7 @@ pub fn mark_object(
     let mut data = std::collections::BTreeMap::new();
     data.insert(NO_PATTERN_KEY.to_string(), true.into());
     Object {
+        extra: Default::default(),
         id: owner.id,
         layer: owner.layer,
         class: owner.class,
@@ -679,6 +681,7 @@ pub fn plant_symbol_objects(
         scale_y: None,
     };
     let inst = Object {
+        extra: Default::default(),
         id: plant.id,
         layer: plant.layer,
         class: plant.class,

@@ -127,7 +127,7 @@ pub fn export_file(path: &Path, doc: &Document, opts: &IfcOptions) -> Result<Rep
         let file = out.into_inner().map_err(|e| IfcError::Io(e.to_string()))?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&tmp, &target)
+        cadektor_core::fsio::replace_with_backup(&tmp, &target)
             .map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
         Ok(report)
     })();

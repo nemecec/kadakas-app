@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use cadektor_api::Session;
 use cadektor_core::fsio;
 use cadektor_core::model::Document;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub fn parse_document(text: &str) -> Result<Document, String> {
     Document::from_json(text).map_err(|e| e.to_string())
@@ -33,8 +33,9 @@ pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-pub fn write_svg(path: &Path, doc: &Document) -> Result<(), String> {
-    fsio::write_atomic(path, cadektor_core::svg::render(doc, 1600).as_bytes())
+/// Writes the SVG of the session's document (the same SVG as `render.svg`), atomically.
+pub fn write_svg(path: &Path, session: &Session) -> Result<(), String> {
+    fsio::write_atomic(path, session.render_svg(1600).as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
@@ -87,44 +88,26 @@ pub fn agent_line(
         }
         return resp;
     };
-    // An agent may only use the allowed folders (see `Session::paths`), and only `.json` documents.
-    let write = method == "file.save";
-    let checked = req["params"]["path"].as_str().map(|t| {
-        session
-            .check_path(Path::new(t), write, &["cdk", "json"])
-            .map_err(|e| (1, e))
+    // An agent may only use the allowed folders (see `Session::paths`) and only document files.
+    // The same handler serves `cadektor serve` and `cadektor mcp`. A save here counts as a manual save.
+    let params = req.get("params").cloned().unwrap_or(Value::Null);
+    let result = cadektor_api::files::file_call(session, method, &params, &mut |p, bytes| {
+        crate::autosave::manual_save(p, || cadektor_api::files::write_document_file(p, bytes))
     });
-    let result = match checked {
-        None => Err((-32602, "params.path is required".to_string())),
-        Some(Err(e)) => Err(e),
-        Some(Ok(p)) if write => write_document(&p, session.editor.doc())
-            .map_err(|e| (1, e))
-            .map(|()| {
-                *path = Some(p);
-                fx.path_changed = true;
-            }),
-        Some(Ok(p)) => read_document(&p).map_err(|e| (1, e)).map(|doc| {
-            session.replace_document(doc);
-            session.take_replaced();
-            *path = Some(p);
+    match &result {
+        Ok(cadektor_api::files::FileDone::Saved(p)) => {
+            *path = Some(p.clone());
+            fx.path_changed = true;
+        }
+        Ok(cadektor_api::files::FileDone::Opened(p)) => {
+            *path = Some(p.clone());
             fx.replaced = true;
             fx.path_changed = true;
-        }),
-    };
-    session.doc_dir = path
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(Path::to_path_buf);
-    let id = req.get("id")?.clone();
-    Some(
-        match result {
-            Ok(()) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}),
-            Err((code, message)) => {
-                json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-            }
         }
-        .to_string(),
-    )
+        Err(_) => {}
+    }
+    let id = req.get("id")?.clone();
+    Some(cadektor_api::files::file_reply(id, result))
 }
 
 #[cfg(test)]
@@ -134,6 +117,7 @@ mod tests {
     use cadektor_core::command::Command;
     use cadektor_core::model::{Attributes, FORMAT_VERSION, Shape};
     use glam::DVec2;
+    use serde_json::json;
 
     #[test]
     fn save_and_load_roundtrip() {
@@ -154,7 +138,7 @@ mod tests {
         write_document(&path, s.editor.doc()).unwrap();
         assert_eq!(read_document(&path).unwrap(), s.editor.doc().clone());
         let svg = std::env::temp_dir().join(format!("cadektor-test-{}.svg", std::process::id()));
-        write_svg(&svg, s.editor.doc()).unwrap();
+        write_svg(&svg, &s).unwrap();
         assert!(std::fs::read_to_string(&svg).unwrap().contains("<circle"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(svg);
@@ -314,7 +298,7 @@ mod tests {
             &mut fx,
             json!({"id": 5, "method": "file.open", "params": {"path": dir.join("nope")}}),
         );
-        assert_eq!(r["error"]["code"], 1);
+        assert_eq!(r["error"]["code"], 2);
         let mut v = serde_json::to_value(Document::default()).unwrap();
         v["format_version"] = json!(FORMAT_VERSION + 1);
         std::fs::write(dir.join("new.json"), v.to_string()).unwrap();

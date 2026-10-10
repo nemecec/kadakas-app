@@ -87,7 +87,8 @@ class _LineRpc:
             raise CadektorError(-32603, f"reply {reply.get('id')!r} does not match request {req_id}")
         if "error" in reply:
             err = reply["error"]
-            raise CadektorError(err.get("code", 0), err.get("message", "error"), method=method)
+            raise CadektorError(err.get("code", 0), err.get("message", "error"), method=method,
+                                kind=(err.get("data") or {}).get("kind"))
         return reply.get("result")
 
 

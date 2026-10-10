@@ -47,7 +47,7 @@ def test_command_examples_run_in_order_in_a_fresh_session(make_serve):
         resp = cad.rpc("execute", {"command": example})
         if "error" in resp:
             # Some examples name object ids that may not exist; only the error type is checked.
-            assert resp["error"]["code"] == 1, resp
+            assert resp["error"]["code"] in (1, 2, 3), resp
             assert isinstance(resp["error"]["message"], str)
         else:
             assert "created" in resp["result"]

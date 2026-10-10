@@ -21,6 +21,7 @@ use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::sheets::{Annotation, AnnotationItem, Viewport};
 use glam::DVec2;
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 macro_rules! style_methods {
@@ -191,14 +192,6 @@ pub fn describe() -> Value {
     })
 }
 
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError::invalid_params(e)
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError::app(e)
-}
-
 type Res = Result<Value, RpcError>;
 
 const STYLE_TYPES: [(&str, &str); 4] = [
@@ -308,7 +301,7 @@ fn object_param(p: &Value, key: &str) -> Result<ObjectId, RpcError> {
 fn annot_of(doc: &Document, id: ObjectId) -> Result<(&Object, &Annot), RpcError> {
     let o = doc
         .object(id)
-        .ok_or_else(|| app(format!("object {id} does not exist")))?;
+        .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
     match &o.shape {
         Shape::Annotation(a) => Ok((o, a)),
         _ => Err(bad(format!("object {id} is not an annotation"))),
@@ -388,7 +381,7 @@ fn style_create(s: &mut Session, ty: &str, p: &Value) -> Res {
     let out = s
         .editor
         .execute(&Command::AddResource { name, body })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"id": out.created[0]}))
 }
 
@@ -410,7 +403,7 @@ fn style_update(s: &mut Session, ty: &str, p: &Value) -> Res {
             name,
             body: Some(body),
         })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(style_json(s.editor.doc(), id))
 }
 
@@ -423,7 +416,7 @@ fn style_delete(s: &mut Session, ty: &str, p: &Value) -> Res {
     };
     s.editor
         .execute(&Command::DeleteResource { id, reassign })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"ok": true}))
 }
 
@@ -514,7 +507,7 @@ fn prep_dimension(
     if let Some(object) = j.remove("object").and_then(|v| v.as_u64()).map(ObjectId) {
         let shape = &doc
             .object(object)
-            .ok_or_else(|| app(format!("object {object} does not exist")))?
+            .ok_or_else(|| RpcError::not_found(format!("object {object} does not exist")))?
             .shape;
         let angle = j.remove("angle").and_then(|v| v.as_f64()).unwrap_or(0.78);
         let pts = match (mode, shape) {
@@ -693,7 +686,7 @@ fn viewport_of(doc: &Document, id: ObjectId) -> Result<&Viewport, RpcError> {
     match doc.object(id).map(|o| &o.shape) {
         Some(Shape::Viewport(v)) => Ok(v),
         Some(_) => Err(bad(format!("object {id} is not a viewport"))),
-        None => Err(app(format!("object {id} does not exist"))),
+        None => Err(RpcError::not_found(format!("object {id} does not exist"))),
     }
 }
 
@@ -738,7 +731,7 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
                     class: None,
                     attrs: None,
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             json!({"viewport": vid, "annotation": aid})
         }
         None => {
@@ -749,7 +742,7 @@ fn add(s: &mut Session, ty: &str, p: &Value) -> Res {
                 class,
                 attrs: Attributes::default(),
             });
-            let out = s.editor.execute(&cmd).map_err(app)?;
+            let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
             json!(out.created[0])
         }
     };
@@ -908,7 +901,7 @@ fn update(s: &mut Session, p: &Value) -> Res {
             class: None,
             attrs: None,
         })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     let doc = s.editor.doc();
     let (o, a) = annot_of(doc, id)?;
     Ok(item_json(doc, o, a))
@@ -937,7 +930,7 @@ fn tag_all(s: &mut Session, p: &Value) -> Res {
     let out = s
         .editor
         .execute(&Command::Batch { commands: cmds })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"tagged": n, "ids": out.created, "skipped": matched - n}))
 }
 
@@ -951,7 +944,7 @@ fn apply_text_style(s: &mut Session, p: &Value) -> Res {
     for id in &ids {
         let o = doc
             .object(*id)
-            .ok_or_else(|| app(format!("object {id} does not exist")))?;
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
         let shape = match &o.shape {
             Shape::Annotation(a) => {
                 let mut a = (**a).clone();
@@ -981,7 +974,7 @@ fn apply_text_style(s: &mut Session, p: &Value) -> Res {
     }
     s.editor
         .execute(&Command::Batch { commands: cmds })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"changed": ids.len()}))
 }
 
