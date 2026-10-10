@@ -252,6 +252,13 @@ fn draw_object(
             )
         }
         Shape::Viewport(_) | Shape::TitleBlock(_) => Ok(()),
+        // Annotations come from the extension, which has the worksheet code for tags and legends.
+        Shape::Annotation(_) => {
+            if let Some(ext) = ext {
+                ext(doc, o, &style, s);
+            }
+            Ok(())
+        }
         Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
             let outline = site_outline(&o.shape);
             let res = writeln!(

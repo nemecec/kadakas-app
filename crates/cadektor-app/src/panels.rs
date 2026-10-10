@@ -271,6 +271,15 @@ pub fn tool_panel(
     for t in Tool::SITE {
         tool_button(ui, m, keys, t);
     }
+    ui.add_space(8.0);
+    ui.label("Annotation");
+    for t in Tool::ANNOTATION {
+        tool_button(ui, m, keys, t);
+    }
+    crate::annot_ui::panel_buttons(ui, doc, &mut settings.annot);
+    if Tool::ANNOTATION.contains(&m.tool()) {
+        crate::annot_ui::tool_options(ui, m.tool(), settings, doc);
+    }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
     }
@@ -593,6 +602,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 ui.end_row();
             }
             Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
+            Shape::Annotation(a) => f.commit |= crate::annot_ui::fields(ui, a),
             Shape::Group { name } => f.text(ui, "Name", name),
             Shape::Symbol {
                 at,

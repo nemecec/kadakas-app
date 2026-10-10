@@ -1,5 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
+mod annot_ui;
 mod app;
 mod area_ui;
 mod canvas;

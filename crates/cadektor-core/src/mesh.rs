@@ -701,7 +701,7 @@ impl Builder<'_> {
                     .polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
-            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}
             // A group draws through its members.
             Shape::Group { .. } => {}
             Shape::Symbol { .. } => {

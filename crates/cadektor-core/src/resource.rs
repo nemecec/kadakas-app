@@ -37,6 +37,8 @@ pub enum ResourceBody {
     LandscapeAreaStyle(Box<LandscapeAreaStyle>),
     /// A symbol, hatch, tile, line type or texture (see `crate::graphics`).
     Graphic(Box<crate::graphics::GraphicResource>),
+    /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
+    Annot(Box<crate::annot::style::AnnotResource>),
     Unknown(serde_json::Value),
 }
 
@@ -62,6 +64,7 @@ impl Serialize for ResourceBody {
                 v.serialize(s)
             }
             ResourceBody::Graphic(g) => g.serialize(s),
+            ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -115,7 +118,14 @@ impl<'de> Deserialize<'de> for ResourceBody {
                     }),
                 )
             }
-            _ => Ok(ResourceBody::Unknown(v)),
+            _ => match crate::annot::style::AnnotResource::from_json(&v) {
+                // A value from a newer app (a unit this version does not know): keep the raw JSON and save it again.
+                Some(r) => Ok(r.map_or_else(
+                    |_| ResourceBody::Unknown(v.clone()),
+                    |a| ResourceBody::Annot(Box::new(a)),
+                )),
+                None => Ok(ResourceBody::Unknown(v)),
+            },
         }
     }
 }
@@ -136,6 +146,7 @@ impl ResourceBody {
             ResourceBody::HardscapeStyle(_) => "hardscape_style",
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Graphic(g) => g.type_name(),
+            ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -153,6 +164,7 @@ impl ResourceBody {
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
             ResourceBody::Graphic(g) => g.validate(),
+            ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }

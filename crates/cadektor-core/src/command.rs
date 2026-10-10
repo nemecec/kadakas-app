@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::model::*;
 use crate::resource::{ResourceBody, ResourceId, Resources};
 
+mod annot_ops;
 mod area_ops;
 mod drawing_ops;
 mod graphic_ops;
@@ -1049,7 +1050,7 @@ impl<'a> Tx<'a> {
                 }
             }
         }
-        Ok(())
+        self.annot_after(cmd)
     }
 
     /// After a successful run: every object that the command touched must

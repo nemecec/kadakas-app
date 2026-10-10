@@ -414,6 +414,7 @@ impl Annotation {
                 AnnotationItem::Shape { shape } => {
                     shape.is_finite()
                         && shape.is_in_range()
+                        && shape_problem(shape).is_none()
                         && !matches!(**shape, Shape::Viewport(_) | Shape::TitleBlock(_))
                 }
             }
@@ -745,6 +746,7 @@ pub fn shape_problem(shape: &Shape) -> Option<String> {
     match shape {
         Shape::Viewport(v) => v.problem(),
         Shape::TitleBlock(t) => t.problem(),
+        Shape::Annotation(a) => a.problem(),
         _ => None,
     }
 }
@@ -761,6 +763,7 @@ pub fn allowed_on_sheet(shape: &Shape) -> bool {
             | Shape::Text { .. }
             | Shape::Viewport(_)
             | Shape::TitleBlock(_)
+            | Shape::Annotation(_)
             | Shape::Group { .. }
             | Shape::Symbol { .. }
     )
