@@ -37,15 +37,29 @@ impl Version {
             if part.is_empty() || part.len() > 9 || !part.bytes().all(|b| b.is_ascii_digit()) {
                 return Err(bad("numbers must be 1 to 9 digits"));
             }
+            if part.len() > 1 && part.starts_with('0') {
+                return Err(bad("no leading zeros"));
+            }
             n[i] = part.parse().map_err(|_| bad("not a number"))?;
         }
         if let Some(p) = pre
             && (!p
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
                 || p.split('.').any(str::is_empty))
         {
-            return Err(bad("bad pre-release part"));
+            // Lower case only: two versions that differ only in case would share a folder
+            // on a case-insensitive file system.
+            return Err(bad(
+                "bad pre-release part (lower-case letters, digits, . and -)",
+            ));
+        }
+        if let Some(p) = pre
+            && p.split('.').any(|id| {
+                id.len() > 1 && id.starts_with('0') && id.bytes().all(|b| b.is_ascii_digit())
+            })
+        {
+            return Err(bad("no leading zeros in numbers of the pre-release part"));
         }
         Ok(Version {
             major: n[0],
@@ -154,6 +168,11 @@ mod tests {
             "1.2.3-a..b",
             "1.2.3-a/b",
             "1.2.3-é",
+            "1.2.3-Beta",
+            "01.2.3",
+            "1.02.3",
+            "1.2.3-a.01",
+            "1.2.3-00",
             "1234567890.0.0",
         ] {
             assert!(Version::parse(t).is_err(), "{t}");
@@ -191,10 +210,18 @@ mod tests {
 
     proptest! {
         #[test]
-        fn text_round_trip(a in 0u64..1000, b in 0u64..1000, c in 0u64..1000, pre in proptest::option::of("[a-z0-9]{1,8}(\\.[a-z0-9]{1,4}){0,2}")) {
+        fn text_round_trip(a in 0u64..1000, b in 0u64..1000, c in 0u64..1000, pre in proptest::option::of("[a-z][a-z0-9]{0,7}(\\.[a-z][a-z0-9]{0,3}){0,2}")) {
             let text = match &pre { Some(p) => format!("{a}.{b}.{c}-{p}"), None => format!("{a}.{b}.{c}") };
             let ver = Version::parse(&text).unwrap();
             prop_assert_eq!(ver.to_string(), text);
+        }
+
+        #[test]
+        fn eq_and_ord_agree(a in "[0-2]\\.[0-2]\\.[0-2](-[a-c0-3]{1,2}(\\.[a-c0-3]{1,2})?)?", b in "[0-2]\\.[0-2]\\.[0-2](-[a-c0-3]{1,2}(\\.[a-c0-3]{1,2})?)?") {
+            if let (Ok(x), Ok(y)) = (Version::parse(&a), Version::parse(&b)) {
+                prop_assert_eq!(x == y, x.cmp(&y) == Ordering::Equal);
+                prop_assert_eq!(x.cmp(&y), y.cmp(&x).reverse());
+            }
         }
 
         #[test]

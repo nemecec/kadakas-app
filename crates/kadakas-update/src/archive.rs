@@ -6,6 +6,10 @@
 //! - Only plain files and folders are written. Links, devices and pipes are refused.
 //! - A path must be relative, with normal names only: no `..`, no root, no drive letter, no
 //!   backslash and no `:` (Windows streams). This stops "zip slip" archives.
+//! - Names that Windows cannot store are refused on every system, so an archive means the same
+//!   everywhere: reserved device names (`CON`, `NUL`, `COM1`, ...), and names that end in a dot or
+//!   a space.
+//! - Two names that differ only in case are refused (they are one file on Windows and macOS).
 //! - A file that exists already is never overwritten, so a duplicate entry is an error.
 //! - The number of entries and the total size are limited.
 
@@ -29,6 +33,25 @@ impl Default for Limits {
     }
 }
 
+/// A name that every supported file system can store.
+fn portable_name(name: &str) -> bool {
+    if name.ends_with('.') || name.ends_with(' ') {
+        return false;
+    }
+    // Windows reserves the device name with any extension: `nul.txt` is `nul`.
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered = |p: &str| {
+        stem.strip_prefix(p)
+            .is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'))
+    };
+    !(matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT"))
+}
+
 /// Checks an archive path and returns it as a clean relative path.
 pub fn safe_relative(path: &Path) -> Result<PathBuf> {
     let text = path.to_string_lossy();
@@ -39,7 +62,12 @@ pub fn safe_relative(path: &Path) -> Result<PathBuf> {
     let mut clean = PathBuf::new();
     for c in path.components() {
         match c {
-            Component::Normal(n) => clean.push(n),
+            Component::Normal(n) => {
+                if !portable_name(&n.to_string_lossy()) {
+                    return Err(unsafe_path());
+                }
+                clean.push(n)
+            }
             Component::CurDir => {}
             _ => return Err(unsafe_path()),
         }
@@ -58,6 +86,8 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
     let mut entries_seen = 0usize;
     let mut total = 0u64;
     let mut files = 0usize;
+    // Lower-case path -> the path as written. Finds names that differ only in case.
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let entries = archive
         .entries()
         .map_err(|e| UpdateError::Archive(e.to_string()))?;
@@ -78,6 +108,22 @@ pub fn extract_tar_gz(reader: impl Read, dest: &Path, limits: Limits) -> Result<
         // Check the path first: a bad path is reported as such, whatever the entry type is.
         let rel = safe_relative(&raw)?;
         let target = dest.join(&rel);
+        // Every prefix of the path is checked too: `A/x` and `a/y` would share one folder.
+        let mut prefix = PathBuf::new();
+        for c in rel.components() {
+            prefix.push(c);
+            let written = prefix.to_string_lossy().into_owned();
+            let folded = written.to_lowercase();
+            if let Some(first) = seen.get(&folded) {
+                if *first != written {
+                    return Err(UpdateError::UnsafePath(format!(
+                        "{written} and {first} differ only in case"
+                    )));
+                }
+            } else {
+                seen.insert(folded, written);
+            }
+        }
         if kind.is_dir() {
             std::fs::create_dir_all(&target)?;
             continue;
@@ -340,6 +386,30 @@ pub(crate) mod tests {
         for bad in ["", ".", "..", "a/..", "/a", "a\\b"] {
             assert!(safe_relative(Path::new(bad)).is_err(), "{bad}");
         }
+        for bad in [
+            "con", "NUL", "nul.txt", "Aux.tar", "COM1", "lpt9.x", "a/PRN", "x.", "x ", "dir /f",
+        ] {
+            assert!(safe_relative(Path::new(bad)).is_err(), "{bad}");
+        }
+        for ok in ["com0", "com10", "lpt", "console", "nullable", "a.b", "COM"] {
+            assert!(safe_relative(Path::new(ok)).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn names_that_differ_only_in_case_are_refused() {
+        for names in [["a.txt", "A.txt"], ["Dir/x", "dir/y"]] {
+            let d = tmp("case");
+            let a = build(&[file(names[0], b"1"), file(names[1], b"2")]);
+            let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
+            assert!(matches!(e, UpdateError::UnsafePath(_)), "{names:?}: {e}");
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+        // The same folder written twice in the same way is fine.
+        let d = tmp("case-ok");
+        let a = build(&[file("Dir/x", b"1"), file("Dir/y", b"2")]);
+        assert_eq!(extract_tar_gz(&a[..], &d, Limits::default()).unwrap(), 2);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     proptest::proptest! {

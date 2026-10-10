@@ -1,69 +1,164 @@
 name: Update manifest
-# Signs the update manifest for the launcher (PLAT-06) after a release is published.
+# Signs the update manifests for the launcher (PLAT-06). See docs/release.md.
 #
-# The manifest lists the update archives of the release (kadakas-update-<platform>.tar.gz, made by
-# release.yml) with their size and SHA-256. It is signed with the ed25519 key in the secret
-# KADAKAS_UPDATE_SIGNING_KEY (32-byte seed as 64 hex characters). The signed file goes to the
-# release "update-manifests", where the launcher looks for it. See docs/release.md.
+# A manifest lists the update archives of a release (kadakas-update-<platform>.tar.gz, made by
+# release.yml) with their size and SHA-256, and it has a validity time (`expires`). It is signed
+# with the ed25519 key in the secret KADAKAS_UPDATE_SIGNING_KEY (a 32-byte seed as 64 hex
+# characters). The signed files go to the release "update-manifests", where the launcher looks.
 #
-# It runs after the release is PUBLISHED, because the manifest points to the public download
-# addresses. A draft release has no public addresses.
+# When it runs:
+#   - when a release is published (the manifest points to public download addresses, so a draft
+#     release is not enough);
+#   - every week, to sign the latest stable and beta release again. A manifest is valid for
+#     KADAKAS_MANIFEST_VALID_DAYS days (repository variable, default 30), so a weekly re-sign
+#     keeps it fresh. If this job stops, manifests expire and launchers stop offering updates;
+#   - by hand, for one tag.
+#
+# The secret lives in the GitHub Environment "update-signing". Set that environment up with
+# required reviewers and with a deployment rule that allows only the protected branch and tags
+# "v*". Then no other branch or workflow can read the key. See docs/release.md.
 on:
   release:
     types: [published]
+  schedule:
+    - cron: "17 4 * * 1" # Mondays, 04:17 UTC
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag of a published release (for example v0.1.0)"
-        required: true
+        description: "Tag of a published release (for example v0.1.0). Empty: the latest stable and beta."
+        required: false
 
 permissions:
   contents: read
 
+env:
+  VALID_DAYS: ${{ vars.KADAKAS_MANIFEST_VALID_DAYS || '30' }}
+
 jobs:
-  manifest:
+  # Decides which tags to sign. No secret here.
+  plan:
     runs-on: ubuntu-22.04
+    outputs:
+      tags: ${{ steps.plan.outputs.tags }}
+      strict: ${{ steps.plan.outputs.strict }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          # A tag is plain text from outside. Check its form before anything uses it.
+          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          if [ -n "$EVENT_TAG" ]; then
+            [[ "$EVENT_TAG" =~ $re ]] || { echo "bad tag: $EVENT_TAG"; exit 1; }
+            echo "tags=[\"$EVENT_TAG\"]" >> "$GITHUB_OUTPUT"
+            echo "strict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          stable=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+          beta=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 30 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease and .tagName != "update-manifests")][0].tagName // empty')
+          tags="["
+          sep=""
+          for t in $stable $beta; do
+            [[ "$t" =~ $re ]] || { echo "skipping $t"; continue; }
+            tags="$tags$sep\"$t\""; sep=","
+          done
+          echo "tags=$tags]" >> "$GITHUB_OUTPUT"
+          # A scheduled re-sign must not fail because a newer release is already published.
+          echo "strict=false" >> "$GITHUB_OUTPUT"
+
+  # Builds the signing tool. No secret here: the code that runs next to the secret is already built.
+  tool:
+    runs-on: ubuntu-22.04
+    needs: plan
+    if: needs.plan.outputs.tags != '[]'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - run: cargo build --release --locked -p kadakas-sign-manifest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sign-manifest
+          path: target/release/sign-manifest
+          if-no-files-found: error
+
+  sign:
+    runs-on: ubuntu-22.04
+    needs: [plan, tool]
+    if: needs.plan.outputs.tags != '[]'
+    environment: update-signing # holds KADAKAS_UPDATE_SIGNING_KEY; protect it (docs/release.md)
     permissions:
-      contents: write # to upload the manifest to the release "update-manifests"
+      contents: write # to upload to the release "update-manifests"
+    concurrency:
+      group: update-manifests # one upload at a time
+      cancel-in-progress: false
+    strategy:
+      max-parallel: 1
+      matrix:
+        tag: ${{ fromJSON(needs.plan.outputs.tags) }}
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ matrix.tag }}
+      STRICT: ${{ needs.plan.outputs.strict }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sign-manifest
+          path: tool
+      - name: Check the tag
+        run: |
+          set -euo pipefail
+          chmod +x tool/sign-manifest
+          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          [[ "$TAG" =~ $re ]] || { echo "bad tag: $TAG"; exit 1; }
+          # The version in the tag must be the version in the workspace at that tag.
+          ws=$(git show "refs/tags/$TAG:Cargo.toml" | awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}')
+          [ "v$ws" = "$TAG" ] || { echo "tag $TAG does not match the workspace version $ws"; exit 1; }
       - name: Download the update archives of the release
         run: gh release download "$TAG" --pattern 'kadakas-update-*.tar.gz' --dir archives
-      - name: Build the manifest (size and SHA-256 come from the files)
-        run: |
-          version="${TAG#v}"
-          # A version with a dash (1.2.0-beta.1) goes to the beta channel.
-          case "$version" in *-*) channel=beta ;; *) channel=stable ;; esac
-          echo "CHANNEL=$channel" >> "$GITHUB_ENV"
-          args=()
-          for p in macos-aarch64 macos-x86_64 windows-x86_64 linux-x86_64; do
-            file="archives/kadakas-update-$p.tar.gz"
-            url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kadakas-update-$p.tar.gz"
-            args+=(--platform "$p=$file=$url")
-          done
-          cargo run --release -p kadakas-sign-manifest -- build \
-            --version "$version" --channel "$channel" "${args[@]}" --out manifest.json
-      - name: Sign the manifest
+      - name: Build, check, sign and publish
         env:
           KADAKAS_UPDATE_SIGNING_KEY: ${{ secrets.KADAKAS_UPDATE_SIGNING_KEY }}
         run: |
-          cargo run --release -p kadakas-sign-manifest -- sign \
-            --manifest manifest.json --key-env KADAKAS_UPDATE_SIGNING_KEY \
-            --out "manifest-$CHANNEL.json"
-      - name: Check the signature against the keys in the launcher
-        run: |
+          set -euo pipefail
+          tool=./tool/sign-manifest
+          version="${TAG#v}"
           keys=()
           while read -r k; do keys+=(--pubkey "$k"); done < <(sed 's/#.*//' crates/kadakas-launcher/trusted-keys.txt | tr -d ' \r' | grep -E '^[0-9a-fA-F]{64}$')
-          cargo run --release -p kadakas-sign-manifest -- verify --signed "manifest-$CHANNEL.json" "${keys[@]}"
-      - name: Publish the manifest
-        run: |
+          platforms=()
+          for p in macos-aarch64 macos-x86_64 windows-x86_64 linux-x86_64; do
+            platforms+=(--platform "$p=archives/kadakas-update-$p.tar.gz=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kadakas-update-$p.tar.gz")
+          done
+          # A version with a dash (1.2.0-beta.1) is a beta. A stable release also goes to the beta
+          # channel when it is newer than the beta manifest (beta users follow the newest build).
+          case "$version" in *-*) channels="beta" ;; *) channels="stable beta" ;; esac
           gh release view update-manifests >/dev/null 2>&1 || gh release create update-manifests \
             --title "Update manifests" --prerelease --latest=false \
             --notes "Signed manifests for the Kadakas launcher. Made by CI. Do not edit."
-          gh release upload update-manifests "manifest-$CHANNEL.json" --clobber
+          mkdir -p existing out
+          for c in $channels; do
+            gh release download update-manifests --pattern "manifest-$c.json" --dir existing --clobber 2>/dev/null || true
+            $tool build --version "$version" --channel "$c" --valid-days "$VALID_DAYS" "${platforms[@]}" --out "out/unsigned-$c.json"
+            # Never go back: the new version must be higher than the published one. A scheduled
+            # run signs the same version again, which is fine.
+            if [ -f "existing/manifest-$c.json" ]; then
+              equal=(); if [ "$STRICT" != "true" ]; then equal=(--allow-equal yes); fi
+              if ! $tool newer --existing "existing/manifest-$c.json" --manifest "out/unsigned-$c.json" "${equal[@]}" "${keys[@]}"; then
+                if [ "$STRICT" = "true" ] && { [ "$c" = "beta" ] && [ "$channels" != "beta" ]; }; then
+                  echo "The $c manifest is newer than $version. Left as it is."
+                  continue
+                fi
+                if [ "$STRICT" = "true" ]; then echo "Refusing to publish an older $c manifest."; exit 1; fi
+                echo "A newer $c manifest is published already. Skipping."
+                continue
+              fi
+            fi
+            $tool sign --manifest "out/unsigned-$c.json" --key-env KADAKAS_UPDATE_SIGNING_KEY --out "out/manifest-$c.json"
+            $tool verify --signed "out/manifest-$c.json" "${keys[@]}"
+            gh release upload update-manifests "out/manifest-$c.json" --clobber
+          done

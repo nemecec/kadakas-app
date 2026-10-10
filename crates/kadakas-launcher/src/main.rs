@@ -37,12 +37,21 @@ fn bundled_in(exe_dir: &Path) -> Option<Bundled> {
     })
 }
 
-fn build_updater(root: PathBuf, exe_dir: Option<&Path>, base: &str) -> Result<Updater, String> {
+fn build_updater(
+    root: PathBuf,
+    exe_dir: Option<&Path>,
+    base: &str,
+    loopback_http: bool,
+) -> Result<Updater, String> {
     let keys = TrustedKeys::parse_list(TRUSTED_KEYS).map_err(|e| e.to_string())?;
     let store = Store::new(root, exe_dir.and_then(bundled_in));
+    let mut http = UreqHttp::new();
+    if loopback_http {
+        http = http.allow_loopback_http();
+    }
     Ok(Updater::new(
         store,
-        Arc::new(UreqHttp::new()),
+        Arc::new(http),
         keys,
         base,
         current_platform(),
@@ -56,7 +65,10 @@ fn main() -> eframe::Result {
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
     let base = std::env::var("KADAKAS_UPDATE_URL").unwrap_or_else(|_| DEFAULT_MANIFEST_BASE.into());
-    let updater = build_updater(root, exe_dir.as_deref(), &base).expect("bad trusted-keys.txt");
+    // For local tests of the update flow only: allows http://127.0.0.1 for the manifest folder.
+    let loopback = std::env::var("KADAKAS_UPDATE_ALLOW_LOOPBACK_HTTP").is_ok_and(|v| v == "1");
+    let updater =
+        build_updater(root, exe_dir.as_deref(), &base, loopback).expect("bad trusted-keys.txt");
     let app = ui::LauncherApp::new(model::Model::new(Arc::new(updater)));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -98,9 +110,9 @@ mod tests {
         .unwrap();
         let b = bundled_in(&d).unwrap();
         assert_eq!(b.version.to_string(), env!("CARGO_PKG_VERSION"));
-        let u = build_updater(d.join("data"), Some(&d), "https://example.org/m").unwrap();
+        let u = build_updater(d.join("data"), Some(&d), "https://example.org/m", false).unwrap();
         assert!(u.store().active().is_some());
-        let none = build_updater(d.join("data2"), None, "https://example.org/m").unwrap();
+        let none = build_updater(d.join("data2"), None, "https://example.org/m", false).unwrap();
         assert!(none.store().active().is_none());
         std::fs::remove_dir_all(&d).unwrap();
     }

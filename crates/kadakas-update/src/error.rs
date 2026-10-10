@@ -30,6 +30,17 @@ pub enum UpdateError {
     /// A network problem or a bad answer from the server.
     #[error("download failed: {0}")]
     Http(String),
+    /// The manifest is older than the highest version that this install has seen on the channel.
+    /// An attacker may replay an old signed manifest; this stops it.
+    #[error("replayed manifest: version {offered} is older than {seen}, which was seen before")]
+    Replayed { seen: String, offered: String },
+    /// The manifest is past its `expires` time. A server that only serves old files (a freeze
+    /// attack) cannot hold a launcher back for longer than the validity time.
+    #[error("the manifest expired (valid until unix time {expires})")]
+    Expired { expires: u64 },
+    /// Another launcher holds the install lock.
+    #[error("another Kadakas launcher is changing the installation; try again in a moment")]
+    Busy,
     /// The download has another size than the manifest says (for example, it was cut short).
     #[error("the download has {got} bytes, the manifest says {expected}")]
     SizeMismatch { expected: u64, got: u64 },

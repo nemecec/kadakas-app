@@ -3,18 +3,21 @@
 //! Order of checks (nothing later runs when an earlier check fails):
 //!
 //! 1. The signature of the manifest, with the trusted keys.
-//! 2. The channel in the manifest is the channel that was asked for.
-//! 3. The version is newer than the active one (no downgrade).
-//! 4. The download has exactly the announced size.
-//! 5. The download has the announced SHA-256.
-//! 6. The archive paths are safe (see `archive`) and the install is atomic (see `store`).
+//! 2. The manifest is not expired (`expires`), so old signed files cannot be served for ever.
+//! 3. The channel in the manifest is the channel that was asked for.
+//! 4. The version is not lower than the highest one seen on this channel (no replay).
+//! 5. The version is newer than the active one (no downgrade).
+//! 6. The download has exactly the announced size.
+//! 7. The download has the announced SHA-256. The store checks this on the same open file that it
+//!    unpacks.
+//! 8. The archive paths are safe (see `archive`) and the install is atomic (see `store`).
 
 use crate::error::{Result, UpdateError};
 use crate::hex;
 use crate::http::Http;
 use crate::keys::TrustedKeys;
 use crate::manifest::{Channel, MAX_ENVELOPE_BYTES, Manifest, PlatformFile, SignedManifest};
-use crate::store::{Slot, Store};
+use crate::store::{ArchiveFile, Slot, Store};
 use crate::version::Version;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -59,7 +62,17 @@ pub fn current_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// The time source: seconds since 1970.
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+fn system_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 pub struct Updater {
+    clock: Clock,
     store: Store,
     http: Arc<dyn Http>,
     keys: TrustedKeys,
@@ -78,12 +91,19 @@ impl Updater {
         platform: impl Into<String>,
     ) -> Updater {
         Updater {
+            clock: Arc::new(system_clock),
             store,
             http,
             keys,
             manifest_base: manifest_base.into().trim_end_matches('/').to_string(),
             platform: platform.into(),
         }
+    }
+
+    /// Replaces the clock. For tests.
+    pub fn with_clock(mut self, clock: Clock) -> Updater {
+        self.clock = clock;
+        self
     }
 
     pub fn store(&self) -> &Store {
@@ -100,12 +120,22 @@ impl Updater {
         self.http
             .get(&self.manifest_url(channel), MAX_ENVELOPE_BYTES, &mut body)?;
         let manifest = SignedManifest::parse(&body)?.verify(&self.keys)?;
+        manifest.check_fresh((self.clock)())?;
         if manifest.channel != channel {
             return Err(UpdateError::ChannelMismatch {
                 expected: channel.as_str().into(),
                 got: manifest.channel.as_str().into(),
             });
         }
+        if let Some(seen) = self.store.seen(channel)
+            && manifest.version < seen
+        {
+            return Err(UpdateError::Replayed {
+                seen: seen.to_string(),
+                offered: manifest.version.to_string(),
+            });
+        }
+        self.store.note_seen(channel, &manifest.version)?;
         Ok(manifest)
     }
 
@@ -148,8 +178,12 @@ impl Updater {
         }
         let file = manifest.file_for(&self.platform)?;
         let part = self.download(&manifest.version, file)?;
-        let result = self.store.install(&manifest.version, &part, false);
-        let _ = std::fs::remove_file(&part);
+        let archive = ArchiveFile {
+            path: part,
+            sha256: file.sha256.clone(),
+        };
+        let result = self.store.install(&manifest.version, &archive, false);
+        let _ = std::fs::remove_file(&archive.path);
         result.map(|()| manifest.version)
     }
 
@@ -158,8 +192,8 @@ impl Updater {
         self.store.rollback()
     }
 
-    /// Downloads the archive to a file and checks size and hash (steps 4 and 5).
-    /// The file is deleted when a check fails.
+    /// Downloads the archive to a file and checks the size (step 6). The hash is checked by the
+    /// store when it installs (step 7). The file is deleted when a check fails.
     fn download(&self, version: &Version, file: &PlatformFile) -> Result<std::path::PathBuf> {
         std::fs::create_dir_all(self.store.downloads_dir())?;
         let part = self
@@ -191,9 +225,6 @@ impl Updater {
                 expected: file.size,
                 got: on_disk,
             });
-        }
-        if sha256_hex(std::fs::File::open(part)?)? != file.sha256 {
-            return Err(UpdateError::HashMismatch);
         }
         Ok(())
     }
@@ -247,6 +278,8 @@ pub(crate) mod tests {
         let m = Manifest {
             version: v(ver),
             channel,
+            published: 1_000,
+            expires: 1_000 + 30 * 86_400,
             platforms,
         };
         let signed = sign::sign_manifest(&m, signer);
@@ -265,7 +298,11 @@ pub(crate) mod tests {
     ) -> Updater {
         let store = Store::new(root.join("r"), installed.map(|i| bundled(root, i)));
         Updater::new(store, http, trusted(seeds), format!("{BASE}/"), PLATFORM)
+            .with_clock(Arc::new(|| NOW))
     }
+
+    /// The clock of the tests: inside the validity of the sample manifests.
+    pub const NOW: u64 = 5_000;
 
     fn active_text(u: &Updater) -> String {
         let a = u.store().active().unwrap();
@@ -507,7 +544,8 @@ pub(crate) mod tests {
         ));
         publish(&http, "1.1.0", Channel::Stable, &key(1));
         let store = Store::new(root.join("r2"), None);
-        let other = Updater::new(store, http.clone(), trusted(&[1]), BASE, "plan9-mips");
+        let other = Updater::new(store, http.clone(), trusted(&[1]), BASE, "plan9-mips")
+            .with_clock(Arc::new(|| NOW));
         assert!(matches!(
             other.check(Channel::Stable),
             Err(UpdateError::NoPlatform(_))
@@ -534,7 +572,8 @@ pub(crate) mod tests {
         publish(&http, "1.1.0", Channel::Stable, &key(1));
         let store =
             Store::new(root.join("r"), Some(bundled(&root, "1.0.0"))).with_fault(Step::Moved);
-        let u = Updater::new(store, http.clone(), trusted(&[1]), BASE, PLATFORM);
+        let u = Updater::new(store, http.clone(), trusted(&[1]), BASE, PLATFORM)
+            .with_clock(Arc::new(|| NOW));
         assert!(matches!(
             u.update(Channel::Stable),
             Err(UpdateError::Interrupted(_))
@@ -545,6 +584,60 @@ pub(crate) mod tests {
         again.store().recover();
         again.update(Channel::Stable).unwrap();
         assert_eq!(active_text(&again), "app 1.1.0");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_expired_manifest_is_refused() {
+        let root = tmp("up-expired");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http.clone(), &[1], Some("1.0.0"));
+        assert!(u.check(Channel::Stable).is_ok());
+        // 31 days later the same file is a freeze attack: the server serves an old manifest.
+        let late =
+            updater(&root, http, &[1], Some("1.0.0")).with_clock(Arc::new(|| 1_000 + 31 * 86_400));
+        let e = late.check(Channel::Stable).unwrap_err();
+        assert!(matches!(e, UpdateError::Expired { .. }), "{e}");
+        assert!(matches!(
+            late.update(Channel::Stable),
+            Err(UpdateError::Expired { .. })
+        ));
+        assert_eq!(active_text(&late), "app 1.0.0");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_replayed_older_manifest_is_refused_even_after_a_rollback() {
+        let root = tmp("up-replay");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http.clone(), &[1], Some("1.0.0"));
+        u.update(Channel::Stable).unwrap();
+        // The user rolls back to the bundled 1.0.0. Now 1.0.5 looks newer than the active version.
+        u.rollback().unwrap();
+        assert_eq!(active_text(&u), "app 1.0.0");
+        // An attacker (or a confused server) serves a genuine, signed, older manifest.
+        publish(&http, "1.0.5", Channel::Stable, &key(1));
+        let e = u.check(Channel::Stable).unwrap_err();
+        assert!(matches!(e, UpdateError::Replayed { .. }), "{e}");
+        assert!(matches!(
+            u.update(Channel::Stable),
+            Err(UpdateError::Replayed { .. })
+        ));
+        assert_eq!(active_text(&u), "app 1.0.0");
+        // The memory is on disk: a new launcher process refuses it too.
+        let again = updater(&root, http.clone(), &[1], Some("1.0.0"));
+        assert!(again.check(Channel::Stable).is_err());
+        // The same version again is not a replay (CI signs it again before it expires).
+        publish(&http, "1.1.0", Channel::Stable, &key(1));
+        assert!(matches!(
+            again.check(Channel::Stable).unwrap(),
+            UpdateStatus::Available(_)
+        ));
+        // Another channel has its own memory.
+        publish(&http, "1.0.2-beta.1", Channel::Beta, &key(1));
+        assert!(again.check(Channel::Beta).is_ok());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

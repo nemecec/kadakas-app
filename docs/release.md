@@ -89,9 +89,17 @@ The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a ne
 
 1. Download `manifest-<channel>.json` from the release `update-manifests` (`KADAKAS_UPDATE_URL` replaces the folder address, for tests).
 2. Check the ed25519 signature with the public keys that are built into the launcher. Nothing in the file is used before the signature is good.
-3. Refuse a manifest for another channel. Refuse a version that is older than the active one. Only the Roll back button goes to an older version.
-4. Download the archive for this system and check that it has exactly the announced size and SHA-256.
-5. Unpack it into `versions/.tmp-<version>`, rename it to `versions/<version>`, and then write `current`. The write of `current` is the switch. If the computer stops before it, the old version still runs, and the next start of the launcher removes the half-made folder.
+3. Refuse an expired manifest (`expires` is signed). This stops a server, or an attacker on the network, from keeping a launcher on old news by serving an old file for ever.
+4. Refuse a manifest for another channel.
+5. Refuse a replay: the launcher remembers the highest manifest version it has seen on each channel (`seen.json`). A signed manifest with a lower version is refused, even when the user has rolled back and the old version looks new. To publish an older build, release it with a higher version number.
+6. Refuse a version that is older than the active one. Only the Roll back button goes to an older version.
+7. Download the archive for this system. The size must be exactly the announced size. The download has a timeout for each chunk (30 seconds) and a time budget for the whole body (60 seconds plus the size at 100 kB/s), so a stalled server ends as an error and the window never hangs. Redirects are followed, but never from https to http.
+8. Open the archive once. Compute its SHA-256 from that open file, then unpack the same file. The two steps cannot see different files.
+9. Unpack it into `versions/.tmp-<version>`, write the marker file `.kadakas-complete` (the archive SHA-256), rename the folder to `versions/<version>`, and then write `current`. The write of `current` is the switch. If the computer stops before it, the old version still runs, and the next start of the launcher removes the half-made folder. An existing folder is reused only when its marker has the same SHA-256; otherwise it is unpacked again.
+
+One install lock (`lock` in the install folder, an advisory file lock) lets only one launcher change the folder at a time. Install and rollback wait for it (up to 10 seconds, then they report "busy"). The clean-up at start-up skips when another launcher holds it.
+
+When the launcher starts and the version next to it (from the installer) is newer than the one in `current`, the newer one runs. This is the case after the user installs a newer Kadakas over an old update.
 
 The archive is a `.tar.gz` with `kadakas-app` and `kadakas` (with `.exe` on Windows) at the top level. The unpacker accepts plain files and folders only. It refuses links, absolute paths, `..`, backslashes and `:` in names.
 
@@ -100,8 +108,15 @@ A version folder may also hold `flavors.json` to list more programs (other UI fl
 ### How CI signs the manifest
 
 - `release.yml` builds the installers and one update archive per system: `kadakas-update-<platform>.tar.gz`, with the platform names `macos-aarch64`, `macos-x86_64`, `windows-x86_64` and `linux-x86_64`. They go into the draft release.
-- After you publish the release, `.github/workflows/update-manifest.yml` runs. It downloads the archives, runs `sign-manifest build` (size and SHA-256 come from the files), signs the result with `sign-manifest sign`, checks it with `sign-manifest verify` against the keys in `crates/kadakas-launcher/trusted-keys.txt`, and uploads `manifest-stable.json` or `manifest-beta.json` to the release `update-manifests`. A version with a dash (`1.2.0-beta.1`) goes to the beta channel.
+- `.github/workflows/update-manifest.yml` runs when a release is **published**, every Monday, and by hand. It has three jobs:
+  1. `plan` (no secret) checks the tag against a strict version pattern and chooses the tags to sign: the published tag, or on the weekly run the latest stable and the latest beta release.
+  2. `tool` (no secret) builds `sign-manifest` once. The job that holds the key only runs the finished binary.
+  3. `sign` runs in the GitHub Environment `update-signing`. It checks that the tag version equals the workspace version at that tag, downloads the archives, runs `sign-manifest build` (size and SHA-256 come from the files), `newer` (see below), `sign` and `verify` (against the keys in `crates/kadakas-launcher/trusted-keys.txt`), and uploads `manifest-stable.json` or `manifest-beta.json` to the release `update-manifests`. A version with a dash (`1.2.0-beta.1`) goes to the beta channel only. A stable release also updates `manifest-beta.json` when it is newer than the beta manifest, so beta users never fall behind stable users.
+- **No backports.** Before `--clobber` replaces a published manifest, the job downloads it, checks its signature and fails when the new version is not higher (`sign-manifest newer`). The weekly re-sign allows an equal version.
+- **Validity.** Each manifest has `published` and `expires`. The validity is `KADAKAS_MANIFEST_VALID_DAYS` days (repository variable, default 30). The weekly run signs again, so a manifest is never older than about a week. If the weekly job stops, manifests expire after the validity time and launchers stop offering updates (they show the "expired" error). Check the Actions page after a failed run.
 - The private key is the secret `KADAKAS_UPDATE_SIGNING_KEY`: 64 hex characters (a 32-byte seed). Only the signing step sees it, as an environment variable. It never goes to disk, and the launcher never has it.
+
+Protect the key: create the Environment `update-signing` (Settings, Environments), put the secret there and not in the repository secrets, add **required reviewers**, and under "Deployment branches and tags" allow only the default branch and the tag pattern `v*`. Then a changed workflow on another branch cannot read the key, and each signing run needs a person to approve it.
 
 You can run the tool by hand:
 
@@ -131,10 +146,13 @@ The launcher trusts one or two keys. To change the key without breaking old laun
 
 Launchers that are older than step 1 cannot follow a rotation. They need a new installer.
 
+**Revocation also needs a new installer.** The launcher does not update itself, and its keys are built in. If a signing key leaks, the new key reaches users only with a new installer (a new launcher). Until then, an attacker with the old key can sign manifests that those launchers accept (an attacker still needs a download address, and the version must be higher than the highest one seen). So: protect the key as described above, keep the validity short, and plan the rotation before the first release (ship two keys from the start if you can, with the second key kept offline as a spare).
+
 ### Not done yet
 
 - The launcher does not update itself. A new launcher comes with a new installer.
-- There is no download progress bar.
+- There is no download progress bar, and no cancel button. A stuck download ends by itself through the timeouts.
+- The launcher does not check the free disk space before a download (the standard library has no portable call for it, and we did not add a dependency for it). A full disk gives a normal file error, and the old version keeps working.
 - The installers are not signed (see the next section).
 
 ## TODO: signing

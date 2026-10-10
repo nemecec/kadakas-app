@@ -7,11 +7,18 @@
 //!     Prints the public key of a private key.
 //! sign-manifest build --version V --channel stable|beta --out FILE
 //!                     --platform NAME=ARCHIVE=URL [--platform ...]
-//!     Makes an unsigned manifest. Size and SHA-256 come from the archive files.
+//!                     [--valid-days N] [--now UNIX_SECONDS]
+//!     Makes an unsigned manifest. Size and SHA-256 come from the archive files. It is valid
+//!     for N days from now (default 30). CI signs again before that time is over.
 //! sign-manifest sign --manifest FILE (--key-file FILE | --key-env VAR) --out FILE
 //!     Signs a manifest and writes the signed envelope.
-//! sign-manifest verify --signed FILE --pubkey HEX [--pubkey HEX]
-//!     Checks a signed envelope. CI runs this before it uploads.
+//! sign-manifest verify --signed FILE --pubkey HEX [--pubkey HEX] [--now UNIX_SECONDS]
+//!     Checks a signed envelope: signature and expiry. CI runs this before it uploads.
+//! sign-manifest newer --existing FILE --manifest FILE --pubkey HEX [--pubkey HEX]
+//!                     [--allow-equal yes]
+//!     CI guard against a backport: checks the signature of the manifest that is published now
+//!     and fails unless the new manifest has a higher version (or an equal one, with
+//!     --allow-equal, for a re-sign). It does not look at the expiry of the old file.
 //! ```
 //!
 //! The private key is a 32-byte seed in hex. CI keeps it in a secret and passes it in an
@@ -42,6 +49,7 @@ pub fn run(args: &[String], env: Env, out: &mut dyn Write) -> Result<(), String>
         "build" => build(&flags),
         "sign" => sign_file(&flags, env),
         "verify" => verify(&flags, out),
+        "newer" => newer(&flags, out),
         other => Err(format!("unknown command {other:?}\n{USAGE}")),
     }
 }
@@ -114,6 +122,18 @@ fn keygen(flags: &Flags, out: &mut dyn Write) -> Result<(), String> {
     writeln!(out, "{}", sign::public_hex(&key)).map_err(io)
 }
 
+/// Seconds since 1970: `--now` or the clock.
+fn now(flags: &Flags) -> Result<u64, String> {
+    match flags.one("now")? {
+        Some(t) => t
+            .parse()
+            .map_err(|_| format!("--now needs a number, got {t:?}")),
+        None => Ok(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())),
+    }
+}
+
 fn build(flags: &Flags) -> Result<(), String> {
     let version = Version::parse(flags.need("version")?).map_err(|e| e.to_string())?;
     let channel_text = flags.need("channel")?;
@@ -137,9 +157,20 @@ fn build(flags: &Flags) -> Result<(), String> {
             },
         );
     }
+    let days: u64 = match flags.one("valid-days")? {
+        Some(d) => d
+            .parse()
+            .ok()
+            .filter(|d| (1..=365).contains(d))
+            .ok_or_else(|| format!("--valid-days must be 1 to 365, got {d:?}"))?,
+        None => 30,
+    };
+    let published = now(flags)?;
     let manifest = Manifest {
         version,
         channel,
+        published,
+        expires: published + days * 86_400,
         platforms,
     };
     manifest.validate().map_err(|e| e.to_string())?;
@@ -164,14 +195,39 @@ fn verify(flags: &Flags, out: &mut dyn Write) -> Result<(), String> {
     let manifest = SignedManifest::parse(&bytes)
         .and_then(|s| s.verify(&keys))
         .map_err(|e| e.to_string())?;
+    manifest
+        .check_fresh(now(flags)?)
+        .map_err(|e| e.to_string())?;
     writeln!(
         out,
-        "ok: version {} on the {} channel, {} platform(s)",
+        "ok: version {} on the {} channel, {} platform(s), valid until {}",
         manifest.version,
         manifest.channel.as_str(),
-        manifest.platforms.len()
+        manifest.platforms.len(),
+        manifest.expires
     )
     .map_err(io)
+}
+
+fn newer(flags: &Flags, out: &mut dyn Write) -> Result<(), String> {
+    let existing_path = flags.need("existing")?;
+    let bytes = std::fs::read(existing_path).map_err(|e| format!("{existing_path}: {e}"))?;
+    let keys = TrustedKeys::new(&flags.all("pubkey")).map_err(|e| e.to_string())?;
+    let old = SignedManifest::parse(&bytes)
+        .and_then(|s| s.verify(&keys))
+        .map_err(|e| format!("the published manifest: {e}"))?;
+    let path = flags.need("manifest")?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let new: Manifest = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    let equal_ok = flags.one("allow-equal")?.is_some();
+    let good = new.version > old.version || (equal_ok && new.version == old.version);
+    if !good {
+        return Err(format!(
+            "version {} is not newer than the published {} (a backport?)",
+            new.version, old.version
+        ));
+    }
+    writeln!(out, "ok: {} follows {}", new.version, old.version).map_err(io)
 }
 
 #[cfg(test)]
@@ -478,6 +534,194 @@ mod tests {
             .is_err()
         );
         assert!(go(&["verify", "--signed", s(&a), "--pubkey", "00"], &[]).is_err());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Builds and signs a manifest file. Returns the path of the signed file.
+    fn make(
+        d: &Path,
+        name: &str,
+        version: &str,
+        now: &str,
+        days: &str,
+        key: &str,
+    ) -> std::path::PathBuf {
+        let archive = d.join("a.tar.gz");
+        std::fs::write(&archive, b"x").unwrap();
+        let unsigned = d.join(format!("{name}-unsigned.json"));
+        go(
+            &[
+                "build",
+                "--version",
+                version,
+                "--channel",
+                "beta",
+                "--now",
+                now,
+                "--valid-days",
+                days,
+                "--platform",
+                &format!("linux-x86_64={}=https://example.org/a", s(&archive)),
+                "--out",
+                s(&unsigned),
+            ],
+            &[],
+        )
+        .unwrap();
+        let signed = d.join(format!("{name}.json"));
+        go(
+            &[
+                "sign",
+                "--manifest",
+                s(&unsigned),
+                "--key-env",
+                "K",
+                "--out",
+                s(&signed),
+            ],
+            &[("K", key)],
+        )
+        .unwrap();
+        signed
+    }
+
+    #[test]
+    fn validity_time_and_expiry() {
+        let d = tmp("expiry");
+        let key = "0d".repeat(32);
+        let public = go(&["public", "--key-env", "K"], &[("K", &key)]).unwrap();
+        let public = public.trim();
+        let f = make(&d, "m", "1.0.0", "1000000", "2", &key);
+        let text = std::fs::read_to_string(&f).unwrap();
+        // published and expires are inside the signed payload.
+        assert!(text.contains("\\\"published\\\":1000000"), "{text}");
+        assert!(
+            text.contains(&format!("\\\"expires\\\":{}", 1_000_000 + 2 * 86_400)),
+            "{text}"
+        );
+        let verify = |now: &str| {
+            go(
+                &[
+                    "verify",
+                    "--signed",
+                    s(&f),
+                    "--pubkey",
+                    public,
+                    "--now",
+                    now,
+                ],
+                &[],
+            )
+        };
+        assert!(verify("1000000").unwrap().contains("valid until 1172800"));
+        assert!(verify(&(1_000_000 + 2 * 86_400).to_string()).is_ok());
+        assert!(
+            verify(&(1_000_000 + 2 * 86_400 + 1).to_string())
+                .unwrap_err()
+                .contains("expired")
+        );
+        assert!(verify("x").is_err());
+        let archive = d.join("a.tar.gz");
+        for days in ["0", "366", "x"] {
+            let out = d.join("o.json");
+            let plat = format!("linux-x86_64={}=https://example.org/a", s(&archive));
+            let args = [
+                "build",
+                "--version",
+                "1.0.0",
+                "--channel",
+                "beta",
+                "--valid-days",
+                days,
+                "--platform",
+                plat.as_str(),
+                "--out",
+                s(&out),
+            ];
+            assert!(go(&args, &[]).is_err(), "{days}");
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_newer_guard_stops_a_backport() {
+        let d = tmp("newer");
+        let key = "0e".repeat(32);
+        let public = go(&["public", "--key-env", "K"], &[("K", &key)]).unwrap();
+        let public = public.trim();
+        let published = make(&d, "pub", "2.0.0", "1000", "30", &key);
+        let newer = make(&d, "new", "2.1.0", "2000", "30", &key);
+        let same = make(&d, "same", "2.0.0", "2000", "30", &key);
+        let older = make(&d, "old", "1.9.0", "2000", "30", &key);
+        let unsigned = |n: &str| d.join(format!("{n}-unsigned.json"));
+        let check = |new: &str, extra: &[&str]| {
+            let new_path = unsigned(new);
+            let mut a = vec![
+                "newer",
+                "--existing",
+                s(&published),
+                "--manifest",
+                s(&new_path),
+                "--pubkey",
+                public,
+            ];
+            a.extend_from_slice(extra);
+            go(&a, &[])
+        };
+        assert!(check("new", &[]).unwrap().contains("2.1.0 follows 2.0.0"));
+        assert!(check("same", &[]).unwrap_err().contains("backport"));
+        assert!(check("same", &["--allow-equal", "yes"]).is_ok());
+        assert!(
+            check("old", &["--allow-equal", "yes"])
+                .unwrap_err()
+                .contains("backport")
+        );
+        let _ = (newer, same, older);
+        // The published file must have a good signature, and exist.
+        let other = go(&["keygen", "--out", s(&d.join("k.txt"))], &[]).unwrap();
+        let wrong_key = go(
+            &[
+                "newer",
+                "--existing",
+                s(&published),
+                "--manifest",
+                s(&unsigned("new")),
+                "--pubkey",
+                other.trim(),
+            ],
+            &[],
+        );
+        assert!(wrong_key.unwrap_err().contains("published manifest"));
+        assert!(
+            go(
+                &[
+                    "newer",
+                    "--existing",
+                    s(&d.join("none")),
+                    "--manifest",
+                    s(&unsigned("new")),
+                    "--pubkey",
+                    public
+                ],
+                &[]
+            )
+            .is_err()
+        );
+        assert!(
+            go(
+                &[
+                    "newer",
+                    "--existing",
+                    s(&published),
+                    "--manifest",
+                    s(&d.join("none")),
+                    "--pubkey",
+                    public
+                ],
+                &[]
+            )
+            .is_err()
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
