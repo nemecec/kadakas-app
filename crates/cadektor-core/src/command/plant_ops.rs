@@ -18,12 +18,23 @@ impl Tx<'_> {
             Shape::PlantTag { style, .. } if self.doc.resources.plant_style(*style).is_none() => {
                 Err(CommandError::NoResource(*style))
             }
+            Shape::Annotation(a) => a.check_refs(self.doc).map_err(invalid),
             _ => self.check_symbol_shape(shape),
         }
     }
 
     /// A landscape area style may only use plant styles that exist.
     fn check_body_refs(&self, body: &ResourceBody) -> Result<(), CommandError> {
+        // An annotation resource that could not be read (a value this version does not know) is
+        // kept when a file is loaded. A new one must be valid.
+        if let ResourceBody::Unknown(v) = body
+            && let Some(Err(e)) = crate::annot::style::AnnotResource::from_json(v)
+        {
+            return Err(invalid(format!(
+                "invalid {}: {e}",
+                v["type"].as_str().unwrap_or("resource")
+            )));
+        }
         if let ResourceBody::LandscapeAreaStyle(s) = body {
             for e in &s.mix {
                 if self.doc.resources.plant_style(e.plant).is_none() {
@@ -108,6 +119,7 @@ impl Tx<'_> {
             .filter(|o| {
                 link::link(o).is_some_and(|l| l.style == id)
                     || matches!(o.shape, Shape::PlantTag { style, .. } if style == id)
+                    || matches!(&o.shape, Shape::Annotation(a) if a.uses_resource(id))
                     || crate::hardscape::style_id(o) == Some(id)
                     || crate::landscape::style_id(o) == Some(id)
             })
@@ -201,6 +213,9 @@ impl Tx<'_> {
                         let o = self.doc.object_mut(uid).expect("exists");
                         if let Shape::PlantTag { style, .. } = &mut o.shape {
                             *style = *to;
+                        }
+                        if let Shape::Annotation(a) = &mut o.shape {
+                            a.replace_resource(*id, *to);
                         }
                         if let Some(mut l) = link::link(o) {
                             l.style = *to;

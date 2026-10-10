@@ -216,6 +216,8 @@ pub enum Shape {
     Viewport(Box<crate::sheets::Viewport>),
     /// Border, grid reference and title block on a sheet layer.
     TitleBlock(crate::sheets::TitleBlock),
+    /// Dimension, callout, data tag, legend, north arrow, scale bar, revision cloud or styled text.
+    Annotation(Box<crate::annot::Annot>),
     /// A group. Its members have this object as their `parent`. The group has no drawing of its own.
     Group {
         #[serde(default)]
@@ -296,6 +298,7 @@ impl Shape {
             Shape::SiteModifier { .. } => "site_modifier",
             Shape::Viewport(_) => "viewport",
             Shape::TitleBlock(_) => "title_block",
+            Shape::Annotation(_) => "annotation",
             Shape::Group { .. } => "group",
             Shape::Symbol { .. } => "symbol",
             Shape::Irrigation(i) => i.kind(),
@@ -329,6 +332,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.problem().is_none(),
             Shape::TitleBlock(tb) => tb.problem().is_none(),
+            Shape::Annotation(a) => a.is_finite(),
             Shape::Group { .. } => true,
             Shape::Irrigation(i) => i.is_finite(),
             Shape::Symbol {
@@ -423,6 +427,7 @@ impl Shape {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
             Shape::Irrigation(i) => i.for_each_number(f),
+            Shape::Annotation(a) => a.numbers(f),
             Shape::Symbol {
                 at,
                 rotation,
@@ -552,6 +557,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.translate(d),
             Shape::TitleBlock(tb) => tb.translate(d),
+            Shape::Annotation(a) => a.translate(d),
             Shape::Group { .. } => {}
             Shape::Irrigation(i) => i.translate(d),
             Shape::Symbol { at, .. } => mv(at),
@@ -612,6 +618,7 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => (vp.min, vp.max),
             Shape::TitleBlock(tb) => tb.bounds(),
+            Shape::Annotation(a) => a.bounds(),
             // The size of these depends on the document. See `Document::object_bounds`.
             Shape::Group { .. } => from_points(&[]),
             Shape::Symbol { at, .. } => (*at, *at),

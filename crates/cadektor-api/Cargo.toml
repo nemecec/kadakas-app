@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22.1"
+cadektor-annot = { version = "0.1.0", path = "../cadektor-annot" }
 cadektor-core = { version = "0.1.0", path = "../cadektor-core" }
 cadektor-irrigation = { version = "0.1.0", path = "../cadektor-irrigation" }
 cadektor-render = { version = "0.1.0", path = "../cadektor-render" }

@@ -32,6 +32,8 @@ is already used by another action, the user file wins, the other action loses th
 
 ## Deviations from the Vectorworks defaults
 
+- Data Tag, North Arrow, Scale Bar, Revision Cloud and the Graphic Legend command have no Vectorworks default. They use `Alt+Shift+T`, `Alt+Shift+N`, `Alt+Shift+B`, `Alt+Shift+V` and `Alt+Shift+E`.
+  The one Dimension tool covers the Vectorworks Constrained Linear, Angular and Radial dimension tools: `N`, `.` and `,` start it in the matching mode.
 - Plant, Landscape Area and Hardscape have no Vectorworks default. They use `Alt+Shift+P`, `Alt+Shift+A` and `Alt+Shift+H`
   because the plain letters are taken (`P` is tool mode group 4, `H` is Pan).
 - The first app version used `Cmd/Ctrl+Shift+Z` for Redo and `Home` for Zoom to Fit. Both stay as extra keys.
@@ -73,16 +75,31 @@ Tool keys switch the active tool.
 | Chamfer tool | Option+7 / Alt+7 | Alt+7 | planned |
 | Offset tool | Shift+- (both) | Shift+- | planned |
 | Clip tool | Option+C / Shift+N | Shift+N | planned |
-| Constrained Linear Dimension tool | N (both) | N | planned |
-| Angular Dimension tool | . (both) | . | planned |
-| Radial Dimension tool | , (both) | , | planned |
+| Constrained Linear Dimension tool (Cadektor: the Dimension tool with modes; `tool.dimension`) | N (both) | N | done |
+| Angular Dimension tool (`tool.angular_dimension`) | . (both) | . | done |
+| Radial Dimension tool (`tool.radial_dimension`) | , (both) | , | done |
+| Callout tool (`tool.callout`) | Alt+1 (Windows) / Option+1 (Mac) | Alt+1 | done |
 | Plant tool (Cadektor landscape tool) (`tool.plant`) | none | Alt+Shift+P (no VW default; Plant needs a free key) | done |
 | Landscape Area tool (Cadektor) (`tool.landscape_area`) | none | Alt+Shift+A (no VW default) | done |
 | Hardscape tool (Cadektor) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Cadektor; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
 | Irrigation tool (Cadektor; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
+| Grading tool (Cadektor; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
+| Data Tag tool (Cadektor) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
+| North Arrow tool (Cadektor) (`tool.north_arrow`) | none | Alt+Shift+N (no VW default) | done |
+| Scale Bar tool (Cadektor) (`tool.scale_bar`) | none | Alt+Shift+B (no VW default) | done |
+| Revision Cloud tool (Cadektor) (`tool.revision_cloud`) | none | Alt+Shift+V (no VW default; Alt+Shift+R is the Regular Polygon tool) | done |
+
+## Annotation commands
+
+| Function | Vectorworks 2026 default (Mac / Windows) | Cadektor binding | Status |
+|---|---|---|---|
+| Add a graphic legend (`cmd.graphic_legend`) | none | Alt+Shift+E (no VW default) | done |
 
 ## Tool modes
+
+The Dimension tool has one group of mode buttons (Horizontal, Vertical, Aligned, Chain, Baseline, Ordinate, Angular, Radial, Diameter,
+Arc length). Group 1 (`U`) picks the next mode. `.` and `,` start the tool in Angular and Radial mode.
 
 Keys that cycle the groups of mode buttons in the tool bar (UI-11).
 The Polyline, Landscape Area and Hardscape tools have one group of mode buttons: the vertex modes
@@ -217,7 +234,7 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 
 These Vectorworks shortcuts have no function in Cadektor and none is planned.
 
-- Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page, Callout,
+- Tools of other tool sets: Building Shell (Wall, Door, Window and joins), 3D Modeling, Visualization, Move Page,
   2D Locus, Symbol Insertion, Double Line, Rounded Rectangle, Oval, Quarter Arc, Freehand, Regular Polygon, Spiral, Eyedropper,
   Visibility, Attribute Mapping, Connect/Combine, Move by Points, Texture.
 - Menus: Page Setup, Quit, Close, Multiple View Panes, the numeric keypad views (see the 3D keys above), render modes other than wireframe and shaded,

@@ -542,10 +542,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "cadektor-annot"
+version = "0.1.0"
+dependencies = [
+ "cadektor-core",
+ "cadektor-sheet",
+ "glam",
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "cadektor-api"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cadektor-annot",
  "cadektor-core",
  "cadektor-ifc",
  "cadektor-io",
@@ -565,6 +577,7 @@ name = "cadektor-app"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cadektor-annot",
  "cadektor-api",
  "cadektor-core",
  "cadektor-irrigation",
@@ -623,6 +636,7 @@ dependencies = [
 name = "cadektor-io"
 version = "0.1.0"
 dependencies = [
+ "cadektor-annot",
  "cadektor-core",
  "cadektor-site",
  "encoding_rs",
@@ -649,9 +663,11 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "base64",
+ "cadektor-annot",
  "cadektor-core",
  "cadektor-render",
  "cadektor-sheet",
+ "cadektor-site",
  "epaint_default_fonts",
  "glam",
  "lopdf",
@@ -690,6 +706,8 @@ dependencies = [
  "cadektor-core",
  "glam",
  "proptest",
+ "serde",
+ "serde_json",
  "spade",
  "thiserror 2.0.21",
 ]

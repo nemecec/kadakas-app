@@ -40,6 +40,8 @@ pub enum ResourceBody {
     /// An irrigation catalog (head models, pipe sizes, pipe materials). The core keeps it as JSON.
     /// `cadektor-irrigation` reads and writes it.
     IrrigationCatalog(serde_json::Value),
+    /// A text style, dimension style, tag style or notes database (see `crate::annot::style`).
+    Annot(Box<crate::annot::style::AnnotResource>),
     Unknown(serde_json::Value),
 }
 
@@ -66,6 +68,7 @@ impl Serialize for ResourceBody {
             }
             ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::IrrigationCatalog(v) => v.serialize(s),
+            ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -120,7 +123,14 @@ impl<'de> Deserialize<'de> for ResourceBody {
                     }),
                 )
             }
-            _ => Ok(ResourceBody::Unknown(v)),
+            _ => match crate::annot::style::AnnotResource::from_json(&v) {
+                // A value from a newer app (a unit this version does not know): keep the raw JSON and save it again.
+                Some(r) => Ok(r.map_or_else(
+                    |_| ResourceBody::Unknown(v.clone()),
+                    |a| ResourceBody::Annot(Box::new(a)),
+                )),
+                None => Ok(ResourceBody::Unknown(v)),
+            },
         }
     }
 }
@@ -142,6 +152,7 @@ impl ResourceBody {
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
             ResourceBody::Graphic(g) => g.type_name(),
             ResourceBody::IrrigationCatalog(_) => "irrigation_catalog",
+            ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -163,6 +174,7 @@ impl ResourceBody {
                 Err("an irrigation catalog is a JSON object".into())
             }
             ResourceBody::IrrigationCatalog(_) => Ok(()),
+            ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }

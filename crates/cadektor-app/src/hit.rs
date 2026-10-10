@@ -86,6 +86,8 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
         Shape::Irrigation(i) => crate::irrigation_ui::hit(i, p, tol),
         // A symbol is picked through its expanded shapes, see `hit_test`.
         Shape::Symbol { .. } => false,
+        // Annotations need the document (see `object_hit`).
+        Shape::Annotation(_) => false,
         Shape::Viewport(_) | Shape::TitleBlock(_) => {
             let (lo, hi) = shape.bounds();
             let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
@@ -105,8 +107,24 @@ fn object_hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
     if matches!(o.shape, Shape::Symbol { .. }) {
         return cadektor_core::symbols::hit_instance(doc, o, p, tol);
     }
+    if matches!(o.shape, Shape::Annotation(_)) {
+        return crate::annot_ui::hit(doc, o, p, tol);
+    }
     let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     shape_hit(&o.shape, filled, p, tol)
+}
+
+/// The topmost pickable object at `p` itself, not the group that holds it. Annotation tools use it.
+pub fn hit_object(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
+    doc.objects
+        .values()
+        .rev()
+        .find(|o| {
+            pickable(doc, o)
+                && !matches!(o.shape, Shape::Group { .. })
+                && object_hit(doc, o, p, tol)
+        })
+        .map(|o| o.id)
 }
 
 /// Topmost pickable object at `p`.
@@ -160,7 +178,11 @@ pub fn box_select_in(
         let Some(target) = doc.selection_target(o.id, context) else {
             continue;
         };
-        let (s0, s1) = doc.object_bounds(o);
+        let (s0, s1) = if matches!(o.shape, Shape::Annotation(_)) {
+            crate::annot_ui::bounds(doc, o)
+        } else {
+            doc.object_bounds(o)
+        };
         if !(s0.is_finite() && s1.is_finite()) {
             continue;
         }
