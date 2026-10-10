@@ -7,4 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo about generate --workspace --fail about.hbs --output-file THIRD_PARTY_NOTICES.txt
+# Some license files have Windows line ends. Use one line end, so the file is the same on every system.
+tr -d '\r' < THIRD_PARTY_NOTICES.txt > THIRD_PARTY_NOTICES.tmp
+mv THIRD_PARTY_NOTICES.tmp THIRD_PARTY_NOTICES.txt
 echo "wrote THIRD_PARTY_NOTICES.txt"
