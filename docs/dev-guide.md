@@ -37,7 +37,8 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
 | `kadakas-launcher` | The launcher program (PLAT-06): an egui window that shows versions, channel, flavor and profile, and has Launch, Check, Update and Roll back. The window code only draws; the state is in `model.rs`. Left out of the coverage bar like the app (native only) | sys, update |
 | `kadakas-sign-manifest` (in `scripts/sign-manifest`) | The CI tool `sign-manifest`: `keygen`, `public`, `build`, `sign`, `verify` for update manifests. Holds the signing code (feature `sign` of `kadakas-update`); the launcher does not | sys, update (feature `sign`) |
-| `kadakas-app` | egui and wgpu desktop app and web build | core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
+| `kadakas-ui-core` | What every UI program needs, without egui (PLAT-03): the tool state machines and tool settings, picking and box selection, the snapping glue and smart-point key, view state (pan, zoom, screen and model transforms) and view history, the Data bar entry logic, keys and the keymap (action ids, default keys, JSON format for profiles). Input is abstracted (`keys::Key`, `Modifiers`, `tools::Input` with model coordinates). Pure and wasm-compatible | core, annot, irrigation, plants, render, site |
+| `kadakas-app` | egui and wgpu desktop app and web build. A thin adapter: it turns egui input into ui-core events and draws the ui-core previews | core, ui-core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
 
 The layers, from the bottom (a crate uses only crates above it; `cargo tree` is the truth):
 
@@ -52,6 +53,7 @@ core            sys
   |
   io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
   script (sys)    plugin-abi  ->  plugin (core, plugin-abi; sys on native)
+  ui-core (core, annot, irrigation, plants, render, site)  ->  app (and any other UI program)
   api  = everything above;  cli = core, sys, api;  app = api and the UI crates
 ```
 
@@ -61,8 +63,9 @@ Nothing below `api` depends on `script` any more: `io` runs its converter throug
 
 - `kadakas-update`, `kadakas-launcher` and `kadakas-sign-manifest` are native only (files, sockets, processes, windows). They are not in the wasm check. Leave them out of the `cargo check ... --target wasm32-unknown-unknown` line, and do not make a wasm crate depend on them.
 - The launcher holds no secret. It has public keys only (`crates/kadakas-launcher/trusted-keys.txt`). Private keys exist in CI secrets only. Signing code lives behind the `sign` feature of `kadakas-update`, and only `sign-manifest` and tests turn it on.
+- UI logic that has no egui code (tools, picking, snapping glue, view state, keymap) belongs in `kadakas-ui-core`, so another UI program can reuse it. The app only converts egui input into ui-core events and draws. Do not add `egui` to ui-core.
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
-- Core, crs, plants, render, site, annot, x3d, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Core, crs, plants, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
@@ -95,7 +98,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
