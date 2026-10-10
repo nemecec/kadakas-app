@@ -21,11 +21,17 @@ fn err(s: &mut Session, method: &str, params: Value) -> String {
     call(s, method, params).unwrap_err().1
 }
 
+/// A folder of its own for each session, so tests that run at the same time never share a cache.
+fn own_cache() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    std::env::temp_dir().join(format!("cadektor-api-gis-{}-{n}", std::process::id()))
+}
+
 fn session_for(m: &Mock) -> Session {
     let mut s = Session::default();
     s.gis.urls = UrlPolicy::allow_list([m.base.clone()]);
-    s.gis.cache_dir =
-        Some(std::env::temp_dir().join(format!("cadektor-api-gis-{}", std::process::id())));
+    s.gis.cache_dir = Some(own_cache());
     s
 }
 
@@ -316,8 +322,7 @@ fn user_dialog_jobs_apply_through_the_poll() {
     let m = services();
     // The agent policy is empty, but the user's own dialog is trusted.
     let mut s = Session::default();
-    s.gis.cache_dir =
-        Some(std::env::temp_dir().join(format!("cadektor-api-gis-ui-{}", std::process::id())));
+    s.gis.cache_dir = Some(own_cache());
     set_crs(&mut s);
     let r = s
         .gis_call_trusted("gis.wms.add", json!({"url": format!("{}/wms", m.base), "layers": ["ortho"], "bbox": [0, 0, 50000, 50000], "max_px": 128}))
@@ -722,4 +727,211 @@ fn replacing_the_document_keeps_the_network_policy() {
     s.gis.urls = UrlPolicy::allow_list(["maps.example.org".to_string()]);
     s.replace_document(cadektor_core::model::Document::default());
     assert_eq!(s.gis.urls.entries(), ["maps.example.org".to_string()]);
+}
+
+fn wmts_server() -> Mock {
+    let base = Arc::new(Mutex::new(String::new()));
+    let b2 = base.clone();
+    let m = Mock::start(move |p| {
+        let b = b2.lock().unwrap().clone();
+        if p.starts_with("/wmts") && p.contains("REQUEST=GetCapabilities") {
+            let matrices: String = (0..6)
+                .map(|z| {
+                    format!(
+                        "<TileMatrix><ows:Identifier>{z}</ows:Identifier><ScaleDenominator>{}</ScaleDenominator><TopLeftCorner>-20037508.342789244 20037508.342789244</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>{}</MatrixWidth><MatrixHeight>{}</MatrixHeight></TileMatrix>",
+                        559082264.0287178 / f64::from(1u32 << z),
+                        1u32 << z,
+                        1u32 << z
+                    )
+                })
+                .collect();
+            Reply::Ok(
+                "text/xml",
+                format!(
+                    r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0">
+<ows:ServiceIdentification><ows:Title>Mock tiles</ows:Title></ows:ServiceIdentification>
+<Contents><Layer><ows:Title>Base</ows:Title><ows:Identifier>base</ows:Identifier><Format>image/png</Format>
+<TileMatrixSetLink><TileMatrixSet>WM</TileMatrixSet></TileMatrixSetLink>
+<ResourceURL format="image/png" resourceType="tile" template="{b}/tiles/{{TileMatrix}}/{{TileCol}}/{{TileRow}}.png"/></Layer>
+<TileMatrixSet><ows:Identifier>WM</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG::3857</ows:SupportedCRS>{matrices}</TileMatrixSet></Contents></Capabilities>"#
+                )
+                .into_bytes(),
+            )
+        } else if p.starts_with("/tiles/") {
+            Reply::Ok("image/png", png(256, 256, [220, 90, 40, 255]))
+        } else {
+            Reply::Status(404, "-")
+        }
+    });
+    *base.lock().unwrap() = m.base.clone();
+    m
+}
+
+#[test]
+fn wmts_through_the_api_and_refresh() {
+    let m = wmts_server();
+    let mut s = session_for(&m);
+    set_crs(&mut s);
+    let c = ok(
+        &mut s,
+        "gis.wmts.capabilities",
+        json!({"url": format!("{}/wmts", m.base)}),
+    );
+    assert_eq!(c["title"], "Mock tiles");
+    assert_eq!(c["layers"][0]["id"], "base");
+    assert_eq!(c["matrix_sets"][0]["levels"], 6);
+    // A drawing gives the default view: the objects plus a margin.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [40000, 30000]}}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "text", "at": [100, 100], "text": "x", "height": 100}}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Maps"}}),
+    );
+    let r = ok(
+        &mut s,
+        "gis.wmts.add",
+        json!({"url": format!("{}/wmts", m.base), "layer": "base", "max_px": 256, "layer_name": "Maps", "opacity": 0.6, "name": "Base map"}),
+    );
+    assert_eq!(r["stats"]["service"], "wmts");
+    let id = r["id"].as_u64().unwrap();
+    let o = s
+        .editor
+        .doc()
+        .object(cadektor_core::model::ObjectId(id))
+        .unwrap();
+    assert_eq!(s.editor.doc().layer(o.layer).unwrap().name, "Maps");
+    let cadektor_core::model::Shape::Underlay(u) = &o.shape else {
+        panic!()
+    };
+    assert_eq!((u.name.as_str(), u.opacity), ("Base map", 0.6));
+    // The view is larger than the drawing: it has a margin.
+    assert!(u.min.x < 0.0 && u.max.x > 40000.0);
+    assert_eq!(o.data["gis_source"]["kind"], "wmts");
+    // Refresh with the stored source.
+    let r2 = ok(
+        &mut s,
+        "gis.wms.refresh",
+        json!({"id": id, "bbox": [0, 0, 20000, 20000]}),
+    );
+    assert_eq!(r2["stats"]["service"], "wmts");
+    // A layer that does not exist.
+    assert!(
+        err(
+            &mut s,
+            "gis.wmts.add",
+            json!({"url": format!("{}/wmts", m.base), "layer": "nope", "bbox": [0, 0, 1000, 1000]})
+        )
+        .contains("no layer named nope")
+    );
+    assert!(err(&mut s, "gis.wmts.add", json!({"url": format!("{}/wmts", m.base), "layer": "base", "bbox": [0, 0, 1000, 1000], "layer_name": "None"})).contains("no layer named None"));
+    // An underlay from a file has no source to fetch again.
+    let dir = std::env::temp_dir().join(format!("cadektor-api-gis-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("p.png"), png(4, 4, [1, 2, 3, 255])).unwrap();
+    std::fs::write(dir.join("p.pgw"), "2\n0\n0\n-2\n385001\n6672009\n").unwrap();
+    let f = ok(
+        &mut s,
+        "gis.geoimage.import",
+        json!({"path": dir.join("p.png"), "crs": "EPSG:3067"}),
+    );
+    assert!(err(&mut s, "gis.wms.refresh", json!({"id": f["id"]})).contains("no source"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(s.gis.cache_dir.clone().unwrap());
+}
+
+#[test]
+fn georef_set_checks_its_values() {
+    let mut s = Session::default();
+    assert!(
+        err(
+            &mut s,
+            "gis.georef.set",
+            json!({"crs": "EPSG:3067", "rotation": "x"})
+        )
+        .len()
+            > 3
+    );
+    let r = ok(
+        &mut s,
+        "gis.georef.set",
+        json!({"crs": "EPSG:3067", "origin": [1, 2], "rotation": 0.5}),
+    );
+    assert_eq!(r["georeference"]["rotation"], 0.5);
+    // Setting it again keeps the user origin.
+    let r = ok(&mut s, "gis.georef.set", json!({"crs": "EPSG:32635"}));
+    assert_eq!(r["georeference"]["origin"], json!([0.0, 0.0]));
+    assert!(err(&mut s, "gis.job.cancel", json!({})).contains("missing"));
+    assert!(err(&mut s, "gis.wms.add", json!("x")).contains("object"));
+}
+
+#[test]
+fn massing_in_a_group_and_report_filters() {
+    let mut s = Session::default();
+    let a = ok(
+        &mut s,
+        "massing.add",
+        json!({"footprint": [[0, 0], [5000, 0], [5000, 5000]], "name": "A"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let b = ok(
+        &mut s,
+        "massing.add",
+        json!({"footprint": [[9000, 0], [14000, 0], [14000, 5000]], "name": "B"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let g = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "group", "ids": [a]}}),
+    )["created"][0]
+        .as_u64()
+        .unwrap();
+    // A new model in the group joins it.
+    let c = ok(
+        &mut s,
+        "massing.add",
+        json!({"footprint": [[0, 9000], [5000, 9000], [5000, 14000]], "parent": g}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        s.editor
+            .doc()
+            .object(cadektor_core::model::ObjectId(c))
+            .unwrap()
+            .parent,
+        Some(cadektor_core::model::ObjectId(g))
+    );
+    let rep = ok(&mut s, "massing.report", json!({"ids": [b]}));
+    assert_eq!(rep["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(rep["rows"][0]["name"], "B");
+    assert!(err(&mut s, "massing.report", json!({"ids": "x"})).len() > 3);
+    assert!(err(&mut s, "massing.nope", json!({})).contains("unknown method"));
+    // Several at once with set, and a bad one rolls the whole batch back.
+    ok(
+        &mut s,
+        "massing.set",
+        json!({"ids": [b, c], "height": 9000, "name": "same"}),
+    );
+    let bad = err(
+        &mut s,
+        "massing.set",
+        json!({"ids": [b, 99999], "height": 1}),
+    );
+    assert!(bad.contains("does not exist"));
+    assert_eq!(
+        ok(&mut s, "massing.get", json!({"id": b}))["height"],
+        9000.0
+    );
 }

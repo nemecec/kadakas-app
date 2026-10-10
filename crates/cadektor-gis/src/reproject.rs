@@ -17,7 +17,6 @@ use cadektor_core::landscape::LandscapePatch;
 use cadektor_core::model::{Document, Object, Shape};
 use cadektor_io::crs::{Crs, Transformer};
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::raster::{Affine, GeoRaster};
@@ -434,20 +433,6 @@ pub fn plan(doc: &Document, target: &str, opts: &ReprojectOptions) -> Result<Rep
             commands.extend([set(Vec::new()), modify, set(holes)]);
         } else {
             commands.push(modify);
-        }
-        let set: BTreeMap<String, Value> = obj
-            .data
-            .iter()
-            .filter(|(k, v)| o.data.get(*k) != Some(*v))
-            .filter(|(k, _)| k.as_str() != "hardscape" && k.as_str() != "landscape")
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        if !set.is_empty() {
-            commands.push(Command::SetData {
-                id: o.id,
-                set,
-                remove: Vec::new(),
-            });
         }
         *report
             .changed
@@ -877,5 +862,202 @@ mod tests {
         assert!(p.report.skipped[0].reason.contains("out of range"));
         // The rest of the plan still works.
         ed.execute(&p.command.unwrap()).unwrap();
+    }
+
+    #[test]
+    fn every_kind_of_shape_is_moved_by_the_mapper() {
+        use cadektor_core::DVec3;
+        use cadektor_core::irrigation::{IrrigationShape, LineType};
+        use cadektor_core::sheets::Viewport;
+        let old = Crs::parse("EPSG:3067").unwrap();
+        let new = Crs::parse("EPSG:32635").unwrap();
+        let old_g = Georeference {
+            crs: "EPSG:3067".into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
+        let new_g = Georeference {
+            crs: "EPSG:32635".into(),
+            origin: DVec2::new(385_000.0, 6_672_000.0),
+            rotation: 0.0,
+            user_origin: DVec2::ZERO,
+        };
+        let m = Mapper {
+            old: &old,
+            new: &new,
+            old_g: &old_g,
+            new_g: &new_g,
+            scale: 1.5,
+        };
+        let moved = |mut shape: Shape| {
+            let before = shape.clone();
+            assert!(m.shape(&mut shape).unwrap(), "{}", before.kind());
+            assert_ne!(shape, before, "{} stays where it was", before.kind());
+            shape
+        };
+        let p = DVec2::new(1000.0, 2000.0);
+        moved(Shape::Line { a: p, b: p * 2.0 });
+        moved(Shape::Rect {
+            min: p,
+            max: p * 2.0,
+        });
+        let Shape::Circle { radius, .. } = moved(Shape::Circle {
+            center: p,
+            radius: 100.0,
+        }) else {
+            panic!()
+        };
+        assert_eq!(radius, 150.0, "the radius follows the scale factor");
+        moved(Shape::Arc {
+            center: p,
+            radius: 100.0,
+            start: 0.0,
+            end: 1.0,
+        });
+        let mut arc = ring(1000.0);
+        arc[1].kind = VertexKind::Arc { radius: 10.0 };
+        let Shape::Polyline { points, .. } = moved(Shape::Polyline {
+            points: arc,
+            closed: true,
+        }) else {
+            panic!()
+        };
+        assert_eq!(points[1].kind, VertexKind::Arc { radius: 15.0 });
+        moved(Shape::Text {
+            at: p,
+            text: "t".into(),
+            height: 10.0,
+        });
+        moved(Shape::Plant {
+            at: p,
+            species: "Oak".into(),
+            spread: 1.0,
+            height: 1.0,
+        });
+        moved(Shape::PlantTag {
+            at: p,
+            anchor: p * 2.0,
+            style: Default::default(),
+            height: 10.0,
+        });
+        moved(Shape::LandscapeArea {
+            boundary: ring(1000.0),
+            name: "a".into(),
+        });
+        moved(Shape::SiteModifier {
+            modifier: cadektor_core::model::ModifierKind::GradeLimit,
+            boundary: ring(1000.0),
+        });
+        moved(Shape::Polyline3d {
+            points: vec![DVec3::new(1.0, 2.0, 3.0); 3],
+            closed: false,
+        });
+        let Shape::SiteModel { points, lines, .. } = moved(Shape::SiteModel {
+            points: vec![DVec3::new(1.0, 2.0, 3.0)],
+            lines: vec![cadektor_core::model::SiteLine {
+                points: vec![DVec3::new(5.0, 6.0, 7.0)],
+                closed: false,
+            }],
+            settings: Default::default(),
+        }) else {
+            panic!()
+        };
+        assert_eq!((points[0].z, lines[0].points[0].z), (3.0, 7.0));
+        moved(Shape::Symbol {
+            symbol: Default::default(),
+            at: p,
+            rotation: 0.0,
+            scale: 1.0,
+            scale_y: None,
+        });
+        moved(Shape::Viewport(Box::new(Viewport::new(
+            DVec2::ZERO,
+            DVec2::splat(100.0),
+            p,
+            100.0,
+            vec![],
+        ))));
+        for i in [
+            IrrigationShape::Outlet {
+                at: p,
+                model: "m".into(),
+                arc: 360.0,
+                direction: 0.0,
+                radius: None,
+                zone: None,
+            },
+            IrrigationShape::Line {
+                points: vec![p, p * 3.0],
+                line_type: LineType::default(),
+                size: "25".into(),
+                material: "PE".into(),
+                emitter_spacing: None,
+                emitter_flow: None,
+            },
+        ] {
+            moved(Shape::Irrigation(Box::new(i)));
+        }
+        // Shapes of paper space and derived shapes have no points in the model.
+        let mut group = Shape::Group { name: "g".into() };
+        assert!(!m.shape(&mut group).unwrap());
+    }
+
+    #[test]
+    fn landscape_holes_and_a_broken_picture() {
+        use cadektor_core::landscape::LandscapePatch;
+        use cadektor_core::underlay::{PngData, Underlay};
+        let mut ed = doc_in("EPSG:3067", DVec2::new(385_000.0, 6_672_000.0), 0.0);
+        ed.execute(&Command::AddLandscapeArea {
+            boundary: ring(10_000.0),
+            name: "Bed".into(),
+            patch: Box::new(LandscapePatch {
+                holes: Some(vec![corners(&[
+                    DVec2::new(2000.0, 2000.0),
+                    DVec2::new(4000.0, 2000.0),
+                    DVec2::new(4000.0, 4000.0),
+                ])]),
+                ..Default::default()
+            }),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+        // A picture that starts like a PNG but cannot be read stays where it is and is listed.
+        add(
+            &mut ed,
+            Shape::Underlay(Box::new(Underlay {
+                name: "broken".into(),
+                min: DVec2::ZERO,
+                max: DVec2::splat(1000.0),
+                width: 2,
+                height: 2,
+                png: PngData(std::sync::Arc::new(vec![
+                    0x89, b'P', b'N', b'G', 0, 0, 0, 0, 0,
+                ])),
+                opacity: 1.0,
+                source: String::new(),
+            })),
+        );
+        // A north arrow on the design layer keeps its place, and the report says so.
+        let arrow: cadektor_core::annot::Annot =
+            serde_json::from_value(serde_json::json!({"type": "north_arrow", "at": [0, 0]}))
+                .unwrap();
+        add(&mut ed, Shape::Annotation(Box::new(arrow)));
+        let before = ed.doc().clone();
+        let p = plan(&before, "EPSG:32635", &ReprojectOptions::default()).unwrap();
+        assert_eq!(p.report.changed["landscape_area"], 1);
+        assert_eq!(p.report.skipped.len(), 1);
+        assert_eq!(p.report.skipped[0].kind, "underlay");
+        assert!(p.report.warnings.iter().any(|w| w.contains("annotation")));
+        ed.execute(&p.command.unwrap()).unwrap();
+        let id = *before.objects.keys().next().unwrap();
+        let old = cadektor_core::landscape::data(&before.objects[&id]).unwrap();
+        let new = cadektor_core::landscape::data(&ed.doc().objects[&id]).unwrap();
+        assert_eq!(new.holes.len(), 1);
+        for (a, b) in old.holes[0].iter().zip(&new.holes[0]) {
+            assert!((lonlat(&before, a.p) - lonlat(ed.doc(), b.p)).length() < 1e-8);
+        }
     }
 }

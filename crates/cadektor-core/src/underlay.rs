@@ -274,6 +274,63 @@ mod tests {
         assert!(sample().decode(10).is_none());
     }
 
+    fn encode(color: png::ColorType, depth: png::BitDepth, data: &[u8]) -> Underlay {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, 2, 1);
+        enc.set_color(color);
+        enc.set_depth(depth);
+        if color == png::ColorType::Indexed {
+            enc.set_palette(vec![10, 20, 30, 40, 50, 60]);
+        }
+        enc.write_header().unwrap().write_image_data(data).unwrap();
+        Underlay {
+            png: PngData(Arc::new(out)),
+            ..sample()
+        }
+    }
+
+    #[test]
+    fn decode_reads_every_8_bit_color_type_and_refuses_the_rest() {
+        let rgb = encode(
+            png::ColorType::Rgb,
+            png::BitDepth::Eight,
+            &[1, 2, 3, 4, 5, 6],
+        );
+        assert_eq!(
+            rgb.decode(10).unwrap().data,
+            vec![1, 2, 3, 255, 4, 5, 6, 255]
+        );
+        let gray = encode(png::ColorType::Grayscale, png::BitDepth::Eight, &[7, 8]);
+        assert_eq!(
+            gray.decode(10).unwrap().data,
+            vec![7, 7, 7, 255, 8, 8, 8, 255]
+        );
+        let ga = encode(
+            png::ColorType::GrayscaleAlpha,
+            png::BitDepth::Eight,
+            &[7, 100, 8, 200],
+        );
+        assert_eq!(
+            ga.decode(10).unwrap().data,
+            vec![7, 7, 7, 100, 8, 8, 8, 200]
+        );
+        let indexed = encode(png::ColorType::Indexed, png::BitDepth::Eight, &[0, 1]);
+        assert!(
+            indexed.decode(10).is_none(),
+            "palette pictures are not read"
+        );
+        let deep = encode(
+            png::ColorType::Grayscale,
+            png::BitDepth::Sixteen,
+            &[0, 1, 0, 2],
+        );
+        assert!(deep.decode(10).is_none(), "16 bit pictures are not read");
+        // A cut file is not read either.
+        let mut cut = rgb.clone();
+        cut.png = PngData(Arc::new(cut.png.0[..30].to_vec()));
+        assert!(cut.decode(10).is_none());
+    }
+
     #[test]
     fn base64_round_trip_and_errors() {
         for n in 0..20u8 {

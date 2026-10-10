@@ -164,3 +164,96 @@ fn big_geoimages_are_reduced_to_the_cap() {
     assert_eq!((placed.underlay.width, placed.underlay.height), (100, 67));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+fn tiff_with<C: colortype::ColorType>(w: u32, h: u32, data: &[C::Inner], matrix: bool) -> Vec<u8>
+where
+    [C::Inner]: tiff::encoder::TiffValue,
+{
+    let mut buf = Cursor::new(Vec::new());
+    let mut enc = TiffEncoder::new(&mut buf).unwrap();
+    let mut img = enc.new_image::<C>(w, h).unwrap();
+    if matrix {
+        let m = [
+            2.0f64,
+            0.0,
+            0.0,
+            385_000.0,
+            0.0,
+            -2.0,
+            0.0,
+            6_672_010.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ];
+        img.encoder()
+            .write_tag(Tag::Unknown(34264), &m[..])
+            .unwrap();
+    }
+    img.write_data(data).unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn other_sample_formats_and_the_model_transformation() {
+    // 8 bit gray: the value is copied into all channels.
+    let g = read_geotiff(
+        "g",
+        &tiff_with::<colortype::Gray8>(2, 2, &[10, 20, 30, 40], true),
+    )
+    .unwrap();
+    assert_eq!(
+        &g.raster.image.data[..8],
+        &[10, 10, 10, 255, 20, 20, 20, 255]
+    );
+    // The model transformation matrix gives the place.
+    assert_eq!(
+        g.raster.affine.apply(0.0, 0.0),
+        DVec2::new(385_000.0, 6_672_010.0)
+    );
+    assert_eq!(
+        g.raster.affine.apply(1.0, 1.0),
+        DVec2::new(385_002.0, 6_672_008.0)
+    );
+    // 16 bit gray: the high byte is kept.
+    let g16 = read_geotiff(
+        "g",
+        &tiff_with::<colortype::Gray16>(2, 1, &[0x1234, 0xFF00], true),
+    )
+    .unwrap();
+    assert_eq!(
+        &g16.raster.image.data[..8],
+        &[0x12, 0x12, 0x12, 255, 0xFF, 0xFF, 0xFF, 255]
+    );
+    // RGBA keeps its alpha.
+    let rgba = read_geotiff(
+        "g",
+        &tiff_with::<colortype::RGBA8>(1, 1, &[1, 2, 3, 4], true),
+    )
+    .unwrap();
+    assert_eq!(rgba.raster.image.data, vec![1, 2, 3, 4]);
+    // CMYK is not supported, and the message says what is.
+    let e = read_geotiff(
+        "g",
+        &tiff_with::<colortype::CMYK8>(1, 1, &[1, 2, 3, 4], true),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("not supported") && e.contains("gray, RGB or RGBA"),
+        "{e}"
+    );
+    // 32 bit float samples are not supported either.
+    let e = read_geotiff(
+        "g",
+        &tiff_with::<colortype::Gray32Float>(1, 1, &[1.5], true),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("not 8 or 16 bit"), "{e}");
+}
