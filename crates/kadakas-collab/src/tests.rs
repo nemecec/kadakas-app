@@ -815,6 +815,7 @@ fn auth_and_protocol_failures_are_final() {
             code: ErrorCode::RateLimited,
             message: "slow down".into(),
             op_id: None,
+            hash: None,
         },
         0,
     );
@@ -828,6 +829,7 @@ fn auth_and_protocol_failures_are_final() {
             code: ErrorCode::UnsupportedProtocol,
             message: "old".into(),
             op_id: None,
+            hash: None,
         },
         0,
     );
@@ -2496,4 +2498,97 @@ fn a_hello_without_log_id_gets_a_snapshot_not_entries() {
     let conn = s.open();
     let outs = s.receive(conn, hello(Some(0), Some("other")), 0);
     assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
+}
+
+#[test]
+fn a_refused_blob_is_put_again_before_the_transaction_is_sent_again() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::RateLimited, 1);
+    let (op, hash) = picture_op(1, 'R');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.flush(0);
+    net.deliver(0);
+    // The blob was refused, and the submit after it was blocked with the same code.
+    assert!(!net.seq.has_blob(&hash));
+    assert!(net.seq.replica().alive(obj(1)).is_none());
+    assert_eq!(net.clients[0].pending().len(), 1, "kept");
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+    net.now += 300;
+    net.settle();
+    net.all_equal();
+    assert!(net.seq.has_blob(&hash), "the blob came again");
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    assert!(net.clients[0].pending().is_empty());
+}
+
+#[test]
+fn a_blob_refused_with_a_reject_code_is_reported_and_blocks_nothing() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_blob_errors(ErrorCode::DocumentFull, 1);
+    let (op, hash) = picture_op(1, 'S');
+    net.clients[0].edit(vec![op]).unwrap();
+    net.clients[0].take_events();
+    net.settle();
+    assert!(!net.seq.has_blob(&hash));
+    // The reject code has no retry and no block: the transaction was ordered.
+    assert!(net.seq.replica().alive(obj(1)).is_some());
+    assert_eq!(net.clients[0].state(), ConnState::Online);
+}
+
+#[test]
+fn document_full_drops_the_transaction() {
+    let mut net = Net::new(1);
+    net.connect(0);
+    net.settle();
+    net.seq.inject_errors(ErrorCode::DocumentFull, 1);
+    net.clients[0].edit(vec![create(1, 1)]).unwrap();
+    net.settle();
+    assert!(net.clients[0].pending().is_empty());
+    assert!(net.seq.replica().alive(obj(1)).is_none());
+}
+
+#[test]
+fn a_blocked_connection_is_free_again_with_a_lower_number() {
+    // Rule 7: the block ends when a submit with the refused number, or a lower one, comes again.
+    let mut s = Sequencer::new(replica_of(&Document::default()));
+    s.check_entities(false);
+    let conn = s.open();
+    let hello = ClientMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        user: Uid::from_num(1),
+        client: Uid::from_num(1),
+        name: "n".into(),
+        token: String::new(),
+        last_seq: None,
+        log_id: None,
+    };
+    s.receive(conn, hello, 0);
+    let submit = |n: u64| ClientMsg::Submit {
+        op_id: n,
+        ops: vec![create(n, 1)],
+    };
+    s.inject_errors(ErrorCode::Internal, 1);
+    let first = s.receive(conn, submit(5), 0);
+    assert!(matches!(
+        first[0].msg,
+        ServerMsg::Error { op_id: Some(5), .. }
+    ));
+    let later = s.receive(conn, submit(6), 0);
+    assert!(matches!(
+        later[0].msg,
+        ServerMsg::Error {
+            code: ErrorCode::Internal,
+            op_id: Some(6),
+            ..
+        }
+    ));
+    // A lower number frees the connection.
+    let free = s.receive(conn, submit(4), 0);
+    assert!(matches!(free[0].msg, ServerMsg::Ack { .. }));
+    let free = s.receive(conn, submit(7), 0);
+    assert!(matches!(free[0].msg, ServerMsg::Ack { .. }));
 }

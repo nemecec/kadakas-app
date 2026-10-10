@@ -312,7 +312,9 @@ empty `state`, so the others learn who is online.
 `{"type": "blob_missing", "hash": "…"}`.
 
 **`error`**: `{"type": "error", "code": "…", "message": "…", "op_id": 5}`. `op_id` is left out if
-the error is not about one transaction.
+the error is not about one transaction. An error about a `blob_put` (it has no `op_id`) can have a
+`hash`: `{"type": "error", "code": "rate_limited", "message": "…", "hash": "<sha256 hex>"}`. A
+server may also put `hash` on the errors that it sends for blocked submits (rule 7).
 
 ### 4.3 The snapshot
 
@@ -363,12 +365,17 @@ as canonical JSON text, are equal.
    come. If it refuses a submit with a **retry** error (`rate_limited`, `internal`), it must refuse
    every later submit of that connection with the same code, until the refused number comes again.
    Otherwise a later transaction could be ordered before the refused one, and edits that depend on
-   it would be lost.
+   it would be lost. A `blob_put` refused with a retry error blocks the later submits of the
+   connection with the same code, until that blob is put again. (Otherwise the next submit would
+   fail as `invalid_txn`, a reject, and the edit would be lost.) The error of such a `blob_put`
+   has the `hash` of the blob.
 8. **Refuse before ordering** (send `error` with the `op_id`; do not use a sequence number):
    - `invalid_txn`: the transaction is malformed or breaks a limit or a value check (below);
    - `duplicate_uid`: a `create` without `merge` uses an ID that exists or ever existed in the
      replica, also twice in one transaction. (A `create` with `merge` of an ID that exists or is
      deleted is not an error: section 3.3.2.)
+   - `document_full`: the transaction would make the document larger than the server allows (the
+     size of the snapshot). It is a reject: the client drops the transaction.
    - `rate_limited`: the client sends too much (for example more than the server's limit of
      transactions per second or bytes per minute). It is temporary.
 9. **Presence.** Check the numbers (`bad_message` if they are not valid). Send at most one update per
@@ -425,8 +432,8 @@ Every error code has a class. The client acts on the class:
 | Code | Class | The client |
 |---|---|---|
 | `unsupported_protocol`, `auth_failed` | fatal | stops; the host must connect again on purpose |
-| `bad_message`, `invalid_txn`, `duplicate_uid` | reject | drops the transaction and its undo step; its edit leaves the view |
-| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s |
+| `bad_message`, `invalid_txn`, `duplicate_uid`, `document_full` | reject | drops the transaction and its undo step; its edit leaves the view |
+| `rate_limited`, `internal` | retry | keeps the transaction and sends it and all later ones again after 250 ms, then 500 ms, 1 s and so on up to 30 s. If the error has a `hash`, the client puts that blob again (`blob_put`) before it sends the transactions again |
 | any other code (the client reads it as `unknown`) | retry when the error has an `op_id`; otherwise the client reports it and goes on | as for a retry error, or reports it |
 | `op_id_reused` | renumber | goes offline; at the next sign-in the waiting transactions get new numbers above everything the server knows |
 

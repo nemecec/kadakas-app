@@ -87,6 +87,11 @@ pub struct Sequencer {
     blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
     /// Blobs by hash.
     blobs: BTreeMap<String, String>,
+    /// The next blob_put calls fail with this error (nothing is kept).
+    inject_blob: Option<(ErrorCode, usize)>,
+    /// Per connection: a blob_put was refused with a retry error. Every later submit gets the
+    /// same error, until that blob is put again.
+    blob_blocked: BTreeMap<ConnId, (ErrorCode, String)>,
 }
 
 impl Sequencer {
@@ -108,6 +113,8 @@ impl Sequencer {
             check_entities: true,
             blocked: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            inject_blob: None,
+            blob_blocked: BTreeMap::new(),
         }
     }
 
@@ -138,6 +145,13 @@ impl Sequencer {
     /// Makes the next `count` submits fail with this error (nothing is ordered).
     pub fn inject_errors(&mut self, code: ErrorCode, count: usize) {
         self.inject = Some((code, count));
+    }
+
+    /// Makes the next `count` `blob_put` messages fail with this error. The error names the blob
+    /// (`hash`). With a retry class, the submits of the connection fail with the same code until
+    /// the blob is put again (rule 7).
+    pub fn inject_blob_errors(&mut self, code: ErrorCode, count: usize) {
+        self.inject_blob = Some((code, count));
     }
 
     /// Keeps only the last `n` log entries. A client that is further behind gets a snapshot.
@@ -201,6 +215,7 @@ impl Sequencer {
     /// The connection ended. The others hear that the client left.
     pub fn close(&mut self, conn: ConnId) -> Vec<Out> {
         self.blocked.remove(&conn);
+        self.blob_blocked.remove(&conn);
         match self.conns.remove(&conn) {
             Some(Conn {
                 who: Some((client, _)),
@@ -318,6 +333,18 @@ impl Sequencer {
                 )
             }
             (ClientMsg::BlobPut { hash, data }, Some(_)) => {
+                if let Some((code, n)) = self.inject_blob {
+                    self.inject_blob = (n > 1).then_some((code, n - 1));
+                    if code.class() == crate::protocol::ErrorClass::Retry {
+                        self.blob_blocked.insert(conn, (code, hash.clone()));
+                    }
+                    return reply(ServerMsg::Error {
+                        code,
+                        message: "injected by the test".into(),
+                        op_id: None,
+                        hash: Some(hash),
+                    });
+                }
                 if data.len() > crate::blob::MAX_BLOB_BYTES
                     || crate::blob::sha256_hex(data.as_bytes()) != hash
                 {
@@ -326,6 +353,13 @@ impl Sequencer {
                         "the hash is not the hash of the data",
                         None,
                     ));
+                }
+                if self
+                    .blob_blocked
+                    .get(&conn)
+                    .is_some_and(|(_, h)| *h == hash)
+                {
+                    self.blob_blocked.remove(&conn);
                 }
                 self.blobs.insert(hash, data);
                 Vec::new()
@@ -425,6 +459,14 @@ impl Sequencer {
             }
             self.blocked.remove(&conn);
         }
+        if let Some((code, hash)) = self.blob_blocked.get(&conn).cloned() {
+            return reply(ServerMsg::Error {
+                code,
+                message: "a blob was refused".into(),
+                op_id: Some(op_id),
+                hash: Some(hash),
+            });
+        }
         if let Some((code, n)) = self.inject {
             self.inject = (n > 1).then_some((code, n - 1));
             if code.class() == crate::protocol::ErrorClass::Retry {
@@ -494,6 +536,7 @@ fn error(code: ErrorCode, message: &str, op_id: Option<u64>) -> ServerMsg {
         code,
         message: message.to_string(),
         op_id,
+        hash: None,
     }
 }
 

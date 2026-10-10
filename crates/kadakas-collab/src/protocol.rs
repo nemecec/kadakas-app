@@ -77,6 +77,8 @@ pub enum ErrorCode {
     /// The pair (client, `op_id`) was used before with other content, or is below the highest
     /// number that the server has for this client. The client numbers the transaction again.
     OpIdReused,
+    /// The document would become too large (the limit of the snapshot). Refused for good.
+    DocumentFull,
     /// A code that this version does not know (a newer server). The client treats it as a retry
     /// error when it has an `op_id`, and otherwise reports it and goes on.
     #[serde(other)]
@@ -108,9 +110,10 @@ impl ErrorCode {
     pub fn class(self) -> ErrorClass {
         match self {
             ErrorCode::UnsupportedProtocol | ErrorCode::AuthFailed => ErrorClass::Fatal,
-            ErrorCode::BadMessage | ErrorCode::DuplicateUid | ErrorCode::InvalidTxn => {
-                ErrorClass::Reject
-            }
+            ErrorCode::BadMessage
+            | ErrorCode::DuplicateUid
+            | ErrorCode::InvalidTxn
+            | ErrorCode::DocumentFull => ErrorClass::Reject,
             ErrorCode::RateLimited | ErrorCode::Internal | ErrorCode::Unknown => ErrorClass::Retry,
             ErrorCode::OpIdReused => ErrorClass::Renumber,
         }
@@ -211,6 +214,10 @@ pub enum ServerMsg {
         /// The transaction that was refused, if the error is about one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         op_id: Option<u64>,
+        /// The blob that the error is about, for a refused `blob_put` (it has no `op_id`). With a
+        /// retry class, the client puts this blob again before it sends the transaction again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hash: Option<String>,
     },
 }
 
@@ -312,12 +319,14 @@ mod tests {
             code: ErrorCode::DuplicateUid,
             message: "x".into(),
             op_id: Some(3),
+            hash: Some("h".into()),
         });
         assert!(t.contains("duplicate_uid"));
         round(&ServerMsg::Error {
             code: ErrorCode::Internal,
             message: "x".into(),
             op_id: None,
+            hash: None,
         });
     }
 
@@ -330,6 +339,7 @@ mod tests {
             (ErrorCode::BadMessage, Reject),
             (ErrorCode::DuplicateUid, Reject),
             (ErrorCode::InvalidTxn, Reject),
+            (ErrorCode::DocumentFull, Reject),
             (ErrorCode::RateLimited, Retry),
             (ErrorCode::Internal, Retry),
             (ErrorCode::OpIdReused, Renumber),

@@ -850,7 +850,8 @@ impl Client {
                 code,
                 message,
                 op_id,
-            } => self.on_error(code, message, op_id, now_ms),
+                hash,
+            } => self.on_error(code, message, op_id, hash, now_ms),
         }
     }
 
@@ -1032,8 +1033,31 @@ impl Client {
         }
     }
 
-    fn on_error(&mut self, code: ErrorCode, message: String, op_id: Option<u64>, now_ms: u64) {
+    fn on_error(
+        &mut self,
+        code: ErrorCode,
+        message: String,
+        op_id: Option<u64>,
+        hash: Option<String>,
+        now_ms: u64,
+    ) {
         let class = code.class();
+        let mut op_id = op_id;
+        // A blob error with a retry class: the blob is sent again before the next try. If the
+        // error names no transaction, the first waiting transaction that uses the blob is tried
+        // again, so the server unblocks its connection.
+        if let Some(h) = hash.as_deref()
+            && class == ErrorClass::Retry
+        {
+            self.put_on_conn.remove(h);
+            if op_id.is_none() {
+                op_id = self
+                    .pending
+                    .iter()
+                    .find(|t| t.ops.iter().any(|o| op_blob_refs(o).iter().any(|r| r == h)))
+                    .map(|t| t.op_id);
+            }
+        }
         match (op_id, class) {
             (_, ErrorClass::Fatal) => self.fail(code, message),
             (Some(op_id), ErrorClass::Retry) => {
