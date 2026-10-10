@@ -155,7 +155,7 @@ mod tests {
             assert_eq!(t.origin(&format!("{}\n", d.script)), Origin::Document);
         }
         assert!(!t.is_trusted("def reset(p, g): return []"));
-        assert!(t.is_empty() && t.len() == 0);
+        assert!(t.is_empty());
     }
 
     #[test]
