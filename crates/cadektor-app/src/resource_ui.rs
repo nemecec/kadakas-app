@@ -98,7 +98,11 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 })
                 .show_ui(ui, |ui| {
                     for (i, t) in TYPES.iter().enumerate() {
-                        ui.selectable_value(&mut st.ty, i, if i == 0 { "All types" } else { t });
+                        let label = if i == 0 { "All types" } else { t };
+                        let icon = crate::icons::resource_icon(t);
+                        if crate::icons::select_button(ui, icon, label, st.ty == i).clicked() {
+                            st.ty = i;
+                        }
                     }
                 });
             let ty = (st.ty > 0).then(|| TYPES[st.ty]);
@@ -124,7 +128,16 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                                 ui.label(&r.name);
                             }
                         }
-                        ui.small(format!("{}, used by {}", r.type_name, r.used_by));
+                        ui.horizontal(|ui| {
+                            if let Some(img) = crate::icons::image(
+                                ui,
+                                crate::icons::resource_icon(r.type_name),
+                                12.0,
+                            ) {
+                                ui.add(img);
+                            }
+                            ui.small(format!("{}, used by {}", r.type_name, r.used_by));
+                        });
                     });
                     ui.menu_button("...", |ui| {
                         if ui.button("Duplicate").clicked() {
