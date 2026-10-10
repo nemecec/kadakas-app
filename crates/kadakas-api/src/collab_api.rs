@@ -8,15 +8,28 @@
 //! [`Endpoint`] (`Session::set_collab_endpoint`). A native host can give a WebSocket endpoint
 //! from its own crate; tests give an in-memory one. This crate has no network code for it.
 //!
-//! The document of the session stays the normal document. `collab.sync` copies the local
-//! changes (found with the change sets of PLAT-02) into the collaboration client, moves the
-//! messages, and then rebuilds the document when other users changed something. A rebuilt
-//! document replaces the open one (`events.reset` for subscribers, and the undo history of the
-//! normal `undo` is gone: with collaboration, use `collab.undo`, which takes back only your own
-//! work).
+//! # The document
+//!
+//! The document of the session stays the normal document. Every call that moves messages does
+//! the same three steps, in this order:
+//!
+//! 1. **Push.** The local changes since the last step (found with the change sets of PLAT-02) are
+//!    compared with the *shadow*, the state that the document had when it last matched the
+//!    client, and become transactions. A change set with many things becomes several
+//!    transactions. This step comes first in every call, also in `collab.presence`, so a change
+//!    that was made since the last call is never lost by the next step.
+//! 2. **Pump.** Messages go to the server and come back.
+//! 3. **Apply.** If other users changed something, the document is built from the client's view
+//!    (see `kadakas_collab::materialize`, which never fails) and applied to the editor with
+//!    `Editor::apply_remote`. The editor logs one change set with the origin `remote` that lists
+//!    exactly the things that changed, so subscribers get `events.change` (not `events.reset`),
+//!    and the selection, the group context and the caches of the session stay (selected objects
+//!    that are gone leave the selection). The undo history of the normal `undo` is cleared,
+//!    because its steps do not fit any more. While the session is connected, `undo` and `redo`
+//!    refuse and point to `collab.undo`.
 
 use kadakas_collab::client::{Client, ClientConfig, ClientEvent, ConnState};
-use kadakas_collab::docsync;
+use kadakas_collab::materialize::{Materialized, Quarantined, materialize};
 use kadakas_collab::presence::{PresenceState, Viewport};
 use kadakas_collab::transport::{Endpoint, Link};
 use kadakas_core::model::Document;
@@ -29,11 +42,11 @@ use crate::{RpcError, Session};
 
 pub const STATUS: (&str, &str) = (
     "collab.status",
-    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, name, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other users), can_undo, can_redo}.",
+    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
 );
 pub const CONNECT: (&str, &str) = (
     "collab.connect",
-    "Connect to the endpoint that the host gave this session. params: {user? (UUID text; default: a new one, kept for later calls), name? (shown to others), token? (for the server), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.",
+    "Connect to the endpoint that the host gave this session. Refused in a session with predictable IDs (sequential ids). params: {user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), token? (for the server), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.",
 );
 pub const DISCONNECT: (&str, &str) = (
     "collab.disconnect",
@@ -41,27 +54,29 @@ pub const DISCONNECT: (&str, &str) = (
 );
 pub const SYNC: (&str, &str) = (
     "collab.sync",
-    "Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (number of the transaction sent, or null), received, sent, document_changed, events, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed.",
+    "Send local changes, move messages, and apply changes of other users to the open document. Call it after your edits and now and then to hear of others. params: {now_ms?}. Returns {pushed (numbers of the transactions sent), problems (changes that could not be shared, as texts), received, sent, document_changed, events, quarantined, repairs, status}. events lists what happened: connected, disconnected, rejected {op_id, code, message}, server_error, failed, gap, store_failed, store_corrupt, regressed, renumbered, reconnect.",
 );
 pub const PRESENCE: (&str, &str) = (
     "collab.presence",
-    "Set what others see of you and list the others. params: {cursor? [x, y] in mm, selection? [object ids], viewport? {center: [x, y], scale (mm per pixel), size: [w, h]}, clear? (true: show nothing), now_ms?}. Without cursor, selection, viewport and clear it only reads. Presence is not saved in the document, goes at most 20 times a second, and is forgotten after 15 seconds of silence. Returns {own, peers: [{user, name, cursor, selection, viewport}]}.",
+    "Set what others see of you and list the others. params: {cursor? [x, y] in mm, selection? [object ids], viewport? {center: [x, y], scale (mm per pixel), size: [w, h]}, clear? (true: show nothing), now_ms?}. Without cursor, selection, viewport and clear it only reads. Presence is not saved in the document, goes at most 20 times a second, and is forgotten after 15 seconds of silence. Returns {own, peers: [{client, user, name, cursor, selection, viewport}]}.",
 );
 pub const UNDO: (&str, &str) = (
     "collab.undo",
-    "Undo your own last edit in the shared document. Other users' work stays: a property that another user changed after you is skipped. Returns {done, op_id, applied, skipped: [{target, prop, reason (changed_by_other | gone)}], document_changed}.",
+    "Undo your own last edit in the shared document. Other users' work stays: a property that another user changed after you is skipped, and so is an object that others use. Returns {done, op_id, applied, skipped: [{target, prop, reason (changed_by_other | gone | referenced)}], document_changed}.",
 );
 pub const REDO: (&str, &str) = (
     "collab.redo",
-    "Redo what collab.undo took back. Same result as collab.undo.",
+    "Redo what collab.undo took back. Edits of other users do not clear the redo steps; an edit of your own does. Same result as collab.undo.",
 );
 
 pub fn describe() -> Value {
     json!({
         "model": "The server orders the edits of all users. Edits are property-level: create, delete, set and unset a property of an object, layer, class or resource, by ID. The last edit in server order wins per property. A delete wins over later edits. Your own edits show at once and are replayed on the server order (rebase).",
         "endpoint": "The host gives the session an endpoint. Without one, collab.connect fails. The protocol is in docs/collaboration.md.",
-        "undo": "collab.undo takes back only your own edits, as new edits. The normal undo is not used with collaboration.",
-        "presence": "Cursor, selection and viewport of each user. Not part of the document and not saved.",
+        "undo": "collab.undo takes back only your own edits, as new edits. While the session is connected, the normal undo and redo refuse and point to collab.undo.",
+        "presence": "Cursor, selection and viewport of each client. Not part of the document and not saved.",
+        "remote_changes": "A change of another user reaches the document as one change set with the origin remote (events.change). The selection, the group context and the caches stay. The undo history of the normal undo is cleared.",
+        "limits": "The z-order of objects and the order of layers are not shared. A session with predictable IDs cannot connect.",
         "examples": [
             {"method": "collab.connect", "params": {"name": "Ann"}},
             {"method": "collab.sync", "params": {}},
@@ -78,6 +93,11 @@ pub struct CollabState {
     link: Option<Link>,
     /// The revision of the document that was last copied into the client.
     synced_rev: u64,
+    /// What the last build of the document left out or repaired.
+    quarantined: Vec<Quarantined>,
+    repairs: Vec<String>,
+    /// Events that were read by a call that has no place for them (connect, presence, undo).
+    kept_events: Vec<ClientEvent>,
 }
 
 impl Session {
@@ -91,6 +111,17 @@ impl Session {
     pub fn collab_client(&self) -> Option<&Client> {
         self.collab.link.as_ref().map(|l| &l.client)
     }
+}
+
+/// True if the session is connected or connecting to a shared document. The normal `undo` and
+/// `redo` refuse then.
+pub(crate) fn is_connected(s: &Session) -> bool {
+    s.collab.link.as_ref().is_some_and(|l| {
+        matches!(
+            l.client.state(),
+            ConnState::Connecting | ConnState::Syncing | ConnState::Online
+        )
+    })
 }
 
 fn now_ms(m: &Map<String, Value>) -> Result<u64, RpcError> {
@@ -144,6 +175,14 @@ fn state_name(st: ConnState) -> &'static str {
     }
 }
 
+fn quarantined_json(q: &[Quarantined]) -> Value {
+    Value::Array(
+        q.iter()
+            .map(|q| json!({"kind": q.target.kind, "id": q.target.id, "reason": q.reason}))
+            .collect(),
+    )
+}
+
 fn status(s: &Session) -> Value {
     let endpoint = s.collab.endpoint.as_ref().map(|e| e.describe());
     match &s.collab.link {
@@ -154,43 +193,106 @@ fn status(s: &Session) -> Value {
                 "state": state_name(c.state()),
                 "endpoint": endpoint,
                 "user": c.user(),
+                "client": c.client_id(),
                 "name": c.name(),
+                "log_id": c.log_id(),
                 "confirmed_seq": c.confirmed_seq(),
                 "head_seq": c.head_seq(),
                 "pending": c.pending().len(),
                 "peers": c.peers().len(),
                 "can_undo": c.can_undo(),
                 "can_redo": c.can_redo(),
+                "quarantined": quarantined_json(&s.collab.quarantined),
+                "repairs": s.collab.repairs,
             })
         }
     }
 }
 
+/// The offline log in two files.
+#[cfg(not(target_arch = "wasm32"))]
+struct FileStore {
+    journal: std::path::PathBuf,
+    checkpoint: std::path::PathBuf,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileStore {
+    fn path(&self, slot: kadakas_collab::store::Slot) -> &std::path::Path {
+        match slot {
+            kadakas_collab::store::Slot::Journal => &self.journal,
+            kadakas_collab::store::Slot::Checkpoint => &self.checkpoint,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl kadakas_collab::store::OpLogStore for FileStore {
+    fn save(&mut self, slot: kadakas_collab::store::Slot, text: &str) -> Result<(), String> {
+        kadakas_sys::fsio::write_atomic(self.path(slot), text.as_bytes()).map_err(|e| e.to_string())
+    }
+
+    fn load(&self, slot: kadakas_collab::store::Slot) -> Option<String> {
+        std::fs::read_to_string(self.path(slot)).ok()
+    }
+}
+
+/// The store that `collab.connect {store}` names, if the path policy allows it.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_store(s: &Session, base: &str) -> Result<FileStore, RpcError> {
+    let one = |suffix: &str| {
+        s.check_path(
+            std::path::Path::new(&format!("{base}.{suffix}.json")),
+            true,
+            &["json"],
+        )
+        .map_err(RpcError::policy)
+    };
+    Ok(FileStore {
+        journal: one("journal")?,
+        checkpoint: one("checkpoint")?,
+    })
+}
+
 fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let now = now_ms(m)?;
+    if s.sequential_ids {
+        return Err(RpcError::policy(
+            "a session with predictable (sequential) IDs cannot join a shared document: its IDs would meet the IDs of other users",
+        ));
+    }
     if s.collab.endpoint.is_none() {
         return Err(RpcError::policy(
             "this session has no collaboration endpoint: the host has not set one",
         ));
     }
-    let busy = s.collab.link.as_ref().is_some_and(|l| {
-        matches!(
-            l.client.state(),
-            ConnState::Connecting | ConnState::Syncing | ConnState::Online
-        )
-    });
-    if busy {
+    if is_connected(s) {
         return Err(RpcError::conflict(
             "already connected: call collab.disconnect first",
         ));
     }
     let text = |key: &str| m.get(key).and_then(Value::as_str).map(str::to_string);
+    #[cfg(not(target_arch = "wasm32"))]
+    let store = match text("store") {
+        Some(base) => Some(open_store(s, &base)?),
+        None => None,
+    };
+    #[cfg(target_arch = "wasm32")]
+    if text("store").is_some() {
+        return Err(RpcError::policy("a store is not available in this build"));
+    }
     let user = match text("user") {
         Some(t) => Uid::parse(&t).ok_or_else(|| bad("user must be a UUID text"))?,
         // Keep the user of an earlier connection, so the offline queue stays valid.
         None => s.collab.link.as_ref().map_or_else(
-            // A fresh UUIDv7 from the generator of a new document.
-            || Document::default().alloc_id(),
+            || {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(u) = store.as_ref().and_then(journal_user) {
+                    return u;
+                }
+                // A fresh UUIDv7 from the generator of a new document.
+                Document::default().alloc_id()
+            },
             |l| l.client.user(),
         ),
     };
@@ -200,18 +302,46 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         .as_ref()
         .is_some_and(|l| l.client.user() == user);
     if !reuse {
+        if let Some(l) = &s.collab.link
+            && !l.client.pending().is_empty()
+            && m.get("discard").and_then(Value::as_bool) != Some(true)
+        {
+            return Err(RpcError::conflict(format!(
+                "{} edits wait for user {}: connect as that user, or pass discard: true to drop them",
+                l.client.pending().len(),
+                l.client.user()
+            )));
+        }
         let cfg = ClientConfig {
             user,
+            client: Document::default().alloc_id(),
             name: text("name").unwrap_or_default(),
             token: text("token").unwrap_or_default(),
         };
-        s.collab.link = Some(Link::new(Client::new(cfg)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = match store {
+            Some(st) => Client::restore(cfg, Box::new(st)),
+            None => Client::new(cfg),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let client = Client::new(cfg);
+        s.collab.link = Some(Link::new(client));
     }
     let endpoint = s.collab.endpoint.as_mut().expect("checked above");
     let link = s.collab.link.as_mut().expect("made above");
     link.connect(endpoint.as_mut()).map_err(RpcError::app)?;
-    run_sync(s, now)?;
+    // The document is not the state of the client yet: nothing of it goes out before the first
+    // sync gave the client a state and a shadow.
+    sync_cycle(s, now)?;
     Ok(status(s))
+}
+
+/// The user in a saved journal, if there is one.
+#[cfg(not(target_arch = "wasm32"))]
+fn journal_user(st: &FileStore) -> Option<Uid> {
+    use kadakas_collab::store::{Journal, OpLogStore, Slot};
+    let text = st.load(Slot::Journal)?;
+    serde_json::from_str::<Journal>(&text).ok().map(|j| j.user)
 }
 
 fn disconnect(s: &mut Session) -> Result<Value, RpcError> {
@@ -221,56 +351,67 @@ fn disconnect(s: &mut Session) -> Result<Value, RpcError> {
     Ok(status(s))
 }
 
-/// The edits in the document that the client does not have yet. Only a client with a state
-/// takes them: a client that waits for its first snapshot must not turn the open document into
-/// edits.
-fn push_local(s: &mut Session) -> Result<Option<u64>, RpcError> {
+/// The edits in the document that the client does not have yet. Only a client that knows the
+/// document (it has a shadow) takes them: a client that waits for its first snapshot must not turn
+/// the open document into edits.
+fn push_local(s: &mut Session) -> (Vec<u64>, Vec<String>) {
     let Some(link) = s.collab.link.as_mut() else {
-        return Ok(None);
+        return (Vec::new(), Vec::new());
     };
     let rev = s.editor.revision();
-    if !link.client.has_state() || rev == s.collab.synced_rev {
-        return Ok(None);
+    if !link.client.has_shadow() || rev == s.collab.synced_rev {
+        return (Vec::new(), Vec::new());
     }
     let doc = s.editor.doc();
     let since = s.editor.changes_since(s.collab.synced_rev);
-    let mut last = None;
+    let mut ids = Vec::new();
+    let mut problems = Vec::new();
     if since.truncated {
-        last = link
-            .client
-            .edit_from_diff(doc)
-            .map_err(RpcError::validation)?;
+        // The log dropped some change sets: compare everything. The comparison is with the
+        // shadow, not with the view, so changes of other users are not undone.
+        let made = link.client.edit_from_diff(doc);
+        ids.extend(made.op_ids);
+        problems.extend(made.problems);
     } else {
         for cs in &since.changes {
-            if let Some(id) = link
-                .client
-                .edit_from_change(doc, cs)
-                .map_err(RpcError::validation)?
-            {
-                last = Some(id);
-            }
+            let made = link.client.edit_from_change(doc, cs);
+            ids.extend(made.op_ids);
+            problems.extend(made.problems);
         }
     }
+    // Always go on, also after a problem: the same change must not stop every later call.
     s.collab.synced_rev = rev;
-    Ok(last)
+    (ids, problems)
 }
 
-/// Rebuilds the open document when the client's view changed. True if it changed.
-fn apply_remote(s: &mut Session) -> Result<bool, RpcError> {
+/// Builds the document from the client's view when it changed, and applies the difference to the
+/// editor. True if the document changed.
+fn apply_remote(s: &mut Session) -> bool {
     let Some(link) = s.collab.link.as_mut() else {
-        return Ok(false);
+        return false;
     };
-    if !link.client.take_changed() {
-        return Ok(false);
+    let first = !link.client.has_shadow();
+    if !link.client.take_changed() && !first {
+        return false;
     }
-    let doc =
-        docsync::materialize(link.client.view(), s.editor.doc()).map_err(RpcError::validation)?;
-    if doc == *s.editor.doc() {
-        return Ok(false);
+    if !link.client.has_state() {
+        return false;
     }
-    s.replace_document(doc);
+    let Materialized {
+        doc,
+        quarantined,
+        repairs,
+    } = materialize(link.client.view(), s.editor.doc());
+    s.collab.quarantined = quarantined;
+    s.collab.repairs = repairs;
+    // From now on the shadow is the document that the client built.
+    link.client.set_shadow(&doc);
+    let changed = s.editor.apply_remote(doc).is_some();
+    if changed {
+        s.prune_selection();
+    }
     s.collab.synced_rev = s.editor.revision();
-    Ok(true)
+    changed
 }
 
 struct Moved {
@@ -298,12 +439,30 @@ fn pump(s: &mut Session, now: u64) -> Moved {
     total
 }
 
-/// Pushes local changes, moves messages and applies remote changes.
-fn run_sync(s: &mut Session, now: u64) -> Result<(Option<u64>, Moved, bool), RpcError> {
-    let pushed = push_local(s)?;
+struct Cycle {
+    pushed: Vec<u64>,
+    problems: Vec<String>,
+    moved: Moved,
+    changed: bool,
+}
+
+/// Push, pump, apply: the three steps of every call that moves messages.
+fn sync_cycle(s: &mut Session, now: u64) -> Result<Cycle, RpcError> {
+    let (pushed, problems) = push_local(s);
     let moved = pump(s, now);
-    let changed = apply_remote(s)?;
-    Ok((pushed, moved, changed))
+    let changed = apply_remote(s);
+    if let Some(l) = s.collab.link.as_mut() {
+        let events = l.client.take_events();
+        s.collab.kept_events.extend(events);
+        let extra = s.collab.kept_events.len().saturating_sub(200);
+        s.collab.kept_events.drain(..extra);
+    }
+    Ok(Cycle {
+        pushed,
+        problems,
+        moved,
+        changed,
+    })
 }
 
 fn event_json(e: &ClientEvent) -> Value {
@@ -325,6 +484,10 @@ fn event_json(e: &ClientEvent) -> Value {
             json!({"event": "gap", "expected": expected, "got": got})
         }
         ClientEvent::StoreFailed(m) => json!({"event": "store_failed", "message": m}),
+        ClientEvent::StoreCorrupt(m) => json!({"event": "store_corrupt", "message": m}),
+        ClientEvent::ServerRegressed { resent } => json!({"event": "regressed", "resent": resent}),
+        ClientEvent::Renumbered { count } => json!({"event": "renumbered", "count": count}),
+        ClientEvent::Reconnect(m) => json!({"event": "reconnect", "message": m}),
     }
 }
 
@@ -335,22 +498,20 @@ fn sync(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         ));
     }
     let now = now_ms(m)?;
-    let (pushed, moved, changed) = run_sync(s, now)?;
-    let events: Vec<Value> = s
-        .collab
-        .link
-        .as_mut()
-        .map(|l| l.client.take_events())
-        .unwrap_or_default()
+    let c = sync_cycle(s, now)?;
+    let events: Vec<Value> = std::mem::take(&mut s.collab.kept_events)
         .iter()
         .map(event_json)
         .collect();
     Ok(json!({
-        "pushed": pushed,
-        "received": moved.received,
-        "sent": moved.sent,
-        "document_changed": changed,
+        "pushed": c.pushed,
+        "problems": c.problems,
+        "received": c.moved.received,
+        "sent": c.moved.sent,
+        "document_changed": c.changed,
         "events": events,
+        "quarantined": quarantined_json(&s.collab.quarantined),
+        "repairs": s.collab.repairs,
         "status": status(s),
     }))
 }
@@ -394,7 +555,8 @@ fn presence(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
             .set_presence(state)
             .map_err(RpcError::validation)?;
     }
-    pump(s, now);
+    // The pump may bring changes of other users, so the three steps run here too.
+    sync_cycle(s, now)?;
     let c = &s.collab.link.as_ref().expect("checked above").client;
     let peers: Vec<Value> = c
         .peers()
@@ -402,6 +564,7 @@ fn presence(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> 
         .iter()
         .map(|p| {
             let mut v = presence_json(&p.state);
+            v["client"] = json!(p.client);
             v["user"] = json!(p.user);
             v["name"] = json!(p.name);
             v
@@ -418,17 +581,16 @@ fn undo(s: &mut Session, m: &Map<String, Value>, redo: bool) -> Result<Value, Rp
     }
     let now = now_ms(m)?;
     // Your latest edits first, so the undo step is the one you expect.
-    push_local(s)?;
+    push_local(s);
     let link = s.collab.link.as_mut().expect("checked above");
     let report = if redo {
         link.client.redo()
     } else {
         link.client.undo()
     };
-    pump(s, now);
-    let changed = apply_remote(s)?;
+    let c = sync_cycle(s, now)?;
     let mut v = serde_json::to_value(&report).map_err(RpcError::app)?;
-    v["document_changed"] = json!(changed);
+    v["document_changed"] = json!(c.changed);
     Ok(v)
 }
 

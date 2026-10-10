@@ -894,6 +894,16 @@ impl Session {
         if let Some(r) = collab_api::handle(self, method, p.clone()) {
             return r;
         }
+        if method == "document.load" && collab_api::is_connected(self) {
+            return Err(RpcError::conflict(
+                "this session is connected to a shared document: call collab.disconnect before you load another document",
+            ));
+        }
+        if matches!(method, "undo" | "redo") && collab_api::is_connected(self) {
+            return Err(RpcError::conflict(format!(
+                "this session is connected to a shared document: use collab.{method}, which takes back only your own edits"
+            )));
+        }
         if method.starts_with("site.") {
             return self.handle_site(method, p);
         }

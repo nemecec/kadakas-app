@@ -21,7 +21,20 @@ use serde_json::Value;
 /// The most operations in one transaction.
 pub const MAX_OPS: usize = 20_000;
 /// The longest property name.
-pub const MAX_PROP_LEN: usize = 128;
+pub const MAX_PROP_LEN: usize = 256;
+/// The deepest nesting of a property value (arrays and objects). `serde_json` stops reading at
+/// 128 levels; a value must stay far below.
+pub const MAX_JSON_DEPTH: usize = 64;
+/// The largest value of one property, in bytes of JSON. Pictures (an underlay) are the reason
+/// for the size.
+pub const MAX_VALUE_BYTES: usize = 32 * 1024 * 1024;
+/// The largest transaction, in bytes of JSON. A client splits bigger changes into several
+/// transactions (see `docsync::split`).
+pub const MAX_TXN_BYTES: usize = 48 * 1024 * 1024;
+/// The largest message (one frame) that a server must accept or send, except a snapshot.
+pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+/// The largest snapshot frame.
+pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024 * 1024;
 
 /// What kind of thing an operation works on. Each kind has its own space of IDs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -74,21 +87,23 @@ impl Target {
     }
 }
 
-/// Who wrote something: a user and the number of the transaction of that user.
+/// Who wrote something: a client instance and the number of its transaction.
 ///
-/// Transaction numbers count up from 1 for each user and never repeat, also after a restart (the
-/// client saves its counter with its offline log). The pair (nil, 0) is the "baseline" writer of
-/// the first content of a document.
+/// The `client` is a UUID that a client instance makes for itself. It is not the user: one user
+/// can work on two devices, in two sessions, or start again with a lost journal, and each of them
+/// has its own client ID, so their transaction numbers never meet. Transaction numbers count up
+/// from 1 for each client ID. They are strictly increasing, and the client saves its counter with
+/// its offline log. The pair (nil, 0) is the "baseline" writer of the first content of a document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Writer {
-    pub user: Uid,
+    pub client: Uid,
     pub op: u64,
 }
 
 impl Writer {
     /// The writer of the content that a document had before collaboration began.
     pub const BASELINE: Writer = Writer {
-        user: Uid::NIL,
+        client: Uid::NIL,
         op: 0,
     };
 }
@@ -156,6 +171,84 @@ pub enum InvalidTxn {
     BadProp(String),
     #[error("the settings of the document cannot be created")]
     CreateDocument,
+    #[error("a value of {0:?} is nested deeper than {MAX_JSON_DEPTH} levels")]
+    TooDeep(String),
+    #[error(
+        "a value of {0:?} is larger than {MAX_VALUE_BYTES} bytes, or the transaction is larger than {MAX_TXN_BYTES} bytes"
+    )]
+    TooLarge(String),
+    #[error("a value of {0:?} holds a number that is not finite")]
+    NotFinite(String),
+}
+
+/// Walks a JSON value: its depth, its size in bytes (an estimate that is never below half of the
+/// text) and whether all numbers are finite. Stops early when a limit is crossed.
+fn scan(v: &Value, depth: usize, size: &mut usize) -> Result<(), &'static str> {
+    if depth > MAX_JSON_DEPTH {
+        return Err("deep");
+    }
+    *size += 8;
+    if *size > MAX_TXN_BYTES {
+        return Err("large");
+    }
+    match v {
+        Value::Number(n) => {
+            if n.as_f64().is_none_or(|f| !f.is_finite()) {
+                return Err("finite");
+            }
+        }
+        Value::String(s) => *size += s.len(),
+        Value::Array(a) => {
+            for x in a {
+                scan(x, depth + 1, size)?;
+            }
+        }
+        Value::Object(m) => {
+            for (k, x) in m {
+                *size += k.len();
+                scan(x, depth + 1, size)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn check_value(prop: &str, v: &Value, total: &mut usize) -> Result<(), InvalidTxn> {
+    let mut size = 0;
+    scan(v, 0, &mut size).map_err(|why| match why {
+        "deep" => InvalidTxn::TooDeep(prop.to_string()),
+        "finite" => InvalidTxn::NotFinite(prop.to_string()),
+        _ => InvalidTxn::TooLarge(prop.to_string()),
+    })?;
+    if size > MAX_VALUE_BYTES {
+        return Err(InvalidTxn::TooLarge(prop.to_string()));
+    }
+    *total += size;
+    if *total > MAX_TXN_BYTES {
+        return Err(InvalidTxn::TooLarge(prop.to_string()));
+    }
+    Ok(())
+}
+
+/// The size of an operation in bytes of JSON, estimated (never far below the real size).
+pub fn op_size(op: &Op) -> usize {
+    let mut size = 32;
+    match op {
+        Op::Create { props, .. } => {
+            for (k, v) in props {
+                size += k.len();
+                let _ = scan(v, 0, &mut size);
+            }
+        }
+        Op::Set { prop, value, .. } => {
+            size += prop.len();
+            let _ = scan(value, 0, &mut size);
+        }
+        Op::Unset { prop, .. } => size += prop.len(),
+        _ => {}
+    }
+    size
 }
 
 fn check_prop(prop: &str) -> Result<(), InvalidTxn> {
@@ -174,15 +267,23 @@ pub fn validate_ops(ops: &[Op]) -> Result<(), InvalidTxn> {
     if ops.len() > MAX_OPS {
         return Err(InvalidTxn::TooMany);
     }
+    let mut total = 0;
     for op in ops {
         match op {
             Op::Create { target, props } => {
                 if target.kind == Kind::Document {
                     return Err(InvalidTxn::CreateDocument);
                 }
-                props.keys().try_for_each(|k| check_prop(k))?;
+                for (k, v) in props {
+                    check_prop(k)?;
+                    check_value(k, v, &mut total)?;
+                }
             }
-            Op::Set { prop, .. } | Op::Unset { prop, .. } => check_prop(prop)?,
+            Op::Set { prop, value, .. } => {
+                check_prop(prop)?;
+                check_value(prop, value, &mut total)?;
+            }
+            Op::Unset { prop, .. } => check_prop(prop)?,
             Op::Delete { .. } | Op::Restore { .. } => {}
         }
     }
@@ -274,6 +375,51 @@ mod tests {
             props: [("shape".to_string(), json!({}))].into(),
         };
         assert_eq!(validate_ops(&[ok]), Ok(()));
+        // Depth and size.
+        let mut deep = json!(1);
+        for _ in 0..(MAX_JSON_DEPTH + 2) {
+            deep = json!([deep]);
+        }
+        let set_deep = Op::Set {
+            target: t(1),
+            prop: "a".into(),
+            value: deep,
+        };
+        assert!(matches!(
+            validate_ops(&[set_deep]),
+            Err(InvalidTxn::TooDeep(_))
+        ));
+        let big = Op::Set {
+            target: t(1),
+            prop: "a".into(),
+            value: json!("x".repeat(MAX_VALUE_BYTES + 1)),
+        };
+        assert!(matches!(validate_ops(&[big]), Err(InvalidTxn::TooLarge(_))));
+        let many = Op::Set {
+            target: t(1),
+            prop: "a".into(),
+            value: json!("x".repeat(MAX_VALUE_BYTES - 100)),
+        };
+        assert!(matches!(
+            validate_ops(&vec![many; 3]),
+            Err(InvalidTxn::TooLarge(_))
+        ));
+        let huge: Value = serde_json::from_str("[1e308]").unwrap();
+        assert!(
+            validate_ops(&[Op::Set {
+                target: t(1),
+                prop: "a".into(),
+                value: huge
+            }])
+            .is_ok()
+        );
+        for e in [
+            InvalidTxn::TooDeep("a".into()),
+            InvalidTxn::TooLarge("a".into()),
+            InvalidTxn::NotFinite("a".into()),
+        ] {
+            assert!(!e.to_string().is_empty());
+        }
         assert!(!InvalidTxn::Empty.to_string().is_empty());
     }
 }

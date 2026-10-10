@@ -43,10 +43,17 @@ pub trait OpLogStore: Send {
     fn load(&self, slot: Slot) -> Option<String>;
 }
 
+/// The largest journal that a client saves, in bytes of JSON. Above it the oldest undo and redo
+/// steps go first.
+pub const MAX_JOURNAL_BYTES: usize = 64 * 1024 * 1024;
+
 /// The pending work of a client.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Journal {
     pub user: Uid,
+    /// The client instance: the writer of the transactions. It stays the same after a restart,
+    /// so the numbers of the transactions go on.
+    pub client: Uid,
     /// The number of the last transaction that this user made.
     pub last_op: u64,
     pub pending: Vec<Txn>,
@@ -57,6 +64,9 @@ pub struct Journal {
 /// The confirmed state of a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
+    /// The name of the log that `state` comes from (empty if the client did not know it).
+    #[serde(default)]
+    pub log_id: String,
     pub seq: u64,
     pub state: Replica,
 }
@@ -122,6 +132,7 @@ mod tests {
         let back: Journal = serde_json::from_str(&serde_json::to_string(&j).unwrap()).unwrap();
         assert_eq!(back, j);
         let c = Checkpoint {
+            log_id: "log".into(),
             seq: 3,
             state: Replica::new(),
         };

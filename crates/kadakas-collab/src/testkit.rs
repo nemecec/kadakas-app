@@ -10,25 +10,34 @@
 //!
 //! What it does:
 //!
-//! - Checks `hello` (protocol version, optional token) and answers `welcome` and then `entries`
-//!   or `snapshot`.
+//! - Checks `hello` (protocol version, optional token that is bound to a user) and answers
+//!   `welcome` and then `entries` or `snapshot`. A client without state, with another `log_id`, or
+//!   ahead of the log gets a snapshot.
 //! - Gives each valid transaction the next sequence number, applies it to its own replica, sends
 //!   `ack` to the author and `broadcast` to the others.
-//! - Answers a repeated transaction (same user and `op_id`) with the old sequence number.
-//! - Refuses `create` of an ID that exists or existed, and malformed transactions.
-//! - Relays presence to the others, at most once per user per `MIN_INTERVAL_MS`.
+//! - Keeps for each client only the highest `op_id`, its sequence number and a hash of its content.
+//!   A repeat with the same content gets the old sequence number. The same `op_id` with other
+//!   content, or a lower one, is `op_id_reused`.
+//! - Refuses `create` of an ID that exists or existed, malformed transactions, and things that
+//!   fail `validate::validate_entity`.
+//! - Relays presence to the others, at most once per client per `MIN_INTERVAL_MS`. The latest
+//!   update that came too soon is held and sent later ([`Sequencer::tick`]).
 //! - Can forget old log entries, so clients that are far behind get a `snapshot`.
+//! - Can answer the next submits with an error of your choice (for tests of retry).
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use kadakas_core::uid::Uid;
+use serde_json::{Map, Value};
 
 use crate::op::{Op, Target, Writer, validate_ops};
 use crate::presence::{self, Peer, PresenceState, Throttle};
 use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
 use crate::transport::{Endpoint, MemPeer, MemTransport, Transport, TransportError, mem_pair};
+use crate::validate::validate_entity;
 
 /// A connection number, made by [`Sequencer::open`].
 pub type ConnId = u64;
@@ -41,26 +50,49 @@ pub struct Out {
 }
 
 struct Conn {
-    /// Set after a good `hello`.
-    user: Option<Uid>,
+    /// Set after a good `hello`: (client, user).
+    who: Option<(Uid, Uid)>,
     name: String,
     presence: PresenceState,
     throttle: Throttle,
+    /// The latest presence that came too soon.
+    held: Option<PresenceState>,
+}
+
+/// What the server keeps for one client: not a set of all transactions, only the last one.
+#[derive(Clone, Copy)]
+struct WriterRecord {
+    high: u64,
+    seq: u64,
+    hash: u64,
 }
 
 /// The reference sequencer.
 pub struct Sequencer {
     replica: Replica,
+    log_id: String,
     seq: u64,
     log: Vec<Entry>,
     /// The sequence number before the first entry of `log`.
     log_start: u64,
     log_limit: usize,
-    done: BTreeMap<(Uid, u64), u64>,
-    last_op: BTreeMap<Uid, u64>,
+    writers: BTreeMap<Uid, WriterRecord>,
     conns: BTreeMap<ConnId, Conn>,
     next_conn: ConnId,
-    token: Option<String>,
+    /// token -> the user it belongs to (`None`: any user).
+    tokens: BTreeMap<String, Option<Uid>>,
+    require_token: bool,
+    inject: Option<(ErrorCode, usize)>,
+    check_entities: bool,
+    /// Per connection: after a refusal that the client must retry, every later submit gets the
+    /// same error, until the refused number comes again.
+    blocked: BTreeMap<ConnId, (ErrorCode, u64)>,
+}
+
+fn hash_ops(ops: &[Op]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(ops).unwrap_or_default().hash(&mut h);
+    h.finish()
 }
 
 impl Sequencer {
@@ -68,21 +100,49 @@ impl Sequencer {
     pub fn new(initial: Replica) -> Sequencer {
         Sequencer {
             replica: initial,
+            log_id: "log-1".into(),
             seq: 0,
             log: Vec::new(),
             log_start: 0,
             log_limit: usize::MAX,
-            done: BTreeMap::new(),
-            last_op: BTreeMap::new(),
+            writers: BTreeMap::new(),
             conns: BTreeMap::new(),
             next_conn: 1,
-            token: None,
+            tokens: BTreeMap::new(),
+            require_token: false,
+            inject: None,
+            check_entities: true,
+            blocked: BTreeMap::new(),
         }
     }
 
-    /// Clients must send this token in `hello`.
+    /// Clients must send this token in `hello`. Any user may use it.
     pub fn require_token(&mut self, token: &str) {
-        self.token = Some(token.to_string());
+        self.require_token = true;
+        self.tokens.insert(token.to_string(), None);
+    }
+
+    /// Clients must send a token, and this token belongs to this user: a `hello` with another
+    /// user is refused.
+    pub fn bind_token(&mut self, token: &str, user: Uid) {
+        self.require_token = true;
+        self.tokens.insert(token.to_string(), Some(user));
+    }
+
+    /// Turns the check of the things on or off (it is on by default). Tests of the merge rules use
+    /// made-up properties that are not valid objects, and switch it off.
+    pub fn check_entities(&mut self, on: bool) {
+        self.check_entities = on;
+    }
+
+    /// Names the log. A new name tells clients that the log started again.
+    pub fn set_log_id(&mut self, id: &str) {
+        self.log_id = id.to_string();
+    }
+
+    /// Makes the next `count` submits fail with this error (nothing is ordered).
+    pub fn inject_errors(&mut self, code: ErrorCode, count: usize) {
+        self.inject = Some((code, count));
     }
 
     /// Keeps only the last `n` log entries. A client that is further behind gets a snapshot.
@@ -116,34 +176,37 @@ impl Sequencer {
         self.conns.len()
     }
 
-    /// Opens a connection. The user is not known until `hello`.
+    /// Opens a connection. The client is not known until `hello`.
     pub fn open(&mut self) -> ConnId {
         let id = self.next_conn;
         self.next_conn += 1;
         self.conns.insert(
             id,
             Conn {
-                user: None,
+                who: None,
                 name: String::new(),
                 presence: PresenceState::default(),
                 throttle: Throttle::new(presence::MIN_INTERVAL_MS),
+                held: None,
             },
         );
         id
     }
 
-    /// The connection ended. The others hear that the user left.
+    /// The connection ended. The others hear that the client left.
     pub fn close(&mut self, conn: ConnId) -> Vec<Out> {
+        self.blocked.remove(&conn);
         match self.conns.remove(&conn) {
             Some(Conn {
-                user: Some(user), ..
-            }) => self.to_others(conn, ServerMsg::PresenceLeave { user }),
+                who: Some((client, _)),
+                ..
+            }) => self.to_others(conn, ServerMsg::PresenceLeave { client }),
             _ => Vec::new(),
         }
     }
 
     fn joined(&self) -> impl Iterator<Item = (&ConnId, &Conn)> {
-        self.conns.iter().filter(|(_, c)| c.user.is_some())
+        self.conns.iter().filter(|(_, c)| c.who.is_some())
     }
 
     fn to_others(&self, from: ConnId, msg: ServerMsg) -> Vec<Out> {
@@ -156,21 +219,52 @@ impl Sequencer {
             .collect()
     }
 
+    /// Sends the presence that was held back, if its time has come.
+    pub fn tick(&mut self, now_ms: u64) -> Vec<Out> {
+        let due: Vec<ConnId> = self
+            .conns
+            .iter()
+            .filter(|(_, c)| c.held.is_some() && c.throttle.ready(now_ms))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut out = Vec::new();
+        for conn in due {
+            let c = self.conns.get_mut(&conn).expect("listed");
+            let state = c.held.take().expect("checked");
+            c.throttle.allow(now_ms);
+            c.presence = state.clone();
+            let (client, user) = c.who.expect("only joined connections hold presence");
+            let name = c.name.clone();
+            out.extend(self.to_others(
+                conn,
+                ServerMsg::Presence {
+                    client,
+                    user,
+                    name,
+                    state,
+                },
+            ));
+        }
+        out
+    }
+
     /// Handles one message of a connection. `now_ms` is for the presence rate limit.
     pub fn receive(&mut self, conn: ConnId, msg: ClientMsg, now_ms: u64) -> Vec<Out> {
         if !self.conns.contains_key(&conn) {
             return Vec::new();
         }
-        let user = self.conns[&conn].user;
+        let who = self.conns[&conn].who;
         let reply = |msg| vec![Out { conn, msg }];
-        match (msg, user) {
+        match (msg, who) {
             (
                 ClientMsg::Hello {
                     protocol,
-                    user: who,
+                    user,
+                    client,
                     name,
                     token,
                     last_seq,
+                    log_id,
                 },
                 None,
             ) => {
@@ -181,51 +275,79 @@ impl Sequencer {
                         None,
                     ));
                 }
-                if self.token.as_ref().is_some_and(|t| *t != token) {
-                    return reply(error(ErrorCode::AuthFailed, "wrong token", None));
+                if self.require_token {
+                    match self.tokens.get(&token) {
+                        Some(bound) if bound.is_none_or(|u| u == user) => {}
+                        _ => return reply(error(ErrorCode::AuthFailed, "wrong token", None)),
+                    }
                 }
-                self.join(conn, who, &name, last_seq)
+                self.join(conn, user, client, &name, last_seq, log_id)
             }
             (ClientMsg::Hello { .. }, Some(_)) => {
                 reply(error(ErrorCode::BadMessage, "hello twice", None))
             }
             (_, None) => reply(error(ErrorCode::BadMessage, "say hello first", None)),
-            (ClientMsg::Submit { op_id, ops }, Some(user)) => self.submit(conn, user, op_id, ops),
-            (ClientMsg::Presence { state }, Some(user)) => {
+            (ClientMsg::Submit { op_id, ops }, Some((client, user))) => {
+                self.submit(conn, client, user, op_id, ops)
+            }
+            (ClientMsg::Presence { state }, Some((client, user))) => {
                 if state.check().is_err() {
                     return reply(error(ErrorCode::BadMessage, "bad presence", None));
                 }
                 let c = self.conns.get_mut(&conn).expect("checked above");
                 if !c.throttle.allow(now_ms) {
+                    c.held = Some(state);
                     return Vec::new();
                 }
+                c.held = None;
                 c.presence = state.clone();
                 let name = c.name.clone();
-                self.to_others(conn, ServerMsg::Presence { user, name, state })
+                self.to_others(
+                    conn,
+                    ServerMsg::Presence {
+                        client,
+                        user,
+                        name,
+                        state,
+                    },
+                )
             }
             (ClientMsg::Bye, Some(_)) => self.close(conn),
         }
     }
 
-    fn join(&mut self, conn: ConnId, user: Uid, name: &str, last_seq: Option<u64>) -> Vec<Out> {
+    fn join(
+        &mut self,
+        conn: ConnId,
+        user: Uid,
+        client: Uid,
+        name: &str,
+        last_seq: Option<u64>,
+        log_id: Option<String>,
+    ) -> Vec<Out> {
         let name = presence::clean_name(name);
         {
             let c = self.conns.get_mut(&conn).expect("open connection");
-            c.user = Some(user);
-            c.name = name;
+            c.who = Some((client, user));
+            c.name = name.clone();
         }
         let announce = ServerMsg::Presence {
+            client,
             user,
-            name: self.conns[&conn].name.clone(),
+            name,
             state: PresenceState::default(),
         };
         let peers = self
             .joined()
             .filter(|(id, _)| **id != conn)
-            .map(|(_, c)| Peer {
-                user: c.user.expect("joined"),
-                name: c.name.clone(),
-                state: c.presence.clone(),
+            .map(|(_, c)| {
+                let (client, user) = c.who.expect("joined");
+                Peer {
+                    client,
+                    user,
+                    name: c.name.clone(),
+                    state: c.presence.clone(),
+                }
             })
             .collect();
         let mut out = self.to_others(conn, announce);
@@ -233,12 +355,14 @@ impl Sequencer {
             conn,
             msg: ServerMsg::Welcome {
                 protocol: PROTOCOL_VERSION,
+                log_id: self.log_id.clone(),
                 head_seq: self.seq,
-                your_last_op: self.last_op.get(&user).copied().unwrap_or(0),
+                your_last_op: self.writers.get(&client).map_or(0, |w| w.high),
                 peers,
             },
         });
-        let can_resume = last_seq.is_some_and(|n| n >= self.log_start && n <= self.seq);
+        let same_log = log_id.as_ref().is_none_or(|l| *l == self.log_id);
+        let can_resume = same_log && last_seq.is_some_and(|n| n >= self.log_start && n <= self.seq);
         out.push(Out {
             conn,
             msg: if can_resume {
@@ -248,6 +372,7 @@ impl Sequencer {
                 }
             } else {
                 ServerMsg::Snapshot {
+                    log_id: self.log_id.clone(),
                     seq: self.seq,
                     state: self.replica.clone(),
                 }
@@ -256,10 +381,95 @@ impl Sequencer {
         out
     }
 
-    fn submit(&mut self, conn: ConnId, user: Uid, op_id: u64, ops: Vec<Op>) -> Vec<Out> {
+    /// Checks the things that the operations touch, as a server must: each thing must stay a
+    /// valid thing. It applies the operations to copies of the properties of the touched things.
+    /// An edit of a thing that is not there is not an error: the merge drops it.
+    fn check_things(&self, ops: &[Op]) -> Result<(), String> {
+        let mut props: BTreeMap<Target, Map<String, Value>> = BTreeMap::new();
+        let mut order: Vec<Target> = Vec::new();
+        for op in ops {
+            let t = op.target();
+            let current = |this: &Self| this.replica.alive(t).map(|e| e.visible());
+            match op {
+                Op::Create { props: p, .. } => {
+                    props.insert(t, p.clone().into_iter().collect());
+                }
+                Op::Set { prop, value, .. } => {
+                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
+                        continue;
+                    };
+                    m.insert(prop.clone(), value.clone());
+                }
+                Op::Unset { prop, .. } => {
+                    let Some(m) = Self::entry_props(&mut props, t, current(self)) else {
+                        continue;
+                    };
+                    m.remove(prop);
+                }
+                _ => continue,
+            }
+            if !order.contains(&t) {
+                order.push(t);
+            }
+        }
+        for t in order {
+            validate_entity(t.kind, t.id, &props[&t])
+                .map_err(|e| format!("{:?} {}: {e}", t.kind, t.id))?;
+        }
+        Ok(())
+    }
+
+    /// The working copy of the properties of a thing: the one that was made before, or the
+    /// current ones. `None` if the thing is not there.
+    fn entry_props(
+        props: &mut BTreeMap<Target, Map<String, Value>>,
+        t: Target,
+        current: Option<Map<String, Value>>,
+    ) -> Option<&mut Map<String, Value>> {
+        match props.entry(t) {
+            std::collections::btree_map::Entry::Occupied(e) => Some(e.into_mut()),
+            std::collections::btree_map::Entry::Vacant(v) => Some(v.insert(current?)),
+        }
+    }
+
+    fn submit(
+        &mut self,
+        conn: ConnId,
+        client: Uid,
+        user: Uid,
+        op_id: u64,
+        ops: Vec<Op>,
+    ) -> Vec<Out> {
         let reply = |msg| vec![Out { conn, msg }];
-        if let Some(seq) = self.done.get(&(user, op_id)) {
-            return reply(ServerMsg::Ack { op_id, seq: *seq });
+        if let Some((code, from)) = self.blocked.get(&conn).copied() {
+            if op_id > from {
+                return reply(error(
+                    code,
+                    "an earlier transaction was refused",
+                    Some(op_id),
+                ));
+            }
+            self.blocked.remove(&conn);
+        }
+        if let Some((code, n)) = self.inject {
+            self.inject = (n > 1).then_some((code, n - 1));
+            if code.class() == crate::protocol::ErrorClass::Retry {
+                self.blocked.insert(conn, (code, op_id));
+            }
+            return reply(error(code, "injected by the test", Some(op_id)));
+        }
+        let hash = hash_ops(&ops);
+        if let Some(w) = self.writers.get(&client) {
+            if op_id == w.high && hash == w.hash {
+                return reply(ServerMsg::Ack { op_id, seq: w.seq });
+            }
+            if op_id <= w.high {
+                return reply(error(
+                    ErrorCode::OpIdReused,
+                    "the number is used or too low",
+                    Some(op_id),
+                ));
+            }
         }
         if let Err(e) = validate_ops(&ops) {
             return reply(error(ErrorCode::InvalidTxn, &e.to_string(), Some(op_id)));
@@ -277,19 +487,30 @@ impl Sequencer {
                 made.push(*target);
             }
         }
+        if self.check_entities
+            && let Err(e) = self.check_things(&ops)
+        {
+            return reply(error(ErrorCode::InvalidTxn, &e, Some(op_id)));
+        }
         self.seq += 1;
-        self.replica.apply_all(Writer { user, op: op_id }, &ops);
+        self.replica.apply_all(Writer { client, op: op_id }, &ops);
         let entry = Entry {
             seq: self.seq,
-            author: user,
+            author: client,
+            user,
             op_id,
             ops,
         };
         self.log.push(entry.clone());
         self.trim();
-        self.done.insert((user, op_id), self.seq);
-        let last = self.last_op.entry(user).or_insert(0);
-        *last = (*last).max(op_id);
+        self.writers.insert(
+            client,
+            WriterRecord {
+                high: op_id,
+                seq: self.seq,
+                hash,
+            },
+        );
         let mut out = reply(ServerMsg::Ack {
             op_id,
             seq: self.seq,
@@ -354,6 +575,11 @@ impl Hub {
         let mut g = self.inner.lock().unwrap();
         let inner = &mut *g;
         let now = inner.now_ms;
+        for o in inner.seq.tick(now) {
+            if let Some(p) = inner.peers.get_mut(&o.conn) {
+                p.send(&o.msg);
+            }
+        }
         let mut work = true;
         while work {
             work = false;

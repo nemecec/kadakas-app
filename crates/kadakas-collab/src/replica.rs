@@ -49,6 +49,27 @@ use serde_json::{Map, Value, json};
 
 use crate::op::{Kind, Op, Target, Writer};
 
+/// True if two JSON values are the same, with numbers compared as numbers: `1` and `1.0` are
+/// the same. Clients use it to decide if a property changed, so a program that writes `1.0` for
+/// `1` makes no edit. (Servers do not compare: they relay the JSON text unchanged.)
+pub fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(p), Some(q)) => p == q,
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_json(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, p)| y.get(k).is_some_and(|q| same_json(p, q)))
+        }
+        _ => a == b,
+    }
+}
+
 /// The value of one property, and who wrote it last.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Slot {
@@ -391,9 +412,9 @@ mod tests {
         Target::new(Kind::Object, Uid::from_num(n))
     }
 
-    fn w(user: u64, op: u64) -> Writer {
+    fn w(client: u64, op: u64) -> Writer {
         Writer {
-            user: Uid::from_num(user),
+            client: Uid::from_num(client),
             op,
         }
     }
@@ -411,6 +432,19 @@ mod tests {
             prop: prop.into(),
             value: json!(v),
         }
+    }
+
+    #[test]
+    fn numbers_compare_as_numbers() {
+        assert!(same_json(&json!(1), &json!(1.0)));
+        assert!(same_json(&json!([1, {"a": 2.0}]), &json!([1.0, {"a": 2}])));
+        assert!(!same_json(&json!(1), &json!(1.5)));
+        assert!(!same_json(&json!([1]), &json!([1, 2])));
+        assert!(!same_json(&json!({"a": 1}), &json!({"b": 1})));
+        assert!(!same_json(&json!({"a": 1}), &json!({"a": 1, "b": 1})));
+        assert!(same_json(&json!("x"), &json!("x")));
+        assert!(!same_json(&json!(1), &json!("1")));
+        assert!(same_json(&json!(u64::MAX), &json!(u64::MAX)));
     }
 
     #[test]

@@ -56,6 +56,9 @@ pub enum SkipReason {
     ChangedByOther,
     /// The object is gone (deleted), or somebody else deleted it.
     Gone,
+    /// Another user's work points to the object (a layer they put objects on, a group they
+    /// added a member to). Deleting it would move or break their work, so it stays.
+    Referenced,
 }
 
 /// An inverse operation that was not sent.
@@ -97,6 +100,25 @@ pub fn filter_inverse(view: &Replica, me: Uid, inverse: &[Op]) -> (Vec<Op>, Vec<
     (keep, skipped)
 }
 
+/// True if a property that another client wrote holds the ID of the thing.
+fn referenced_by_others(view: &Replica, target: crate::op::Target, me: Uid) -> bool {
+    fn mentions(v: &serde_json::Value, id: &str) -> bool {
+        match v {
+            serde_json::Value::String(s) => s == id,
+            serde_json::Value::Array(a) => a.iter().any(|x| mentions(x, id)),
+            serde_json::Value::Object(m) => m.values().any(|x| mentions(x, id)),
+            _ => false,
+        }
+    }
+    let id = target.id.to_string();
+    view.alive_things().any(|(t, e)| {
+        *t != target
+            && e.props
+                .values()
+                .any(|s| !s.removed && s.writer.client != me && mentions(&s.value, &id))
+    })
+}
+
 fn check(view: &Replica, me: Uid, op: &Op) -> Option<SkipReason> {
     match op {
         Op::Set { target, prop, .. } | Op::Unset { target, prop } => {
@@ -104,7 +126,7 @@ fn check(view: &Replica, me: Uid, op: &Op) -> Option<SkipReason> {
                 return Some(SkipReason::Gone);
             };
             match e.props.get(prop) {
-                Some(slot) if slot.writer.user != me => Some(SkipReason::ChangedByOther),
+                Some(slot) if slot.writer.client != me => Some(SkipReason::ChangedByOther),
                 _ => None,
             }
         }
@@ -112,10 +134,13 @@ fn check(view: &Replica, me: Uid, op: &Op) -> Option<SkipReason> {
             let Some(e) = view.alive(*target) else {
                 return Some(SkipReason::Gone);
             };
-            e.props
-                .values()
-                .any(|s| s.writer.user != me)
-                .then_some(SkipReason::ChangedByOther)
+            if e.props.values().any(|s| s.writer.client != me) {
+                Some(SkipReason::ChangedByOther)
+            } else if referenced_by_others(view, *target, me) {
+                Some(SkipReason::Referenced)
+            } else {
+                None
+            }
         }
         Op::Restore { target, deleted_by } => match view.get(*target) {
             Some(e) if e.deleted_by == Some(*deleted_by) => None,
@@ -136,9 +161,9 @@ mod tests {
         Target::new(Kind::Object, Uid::from_num(n))
     }
 
-    fn w(user: u64, op: u64) -> Writer {
+    fn w(client: u64, op: u64) -> Writer {
         Writer {
-            user: Uid::from_num(user),
+            client: Uid::from_num(client),
             op,
         }
     }

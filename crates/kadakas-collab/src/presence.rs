@@ -13,8 +13,10 @@
 //!   is still there.
 //! - A receiver forgets a user after [`TTL_MS`] without news ([`Peers::expire`]).
 //!
-//! A server should enforce the same minimum interval for each user and drop updates that come
-//! faster ([`Throttle`]), and it should check the size of the state ([`PresenceState::check`]).
+//! A server enforces the same minimum interval for each client ([`Throttle`]). Updates that come
+//! faster are not dropped for good: the server keeps the latest one and forwards it when the
+//! interval has passed (the *trailing edge*), so the last position of a cursor always arrives. The
+//! server also checks the size of the state ([`PresenceState::check`]).
 //!
 //! Time is an argument (`now_ms`, milliseconds on any steady clock), so the code is pure.
 
@@ -99,6 +101,8 @@ pub fn clean_name(name: &str) -> String {
 /// One user as the others see them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peer {
+    /// The client instance. One user on two devices shows two cursors.
+    pub client: Uid,
     pub user: Uid,
     pub name: String,
     #[serde(default)]
@@ -196,7 +200,7 @@ impl Outgoing {
     }
 }
 
-/// The other users, with the time of their last news.
+/// The other clients, with the time of their last news.
 #[derive(Clone, Debug, Default)]
 pub struct Peers {
     peers: BTreeMap<Uid, (Peer, u64)>,
@@ -205,11 +209,11 @@ pub struct Peers {
 impl Peers {
     /// Adds or updates a user.
     pub fn update(&mut self, peer: Peer, now_ms: u64) {
-        self.peers.insert(peer.user, (peer, now_ms));
+        self.peers.insert(peer.client, (peer, now_ms));
     }
 
-    pub fn remove(&mut self, user: Uid) -> bool {
-        self.peers.remove(&user).is_some()
+    pub fn remove(&mut self, client: Uid) -> bool {
+        self.peers.remove(&client).is_some()
     }
 
     pub fn clear(&mut self) {
@@ -230,8 +234,8 @@ impl Peers {
         gone
     }
 
-    pub fn get(&self, user: Uid) -> Option<&Peer> {
-        self.peers.get(&user).map(|(p, _)| p)
+    pub fn get(&self, client: Uid) -> Option<&Peer> {
+        self.peers.get(&client).map(|(p, _)| p)
     }
 
     /// All users, ordered by ID.
@@ -339,14 +343,15 @@ mod tests {
         let mut p = Peers::default();
         assert!(p.is_empty());
         let peer = |n: u64| Peer {
-            user: Uid::from_num(n),
+            client: Uid::from_num(n),
+            user: Uid::from_num(n + 100),
             name: format!("u{n}"),
             state: at(n as f64),
         };
         p.update(peer(2), 0);
         p.update(peer(1), 10_000);
         assert_eq!(p.len(), 2);
-        assert_eq!(p.list()[0].user, Uid::from_num(1));
+        assert_eq!(p.list()[0].client, Uid::from_num(1));
         assert_eq!(p.get(Uid::from_num(2)).unwrap().name, "u2");
         assert!(p.expire(14_999).is_empty());
         assert_eq!(p.expire(15_000), vec![Uid::from_num(2)]);

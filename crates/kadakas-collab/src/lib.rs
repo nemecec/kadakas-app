@@ -22,6 +22,7 @@
 
 pub mod client;
 pub mod docsync;
+pub mod materialize;
 pub mod op;
 pub mod presence;
 pub mod protocol;
@@ -29,6 +30,7 @@ pub mod replica;
 pub mod store;
 pub mod transport;
 pub mod undo;
+pub mod validate;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +39,7 @@ mod tests;
 pub mod testkit;
 
 pub use client::{Client, ClientConfig, ClientEvent, ConnState};
+pub use materialize::{Materialized, Quarantined, materialize};
 pub use op::{Kind, Op, Target, Txn, Writer};
 pub use protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 pub use replica::Replica;

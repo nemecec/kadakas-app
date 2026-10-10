@@ -207,6 +207,12 @@ impl Link {
                     self.client.handle(msg, now_ms);
                 }
                 Ok(None) => break,
+                Err(TransportError::BadMessage(why)) => {
+                    // Reconnecting would bring the same frame again: stop for good.
+                    self.client.bad_frame(&why);
+                    report.lost = true;
+                    break;
+                }
                 Err(_) => {
                     report.lost = true;
                     break;
@@ -252,6 +258,7 @@ mod tests {
     fn client() -> Client {
         Client::new(ClientConfig {
             user: Uid::from_num(1),
+            client: Uid::from_num(11),
             name: "A".into(),
             token: String::new(),
         })
@@ -278,7 +285,7 @@ mod tests {
         assert_eq!(s.recv(), Ok(Some(ClientMsg::Bye)));
         assert_eq!(s.recv(), Ok(None));
         s.send(&ServerMsg::PresenceLeave {
-            user: Uid::from_num(2),
+            client: Uid::from_num(2),
         });
         assert!(matches!(
             c.recv(),
@@ -292,7 +299,7 @@ mod tests {
         assert_eq!(c.send(&ClientMsg::Bye), Err(TransportError::Closed));
         assert_eq!(c.recv(), Err(TransportError::Closed));
         s.send(&ServerMsg::PresenceLeave {
-            user: Uid::from_num(2),
+            client: Uid::from_num(2),
         });
         let (mut c2, mut s2) = mem_pair();
         c2.pipe.lock().unwrap().to_server.push_back("{".into());
@@ -326,6 +333,7 @@ mod tests {
         link.pump(0);
         s.send(&ServerMsg::Welcome {
             protocol: crate::protocol::PROTOCOL_VERSION,
+            log_id: "log".into(),
             head_seq: 0,
             your_last_op: 0,
             peers: vec![],
@@ -367,6 +375,27 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_that_cannot_be_read_stops_the_client_for_good() {
+        let (t, mut s) = mem_pair();
+        let mut link = Link::new(client());
+        link.attach(Box::new(t));
+        link.pump(0);
+        s.send_raw("{\"type\": ");
+        let r = link.pump(1);
+        assert!(r.lost);
+        assert!(!link.is_connected());
+        assert_eq!(link.client.state(), ConnState::Failed);
+        let events = link.client.take_events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            crate::client::ClientEvent::Failed {
+                code: crate::protocol::ErrorCode::BadMessage,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn disconnect_says_bye() {
         let (t, mut s) = mem_pair();
         let mut link = Link::new(client());
@@ -374,12 +403,17 @@ mod tests {
         link.pump(0);
         s.send(&ServerMsg::Welcome {
             protocol: crate::protocol::PROTOCOL_VERSION,
+            log_id: "log".into(),
             head_seq: 0,
             your_last_op: 0,
             peers: vec![],
         });
         link.pump(1);
-        s.send(&ServerMsg::Entries { entries: vec![] });
+        s.send(&ServerMsg::Snapshot {
+            log_id: "log".into(),
+            seq: 0,
+            state: crate::replica::Replica::new(),
+        });
         link.pump(2);
         assert_eq!(link.client.state(), ConnState::Online);
         link.disconnect();

@@ -4,6 +4,15 @@
 //! out ([`Client::take_outbox`]). A host (see `transport::Link`) moves the messages. This keeps
 //! the client pure, easy to test and usable in the browser.
 //!
+//! # Identity
+//!
+//! A **user** is a person. A **client** is one running instance of the program, with its own UUID
+//! (`ClientConfig::client`). The client ID is the *writer* of the transactions: the pair (client,
+//! `op_id`) names a transaction. A second device, a second session, or a program that lost its
+//! journal gets a new client ID, so its transaction numbers never meet the numbers of another
+//! instance. The user is metadata: the server binds it to the token and puts it in the entries.
+//! A client that restores its journal keeps the client ID of the journal.
+//!
 //! # Two states of the document
 //!
 //! The client keeps two replicas:
@@ -22,7 +31,7 @@
 //! `ack`, the transaction moves from the queue into `confirmed`. Nothing changes in `view`, since
 //! `view` already had it in the right place.
 //!
-//! When a transaction of another user arrives, it is ordered by the server *before* all of our
+//! When a transaction of another client arrives, it is ordered by the server *before* all of our
 //! pending transactions (the server has not seen ours yet, or has put them later). So it goes
 //! into `confirmed`, and `view` is built again: `confirmed` plus the pending transactions on
 //! top. This is the **rebase**: our pending operations are replayed on the new base. Because
@@ -35,17 +44,45 @@
 //! removes the dropped operations from the queue, so they are not sent. Then the queue goes to the
 //! server in order.
 //!
+//! # The document and the shadow
+//!
+//! The host has a `Document`. The client does not see it change; the host tells the client about
+//! local changes with [`Client::edit_from_change`] or [`Client::edit_from_diff`]. These compare
+//! the document with the **shadow**: a replica that equals the last document that the host
+//! built from the view (or the last local state that was already turned into edits). They do not
+//! compare with the view, because the view can already hold remote changes that the document does
+//! not show yet, and a diff against the view would undo them. After the host rebuilds its document
+//! from the view, it calls [`Client::set_shadow`].
+//!
 //! # Connection states
 //!
 //! `Offline` (or `Failed` after a fatal error) -> `connect()` sends `hello` ->
 //! `Connecting` -> `welcome` -> `Syncing` -> `entries` or `snapshot` -> `Online`.
 //! A lost connection goes back to `Offline`. Edits work in every state.
 //!
+//! # Errors of the server
+//!
+//! Each error code has a class (see `protocol::ErrorClass`). A *retry* error (`rate_limited`,
+//! `internal`) keeps the transaction and sends it, and the ones after it, again after a time that
+//! doubles each time (250 ms, up to 30 s). A *reject* error drops the transaction and its undo
+//! step. A *renumber* error (`op_id_reused`) takes the client offline with a `Reconnect` event; at
+//! the next sign-in the waiting transactions get new numbers above everything the server knows.
+//! A *fatal* error ends the client until the host connects again.
+//!
+//! # A server that goes back
+//!
+//! `welcome` carries the `log_id` of the log. If it differs from the one in the client's state,
+//! or `head_seq` is below the client's sequence number, the server lost entries or is another
+//! log (a restore from a backup). The client then waits for the `snapshot`, throws away its queue
+//! and undo steps, and compares the snapshot with the state it had. What it had and the snapshot
+//! lacks (acknowledged work that the server lost) goes out again as new transactions.
+//!
 //! # Offline work
 //!
 //! Edits made offline stay in the pending queue. With an [`OpLogStore`] the queue, the undo
-//! stacks and the transaction counter are saved after every change, so a restart loses nothing
-//! (see `store`).
+//! stacks, the client ID and the transaction counter are saved when they change, so a restart
+//! loses nothing (see `store`). A journal that cannot be read is reported as an event, never
+//! ignored.
 
 use std::collections::VecDeque;
 
@@ -57,15 +94,24 @@ use serde::{Deserialize, Serialize};
 use crate::docsync;
 use crate::op::{InvalidTxn, Op, Txn, Writer, validate_ops};
 use crate::presence::{self, Outgoing, Peer, Peers, PresenceError, PresenceState};
-use crate::protocol::{ClientMsg, Entry, ErrorCode, PROTOCOL_VERSION, ServerMsg};
+use crate::protocol::{ClientMsg, Entry, ErrorClass, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::replica::Replica;
-use crate::store::{Checkpoint, Journal, OpLogStore, Slot};
+use crate::store::{Checkpoint, Journal, MAX_JOURNAL_BYTES, OpLogStore, Slot};
 use crate::undo::{MAX_STEPS, UndoEntry, UndoReport, filter_inverse};
+
+/// The first wait before a transaction is sent again after a retry error, in milliseconds.
+pub const RETRY_BASE_MS: u64 = 250;
+/// The longest wait.
+pub const RETRY_MAX_MS: u64 = 30_000;
 
 /// Who the client is and how it signs in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientConfig {
+    /// The person.
     pub user: Uid,
+    /// This instance of the program: a fresh UUID. A client that restores a journal uses the
+    /// client ID of the journal instead.
+    pub client: Uid,
     pub name: String,
     /// The token for the server. The meaning is up to the server.
     pub token: String,
@@ -81,7 +127,8 @@ pub enum ConnState {
     /// `welcome` arrived. The client waits for the missed entries or the snapshot.
     Syncing,
     Online,
-    /// The server refused the client for good (wrong token or protocol version).
+    /// The server refused the client for good (wrong token or protocol version), or sent
+    /// something that cannot be read.
     Failed,
 }
 
@@ -106,6 +153,17 @@ pub enum ClientEvent {
     GapDetected { expected: u64, got: u64 },
     /// The store could not save.
     StoreFailed(String),
+    /// The journal or the checkpoint in the store could not be read, or belongs to another
+    /// user. The client starts without it. The text says why.
+    StoreCorrupt(String),
+    /// The server went back (another `log_id`, or a lower sequence number). The client took the
+    /// snapshot and sent `resent` transactions with work that the server had lost.
+    ServerRegressed { resent: usize },
+    /// The pending transactions got new numbers (the server knew a higher number for this client).
+    Renumbered { count: usize },
+    /// The client went offline on purpose and the host should connect again (for example after
+    /// `op_id_reused`: the numbers are fixed at the next sign-in).
+    Reconnect(String),
 }
 
 /// Why an edit was refused.
@@ -118,16 +176,41 @@ pub enum EditError {
     NoEffect,
 }
 
+/// The result of turning a document change into transactions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DocEdit {
+    /// The numbers of the transactions that were made (a big change is split into several).
+    pub op_ids: Vec<u64>,
+    /// What could not be shared, as texts. The local document has these changes anyway.
+    pub problems: Vec<String>,
+}
+
+/// A transaction that waits to be sent again.
+#[derive(Clone, Copy, Debug)]
+struct Retry {
+    /// The first transaction that was refused. It and all later ones are sent again.
+    from_op: u64,
+    /// When to send, or `None` if they were sent and an answer is awaited.
+    at: Option<u64>,
+    attempts: u32,
+}
+
 /// The state machine of one collaboration client.
 pub struct Client {
     cfg: ClientConfig,
+    /// The writer ID of this instance (`cfg.client`, or the one of the restored journal).
+    client: Uid,
     state: ConnState,
     confirmed: Replica,
     confirmed_seq: u64,
+    log_id: Option<String>,
     /// True once the client has a confirmed state (from a snapshot, a restore or `with_state`).
     has_state: bool,
+    /// The server is not the one that the state came from: only a snapshot is acceptable.
+    regress: bool,
     head_seq: u64,
     view: Replica,
+    shadow: Option<Replica>,
     pending: VecDeque<Txn>,
     last_op: u64,
     undo: Vec<UndoEntry>,
@@ -137,20 +220,28 @@ pub struct Client {
     out_presence: Outgoing,
     peers: Peers,
     changed: bool,
+    retry: Option<Retry>,
+    /// At the next sign-in, give the waiting transactions new numbers, whatever the server says.
+    force_renumber: bool,
     store: Option<Box<dyn OpLogStore>>,
+    saved_journal: String,
 }
 
 impl Client {
     /// A client without state. It gets its state from the first sync.
     pub fn new(cfg: ClientConfig) -> Client {
         Client {
+            client: cfg.client,
             cfg,
             state: ConnState::Offline,
             confirmed: Replica::new(),
             confirmed_seq: 0,
+            log_id: None,
             has_state: false,
+            regress: false,
             head_seq: 0,
             view: Replica::new(),
+            shadow: None,
             pending: VecDeque::new(),
             last_op: 0,
             undo: Vec::new(),
@@ -160,45 +251,66 @@ impl Client {
             out_presence: Outgoing::default(),
             peers: Peers::default(),
             changed: false,
+            retry: None,
+            force_renumber: false,
             store: None,
+            saved_journal: String::new(),
         }
     }
 
     /// A client that starts from a known confirmed state, for example a document that the server
-    /// holds at `seq`.
-    pub fn with_state(cfg: ClientConfig, state: Replica, seq: u64) -> Client {
+    /// holds at `seq` in the log `log_id`.
+    pub fn with_state(cfg: ClientConfig, state: Replica, seq: u64, log_id: &str) -> Client {
         let mut c = Client::new(cfg);
         c.view = state.clone();
         c.confirmed = state;
         c.confirmed_seq = seq;
         c.head_seq = seq;
+        c.log_id = Some(log_id.to_string());
         c.has_state = true;
         c
     }
 
     /// A client that continues from a store: the checkpoint gives the confirmed state, the
-    /// journal gives the pending transactions, the undo stacks and the counter. A journal of
-    /// another user is ignored. The store stays attached.
+    /// journal gives the client ID, the pending transactions, the undo stacks and the counter.
+    /// The store stays attached.
+    ///
+    /// A checkpoint or journal that cannot be read, or a journal of another user, is not
+    /// silently dropped: the client reports [`ClientEvent::StoreCorrupt`] and starts without it
+    /// (with the client ID of `cfg`, so its numbers do not meet the numbers of the lost journal).
     pub fn restore(cfg: ClientConfig, store: Box<dyn OpLogStore>) -> Client {
         let mut c = Client::new(cfg);
-        if let Some(cp) = store
-            .load(Slot::Checkpoint)
-            .and_then(|t| serde_json::from_str::<Checkpoint>(&t).ok())
-        {
-            c.confirmed = cp.state;
-            c.confirmed_seq = cp.seq;
-            c.head_seq = cp.seq;
-            c.has_state = true;
+        if let Some(text) = store.load(Slot::Checkpoint) {
+            match serde_json::from_str::<Checkpoint>(&text) {
+                Ok(cp) => {
+                    c.confirmed = cp.state;
+                    c.confirmed_seq = cp.seq;
+                    c.head_seq = cp.seq;
+                    c.log_id = Some(cp.log_id).filter(|l| !l.is_empty());
+                    c.has_state = true;
+                }
+                Err(e) => c
+                    .events
+                    .push(ClientEvent::StoreCorrupt(format!("the checkpoint: {e}"))),
+            }
         }
-        if let Some(j) = store
-            .load(Slot::Journal)
-            .and_then(|t| serde_json::from_str::<Journal>(&t).ok())
-            .filter(|j| j.user == c.cfg.user)
-        {
-            c.last_op = j.last_op;
-            c.pending = j.pending.into();
-            c.undo = j.undo;
-            c.redo = j.redo;
+        if let Some(text) = store.load(Slot::Journal) {
+            match serde_json::from_str::<Journal>(&text) {
+                Ok(j) if j.user == c.cfg.user => {
+                    c.client = j.client;
+                    c.last_op = j.last_op;
+                    c.pending = j.pending.into();
+                    c.undo = j.undo;
+                    c.redo = j.redo;
+                    c.saved_journal = text;
+                }
+                Ok(_) => c.events.push(ClientEvent::StoreCorrupt(
+                    "the journal belongs to another user".into(),
+                )),
+                Err(e) => c
+                    .events
+                    .push(ClientEvent::StoreCorrupt(format!("the journal: {e}"))),
+            }
         }
         c.store = Some(store);
         c.rebuild_view();
@@ -214,6 +326,11 @@ impl Client {
 
     pub fn user(&self) -> Uid {
         self.cfg.user
+    }
+
+    /// The writer ID of this instance.
+    pub fn client_id(&self) -> Uid {
+        self.client
     }
 
     pub fn name(&self) -> &str {
@@ -232,6 +349,11 @@ impl Client {
     /// The last sequence number the server reported.
     pub fn head_seq(&self) -> u64 {
         self.head_seq
+    }
+
+    /// The name of the log that the state comes from.
+    pub fn log_id(&self) -> Option<&str> {
+        self.log_id.as_deref()
     }
 
     /// What the user sees.
@@ -258,6 +380,11 @@ impl Client {
         self.has_state
     }
 
+    /// True once the host has told the client what its document shows (see [`Client::set_shadow`]).
+    pub fn has_shadow(&self) -> bool {
+        self.shadow.is_some()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -268,10 +395,15 @@ impl Client {
 
     /// True if the view changed since the last call by something other than an edit that the
     /// host made itself: a change of another user, a rebase, or an undo or redo. The host builds
-    /// the document again then (see `docsync::materialize`). Edits made with [`Client::edit`] do
-    /// not set it, because the host's document has them already.
+    /// the document again then (see `materialize::materialize`). Edits made with
+    /// [`Client::edit`] do not set it, because the host's document has them already.
     pub fn take_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
+    }
+
+    /// Sets the flag again. A host calls it when it could not use the change yet.
+    pub fn keep_changed(&mut self) {
+        self.changed = true;
     }
 
     pub fn take_events(&mut self) -> Vec<ClientEvent> {
@@ -291,13 +423,16 @@ impl Client {
             return;
         }
         self.state = ConnState::Connecting;
+        self.regress = false;
         self.outbox.clear();
         self.outbox.push(ClientMsg::Hello {
             protocol: PROTOCOL_VERSION,
             user: self.cfg.user,
+            client: self.client,
             name: self.cfg.name.clone(),
             token: self.cfg.token.clone(),
             last_seq: self.has_state.then_some(self.confirmed_seq),
+            log_id: self.log_id.clone(),
         });
     }
 
@@ -305,6 +440,16 @@ impl Client {
     pub fn connection_lost(&mut self) {
         self.outbox.clear();
         self.go_offline();
+    }
+
+    /// The server sent a frame that cannot be read (not JSON, too deep, not a message). Going
+    /// back to the same frame by reconnecting would loop, so the client stops: it is `Failed`
+    /// until the host connects again on purpose.
+    pub fn bad_frame(&mut self, why: &str) {
+        self.fail(
+            ErrorCode::BadMessage,
+            format!("the server sent a message that cannot be read: {why}"),
+        );
     }
 
     /// Says goodbye to the server and goes offline. `Bye` waits in the outbox.
@@ -325,6 +470,7 @@ impl Client {
             self.state = ConnState::Offline;
         }
         self.peers.clear();
+        self.retry = None;
         self.save_checkpoint();
     }
 
@@ -341,35 +487,55 @@ impl Client {
         });
         trim(&mut self.undo);
         self.redo.clear();
+        self.save_journal();
         Ok(op_id)
     }
 
-    /// Turns a change set of the local document into an edit (see `docsync::ops_from_change`).
-    /// `Ok(None)` if the change set has no shared effect.
-    pub fn edit_from_change(
-        &mut self,
-        doc: &Document,
-        cs: &ChangeSet,
-    ) -> Result<Option<u64>, EditError> {
-        let ops = docsync::ops_from_change(&self.view, doc, cs);
-        self.edit_or_none(ops)
+    /// Tells the client what the host's document shows. Call it after the host built its document
+    /// from the view, and when the client starts with a document that equals the state.
+    pub fn set_shadow(&mut self, doc: &Document) {
+        self.shadow = Some(docsync::replica_of(doc));
     }
 
-    /// Like [`Client::edit_from_change`], comparing the whole document.
-    pub fn edit_from_diff(&mut self, doc: &Document) -> Result<Option<u64>, EditError> {
-        let ops = docsync::ops_from_diff(&self.view, doc);
-        self.edit_or_none(ops)
+    /// Turns a change set of the local document into edits (see `docsync::ops_from_change`). Big
+    /// changes become several transactions.
+    pub fn edit_from_change(&mut self, doc: &Document, cs: &ChangeSet) -> DocEdit {
+        match &self.shadow {
+            Some(shadow) => {
+                let ops = docsync::ops_from_change(shadow, doc, cs);
+                self.edit_doc_ops(ops)
+            }
+            None => no_shadow(),
+        }
     }
 
-    fn edit_or_none(&mut self, ops: Vec<Op>) -> Result<Option<u64>, EditError> {
+    /// Like [`Client::edit_from_change`], comparing the whole document with the shadow.
+    pub fn edit_from_diff(&mut self, doc: &Document) -> DocEdit {
+        match &self.shadow {
+            Some(shadow) => {
+                let ops = docsync::ops_from_diff(shadow, doc);
+                self.edit_doc_ops(ops)
+            }
+            None => no_shadow(),
+        }
+    }
+
+    fn edit_doc_ops(&mut self, ops: Vec<Op>) -> DocEdit {
+        let mut out = DocEdit::default();
         if ops.is_empty() {
-            return Ok(None);
+            return out;
         }
-        match self.edit(ops) {
-            Ok(id) => Ok(Some(id)),
-            Err(EditError::NoEffect) => Ok(None),
-            Err(e) => Err(e),
+        if let Some(shadow) = &mut self.shadow {
+            shadow.apply_all(Writer::BASELINE, &ops);
         }
+        for chunk in docsync::split(ops) {
+            match self.edit(chunk) {
+                Ok(id) => out.op_ids.push(id),
+                Err(EditError::NoEffect) => {}
+                Err(e) => out.problems.push(e.to_string()),
+            }
+        }
+        out
     }
 
     /// Applies the operations to the view, queues the transaction, and returns its number and
@@ -378,7 +544,7 @@ impl Client {
         validate_ops(&ops)?;
         let op_id = self.last_op + 1;
         let w = Writer {
-            user: self.cfg.user,
+            client: self.client,
             op: op_id,
         };
         let mut applied = Vec::new();
@@ -405,7 +571,6 @@ impl Client {
             op_id,
             ops: applied,
         });
-        self.save_journal();
         Ok((op_id, inverse))
     }
 
@@ -423,7 +588,8 @@ impl Client {
         report
     }
 
-    /// Does again what the last undo took back.
+    /// Does again what the last undo took back. Edits of other users do not clear the redo
+    /// steps; a new edit of your own does.
     pub fn redo(&mut self) -> UndoReport {
         let Some(entry) = self.redo.pop() else {
             return UndoReport::default();
@@ -440,7 +606,7 @@ impl Client {
     /// Sends the inverse operations of a step that are still safe. Returns the report and the
     /// step that undoes this step.
     fn step(&mut self, entry: UndoEntry) -> (UndoReport, Option<UndoEntry>) {
-        let (keep, skipped) = filter_inverse(&self.view, self.cfg.user, &entry.inverse);
+        let (keep, skipped) = filter_inverse(&self.view, self.client, &entry.inverse);
         let mut report = UndoReport {
             done: true,
             skipped,
@@ -481,38 +647,61 @@ impl Client {
         self.out_presence.state()
     }
 
-    /// Sends the presence if it is due and forgets users who went quiet. Call it often (every
-    /// frame is fine). `now_ms` is any steady clock.
+    /// Sends the presence if it is due, sends refused transactions again when their time has
+    /// come, and forgets clients that went quiet. Call it often (every frame is fine). `now_ms`
+    /// is any steady clock.
     pub fn tick(&mut self, now_ms: u64) {
-        if self.state == ConnState::Online
-            && let Some(state) = self.out_presence.poll(now_ms)
-        {
-            self.outbox.push(ClientMsg::Presence { state });
+        if self.state == ConnState::Online {
+            if let Some(state) = self.out_presence.poll(now_ms) {
+                self.outbox.push(ClientMsg::Presence { state });
+            }
+            if let Some(r) = self.retry
+                && r.at.is_some_and(|at| now_ms >= at)
+            {
+                self.retry = Some(Retry { at: None, ..r });
+                self.resend_from(r.from_op);
+            }
         }
         self.peers.expire(now_ms);
     }
 
+    fn resend_from(&mut self, from_op: u64) {
+        for t in self.pending.iter().filter(|t| t.op_id >= from_op) {
+            self.outbox.push(ClientMsg::Submit {
+                op_id: t.op_id,
+                ops: t.ops.clone(),
+            });
+        }
+    }
+
     // ----- messages from the server -----
 
-    /// Handles one message from the server. `now_ms` stamps presence news.
+    /// Handles one message from the server. `now_ms` stamps presence news and sets the time of a
+    /// new try after a retry error.
     pub fn handle(&mut self, msg: ServerMsg, now_ms: u64) {
         match msg {
             ServerMsg::Welcome {
                 protocol,
+                log_id,
                 head_seq,
                 your_last_op,
                 peers,
-            } => self.on_welcome(protocol, head_seq, your_last_op, peers, now_ms),
-            ServerMsg::Snapshot { seq, state } => {
+            } => self.on_welcome(protocol, log_id, head_seq, your_last_op, peers, now_ms),
+            ServerMsg::Snapshot { log_id, seq, state } => {
                 if self.state == ConnState::Syncing {
-                    self.confirmed = state;
-                    self.confirmed_seq = seq;
-                    self.has_state = true;
-                    self.finish_sync();
+                    self.on_snapshot(log_id, seq, state);
                 }
             }
             ServerMsg::Entries { entries } => {
-                if self.state == ConnState::Syncing && self.apply_entries(&entries) {
+                if self.state != ConnState::Syncing {
+                    return;
+                }
+                if !self.has_state || self.regress {
+                    self.fail(
+                        ErrorCode::BadMessage,
+                        "the server sent entries to a client that needs a snapshot".into(),
+                    );
+                } else if self.apply_entries(&entries) {
                     self.finish_sync();
                 }
             }
@@ -526,26 +715,40 @@ impl Client {
                     self.apply_entries(std::slice::from_ref(&entry));
                 }
             }
-            ServerMsg::Presence { user, name, state } => {
-                if user != self.cfg.user && state.check().is_ok() {
+            ServerMsg::Presence {
+                client,
+                user,
+                name,
+                state,
+            } => {
+                if client != self.client && state.check().is_ok() {
                     let name = presence::clean_name(&name);
-                    self.peers.update(Peer { user, name, state }, now_ms);
+                    self.peers.update(
+                        Peer {
+                            client,
+                            user,
+                            name,
+                            state,
+                        },
+                        now_ms,
+                    );
                 }
             }
-            ServerMsg::PresenceLeave { user } => {
-                self.peers.remove(user);
+            ServerMsg::PresenceLeave { client } => {
+                self.peers.remove(client);
             }
             ServerMsg::Error {
                 code,
                 message,
                 op_id,
-            } => self.on_error(code, message, op_id),
+            } => self.on_error(code, message, op_id, now_ms),
         }
     }
 
     fn on_welcome(
         &mut self,
         protocol: u32,
+        log_id: String,
         head_seq: u64,
         your_last_op: u64,
         peers: Vec<Peer>,
@@ -561,11 +764,28 @@ impl Client {
             );
             return;
         }
+        if self.has_state
+            && (self.log_id.as_ref().is_some_and(|l| *l != log_id) || head_seq < self.confirmed_seq)
+        {
+            self.regress = true;
+        }
         self.head_seq = head_seq;
-        self.pending.retain(|t| t.op_id > your_last_op);
+        if your_last_op > self.last_op || self.force_renumber {
+            // The journal is behind what the server knows of this client: numbers up to
+            // `your_last_op` are used, maybe by other content. Our waiting transactions get
+            // numbers above, so the server cannot take them for old ones.
+            self.force_renumber = false;
+            self.last_op = self.last_op.max(your_last_op);
+            let count = self.renumber_from(0);
+            if count > 0 {
+                self.events.push(ClientEvent::Renumbered { count });
+            }
+        } else {
+            self.pending.retain(|t| t.op_id > your_last_op);
+        }
         self.peers.clear();
         for p in peers {
-            if p.user != self.cfg.user && p.state.check().is_ok() {
+            if p.client != self.client && p.state.check().is_ok() {
                 self.peers.update(
                     Peer {
                         name: presence::clean_name(&p.name),
@@ -576,6 +796,37 @@ impl Client {
             }
         }
         self.state = ConnState::Syncing;
+    }
+
+    fn on_snapshot(&mut self, log_id: String, seq: u64, state: Replica) {
+        let regress =
+            self.has_state && (self.regress || self.log_id.as_ref().is_some_and(|l| *l != log_id));
+        let old_view = std::mem::take(&mut self.view);
+        self.confirmed = state;
+        self.confirmed_seq = seq;
+        self.log_id = Some(log_id);
+        self.has_state = true;
+        if regress {
+            // The server lost entries, or this is another log. What we had and the snapshot
+            // lacks goes out again. The old queue and undo steps do not fit the new state.
+            self.pending.clear();
+            self.undo.clear();
+            self.redo.clear();
+            let lost = docsync::diff_replicas(&self.confirmed, &old_view);
+            self.finish_sync();
+            let mut resent = 0;
+            for chunk in docsync::split(lost) {
+                if self.commit(chunk).is_ok() {
+                    resent += 1;
+                }
+            }
+            self.regress = false;
+            self.changed = true;
+            self.events.push(ClientEvent::ServerRegressed { resent });
+            self.save_journal();
+        } else {
+            self.finish_sync();
+        }
     }
 
     /// Applies entries to `confirmed` in order. Returns false if there was a gap (the client
@@ -591,7 +842,7 @@ impl Client {
                 return false;
             }
             let w = Writer {
-                user: e.author,
+                client: e.author,
                 op: e.op_id,
             };
             self.confirmed.apply_all(w, &e.ops);
@@ -599,7 +850,7 @@ impl Client {
             self.head_seq = self.head_seq.max(e.seq);
             // While syncing, `finish_sync` builds the view. Only live entries touch it here.
             let live = self.state == ConnState::Online;
-            if e.author == self.cfg.user {
+            if e.author == self.client {
                 self.pending.retain(|t| t.op_id != e.op_id);
                 rebuild |= live;
             } else if live && self.pending.is_empty() {
@@ -620,9 +871,14 @@ impl Client {
         let Some(i) = self.pending.iter().position(|t| t.op_id == op_id) else {
             return;
         };
+        if self.retry.is_some_and(|r| r.at.is_none()) {
+            self.retry = None;
+        }
         if seq <= self.confirmed_seq {
-            // The entry came before in another way. Only the queue needs the update.
+            // The entry came before in another way (the server sent it as an entry). The
+            // transaction is in `confirmed` already, so the view is built again without it.
             self.pending.remove(i);
+            self.rebuild_view();
             self.save_journal();
             return;
         }
@@ -632,7 +888,7 @@ impl Client {
         }
         let txn = self.pending.remove(i).expect("position found above");
         let w = Writer {
-            user: self.cfg.user,
+            client: self.client,
             op: op_id,
         };
         self.confirmed.apply_all(w, &txn.ops);
@@ -645,31 +901,85 @@ impl Client {
         self.save_journal();
     }
 
-    fn on_error(&mut self, code: ErrorCode, message: String, op_id: Option<u64>) {
-        if let Some(op_id) = op_id {
-            if self.pending.iter().any(|t| t.op_id == op_id) {
-                self.pending.retain(|t| t.op_id != op_id);
-                self.undo.retain(|u| u.of_op != op_id);
-                self.redo.retain(|u| u.of_op != op_id);
-                self.rebuild_view();
-                self.save_journal();
+    fn on_error(&mut self, code: ErrorCode, message: String, op_id: Option<u64>, now_ms: u64) {
+        let class = code.class();
+        match (op_id, class) {
+            (_, ErrorClass::Fatal) => self.fail(code, message),
+            (Some(op_id), ErrorClass::Retry) => {
+                // An error for a later transaction of the same round does not make the wait longer.
+                if self
+                    .retry
+                    .is_some_and(|r| r.at.is_some() && op_id >= r.from_op)
+                {
+                    return;
+                }
+                if self.pending.iter().any(|t| t.op_id == op_id) {
+                    let prev = self.retry;
+                    let attempts = prev.map_or(0, |r| r.attempts);
+                    let wait = RETRY_BASE_MS
+                        .saturating_mul(1u64 << attempts.min(20))
+                        .min(RETRY_MAX_MS);
+                    self.retry = Some(Retry {
+                        from_op: prev.map_or(op_id, |r| r.from_op.min(op_id)),
+                        at: Some(now_ms + wait),
+                        attempts: attempts + 1,
+                    });
+                }
             }
-            self.events.push(ClientEvent::Rejected {
-                op_id,
-                code,
-                message,
-            });
-        } else if code.is_fatal() {
-            self.fail(code, message);
-        } else {
-            self.events.push(ClientEvent::ServerError { code, message });
+            (Some(_), ErrorClass::Renumber) => {
+                // The server knows this number with other content. Later transactions may have
+                // been taken or not, so the client stops here and fixes the numbers at the next
+                // sign-in, when the server tells the highest number it has.
+                self.force_renumber = true;
+                self.events.push(ClientEvent::Reconnect(message));
+                self.connection_lost();
+            }
+            (Some(op_id), ErrorClass::Reject) => {
+                if self.pending.iter().any(|t| t.op_id == op_id) {
+                    self.pending.retain(|t| t.op_id != op_id);
+                    self.undo.retain(|u| u.of_op != op_id);
+                    self.redo.retain(|u| u.of_op != op_id);
+                    self.rebuild_view();
+                    self.save_journal();
+                }
+                self.events.push(ClientEvent::Rejected {
+                    op_id,
+                    code,
+                    message,
+                });
+            }
+            (None, _) => self.events.push(ClientEvent::ServerError { code, message }),
         }
+    }
+
+    /// Gives the waiting transactions from `from_op` on new numbers above `last_op`, in order.
+    /// Returns how many. The view is built again, because the writer of their slots changes.
+    fn renumber_from(&mut self, from_op: u64) -> usize {
+        let mut count = 0;
+        let mut map: Vec<(u64, u64)> = Vec::new();
+        for t in self.pending.iter_mut().filter(|t| t.op_id >= from_op) {
+            self.last_op += 1;
+            map.push((t.op_id, self.last_op));
+            t.op_id = self.last_op;
+            count += 1;
+        }
+        for u in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            if let Some((_, new)) = map.iter().find(|(old, _)| *old == u.of_op) {
+                u.of_op = *new;
+            }
+        }
+        if count > 0 {
+            self.rebuild_view();
+            self.save_journal();
+        }
+        count
     }
 
     fn fail(&mut self, code: ErrorCode, message: String) {
         self.state = ConnState::Failed;
         self.outbox.clear();
         self.peers.clear();
+        self.retry = None;
         self.events.push(ClientEvent::Failed { code, message });
     }
 
@@ -681,15 +991,19 @@ impl Client {
     /// The end of the sync: replay the queue on the new base, send it, and go online.
     fn finish_sync(&mut self) {
         let mut scratch = self.confirmed.clone();
-        let user = self.cfg.user;
+        let client = self.client;
         for t in &mut self.pending {
-            let w = Writer { user, op: t.op_id };
+            let w = Writer {
+                client,
+                op: t.op_id,
+            };
             t.ops.retain(|op| scratch.apply(w, op).is_applied());
         }
         self.pending.retain(|t| !t.ops.is_empty());
         self.view = scratch;
         self.changed = true;
         self.state = ConnState::Online;
+        self.retry = None;
         for t in &self.pending {
             self.outbox.push(ClientMsg::Submit {
                 op_id: t.op_id,
@@ -707,7 +1021,7 @@ impl Client {
         let mut v = self.confirmed.clone();
         for t in &self.pending {
             let w = Writer {
-                user: self.cfg.user,
+                client: self.client,
                 op: t.op_id,
             };
             v.apply_all(w, &t.ops);
@@ -722,6 +1036,7 @@ impl Client {
     pub fn journal(&self) -> Journal {
         Journal {
             user: self.cfg.user,
+            client: self.client,
             last_op: self.last_op,
             pending: self.pending.iter().cloned().collect(),
             undo: self.undo.clone(),
@@ -732,17 +1047,37 @@ impl Client {
     /// The checkpoint as it would be saved, if the client has a confirmed state.
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         self.has_state.then(|| Checkpoint {
+            log_id: self.log_id.clone().unwrap_or_default(),
             seq: self.confirmed_seq,
             state: self.confirmed.clone(),
         })
     }
 
+    /// Saves the journal when it changed. It is bounded: when it is too large, the oldest undo
+    /// and redo steps go first. If the waiting transactions alone are too large, the journal is
+    /// not saved and the client reports it.
     fn save_journal(&mut self) {
         if self.store.is_none() {
             return;
         }
-        let text = serde_json::to_string(&self.journal()).expect("a journal is JSON");
-        self.save(Slot::Journal, &text);
+        let mut j = self.journal();
+        let mut text = serde_json::to_string(&j).expect("a journal is JSON");
+        while text.len() > MAX_JOURNAL_BYTES && (!j.undo.is_empty() || !j.redo.is_empty()) {
+            let n = j.undo.len().div_ceil(2);
+            j.undo.drain(..n);
+            let n = j.redo.len().div_ceil(2);
+            j.redo.drain(..n);
+            text = serde_json::to_string(&j).expect("a journal is JSON");
+        }
+        if text.len() > MAX_JOURNAL_BYTES {
+            self.events.push(ClientEvent::StoreFailed(
+                "the waiting edits are too large for the journal".into(),
+            ));
+            return;
+        }
+        if text != self.saved_journal && self.save(Slot::Journal, &text) {
+            self.saved_journal = text;
+        }
     }
 
     /// Saves the confirmed state now.
@@ -756,12 +1091,21 @@ impl Client {
         }
     }
 
-    fn save(&mut self, slot: Slot, text: &str) {
+    fn save(&mut self, slot: Slot, text: &str) -> bool {
         if let Some(store) = &mut self.store
             && let Err(e) = store.save(slot, text)
         {
             self.events.push(ClientEvent::StoreFailed(e));
+            return false;
         }
+        true
+    }
+}
+
+fn no_shadow() -> DocEdit {
+    DocEdit {
+        op_ids: Vec::new(),
+        problems: vec!["the client does not know the document yet (call set_shadow)".into()],
     }
 }
 

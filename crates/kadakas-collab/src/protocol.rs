@@ -36,7 +36,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub struct Entry {
     /// The sequence number. The first entry has 1.
     pub seq: u64,
+    /// The client instance that wrote it (the `client` of its `hello`). This is the writer.
     pub author: Uid,
+    /// The user of that client, as the server knows it from the sign-in.
+    pub user: Uid,
     /// The number of the transaction for its author (`Txn::op_id`).
     pub op_id: u64,
     pub ops: Vec<Op>,
@@ -57,24 +60,55 @@ impl Entry {
 pub enum ErrorCode {
     /// The server does not speak the protocol version of the client.
     UnsupportedProtocol,
-    /// The token is wrong or missing. The connection ends.
+    /// The token is wrong or missing, or the user does not belong to the token. Ends the
+    /// connection.
     AuthFailed,
     /// The message is not valid, or comes at a wrong time (before `hello`).
     BadMessage,
     /// A `create` used an ID that exists or existed.
     DuplicateUid,
-    /// The transaction is empty, too large or malformed.
+    /// The transaction is empty, malformed, too deep, too large or has a value that the server
+    /// refuses (see `validate`).
     InvalidTxn,
-    /// The user sent too much too fast.
+    /// The user sent too much too fast. Temporary: the client sends the transaction again.
     RateLimited,
-    /// A fault in the server.
+    /// A fault in the server. Temporary: the client sends the transaction again.
     Internal,
+    /// The pair (client, `op_id`) was used before with other content, or is below the highest
+    /// number that the server has for this client. The client numbers the transaction again.
+    OpIdReused,
+}
+
+/// What a client does when it gets an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// The client cannot go on. It must not connect again by itself.
+    Fatal,
+    /// The server refused the transaction for good. The client drops it.
+    Reject,
+    /// The server could not take the transaction now. The client keeps it and sends it again
+    /// after a time that grows.
+    Retry,
+    /// The client gives the transaction (and the ones after it) new numbers and sends them again.
+    Renumber,
 }
 
 impl ErrorCode {
     /// True if the connection cannot go on after this error.
     pub fn is_fatal(self) -> bool {
-        matches!(self, ErrorCode::UnsupportedProtocol | ErrorCode::AuthFailed)
+        self.class() == ErrorClass::Fatal
+    }
+
+    /// What a client does with a transaction that gets this error.
+    pub fn class(self) -> ErrorClass {
+        match self {
+            ErrorCode::UnsupportedProtocol | ErrorCode::AuthFailed => ErrorClass::Fatal,
+            ErrorCode::BadMessage | ErrorCode::DuplicateUid | ErrorCode::InvalidTxn => {
+                ErrorClass::Reject
+            }
+            ErrorCode::RateLimited | ErrorCode::Internal => ErrorClass::Retry,
+            ErrorCode::OpIdReused => ErrorClass::Renumber,
+        }
     }
 }
 
@@ -84,16 +118,23 @@ impl ErrorCode {
 pub enum ClientMsg {
     Hello {
         protocol: u32,
+        /// The person. The server must check that the token belongs to this user.
         user: Uid,
+        /// The client instance: a UUID that this program made for itself. It is the writer of
+        /// the transactions. The client keeps it in its journal.
+        client: Uid,
         name: String,
         token: String,
         /// The last sequence number the client has, or `None` if it has no state yet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_seq: Option<u64>,
+        /// The `log_id` that the client saw last, with its state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        log_id: Option<String>,
     },
     /// A transaction. The server answers with `ack`, or with `error` that has this `op_id`. The
-    /// server must treat a second submit with the same user and `op_id` as the first (it answers
-    /// with the old sequence number): a client sends again after a lost connection.
+    /// server must treat a second submit with the same client, `op_id` and content as the first
+    /// (it answers with the old sequence number): a client sends again after a lost connection.
     Submit {
         op_id: u64,
         ops: Vec<Op>,
@@ -111,32 +152,40 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     Welcome {
         protocol: u32,
+        /// The name of this log. It changes when the log starts again (a restore from a backup
+        /// that lost entries, a copy of the document). A client that sees another name than
+        /// the one in its state starts again from the snapshot and sends its own work again.
+        log_id: String,
         /// The sequence number of the last entry in the log.
         head_seq: u64,
-        /// The highest `op_id` of this user that the server has sequenced (0 if none). The
-        /// client drops its own transactions up to this number from its queue.
+        /// The highest `op_id` of this client that the server has sequenced (0 if none).
         your_last_op: u64,
-        /// The other users who are online now.
+        /// The other clients who are online now.
         peers: Vec<Peer>,
     },
     /// The whole state at a sequence number. It follows `welcome` when the client has no state
     /// or is too far behind.
-    Snapshot { seq: u64, state: Replica },
+    Snapshot {
+        log_id: String,
+        seq: u64,
+        state: Replica,
+    },
     /// The entries after the `last_seq` of the client, in order. Maybe empty. It follows
-    /// `welcome` when the client can catch up.
+    /// `welcome` when the client can catch up. A client without state must not get it.
     Entries { entries: Vec<Entry> },
     /// The transaction `op_id` of this client has the sequence number `seq`.
     Ack { op_id: u64, seq: u64 },
-    /// An entry of another user.
+    /// An entry of another client.
     Broadcast { entry: Entry },
-    /// The presence of another user.
+    /// The presence of another client.
     Presence {
+        client: Uid,
         user: Uid,
         name: String,
         state: PresenceState,
     },
-    /// Another user went offline.
-    PresenceLeave { user: Uid },
+    /// Another client went offline.
+    PresenceLeave { client: Uid },
     Error {
         code: ErrorCode,
         message: String,
@@ -162,12 +211,14 @@ mod tests {
     #[test]
     fn every_message_round_trips() {
         let user = Uid::from_num(5);
+        let client = Uid::from_num(6);
         let op = Op::Delete {
             target: Target::new(Kind::Object, Uid::from_num(9)),
         };
         let entry = Entry {
             seq: 4,
-            author: user,
+            author: client,
+            user,
             op_id: 2,
             ops: vec![op.clone()],
         };
@@ -175,17 +226,21 @@ mod tests {
         let t = round(&ClientMsg::Hello {
             protocol: PROTOCOL_VERSION,
             user,
+            client,
             name: "Ann".into(),
             token: "t".into(),
             last_seq: Some(3),
+            log_id: Some("log".into()),
         });
         assert!(t.contains(r#""type":"hello""#));
         round(&ClientMsg::Hello {
             protocol: 1,
             user,
+            client,
             name: "Ann".into(),
             token: String::new(),
             last_seq: None,
+            log_id: None,
         });
         round(&ClientMsg::Submit {
             op_id: 1,
@@ -197,15 +252,18 @@ mod tests {
         round(&ClientMsg::Bye);
         round(&ServerMsg::Welcome {
             protocol: 1,
+            log_id: "log".into(),
             head_seq: 9,
             your_last_op: 3,
             peers: vec![Peer {
+                client,
                 user,
                 name: "Bo".into(),
                 state: PresenceState::default(),
             }],
         });
         round(&ServerMsg::Snapshot {
+            log_id: "log".into(),
             seq: 9,
             state: Replica::new(),
         });
@@ -215,11 +273,12 @@ mod tests {
         round(&ServerMsg::Ack { op_id: 1, seq: 2 });
         round(&ServerMsg::Broadcast { entry });
         round(&ServerMsg::Presence {
+            client,
             user,
             name: "Bo".into(),
             state: PresenceState::default(),
         });
-        round(&ServerMsg::PresenceLeave { user });
+        round(&ServerMsg::PresenceLeave { client });
         let t = round(&ServerMsg::Error {
             code: ErrorCode::DuplicateUid,
             message: "x".into(),
@@ -231,6 +290,25 @@ mod tests {
             message: "x".into(),
             op_id: None,
         });
+    }
+
+    #[test]
+    fn every_error_code_has_a_class() {
+        use ErrorClass::*;
+        let all = [
+            (ErrorCode::UnsupportedProtocol, Fatal),
+            (ErrorCode::AuthFailed, Fatal),
+            (ErrorCode::BadMessage, Reject),
+            (ErrorCode::DuplicateUid, Reject),
+            (ErrorCode::InvalidTxn, Reject),
+            (ErrorCode::RateLimited, Retry),
+            (ErrorCode::Internal, Retry),
+            (ErrorCode::OpIdReused, Renumber),
+        ];
+        for (code, class) in all {
+            assert_eq!(code.class(), class, "{code:?}");
+            assert_eq!(code.is_fatal(), class == Fatal);
+        }
     }
 
     #[test]
