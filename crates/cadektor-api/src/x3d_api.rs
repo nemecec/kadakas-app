@@ -20,6 +20,7 @@ use cadektor_core::sheets::{Viewport, fit_scale};
 use cadektor_x3d::section::{SectionDrawing, SectionSpec};
 use cadektor_x3d::{DocumentMaterials, ExportOptions, PlantDetail, X3dError};
 
+use crate::errors::{app, bad};
 use crate::sheets_api::{class_ref, layer_list, layer_ref, sheet_ref, viewport_json};
 use crate::{RpcError, Session};
 
@@ -55,14 +56,6 @@ const METHODS: [&str; 5] = [
 /// True if this module handles the method.
 pub fn knows(method: &str) -> bool {
     METHODS.contains(&method)
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError::invalid_params(e)
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError::app(e)
 }
 
 /// The kind of a 3D export that a request asks for.
@@ -209,10 +202,7 @@ impl Session {
             "section_viewport.create" => self.section_viewport_create(m),
             "section_viewport.update" => self.section_viewport_update(m),
             "section_viewport.get" => self.section_viewport_get(m),
-            _ => Err(RpcError {
-                code: -32601,
-                message: format!("unknown method: {method}"),
-            }),
+            _ => Err(RpcError::method_not_found(method)),
         }
     }
 
@@ -257,7 +247,7 @@ impl Session {
             .execute(&Command::Batch {
                 commands: vec![add, set],
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "id": id }))
     }
 
@@ -270,9 +260,9 @@ impl Session {
             .editor
             .doc()
             .object(id)
-            .ok_or_else(|| app(format!("object {id} does not exist")))?;
-        let (old_a, old_b) =
-            settings::ends(obj).ok_or_else(|| app(format!("object {id} is not a section line")))?;
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
+        let (old_a, old_b) = settings::ends(obj)
+            .ok_or_else(|| RpcError::validation(format!("object {id} is not a section line")))?;
         let current = settings::data(obj).expect("checked");
         let s = patched(&current, &m)?;
         let (na, nb) = (a.unwrap_or(old_a), b.unwrap_or(old_b));
@@ -298,7 +288,7 @@ impl Session {
         }
         self.editor
             .execute(&Command::Batch { commands })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         Ok(json!({ "id": id }))
     }
 
@@ -310,13 +300,12 @@ impl Session {
         let doc = self.editor.doc();
         let obj = doc
             .object(id)
-            .ok_or_else(|| app(format!("object {id} does not exist")))?;
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
         let (vp, line) = match &obj.shape {
             Shape::Viewport(v) => {
-                let sv = v
-                    .section
-                    .as_ref()
-                    .ok_or_else(|| app(format!("viewport {id} is not a section viewport")))?;
+                let sv = v.section.as_ref().ok_or_else(|| {
+                    RpcError::validation(format!("viewport {id} is not a section viewport"))
+                })?;
                 (Some((**v).clone()), sv.line)
             }
             _ => (None, id),
@@ -324,7 +313,7 @@ impl Session {
         let spec = doc
             .object(line)
             .and_then(SectionSpec::from_line)
-            .ok_or_else(|| app(format!("object {line} is not a section line")))?;
+            .ok_or_else(|| RpcError::validation(format!("object {line} is not a section line")))?;
         if let Some(p) = spec.problem() {
             return Err(app(p));
         }
@@ -471,7 +460,7 @@ impl Session {
                 class: None,
                 attrs: Attributes::default(),
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         viewport_json(self.editor.doc(), ObjectId(out.created[0]))
     }
 
@@ -526,7 +515,7 @@ impl Session {
             let spec = doc
                 .object(sv.line)
                 .and_then(SectionSpec::from_line)
-                .ok_or_else(|| app("the section line is gone"))?;
+                .ok_or_else(|| RpcError::not_found("the section line is gone"))?;
             let d = self.section_drawing(sv.line, Some(&next), &spec);
             fit_viewport(&mut next, &d, true);
         }
@@ -539,7 +528,7 @@ impl Session {
                 class: None,
                 attrs: None,
             })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         viewport_json(self.editor.doc(), id)
     }
 
@@ -628,12 +617,12 @@ impl Session {
         let mut checked_paths = Vec::new();
         for (p, ext) in &paths {
             let p = if checked {
-                self.check_path(p, true, &[ext]).map_err(app)?
+                self.check_path(p, true, &[ext]).map_err(RpcError::policy)?
             } else {
                 p.clone()
             };
             if checked && self.paths.is_restricted() && p.exists() && !overwrite {
-                return Err(app(format!(
+                return Err(RpcError::conflict(format!(
                     "{} exists: pass \"overwrite\": true to replace it",
                     p.display()
                 )));
@@ -653,7 +642,8 @@ impl Session {
             e => app(e),
         };
         let write = |p: &Path, bytes: &[u8]| {
-            std::fs::write(p, bytes).map_err(|e| app(format!("{}: {e}", p.display())))
+            cadektor_core::fsio::write_atomic(p, bytes)
+                .map_err(|e| app(format!("{}: {e}", p.display())))
         };
         let mut files = vec![checked_paths[0].clone()];
         let stats = match kind {
@@ -682,12 +672,13 @@ impl Session {
                     let tp = checked_paths[0].with_file_name(n);
                     let ext = if n.ends_with(".jpg") { "jpg" } else { "png" };
                     let tp = if checked {
-                        self.check_path(&tp, true, &[ext]).map_err(app)?
+                        self.check_path(&tp, true, &[ext])
+                            .map_err(RpcError::policy)?
                     } else {
                         tp
                     };
                     if checked && self.paths.is_restricted() && tp.exists() && !overwrite {
-                        return Err(app(format!(
+                        return Err(RpcError::conflict(format!(
                             "{} exists: pass \"overwrite\": true to replace it",
                             tp.display()
                         )));

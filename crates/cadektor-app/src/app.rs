@@ -116,9 +116,11 @@ impl CadektorApp {
     ) -> Self {
         let mut app = Self::blank();
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
-        app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs);
-        // Agents may fetch only the addresses of --allow-url (default: none). Network calls never block the UI.
         let args: Vec<String> = std::env::args().collect();
+        // Agents start a DWG converter only with --allow-converters (default: off). The file dialogs are not limited.
+        app.session.paths = cadektor_api::PathPolicy::restricted(allow_dirs)
+            .with_converters(args.iter().any(|a| a == "--allow-converters"));
+        // Agents may fetch only the addresses of --allow-url (default: none). Network calls never block the UI.
         app.session.gis.urls =
             cadektor_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
         app.session.gis.blocking = false;
@@ -650,7 +652,7 @@ impl CadektorApp {
         else {
             return;
         };
-        self.status = match file_io::write_svg(&p, self.session.editor.doc()) {
+        self.status = match file_io::write_svg(&p, &self.session) {
             Ok(()) => format!("Exported {}", p.display()),
             Err(e) => e,
         };

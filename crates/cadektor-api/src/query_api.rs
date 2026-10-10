@@ -67,17 +67,7 @@ pub fn describe() -> Value {
 }
 
 fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
+    RpcError::invalid_params(e)
 }
 
 fn read<T: for<'de> Deserialize<'de>>(m: &Map<String, Value>) -> Result<T, RpcError> {
@@ -328,7 +318,9 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                         Some((pt, tol * 4.0)),
                     );
                     if s.smart.acquire_at(pt, &geom, tol, p.edges).is_none() {
-                        return Err(app("no object point or edge is near the point"));
+                        return Err(RpcError::not_found(
+                            "no object point or edge is near the point",
+                        ));
                     }
                 }
                 "clear" => s.smart.clear(),
@@ -359,7 +351,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     classes: p.classes,
                     mode,
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             s.prune_selection();
             Ok(visibility_json(s))
         }

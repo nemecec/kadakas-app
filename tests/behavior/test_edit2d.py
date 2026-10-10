@@ -49,8 +49,8 @@ def test_scale_a_circle_and_undo(cad):
 def test_a_circle_cannot_be_stretched(cad):
     c = cad.execute(circle_cmd(0, 0, 500))[0]
     err = cad.error("edit.scale", {"ids": [c], "center": [0, 0], "sx": 2, "sy": 3})
-    assert err["code"] == 1 and "same scale" in err["message"]
-    assert cad.error("edit.scale", {"ids": [c], "center": [0, 0], "sx": 0})["code"] == 1
+    assert err["code"] == 3 and "same scale" in err["message"]
+    assert cad.error("edit.scale", {"ids": [c], "center": [0, 0], "sx": 0})["code"] == 3
 
 
 def test_a_rectangle_stretches_and_stays_a_rectangle(cad):
@@ -67,7 +67,7 @@ def test_mirror_move_and_copy(cad):
     assert shape_of(cad, r)["min"] == [100, 0]
     cad.result("edit.mirror", {"ids": [r], "a": [0, 0], "b": [0, 1]})
     assert shape_of(cad, r)["min"] == [-300, 0]
-    assert cad.error("edit.mirror", {"ids": [r], "a": [1, 1], "b": [1, 1]})["code"] == 1
+    assert cad.error("edit.mirror", {"ids": [r], "a": [1, 1], "b": [1, 1]})["code"] == 3
 
 
 def test_rotate_with_copy_uses_the_selection(cad):
@@ -113,8 +113,8 @@ def test_array_resize_rotate_and_errors(cad):
     out = cad.result("edit.array", {"ids": [r], "shape": "linear", "count": 2, "offset": [100, 0], "resize": 2})
     s = shape_of(cad, out["created"][1])
     assert (s["max"][0] - s["min"][0]) == pytest.approx(40)
-    assert cad.error("edit.array", {"ids": [r], "shape": "linear", "count": 0, "offset": [1, 0]})["code"] == 1
-    assert cad.error("edit.array", {"ids": [r], "shape": "linear", "count": 2})["code"] == 1
+    assert cad.error("edit.array", {"ids": [r], "shape": "linear", "count": 0, "offset": [1, 0]})["code"] == 3
+    assert cad.error("edit.array", {"ids": [r], "shape": "linear", "count": 2})["code"] == 3
     assert cad.error("edit.array", {"ids": [r], "shape": "spiral"})["code"] == -32602
 
 
@@ -172,7 +172,7 @@ def test_round_every_corner_of_a_rectangle(cad):
     assert sum(1 for v in s["points"] if isinstance(v, dict) and v["kind"] == "point_on_arc") == 4
     cad.result("undo")
     assert shape_of(cad, p)["points"][0] == [0, 0]
-    assert cad.error("edit.fillet", {"id": p, "all": True, "radius": 600})["code"] == 1
+    assert cad.error("edit.fillet", {"id": p, "all": True, "radius": 600})["code"] == 3
 
 
 def test_chamfer_forms(cad):
@@ -187,7 +187,7 @@ def test_chamfer_forms(cad):
     assert shape_of(cad, out["created"][0])["a"] == pytest.approx([200, 0])
     cad.result("undo")
     assert cad.error("edit.chamfer", base)["code"] == -32602
-    assert cad.error("edit.chamfer", {**base, "distance": 5000})["code"] == 1
+    assert cad.error("edit.chamfer", {**base, "distance": 5000})["code"] == 3
 
 
 def test_trim_removes_the_part_between_crossings(cad):
@@ -205,7 +205,7 @@ def test_trim_removes_the_part_between_crossings(cad):
     cad.result("edit.trim", {"id": t, "pick": [500, 0], "cutters": cutters})
     # Only the crossing at 300 counts: the part from 300 to the end goes.
     assert shape_of(cad, t)["b"] == [300, 0]
-    assert cad.error("edit.trim", {"id": t, "pick": [5000, 0], "cutters": []})["code"] == 1
+    assert cad.error("edit.trim", {"id": t, "pick": [5000, 0], "cutters": []})["code"] == 3
 
 
 def test_trim_a_circle_leaves_an_arc(cad):
@@ -221,7 +221,7 @@ def test_extend_to_a_boundary(cad):
     b = cad.execute(line_cmd(1000, -500, 1000, 500))[0]
     cad.result("edit.extend", {"id": t, "pick": [350, 0], "boundaries": [b]})
     assert shape_of(cad, t)["b"] == [1000, 0]
-    assert cad.error("edit.extend", {"id": t, "pick": [10, 0], "boundaries": [b]})["code"] == 1
+    assert cad.error("edit.extend", {"id": t, "pick": [10, 0], "boundaries": [b]})["code"] == 3
 
 
 def test_split_a_line_and_a_rectangle(cad):
@@ -238,7 +238,7 @@ def test_split_a_line_and_a_rectangle(cad):
     assert sorted(round(v) for v in pieces.values()) == [300000, 700000]
     assert before > 0
     assert cad.error("edit.split", {"id": r})["code"] == -32602
-    assert cad.error("edit.split", {"id": r, "line": {"a": [5000, 0], "b": [5000, 1]}})["code"] == 1
+    assert cad.error("edit.split", {"id": r, "line": {"a": [5000, 0], "b": [5000, 1]}})["code"] == 3
 
 
 def test_surface_add_subtract_clip_intersect_compose(cad):
@@ -283,10 +283,11 @@ def test_surface_errors(cad):
     a = cad.execute(rect_cmd(0, 0, 10, 10))[0]
     ln = cad.execute(line_cmd(0, 0, 5, 5))[0]
     assert "line" in cad.error("surface.add", {"ids": [a, ln]})["message"]
-    assert cad.error("surface.add", {"ids": [a]})["code"] == 1
+    assert cad.error("surface.add", {"ids": [a, 999]})["code"] == 2
+    assert cad.error("surface.add", {"ids": [a]})["code"] == 3
     assert cad.error("surface.subtract", {"base": a})["code"] == -32602
     far = cad.execute(rect_cmd(500, 500, 600, 600))[0]
-    assert cad.error("surface.intersect", {"ids": [a, far]})["code"] == 1
+    assert cad.error("surface.intersect", {"ids": [a, far]})["code"] == 3
 
 
 def test_execute_takes_the_new_commands_too(cad):

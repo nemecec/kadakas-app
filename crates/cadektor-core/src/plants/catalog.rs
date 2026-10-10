@@ -151,22 +151,9 @@ fn detect_delimiter(text: &str) -> char {
     }
 }
 
-fn quote(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r', ';', '\t']) || s.starts_with(' ') || s.ends_with(' ') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
-/// Writes rows as CSV text with comma delimiters and `\n` line ends.
+/// Writes rows as CSV text (see `crate::csv`: quoting and the formula guard).
 pub fn write_csv(rows: &[Vec<String>]) -> String {
-    let mut out = String::new();
-    for r in rows {
-        out.push_str(&r.iter().map(|f| quote(f)).collect::<Vec<_>>().join(","));
-        out.push('\n');
-    }
-    out
+    crate::csv::write_rows(rows)
 }
 
 // ---------------------------------------------------------------------------

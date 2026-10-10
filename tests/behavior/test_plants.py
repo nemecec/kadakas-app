@@ -47,7 +47,7 @@ def test_create_list_get_update_duplicate_and_delete_styles(cad):
 
 def test_bad_style_input_is_refused(cad):
     make_style(cad)
-    assert cad.error("plant_style.create", {"name": "Field maple"})["code"] == 1  # duplicate name
+    assert cad.error("plant_style.create", {"name": "Field maple"})["code"] == 3  # duplicate name
     assert cad.error("plant_style.create", {"name": "X", "spread": -5})["code"] == -32602
     assert cad.error("plant_style.create", {"name": "X", "category": "cactus"})["code"] == -32602
     assert cad.error("plant_style.create", {"name": "X", "colour": "red"})["code"] == -32602
@@ -238,7 +238,7 @@ def test_tag_is_a_shape_with_an_editable_position(cad):
     cad.execute({"op": "modify_object", "id": tag, "shape": {**shape, "at": [300, 2000]}})
     assert cad.result("objects.get", {"id": tag})["shape"]["at"] == [300, 2000]
     err = cad.error("execute", {"command": {"op": "add_object", "shape": {"kind": "plant_tag", "at": [0, 0], "anchor": [0, 0], "style": 9999}}})
-    assert err["code"] == 1
+    assert err["code"] == 2
 
 
 def test_a_style_with_tags_cannot_be_deleted(cad):
@@ -376,7 +376,7 @@ def test_existing_tree_display_shows_the_zone_and_dashes_removed_trees(cad):
 
 def test_existing_tree_validation(cad):
     for bad in ({"dbh": 0}, {"spread": -1}, {"rpz_factor": -2}, {"dbh": 1e12}):
-        assert cad.error("execute", {"command": tree(**bad)})["code"] in (1, -32602)
+        assert cad.error("execute", {"command": tree(**bad)})["code"] in (1, 3, -32602)
     assert cad.error("execute", {"command": tree(action="chop")})["code"] == -32602
     assert cad.result("report.existing_trees")["rows"] == []
 
@@ -458,7 +458,7 @@ def test_set_data_cannot_change_the_plant_link(cad):
     pid = place(cad, mode="single", style=sid, at=[0, 0])["created"][0]
     err = cad.error("execute", {"command": {"op": "set_data", "id": pid, "set": {"plant": {"style": 999}}}})
     assert "reserved" in err["message"]
-    assert cad.error("execute", {"command": {"op": "set_data", "id": pid, "remove": ["plant"]}})["code"] == 1
+    assert cad.error("execute", {"command": {"op": "set_data", "id": pid, "remove": ["plant"]}})["code"] == 3
     assert cad.result("objects.get", {"id": pid})["data"]["plant"]["style"] == sid
     cad.execute({"op": "set_data", "id": pid, "set": {"note": "ok"}})
 
@@ -521,7 +521,7 @@ def test_locked_style_fields_refuse_overrides_and_snap_back(cad):
     obj = cad.result("objects.get", {"id": pid})
     assert obj["shape"]["spread"] == 7000 and obj["shape"]["height"] == 6000
     assert obj["data"]["plant"]["overrides"] == {"height": 6000}
-    assert cad.error("plants.set_style", {"ids": [pid], "overrides": {"price": 2}})["code"] == 1
+    assert cad.error("plants.set_style", {"ids": [pid], "overrides": {"price": 2}})["code"] == 3
     assert cad.error("plant_style.update", {"id": sid, "locked": ["colour"]})["code"] == -32602
 
 
@@ -541,7 +541,7 @@ def test_size_and_rotation_variation_is_seeded(cad):
     assert all(7000 * 0.75 <= s <= 7000 * 1.25 and 0 <= r < 6.2832 for s, r in look(a))
     assert len({s for s, _ in look(a)}) > 6
     assert len(cad.result("report.plant_schedule")["rows"]) == 1, "variation keeps one row"
-    assert cad.error("plants.place", {"mode": "single", "style": sid, "at": [0, 0], "variation": {"size": 2}})["code"] == 1
+    assert cad.error("plants.place", {"mode": "single", "style": sid, "at": [0, 0], "variation": {"size": 2}})["code"] == 3
     assert 'data-graphic="cloud"' in cad.result("render.svg")["svg"]
 
 

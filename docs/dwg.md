@@ -41,7 +41,7 @@ Cadektor does not include either program. Get them from their own sites or from 
 2. `ODAFileConverter` in its standard install folder, or on `PATH`.
 3. `dwg2dxf` and `dxf2dwg` on `PATH`.
 
-A request can never name a program. An agent cannot make Cadektor run something else.
+A request can never name a program. An agent cannot make Cadektor run something else. Agents may start the converter only when the host runs with `--allow-converters` (`cadektor serve`, `cadektor mcp` and the app). The default is off, and the call fails with error code 4 (kind `policy`). The file dialogs of the app are not limited.
 `describe` (`io.dwg.converter`) shows which converter Cadektor found.
 
 ## Use

@@ -198,7 +198,10 @@ impl Mapper<'_> {
                     return Err(e);
                 }
             }
-            Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Underlay(_) => {
+            Shape::TitleBlock(_)
+            | Shape::Group { .. }
+            | Shape::Unknown { .. }
+            | Shape::Underlay(_) => {
                 return Ok(false);
             }
         }

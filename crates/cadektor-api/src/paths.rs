@@ -11,11 +11,28 @@ use std::path::{Path, PathBuf};
 pub struct PathPolicy {
     /// Canonical allowed folders. `None`: every path is allowed.
     roots: Option<Vec<PathBuf>>,
+    /// May agents start an external converter (DWG)? Off by default. Needs `--allow-converters`.
+    /// A session without a path policy (a library user) and the dialogs of the user are not limited.
+    pub allow_converters: bool,
 }
 
 impl PathPolicy {
     pub fn unrestricted() -> Self {
-        PathPolicy { roots: None }
+        PathPolicy {
+            roots: None,
+            allow_converters: false,
+        }
+    }
+
+    /// Allows (or forbids) agents to start external converters.
+    pub fn with_converters(mut self, allow: bool) -> Self {
+        self.allow_converters = allow;
+        self
+    }
+
+    /// True if a request from an agent may start an external converter.
+    pub fn converters_allowed(&self) -> bool {
+        self.roots.is_none() || self.allow_converters
     }
 
     /// Allows these folders (and the folder of the document). Folders that do not exist are dropped.
@@ -27,6 +44,7 @@ impl PathPolicy {
                     .filter_map(|r| std::fs::canonicalize(r).ok())
                     .collect(),
             ),
+            allow_converters: false,
         }
     }
 

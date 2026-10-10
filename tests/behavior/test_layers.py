@@ -23,7 +23,7 @@ def locked_rect(cad):
 def test_locked_layer_blocks_edits_and_leaves_document_unchanged(cad, locked_rect, make_command):
     before = cad.doc()
     error = cad.error("execute", {"command": make_command(locked_rect)})
-    assert error["code"] == 1
+    assert error["code"] == 5
     assert "locked" in error["message"]
     assert cad.doc() == before
 
@@ -68,7 +68,7 @@ def test_cannot_delete_a_layer_that_still_has_objects(cad):
     cad.execute({"op": "set_active", "layer": site})
     cad.execute(rect_cmd(0, 0, 1, 1))
     error = cad.error("execute", {"command": {"op": "delete_layer", "id": site}})
-    assert error["code"] == 1
+    assert error["code"] == 5
     assert "not empty" in error["message"]
 
 
@@ -83,5 +83,5 @@ def test_deleting_the_active_empty_layer_moves_active_to_first_layer(cad):
 
 def test_the_last_layer_cannot_be_deleted(cad):
     error = cad.error("execute", {"command": {"op": "delete_layer", "id": 1}})
-    assert error["code"] == 1
+    assert error["code"] == 3
     assert "at least one layer" in error["message"]

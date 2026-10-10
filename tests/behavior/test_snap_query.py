@@ -145,7 +145,7 @@ def test_smart_acquire_at_an_object_point(cad):
     cad.execute(line_cmd(0, 0, 1000, 0))
     s = cad.result("snap.smart", {"action": "acquire_at", "point": [3, 3], "tolerance": 10})
     assert s["smart"]["points"] == [[0, 0]]
-    assert cad.error("snap.smart", {"action": "acquire_at", "point": [5000, 5000]})["code"] == 1
+    assert cad.error("snap.smart", {"action": "acquire_at", "point": [5000, 5000]})["code"] == 2
     s = cad.result("snap.smart", {"action": "acquire_at", "point": [300, 4], "edges": True, "tolerance": 10})
     assert len(s["smart"]["edges"]) == 1
 
@@ -185,8 +185,8 @@ def test_grey_classes_and_undo(cad):
     cad.result("undo")
     assert {c["id"]: c["mode"] for c in cad.result("visibility.get")["classes"]}[cls] == "grey"
     assert cad.error("visibility.set", {"mode": "pink", "classes": [cls]})["code"] == -32602
-    assert cad.error("visibility.set", {"mode": "grey"})["code"] == 1
-    assert cad.error("visibility.set", {"mode": "grey", "layers": [999]})["code"] == 1
+    assert cad.error("visibility.set", {"mode": "grey"})["code"] == 3
+    assert cad.error("visibility.set", {"mode": "grey", "layers": [999]})["code"] == 2
 
 
 def test_grey_layers_stay_in_exports_and_the_file(cad, tmp_path):

@@ -132,6 +132,7 @@ impl Tx<'_> {
                     )));
                 }
                 self.doc.layers.push(Layer {
+                    extra: Default::default(),
                     id,
                     name: name.clone(),
                     kind: LayerKind::Sheet,

@@ -177,7 +177,7 @@ fn draw_object(
     );
     let extra_style = (ext.is_some() && crate::site::carries_extra(o)).then(|| style.clone());
     let _ = match &o.shape {
-        Shape::Group { .. } => Ok(()),
+        Shape::Group { .. } | Shape::Unknown { .. } => Ok(()),
         Shape::Underlay(u) => writeln!(s, "{}", u.svg_element()),
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh.

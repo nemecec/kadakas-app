@@ -117,16 +117,16 @@ pub fn describe() -> Value {
 }
 
 fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
+    RpcError::invalid_params(e)
 }
 
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
+/// The error for a plan that cannot be made: a missing object is "not found", the rest is
+/// "validation" (the request is well formed, the shapes do not allow it).
+fn plan_error(msg: String) -> RpcError {
+    if msg.starts_with("no object ") {
+        RpcError::not_found(msg)
+    } else {
+        RpcError::validation(msg)
     }
 }
 
@@ -143,7 +143,7 @@ fn ids_or_selection(s: &Session, ids: Option<Vec<ObjectId>>) -> Result<Vec<Objec
 }
 
 fn run(s: &mut Session, cmd: &Command) -> Result<Outcome, RpcError> {
-    let out = s.editor.execute(cmd).map_err(app)?;
+    let out = s.editor.execute(cmd).map_err(RpcError::from)?;
     s.prune_selection();
     Ok(out)
 }
@@ -154,7 +154,7 @@ fn created(out: &Outcome) -> Value {
 
 /// Runs a plan (a batch of commands) and returns the IDs of the new objects.
 fn run_plan(s: &mut Session, plan: Result<Command, String>) -> Result<Value, RpcError> {
-    let cmd = plan.map_err(app)?;
+    let cmd = plan.map_err(plan_error)?;
     let out = run(s, &cmd)?;
     Ok(created(&out))
 }

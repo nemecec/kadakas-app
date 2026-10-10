@@ -60,7 +60,7 @@ fn take_sources(
     for id in ids {
         let o = doc
             .object(*id)
-            .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+            .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
         match &o.shape {
             Shape::Locus3d { p } => points.push(*p),
             Shape::Polyline3d {
@@ -130,7 +130,7 @@ impl Session {
                     .execute(&Command::Batch {
                         commands: vec![create, Command::DeleteObjects { ids: source_ids }],
                     })
-                    .map_err(RpcError::app)?;
+                    .map_err(RpcError::from)?;
                 self.prune_selection();
                 Ok(json!({ "id": out.created[0] }))
             }
@@ -145,14 +145,16 @@ impl Session {
                 let doc = self.editor.doc();
                 let obj = doc
                     .object(id)
-                    .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+                    .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
                 let Shape::SiteModel {
                     points,
                     lines,
                     settings: current,
                 } = &obj.shape
                 else {
-                    return Err(RpcError::app(format!("object {id} is not a site model")));
+                    return Err(RpcError::validation(format!(
+                        "object {id} is not a site model"
+                    )));
                 };
                 let (mut points, mut lines) = (points.clone(), lines.clone());
                 for (what, list, len) in [
@@ -202,7 +204,7 @@ impl Session {
                 }
                 self.editor
                     .execute(&Command::Batch { commands })
-                    .map_err(RpcError::app)?;
+                    .map_err(RpcError::from)?;
                 self.prune_selection();
                 Ok(json!({ "id": id, "points": np, "lines": nl }))
             }
@@ -310,10 +312,7 @@ impl Session {
                     json!({ "count": list.len(), "major_count": list.iter().filter(|c| c.major).count(), "levels": levels, "contours": contours }),
                 )
             }
-            _ => Err(RpcError {
-                code: -32601,
-                message: format!("unknown method: {method}"),
-            }),
+            _ => Err(RpcError::method_not_found(method)),
         }
     }
 

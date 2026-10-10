@@ -97,7 +97,7 @@ fn hardscape_styles_crud() {
     );
     assert_eq!(
         fail(&mut s, "hardscape_style.delete", json!({"id": id})).0,
-        1,
+        5,
         "in use"
     );
     ok(
@@ -153,7 +153,7 @@ fn hardscape_styles_crud() {
             json!({"name": "Setts 2 copy"})
         )
         .0,
-        1,
+        3,
         "name exists"
     );
     assert_eq!(
@@ -339,12 +339,12 @@ fn hardscape_add_and_set() {
     );
     // Undo is one step.
     assert!(ok(&mut s, "undo", json!({}))["done"].as_bool().unwrap());
-    assert_eq!(fail(&mut s, "objects.get", json!({"id": slab})).0, 1);
+    assert_eq!(fail(&mut s, "objects.get", json!({"id": slab})).0, 2);
     // Errors.
     let f = |s: &mut Session, m: &str, p: Value| fail(s, m, p).0;
     assert_eq!(
         f(&mut s, "hardscape.add", json!({})),
-        1,
+        3,
         "needs a boundary or a center line"
     );
     assert_eq!(
@@ -369,7 +369,7 @@ fn hardscape_add_and_set() {
             "hardscape.add",
             json!({"boundary": square(10), "center": [[0, 0], [5, 0]]})
         ),
-        1
+        3
     );
     assert_eq!(
         f(
@@ -476,7 +476,7 @@ fn hardscape_add_and_set() {
     );
     assert_eq!(
         f(&mut s, "hardscape.set", json!({"id": p})),
-        1,
+        3,
         "nothing to change"
     );
     assert_eq!(
@@ -485,7 +485,7 @@ fn hardscape_add_and_set() {
     );
     assert_eq!(
         f(&mut s, "hardscape.set", json!({"id": 999, "width": 5})),
-        1
+        2
     );
     assert_eq!(
         f(&mut s, "hardscape.set", json!({"id": p, "id2": 1})),
@@ -551,13 +551,13 @@ fn landscape_areas_holes_and_reports() {
             "landscape_area.set",
             json!({"id": a, "holes": [[[-50, 0], [10, 0], [10, 10]]]})
         ),
-        1
+        3
     );
     assert_eq!(
         f(&mut s, "landscape_area.set", json!({"id": a, "wibble": 1})),
         -32602
     );
-    assert_eq!(f(&mut s, "landscape_area.set", json!({"id": a})), 1);
+    assert_eq!(f(&mut s, "landscape_area.set", json!({"id": a})), 3);
     assert_eq!(
         f(&mut s, "landscape_area.add", json!({"name": "x"})),
         -32602,

@@ -272,6 +272,7 @@ mod tests {
         doc.object_mut(a).unwrap().parent = Some(g);
         let layer = doc.layers[0].id;
         doc.layers.push(crate::model::Layer {
+            extra: Default::default(),
             id: crate::model::LayerId(900),
             name: "x".into(),
             kind: Default::default(),

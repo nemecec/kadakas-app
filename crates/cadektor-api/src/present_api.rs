@@ -15,6 +15,7 @@ use cadektor_core::present::{
 use cadektor_core::resource::{ResourceBody, ResourceId};
 use cadektor_core::sun;
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const MATERIAL_LIST: (&str, &str) = (
@@ -143,20 +144,6 @@ pub fn describe() -> Value {
 /// True for the methods of this module.
 pub fn knows(method: &str) -> bool {
     KNOWN.contains(&method)
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
 }
 
 fn required<'a>(m: &'a Map<String, Value>, key: &str) -> Result<&'a Value, RpcError> {
@@ -378,7 +365,7 @@ fn read_image_file(s: &Session, path: &str) -> Result<Vec<u8>, RpcError> {
     {
         let p = s
             .check_path(std::path::Path::new(path), false, &["png", "jpg", "jpeg"])
-            .map_err(app)?;
+            .map_err(RpcError::policy)?;
         std::fs::read(&p).map_err(|e| app(format!("cannot read {}: {e}", p.display())))
     }
     #[cfg(target_arch = "wasm32")]
@@ -507,7 +494,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let out = s
                 .editor
                 .execute(&Command::AddResource { name, body })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"id": out.created[0]}))
         }
         "material.update" => {
@@ -525,7 +512,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     name,
                     body: Some(body),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(material_json(s.editor.doc(), id))
         }
         "material.duplicate" | "render_style.duplicate" => {
@@ -544,7 +531,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     name,
                     body: r.body.clone(),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"id": out.created[0]}))
         }
         "material.delete" | "render_style.delete" => {
@@ -556,7 +543,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let id = ref_of(s.editor.doc(), required(m, "id")?, kind)?;
             s.editor
                 .execute(&Command::DeleteResource { id, reassign: None })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"ok": true}))
         }
         "material.add_defaults" => {
@@ -586,7 +573,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     .execute(&Command::Batch {
                         commands: commands.into_iter().map(|c| c.1).collect(),
                     })
-                    .map_err(app)?;
+                    .map_err(RpcError::from)?;
                 added = names
                     .into_iter()
                     .zip(out.created)
@@ -629,7 +616,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                         mat,
                     )))),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(info)
         }
         "material.assign" => assign(s, m),
@@ -682,7 +669,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             let out = s
                 .editor
                 .execute(&Command::AddResource { name, body })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"id": out.created[0]}))
         }
         "render_style.update" => {
@@ -700,7 +687,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
                     name,
                     body: Some(body),
                 })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(style_json(s.editor.doc(), id))
         }
         "render_style.set_active" => {
@@ -711,7 +698,7 @@ fn run(s: &mut Session, method: &str, m: &Map<String, Value>) -> Result<Value, R
             };
             s.editor
                 .execute(&Command::SetRenderStyle { style })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"active": style}))
         }
         "sun.set" => sun_set(s, m),
@@ -811,7 +798,7 @@ fn assign(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let assigned = commands.len();
     s.editor
         .execute(&Command::Batch { commands })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(json!({"assigned": assigned}))
 }
 
@@ -1034,7 +1021,7 @@ fn sun_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     {
         s.editor
             .execute(&Command::SetSun { sun: None })
-            .map_err(app)?;
+            .map_err(RpcError::from)?;
         return Ok(json!({"sun": null}));
     }
     let doc = s.editor.doc();
@@ -1084,7 +1071,7 @@ fn sun_set(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     }
     s.editor
         .execute(&Command::SetSun { sun: Some(st) })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(sun_info(&st))
 }
 

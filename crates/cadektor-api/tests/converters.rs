@@ -72,7 +72,7 @@ fn dwg_files_go_through_the_converter_named_by_the_environment() {
 
     // A restricted session checks the path, the extension and the overwrite flag.
     let mut r = Session::default();
-    r.paths = PathPolicy::restricted([dir.clone()]);
+    r.paths = PathPolicy::restricted([dir.clone()]).with_converters(true);
     ok(&mut r, "import.file", json!({"path": input}));
     assert!(err(&mut r, "export.file", json!({"path": out})).contains("overwrite"));
     ok(

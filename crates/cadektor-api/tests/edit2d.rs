@@ -148,7 +148,7 @@ fn transforms_copy_and_select() {
             json!({"ids": [c], "center": [0, 0], "sx": 0})
         )
         .0,
-        1
+        3
     );
     assert_eq!(
         fail(
@@ -157,7 +157,7 @@ fn transforms_copy_and_select() {
             json!({"ids": [c], "a": [1, 1], "b": [1, 1]})
         )
         .0,
-        1
+        3
     );
     assert_eq!(
         fail(&mut s, "edit.scale", json!({"ids": [c], "sx": 2})).0,
@@ -183,7 +183,7 @@ fn arrays_in_three_shapes() {
     assert_eq!(rect_a["created"].as_array().unwrap().len(), 4);
     assert_eq!(
         fail(&mut s, "objects.get", json!({"id": c})).0,
-        1,
+        2,
         "the original is gone"
     );
 }
@@ -215,8 +215,8 @@ fn offset_and_its_errors() {
         (json!({"id": l, "distance": 1, "through": [0, 0]}), -32602),
         (json!({"id": l, "distance": 1, "side": "up"}), -32602),
         (json!({"id": l, "through": [null, 0]}), -32602),
-        (json!({"id": 999, "distance": 1}), 1),
-        (json!({"id": l, "distance": -1}), 1),
+        (json!({"id": 999, "distance": 1}), 2),
+        (json!({"id": l, "distance": -1}), 3),
     ] {
         assert_eq!(fail(&mut s, "edit.offset", p.clone()).0, code, "{p}");
     }
@@ -308,11 +308,11 @@ fn fillet_and_chamfer_forms() {
         (
             "edit.fillet",
             json!({"id": poly, "all": true, "radius": 10000}),
-            1,
+            3,
         ),
         ("edit.fillet", with(json!({"radius": "big"})), -32602),
         ("edit.chamfer", with(json!({})), -32602),
-        ("edit.chamfer", with(json!({"distance": 5000})), 1),
+        ("edit.chamfer", with(json!({"distance": 5000})), 3),
         (
             "edit.fillet",
             json!({"a": a, "b": b, "pick_a": [null, 0], "pick_b": [0, 8], "radius": 10}),
@@ -345,7 +345,7 @@ fn trim_extend_split() {
             json!({"id": t, "pick": [500, 0], "cutters": []})
         )
         .0,
-        1
+        3
     );
     assert_eq!(
         fail(&mut s, "edit.trim", json!({"id": t, "pick": [null, 0]})).0,
@@ -367,7 +367,7 @@ fn trim_extend_split() {
             json!({"id": e, "pick": [190, 500], "boundaries": []})
         )
         .0,
-        1
+        3
     );
     // Split a line, and a rectangle along a line.
     let out = call(&mut s, "edit.split", json!({"id": t, "at": [[500, 5]]}));
@@ -386,7 +386,7 @@ fn trim_extend_split() {
         json!({"id": r, "line": {"a": [0, 0], "b": [0, 0]}}),
     ] {
         let (code, _) = fail(&mut s, "edit.split", p.clone());
-        assert!(code == -32602 || code == 1, "{p}");
+        assert!(code == -32602 || code == 3, "{p}");
     }
 }
 
@@ -457,7 +457,7 @@ fn surfaces() {
         ("surface.add", json!({}), -32602),
         ("surface.subtract", json!({"base": a}), -32602),
         ("surface.subtract", json!({"cutters": [b]}), -32602),
-        ("surface.add", json!({"ids": [999, 998]}), 1),
+        ("surface.add", json!({"ids": [999, 998]}), 2),
     ] {
         assert_eq!(fail(&mut s, m, p.clone()).0, code, "{m} {p}");
     }
@@ -650,7 +650,7 @@ fn smart_points_and_edges() {
             -32602,
         ),
         (json!({"action": "acquire_at"}), -32602),
-        (json!({"action": "acquire_at", "point": [9000, 9000]}), 1),
+        (json!({"action": "acquire_at", "point": [9000, 9000]}), 2),
     ] {
         assert_eq!(fail(&mut s, "snap.smart", p.clone()).0, code, "{p}");
     }
@@ -709,8 +709,8 @@ fn visibility_modes() {
     for (p, code) in [
         (json!({"mode": "pink", "layers": [1]}), -32602),
         (json!({"layers": [1]}), -32602),
-        (json!({"mode": "grey"}), 1),
-        (json!({"mode": "grey", "layers": [999]}), 1),
+        (json!({"mode": "grey"}), 3),
+        (json!({"mode": "grey", "layers": [999]}), 2),
     ] {
         assert_eq!(fail(&mut s, "visibility.set", p.clone()).0, code, "{p}");
     }

@@ -135,7 +135,7 @@ def test_wms_errors_are_clear(make_serve, map_server):
     assert "404" in cad.error("gis.wms.capabilities", {"url": f"{base}/missing"})["message"]
     # An address that is not on the list is refused even when another one is.
     assert "not on the list" in cad.error("gis.wms.capabilities", {"url": "https://example.org/wms"})["message"]
-    assert cad.error("gis.wms.capabilities", {"url": "file:///etc/passwd"})["code"] == -32602
+    assert cad.error("gis.wms.capabilities", {"url": "file:///etc/passwd"})["code"] == 4
 
 
 def test_wfs_buildings_become_massing_models_with_quantities(make_serve, map_server):

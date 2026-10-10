@@ -34,7 +34,7 @@ pub(crate) fn describe() -> Value {
         },
         "mapping": {
             "site_model": "IfcGeographicElement TERRAIN, IfcTriangulatedFaceSet of the proposed surface",
-            "hardscape": "IfcSlab BASESLAB (Vectorworks default). IfcExtrudedAreaSolid when flat, IfcTriangulatedFaceSet when sloped or draped. Style components become an IfcMaterialLayerSet. Pset_SlabCommon and Qto_SlabBaseQuantities",
+            "hardscape": "IfcSlab with the predefined type BASESLAB. IfcExtrudedAreaSolid when flat, IfcTriangulatedFaceSet when sloped or draped. Style components become an IfcMaterialLayerSet. Pset_SlabCommon and Qto_SlabBaseQuantities",
             "landscape_area": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION: IFC4 has no VEGETATION type), thin extrusion with holes",
             "plant, existing_tree": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION), trunk and canopy cylinders plus an IfcBoundingBox",
             "massing": "IfcBuildingElementProxy (NOTDEFINED) with an extruded solid (flat roof) or a closed IfcTriangulatedFaceSet (gable, hip). Pset_BuildingElementProxyCommon, Cadektor_Massing, Cadektor_MassingQuantities (Height, EavesHeight, FootprintArea, GrossFloorArea, GrossVolume). With massing_as_building: IfcBuilding, Pset_BuildingCommon and Qto_BuildingBaseQuantities",
@@ -104,7 +104,7 @@ impl Session {
         let opts = IfcImportOptions::from_json(options).map_err(import_rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["ifc"])
-                .map_err(RpcError::app)?
+                .map_err(RpcError::policy)?
         } else {
             path
         };
@@ -112,7 +112,7 @@ impl Session {
             cadektor_ifc::import_file(&path, self.editor.doc(), &opts).map_err(import_rpc)?;
         self.editor
             .execute(&result.command)
-            .map_err(RpcError::app)?;
+            .map_err(RpcError::from)?;
         self.prune_selection();
         Ok(json!({
             "imported": result.report.total(),
@@ -132,12 +132,12 @@ impl Session {
         let opts = IfcOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
             self.check_path(&path, true, &["ifc"])
-                .map_err(RpcError::app)?
+                .map_err(RpcError::policy)?
         } else {
             path
         };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(RpcError::app(format!(
+            return Err(RpcError::conflict(format!(
                 "{} exists: pass \"overwrite\": true to replace it",
                 path.display()
             )));

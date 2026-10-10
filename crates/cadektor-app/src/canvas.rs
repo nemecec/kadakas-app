@@ -222,7 +222,11 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         // Annotations need the document (see `draw_object`).
         Shape::Annotation(_) => {}
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
-        Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Symbol { .. } => {}
+        Shape::Viewport(_)
+        | Shape::TitleBlock(_)
+        | Shape::Group { .. }
+        | Shape::Unknown { .. }
+        | Shape::Symbol { .. } => {}
         Shape::Irrigation(i) => crate::irrigation_ui::draw(painter, view, i, st, offset),
     }
 }
@@ -360,7 +364,7 @@ fn draw_shape_or_object(
                 draw_object_deep(painter, view, doc, counts, &v, vst, offset, depth + 1);
             }
         }
-        Shape::Group { .. } => {}
+        Shape::Group { .. } | Shape::Unknown { .. } => {}
         Shape::Plant { at, spread, .. } => {
             let look = cadektor_core::plants::link::look(doc, o);
             // The colors of the style apply when the object has none of its own.

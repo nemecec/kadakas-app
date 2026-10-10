@@ -17,6 +17,7 @@ use cadektor_core::model::*;
 use cadektor_core::sheets::*;
 use cadektor_render::{Projection, RenderMode, StandardView};
 
+use crate::errors::{app, bad};
 use crate::{RpcError, Session};
 
 pub const SHEET_LIST: (&str, &str) = (
@@ -104,7 +105,7 @@ pub fn describe() -> Value {
         "concepts": "A sheet layer is a page (paper space: mm, scale 1:1). A viewport is an object on a sheet layer that shows design layers at a scale. Viewports are drawn live from the model. Annotations live inside the viewport, in paper mm. A title block is a parametric object with a border, a grid reference and fields from the project and the sheet.",
         "export": "export.file {path, format, options?, overwrite?} with format pdf (options: sheets? [layer ID or name], default all sheet layers, one page each), sheet_svg (options: sheet) or sheet_png (options: sheet, dpi? default 150, at most 64 megapixels). The extension must be .pdf, .svg or .png. The path rules of export.file apply. At most 64 megapixels of 3D viewport images per page and per PDF.",
         "viewport_visibility": "A viewport stores the visibility of all design layers and classes when it is created. Later changes in the document do not reach it. Change it with viewport.set_override.",
-        "override_precedence": "Inside a viewport (as in Vectorworks, a class override acts on attributes that are by class only): the object's own attributes, then the viewport class override, then the class attributes, then defaults (black, no fill, 0.25 mm). Visibility is the viewport's own.",
+        "override_precedence": "Inside a viewport (a class override acts only on attributes that are set by class): the object's own attributes, then the viewport class override, then the class attributes, then defaults (black, no fill, 0.25 mm). Visibility is the viewport's own.",
         "examples": [
             {"method": "sheet.create", "params": {"name": "Planting plan", "paper": "a1", "number": "L-101", "title": "Planting plan"}},
             {"method": "viewport.create", "params": {"sheet": "Planting plan", "scale": "fit", "view": "plan"}},
@@ -116,20 +117,6 @@ pub fn describe() -> Value {
             {"method": "export.file", "params": {"format": "pdf", "path": "/tmp/plans.pdf", "options": {"sheets": ["Planting plan"]}}}
         ],
     })
-}
-
-fn bad(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: -32602,
-        message: e.to_string(),
-    }
-}
-
-fn app(e: impl std::fmt::Display) -> RpcError {
-    RpcError {
-        code: 1,
-        message: e.to_string(),
-    }
 }
 
 type Res = Result<Value, RpcError>;
@@ -177,7 +164,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
             let guid = cadektor_core::guid::random();
             s.editor
                 .execute(&Command::SetProjectGuid { guid: guid.clone() })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({ "guid": guid }))
         }
         "viewport.create" => viewport_create(s, p),
@@ -199,7 +186,7 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
             let name = str_field(p, "name")?;
             s.editor
                 .execute(&Command::DeleteView { name })
-                .map_err(app)?;
+                .map_err(RpcError::from)?;
             Ok(json!({"ok": true}))
         }
         _ => unreachable!("checked by KNOWN"),
@@ -362,7 +349,7 @@ fn sheet_create(s: &mut Session, p: &Value) -> Res {
         number: opt_str(p, "number"),
         title: opt_str(p, "title"),
     };
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     Ok(json!({"layer": out.created[0]}))
 }
 
@@ -375,7 +362,7 @@ fn sheet_set(s: &mut Session, p: &Value) -> Res {
         number: opt_str(p, "number"),
         title: opt_str(p, "title"),
     };
-    s.editor.execute(&cmd).map_err(app)?;
+    s.editor.execute(&cmd).map_err(RpcError::from)?;
     let doc = s.editor.doc();
     Ok(sheet_json(doc, doc.layer(layer).expect("checked")))
 }
@@ -389,7 +376,7 @@ fn project_set(s: &mut Session, p: &Value) -> Res {
         date: opt_str(p, "date"),
         revision: opt_str(p, "revision"),
     };
-    s.editor.execute(&cmd).map_err(app)?;
+    s.editor.execute(&cmd).map_err(RpcError::from)?;
     Ok(serde_json::to_value(&s.editor.doc().drawing.project).unwrap())
 }
 
@@ -406,7 +393,7 @@ pub(crate) fn viewport_json(doc: &Document, id: ObjectId) -> Res {
 fn find_viewport(doc: &Document, id: ObjectId) -> Result<(&Object, &Viewport), RpcError> {
     let o = doc
         .object(id)
-        .ok_or_else(|| app(format!("object {id} does not exist")))?;
+        .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
     match &o.shape {
         Shape::Viewport(v) => Ok((o, v)),
         _ => Err(bad(format!("object {id} is not a viewport"))),
@@ -533,7 +520,7 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
         class: None,
         attrs: Attributes::default(),
     };
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     viewport_json(s.editor.doc(), ObjectId(out.created[0]))
 }
 
@@ -555,7 +542,7 @@ fn change_viewport(
             class: None,
             attrs: None,
         })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     viewport_json(s.editor.doc(), id)
 }
 
@@ -742,7 +729,7 @@ fn viewport_annotate(s: &mut Session, p: &Value) -> Res {
 fn find_title_block(doc: &Document, id: ObjectId) -> Result<(&Object, &TitleBlock), RpcError> {
     let o = doc
         .object(id)
-        .ok_or_else(|| app(format!("object {id} does not exist")))?;
+        .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
     match &o.shape {
         Shape::TitleBlock(t) => Ok((o, t)),
         _ => Err(bad(format!("object {id} is not a title block"))),
@@ -778,7 +765,7 @@ fn title_block_create(s: &mut Session, p: &Value) -> Res {
         class: None,
         attrs: Attributes::default(),
     };
-    let out = s.editor.execute(&cmd).map_err(app)?;
+    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
     Ok(json!({"id": out.created[0]}))
 }
 
@@ -794,7 +781,7 @@ fn title_block_update(s: &mut Session, p: &Value) -> Res {
             class: None,
             attrs: None,
         })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(serde_json::to_value(&tb).unwrap())
 }
 
@@ -841,7 +828,7 @@ fn saved_view_save(s: &mut Session, p: &Value) -> Res {
         .execute(&Command::SaveView {
             view: Box::new(view.clone()),
         })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     Ok(serde_json::to_value(view).unwrap())
 }
 
@@ -849,7 +836,7 @@ fn saved_view_restore(s: &mut Session, p: &Value) -> Res {
     let name = str_field(p, "name")?;
     s.editor
         .execute(&Command::RestoreView { name: name.clone() })
-        .map_err(app)?;
+        .map_err(RpcError::from)?;
     let view = s
         .editor
         .doc()
@@ -974,12 +961,13 @@ impl Session {
             return Err(bad(format!("{} is a folder", path.display())));
         }
         let path = if checked {
-            self.check_path(&path, true, &[ext]).map_err(app)?
+            self.check_path(&path, true, &[ext])
+                .map_err(RpcError::policy)?
         } else {
             path
         };
         if checked && self.paths.is_restricted() && path.exists() && !overwrite {
-            return Err(app(format!(
+            return Err(RpcError::conflict(format!(
                 "{} exists: pass \"overwrite\": true to replace it",
                 path.display()
             )));

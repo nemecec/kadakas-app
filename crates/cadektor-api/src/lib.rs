@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod annotation_api;
+mod errors;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod files;
+pub use errors::RpcError;
 mod data_api;
 mod edit2d_api;
 #[cfg(not(target_arch = "wasm32"))]
@@ -108,27 +112,6 @@ pub struct Session {
     /// Plug-in objects and scripts: the flag for agents, the script host and the limits (see `plugin_api`).
     #[cfg(not(target_arch = "wasm32"))]
     pub scripting: ScriptingState,
-}
-
-#[derive(Debug)]
-pub struct RpcError {
-    pub code: i64,
-    pub message: String,
-}
-
-impl RpcError {
-    fn invalid_params(e: impl std::fmt::Display) -> Self {
-        RpcError {
-            code: -32602,
-            message: e.to_string(),
-        }
-    }
-    fn app(e: impl std::fmt::Display) -> Self {
-        RpcError {
-            code: 1,
-            message: e.to_string(),
-        }
-    }
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -630,6 +613,20 @@ impl Session {
         }
     }
 
+    /// The SVG of the document with the site model and annotation extensions. `render.svg`, the
+    /// command `cadektor render` and the app's SVG export all use this one function.
+    /// The width is in px, 16 to 8192.
+    pub fn render_svg(&self, width: u32) -> String {
+        let doc = self.editor.doc();
+        let revision = self.editor.revision();
+        let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, revision);
+        let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
+            site_ext(d, o, style, out);
+            cadektor_annot::svg::object_svg_with(d, o, style, out, &self.annot_cache, revision);
+        };
+        cadektor_core::svg::render_with(doc, width.clamp(16, 8192), Some(&ext))
+    }
+
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
         // An old file has no project GUID. It gets one in memory, and the next save writes it.
@@ -802,6 +799,8 @@ impl Session {
                 "editing": edit2d_api::describe(),
                 "queries": query_api::describe(),
                 "annotation": annotation_api::describe(),
+                "errors": errors::describe(),
+                "unknown_shapes": "A file from a newer Cadektor may hold shapes of a kind that this version does not know. They load as kind 'unknown' (the original kind is in shape.kind of objects.get). They are listed in document.summary (objects_by_kind.unknown and unknown_shapes), they are not drawn, they save back unchanged, and only delete_objects can change them.",
                 });
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -824,7 +823,7 @@ impl Session {
                 }
                 let P { command } = params(p)?;
                 let command = self.in_context(command);
-                let out = self.editor.execute(&command).map_err(RpcError::app)?;
+                let out = self.editor.execute(&command).map_err(RpcError::from)?;
                 self.prune_selection();
                 serde_json::to_value(out).unwrap()
             }
@@ -852,6 +851,10 @@ impl Session {
                     "active_class": doc.active_class,
                     "object_count": doc.objects.len(),
                     "objects_by_kind": kinds,
+                    "unknown_shapes": doc.objects.values().filter_map(|o| match &o.shape {
+                        Shape::Unknown { kind, .. } => Some(json!({"id": o.id, "kind": kind})),
+                        _ => None,
+                    }).collect::<Vec<_>>(),
                     "bounds": bounds,
                     "georeference": doc.georef,
                     "grey": doc.drawing.grey,
@@ -894,7 +897,7 @@ impl Session {
                 let P { id } = params(p)?;
                 let o = doc
                     .object(id)
-                    .ok_or_else(|| RpcError::app(format!("object {id} does not exist")))?;
+                    .ok_or_else(|| RpcError::not_found(format!("object {id} does not exist")))?;
                 let mut v = serde_json::to_value(o).unwrap();
                 elide_image(&mut v);
                 v
@@ -907,7 +910,7 @@ impl Session {
                 }
                 let P { ids } = params(p)?;
                 if let Some(bad) = ids.iter().find(|id| doc.object(**id).is_none()) {
-                    return Err(RpcError::app(format!("object {bad} does not exist")));
+                    return Err(RpcError::not_found(format!("object {bad} does not exist")));
                 }
                 self.selection = ids;
                 json!({ "ids": self.selection })
@@ -918,20 +921,7 @@ impl Session {
                     width: Option<u32>,
                 }
                 let P { width } = params(p)?;
-                let revision = self.editor.revision();
-                let site_ext = cadektor_site::draw::svg_ext(&self.site_cache, revision);
-                let ext = |d: &Document, o: &Object, style: &str, out: &mut String| {
-                    site_ext(d, o, style, out);
-                    cadektor_annot::svg::object_svg_with(
-                        d,
-                        o,
-                        style,
-                        out,
-                        &self.annot_cache,
-                        revision,
-                    );
-                };
-                json!({ "svg": cadektor_core::svg::render_with(doc, width.unwrap_or(800).clamp(16, 8192), Some(&ext)) })
+                json!({ "svg": self.render_svg(width.unwrap_or(800)) })
             }
             "render.png" => {
                 #[derive(Deserialize)]
@@ -1098,12 +1088,7 @@ impl Session {
                     .or_else(|| query_api::handle(self, method, p.clone()))
                     .or_else(|| annotation_api::handle(self, method, p.clone()))
                     .or_else(|| data_api::handle(self, method, p))
-                    .unwrap_or_else(|| {
-                        Err(RpcError {
-                            code: -32601,
-                            message: format!("unknown method: {method}"),
-                        })
-                    });
+                    .unwrap_or_else(|| Err(RpcError::method_not_found(method)));
             }
         })
     }
@@ -1208,7 +1193,7 @@ impl Session {
         let id = id?;
         Some(match result {
             Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}).to_string(),
-            Err(e) => error_response(id, e.code, &e.message),
+            Err(e) => errors::error_response(id, e.code, e.kind, &e.message),
         })
     }
 }
@@ -1237,7 +1222,11 @@ fn view_json(v: ViewSettings) -> Value {
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> String {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
+    let kind = errors::CODES
+        .iter()
+        .find(|c| c.0 == code)
+        .map_or("error", |c| c.1);
+    errors::error_response(id, code, kind, message)
 }
 
 fn command_examples() -> Value {
@@ -1316,7 +1305,7 @@ mod tests {
                 &mut s,
                 r#"{"id":1,"method":"objects.get","params":{"id":9}}"#
             )["error"]["code"],
-            1
+            2
         );
         assert!(s.handle_line(r#"{"method":"undo"}"#).is_none());
     }
@@ -1396,7 +1385,7 @@ mod tests {
         );
         assert_eq!(
             (code, msg.as_str()),
-            (1, "invalid value: radius must be positive")
+            (3, "invalid value: radius must be positive")
         );
 
         let (code, msg) = fail(&mut s, "execute", json!({"command": {"op": "explode"}}));
@@ -1411,7 +1400,7 @@ mod tests {
             "execute",
             json!({"command": {"op": "delete_objects", "ids": [42]}}),
         );
-        assert_eq!((code, msg.as_str()), (1, "object 42 does not exist"));
+        assert_eq!((code, msg.as_str()), (2, "object 42 does not exist"));
         assert!(ok(&mut s, "document.summary", json!({}))["object_count"] == 0);
     }
 
@@ -1496,7 +1485,10 @@ mod tests {
         assert_eq!(code, 1);
         assert_eq!(
             msg,
-            format!("file format {} is newer than this app", FORMAT_VERSION + 1)
+            format!(
+                "file was made by a newer Cadektor (format {})",
+                FORMAT_VERSION + 1
+            )
         );
 
         let (code, _) = fail(
@@ -1574,7 +1566,7 @@ mod tests {
 
         assert_eq!(
             fail(&mut s, "objects.get", json!({"id": 999})),
-            (1, "object 999 does not exist".into())
+            (2, "object 999 does not exist".into())
         );
         assert_eq!(fail(&mut s, "objects.get", json!({})).0, -32602);
     }
@@ -1593,7 +1585,7 @@ mod tests {
         // An unknown ID is rejected and the selection stays as it was.
         assert_eq!(
             fail(&mut s, "selection.set", json!({"ids": [a, 999]})),
-            (1, "object 999 does not exist".into())
+            (2, "object 999 does not exist".into())
         );
         assert_eq!(
             ok(&mut s, "selection.get", json!({})),

@@ -106,7 +106,7 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
         }
         // A viewport is picked inside its frame. A title block is picked at its border.
-        Shape::Group { .. } => false,
+        Shape::Group { .. } | Shape::Unknown { .. } => false,
         Shape::Irrigation(i) => crate::irrigation_ui::hit(i, p, tol),
         // A symbol is picked through its expanded shapes, see `hit_test`.
         Shape::Symbol { .. } => false,

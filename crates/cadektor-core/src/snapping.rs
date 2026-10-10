@@ -317,6 +317,7 @@ impl Geometry {
             Shape::Symbol { at, .. } => self.add_point(*at, Center),
             Shape::TitleBlock(_)
             | Shape::Group { .. }
+            | Shape::Unknown { .. }
             | Shape::Annotation(_)
             | Shape::Irrigation(_) => {}
         }

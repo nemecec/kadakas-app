@@ -13,6 +13,7 @@ def test_the_screenshot_method_is_described_and_known(cad):
 def test_the_headless_server_says_why_there_is_no_screenshot(cad):
     err = cad.error("view.screenshot", {"region": "window"})
     assert err["code"] == 1
+    assert err["data"]["kind"] == "error"
     assert "live window" in err["message"] and "render.png" in err["message"]
     # The session stays healthy.
     assert cad.result("document.summary")["object_count"] == 0

@@ -4,6 +4,7 @@
 
 pub mod annot;
 pub mod command;
+pub mod csv;
 pub mod curve;
 pub mod datamap;
 pub mod edit2d;

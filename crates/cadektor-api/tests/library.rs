@@ -45,15 +45,37 @@ fn the_library_folder_lists_files_exports_and_keeps_favorites() {
         json!({"library": "Shared", "ids": [hatch]}),
     );
     assert_eq!(e["count"], 1);
-    assert!(e["path"].as_str().unwrap().ends_with("Shared.cdk.json"));
+    assert!(e["path"].as_str().unwrap().ends_with("Shared.cdk"));
     // A file that is not a library is not listed.
     std::fs::write(dir.join("notes.cdk.json"), "not json").unwrap();
     std::fs::write(dir.join("readme.txt"), "x").unwrap();
     let list = ok(&mut s, "library.list", json!({}));
     assert_eq!(
         list["files"],
-        json!([{"file": "Shared.cdk.json", "resources": 1}])
+        json!([{"file": "Shared.cdk", "resources": 1}])
     );
+    // The old extension is listed too, and a name without extension finds it when only it exists.
+    std::fs::copy(dir.join("Shared.cdk"), dir.join("Old.cdk.json")).unwrap();
+    let list = ok(&mut s, "library.list", json!({}));
+    assert_eq!(
+        list["files"],
+        json!([
+            {"file": "Old.cdk.json", "resources": 1},
+            {"file": "Shared.cdk", "resources": 1}
+        ])
+    );
+    let r = ok(&mut s, "resource.list_file", json!({"library": "Old"}));
+    assert_eq!(r["resources"].as_array().unwrap().len(), 1);
+    let r = ok(&mut s, "resource.list_file", json!({"library": "Shared"}));
+    assert_eq!(r["resources"].as_array().unwrap().len(), 1);
+    // A path request takes both extensions.
+    let p = dir.join("Shared.cdk");
+    let r = ok(&mut s, "resource.list_file", json!({"path": p}));
+    assert_eq!(r["resources"].as_array().unwrap().len(), 1);
+    let p = dir.join("Old.cdk.json");
+    let r = ok(&mut s, "resource.list_file", json!({"path": p}));
+    assert_eq!(r["resources"].as_array().unwrap().len(), 1);
+    std::fs::remove_file(dir.join("Old.cdk.json")).unwrap();
 
     // A restricted session cannot replace a file without overwrite, and the library folder must be allowed.
     let mut restricted = Session::default();

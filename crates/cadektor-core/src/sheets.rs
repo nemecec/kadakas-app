@@ -265,6 +265,9 @@ pub struct Drawing {
     /// Layers and classes that show in grey (see `crate::visibility`).
     #[serde(default)]
     pub grey: crate::visibility::GreySet,
+    /// Fields that this version does not know. They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Drawing {
@@ -1470,6 +1473,7 @@ mod tests {
     fn doc_with_overrides() -> (Document, Object) {
         let mut doc = Document::default();
         doc.classes.push(Class {
+            extra: Default::default(),
             id: ClassId(9),
             name: "Trees".into(),
             visible: true,
@@ -1631,6 +1635,7 @@ mod tests {
     fn title_fields_and_geometry() {
         let mut doc = Document::default();
         doc.layers.push(crate::model::Layer {
+            extra: Default::default(),
             id: LayerId(5),
             name: "Plan sheet".into(),
             kind: LayerKind::Sheet,

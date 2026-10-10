@@ -901,6 +901,9 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             }
             Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
             Shape::Annotation(a) => f.commit |= crate::annot_ui::fields(ui, a),
+            Shape::Unknown { kind, .. } => {
+                ui.label(format!("Unknown shape kind '{kind}' (made by a newer Cadektor). It can only be deleted."));
+            }
             Shape::Group { name } => f.text(ui, "Name", name),
             Shape::Irrigation(i) => crate::irrigation_ui::edit(ui, &mut f, i),
             Shape::Symbol {

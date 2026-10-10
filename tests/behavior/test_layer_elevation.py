@@ -37,8 +37,8 @@ def test_changing_the_elevation_moves_what_stands_on_the_layer_and_undo_restores
 
 def test_elevations_beyond_the_limit_are_refused(cad):
     resp = cad.rpc("execute", {"command": {"op": "add_layer", "name": "Bad", "elevation": 1e12}})
-    assert resp["error"]["code"] == 1 and "1e9" in resp["error"]["message"]
+    assert resp["error"]["code"] == 3 and "1e9" in resp["error"]["message"]
     layer = cad.execute({"op": "add_layer", "name": "Ok", "elevation": 5})[0]
     resp = cad.rpc("execute", {"command": {"op": "modify_layer", "id": layer, "elevation": -1e12}})
-    assert resp["error"]["code"] == 1
+    assert resp["error"]["code"] == 3
     assert [l["elevation"] for l in cad.result("document.summary")["layers"]][-1] == 5

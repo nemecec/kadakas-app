@@ -578,7 +578,7 @@ fn export_csv_file(session: &mut Session) -> String {
         .ok()
         .and_then(|v| v["csv"].as_str().map(String::from))
         .unwrap_or_default();
-    match std::fs::write(&path, csv) {
+    match cadektor_core::fsio::write_atomic(&path, csv.as_bytes()) {
         Ok(()) => format!("Exported to {}", path.display()),
         Err(e) => format!("Cannot write {}: {e}", path.display()),
     }
@@ -629,10 +629,12 @@ pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
         else {
             return;
         };
-        *status = match std::fs::write(&path, schedule::schedule_csv(&sch)) {
-            Ok(()) => format!("Exported to {}", path.display()),
-            Err(e) => format!("Cannot write {}: {e}", path.display()),
-        };
+        *status =
+            match cadektor_core::fsio::write_atomic(&path, schedule::schedule_csv(&sch).as_bytes())
+            {
+                Ok(()) => format!("Exported to {}", path.display()),
+                Err(e) => format!("Cannot write {}: {e}", path.display()),
+            };
     }
     #[cfg(target_arch = "wasm32")]
     let _ = status;
