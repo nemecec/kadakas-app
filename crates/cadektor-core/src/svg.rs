@@ -17,7 +17,8 @@ pub fn drawing_bounds(doc: &Document) -> Option<(DVec2, DVec2)> {
     doc.objects
         .values()
         .filter(|o| doc.is_visible(o))
-        .map(|o| o.shape.bounds())
+        .map(|o| doc.object_bounds(o))
+        .filter(|(a, b)| a.is_finite() && b.is_finite())
         .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
 }
 
@@ -103,13 +104,35 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
     let tag_counts = schedule::tag_counts(doc);
     // 1 mm of line weight on paper is `scale` mm in the model.
     for o in doc.objects.values().filter(|o| doc.is_visible(o)) {
+        draw_object(doc, o, &mut s, &tag_counts, ext, 0);
+    }
+    s.push_str("</svg>\n");
+    s
+}
+
+/// Draws one object (and, for a symbol, the shapes of its definition). Symbols can contain symbols, so
+/// this calls itself, up to a depth that stops a loop.
+fn draw_object(doc: &Document, o: &Object, s: &mut String, tag_counts: &schedule::TagCounts, ext: Option<SvgExt<'_>>, depth: usize) {
+    if depth > crate::symbols::MAX_DEPTH + 2 {
+        return;
+    }
         let a = crate::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
         let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
         let stroke = a.pen.unwrap_or(Color::BLACK).to_css();
         let fill = a.fill.unwrap_or(Color::NONE).to_css();
         let sw = a.line_weight.unwrap_or(0.25) * scale;
-        let style = format!(r#"stroke="{stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id);
+        let decor = crate::pattern::decorate(doc, o, &a, scale);
+        // A line type draws the outline itself, in dashes.
+        let line_stroke = if decor.as_ref().is_some_and(|d| d.replaces_outline) { "none".to_string() } else { stroke.clone() };
+        let style = format!(r#"stroke="{line_stroke}" fill="{fill}" stroke-width="{sw}" data-id="{}""#, o.id);
         let _ = match &o.shape {
+            Shape::Group { .. } => Ok(()),
+            Shape::Symbol { .. } => {
+                for v in crate::symbols::instance_objects(doc, o) {
+                    draw_object(doc, &v, s, tag_counts, ext, depth + 1);
+                }
+                Ok(())
+            }
             Shape::Line { a, b } => writeln!(s, r#"<line x1="{}" y1="{}" x2="{}" y2="{}" {style}/>"#, a.x, -a.y, b.x, -b.y),
             Shape::Rect { min, max } => {
                 let (p, q) = (min.min(*max), min.max(*max));
@@ -163,7 +186,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 let outline = site_outline(&o.shape);
                 let res = writeln!(s, r#"<polygon points="{}" {style} data-kind="{}"/>"#, points_attr(&outline), o.shape.kind());
                 if let Some(ext) = ext {
-                    ext(doc, o, &style, &mut s);
+                    ext(doc, o, &style, s);
                 }
                 res
             }
@@ -193,7 +216,13 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                         at.x, -at.y, o.id
                     );
                 }
-                if look.graphic == PlantGraphic::Circle {
+                let parts = look.symbol.map(|sym| crate::symbols::plant_symbol_objects(doc, o, sym, *at, *spread, look.rotation)).unwrap_or_default();
+                if !parts.is_empty() {
+                    for v in &parts {
+                        draw_object(doc, v, s, tag_counts, ext, depth + 1);
+                    }
+                    writeln!(s, r#"<g data-kind="plant" data-graphic="symbol"><title>{}</title></g>"#, esc(species))
+                } else if look.graphic == PlantGraphic::Circle {
                     writeln!(
                         s,
                         r#"<g data-kind="plant"><circle cx="{}" cy="{}" r="{}" {style} fill-opacity="0.3"/><title>{}</title></g>"#,
@@ -241,7 +270,7 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 )
             }
             Shape::PlantTag { at, anchor, height, .. } => {
-                let text = schedule::tag_info_with(doc, o.id, &tag_counts).map_or_else(|| "?".to_string(), |t| t.text());
+                let text = schedule::tag_info_with(doc, o.id, tag_counts).map_or_else(|| "?".to_string(), |t| t.text());
                 writeln!(
                     s,
                     r#"<g data-kind="plant_tag"><line x1="{}" y1="{}" x2="{}" y2="{}" {style}/><text x="{}" y="{}" font-size="{height}" font-family="sans-serif" fill="{stroke}">{}</text></g>"#,
@@ -264,9 +293,38 @@ pub fn render_with(doc: &Document, width_px: u32, ext: Option<SvgExt<'_>>) -> St
                 res
             }
         };
+        if let Some(d) = &decor {
+            decor_svg(doc, d, &a, o, scale, s, tag_counts, ext, depth);
+        }
+}
+
+/// The fill pattern, dashes and marks of an object.
+#[allow(clippy::too_many_arguments)]
+fn decor_svg(doc: &Document, d: &crate::pattern::Decor, a: &Attributes, o: &Object, scale: f64, s: &mut String, tag_counts: &schedule::TagCounts, ext: Option<SvgExt<'_>>, depth: usize) {
+    let pen = a.pen.unwrap_or(Color::BLACK);
+    let sw = a.line_weight.unwrap_or(0.25) * scale;
+    // Pattern lines with the same color and weight share one path.
+    let mut groups: Vec<((Color, f64), String)> = Vec::new();
+    for seg in &d.fill {
+        let key = (crate::pattern::pen_of(seg, pen), seg.weight.map_or(sw, |w| w * scale));
+        let piece = format!("M {} {} L {} {} ", seg.a.x, -seg.a.y, seg.b.x, -seg.b.y);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, path)) => path.push_str(&piece),
+            None => groups.push((key, piece)),
+        }
     }
-    s.push_str("</svg>\n");
-    s
+    for ((color, width), path) in groups {
+        let _ = writeln!(s, r#"<path d="{}" fill="none" stroke="{}" stroke-width="{width}" data-pattern="fill" data-id="{}"/>"#, path.trim_end(), color.to_css(), o.id);
+    }
+    if !d.strokes.is_empty() {
+        let path: String = d.strokes.iter().map(|st| st.iter().enumerate().map(|(i, q)| format!("{}{} {}", if i == 0 { "M " } else { " L " }, q.x, -q.y)).collect::<String>()).collect::<Vec<_>>().join(" ");
+        let _ = writeln!(s, r#"<path d="{path}" fill="none" stroke="{}" stroke-width="{sw}" data-pattern="line_type" data-id="{}"/>"#, pen.to_css(), o.id);
+    }
+    for m in &d.marks {
+        let shape = Shape::Symbol { symbol: m.symbol, at: m.at, rotation: m.angle, scale: m.scale, scale_y: None };
+        let inst = Object { id: o.id, layer: o.layer, class: o.class, shape, attrs: Attributes { pen: Some(pen), line_weight: a.line_weight, ..Attributes::default() }, data: Default::default(), parent: None };
+        draw_object(doc, &inst, s, tag_counts, ext, depth + 1);
+    }
 }
 
 #[cfg(test)]
@@ -386,7 +444,7 @@ mod tests {
             shape: None,
             layer: None,
             class: None,
-            attrs: Some(Attributes { pen: Some(Color([255, 0, 0, 255])), fill: Some(Color([0, 0, 255, 128])), line_weight: None }),
+            attrs: Some(Attributes { pen: Some(Color([255, 0, 0, 255])), fill: Some(Color([0, 0, 255, 128])), line_weight: None, ..Default::default() }),
         })
         .unwrap();
         let svg = render(ed.doc(), 400);

@@ -16,7 +16,7 @@ impl Tx<'_> {
     pub(super) fn check_shape_refs(&self, shape: &Shape) -> Result<(), CommandError> {
         match shape {
             Shape::PlantTag { style, .. } if self.doc.resources.plant_style(*style).is_none() => Err(CommandError::NoResource(*style)),
-            _ => Ok(()),
+            _ => self.check_symbol_shape(shape),
         }
     }
 
@@ -100,6 +100,7 @@ impl Tx<'_> {
             Command::AddResource { name, body } => {
                 body.validate().map_err(invalid)?;
                 self.check_body_refs(body)?;
+                self.check_graphic_refs(None, body)?;
                 self.check_resource_name(name, body, None)?;
                 let id = ResourceId(self.alloc()?);
                 self.doc.resources.push(Resource { id, name: name.trim().to_string(), body: body.clone() });
@@ -115,6 +116,7 @@ impl Tx<'_> {
                 }
                 new_body.validate().map_err(invalid)?;
                 self.check_body_refs(&new_body)?;
+                self.check_graphic_refs(Some(*id), &new_body)?;
                 self.check_resource_name(&new_name, &new_body, Some(*id))?;
                 let r = self.doc.resources.get_mut(*id).expect("checked");
                 r.name = new_name.trim().to_string();
@@ -124,6 +126,9 @@ impl Tx<'_> {
                 self.resync(&users);
             }
             Command::DeleteResource { id, reassign } => {
+                if self.graphic_delete(*id, *reassign)? {
+                    return Ok(());
+                }
                 let current = self.doc.resources.get(*id).ok_or(CommandError::NoResource(*id))?;
                 let users = self.users_of(*id);
                 let mixes = self.doc.resources.mixes_using(*id);

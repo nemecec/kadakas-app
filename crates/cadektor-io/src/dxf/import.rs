@@ -228,13 +228,13 @@ impl Walker<'_> {
         let weight = def.and_then(|d| weight_mm(d.lineweight));
         let result = match self.opts.layer_mode {
             LayerMode::Classes => {
-                let attrs = Attributes { pen: Some(pen.unwrap_or(Color::BLACK)), fill: Some(Color::NONE), line_weight: Some(weight.unwrap_or(0.25)) };
+                let attrs = Attributes { pen: Some(pen.unwrap_or(Color::BLACK)), fill: Some(Color::NONE), line_weight: Some(weight.unwrap_or(0.25)), ..Default::default() };
                 let class = self.b.class(&decode_percent(name), &attrs, visible);
                 (self.target_layer, class, Attributes::default())
             }
             LayerMode::Layers => {
                 let layer = self.b.layer(&decode_percent(name), visible);
-                (layer, self.b.default_class, Attributes { pen, fill: None, line_weight: weight })
+                (layer, self.b.default_class, Attributes { pen, fill: None, line_weight: weight, ..Default::default() })
             }
         };
         self.mapped.insert(name.to_string(), result.clone());
@@ -302,7 +302,7 @@ impl Walker<'_> {
             Some(v) if v >= 0 => weight_mm(v),
             _ => defaults.line_weight,
         };
-        Attributes { pen, fill: defaults.fill, line_weight }
+        Attributes { pen, fill: defaults.fill, line_weight, ..Default::default() }
     }
 
     fn insert(&mut self, e: &Entity, cx: &Cx) {

@@ -174,7 +174,7 @@ pub fn build(format: &str, name: &str, data: GisData, ctx: &Context, opts: &Impo
         Some(l) => b.layer(l, true),
         None => b.default_layer,
     };
-    let class_attrs = Attributes { pen: Some(Color::BLACK), fill: Some(Color::NONE), line_weight: Some(0.25) };
+    let class_attrs = Attributes { pen: Some(Color::BLACK), fill: Some(Color::NONE), line_weight: Some(0.25), ..Default::default() };
     let to_model = |p: &Pt| -> Result<DVec3, String> {
         let (x, y, z) = match &transform {
             Some((s, t)) => {

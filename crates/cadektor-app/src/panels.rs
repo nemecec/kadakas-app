@@ -466,6 +466,15 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             ui.end_row();
         }
         Shape::TitleBlock(tb) => f.scalar(ui, "Margin", &mut tb.margin, 1.0),
+        Shape::Group { name } => f.text(ui, "Name", name),
+        Shape::Symbol { at, rotation, scale, scale_y, .. } => {
+            f.xy(ui, "Position", at);
+            f.scalar(ui, "Rotation (rad)", rotation, 0.1);
+            f.scalar(ui, "Scale", scale, 0.1);
+            let mut sy = scale_y.unwrap_or(*scale);
+            f.scalar(ui, "Scale Y", &mut sy, 0.1);
+            *scale_y = (sy != *scale).then_some(sy);
+        }
         Shape::Line { a, b } => {
             f.xy(ui, "Start", a);
             f.xy(ui, "End", b);

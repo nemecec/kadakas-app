@@ -33,6 +33,8 @@ pub enum ResourceBody {
     Worksheet(serde_json::Value),
     HardscapeStyle(Box<HardscapeStyle>),
     LandscapeAreaStyle(Box<LandscapeAreaStyle>),
+    /// A symbol, hatch, tile, line type or texture (see `crate::graphics`).
+    Graphic(Box<crate::graphics::GraphicResource>),
     Unknown(serde_json::Value),
 }
 
@@ -57,6 +59,7 @@ impl Serialize for ResourceBody {
                 v["type"] = "landscape_area_style".into();
                 v.serialize(s)
             }
+            ResourceBody::Graphic(g) => g.serialize(s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -88,6 +91,10 @@ impl<'de> Deserialize<'de> for ResourceBody {
             Some("landscape_area_style") => serde_json::from_value::<LandscapeAreaStyle>(v)
                 .map(|s| ResourceBody::LandscapeAreaStyle(Box::new(s)))
                 .map_err(serde::de::Error::custom),
+            Some(t) if crate::graphics::TYPE_NAMES.contains(&t) => {
+                // A hatch, symbol or the like in a shape that this version does not know (from an older or newer app) is kept as it is.
+                Ok(serde_json::from_value(v.clone()).map_or(ResourceBody::Unknown(v), |g| ResourceBody::Graphic(Box::new(g))))
+            }
             _ => Ok(ResourceBody::Unknown(v)),
         }
     }
@@ -108,6 +115,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => "worksheet",
             ResourceBody::HardscapeStyle(_) => "hardscape_style",
             ResourceBody::LandscapeAreaStyle(_) => "landscape_area_style",
+            ResourceBody::Graphic(g) => g.type_name(),
             ResourceBody::Unknown(_) => "unknown",
         }
     }
@@ -122,6 +130,7 @@ impl ResourceBody {
             ResourceBody::Worksheet(_) => Ok(()),
             ResourceBody::HardscapeStyle(s) => s.validate(),
             ResourceBody::LandscapeAreaStyle(s) => s.validate(),
+            ResourceBody::Graphic(g) => g.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }
@@ -311,7 +320,7 @@ mod tests {
 
     #[test]
     fn unknown_types_are_kept_and_saved_again() {
-        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hatch", "angle": 45, "rows": [1, 2]}});
+        let j = serde_json::json!({"id": 9, "name": "Hatch 1", "body": {"type": "hologram", "angle": 45, "rows": [1, 2]}});
         let r: Resource = serde_json::from_value(j.clone()).unwrap();
         assert!(matches!(r.body, ResourceBody::Unknown(_)));
         assert_eq!(r.body.type_name(), "unknown");
@@ -366,6 +375,25 @@ mod tests {
         assert!(serde_json::from_value::<Resource>(bad).is_err());
         let bad_fmt = ResourceBody::RecordFormat(Box::new(RecordFormat { fields: vec![FieldDef::new("", FieldType::Text)] }));
         assert!(bad_fmt.validate().is_err());
+    }
+
+    #[test]
+    fn graphic_resources_round_trip_and_unreadable_ones_are_kept() {
+        let j = serde_json::json!({"id": 3, "name": "Diag", "body": {"type": "hatch", "units": "world", "lines": [{"angle": 45.0, "spacing": 2.0}]}});
+        let r: Resource = serde_json::from_value(j).unwrap();
+        assert!(matches!(&r.body, ResourceBody::Graphic(_)));
+        assert_eq!((r.body.type_name(), r.body.validate()), ("hatch", Ok(())));
+        let back: Resource = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
+        let mut store = Resources::default();
+        store.push(r);
+        assert!(store.hatch(ResourceId(3)).is_some() && store.symbol(ResourceId(3)).is_none());
+        assert!(store.find_graphic("hatch", "diag").is_some());
+        // A hatch in a shape that this version cannot read stays as it is.
+        let old = serde_json::json!({"id": 4, "name": "Old", "body": {"type": "hatch", "angle": 45, "rows": [1]}});
+        let r: Resource = serde_json::from_value(old.clone()).unwrap();
+        assert!(matches!(r.body, ResourceBody::Unknown(_)));
+        assert_eq!(serde_json::to_value(&r).unwrap(), old);
     }
 
     #[test]

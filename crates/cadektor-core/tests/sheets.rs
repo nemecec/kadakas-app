@@ -97,9 +97,9 @@ proptest! {
         ov_w in prop::option::of(0.0..2.0f64),
     ) {
         let mut doc = Document::default();
-        doc.classes[0].attrs = Attributes { pen: class_pen.map(Color), fill: None, line_weight: class_w };
+        doc.classes[0].attrs = Attributes { pen: class_pen.map(Color), fill: None, line_weight: class_w, ..Default::default() };
         let mut o = Object::new(ObjectId(40), FIRST_LAYER, NONE_CLASS, Shape::Circle { center: DVec2::ZERO, radius: 1.0 });
-        o.attrs = Attributes { pen: obj_pen.map(Color), fill: None, line_weight: obj_w };
+        o.attrs = Attributes { pen: obj_pen.map(Color), fill: None, line_weight: obj_w, ..Default::default() };
         let mut vp = viewport(vec![FIRST_LAYER]);
         vp.class_overrides.insert(NONE_CLASS, ClassOverride { pen: ov_pen.map(Color), line_weight: ov_w, ..Default::default() });
         let a = vp.resolve(&doc, &o);

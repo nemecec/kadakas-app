@@ -1,7 +1,7 @@
 //! Painting the drawing area. Pure drawing: no document changes here.
 
 use cadektor_core::curve;
-use cadektor_core::model::{Color, Document, Object, ObjectId, Shape, Vertex, arc_sweep};
+use cadektor_core::model::{Attributes, Color, Document, Object, ObjectId, Shape, Vertex, arc_sweep};
 use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use glam::DVec2;
@@ -145,14 +145,56 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
         Shape::ExistingTree { .. } => plant_draw::draw_tree(painter, view, shape, st, offset),
         Shape::PlantTag { at, anchor, height, .. } => plant_draw::draw_tag(painter, view, *at, *anchor, *height, "?", st, offset),
         // Sheet layer objects are drawn from the display list of the sheet (see `sheets_ui`).
-        Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+        Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } | Shape::Symbol { .. } => {}
     }
 }
 
 /// Draws an object. Plants and tags need the document: a plant draws the outline and colors
 /// of its style, and a tag shows the live ID code and count.
 pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2) {
+    draw_object_deep(painter, view, doc, counts, o, st, offset, 0);
+}
+
+/// Like `draw_object`, for a symbol also through the shapes of its definition. `depth` stops loops.
+#[allow(clippy::too_many_arguments)]
+fn draw_object_deep(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2, depth: usize) {
+    if depth > cadektor_core::symbols::MAX_DEPTH + 2 {
+        return;
+    }
+    let attrs = cadektor_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+    let scale = doc.layer(o.layer).map_or(100.0, |l| l.scale);
+    let decor = cadektor_core::pattern::decorate(doc, o, &attrs, scale);
+    // A line type draws the outline in dashes, so the plain outline is left out.
+    let outline_st = if decor.as_ref().is_some_and(|d| d.replaces_outline) { Style { width: 0.0, ..st } } else { st };
+    draw_shape_or_object(painter, view, doc, counts, o, outline_st, offset, depth);
+    if let Some(d) = decor {
+        let s = |p: DVec2| view.to_screen(p + offset);
+        for seg in &d.fill {
+            let pen = seg.color.map_or(st.pen, color32);
+            let w = seg.weight.map_or(st.width, |w| (w * scale * view.zoom).clamp(1.0, 24.0) as f32);
+            painter.line_segment([s(seg.a), s(seg.b)], Stroke::new(w.min(st.width.max(1.0)), pen));
+        }
+        for stroke in &d.strokes {
+            painter.add(PathShape { points: stroke.iter().map(|p| s(*p)).collect(), closed: false, fill: Color32::TRANSPARENT, stroke: PathStroke::new(st.width, st.pen) });
+        }
+        for m in &d.marks {
+            let shape = Shape::Symbol { symbol: m.symbol, at: m.at, rotation: m.angle, scale: m.scale, scale_y: None };
+            let inst = Object { id: o.id, layer: o.layer, class: o.class, shape, attrs: Attributes { pen: attrs.pen, line_weight: attrs.line_weight, ..Attributes::default() }, data: Default::default(), parent: None };
+            draw_object_deep(painter, view, doc, counts, &inst, st, offset, depth + 1);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_shape_or_object(painter: &Painter, view: &View, doc: &Document, counts: &TagCounts, o: &Object, st: Style, offset: DVec2, depth: usize) {
     match &o.shape {
+        Shape::Symbol { .. } => {
+            for v in cadektor_core::symbols::instance_objects(doc, o) {
+                let vst = object_style(doc, &v, view.zoom);
+                draw_object_deep(painter, view, doc, counts, &v, vst, offset, depth + 1);
+            }
+        }
+        Shape::Group { .. } => {}
         Shape::Plant { at, spread, .. } => {
             let look = cadektor_core::plants::link::look(doc, o);
             // The colors of the style apply when the object has none of its own.
@@ -171,7 +213,15 @@ pub fn draw_object(painter: &Painter, view: &View, doc: &Document, counts: &TagC
             {
                 st.pen = color32(c);
             }
-            plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
+            let parts = look.symbol.map(|sym| cadektor_core::symbols::plant_symbol_objects(doc, o, sym, *at, *spread, look.rotation)).unwrap_or_default();
+            if parts.is_empty() {
+                plant_draw::draw_plant(painter, view, &look, *at, *spread, st, offset);
+            } else {
+                for v in &parts {
+                    let vst = Style { pen: if o.attrs.pen.is_none() && v.attrs.pen.is_none() { st.pen } else { object_style(doc, v, view.zoom).pen }, ..object_style(doc, v, view.zoom) };
+                    draw_object(painter, view, doc, counts, v, vst, offset);
+                }
+            }
         }
         Shape::PlantTag { at, anchor, height, .. } => {
             let text = cadektor_core::plants::schedule::tag_info_with(doc, o.id, counts).map_or_else(|| "?".to_string(), |t| t.text());
@@ -241,7 +291,7 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         painter.rect_filled(rect, 0.0, Color32::from_gray(205));
         sheets.paint(&painter, view, page);
         for o in f.doc.objects.values().filter(|o| f.selection.contains(&o.id)) {
-            let (lo, hi) = o.shape.bounds();
+            let (lo, hi) = f.doc.object_bounds(o);
             painter.rect_stroke(Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(2.0), 0.0, Stroke::new(1.5, SELECT_COLOR), egui::StrokeKind::Middle);
         }
         draw_preview(&painter, view, f);
@@ -256,7 +306,9 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
     let counts = tag_counts(f.doc);
     for o in f.doc.objects.values().filter(|o| f.doc.is_visible(o)) {
         let st = object_style(f.doc, o, view.zoom);
-        let selected = f.selection.contains(&o.id);
+        let direct = f.selection.contains(&o.id);
+        let via_group = !direct && o.parent.is_some() && f.doc.ancestors(o.id).iter().any(|g| f.selection.contains(g));
+        let selected = direct || via_group;
         let locked = f.doc.layer(o.layer).is_some_and(|l| l.locked);
         let st = if locked { Style { pen: st.pen.gamma_multiply(0.6), ..st } } else { st };
         draw_object(&painter, view, f.doc, &counts, o, st, DVec2::ZERO);
@@ -268,17 +320,25 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         }
         if selected {
             let hl = Style { pen: SELECT_COLOR, fill: Color32::TRANSPARENT, width: st.width + 1.5 };
-            draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
+            if let Shape::Symbol { .. } = o.shape {
+                for v in cadektor_core::symbols::instance_objects(f.doc, o) {
+                    draw_shape(&painter, view, &v.shape, hl, DVec2::ZERO);
+                }
+            } else {
+                draw_shape(&painter, view, &o.shape, hl, DVec2::ZERO);
+            }
             if let Some(vs) = o.shape.vertices() {
                 draw_vertex_markers(&painter, view, vs);
             }
-            let (lo, hi) = o.shape.bounds();
-            painter.rect_stroke(
-                Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(3.0),
-                0.0,
-                Stroke::new(1.0, SELECT_COLOR.gamma_multiply(0.6)),
-                egui::StrokeKind::Middle,
-            );
+            let (lo, hi) = f.doc.object_bounds(o);
+            if direct && lo.is_finite() && hi.is_finite() {
+                painter.rect_stroke(
+                    Rect::from_two_pos(view.to_screen(lo), view.to_screen(hi)).expand(3.0),
+                    0.0,
+                    Stroke::new(1.0, SELECT_COLOR.gamma_multiply(0.6)),
+                    egui::StrokeKind::Middle,
+                );
+            }
         }
     }
     draw_preview(&painter, view, f);

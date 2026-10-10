@@ -558,6 +558,20 @@ impl Builder<'_> {
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            // A group draws through its members.
+            Shape::Group { .. } => {}
+            Shape::Symbol { .. } => {
+                // The 3D components if there are some. Otherwise the 2D components, flat at the layer.
+                let solids = crate::symbols::instance_solids(self.doc, obj);
+                if solids.is_empty() {
+                    for part in crate::symbols::instance_objects(self.doc, obj) {
+                        self.add_object(&part, layer);
+                    }
+                }
+                for (ring, base, height, color) in solids {
+                    self.slab(&ring, z + base + height, height, color.map(rgba).or(fill).unwrap_or(HARDSCAPE_DEFAULT), edge, id);
+                }
+            }
             Shape::SiteModel { .. } | Shape::SiteModifier { .. } => {
                 if let Some(ext) = self.ext {
                     let mut sink = SceneSink { scene: &mut self.scene, object: id, z0: z };
@@ -1133,7 +1147,7 @@ mod tests {
                 shape: Shape::Rect { min: DVec2::ZERO, max: DVec2::splat(10.0) },
                 layer: None,
                 class: None,
-                attrs: Attributes { pen: Some(Color([1, 2, 3, 255])), fill: Some(Color([10, 20, 30, 255])), line_weight: None },
+                attrs: Attributes { pen: Some(Color([1, 2, 3, 255])), fill: Some(Color([10, 20, 30, 255])), line_weight: None, ..Default::default() },
             })
             .unwrap();
         let scene = build(ed.doc());

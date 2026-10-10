@@ -143,6 +143,10 @@ actions! {
     Undo => "edit.undo", "Undo", ["Cmd/Ctrl+Z"], true;
     Redo => "edit.redo", "Redo", ["Cmd/Ctrl+Y", "Cmd/Ctrl+Shift+Z"], true;
     Delete => "edit.delete", "Delete", ["Delete", "Backspace"], true;
+    Group => "edit.group", "Group", ["Cmd/Ctrl+G"], true;
+    Ungroup => "edit.ungroup", "Ungroup", ["Cmd/Ctrl+U"], true;
+    EnterGroup => "edit.enter_group", "Edit group (enter)", ["Cmd/Ctrl+["], true;
+    ExitGroup => "edit.exit_group", "Exit group", ["Cmd/Ctrl+]"], true;
     SelectAll => "edit.select_all", "Select All", ["Cmd/Ctrl+A"], true;
     Cancel => "edit.cancel", "Cancel the operation", ["Escape"], true;
     Finish => "edit.finish", "Finish the object", ["Enter"], true;

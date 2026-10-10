@@ -329,7 +329,7 @@ mod tests {
 
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
-                let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0 };
+                let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0, context: self.s.edit_context() };
                 self.m.handle(input, &cx)
             };
             for e in &fx {
@@ -353,7 +353,7 @@ mod tests {
         }
 
         fn preview(&self, at: DVec2) -> Preview {
-            let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0 };
+            let cx = Ctx { doc: self.s.editor.doc(), selection: &self.s.selection, settings: &self.settings, tol: 5.0, context: self.s.edit_context() };
             self.m.preview(at, &cx)
         }
     }

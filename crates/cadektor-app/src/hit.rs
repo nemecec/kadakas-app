@@ -70,6 +70,9 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             p.cmpge(lo - tol).all() && p.cmple(hi + tol).all()
         }
         // A viewport is picked inside its frame. A title block is picked at its border.
+        Shape::Group { .. } => false,
+        // A symbol is picked through its expanded shapes, see `hit_test`.
+        Shape::Symbol { .. } => false,
         Shape::Viewport(_) | Shape::TitleBlock(_) => {
             let (lo, hi) = shape.bounds();
             let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
@@ -83,36 +86,59 @@ fn pickable(doc: &Document, o: &Object) -> bool {
     doc.is_pickable(o) && doc.layer(o.layer).is_some_and(|l| !l.locked)
 }
 
+/// True if the object is hit at `p`. A symbol instance is hit through the shapes of its definition.
+fn object_hit(doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
+    if matches!(o.shape, Shape::Symbol { .. }) {
+        return cadektor_core::symbols::hit_instance(doc, o, p, tol);
+    }
+    let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
+    shape_hit(&o.shape, filled, p, tol)
+}
+
 /// Topmost pickable object at `p`.
+#[cfg(test)]
 pub fn hit_test(doc: &Document, p: DVec2, tol: f64) -> Option<ObjectId> {
+    hit_test_in(doc, p, tol, None)
+}
+
+/// What a click at `p` selects when you are in the group `context` (none: in no group): the topmost
+/// object under the point, or the group that holds it, as a direct member of the context.
+pub fn hit_test_in(doc: &Document, p: DVec2, tol: f64, context: Option<ObjectId>) -> Option<ObjectId> {
     doc.objects
         .values()
         .rev()
-        .filter(|o| pickable(doc, o))
-        .find(|o| {
-            let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
-            shape_hit(&o.shape, filled, p, tol)
-        })
-        .map(|o| o.id)
+        .filter(|o| pickable(doc, o) && (context.is_none() && o.parent.is_none() || doc.selection_target(o.id, context).is_some()))
+        .find(|o| object_hit(doc, o, p, tol))
+        .and_then(|o| doc.selection_target(o.id, context))
 }
 
 /// Objects selected by a box. `crossing` selects objects that touch the box,
-/// otherwise objects must be fully inside.
+/// otherwise objects must be fully inside. In a group, the members of the group are selected. A group
+/// is selected when any of its members is selected this way (crossing) or all of them (inside).
+#[cfg(test)]
 pub fn box_select(doc: &Document, a: DVec2, b: DVec2, crossing: bool) -> Vec<ObjectId> {
+    box_select_in(doc, a, b, crossing, None)
+}
+
+pub fn box_select_in(doc: &Document, a: DVec2, b: DVec2, crossing: bool, context: Option<ObjectId>) -> Vec<ObjectId> {
     let (lo, hi) = (a.min(b), a.max(b));
-    doc.objects
-        .values()
-        .filter(|o| pickable(doc, o))
-        .filter(|o| {
-            let (s0, s1) = o.shape.bounds();
-            if crossing {
-                s0.cmple(hi).all() && s1.cmpge(lo).all()
-            } else {
-                s0.cmpge(lo).all() && s1.cmple(hi).all()
-            }
-        })
-        .map(|o| o.id)
-        .collect()
+    let mut out: Vec<ObjectId> = Vec::new();
+    for o in doc.objects.values().filter(|o| pickable(doc, o) && !matches!(o.shape, Shape::Group { .. })) {
+        let Some(target) = doc.selection_target(o.id, context) else { continue };
+        let (s0, s1) = doc.object_bounds(o);
+        if !(s0.is_finite() && s1.is_finite()) {
+            continue;
+        }
+        let hit = if crossing { s0.cmple(hi).all() && s1.cmpge(lo).all() } else { s0.cmpge(lo).all() && s1.cmple(hi).all() };
+        if hit && !out.contains(&target) {
+            out.push(target);
+        }
+    }
+    if !crossing {
+        // A group counts only if all of its members are inside.
+        out.retain(|id| doc.leaves(&[*id]).iter().all(|l| doc.object(*l).is_some_and(|o| { let (s0, s1) = doc.object_bounds(o); s0.cmpge(lo).all() && s1.cmple(hi).all() })));
+    }
+    out
 }
 
 #[cfg(test)]

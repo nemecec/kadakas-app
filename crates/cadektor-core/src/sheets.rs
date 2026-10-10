@@ -549,6 +549,8 @@ impl Viewport {
             pen: obj.attrs.pen.or(ov.and_then(|o| o.pen)).or(class.and_then(|c| c.pen)).or(Some(crate::model::Color::BLACK)),
             fill: obj.attrs.fill.or(ov.and_then(|o| o.fill)).or(class.and_then(|c| c.fill)).or(Some(crate::model::Color::NONE)),
             line_weight: obj.attrs.line_weight.or(ov.and_then(|o| o.line_weight)).or(class.and_then(|c| c.line_weight)).or(Some(DEFAULT_WEIGHT)),
+            fill_pattern: obj.attrs.fill_pattern.or(class.and_then(|c| c.fill_pattern)),
+            line_type: obj.attrs.line_type.or(class.and_then(|c| c.line_type)),
         }
     }
 
@@ -559,6 +561,8 @@ impl Viewport {
             pen: a.attrs.pen.or(class.and_then(|c| c.pen)).or(Some(crate::model::Color::BLACK)),
             fill: a.attrs.fill.or(class.and_then(|c| c.fill)).or(Some(crate::model::Color::NONE)),
             line_weight: a.attrs.line_weight.or(class.and_then(|c| c.line_weight)).or(Some(DEFAULT_WEIGHT)),
+            fill_pattern: a.attrs.fill_pattern.or(class.and_then(|c| c.fill_pattern)),
+            line_type: a.attrs.line_type.or(class.and_then(|c| c.line_type)),
         }
     }
 
@@ -620,6 +624,8 @@ pub fn allowed_on_sheet(shape: &Shape) -> bool {
     matches!(
         shape,
         Shape::Line { .. } | Shape::Rect { .. } | Shape::Circle { .. } | Shape::Arc { .. } | Shape::Polyline { .. } | Shape::Text { .. } | Shape::Viewport(_) | Shape::TitleBlock(_)
+            | Shape::Group { .. }
+            | Shape::Symbol { .. }
     )
 }
 
@@ -1101,7 +1107,7 @@ mod tests {
 
     fn doc_with_overrides() -> (Document, Object) {
         let mut doc = Document::default();
-        doc.classes.push(Class { id: ClassId(9), name: "Trees".into(), visible: true, attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([0, 255, 0, 255])), line_weight: Some(0.5) } });
+        doc.classes.push(Class { id: ClassId(9), name: "Trees".into(), visible: true, attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([0, 255, 0, 255])), line_weight: Some(0.5), ..Default::default() } });
         let mut o = Object::new(crate::model::ObjectId(50), FIRST_LAYER, ClassId(9), Shape::Circle { center: v(0.0, 0.0), radius: 10.0 });
         o.attrs.pen = Some(Color([1, 2, 3, 255]));
         (doc, o)

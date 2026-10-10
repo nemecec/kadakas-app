@@ -76,6 +76,12 @@ pub struct Attributes {
     /// Line weight in millimeters on paper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_weight: Option<f64>,
+    /// A hatch or tile resource that fills closed shapes, drawn in the pen color over the fill color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_pattern: Option<ResourceId>,
+    /// A line type resource (dashes, and symbols along the line) for the outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_type: Option<ResourceId>,
 }
 
 impl Attributes {
@@ -162,6 +168,28 @@ pub enum Shape {
     Viewport(Box<crate::sheets::Viewport>),
     /// Border, grid reference and title block on a sheet layer.
     TitleBlock(crate::sheets::TitleBlock),
+    /// A group. Its members have this object as their `parent`. The group has no drawing of its own.
+    Group {
+        #[serde(default)]
+        name: String,
+    },
+    /// An instance of a symbol definition (a resource). `at` is where the insertion point of the
+    /// definition goes. The instance is turned by `rotation` (radians) and scaled by `scale`
+    /// (in x, and in y too unless `scale_y` is set) about that point. A negative scale mirrors.
+    Symbol {
+        symbol: ResourceId,
+        at: DVec2,
+        #[serde(default)]
+        rotation: f64,
+        #[serde(default = "default_symbol_scale")]
+        scale: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_y: Option<f64>,
+    },
+}
+
+fn default_symbol_scale() -> f64 {
+    1.0
 }
 
 /// Default text height of a plant tag, in mm.
@@ -211,6 +239,8 @@ impl Shape {
             Shape::SiteModifier { .. } => "site_modifier",
             Shape::Viewport(_) => "viewport",
             Shape::TitleBlock(_) => "title_block",
+            Shape::Group { .. } => "group",
+            Shape::Symbol { .. } => "symbol",
         }
     }
 
@@ -237,6 +267,8 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.problem().is_none(),
             Shape::TitleBlock(tb) => tb.problem().is_none(),
+            Shape::Group { .. } => true,
+            Shape::Symbol { at, rotation, scale, scale_y, .. } => v(at) && rotation.is_finite() && scale.is_finite() && scale_y.is_none_or(f64::is_finite),
             Shape::Locus3d { p } => p.is_finite(),
             Shape::Polyline3d { points, .. } => points.iter().all(|p| p.is_finite()),
             Shape::SiteModel { points, lines, settings } => {
@@ -275,7 +307,11 @@ impl Shape {
         };
         match self {
             // Viewports and title blocks are checked as a whole (`Viewport::problem`).
-            Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+            Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Group { .. } => {}
+            Shape::Symbol { at, rotation, scale, scale_y, .. } => {
+                v(at);
+                [*rotation, *scale].into_iter().chain(scale_y.iter().copied()).for_each(&mut *f);
+            }
             Shape::Locus3d { p } => p.to_array().into_iter().for_each(&mut *f),
             Shape::Polyline3d { points, .. } => points.iter().for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
             Shape::SiteModel { points, lines, settings } => {
@@ -346,6 +382,8 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => vp.translate(d),
             Shape::TitleBlock(tb) => tb.translate(d),
+            Shape::Group { .. } => {}
+            Shape::Symbol { at, .. } => mv(at),
             Shape::Locus3d { p } => {
                 p.x += d.x;
                 p.y += d.y;
@@ -392,6 +430,9 @@ impl Shape {
         match self {
             Shape::Viewport(vp) => (vp.min, vp.max),
             Shape::TitleBlock(tb) => tb.bounds(),
+            // The size of these depends on the document. See `Document::object_bounds`.
+            Shape::Group { .. } => from_points(&[]),
+            Shape::Symbol { at, .. } => (*at, *at),
             Shape::Locus3d { p } => (p.truncate(), p.truncate()),
             Shape::Polyline3d { points, .. } => {
                 from_points(&points.iter().map(|p| p.truncate()).collect::<Vec<_>>())
@@ -630,6 +671,7 @@ impl Default for Document {
                     pen: Some(Color::BLACK),
                     fill: Some(Color::NONE),
                     line_weight: Some(0.25),
+                    ..Attributes::default()
                 },
             }],
             objects: Objects::new(),
@@ -729,6 +771,7 @@ impl Document {
             return Err(format!("object {} is on the wrong kind of layer", o.id));
         }
         self.resources.validate()?;
+        crate::group::check_tree(self)?;
         if self.layer(self.active_layer).is_none() || self.class(self.active_class).is_none() {
             return Err("active layer or class does not exist".into());
         }
@@ -763,6 +806,8 @@ impl Document {
             pen: obj.attrs.pen.or(class.and_then(|c| c.pen)),
             fill: obj.attrs.fill.or(class.and_then(|c| c.fill)),
             line_weight: obj.attrs.line_weight.or(class.and_then(|c| c.line_weight)),
+            fill_pattern: obj.attrs.fill_pattern.or(class.and_then(|c| c.fill_pattern)),
+            line_type: obj.attrs.line_type.or(class.and_then(|c| c.line_type)),
         }
     }
 
@@ -771,6 +816,7 @@ impl Document {
     pub fn is_visible(&self, obj: &Object) -> bool {
         self.layer(obj.layer).is_some_and(|l| l.visible && l.kind == LayerKind::Design)
             && self.class(obj.class).is_some_and(|c| c.visible)
+            && !crate::symbols::is_being_edited(obj)
     }
 
     /// True if the object can be picked or snapped to: it shows in the model, or it is on the
@@ -781,7 +827,7 @@ impl Document {
 
     /// True if the layer and the class of the object are visible, on any kind of layer.
     pub fn is_shown(&self, obj: &Object) -> bool {
-        self.layer(obj.layer).is_some_and(|l| l.visible) && self.class(obj.class).is_some_and(|c| c.visible)
+        self.layer(obj.layer).is_some_and(|l| l.visible) && self.class(obj.class).is_some_and(|c| c.visible) && !crate::symbols::is_being_edited(obj)
     }
 }
 
@@ -1000,7 +1046,7 @@ mod tests {
             id: ClassId(5),
             name: "Trees".into(),
             visible: true,
-            attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([1, 2, 3, 255])), line_weight: Some(0.5) },
+            attrs: Attributes { pen: Some(Color([0, 128, 0, 255])), fill: Some(Color([1, 2, 3, 255])), line_weight: Some(0.5), ..Default::default() },
         });
 
         // No object overrides: every value comes from the class.
@@ -1012,7 +1058,7 @@ mod tests {
         assert_eq!(a.line_weight, Some(0.5));
 
         // Object overrides win per field; unset fields still come from the class.
-        o.attrs = Attributes { pen: Some(Color::BLACK), fill: None, line_weight: Some(2.0) };
+        o.attrs = Attributes { pen: Some(Color::BLACK), fill: None, line_weight: Some(2.0), ..Default::default() };
         let a = doc.resolved_attrs(&o);
         assert_eq!(a.pen, Some(Color::BLACK));
         assert_eq!(a.fill, Some(Color([1, 2, 3, 255])));
@@ -1221,6 +1267,9 @@ mod tests {
         o.data.insert("Pset_Wall".into(), serde_json::json!({"FireRating": "REI60", "Load": 2.5}));
         o.parent = Some(ObjectId(99));
         doc.objects.insert(o.id, o);
+        // The parent must be a group that exists.
+        assert!(doc.validate().unwrap_err().contains("does not exist"));
+        doc.objects.insert(ObjectId(99), Object::new(ObjectId(99), FIRST_LAYER, NONE_CLASS, Shape::Group { name: "g".into() }));
         doc.validate().unwrap();
         let text = serde_json::to_string(&doc).unwrap();
         assert!(text.contains(r#""kind":"sheet""#) && text.contains("Pset_Wall") && text.contains(r#""parent":99"#));

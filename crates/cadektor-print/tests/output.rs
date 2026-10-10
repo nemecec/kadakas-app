@@ -29,7 +29,7 @@ fn add(ed: &mut Editor, shape: Shape, layer: Option<LayerId>, attrs: Attributes)
 /// A model with one of most shapes on layer 1, and a sheet layer with a viewport.
 fn project() -> (Editor, LayerId, ObjectId) {
     let mut ed = Editor::default();
-    let red = Attributes { pen: Some(RED), fill: Some(Color([0, 200, 0, 255])), line_weight: Some(0.5) };
+    let red = Attributes { pen: Some(RED), fill: Some(Color([0, 200, 0, 255])), line_weight: Some(0.5), ..Default::default() };
     add(&mut ed, Shape::Rect { min: v(0.0, 0.0), max: v(10_000.0, 6000.0) }, None, red.clone());
     add(&mut ed, Shape::Circle { center: v(3000.0, 3000.0), radius: 1000.0 }, None, red.clone());
     add(&mut ed, Shape::Arc { center: v(6000.0, 3000.0), radius: 1000.0, start: 0.0, end: 3.0 }, None, red.clone());
@@ -135,7 +135,7 @@ fn objects_outside_the_window_are_skipped() {
 #[test]
 fn visibility_and_graphic_overrides_change_the_drawing() {
     let (mut ed, sheet, vp) = project();
-    let trees = ClassId(run(&mut ed, Command::AddClass { name: "Trees".into(), attrs: Attributes { pen: Some(Color([0, 0, 255, 255])), fill: None, line_weight: Some(0.1) } })[0]);
+    let trees = ClassId(run(&mut ed, Command::AddClass { name: "Trees".into(), attrs: Attributes { pen: Some(Color([0, 0, 255, 255])), fill: None, line_weight: Some(0.1), ..Default::default() } })[0]);
     add_in_class(&mut ed, trees);
     let base = prims(&ed, sheet);
     let blue = |ps: &[Prim]| ps.iter().filter(|p| matches!(p, Prim::Path(pp) if pp.stroke == Some([0, 0, 255, 255]))).count();

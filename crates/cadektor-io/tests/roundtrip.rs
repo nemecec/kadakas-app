@@ -141,7 +141,7 @@ fn classes_and_layers_round_trip_by_name() {
         id: walls,
         name: "Walls & fences".into(),
         visible: false,
-        attrs: cadektor_core::model::Attributes { pen: Some(cadektor_core::model::Color([200, 10, 30, 255])), fill: None, line_weight: Some(0.5) },
+        attrs: cadektor_core::model::Attributes { pen: Some(cadektor_core::model::Color([200, 10, 30, 255])), fill: None, line_weight: Some(0.5), ..Default::default() },
     });
     add(&mut doc, Shape::Line { a: DVec2::ZERO, b: DVec2::X });
     let id = ObjectId(doc.alloc_id().unwrap());

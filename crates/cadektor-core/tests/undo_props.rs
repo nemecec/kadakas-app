@@ -67,7 +67,7 @@ fn attrs() -> impl Strategy<Value = Attributes> {
         prop::option::of(any::<[u8; 4]>().prop_map(Color)),
         prop::option::of(prop_oneof![0.0..5.0f64, Just(f64::NAN)]),
     )
-        .prop_map(|(pen, line_weight)| Attributes { pen, fill: None, line_weight })
+        .prop_map(|(pen, line_weight)| Attributes { pen, fill: None, line_weight, ..Default::default() })
 }
 
 fn data() -> impl Strategy<Value = BTreeMap<String, Value>> {
@@ -112,6 +112,7 @@ fn command() -> impl Strategy<Value = Command> {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Step {
     Do(Command),
     Undo,

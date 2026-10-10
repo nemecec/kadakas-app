@@ -96,6 +96,51 @@ fn text(at: DVec2, t: &str, height: f64, color: Rgba) -> Prim {
 
 /// Draws one shape. `attrs` are the final attributes (with viewport overrides applied).
 pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>) {
+    shape_prims_deep(doc, obj, attrs, xf, counts, tables, out, 0);
+}
+
+/// Fill pattern, line type and symbol marks of an object, as primitives on paper.
+#[allow(clippy::too_many_arguments)]
+fn decor_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>, start: usize, depth: usize) {
+    // Model mm per paper mm.
+    let scale = if xf.k > 0.0 { 1.0 / xf.k } else { 1.0 };
+    let Some(d) = cadektor_core::pattern::decorate(doc, obj, attrs, scale) else { return };
+    let st = Style::of(attrs);
+    if d.replaces_outline {
+        for p in &mut out[start..] {
+            if let Prim::Path(pp) = p {
+                pp.stroke = None;
+            }
+        }
+    }
+    let pen = st.stroke.unwrap_or([0, 0, 0, 255]);
+    for seg in &d.fill {
+        let color = seg.color.map_or(pen, |c| c.0);
+        out.push(Prim::Path(PathPrim::stroked(mapped(&[seg.a, seg.b], xf), false, color, seg.weight.unwrap_or(st.width))));
+    }
+    for stroke in &d.strokes {
+        out.push(Prim::Path(PathPrim::stroked(mapped(stroke, xf), false, pen, st.width)));
+    }
+    for m in &d.marks {
+        let shape = Shape::Symbol { symbol: m.symbol, at: m.at, rotation: m.angle, scale: m.scale, scale_y: None };
+        let inst = Object { id: obj.id, layer: obj.layer, class: obj.class, shape, attrs: Attributes::default(), data: Default::default(), parent: None };
+        let a = Attributes { fill_pattern: None, line_type: None, ..attrs.clone() };
+        shape_prims_deep(doc, &inst, &a, xf, counts, tables, out, depth + 1);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shape_prims_deep(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>, depth: usize) {
+    if depth > cadektor_core::symbols::MAX_DEPTH + 2 {
+        return;
+    }
+    let start = out.len();
+    shape_core(doc, obj, attrs, xf, counts, tables, out, depth);
+    decor_prims(doc, obj, attrs, xf, counts, tables, out, start, depth);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shape_core(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, counts: &TagCounts, tables: &crate::table::Tables, out: &mut Vec<Prim>, depth: usize) {
     let st = Style::of(attrs);
     let ink = st.stroke.unwrap_or([0, 0, 0, 255]);
     match &obj.shape {
@@ -125,7 +170,13 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
             if let Some(zone) = look.zone {
                 out.push(dashed(path(circle_segs(xf.p(*at), xf.len(zone)), true, &Style { fill: None, ..st }), [2.0, 1.0]));
             }
-            if look.graphic == PlantGraphic::Circle {
+            let parts = look.symbol.map(|sym| cadektor_core::symbols::plant_symbol_objects(doc, obj, sym, *at, *spread, look.rotation)).unwrap_or_default();
+            if !parts.is_empty() {
+                for v in &parts {
+                    let a = Attributes { pen: v.attrs.pen.or(attrs.pen), fill: v.attrs.fill.or(attrs.fill), line_weight: v.attrs.line_weight.or(attrs.line_weight), ..Attributes::default() };
+                    shape_prims_deep(doc, v, &a, xf, counts, tables, out, depth + 1);
+                }
+            } else if look.graphic == PlantGraphic::Circle {
                 out.push(path(circle_segs(xf.p(*at), xf.len(spread / 2.0)), true, &s));
             } else {
                 for (i, gp) in graphic::paths_rotated(look.graphic, *at, spread / 2.0, look.rotation).iter().enumerate() {
@@ -195,6 +246,24 @@ pub fn shape_prims(doc: &Document, obj: &Object, attrs: &Attributes, xf: &Xf, co
         }
         // Paper-space objects that other code composes.
         Shape::Viewport(_) | Shape::TitleBlock(_) => {}
+        Shape::Group { .. } => {}
+        Shape::Symbol { .. } => {
+            for v in cadektor_core::symbols::instance_objects(doc, obj) {
+                // A component with a class of its own looks like that class. Otherwise it follows the instance.
+                let a = if v.class == obj.class {
+                    Attributes {
+                        pen: v.attrs.pen.or(attrs.pen),
+                        fill: v.attrs.fill.or(attrs.fill),
+                        line_weight: v.attrs.line_weight.or(attrs.line_weight),
+                        fill_pattern: v.attrs.fill_pattern.or(attrs.fill_pattern),
+                        line_type: v.attrs.line_type.or(attrs.line_type),
+                    }
+                } else {
+                    doc.resolved_attrs(&v)
+                };
+                shape_prims_deep(doc, &v, &a, xf, counts, tables, out, depth + 1);
+            }
+        }
     }
 }
 

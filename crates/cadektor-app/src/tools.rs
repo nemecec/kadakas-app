@@ -207,6 +207,8 @@ pub struct Ctx<'a> {
     pub settings: &'a ToolSettings,
     /// Pick distance in mm.
     pub tol: f64,
+    /// The group you are in (selection picks its members), if any.
+    pub context: Option<ObjectId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -443,7 +445,7 @@ impl ToolMachine {
 
     fn handle_select(&mut self, input: Input, cx: &Ctx) -> Vec<Effect> {
         match input {
-            Input::Press { p, shift } => match hit::hit_test(cx.doc, p, cx.tol) {
+            Input::Press { p, shift } => match hit::hit_test_in(cx.doc, p, cx.tol, cx.context) {
                 Some(id) if shift => {
                     let mut sel = cx.selection.to_vec();
                     match sel.iter().position(|s| *s == id) {
@@ -486,7 +488,7 @@ impl ToolMachine {
                         return vec![];
                     }
                     let mut sel = if add { cx.selection.to_vec() } else { vec![] };
-                    for id in hit::box_select(cx.doc, start, p, p.x < start.x) {
+                    for id in hit::box_select_in(cx.doc, start, p, p.x < start.x, cx.context) {
                         if !sel.contains(&id) {
                             sel.push(id);
                         }
@@ -594,7 +596,7 @@ mod tests {
         /// Sends an input and applies the effects like the app does.
         fn send(&mut self, input: Input) -> Vec<Effect> {
             let fx = {
-                let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: 5.0 };
+                let cx = Ctx { doc: self.session.editor.doc(), selection: &self.session.selection, settings: &self.settings, tol: 5.0, context: self.session.edit_context() };
                 self.m.handle(input, &cx)
             };
             for e in &fx {
@@ -853,7 +855,7 @@ mod tests {
     fn previews_and_keys() {
         let mut f = Fixture::new(Tool::Line);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0, context: None };
         assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Shape(Shape::Line { .. })));
         assert!(f.m.readout(DVec2::new(3.0, 4.0), &f.settings).contains("Length 5.0"));
         assert_eq!(f.m.anchor(), Some(DVec2::ZERO));
@@ -1021,7 +1023,7 @@ mod tests {
         f.settings.arc_radius = 80.0;
         f.click(0.0, 0.0);
         f.click(100.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0, context: None };
         let Preview::Path { vertices, closed } = f.m.preview(DVec2::new(100.0, 100.0), &cx) else { panic!() };
         assert!(closed);
         assert_eq!(vertices.len(), 3);
@@ -1034,7 +1036,7 @@ mod tests {
         // A polyline preview is open.
         let mut f = Fixture::new(Tool::Polyline);
         f.click(0.0, 0.0);
-        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0 };
+        let cx = Ctx { doc: f.session.editor.doc(), selection: &[], settings: &f.settings, tol: 1.0, context: None };
         assert!(matches!(f.m.preview(DVec2::X, &cx), Preview::Path { closed: false, .. }));
     }
 

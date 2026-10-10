@@ -114,6 +114,8 @@ pub struct Look {
     pub zone: Option<f64>,
     /// Rotation of the plan graphic in radians.
     pub rotation: f64,
+    /// A symbol that draws the plant in plan (see `PlantStyle::plan_symbol`).
+    pub symbol: Option<crate::resource::ResourceId>,
 }
 
 /// How a plant looks: graphic, form and colors, from its style and overrides. A plant without a
@@ -122,7 +124,7 @@ pub fn look(doc: &Document, obj: &Object) -> Look {
     let rotation = rotation(obj);
     let Some(l) = link(obj) else { return Look { rotation, ..Look::default() } };
     let Some(base) = doc.resources.plant_style(l.style) else { return Look { rotation, ..Look::default() } };
-    let mut look = Look { graphic: base.graphic, form: base.form, fill: base.fill, pen: base.pen, zone: None, rotation };
+    let mut look = Look { graphic: base.graphic, form: base.form, fill: base.fill, pen: base.pen, zone: None, rotation, symbol: base.plan_symbol };
     // A bad override value is ignored here, like `effective` ignores a bad override set.
     // Overrides of locked fields have no effect.
     let get = |k: &str| l.overrides.get(k).filter(|_| !base.is_locked(k));
@@ -134,6 +136,9 @@ pub fn look(doc: &Document, obj: &Object) -> Look {
     }
     if let Some(v) = get("fill") {
         look.fill = serde_json::from_value(v.clone()).ok().flatten();
+    }
+    if let Some(v) = get("plan_symbol") {
+        look.symbol = serde_json::from_value(v.clone()).ok().flatten();
     }
     if let Some(v) = get("pen") {
         look.pen = serde_json::from_value(v.clone()).ok().flatten();
