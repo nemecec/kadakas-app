@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use cadektor_core::snapping::Settings;
 use serde::{Deserialize, Serialize};
 
+use crate::icon_size::IconSize;
 use crate::theme::ThemeChoice;
 
 /// Settings that the user changes in the window.
@@ -19,6 +20,8 @@ pub struct Prefs {
     pub snap: Settings,
     /// Show the SmartCursor cue label at the pointer.
     pub cues: bool,
+    /// Small, Medium or Large icons (palettes 16/24/32 pt, bars 16/20/24 pt, menus 16 pt).
+    pub icon_size: IconSize,
 }
 
 impl Default for Prefs {
@@ -27,6 +30,7 @@ impl Default for Prefs {
             theme: ThemeChoice::System,
             snap: Settings::default(),
             cues: true,
+            icon_size: IconSize::default(),
         }
     }
 }
@@ -106,12 +110,19 @@ mod tests {
     }
 
     #[test]
+    fn an_old_prefs_file_gets_the_medium_icon_size() {
+        let p: Prefs = serde_json::from_str(r#"{"cues": false}"#).unwrap();
+        assert_eq!(p.icon_size, IconSize::Medium);
+    }
+
+    #[test]
     fn prefs_round_trip_and_defaults() {
         let d = temp("rt");
         assert_eq!(load_from(&d), (Prefs::default(), None));
         let mut p = Prefs {
             theme: ThemeChoice::Dark,
             cues: false,
+            icon_size: IconSize::Large,
             ..Prefs::default()
         };
         p.snap.set.angle = true;

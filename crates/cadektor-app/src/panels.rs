@@ -12,6 +12,7 @@ use cadektor_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeActio
 
 use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
+use crate::icon_size::{IconRole, IconSize};
 use crate::keymap::{Action, Keymap};
 use crate::snap::SnapResult;
 use crate::tools::{
@@ -64,6 +65,7 @@ pub struct MenuExtras<'a> {
     pub snap: &'a mut cadektor_core::snapping::Settings,
     pub cues: &'a mut bool,
     pub theme: &'a mut crate::theme::ThemeChoice,
+    pub icon_size: &'a mut IconSize,
     pub layout_names: Vec<String>,
     pub can_back: bool,
     pub can_forward: bool,
@@ -75,6 +77,8 @@ pub struct MenuExtras<'a> {
 /// A request of the Window menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuRequest {
+    /// Help > About.
+    About,
     ShowTab(crate::layout::Tab),
     SaveLayoutAs,
     LoadLayout(String),
@@ -203,6 +207,11 @@ pub fn menu_bar(
                     ui.selectable_value(extras.theme, t, t.label());
                 }
             });
+            ui.menu_button("Icon size", |ui| {
+                for z in IconSize::ALL {
+                    ui.selectable_value(extras.icon_size, z, z.label());
+                }
+            });
         });
         ui.menu_button("Window", |ui| {
             for tab in crate::layout::Tab::ALL {
@@ -242,6 +251,12 @@ pub fn menu_bar(
                 }
             }
         });
+        ui.menu_button("Help", |ui| {
+            if ui.button("About Cadektor...").clicked() {
+                extras.requests.push(MenuRequest::About);
+                ui.close();
+            }
+        });
     });
     out
 }
@@ -271,9 +286,15 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             StandardView::Front,
             StandardView::RightIsometric,
         ] {
-            if crate::icons::select_button(ui, crate::icons::view_icon(s), s.label(), v.view == s)
-                .on_hover_text(view_hint(keys, s))
-                .clicked()
+            if crate::icons::select_button_for(
+                ui,
+                IconRole::Bar,
+                crate::icons::view_icon(s),
+                s.label(),
+                v.view == s,
+            )
+            .on_hover_text(view_hint(keys, s))
+            .clicked()
             {
                 v.view = s;
             }
@@ -284,8 +305,9 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             ui.selectable_value(&mut v.projection, Projection::Perspective, "Perspective")
                 .on_hover_text(keys.hint(Action::ViewProjection));
             ui.separator();
-            if crate::icons::select_button(
+            if crate::icons::select_button_for(
                 ui,
+                IconRole::Bar,
                 crate::icons::render_icon(RenderMode::Wireframe),
                 "Wireframe",
                 v.mode == RenderMode::Wireframe,
@@ -295,8 +317,9 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             {
                 v.mode = RenderMode::Wireframe;
             }
-            if crate::icons::select_button(
+            if crate::icons::select_button_for(
                 ui,
+                IconRole::Bar,
                 crate::icons::render_icon(RenderMode::Shaded),
                 "Shaded",
                 v.mode == RenderMode::Shaded,
@@ -306,8 +329,9 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             {
                 v.mode = RenderMode::Shaded;
             }
-            if crate::icons::select_button(
+            if crate::icons::select_button_for(
                 ui,
+                IconRole::Bar,
                 crate::icons::render_icon(RenderMode::HiddenLine),
                 "Hidden Line",
                 v.mode == RenderMode::HiddenLine,
@@ -317,8 +341,9 @@ pub fn view_bar(ui: &mut Ui, v: &mut ViewSettings, keys: &Keymap, gpu_ready: boo
             {
                 v.mode = RenderMode::HiddenLine;
             }
-            if crate::icons::select_button(
+            if crate::icons::select_button_for(
                 ui,
+                IconRole::Bar,
                 crate::icons::render_icon(RenderMode::DashedHiddenLine),
                 "Dashed",
                 v.mode == RenderMode::DashedHiddenLine,
@@ -385,9 +410,14 @@ pub fn tool_label(tool: Tool, keys: &Keymap) -> (String, String) {
 
 fn tool_button(ui: &mut Ui, m: &mut ToolMachine, keys: &Keymap, tool: Tool) {
     let (label, tip) = tool_label(tool, keys);
-    let r =
-        crate::icons::select_button(ui, crate::icons::tool_icon(tool), &label, m.tool() == tool)
-            .on_hover_text(tip);
+    let r = crate::icons::select_button_for(
+        ui,
+        IconRole::Palette,
+        crate::icons::tool_icon(tool),
+        &label,
+        m.tool() == tool,
+    )
+    .on_hover_text(tip);
     if r.clicked() {
         m.set_tool(tool);
     }
@@ -501,7 +531,13 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
                 crate::tools::SelectMode::Rectangle => "rectangle",
                 crate::tools::SelectMode::Lasso => "lasso",
             };
-            let r = crate::icons::select_button(ui, icon, mode.label(), settings.select_mode == mode);
+            let r = crate::icons::select_button_for(
+                ui,
+                IconRole::Palette,
+                icon,
+                mode.label(),
+                settings.select_mode == mode,
+            );
             let tip = match mode {
                 crate::tools::SelectMode::Rectangle => {
                     "Drag a box. Left to right selects what is inside, right to left what the box touches."

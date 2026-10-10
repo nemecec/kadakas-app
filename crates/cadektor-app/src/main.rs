@@ -2,6 +2,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 
 #[cfg(not(target_arch = "wasm32"))]
+mod about;
 mod agent;
 mod annot_ui;
 mod app;
@@ -22,6 +23,7 @@ mod gis_ui;
 mod gpu3d;
 mod grading_ui;
 mod hit;
+mod icon_size;
 mod icons;
 #[cfg(not(target_arch = "wasm32"))]
 mod io_dialog;

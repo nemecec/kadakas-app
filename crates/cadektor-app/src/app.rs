@@ -14,6 +14,7 @@ use crate::canvas3d;
 use crate::databar::{self, DataEntry};
 use crate::file_io;
 use crate::gpu3d::Gpu3d;
+use crate::icon_size;
 use crate::keymap::{self, Action, Keymap};
 use crate::layout::{self, Layouts, Tab};
 use crate::panels::{self, InfoEdit, MenuAction, MenuExtras, MenuRequest, NavState};
@@ -101,6 +102,7 @@ pub struct CadektorApp {
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
     autosave: crate::autosave_ui::AutosaveUi,
+    about: crate::about::About,
     /// Files that the browser has picked, waiting for the next frame.
     #[cfg(target_arch = "wasm32")]
     web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
@@ -259,6 +261,7 @@ impl CadektorApp {
             script_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
+            about: crate::about::About::default(),
             #[cfg(target_arch = "wasm32")]
             web_inbox: Default::default(),
             #[cfg(target_arch = "wasm32")]
@@ -1539,6 +1542,7 @@ impl CadektorApp {
                     self.save_layouts();
                 }
                 MenuRequest::ResetLayout => self.layouts.reset(),
+                MenuRequest::About => self.about.open(),
             }
         }
     }
@@ -1794,6 +1798,7 @@ impl eframe::App for CadektorApp {
             self.theme_applied = Some(self.prefs.theme);
         }
         self.dark = theme::is_dark(&ctx);
+        icon_size::set(&ctx, self.prefs.icon_size);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
@@ -1868,7 +1873,8 @@ impl eframe::App for CadektorApp {
             self.path.as_deref(),
             self.session.editor.doc(),
         );
-        if let Some(r) = self.autosave.show(&ctx) {
+        self.about.show(&ctx);
+        if let Some(r) = self.autosave.show(&ctx, &mut self.prefs.icon_size) {
             self.replace_document(r.doc, None);
             self.status = r.status;
         }
@@ -1901,6 +1907,7 @@ impl eframe::App for CadektorApp {
                 snap: &mut self.session.snap,
                 cues: &mut self.prefs.cues,
                 theme: &mut self.prefs.theme,
+                icon_size: &mut self.prefs.icon_size,
                 layout_names: self.layouts.names(),
                 can_back: self.view_history.can_go_back(),
                 can_forward: self.view_history.can_go_forward(),

@@ -171,12 +171,16 @@ impl AutosaveUi {
     }
 
     /// Shows the dialogs. Returns a document when the user opens a recovered copy.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<Recovered> {
-        self.preferences(ctx);
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        icon_size: &mut crate::icon_size::IconSize,
+    ) -> Option<Recovered> {
+        self.preferences(ctx, icon_size);
         self.recovery_dialog(ctx)
     }
 
-    fn preferences(&mut self, ctx: &egui::Context) {
+    fn preferences(&mut self, ctx: &egui::Context, icon_size: &mut crate::icon_size::IconSize) {
         if !self.prefs_open {
             return;
         }
@@ -187,6 +191,14 @@ impl AutosaveUi {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                ui.heading("Appearance");
+                ui.horizontal(|ui| {
+                    ui.label("Icon size");
+                    for z in crate::icon_size::IconSize::ALL {
+                        ui.selectable_value(icon_size, z, z.label());
+                    }
+                });
+                ui.add_space(6.0);
                 ui.heading("Autosave");
                 let s = &mut self.settings;
                 ui.checkbox(&mut s.enabled, "Save a recovery copy while I work");

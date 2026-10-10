@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Context, TextureHandle, Ui, Vec2};
 
+use crate::icon_size::{self, IconRole, IconSize};
 use crate::panels::MenuAction;
 use crate::tools::Tool;
 
@@ -771,8 +772,8 @@ type Key = (&'static str, u32);
 #[derive(Clone, Default)]
 struct Cache(Arc<Mutex<Textures>>);
 
-/// The pixel ratio of the textures, and the textures.
-type Textures = (f32, HashMap<Key, Option<TextureHandle>>);
+/// The pixel ratio and the icon size of the textures, and the textures.
+type Textures = ((f32, IconSize), HashMap<Key, Option<TextureHandle>>);
 
 /// The white texture of an icon at `size` points. `None` if the icon is missing.
 pub fn texture(ctx: &Context, name: &str, size: f32) -> Option<TextureHandle> {
@@ -781,10 +782,11 @@ pub fn texture(ctx: &Context, name: &str, size: f32) -> Option<TextureHandle> {
     let px = (size * ppp).ceil().max(1.0) as u32;
     let cache = ctx.data_mut(|d| d.get_temp_mut_or_default::<Cache>(egui::Id::NULL).clone());
     let mut guard = cache.0.lock().ok()?;
-    if guard.0 != ppp {
-        // The scale changed: free the old textures.
+    let state = (ppp, icon_size::current(ctx));
+    if guard.0 != state {
+        // The scale or the icon size changed: free the old textures.
         guard.1.clear();
-        guard.0 = ppp;
+        guard.0 = state;
     }
     guard
         .1
@@ -812,9 +814,16 @@ pub fn image(ui: &Ui, name: &str, size: f32) -> Option<egui::Image<'static>> {
     Some(egui::Image::new(egui::load::SizedTexture::new(t.id(), Vec2::splat(size))).tint(color))
 }
 
-/// A button with an icon and a label. Without the icon, it shows the label only.
+/// A button with an icon and a label, with the icon size of menus and lists (16 points).
+/// Without the icon, it shows the label only.
 pub fn button(ui: &Ui, name: &str, label: &str) -> egui::Button<'static> {
-    match image(ui, name, 16.0) {
+    button_for(ui, IconRole::Menu, name, label)
+}
+
+/// A button with an icon and a label. The icon size comes from the user's choice and `role`.
+pub fn button_for(ui: &Ui, role: IconRole, name: &str, label: &str) -> egui::Button<'static> {
+    let size = icon_size::points(ui.ctx(), role);
+    match image(ui, name, size) {
         Some(img) => {
             egui::Button::image_and_text(img, label.to_string()).image_tint_follows_text_color(true)
         }
@@ -822,9 +831,20 @@ pub fn button(ui: &Ui, name: &str, label: &str) -> egui::Button<'static> {
     }
 }
 
-/// A button for a palette: the icon and the label, marked when `selected`.
+/// A button for a list: the icon and the label, marked when `selected`.
 pub fn select_button(ui: &mut Ui, name: &str, label: &str, selected: bool) -> egui::Response {
-    ui.add(button(ui, name, label).selected(selected))
+    select_button_for(ui, IconRole::Menu, name, label, selected)
+}
+
+/// A button for a palette or a bar, sized by `role`, marked when `selected`.
+pub fn select_button_for(
+    ui: &mut Ui,
+    role: IconRole,
+    name: &str,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    ui.add(button_for(ui, role, name, label).selected(selected))
 }
 
 #[cfg(test)]
