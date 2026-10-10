@@ -1,0 +1,68 @@
+## uic-tools: tools.rs
+
+uic-tools-rectangle = Ristkülik
+uic-tools-lasso = Lasso
+uic-tools-pad = Tasand
+uic-tools-grade-limits = Planeerimispiir
+uic-tools-selection = Valik
+uic-tools-line = Joon
+uic-tools-circle = Ring
+uic-tools-polyline = Murdjoon
+uic-tools-text = Tekst
+uic-tools-plant = Taim
+uic-tools-landscape-area = Haljastusala
+uic-tools-hardscape = Kõvakate
+uic-tools-massing-model = Mahumudel
+uic-tools-site-modifiers = Maapinna muutjad
+uic-tools-irrigation = Kastmine
+uic-tools-grading = Planeerimine
+uic-tools-dimension = Mõõtmestamine
+uic-tools-callout = Viide
+uic-tools-data-tag = Andmesilt
+uic-tools-north-arrow = Põhjanool
+uic-tools-scale-bar = Mõõtkavariba
+uic-tools-revision-cloud = Muudatuspilv
+uic-tools-rotate = Pööra
+uic-tools-mirror = Peegelda
+uic-tools-scale = Skaleeri
+uic-tools-offset = Paralleelnihe
+uic-tools-fillet = Ümarda
+uic-tools-chamfer = Faasi
+uic-tools-trim = Kärbi
+uic-tools-extend = Pikenda
+uic-tools-split = Jaga
+uic-tools-corner = Nurk
+uic-tools-bezier = Bézier
+uic-tools-cubic = Kuupsplain
+uic-tools-arc = Kaar
+uic-tools-tangent-arc = Puutujakaar
+uic-tools-point-on-arc = Punkt kaarel
+uic-tools-irrigation-mode = Kastmise režiim: { $mode }
+uic-tools-dimension-mode = Mõõtmestamise režiim: { $mode }
+uic-tools-placement-mode = Asetamise režiim: { $mode }
+uic-tools-the-tool-has-no-mode-buttons = Tööriistal „{ $tool }“ pole režiiminuppe
+uic-tools-vertex-mode = Tipu režiim: { $mode }
+uic-tools-the-tool-has-only-one-group-of = Tööriistal „{ $tool }“ on ainult üks režiiminuppude rühm
+uic-tools-points = { $segment }  Punkte { $points }
+uic-tools-points-mode = { $segment }  Punkte { $points }  Režiim { $mode }{ $radius }
+uic-tools-lasso-points =
+    Lasso { $points ->
+        [one] { $points } punkt
+       *[other] { $points } punkti
+    }
+uic-tools-click-to-select-shift-click-to-toggle = Klõpsa valimiseks, Shift-klõps lülitab valikut, lohistamine liigutab või valib kasti abil. Delete kustutab.
+uic-tools-click-the-first-point-esc-returns-to = Klõpsa esimesel punktil. Esc naaseb valiku juurde.
+uic-tools-click-the-second-point-esc-cancels = Klõpsa teisel punktil. Esc katkestab.
+uic-tools-click-a-point-on-the-circle-esc = Klõpsa punktil ringil. Esc katkestab.
+uic-tools-click-points-pick-a-vertex-mode-in = Klõpsa punktidel. Vali tipu režiim tööriistaribal (U vahetab). Topeltklõps või Enter lõpetab. Esc katkestab.
+uic-tools-pick-a-mode-in-the-data-bar = Vali režiim andmeribal: maastikumüür, kalle, kõrgusmärk, märgipost või lõikejoon. Esc katkestab.
+uic-tools-click-to-annotate-pick-the-mode-and = Klõpsa märkimiseks. Vali režiim ja stiil tööriistaribal. Enter lõpetab punktide loendid. Esc katkestab.
+uic-tools-click-to-place-set-values-in-the = Klõpsa asetamiseks. Väärtused sea andmeribal.
+uic-tools-pick-a-mode-outlet-line-poc-valve = Vali tööriistaribal režiim (pihusti, toru, ühenduspunkt, ventiil, kontroller). Klõpsa asetamiseks. Toru: Enter või topeltklõps lõpetab. Esc katkestab.
+uic-tools-pick-a-placement-mode-and-a-plant = Vali tööriistaribal asetamise režiim ja taimestiil. Klõpsa asetamiseks. Enter lõpetab joone, täitmise ja punktid. Esc katkestab.
+uic-tools-readout-segment = Pikkus { $length }  Nurk { $angle }
+uic-tools-readout-size = Laius { $width }  Kõrgus { $height }
+uic-tools-readout-radius = Raadius { $radius }
+uic-tools-readout-arc-radius = Raadius { $radius }
+uic-tools-readout-move = Nihe dX { $dx }  dY { $dy }
+uic-tools-readout-box = Kast { $width } x { $height }

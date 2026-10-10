@@ -117,6 +117,16 @@ macro_rules! tr {
     };
 }
 
+/// Marks a message id in a table or a `static`, where a call of `tr!` is not possible. It gives
+/// the id as a `&'static str`; the code later passes it to `translate`. The CI check
+/// (`tests/l10n_check.rs` of `kadakas-app`) finds the ids by this macro, like those of `tr!`.
+#[macro_export]
+macro_rules! msg {
+    ($id:literal) => {
+        $id
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +150,12 @@ mod tests {
             assert_eq!(language(), "et");
         });
         assert_eq!(language(), "en-US");
+    }
+
+    #[test]
+    fn msg_gives_the_id() {
+        const ID: &str = msg!("common-ok");
+        assert_eq!(translate(ID, &[]), "OK");
     }
 
     #[test]

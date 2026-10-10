@@ -145,8 +145,10 @@ impl Chord {
     }
 }
 
+use kadakas_l10n::msg;
+
 macro_rules! actions {
-    ($($variant:ident => $id:literal, $label:literal, [$($chord:literal),*], $impl_:literal;)*) => {
+    ($($variant:ident => $id:literal, $label:expr, [$($chord:literal),*], $impl_:literal;)*) => {
         /// Everything a key can do.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub enum Action { $($variant),* }
@@ -154,7 +156,10 @@ macro_rules! actions {
         impl Action {
             pub const ALL: &'static [Action] = &[$(Action::$variant),*];
             pub fn id(self) -> &'static str { match self { $(Action::$variant => $id),* } }
-            pub fn label(self) -> &'static str { match self { $(Action::$variant => $label),* } }
+            /// The message id of the label (the label itself comes from `label`).
+            pub fn label_id(self) -> &'static str { match self { $(Action::$variant => $label),* } }
+            /// The label in the language of the UI.
+            pub fn label(self) -> String { kadakas_l10n::translate(self.label_id(), &[]) }
             /// Default chords, as text.
             pub fn defaults(self) -> &'static [&'static str] { match self { $(Action::$variant => &[$($chord),*]),* } }
             /// False for actions that are bound but not built yet.
@@ -164,106 +169,106 @@ macro_rules! actions {
 }
 
 actions! {
-    ToolSelect => "tool.select", "Selection tool", ["X"], true;
-    ToolText => "tool.text", "Text tool", ["1"], true;
-    ToolLine => "tool.line", "Line tool", ["2"], true;
-    ToolRect => "tool.rect", "Rectangle tool", ["4"], true;
-    ToolCircle => "tool.circle", "Circle tool", ["6"], true;
-    ToolPolyline => "tool.polyline", "Polyline tool", ["5"], true;
-    ToolPlant => "tool.plant", "Plant tool", ["Alt+Shift+P"], true;
-    ToolLandscapeArea => "tool.landscape_area", "Landscape Area tool", ["Alt+Shift+A"], true;
-    ToolHardscape => "tool.hardscape", "Hardscape tool", ["Alt+Shift+H"], true;
-    ToolSiteModifier => "tool.site_modifier", "Site Modifiers tool", ["Alt+Shift+G"], true;
-    ToolMassing => "tool.massing", "Massing Model tool", ["Alt+Shift+M"], true;
-    ToolIrrigation => "tool.irrigation", "Irrigation tool", ["Alt+Shift+I"], true;
-    ToolGrading => "tool.grading", "Grading tool", [], true;
-    ToolDimension => "tool.dimension", "Dimension tool (constrained linear)", ["N"], true;
-    ToolAngularDim => "tool.angular_dimension", "Angular Dimension tool", ["."], true;
-    ToolRadialDim => "tool.radial_dimension", "Radial Dimension tool", [","], true;
-    ToolCallout => "tool.callout", "Callout tool", ["Alt+1"], true;
-    ToolDataTag => "tool.data_tag", "Data Tag tool", ["Alt+Shift+T"], true;
-    ToolNorthArrow => "tool.north_arrow", "North Arrow tool", ["Alt+Shift+N"], true;
-    ToolScaleBar => "tool.scale_bar", "Scale Bar tool", ["Alt+Shift+B"], true;
-    ToolRevisionCloud => "tool.revision_cloud", "Revision Cloud tool", ["Alt+Shift+V"], true;
-    CmdGraphicLegend => "cmd.graphic_legend", "Add a graphic legend", ["Alt+Shift+E"], true;
-    ToolRotate => "tool.rotate", "Rotate tool", ["Alt+="], true;
-    ToolMirror => "tool.mirror", "Mirror tool", ["="], true;
-    ToolScale => "tool.scale", "Scale tool", [], true;
-    ToolOffset => "tool.offset", "Offset tool", ["Shift+-"], true;
-    ToolFillet => "tool.fillet", "Fillet tool", ["7"], true;
-    ToolChamfer => "tool.chamfer", "Chamfer tool", ["Alt+7"], true;
-    ToolTrim => "tool.trim", "Trim tool", ["Alt+Shift+L"], true;
-    ToolExtend => "tool.extend", "Extend tool", [], true;
-    ToolSplit => "tool.split", "Split tool", ["L"], true;
-    CmdDuplicateArray => "cmd.duplicate_array", "Duplicate Array", ["Cmd/Ctrl+Shift+Alt+D"], true;
-    CmdAddSurface => "cmd.add_surface", "Add Surface", ["Cmd/Ctrl+Shift+Alt+A"], true;
-    CmdSubtractSurface => "cmd.subtract_surface", "Subtract Surface", [], true;
-    CmdClipSurface => "cmd.clip_surface", "Clip Surface", ["Cmd/Ctrl+Shift+Alt+C"], true;
-    CmdIntersectSurface => "cmd.intersect_surface", "Intersect Surface", ["Cmd/Ctrl+Shift+Alt+I"], true;
-    CmdCompose => "cmd.compose", "Compose", ["Cmd/Ctrl+Shift+Alt+P"], true;
-    CmdRotateLeft90 => "cmd.rotate_left_90", "Rotate left 90 degrees", ["Cmd/Ctrl+L"], true;
-    CmdRotateRight90 => "cmd.rotate_right_90", "Rotate right 90 degrees", ["Cmd/Ctrl+Shift+R"], true;
-    CmdFlipHorizontal => "cmd.flip_horizontal", "Flip horizontal", ["Cmd/Ctrl+Shift+H"], true;
-    CmdFlipVertical => "cmd.flip_vertical", "Flip vertical", ["Cmd/Ctrl+Shift+V"], true;
-    QuickSearch => "ui.quick_search", "Quick search for commands", ["F"], true;
-    ViewHistoryPrevious => "view.history_previous", "Previous view in history", ["Cmd/Ctrl+Shift+,"], true;
-    ViewHistoryNext => "view.history_next", "Next view in history", ["Cmd/Ctrl+Shift+."], true;
-    SnapCues => "snap.cues", "Toggle SmartCursor cues", ["Y"], true;
-    SnapRelativeAngles => "snap.relative_angles", "Toggle angles relative to the prior segment", ["/"], true;
-    SnapAcquire => "snap.acquire", "Set a smart point or smart edge at the pointer", ["T"], true;
-    ToolMode1 => "mode.group1", "Tool mode group 1", ["U"], true;
-    ToolMode2 => "mode.group2", "Tool mode group 2", ["I"], true;
-    ToolMode3 => "mode.group3", "Tool mode group 3", ["O"], true;
-    ToolMode4 => "mode.group4", "Tool mode group 4", ["P"], true;
-    ToolMode5 => "mode.group5", "Tool mode group 5", ["["], true;
-    ToolMode6 => "mode.group6", "Tool mode group 6", ["]"], true;
-    FileNew => "file.new", "New", ["Cmd/Ctrl+N"], true;
-    FileOpen => "file.open", "Open", ["Cmd/Ctrl+O"], true;
-    FileSave => "file.save", "Save", ["Cmd/Ctrl+S"], true;
-    FileSaveAs => "file.save_as", "Save As", ["Cmd/Ctrl+Shift+S"], true;
-    FileExportPdf => "file.export_pdf", "Export PDF (print)", ["Cmd/Ctrl+P"], true;
-    Undo => "edit.undo", "Undo", ["Cmd/Ctrl+Z"], true;
-    Redo => "edit.redo", "Redo", ["Cmd/Ctrl+Y", "Cmd/Ctrl+Shift+Z"], true;
-    Delete => "edit.delete", "Delete", ["Delete", "Backspace"], true;
-    Group => "edit.group", "Group", ["Cmd/Ctrl+G"], true;
-    Ungroup => "edit.ungroup", "Ungroup", ["Cmd/Ctrl+U"], true;
-    EnterGroup => "edit.enter_group", "Edit group (enter)", ["Cmd/Ctrl+["], true;
-    ExitGroup => "edit.exit_group", "Exit group", ["Cmd/Ctrl+]"], true;
-    SelectAll => "edit.select_all", "Select All", ["Cmd/Ctrl+A"], true;
-    Cancel => "edit.cancel", "Cancel the operation", ["Escape"], true;
-    Finish => "edit.finish", "Finish the object", ["Enter"], true;
-    NudgeLeft => "edit.nudge_left", "Nudge left", ["Shift+Left"], true;
-    NudgeRight => "edit.nudge_right", "Nudge right", ["Shift+Right"], true;
-    NudgeUp => "edit.nudge_up", "Nudge up", ["Shift+Up"], true;
-    NudgeDown => "edit.nudge_down", "Nudge down", ["Shift+Down"], true;
-    ZoomFit => "view.zoom_fit", "Zoom to Fit", ["Cmd/Ctrl+6", "Home"], true;
-    ZoomIn => "view.zoom_in", "Zoom in (x2)", ["Cmd/Ctrl+1"], true;
-    ZoomOut => "view.zoom_out", "Zoom out (x2)", ["Cmd/Ctrl+2"], true;
-    PanLeft => "view.pan_left", "Pan left", ["Left"], true;
-    PanRight => "view.pan_right", "Pan right", ["Right"], true;
-    PanUp => "view.pan_up", "Pan up", ["Up"], true;
-    PanDown => "view.pan_down", "Pan down", ["Down"], true;
-    PanHold => "view.pan_hold", "Pan while held", ["Space"], true;
-    SnapSuspend => "snap.suspend", "Suspend snapping while held", ["Backtick"], true;
-    DataBarFocus => "databar.focus", "Data bar: next field", ["Tab"], true;
-    DataBarPrev => "databar.prev", "Data bar: previous field", ["Shift+Tab"], true;
-    ViewPlan => "view.top_plan", "Top/Plan view", ["Alt+Shift+0", "Cmd/Ctrl+5"], true;
-    ViewTop => "view.top", "Top view", ["Alt+Shift+5"], true;
-    ViewFront => "view.front", "Front view", ["Alt+Shift+2"], true;
-    ViewBack => "view.back", "Back view", ["Alt+Shift+8"], true;
-    ViewLeft => "view.left", "Left view", ["Alt+Shift+4"], true;
-    ViewRight => "view.right", "Right view", ["Alt+Shift+6"], true;
-    ViewLeftIso => "view.left_isometric", "Left Isometric view", ["Alt+Shift+1"], true;
-    ViewRightIso => "view.right_isometric", "Right Isometric view", ["Alt+Shift+3"], true;
-    ViewLeftRearIso => "view.left_rear_isometric", "Left Rear Isometric view", ["Alt+Shift+7"], true;
-    ViewRightRearIso => "view.right_rear_isometric", "Right Rear Isometric view", ["Alt+Shift+9"], true;
-    ViewFlyover => "view.flyover", "Flyover (orbit in 3D)", ["Shift+C"], true;
-    ViewProjection => "view.projection", "Toggle parallel and perspective projection", ["Alt+Shift+J"], true;
-    ViewWireframe => "view.wireframe", "Wireframe rendering", ["Cmd/Ctrl+Shift+W"], true;
-    ViewShaded => "view.shaded", "Shaded rendering", ["Cmd/Ctrl+Shift+G"], true;
-    ViewHiddenLine => "view.hidden_line", "Hidden Line rendering", ["Cmd/Ctrl+Shift+E"], true;
-    ViewDashedHiddenLine => "view.dashed_hidden_line", "Dashed Hidden Line rendering", ["Cmd/Ctrl+Shift+D"], true;
-    ViewRealistic => "view.realistic", "Realistic rendering (textures, sun and shadows)", ["Cmd/Ctrl+Shift+F"], true;
+    ToolSelect => "tool.select", msg!("action-tool-select"), ["X"], true;
+    ToolText => "tool.text", msg!("action-tool-text"), ["1"], true;
+    ToolLine => "tool.line", msg!("action-tool-line"), ["2"], true;
+    ToolRect => "tool.rect", msg!("action-tool-rect"), ["4"], true;
+    ToolCircle => "tool.circle", msg!("action-tool-circle"), ["6"], true;
+    ToolPolyline => "tool.polyline", msg!("action-tool-polyline"), ["5"], true;
+    ToolPlant => "tool.plant", msg!("action-tool-plant"), ["Alt+Shift+P"], true;
+    ToolLandscapeArea => "tool.landscape_area", msg!("action-tool-landscape-area"), ["Alt+Shift+A"], true;
+    ToolHardscape => "tool.hardscape", msg!("action-tool-hardscape"), ["Alt+Shift+H"], true;
+    ToolSiteModifier => "tool.site_modifier", msg!("action-tool-site-modifier"), ["Alt+Shift+G"], true;
+    ToolMassing => "tool.massing", msg!("action-tool-massing"), ["Alt+Shift+M"], true;
+    ToolIrrigation => "tool.irrigation", msg!("action-tool-irrigation"), ["Alt+Shift+I"], true;
+    ToolGrading => "tool.grading", msg!("action-tool-grading"), [], true;
+    ToolDimension => "tool.dimension", msg!("action-tool-dimension"), ["N"], true;
+    ToolAngularDim => "tool.angular_dimension", msg!("action-tool-angular-dimension"), ["."], true;
+    ToolRadialDim => "tool.radial_dimension", msg!("action-tool-radial-dimension"), [","], true;
+    ToolCallout => "tool.callout", msg!("action-tool-callout"), ["Alt+1"], true;
+    ToolDataTag => "tool.data_tag", msg!("action-tool-data-tag"), ["Alt+Shift+T"], true;
+    ToolNorthArrow => "tool.north_arrow", msg!("action-tool-north-arrow"), ["Alt+Shift+N"], true;
+    ToolScaleBar => "tool.scale_bar", msg!("action-tool-scale-bar"), ["Alt+Shift+B"], true;
+    ToolRevisionCloud => "tool.revision_cloud", msg!("action-tool-revision-cloud"), ["Alt+Shift+V"], true;
+    CmdGraphicLegend => "cmd.graphic_legend", msg!("action-cmd-graphic-legend"), ["Alt+Shift+E"], true;
+    ToolRotate => "tool.rotate", msg!("action-tool-rotate"), ["Alt+="], true;
+    ToolMirror => "tool.mirror", msg!("action-tool-mirror"), ["="], true;
+    ToolScale => "tool.scale", msg!("action-tool-scale"), [], true;
+    ToolOffset => "tool.offset", msg!("action-tool-offset"), ["Shift+-"], true;
+    ToolFillet => "tool.fillet", msg!("action-tool-fillet"), ["7"], true;
+    ToolChamfer => "tool.chamfer", msg!("action-tool-chamfer"), ["Alt+7"], true;
+    ToolTrim => "tool.trim", msg!("action-tool-trim"), ["Alt+Shift+L"], true;
+    ToolExtend => "tool.extend", msg!("action-tool-extend"), [], true;
+    ToolSplit => "tool.split", msg!("action-tool-split"), ["L"], true;
+    CmdDuplicateArray => "cmd.duplicate_array", msg!("action-cmd-duplicate-array"), ["Cmd/Ctrl+Shift+Alt+D"], true;
+    CmdAddSurface => "cmd.add_surface", msg!("action-cmd-add-surface"), ["Cmd/Ctrl+Shift+Alt+A"], true;
+    CmdSubtractSurface => "cmd.subtract_surface", msg!("action-cmd-subtract-surface"), [], true;
+    CmdClipSurface => "cmd.clip_surface", msg!("action-cmd-clip-surface"), ["Cmd/Ctrl+Shift+Alt+C"], true;
+    CmdIntersectSurface => "cmd.intersect_surface", msg!("action-cmd-intersect-surface"), ["Cmd/Ctrl+Shift+Alt+I"], true;
+    CmdCompose => "cmd.compose", msg!("action-cmd-compose"), ["Cmd/Ctrl+Shift+Alt+P"], true;
+    CmdRotateLeft90 => "cmd.rotate_left_90", msg!("action-cmd-rotate-left-90"), ["Cmd/Ctrl+L"], true;
+    CmdRotateRight90 => "cmd.rotate_right_90", msg!("action-cmd-rotate-right-90"), ["Cmd/Ctrl+Shift+R"], true;
+    CmdFlipHorizontal => "cmd.flip_horizontal", msg!("action-cmd-flip-horizontal"), ["Cmd/Ctrl+Shift+H"], true;
+    CmdFlipVertical => "cmd.flip_vertical", msg!("action-cmd-flip-vertical"), ["Cmd/Ctrl+Shift+V"], true;
+    QuickSearch => "ui.quick_search", msg!("action-ui-quick-search"), ["F"], true;
+    ViewHistoryPrevious => "view.history_previous", msg!("action-view-history-previous"), ["Cmd/Ctrl+Shift+,"], true;
+    ViewHistoryNext => "view.history_next", msg!("action-view-history-next"), ["Cmd/Ctrl+Shift+."], true;
+    SnapCues => "snap.cues", msg!("action-snap-cues"), ["Y"], true;
+    SnapRelativeAngles => "snap.relative_angles", msg!("action-snap-relative-angles"), ["/"], true;
+    SnapAcquire => "snap.acquire", msg!("action-snap-acquire"), ["T"], true;
+    ToolMode1 => "mode.group1", msg!("action-mode-group1"), ["U"], true;
+    ToolMode2 => "mode.group2", msg!("action-mode-group2"), ["I"], true;
+    ToolMode3 => "mode.group3", msg!("action-mode-group3"), ["O"], true;
+    ToolMode4 => "mode.group4", msg!("action-mode-group4"), ["P"], true;
+    ToolMode5 => "mode.group5", msg!("action-mode-group5"), ["["], true;
+    ToolMode6 => "mode.group6", msg!("action-mode-group6"), ["]"], true;
+    FileNew => "file.new", msg!("action-file-new"), ["Cmd/Ctrl+N"], true;
+    FileOpen => "file.open", msg!("action-file-open"), ["Cmd/Ctrl+O"], true;
+    FileSave => "file.save", msg!("action-file-save"), ["Cmd/Ctrl+S"], true;
+    FileSaveAs => "file.save_as", msg!("action-file-save-as"), ["Cmd/Ctrl+Shift+S"], true;
+    FileExportPdf => "file.export_pdf", msg!("action-file-export-pdf"), ["Cmd/Ctrl+P"], true;
+    Undo => "edit.undo", msg!("action-edit-undo"), ["Cmd/Ctrl+Z"], true;
+    Redo => "edit.redo", msg!("action-edit-redo"), ["Cmd/Ctrl+Y", "Cmd/Ctrl+Shift+Z"], true;
+    Delete => "edit.delete", msg!("action-edit-delete"), ["Delete", "Backspace"], true;
+    Group => "edit.group", msg!("action-edit-group"), ["Cmd/Ctrl+G"], true;
+    Ungroup => "edit.ungroup", msg!("action-edit-ungroup"), ["Cmd/Ctrl+U"], true;
+    EnterGroup => "edit.enter_group", msg!("action-edit-enter-group"), ["Cmd/Ctrl+["], true;
+    ExitGroup => "edit.exit_group", msg!("action-edit-exit-group"), ["Cmd/Ctrl+]"], true;
+    SelectAll => "edit.select_all", msg!("action-edit-select-all"), ["Cmd/Ctrl+A"], true;
+    Cancel => "edit.cancel", msg!("action-edit-cancel"), ["Escape"], true;
+    Finish => "edit.finish", msg!("action-edit-finish"), ["Enter"], true;
+    NudgeLeft => "edit.nudge_left", msg!("action-edit-nudge-left"), ["Shift+Left"], true;
+    NudgeRight => "edit.nudge_right", msg!("action-edit-nudge-right"), ["Shift+Right"], true;
+    NudgeUp => "edit.nudge_up", msg!("action-edit-nudge-up"), ["Shift+Up"], true;
+    NudgeDown => "edit.nudge_down", msg!("action-edit-nudge-down"), ["Shift+Down"], true;
+    ZoomFit => "view.zoom_fit", msg!("action-view-zoom-fit"), ["Cmd/Ctrl+6", "Home"], true;
+    ZoomIn => "view.zoom_in", msg!("action-view-zoom-in"), ["Cmd/Ctrl+1"], true;
+    ZoomOut => "view.zoom_out", msg!("action-view-zoom-out"), ["Cmd/Ctrl+2"], true;
+    PanLeft => "view.pan_left", msg!("action-view-pan-left"), ["Left"], true;
+    PanRight => "view.pan_right", msg!("action-view-pan-right"), ["Right"], true;
+    PanUp => "view.pan_up", msg!("action-view-pan-up"), ["Up"], true;
+    PanDown => "view.pan_down", msg!("action-view-pan-down"), ["Down"], true;
+    PanHold => "view.pan_hold", msg!("action-view-pan-hold"), ["Space"], true;
+    SnapSuspend => "snap.suspend", msg!("action-snap-suspend"), ["Backtick"], true;
+    DataBarFocus => "databar.focus", msg!("action-databar-focus"), ["Tab"], true;
+    DataBarPrev => "databar.prev", msg!("action-databar-prev"), ["Shift+Tab"], true;
+    ViewPlan => "view.top_plan", msg!("action-view-top-plan"), ["Alt+Shift+0", "Cmd/Ctrl+5"], true;
+    ViewTop => "view.top", msg!("action-view-top"), ["Alt+Shift+5"], true;
+    ViewFront => "view.front", msg!("action-view-front"), ["Alt+Shift+2"], true;
+    ViewBack => "view.back", msg!("action-view-back"), ["Alt+Shift+8"], true;
+    ViewLeft => "view.left", msg!("action-view-left"), ["Alt+Shift+4"], true;
+    ViewRight => "view.right", msg!("action-view-right"), ["Alt+Shift+6"], true;
+    ViewLeftIso => "view.left_isometric", msg!("action-view-left-isometric"), ["Alt+Shift+1"], true;
+    ViewRightIso => "view.right_isometric", msg!("action-view-right-isometric"), ["Alt+Shift+3"], true;
+    ViewLeftRearIso => "view.left_rear_isometric", msg!("action-view-left-rear-isometric"), ["Alt+Shift+7"], true;
+    ViewRightRearIso => "view.right_rear_isometric", msg!("action-view-right-rear-isometric"), ["Alt+Shift+9"], true;
+    ViewFlyover => "view.flyover", msg!("action-view-flyover"), ["Shift+C"], true;
+    ViewProjection => "view.projection", msg!("action-view-projection"), ["Alt+Shift+J"], true;
+    ViewWireframe => "view.wireframe", msg!("action-view-wireframe"), ["Cmd/Ctrl+Shift+W"], true;
+    ViewShaded => "view.shaded", msg!("action-view-shaded"), ["Cmd/Ctrl+Shift+G"], true;
+    ViewHiddenLine => "view.hidden_line", msg!("action-view-hidden-line"), ["Cmd/Ctrl+Shift+E"], true;
+    ViewDashedHiddenLine => "view.dashed_hidden_line", msg!("action-view-dashed-hidden-line"), ["Cmd/Ctrl+Shift+D"], true;
+    ViewRealistic => "view.realistic", msg!("action-view-realistic"), ["Cmd/Ctrl+Shift+F"], true;
 }
 
 impl Action {

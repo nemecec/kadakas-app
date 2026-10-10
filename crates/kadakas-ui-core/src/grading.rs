@@ -2,6 +2,7 @@
 //! stake and section line). The math is in `kadakas_site::grading`. The tool makes the same
 //! objects as the API methods.
 
+use kadakas_l10n::tr;
 use std::collections::BTreeMap;
 
 use glam::DVec2;
@@ -44,13 +45,13 @@ impl GradingMode {
         GradingMode::Section,
     ];
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            GradingMode::Wall => "Landscape Wall",
-            GradingMode::Grade => "Grade",
-            GradingMode::Spot => "Spot Elevation",
-            GradingMode::Stake => "Stake",
-            GradingMode::Section => "Section Line",
+            GradingMode::Wall => tr!("uic-grading-landscape-wall"),
+            GradingMode::Grade => tr!("uic-grading-grade"),
+            GradingMode::Spot => tr!("uic-grading-spot-elevation"),
+            GradingMode::Stake => tr!("uic-grading-stake"),
+            GradingMode::Section => tr!("uic-grading-section-line"),
         }
     }
 

@@ -1383,8 +1383,7 @@ impl KadakasApp {
             tol,
             &self.session.snap,
             &mut self.session.smart,
-        )
-        .into();
+        );
     }
 
     /// The commands that quick search offers.

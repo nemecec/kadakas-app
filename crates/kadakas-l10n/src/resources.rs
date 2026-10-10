@@ -9,9 +9,35 @@ macro_rules! files {
     };
 }
 
-pub(crate) const FILES_EN_US: &[(&str, &str)] = files!("en-US": "common.ftl");
+pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
+    "en-US":
+    "common.ftl",
+    "uic-annot-tool.ftl",
+    "uic-databar.ftl",
+    "uic-effects.ftl",
+    "uic-grading.ftl",
+    "uic-irrigation-tool.ftl",
+    "uic-keymap.ftl",
+    "uic-modify-tool.ftl",
+    "uic-plant-tool.ftl",
+    "uic-snap.ftl",
+    "uic-tools.ftl"
+);
 
-pub(crate) const FILES_ET: &[(&str, &str)] = files!("et": "common.ftl");
+pub(crate) const FILES_ET: &[(&str, &str)] = files!(
+    "et":
+    "common.ftl",
+    "uic-annot-tool.ftl",
+    "uic-databar.ftl",
+    "uic-effects.ftl",
+    "uic-grading.ftl",
+    "uic-irrigation-tool.ftl",
+    "uic-keymap.ftl",
+    "uic-modify-tool.ftl",
+    "uic-plant-tool.ftl",
+    "uic-snap.ftl",
+    "uic-tools.ftl"
+);
 
 /// The files of a language as (file name, content), or `None` for an unknown tag.
 pub fn source_files(tag: &str) -> Option<&'static [(&'static str, &'static str)]> {

@@ -8,6 +8,7 @@ use kadakas_core::curve;
 use kadakas_core::irrigation::{IrrigationShape, LineType};
 use kadakas_core::model::{Attributes, Document, Shape};
 use kadakas_irrigation::Catalog;
+use kadakas_l10n::tr;
 
 use super::{Ctx, Effect, Input, Preview, State, ToolMachine};
 use kadakas_core::command::Command;
@@ -32,27 +33,29 @@ impl IrrMode {
         IrrMode::Controller,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            IrrMode::Outlet => "Outlet",
-            IrrMode::Line => "Line",
-            IrrMode::Poc => "POC",
-            IrrMode::Valve => "Valve",
-            IrrMode::Controller => "Controller",
+            IrrMode::Outlet => tr!("uic-irrigation-tool-outlet"),
+            IrrMode::Line => tr!("uic-irrigation-tool-line"),
+            IrrMode::Poc => tr!("uic-irrigation-tool-poc"),
+            IrrMode::Valve => tr!("uic-irrigation-tool-valve"),
+            IrrMode::Controller => tr!("uic-irrigation-tool-controller"),
         }
     }
 
-    pub fn help(self) -> &'static str {
+    pub fn help(self) -> String {
         match self {
             IrrMode::Outlet => {
-                "Click to place a head. Set the model, arc and direction in the Tool bar."
+                tr!("uic-irrigation-tool-click-to-place-a-head-set-the")
             }
             IrrMode::Line => {
-                "Click the points of a pipe. Snap to line ends, valves and POCs to connect. Enter or double-click finishes."
+                tr!("uic-irrigation-tool-click-the-points-of-a-pipe-snap")
             }
-            IrrMode::Poc => "Click to place the point of connection (the water supply).",
-            IrrMode::Valve => "Click to place a control valve on the end of a mainline.",
-            IrrMode::Controller => "Click to place an irrigation controller.",
+            IrrMode::Poc => tr!("uic-irrigation-tool-click-to-place-the-point-of-connection"),
+            IrrMode::Valve => tr!("uic-irrigation-tool-click-to-place-a-control-valve-on"),
+            IrrMode::Controller => {
+                tr!("uic-irrigation-tool-click-to-place-an-irrigation-controller")
+            }
         }
     }
 
@@ -200,15 +203,17 @@ impl ToolMachine {
             }
             (Input::Press { p, .. }, _) => match shape_at(s, cx.doc, p) {
                 Some(shape) => vec![add(shape)],
-                None => vec![Effect::Notice(
-                    "Check the values in the Tool bar: the head model must be in the catalog, pressure and flow above zero".into(),
-                )],
+                None => vec![Effect::Notice(tr!(
+                    "uic-irrigation-tool-check-the-values-in-the-tool-bar"
+                ))],
             },
             (Input::DoubleClick | Input::Enter, IrrMode::Line) => {
                 match std::mem::replace(&mut self.state, State::Idle) {
                     State::Points(pts) => match line_from(s, &pts) {
                         Some(shape) => vec![add(shape)],
-                        None => vec![Effect::Notice("A line needs 2 or more points".into())],
+                        None => vec![Effect::Notice(tr!(
+                            "uic-irrigation-tool-a-line-needs-2-or-more-points"
+                        ))],
                     },
                     _ => vec![],
                 }

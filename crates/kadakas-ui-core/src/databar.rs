@@ -8,6 +8,7 @@
 //! through the normal command path.
 
 use glam::DVec2;
+use kadakas_l10n::tr;
 
 use crate::tools::{Tool, has_vertex_modes};
 
@@ -25,21 +26,33 @@ pub enum Field {
 }
 
 impl Field {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Field::X => "X",
-            Field::Y => "Y",
-            Field::Length => "L",
-            Field::Angle => "A",
-            Field::Width => "W",
-            Field::Height => "H",
-            Field::Radius => "R",
-            Field::ArcRadius => "Arc R",
+            Field::X => tr!("uic-databar-x"),
+            Field::Y => tr!("uic-databar-y"),
+            Field::Length => tr!("uic-databar-l"),
+            Field::Angle => tr!("uic-databar-a"),
+            Field::Width => tr!("uic-databar-w"),
+            Field::Height => tr!("uic-databar-h"),
+            Field::Radius => tr!("uic-databar-r"),
+            Field::ArcRadius => tr!("uic-databar-arc-r"),
         }
     }
 
+    /// The unit that goes next to the field, in the units of the UI process: `mm`, `cm`, `m`,
+    /// `ft` or `\u{b0}`. Empty for inches and feet-inches, where the text carries its marks
+    /// (`5' 6"`).
     pub fn unit(self) -> &'static str {
-        if self == Field::Angle { "\u{b0}" } else { "mm" }
+        if self == Field::Angle {
+            "\u{b0}"
+        } else {
+            kadakas_units::current().length_field_unit()
+        }
+    }
+
+    /// True for the fields that hold an angle.
+    pub fn is_angle(self) -> bool {
+        self == Field::Angle
     }
 }
 
@@ -69,10 +82,28 @@ pub fn fields(tool: Tool, anchored: bool, arc: bool) -> &'static [Field] {
     }
 }
 
-/// Parses user text. A comma counts as a decimal point. Empty or bad text is `None`.
-pub fn parse_value(s: &str) -> Option<f64> {
-    let v: f64 = s.trim().replace(',', ".").parse().ok()?;
-    v.is_finite().then_some(v)
+/// Parses what a person typed into a field, in the units and number format of the UI process
+/// (`kadakas-units`): a length gives millimeters (`1,5 m`, `5' 6 1/2"`), the angle gives degrees
+/// (`45,5`, `45\u{b0}30'`, `N 45 E`). A number without a unit counts in the active unit. Empty
+/// or bad text is `None`.
+pub fn parse_field(field: Field, s: &str) -> Option<f64> {
+    let units = kadakas_units::current();
+    if field.is_angle() {
+        units.parse_angle(s)
+    } else {
+        units.parse_length(s)
+    }
+}
+
+/// The text for a field that shows the number `v` (mm or degrees) in the active units, for the
+/// hint of an empty field. No digit grouping, so a person can edit it.
+pub fn field_text(field: Field, v: f64) -> String {
+    let units = kadakas_units::current();
+    if field.is_angle() {
+        units.angle_field(v, 1)
+    } else {
+        units.length_field(v, units.length_decimals())
+    }
 }
 
 /// The model point that the typed values describe. Empty fields follow `cursor`.
@@ -188,12 +219,23 @@ impl DataEntry {
         }
     }
 
+    /// The typed values in mm and degrees; `None` for an empty field or one that does not parse.
     pub fn values(&self) -> Vec<Option<f64>> {
-        self.text.iter().map(|t| parse_value(t)).collect()
+        let fs = self.current_fields();
+        self.text
+            .iter()
+            .enumerate()
+            .map(|(i, t)| fs.get(i).and_then(|f| parse_field(*f, t)))
+            .collect()
     }
 
     pub fn any_typed(&self) -> bool {
-        self.text.iter().any(|t| parse_value(t).is_some())
+        self.values().iter().any(Option::is_some)
+    }
+
+    fn current_fields(&self) -> &'static [Field] {
+        self.key
+            .map_or(&[][..], |(tool, anchored, arc)| fields(tool, anchored, arc))
     }
 
     pub fn activate(&mut self) {
@@ -259,12 +301,50 @@ mod tests {
     }
 
     #[test]
-    fn parses_values() {
-        assert_eq!(parse_value(" 12,5 "), Some(12.5));
-        assert_eq!(parse_value("-3"), Some(-3.0));
-        assert_eq!(parse_value(""), None);
-        assert_eq!(parse_value("abc"), None);
-        assert_eq!(parse_value("inf"), None);
+    fn parses_values_in_the_active_units() {
+        use kadakas_units::{LengthUnit, Settings, Units, with_units};
+        // The default units: millimeters, and a comma works as a decimal point.
+        assert_eq!(parse_field(Field::Length, " 12,5 "), Some(12.5));
+        assert_eq!(parse_field(Field::Length, "-3"), Some(-3.0));
+        assert_eq!(parse_field(Field::Length, ""), None);
+        assert_eq!(parse_field(Field::Length, "abc"), None);
+        assert_eq!(parse_field(Field::Length, "inf"), None);
+        assert_eq!(parse_field(Field::Length, "1.5 m"), Some(1500.0));
+        assert_eq!(parse_field(Field::Angle, "45,5"), Some(45.5));
+        assert_eq!(parse_field(Field::Angle, "N 45 E"), Some(45.0));
+        // A decimal comma, and a unit in the text.
+        let et = Settings::default().resolve("et");
+        with_units(et, || {
+            assert_eq!(parse_field(Field::X, "1,5 m"), Some(1500.0));
+            assert_eq!(parse_field(Field::X, "1 234,5"), Some(1234.5));
+            assert_eq!(field_text(Field::X, 1234.56), "1234,6");
+            assert_eq!(field_text(Field::Angle, 45.0), "45,0");
+            assert_eq!(Field::X.unit(), "mm");
+            assert_eq!(Field::Angle.unit(), "\u{b0}");
+        });
+        // Feet and inches.
+        let imperial = Units {
+            length: LengthUnit::FtIn,
+            ..Units::METRIC
+        };
+        with_units(imperial, || {
+            assert_eq!(parse_field(Field::Length, "5' 6 1/2\""), Some(25.4 * 66.5));
+            assert_eq!(parse_field(Field::Width, "12"), Some(25.4 * 12.0));
+            assert_eq!(field_text(Field::Width, 25.4 * 66.5), "5' 6 1/2\"");
+            assert_eq!(Field::Width.unit(), "");
+        });
+    }
+
+    #[test]
+    fn the_entry_parses_each_field_with_its_own_kind() {
+        let mut e = DataEntry::default();
+        assert!(e.values().is_empty());
+        e.sync(Tool::Line, true, false);
+        e.text = vec!["1,5 m".into(), "45".into()];
+        assert_eq!(e.values(), vec![Some(1500.0), Some(45.0)]);
+        assert!(e.any_typed());
+        e.clear_text();
+        assert!(!e.any_typed());
     }
 
     #[test]

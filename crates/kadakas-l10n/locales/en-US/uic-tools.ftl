@@ -1,0 +1,68 @@
+## uic-tools: tools.rs
+
+uic-tools-rectangle = Rectangle
+uic-tools-lasso = Lasso
+uic-tools-pad = Pad
+uic-tools-grade-limits = Grade Limits
+uic-tools-selection = Selection
+uic-tools-line = Line
+uic-tools-circle = Circle
+uic-tools-polyline = Polyline
+uic-tools-text = Text
+uic-tools-plant = Plant
+uic-tools-landscape-area = Landscape Area
+uic-tools-hardscape = Hardscape
+uic-tools-massing-model = Massing Model
+uic-tools-site-modifiers = Site Modifiers
+uic-tools-irrigation = Irrigation
+uic-tools-grading = Grading
+uic-tools-dimension = Dimension
+uic-tools-callout = Callout
+uic-tools-data-tag = Data Tag
+uic-tools-north-arrow = North Arrow
+uic-tools-scale-bar = Scale Bar
+uic-tools-revision-cloud = Revision Cloud
+uic-tools-rotate = Rotate
+uic-tools-mirror = Mirror
+uic-tools-scale = Scale
+uic-tools-offset = Offset
+uic-tools-fillet = Fillet
+uic-tools-chamfer = Chamfer
+uic-tools-trim = Trim
+uic-tools-extend = Extend
+uic-tools-split = Split
+uic-tools-corner = Corner
+uic-tools-bezier = Bézier
+uic-tools-cubic = Cubic
+uic-tools-arc = Arc
+uic-tools-tangent-arc = Tangent arc
+uic-tools-point-on-arc = Point on arc
+uic-tools-irrigation-mode = Irrigation mode: { $mode }
+uic-tools-dimension-mode = Dimension mode: { $mode }
+uic-tools-placement-mode = Placement mode: { $mode }
+uic-tools-the-tool-has-no-mode-buttons = The { $tool } tool has no mode buttons
+uic-tools-vertex-mode = Vertex mode: { $mode }
+uic-tools-the-tool-has-only-one-group-of = The { $tool } tool has only one group of mode buttons
+uic-tools-points = { $segment }  Points { $points }
+uic-tools-points-mode = { $segment }  Points { $points }  Mode { $mode }{ $radius }
+uic-tools-lasso-points =
+    Lasso { $points ->
+        [one] { $points } point
+       *[other] { $points } points
+    }
+uic-tools-click-to-select-shift-click-to-toggle = Click to select, Shift-click to toggle, drag to move or box select. Delete removes.
+uic-tools-click-the-first-point-esc-returns-to = Click the first point. Esc returns to Selection.
+uic-tools-click-the-second-point-esc-cancels = Click the second point. Esc cancels.
+uic-tools-click-a-point-on-the-circle-esc = Click a point on the circle. Esc cancels.
+uic-tools-click-points-pick-a-vertex-mode-in = Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels.
+uic-tools-pick-a-mode-in-the-data-bar = Pick a mode in the Data bar: landscape wall, grade, spot elevation, stake or section line. Esc cancels.
+uic-tools-click-to-annotate-pick-the-mode-and = Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels.
+uic-tools-click-to-place-set-values-in-the = Click to place. Set values in the Data bar.
+uic-tools-pick-a-mode-outlet-line-poc-valve = Pick a mode (Outlet, Line, POC, Valve, Controller) in the Tool bar. Click to place. A line: Enter or double-click finishes. Esc cancels.
+uic-tools-pick-a-placement-mode-and-a-plant = Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels.
+uic-tools-readout-segment = Length { $length }  Angle { $angle }
+uic-tools-readout-size = Width { $width }  Height { $height }
+uic-tools-readout-radius = Radius { $radius }
+uic-tools-readout-arc-radius = Radius { $radius }
+uic-tools-readout-move = Move dX { $dx }  dY { $dy }
+uic-tools-readout-box = Box { $width } x { $height }

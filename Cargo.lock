@@ -2875,9 +2875,11 @@ dependencies = [
  "kadakas-annot",
  "kadakas-core",
  "kadakas-irrigation",
+ "kadakas-l10n",
  "kadakas-plants",
  "kadakas-render",
  "kadakas-site",
+ "kadakas-units",
  "serde_json",
 ]
 

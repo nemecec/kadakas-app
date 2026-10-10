@@ -10,6 +10,7 @@ use kadakas_core::edit2d::modify::{ChamferSize, JoinKind, JoinMode};
 use kadakas_core::edit2d::offset::Side;
 use kadakas_core::edit2d::plan::{self, Corner, OffsetTo};
 use kadakas_core::model::ObjectId;
+use kadakas_l10n::tr;
 
 use super::{Ctx, Effect, Input, Preview, State, Tool, ToolMachine};
 use crate::hit;
@@ -83,32 +84,32 @@ pub fn is_modify(tool: Tool) -> bool {
 }
 
 /// The hint for the status line.
-pub fn hint(tool: Tool, step: usize) -> &'static str {
+pub fn hint(tool: Tool, step: usize) -> String {
     match (tool, step) {
-        (Tool::Rotate, 0) => "Select objects, then click the center of the turn. Esc cancels.",
-        (Tool::Rotate, 1) => "Click the start direction.",
-        (Tool::Rotate, _) => "Click the end direction.",
-        (Tool::Mirror, 0) => "Select objects, then click the first point of the mirror line.",
-        (Tool::Mirror, _) => "Click the second point of the mirror line.",
-        (Tool::Scale, 0) => "Select objects, then click the fixed point.",
-        (Tool::Scale, 1) => "Click the reference point.",
-        (Tool::Scale, _) => "Click the new place of the reference point.",
-        (Tool::Offset, 0) => "Click the object to offset.",
+        (Tool::Rotate, 0) => tr!("uic-modify-tool-select-objects-then-click-the-center-of"),
+        (Tool::Rotate, 1) => tr!("uic-modify-tool-click-the-start-direction"),
+        (Tool::Rotate, _) => tr!("uic-modify-tool-click-the-end-direction"),
+        (Tool::Mirror, 0) => tr!("uic-modify-tool-select-objects-then-click-the-first-point"),
+        (Tool::Mirror, _) => tr!("uic-modify-tool-click-the-second-point-of-the-mirror"),
+        (Tool::Scale, 0) => tr!("uic-modify-tool-select-objects-then-click-the-fixed-point"),
+        (Tool::Scale, 1) => tr!("uic-modify-tool-click-the-reference-point"),
+        (Tool::Scale, _) => tr!("uic-modify-tool-click-the-new-place-of-the-reference"),
+        (Tool::Offset, 0) => tr!("uic-modify-tool-click-the-object-to-offset"),
         (Tool::Offset, _) => {
-            "Click the side of the copy. Set a distance in the Tool bar, or click the place it passes through."
+            tr!("uic-modify-tool-click-the-side-of-the-copy-set")
         }
         (Tool::Fillet, 0) => {
-            "Click the first object (or double-click a shape to round all corners)."
+            tr!("uic-modify-tool-click-the-first-object-or-double-click")
         }
-        (Tool::Fillet, _) => "Click the second object, or a neighbor segment of the same shape.",
+        (Tool::Fillet, _) => tr!("uic-modify-tool-click-the-second-object-or-a-neighbor"),
         (Tool::Chamfer, 0) => {
-            "Click the first object (or double-click a shape to cut all corners)."
+            tr!("uic-modify-tool-click-the-first-object-or-double-click-2")
         }
-        (Tool::Chamfer, _) => "Click the second object, or a neighbor segment of the same shape.",
-        (Tool::Trim, _) => "Click the part of an object to remove.",
-        (Tool::Extend, _) => "Click the end of an object to extend to the next object.",
-        (Tool::Split, _) => "Click the point where the object is cut in two.",
-        _ => "",
+        (Tool::Chamfer, _) => tr!("uic-modify-tool-click-the-second-object-or-a-neighbor"),
+        (Tool::Trim, _) => tr!("uic-modify-tool-click-the-part-of-an-object-to"),
+        (Tool::Extend, _) => tr!("uic-modify-tool-click-the-end-of-an-object-to"),
+        (Tool::Split, _) => tr!("uic-modify-tool-click-the-point-where-the-object-is"),
+        _ => String::new(),
     }
 }
 
@@ -132,13 +133,13 @@ impl ToolMachine {
         let tool = self.tool;
         let mut st = self.modify_state();
         let s = &cx.settings.modify;
-        let notice = |m: &str| vec![Effect::Notice(m.to_string())];
+        let notice = |m: String| vec![Effect::Notice(m)];
         match input {
             Input::Press { p, .. } => match tool {
                 Tool::Rotate | Tool::Mirror | Tool::Scale => {
                     if cx.selection.is_empty() {
                         self.state = State::Idle;
-                        return notice("Select the objects first");
+                        return notice(tr!("uic-modify-tool-select-the-objects-first"));
                     }
                     if st.pts.last() == Some(&p) {
                         return vec![];
@@ -160,7 +161,9 @@ impl ToolMachine {
                         Tool::Rotate => {
                             let (u, v) = (pts[1] - pts[0], pts[2] - pts[0]);
                             if u.length_squared() == 0.0 || v.length_squared() == 0.0 {
-                                return notice("Click points away from the center");
+                                return notice(tr!(
+                                    "uic-modify-tool-click-points-away-from-the-center"
+                                ));
                             }
                             Transform::Rotate {
                                 center: pts[0],
@@ -170,7 +173,9 @@ impl ToolMachine {
                         _ => {
                             let (u, v) = (pts[1].distance(pts[0]), pts[2].distance(pts[0]));
                             if u <= 0.0 || v <= 0.0 {
-                                return notice("Click points away from the fixed point");
+                                return notice(tr!(
+                                    "uic-modify-tool-click-points-away-from-the-fixed-point"
+                                ));
                             }
                             Transform::Scale {
                                 center: pts[0],
@@ -192,7 +197,7 @@ impl ToolMachine {
                             self.state = State::Modify(st);
                             vec![]
                         }
-                        None => notice("Click an object to offset"),
+                        None => notice(tr!("uic-modify-tool-click-an-object-to-offset")),
                     },
                     Some((id, _)) => {
                         self.state = State::Idle;
@@ -213,7 +218,7 @@ impl ToolMachine {
                 },
                 Tool::Fillet | Tool::Chamfer => {
                     let Some(id) = hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) else {
-                        return notice("Click an object");
+                        return notice(tr!("uic-modify-tool-click-an-object"));
                     };
                     match st.first {
                         None => {
@@ -231,7 +236,7 @@ impl ToolMachine {
                 }
                 Tool::Trim | Tool::Extend | Tool::Split => {
                     let Some(id) = hit::hit_test_in(cx.annot, cx.doc, p, cx.tol, cx.context) else {
-                        return notice("Click an object");
+                        return notice(tr!("uic-modify-tool-click-an-object"));
                     };
                     let others: Vec<ObjectId> = cx.selection.to_vec();
                     let list = (s.cut_to == CutTo::SelectedObjects).then_some(others.as_slice());
@@ -288,11 +293,18 @@ impl ToolMachine {
         match (self.tool, m.pts.len()) {
             (Tool::Rotate, 2) => {
                 let a = (cursor - *c).to_angle() - (m.pts[1] - *c).to_angle();
-                format!("Turn {:.2}\u{b0}", a.to_degrees())
+                tr!(
+                    "uic-modify-tool-readout-turn",
+                    angle = kadakas_units::current().angle_text_d(a.to_degrees(), 2)
+                )
             }
             (Tool::Scale, 2) => {
                 let (u, v) = (m.pts[1].distance(*c), cursor.distance(*c));
-                format!("Scale {:.3}", if u > 0.0 { v / u } else { 0.0 })
+                tr!(
+                    "uic-modify-tool-readout-scale",
+                    factor =
+                        kadakas_units::current().number_text(if u > 0.0 { v / u } else { 0.0 }, 3)
+                )
             }
             _ => String::new(),
         }

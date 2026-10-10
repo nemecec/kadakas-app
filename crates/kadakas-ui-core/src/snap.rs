@@ -6,6 +6,7 @@ use glam::DVec2;
 use kadakas_core::irrigation::IrrigationShape;
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::snapping::{self, Context, Geometry, Guide, Kind, Reach, Settings, Smart};
+use kadakas_l10n::tr;
 
 /// What an irrigation object offers to snap to. `Vertex` is an end or corner, `Center` a center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,12 +113,12 @@ pub fn acquire_smart(
     tol: f64,
     settings: &Settings,
     smart: &mut Smart,
-) -> &'static str {
+) -> String {
     let geom = geometry(doc, &[], settings, Some((cursor, tol * 4.0)));
     match smart.acquire_at(cursor, &geom, tol, settings.set.smart_edges) {
-        Some(snapping::Acquired::Point(_)) => "Smart point set",
-        Some(snapping::Acquired::Edge(..)) => "Smart edge set",
-        None => "No object point under the pointer. Move onto a corner, end or center",
+        Some(snapping::Acquired::Point(_)) => tr!("uic-snap-smart-point-set"),
+        Some(snapping::Acquired::Edge(..)) => tr!("uic-snap-smart-edge-set"),
+        None => tr!("uic-snap-no-object-point-under-the-pointer-move"),
     }
 }
 

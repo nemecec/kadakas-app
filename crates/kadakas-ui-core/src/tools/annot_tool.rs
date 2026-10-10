@@ -10,6 +10,7 @@ use kadakas_core::annot::{
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Shape};
 use kadakas_core::resource::ResourceId;
+use kadakas_l10n::tr;
 
 use super::{Ctx, Effect, Input, Preview, State, Tool, ToolMachine};
 use crate::hit;
@@ -51,37 +52,39 @@ impl DimToolMode {
         DimToolMode::ArcLength,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            DimToolMode::Horizontal => "Horizontal",
-            DimToolMode::Vertical => "Vertical",
-            DimToolMode::Aligned => "Aligned",
-            DimToolMode::Chain => "Chain",
-            DimToolMode::Baseline => "Baseline",
-            DimToolMode::Ordinate => "Ordinate",
-            DimToolMode::Angular => "Angular",
-            DimToolMode::Radial => "Radial",
-            DimToolMode::Diameter => "Diameter",
-            DimToolMode::ArcLength => "Arc length",
+            DimToolMode::Horizontal => tr!("uic-annot-tool-horizontal"),
+            DimToolMode::Vertical => tr!("uic-annot-tool-vertical"),
+            DimToolMode::Aligned => tr!("uic-annot-tool-aligned"),
+            DimToolMode::Chain => tr!("uic-annot-tool-chain"),
+            DimToolMode::Baseline => tr!("uic-annot-tool-baseline"),
+            DimToolMode::Ordinate => tr!("uic-annot-tool-ordinate"),
+            DimToolMode::Angular => tr!("uic-annot-tool-angular"),
+            DimToolMode::Radial => tr!("uic-annot-tool-radial"),
+            DimToolMode::Diameter => tr!("uic-annot-tool-diameter"),
+            DimToolMode::ArcLength => tr!("uic-annot-tool-arc-length"),
         }
     }
 
-    pub fn help(self) -> &'static str {
+    pub fn help(self) -> String {
         match self {
             DimToolMode::Horizontal | DimToolMode::Vertical | DimToolMode::Aligned => {
-                "Click two points, then click where the dimension line goes."
+                tr!("uic-annot-tool-click-two-points-then-click-where-the")
             }
             DimToolMode::Chain | DimToolMode::Baseline => {
-                "Click the points. Enter or double-click finishes."
+                tr!("uic-annot-tool-click-the-points-enter-or-double-click")
             }
             DimToolMode::Ordinate => {
-                "Click the datum, then the points. Enter or double-click finishes."
+                tr!("uic-annot-tool-click-the-datum-then-the-points-enter")
             }
             DimToolMode::Angular => {
-                "Click the vertex, then a point on the first ray and a point on the second ray."
+                tr!("uic-annot-tool-click-the-vertex-then-a-point-on")
             }
-            DimToolMode::Radial | DimToolMode::Diameter => "Click a circle or an arc.",
-            DimToolMode::ArcLength => "Click an arc.",
+            DimToolMode::Radial | DimToolMode::Diameter => {
+                tr!("uic-annot-tool-click-a-circle-or-an-arc")
+            }
+            DimToolMode::ArcLength => tr!("uic-annot-tool-click-an-arc"),
         }
     }
 
@@ -315,7 +318,9 @@ impl ToolMachine {
                 let Some(obj) =
                     hit::hit_object(cx.annot, cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
                 else {
-                    return vec![Effect::Notice("Click a circle or an arc".into())];
+                    return vec![Effect::Notice(tr!(
+                        "uic-annot-tool-click-a-circle-or-an-arc-2"
+                    ))];
                 };
                 let (center, radius, arc) = match &obj.shape {
                     Shape::Circle { center, radius } => (*center, *radius, None),
@@ -325,14 +330,20 @@ impl ToolMachine {
                         start,
                         end,
                     } => (*center, *radius, Some((*start, *end))),
-                    _ => return vec![Effect::Notice("Click a circle or an arc".into())],
+                    _ => {
+                        return vec![Effect::Notice(tr!(
+                            "uic-annot-tool-click-a-circle-or-an-arc-2"
+                        ))];
+                    }
                 };
                 let center_anchor = Some(Anchor::new(obj.id, AnchorTarget::Center));
                 let dir = (p - center).normalize_or(DVec2::X);
                 let a = match mode {
                     DimToolMode::ArcLength => {
                         let Some((start, end)) = arc else {
-                            return vec![Effect::Notice("Arc length needs an arc".into())];
+                            return vec![Effect::Notice(tr!(
+                                "uic-annot-tool-arc-length-needs-an-arc"
+                            ))];
                         };
                         let sweep = kadakas_core::model::arc_sweep(start, end);
                         let pts = vec![
@@ -452,19 +463,22 @@ impl ToolMachine {
                     .map(|r| r.id)
             });
         let Some(style) = style else {
-            return vec![Effect::Notice(
-                "Create a tag style first (Data Tag panel or the tag_style.create API method)"
-                    .into(),
-            )];
+            return vec![Effect::Notice(tr!(
+                "uic-annot-tool-create-a-tag-style-first-data-tag"
+            ))];
         };
         let Some(obj) = hit::hit_object(cx.annot, doc, p, cx.tol)
             .and_then(|id| doc.object(id))
             .filter(|o| !matches!(o.shape, Shape::Annotation(_)))
         else {
-            return vec![Effect::Notice("Click the object to tag".into())];
+            return vec![Effect::Notice(tr!(
+                "uic-annot-tool-click-the-object-to-tag"
+            ))];
         };
         let Some(anchor) = annot::ref_point(&obj.shape) else {
-            return vec![Effect::Notice("This object cannot be tagged".into())];
+            return vec![Effect::Notice(tr!(
+                "uic-annot-tool-this-object-cannot-be-tagged"
+            ))];
         };
         let offset = DVec2::new(8.0, 8.0);
         let scale = doc.layer(obj.layer).map_or(1.0, |l| l.scale);
@@ -565,14 +579,14 @@ impl ToolMachine {
     }
 
     /// The hint for the status line.
-    pub(super) fn annot_hint(&self, settings: &super::ToolSettings) -> &'static str {
+    pub(super) fn annot_hint(&self, settings: &super::ToolSettings) -> String {
         match self.tool {
             Tool::Dimension => settings.annot.dim_mode.help(),
-            Tool::Callout => "Click the point to point at, then click where the text goes.",
-            Tool::DataTag => "Click the object to tag. The tag style is in the Tool bar.",
-            Tool::NorthArrow => "Click to place the north arrow.",
-            Tool::ScaleBar => "Click to place the scale bar. It follows the scale of the layer.",
-            _ => "Click the corners around the changes. Enter or double-click finishes.",
+            Tool::Callout => tr!("uic-annot-tool-click-the-point-to-point-at-then"),
+            Tool::DataTag => tr!("uic-annot-tool-click-the-object-to-tag-the-tag"),
+            Tool::NorthArrow => tr!("uic-annot-tool-click-to-place-the-north-arrow"),
+            Tool::ScaleBar => tr!("uic-annot-tool-click-to-place-the-scale-bar-it"),
+            _ => tr!("uic-annot-tool-click-the-corners-around-the-changes-enter"),
         }
     }
 }

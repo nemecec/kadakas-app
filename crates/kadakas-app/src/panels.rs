@@ -536,7 +536,7 @@ fn select_mode_bar(ui: &mut Ui, settings: &mut ToolSettings) {
                 ui,
                 IconRole::Bar,
                 icon,
-                mode.label(),
+                &mode.label(),
                 settings.select_mode == mode,
             );
             let tip = match mode {
