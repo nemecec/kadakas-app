@@ -119,6 +119,12 @@ impl Tx<'_> {
                     }
                 }
             }
+            Command::SetProjectGuid { guid } => {
+                if guid.len() != 22 || !guid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$') || !matches!(guid.as_bytes()[0], b'0'..=b'3') {
+                    return Err(invalid("a project GUID has 22 characters of 0-9, A-Z, a-z, _ and $, and starts with 0 to 3"));
+                }
+                self.doc.drawing.project.guid = guid.clone();
+            }
             Command::SaveView { view } => {
                 let name = view.name.trim().to_string();
                 if name.is_empty() {

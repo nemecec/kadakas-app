@@ -102,15 +102,32 @@ pub struct ExportForm {
     pub layers_as_layers: bool,
     pub unit: usize,
     pub visible_only: bool,
+    /// IFC: one presentation layer per class.
+    pub ifc_classes_as_layers: bool,
+    /// IFC: write 2D objects as annotations.
+    pub ifc_include_2d: bool,
+    /// IFC: one building storey per design layer.
+    pub ifc_storeys: bool,
+}
+
+fn is_ifc(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ifc"))
 }
 
 impl ExportForm {
     pub fn new(path: PathBuf) -> Self {
-        ExportForm { path, layers_as_layers: false, unit: 0, visible_only: false }
+        ExportForm { path, layers_as_layers: false, unit: 0, visible_only: false, ifc_classes_as_layers: true, ifc_include_2d: false, ifc_storeys: false }
     }
 
     pub fn params(&self) -> Value {
         let mut o = Map::new();
+        if is_ifc(&self.path) {
+            o.insert("classes_as_layers".into(), json!(self.ifc_classes_as_layers));
+            o.insert("include_2d".into(), json!(self.ifc_include_2d));
+            o.insert("layers_as_storeys".into(), json!(self.ifc_storeys));
+            o.insert("visible_only".into(), json!(self.visible_only));
+            return json!({"path": self.path, "format": "ifc", "options": o});
+        }
         if self.layers_as_layers {
             o.insert("layer_mode".into(), json!("layers"));
         }
@@ -154,6 +171,7 @@ impl IoUi {
         let picked = rfd::FileDialog::new()
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
+            .add_filter("IFC4", &["ifc"])
             .set_file_name("drawing.dxf")
             .save_file();
         if let Some(p) = picked {
@@ -230,7 +248,12 @@ impl IoUi {
             egui::Window::new("Export").collapsible(false).resizable(false).show(ctx, |ui| {
                 ui.label(form.path.display().to_string());
                 ui.separator();
-                if kind_of(&form.path) == Kind::Dxf {
+                if is_ifc(&form.path) {
+                    ui.label("IFC4 (IFC4 ADD2 TC1)");
+                    ui.checkbox(&mut form.ifc_classes_as_layers, "Classes become IFC presentation layers");
+                    ui.checkbox(&mut form.ifc_storeys, "Design layers become building storeys (default: everything in the site)");
+                    ui.checkbox(&mut form.ifc_include_2d, "Include 2D objects as annotations");
+                } else if kind_of(&form.path) == Kind::Dxf {
                     ui.checkbox(&mut form.layers_as_layers, "One DXF layer per design layer (default: per class)");
                     ui.horizontal(|ui| {
                         ui.label("Unit");
@@ -296,6 +319,20 @@ mod tests {
         assert_eq!(p["options"]["source_crs"], "EPSG:3067");
         assert_eq!(p["options"]["class_field"], "species");
         assert!(p["options"].get("unit").is_none());
+    }
+
+    #[test]
+    fn ifc_export_params() {
+        let mut f = ExportForm::new("/a/site.IFC".into());
+        let p = f.params();
+        assert_eq!(p["format"], "ifc");
+        assert_eq!(p["options"], json!({"classes_as_layers": true, "include_2d": false, "layers_as_storeys": false, "visible_only": false}));
+        f.ifc_storeys = true;
+        f.ifc_include_2d = true;
+        f.ifc_classes_as_layers = false;
+        f.visible_only = true;
+        assert_eq!(f.params()["options"], json!({"classes_as_layers": false, "include_2d": true, "layers_as_storeys": true, "visible_only": true}));
+        assert!(!is_ifc(Path::new("/a/site.dxf")));
     }
 
     #[test]

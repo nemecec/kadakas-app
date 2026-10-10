@@ -67,15 +67,16 @@ enum Cmd {
         #[arg(long)]
         options: Option<String>,
     },
-    /// Export a document to DXF or GeoJSON. Prints the report.
+    /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The input file is never
+    /// changed. GlobalIds come from the project GUID of the document.
     Export {
         file: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
-        /// dxf or geojson. Default: from the file name.
+        /// dxf, geojson or ifc. Default: from the file name.
         #[arg(long)]
         format: Option<String>,
-        /// Export options as JSON, for example '{"unit": "m"}'.
+        /// Export options as JSON, for example '{"unit": "m"}' or, for IFC, '{"layers_as_storeys": true}'.
         #[arg(long)]
         options: Option<String>,
     },
@@ -173,7 +174,10 @@ fn remote_call(conn: &mut BufReader<TcpStream>, req: &Value) -> Option<String> {
 
 fn load(path: &PathBuf) -> Result<Document, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let mut doc = Document::from_json(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    // An old file has no project GUID. It gets one in memory, and the next save writes it.
+    doc.ensure_project_guid();
+    Ok(doc)
 }
 
 /// The folder of a document file.

@@ -9,6 +9,7 @@ pub mod datamap;
 pub mod fsio;
 pub mod geom;
 pub mod georef;
+pub mod guid;
 pub mod hardscape;
 pub mod landscape;
 pub mod mesh;
