@@ -563,6 +563,15 @@ impl Shape {
         ok
     }
 
+    /// The first problem of a massing model or an underlay (their values are checked as a whole).
+    pub fn problem(&self) -> Option<String> {
+        match self {
+            Shape::Massing(m) => m.problem(),
+            Shape::Underlay(u) => u.problem(),
+            _ => None,
+        }
+    }
+
     /// True unless a hardscape has a thickness of zero or less.
     pub fn has_valid_thickness(&self) -> bool {
         !matches!(self, Shape::Hardscape { thickness: Some(t), .. } if t.is_nan() || *t <= 0.0)
@@ -1033,6 +1042,7 @@ impl Document {
             !o.is_finite()
                 || !o.shape.is_in_range()
                 || !o.shape.has_valid_thickness()
+                || o.shape.problem().is_some()
                 || matches!(o.shape, Shape::Arc { start, end, .. } if arc_sweep(start, end) == 0.0)
                 || o.shape.vertices().is_some_and(|vs| {
                     vs.iter()

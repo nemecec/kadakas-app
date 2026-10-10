@@ -144,6 +144,14 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
             style: *style,
             height: *height,
         },
+        Shape::Massing(m) => {
+            let mut turned = (**m).clone();
+            for v in &mut turned.footprint {
+                v.p = p(v.p);
+            }
+            turned.ridge_angle = turned.ridge_angle.map(|a| a + angle);
+            Shape::Massing(Box::new(turned))
+        }
         other => return Err(format!("a {} cannot be turned", other.kind())),
     })
 }
