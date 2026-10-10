@@ -7,7 +7,7 @@ Cadektor has its own icon set (feature UI-12). The files are in `assets/icons/`.
 
 - Do not download, open, view, trace or copy any Vectorworks icon or screenshot.
 - Draw each tool icon from a written idea only (for example "a tree crown seen from above"), in our own style.
-- Generic action icons come from Tabler Icons (MIT). They are in `assets/icons/tabler/` with the `LICENSE` file. The attribution is in `THIRD_PARTY_NOTICES.txt` (the fixed section "Non-crate assets" in `about.hbs`).
+- Generic action icons come from Tabler Icons (MIT). They are in `assets/icons/tabler/` with the `LICENSE` file. The attribution is in `THIRD_PARTY_NOTICES.txt` (the fixed section in `docs/notices-extra.txt`).
 - Do not put "Vectorworks" in a file name. A test checks this.
 
 ## Style rules

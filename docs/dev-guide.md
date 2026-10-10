@@ -75,6 +75,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Add Python behavior tests in `tests/behavior` for features that agents can reach through the API.
 - Keep line coverage of each library crate at 95% or more (`cargo llvm-cov -p <crate> --summary-only`). CI enforces it with `scripts/coverage.sh` (all crates, or name some: `scripts/coverage.sh print api`). The `cadektor-cli` crate has a bar of 90% (its tests run the binary). The app crate (egui and wgpu windows) is left out.
 - Dependencies must have a permissive license. CI runs `cargo deny check` (settings in `deny.toml`). After you add or update a dependency, run `scripts/notices.sh` and commit `THIRD_PARTY_NOTICES.txt`; the installers ship it (`packager.toml`, `resources`).
+- Attribution: every new dependency, asset (icon, font, image), dataset or cited formula or standard updates `docs/attribution.md`. Crates go in `THIRD_PARTY_NOTICES.txt` through `scripts/notices.sh`; other items go in `docs/notices-extra.txt`, which the script appends. Reviewers check this. Name a trademark only with its owner's note (see `docs/attribution.md`).
 - Test helpers must run on Windows too: use `target/debug/cadektor.exe` there, and read pipes with a thread and a queue, not with `select`.
 - Reject numbers that are not finite. Saved files must always open again.
 - Plain English in documents and comments: short sentences, active voice.

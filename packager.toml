@@ -33,7 +33,7 @@ binaries = [
 
 # The license texts of Cadektor and of all libraries in it. Every installer ships these files
 # (THIRD_PARTY_NOTICES.txt comes from scripts/notices.sh).
-resources = ["THIRD_PARTY_NOTICES.txt", "LICENSE-APACHE", "LICENSE-MIT"]
+resources = ["THIRD_PARTY_NOTICES.txt", "docs/attribution.md", "LICENSE-APACHE", "LICENSE-MIT"]
 
 icons = [
   "packaging/icons/32x32.png",

@@ -2,7 +2,7 @@ THIRD-PARTY SOFTWARE NOTICES FOR CADEKTOR
 
 Cadektor is licensed under Apache-2.0 OR MIT (see LICENSE-APACHE and LICENSE-MIT).
 It includes the open source components below. Each one is used under the license
-named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit it by hand.
+named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit it by hand (the fixed part is in docs/notices-extra.txt).
 
 ================================================================================
 SUMMARY
@@ -8131,9 +8131,10 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 
 ================================================================================
-NON-CRATE ASSETS
+NON-CRATE ASSETS AND DATA
 ================================================================================
-(This section is fixed text in about.hbs. Keep it in line with assets/icons/.)
+(This section is fixed text in docs/notices-extra.txt. scripts/notices.sh appends it to the
+generated part. Keep it in line with assets/icons/ and docs/attribution.md.)
 
 --------------------------------------------------------------------------------
 Tabler Icons 3.49.0 (MIT License)
@@ -8161,3 +8162,95 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+Hack font (MIT License)
+--------------------------------------------------------------------------------
+Used by: the monospace font in the egui default fonts (epaint_default_fonts); https://sourcefoundry.org/hack/
+
+The work in the Hack project is Copyright 2018 Source Foundry Authors and licensed under the MIT License.
+Hack is based on DejaVu (public domain) and Bitstream Vera Sans Mono
+(Copyright 2003 Bitstream Inc., Bitstream Vera License).
+
+MIT License
+
+Copyright (c) 2018 Source Foundry Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+emoji-icon-font (MIT License)
+--------------------------------------------------------------------------------
+Used by: the symbol font in the egui default fonts (epaint_default_fonts); https://github.com/jslegers/emoji-icon-font
+
+MIT License
+
+Copyright (c) 2014 John Slegers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+Ubuntu-Light and Noto Emoji fonts
+--------------------------------------------------------------------------------
+Used by: the proportional font and the emoji font in the egui default fonts
+
+Ubuntu-Light is licensed under the Ubuntu Font Licence 1.0 (Canonical Ltd). Noto Emoji is licensed
+under the SIL Open Font License 1.1 (Google). Both license texts are in the LICENSE TEXTS section above
+(entries "Ubuntu Font Licence v1.0" and "SIL Open Font License 1.1").
+
+--------------------------------------------------------------------------------
+EPSG Geodetic Parameter Dataset
+--------------------------------------------------------------------------------
+Used by: the coordinate system definitions of the crs-definitions crate (cadektor-crs); https://epsg.org
+
+Coordinate reference system definitions come from the EPSG Geodetic Parameter Dataset, maintained by the
+IOGP Geomatics Committee (https://epsg.org). The dataset is subject to the EPSG Terms of Use
+(https://epsg.org/terms-of-use.html). The crs-definitions crate (CC0-1.0) packs the definitions as text.
+The EPSG name and dataset belong to IOGP.
+
+--------------------------------------------------------------------------------
+Cadektor icons (Apache-2.0 OR MIT)
+--------------------------------------------------------------------------------
+Used by: the icons in assets/icons/cadektor/
+
+Drawn for this project from written ideas. They are covered by the project license (LICENSE-APACHE and LICENSE-MIT).
+
+--------------------------------------------------------------------------------
+Trademarks
+--------------------------------------------------------------------------------
+Vectorworks is a trademark of Vectorworks, Inc. Cadektor is an independent project and is not
+affiliated with, endorsed by, or sponsored by Vectorworks, Inc.
+AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. SketchUp is a trademark of Trimble Inc.
+All other names belong to their owners.
