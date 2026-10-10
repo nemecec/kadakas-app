@@ -22,6 +22,18 @@ os.environ["CADEKTOR_BIN"] = str(BIN)
 import cadektor  # noqa: E402
 
 
+@pytest.fixture(scope="session")
+def cadektor_bin() -> Path:
+    """The `cadektor` program under test."""
+    return BIN
+
+
+@pytest.fixture(scope="session")
+def python_dir() -> Path:
+    """The folder `python/` of the repository."""
+    return PYTHON_DIR
+
+
 @pytest.fixture(scope="session", autouse=True)
 def binary() -> Path:
     if not BIN.exists():

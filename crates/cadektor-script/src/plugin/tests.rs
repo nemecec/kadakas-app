@@ -180,6 +180,26 @@ fn bad_shapes_are_refused() {
             "def reset(p, g):\n    return [{'kind': 'line', 'a': [0, 0], 'b': [1, 1], 'attrs': {'pen': 5}}]\n",
             "attrs",
         ),
+        (
+            "def reset(p, g):\n    return [circle([0, 0], 0)]\n",
+            "radius",
+        ),
+        (
+            "def reset(p, g):\n    return [circle([0, 0], -5)]\n",
+            "radius",
+        ),
+        (
+            "def reset(p, g):\n    return [arc([0, 0], -1, 0, 1)]\n",
+            "radius",
+        ),
+        (
+            "def reset(p, g):\n    return [text([0, 0], 'x' * 10001, 10)]\n",
+            "at most",
+        ),
+        (
+            "def reset(p, g):\n    return [text([0, 0], 'x', 0)]\n",
+            "text height",
+        ),
     ] {
         let e = err(script, quick());
         assert!(e.to_string().contains(needle), "{script} -> {e}");
@@ -409,4 +429,25 @@ fn parse_answer_handles_noise() {
     .unwrap();
     assert_eq!(ok.len(), 1);
     assert!(parse_answer(b"{\"ok\": true, \"shapes\": 5}", "", Some(0), &l).is_err());
+}
+
+#[test]
+fn a_background_process_does_not_stall_the_reset() {
+    // The script starts a long job, returns its shapes at once, and must not hold the app.
+    let limits = ResetLimits {
+        timeout: Duration::from_millis(1000),
+        ..ResetLimits::default()
+    };
+    let t = std::time::Instant::now();
+    let shapes = run(
+        "import subprocess\ndef reset(p, g):\n    subprocess.Popen(['sleep', '30'])\n    return [circle(g.at, 5)]\n",
+        limits,
+    )
+    .unwrap();
+    assert_eq!(shapes.len(), 1);
+    assert!(
+        t.elapsed() < Duration::from_millis(2500),
+        "{:?}",
+        t.elapsed()
+    );
 }

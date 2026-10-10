@@ -18,6 +18,7 @@ use cadektor_script::plugin::{
     self as plug, Generated, Geometry, PluginDef, ResetError, ResetLimits,
 };
 use cadektor_script::python::{self, Interpreter};
+use cadektor_script::trust::TrustStore;
 
 use crate::{RpcError, Session};
 
@@ -105,6 +106,11 @@ pub struct ScriptingState {
     pub interpreter: Option<Interpreter>,
     /// Limits of one reset. A definition can lower or raise the time limit.
     pub limits: ResetLimits,
+    /// The scripts that the user trusted. A script that is not here (and not shipped) never runs
+    /// from a user action. Only the dialog of the app adds to it, never an API call.
+    pub trust: TrustStore,
+    /// Private folders for the scripts of `script.run` with `source`. They go away with the session.
+    temp_dirs: Vec<tempfile::TempDir>,
 }
 
 impl Default for ScriptingState {
@@ -115,6 +121,8 @@ impl Default for ScriptingState {
             endpoint: None,
             interpreter: None,
             limits: ResetLimits::default(),
+            trust: TrustStore::in_memory(),
+            temp_dirs: Vec::new(),
         }
     }
 }
@@ -136,7 +144,18 @@ fn app(e: impl std::fmt::Display) -> RpcError {
 fn forbidden() -> RpcError {
     RpcError {
         code: -32001,
-        message: "agents may not run scripts here. A user can start the app or `cadektor serve` with --allow-agent-scripts. The shipped plug-in objects (Bench, Stepping stones) run anyway".into(),
+        message: "this script may not run. A user must review and trust it in the app, or the host must allow agents with --allow-agent-scripts. The shipped plug-in objects (Bench, Stepping stones) run anyway".into(),
+    }
+}
+
+/// The error for a user action on a script that nobody trusted. The app opens the trust dialog.
+pub const UNTRUSTED_CODE: i64 = -32002;
+
+fn untrusted() -> RpcError {
+    RpcError {
+        code: UNTRUSTED_CODE,
+        message: "this plug-in script is not trusted. Review it, then trust it, before it can run"
+            .into(),
     }
 }
 
@@ -363,8 +382,7 @@ fn update(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let mut results = Vec::new();
     let reset = m.get("reset").and_then(Value::as_bool).unwrap_or(false);
     if reset {
-        let trusted = s.scripting.allow_agent_scripts || examples::is_shipped_script(&def.script);
-        if !trusted && !instances.is_empty() {
+        if !instances.is_empty() && allowed(s, &def).is_err() {
             return Err(forbidden());
         }
         let found = Found {
@@ -514,7 +532,7 @@ fn run_script(
 }
 
 fn allowed(s: &Session, def: &PluginDef) -> Result<(), RpcError> {
-    if s.scripting.allow_agent_scripts || examples::is_shipped_script(&def.script) {
+    if s.scripting.allow_agent_scripts || s.scripting.trust.is_trusted(&def.script) {
         Ok(())
     } else {
         Err(forbidden())
@@ -604,15 +622,46 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     Ok(json!({"id": group, "children": created[..created.len() - 1], "shapes": n}))
 }
 
-/// Builds the commands that regenerate one object. Nothing changes in the document yet.
-/// `new_params` are merged over the old values. A script failure is part of the result: the
-/// commands then only save the parameters and the error.
-fn plan_reset(
+/// Everything a reset needs, copied out of the session. It can run on another thread, so the
+/// window stays alive while a slow script runs. Make it with [`user_prepare`].
+pub struct ResetJob {
+    pub id: ObjectId,
+    found: Found,
+    params: Map<String, Value>,
+    geometry: Geometry,
+    /// The lowest corner of the members now (they may have moved).
+    now: [f64; 2],
+    children: Vec<ObjectId>,
+    interpreter: Option<Interpreter>,
+    limits: ResetLimits,
+}
+
+impl ResetJob {
+    /// Runs the script. This is the only place where Python starts for a reset.
+    pub fn run(&self) -> Result<Vec<Generated>, ResetError> {
+        let py = self.interpreter.as_ref().ok_or_else(|| {
+            ResetError::Protocol(
+                "no Python found: install python3, or uv, or set CADEKTOR_PYTHON".into(),
+            )
+        })?;
+        plug::reset(
+            py,
+            &self.found.name,
+            &self.found.def,
+            &self.params,
+            &self.geometry,
+            &self.limits,
+        )
+    }
+}
+
+/// Collects the data of one reset. Runs nothing. `new_params` are merged over the old values.
+fn prepare_reset(
     s: &Session,
     id: ObjectId,
     f: &Found,
     new_params: Option<&Map<String, Value>>,
-) -> Result<(Command, Outcome), RpcError> {
+) -> Result<ResetJob, RpcError> {
     let doc = s.editor.doc();
     let obj = doc
         .object(id)
@@ -641,16 +690,40 @@ fn plan_reset(
         merged.extend(n.clone());
     }
     let params = f.def.resolve_params(&merged).map_err(bad)?;
+    let (interpreter, limits) = match runner(s, &f.def) {
+        Ok((py, limits)) => (Some(py), limits),
+        Err(_) => (None, s.scripting.limits),
+    };
+    Ok(ResetJob {
+        id,
+        found: Found {
+            id: f.id,
+            name: f.name.clone(),
+            def: f.def.clone(),
+        },
+        params,
+        geometry,
+        now,
+        children,
+        interpreter,
+        limits,
+    })
+}
+
+/// Turns the result of a reset into commands. A script failure is part of the result: the commands
+/// then only save the parameters and the error, and the old shapes stay.
+fn finish_reset(job: &ResetJob, result: Result<Vec<Generated>, ResetError>) -> (Command, Outcome) {
+    let id = job.id;
     let set_data = |origin: [f64; 2], error: Option<&str>| Command::SetData {
         id,
         set: [(
             DATA_KEY.to_string(),
-            instance_json(f, &params, &geometry, origin, error),
+            instance_json(&job.found, &job.params, &job.geometry, origin, error),
         )]
         .into(),
         remove: vec![],
     };
-    match run_script(s, &f.name, &f.def, &params, &geometry) {
+    match result {
         Ok(shapes) => {
             let origin = origin_of(shapes.iter().map(|g| g.shape.clone()));
             let mut commands: Vec<Command> = shapes
@@ -663,16 +736,18 @@ fn plan_reset(
                 })
                 .collect();
             // New members first: a group that loses its last member would go.
-            commands.push(Command::DeleteObjects { ids: children });
+            commands.push(Command::DeleteObjects {
+                ids: job.children.clone(),
+            });
             commands.push(set_data(origin, None));
-            Ok((
+            (
                 Command::Batch { commands },
                 Outcome {
                     ok: true,
                     error: None,
                     traceback: None,
                 },
-            ))
+            )
         }
         Err(e) => {
             let msg = e.to_string();
@@ -680,17 +755,28 @@ fn plan_reset(
                 ResetError::Script { trace, .. } => Some(trace.clone()),
                 _ => None,
             };
-            // Keep the shapes of the last good run; remember the new values and the error.
-            Ok((
-                set_data(now, Some(&msg)),
+            (
+                set_data(job.now, Some(&msg)),
                 Outcome {
                     ok: false,
                     error: Some(msg),
                     traceback: trace,
                 },
-            ))
+            )
         }
     }
+}
+
+/// Builds the commands that regenerate one object (the caller has checked the permission).
+fn plan_reset(
+    s: &Session,
+    id: ObjectId,
+    f: &Found,
+    new_params: Option<&Map<String, Value>>,
+) -> Result<(Command, Outcome), RpcError> {
+    let job = prepare_reset(s, id, f, new_params)?;
+    let result = job.run();
+    Ok(finish_reset(&job, result))
 }
 
 fn instance_def(s: &Session, id: ObjectId) -> Result<Found, RpcError> {
@@ -774,6 +860,10 @@ fn object_info(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         "geometry": data["geometry"],
         "error": data["error"],
         "children": doc.children(id),
+        "param_problem": data["params"].as_object().and_then(|m| f.def.resolve_params(m).err()),
+        "trusted": s.scripting.trust.is_trusted(&f.def.script),
+        "origin": s.scripting.trust.origin(&f.def.script).name(),
+        "script": f.def.script,
     }))
 }
 
@@ -841,11 +931,24 @@ fn script_run(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
             if src.len() > plug::MAX_SCRIPT {
                 return Err(bad("the source is too long"));
             }
-            let dir = std::env::temp_dir().join(format!("cadektor-scripts-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).map_err(app)?;
-            let n = s.scripting.host.list().len();
-            let file = dir.join(format!("agent-{n}.py"));
-            std::fs::write(&file, src).map_err(app)?;
+            // A new private folder (mode 0700), and a file that must not exist yet: no fixed name, no
+            // link to follow.
+            let mut builder = tempfile::Builder::new();
+            builder.prefix("cadektor-script-");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                builder.permissions(std::fs::Permissions::from_mode(0o700));
+            }
+            let dir = builder.tempdir().map_err(app)?;
+            let file = dir.path().join("agent.py");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, src.as_bytes()))
+                .map_err(app)?;
+            s.scripting.temp_dirs.push(dir);
             file
         }
         _ => return Err(bad("give path or source")),
@@ -908,23 +1011,66 @@ fn script_list(s: &Session) -> Value {
     )
 }
 
-/// Runs the reset of one object for the app (a user changed a parameter in Object Info, or chose
-/// Reset). The user's own action is allowed, whatever the agent flag says. Returns the outcome as JSON.
+/// Starts a reset that the user asked for (Object Info or Reset). It does not run the script yet:
+/// run the job (maybe on another thread), then give it to [`user_finish`]. Only a script that the
+/// user trusted (or that ships with the app) may run. The flag for agents does not count here.
+/// Otherwise the error code is [`UNTRUSTED_CODE`].
+pub fn user_prepare(
+    s: &Session,
+    id: ObjectId,
+    new: &Map<String, Value>,
+) -> Result<ResetJob, RpcError> {
+    let f = instance_def(s, id)?;
+    if !s.scripting.trust.is_trusted(&f.def.script) {
+        return Err(untrusted());
+    }
+    prepare_reset(s, id, &f, Some(new))
+}
+
+/// Applies the result of a job from [`user_prepare`] as one undo step. Returns `{id, ok, error?}`.
+/// It refuses if the object changed while the script ran.
+pub fn user_finish(
+    s: &mut Session,
+    job: ResetJob,
+    result: Result<Vec<Generated>, ResetError>,
+) -> Result<Value, RpcError> {
+    let doc = s.editor.doc();
+    let same = doc
+        .object(job.id)
+        .is_some_and(|o| instance_data(o).is_some())
+        && doc.children(job.id) == job.children;
+    if !same {
+        return Err(app("the object changed while its script ran. Try again"));
+    }
+    let (cmd, outcome) = finish_reset(&job, result);
+    exec(s, &cmd)?;
+    let mut v =
+        json!({"id": job.id, "ok": outcome.ok, "children": s.editor.doc().children(job.id)});
+    if let Some(e) = outcome.error {
+        v["error"] = json!(e);
+    }
+    Ok(v)
+}
+
+/// Changes parameters for the user and waits for the script. The same checks as [`user_prepare`].
 pub fn user_set_params(
     s: &mut Session,
     id: ObjectId,
     new: &Map<String, Value>,
 ) -> Result<Value, RpcError> {
-    let was = std::mem::replace(&mut s.scripting.allow_agent_scripts, true);
-    let r = set_params(
-        s,
-        &json!({"id": id, "params": new})
-            .as_object()
-            .cloned()
-            .unwrap(),
-    );
-    s.scripting.allow_agent_scripts = was;
-    r
+    let job = user_prepare(s, id, new)?;
+    let result = job.run();
+    user_finish(s, job, result)
+}
+
+/// The user trusts the exact script of the definition that this plug-in object uses. This is the
+/// only way to add trust. There is no API method for it.
+pub fn trust_plugin(s: &mut Session, id: ObjectId) -> Result<(), String> {
+    let f = instance_def(s, id).map_err(|e| e.message)?;
+    s.scripting
+        .trust
+        .trust(&f.def.script, &f.name)
+        .map_err(|e| format!("cannot save the trust file: {e}"))
 }
 
 /// The state of a plug-in object for the app, or `None` if the object is none.

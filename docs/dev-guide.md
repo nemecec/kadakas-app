@@ -48,7 +48,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check -p cadektor-core -p cadektor-render -p cadektor-api -p cadektor-site -p cadektor-annot --target wasm32-unknown-unknown
 cargo build -p cadektor-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior -q
-uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests)
+uv run --no-project --with pytest pytest python/tests -q   # the Python package (set CADEKTOR_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
 
 All five must pass. The Python package tests belong to check 5. End each commit message with the co-author line that the project uses.

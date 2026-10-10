@@ -87,22 +87,24 @@ pub fn discover() -> Option<Interpreter> {
 
 /// The folder that holds the `cadektor` Python package, if we can find it. A script finds the
 /// package through PYTHONPATH when it is not installed. Order: `CADEKTOR_PYTHON_DIR`, then a
-/// `python` folder next to the program or in a parent folder (up to 5 levels), then `./python`.
+/// `python` folder next to the program or in a parent folder (up to 3 levels: an install, an app
+/// bundle, or `target/debug` of a checkout). The current folder is never searched: a drawing from
+/// the web could bring its own `cadektor` package.
 pub fn package_dir() -> Option<PathBuf> {
+    let env = std::env::var_os("CADEKTOR_PYTHON_DIR").map(PathBuf::from);
+    package_dir_from(env, std::env::current_exe().ok().as_deref())
+}
+
+fn package_dir_from(env: Option<PathBuf>, exe: Option<&Path>) -> Option<PathBuf> {
     let has_pkg = |d: &Path| d.join("cadektor").join("__init__.py").is_file();
-    if let Some(d) = std::env::var_os("CADEKTOR_PYTHON_DIR").map(PathBuf::from) {
+    if let Some(d) = env {
         return has_pkg(&d).then_some(d);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        for dir in exe.ancestors().skip(1).take(6) {
-            let d = dir.join("python");
-            if has_pkg(&d) {
-                return Some(d);
-            }
-        }
-    }
-    let d = std::env::current_dir().ok()?.join("python");
-    has_pkg(&d).then_some(d)
+    exe?.ancestors()
+        .skip(1)
+        .take(3)
+        .map(|dir| dir.join("python"))
+        .find(|d| has_pkg(d))
 }
 
 /// PYTHONPATH with `dir` first, followed by the old value.
@@ -163,5 +165,24 @@ mod tests {
             std::env::split_paths(&p).next().unwrap(),
             PathBuf::from("/x/python")
         );
+    }
+
+    #[test]
+    fn the_current_folder_is_never_searched() {
+        let d = temp("pkg");
+        std::fs::create_dir_all(d.join("python").join("cadektor")).unwrap();
+        std::fs::write(d.join("python").join("cadektor").join("__init__.py"), "").unwrap();
+        // The program is far away from the folder; the folder has a package, but it is ignored.
+        let exe = std::path::Path::new("/usr/bin/some/where/cadektor");
+        assert_eq!(package_dir_from(None, Some(exe)), None);
+        // Next to the program it is found; so it is through the environment.
+        let exe2 = d.join("bin").join("cadektor");
+        assert_eq!(package_dir_from(None, Some(&exe2)), Some(d.join("python")));
+        assert_eq!(
+            package_dir_from(Some(d.join("python")), None),
+            Some(d.join("python"))
+        );
+        assert_eq!(package_dir_from(Some(d.join("nothing")), Some(&exe2)), None);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

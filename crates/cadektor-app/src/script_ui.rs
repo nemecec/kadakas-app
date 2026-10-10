@@ -6,9 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
-use cadektor_api::Session;
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Instant;
+
+use cadektor_api::{ResetJob, Session, UNTRUSTED_CODE};
 use cadektor_core::model::{Document, Object, ObjectId};
 use cadektor_script::host::{Line, RunSpec, Status, Stream};
+use cadektor_script::plugin::{Generated, ResetError};
 use cadektor_script::python;
 use egui::{Color32, Ui};
 use serde_json::{Map, Value, json};
@@ -32,6 +37,18 @@ pub struct ScriptUi {
     /// Set by the Run button: the app starts the script.
     want_run: Option<PathBuf>,
     edit: Option<PluginEdit>,
+    /// The reset that runs now, on its own thread. The window stays alive while it runs.
+    running: Option<RunningReset>,
+    /// Resets that wait their turn. A new one for the same object replaces the old one.
+    queue: VecDeque<ResetJob>,
+    /// The plug-in object whose script the user reviews in the "Trust this plug-in?" dialog.
+    review: Option<ObjectId>,
+}
+
+/// A reset on a worker thread.
+struct RunningReset {
+    started: Instant,
+    rx: Receiver<(ResetJob, Result<Vec<Generated>, ResetError>)>,
 }
 
 /// Working copy of the parameters of the plug-in object in Object Info.
@@ -120,8 +137,15 @@ impl ScriptUi {
     }
 
     /// Draws the Scripts window. Returns the script that the user wants to run.
-    pub fn show(&mut self, ctx: &egui::Context, session: &mut Session) -> Option<PathBuf> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        status: &mut String,
+    ) -> Option<PathBuf> {
         self.poll(session);
+        self.tick(ctx, session, status);
+        self.review_dialog(ctx, session, status);
         let running = self.status.as_ref().is_some_and(Status::is_running);
         if running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -220,6 +244,103 @@ impl ScriptUi {
 
     // ------------------------------------------------------------------ Object Info
 
+    /// Queues a reset. The script runs on a worker thread, one at a time.
+    fn submit(&mut self, job: ResetJob) {
+        self.queue.retain(|j| j.id != job.id);
+        self.queue.push_back(job);
+    }
+
+    /// Takes the result of the running reset and starts the next one.
+    fn tick(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        if let Some(r) = &self.running {
+            match r.rx.try_recv() {
+                Ok((job, result)) => {
+                    self.running = None;
+                    match cadektor_api::user_finish(session, job, result) {
+                        Ok(v) if v["ok"] == json!(false) => {
+                            *status = format!(
+                                "Plug-in object: {}",
+                                v["error"].as_str().unwrap_or("the script failed")
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => *status = format!("Plug-in object: {}", e.message),
+                    }
+                    session
+                        .selection
+                        .retain(|id| session.editor.doc().object(*id).is_some());
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.running = None;
+                    *status = "Plug-in object: the script thread ended without an answer".into();
+                }
+            }
+        }
+        if self.running.is_none() {
+            if let Some(job) = self.queue.pop_front() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = job.run();
+                    let _ = tx.send((job, result));
+                });
+                self.running = Some(RunningReset {
+                    started: Instant::now(),
+                    rx,
+                });
+            }
+        }
+        if self.running.is_some() || !self.queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// The "Trust this plug-in?" dialog: the whole script, where it comes from, and the choice.
+    fn review_dialog(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
+        let Some(id) = self.review else { return };
+        let Some(info) = cadektor_api::instance_info(session, id) else {
+            self.review = None;
+            return;
+        };
+        let mut decision = None;
+        egui::Window::new("Trust this plug-in?")
+            .collapsible(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.strong(info["name"].as_str().unwrap_or(""));
+                ui.label(format!("Comes from: {}", info["origin"].as_str().unwrap_or("")));
+                ui.colored_label(
+                    Color32::from_rgb(200, 40, 40),
+                    "This is a Python program. If you trust it, it runs with your rights, on your files and your network, each time the object is regenerated. Read it first.",
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(info["script"].as_str().unwrap_or("")).monospace());
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("Trust this script").clicked() {
+                        decision = Some(true);
+                    }
+                    if ui.button("Do not trust").clicked() {
+                        decision = Some(false);
+                    }
+                });
+                ui.small("Trust is for this exact text. A changed script asks again.");
+            });
+        match decision {
+            Some(true) => {
+                if let Err(e) = cadektor_api::trust_plugin(session, id) {
+                    *status = e;
+                }
+                self.review = None;
+            }
+            Some(false) => self.review = None,
+            None => {}
+        }
+    }
+
     /// The parameters of the selected plug-in object, in Object Info. Does nothing for other objects.
     pub fn plugin_info(&mut self, ui: &mut Ui, session: &mut Session, status: &mut String) {
         let [id] = session.selection[..] else {
@@ -244,32 +365,64 @@ impl ScriptUi {
             });
         }
         let edit = self.edit.as_mut().expect("set above");
+        let trusted = info["trusted"] == json!(true);
         ui.separator();
         ui.strong(format!(
             "Plug-in object: {}",
             info["name"].as_str().unwrap_or("")
         ));
+        if !trusted {
+            ui.colored_label(
+                Color32::from_rgb(200, 120, 0),
+                "\u{26a0} The script is not trusted, so it does not run.",
+            );
+            if ui.button("Review script...").clicked() {
+                self.review = Some(id);
+            }
+        }
         if let Some(err) = info["error"].as_str() {
             ui.colored_label(Color32::from_rgb(200, 40, 40), "\u{26a0} The script failed")
                 .on_hover_text(err);
             ui.small(err);
             ui.small("The shapes are from the last good run.");
         }
-        let schema = info["schema"].as_array().cloned().unwrap_or_default();
-        for p in &schema {
-            let name = p["name"].as_str().unwrap_or("");
-            let mut value = edit.working.get(name).cloned().unwrap_or(Value::Null);
-            if param_widget(ui, p, &mut value, name) {
-                edit.dirty = true;
-            }
-            edit.working.insert(name.to_string(), value);
+        if let Some(problem) = info["param_problem"].as_str() {
+            ui.colored_label(
+                Color32::from_rgb(200, 40, 40),
+                format!("\u{26a0} {problem}"),
+            );
         }
+        let schema = info["schema"].as_array().cloned().unwrap_or_default();
+        ui.add_enabled_ui(trusted, |ui| {
+            for p in &schema {
+                let name = p["name"].as_str().unwrap_or("");
+                let mut value = edit.working.get(name).cloned().unwrap_or(Value::Null);
+                if param_widget(ui, p, &mut value, name) {
+                    edit.dirty = true;
+                }
+                edit.working.insert(name.to_string(), value);
+            }
+        });
         let settled = !ui.input(|i| i.pointer.any_down()) && ui.memory(|m| m.focused().is_none());
         let reset = ui
-            .button("Reset")
+            .add_enabled(trusted, egui::Button::new("Reset"))
             .on_hover_text("Run the script again")
             .clicked();
-        if (edit.dirty && settled) || reset {
+        if let Some(r) = &self.running {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!(
+                    "Running the script... {:.0} s",
+                    r.started.elapsed().as_secs_f32()
+                ));
+            });
+        } else if !self.queue.is_empty() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Waiting to run the script...");
+            });
+        }
+        if trusted && ((edit.dirty && settled) || reset) {
             let changed: Map<String, Value> = edit
                 .working
                 .iter()
@@ -277,20 +430,15 @@ impl ScriptUi {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
             edit.dirty = false;
-            match cadektor_api::user_set_params(session, id, &changed) {
-                Ok(r) if r["ok"] == json!(false) => {
-                    *status = format!("Plug-in object: {}", r["error"].as_str().unwrap_or("error"));
-                }
-                Ok(_) => {}
+            match cadektor_api::user_prepare(session, id, &changed) {
+                Ok(job) => self.submit(job),
+                Err(e) if e.code == UNTRUSTED_CODE => self.review = Some(id),
                 Err(e) => {
                     *status = format!("Plug-in object: {}", e.message);
                     // Go back to the saved values.
                     self.edit = None;
                 }
             }
-            session
-                .selection
-                .retain(|id| session.editor.doc().object(*id).is_some());
         }
     }
 }
@@ -324,9 +472,12 @@ fn param_widget(ui: &mut Ui, p: &Value, value: &mut Value, id_salt: &str) -> boo
     let mut changed = false;
     match p["type"].as_str().unwrap_or("") {
         ty @ ("number" | "length") => {
-            let mut x = value.as_f64().unwrap_or(0.0);
             let lo = p["min"].as_f64().unwrap_or(f64::MIN);
             let hi = p["max"].as_f64().unwrap_or(f64::MAX);
+            // The widget shows a value inside the range. Showing it is not an edit: a stored value
+            // that is outside the range stays as it is until the user changes it.
+            let mut x = value.as_f64().unwrap_or(0.0).clamp(lo, hi);
+            let shown = x;
             ui.horizontal(|ui| {
                 ui.label(label);
                 let mut d = egui::DragValue::new(&mut x)
@@ -335,7 +486,7 @@ fn param_widget(ui: &mut Ui, p: &Value, value: &mut Value, id_salt: &str) -> boo
                 if ty == "length" {
                     d = d.suffix(" mm");
                 }
-                if ui.add(d).changed() {
+                if ui.add(d).changed() && x != shown {
                     changed = true;
                     *value = json!(x);
                 }
@@ -521,7 +672,7 @@ mod tests {
         let ctx = egui::Context::default();
         for _ in 0..200 {
             let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
-            ui_state.show(&ctx, &mut s);
+            ui_state.show(&ctx, &mut s, &mut status);
             if ui_state.status.as_ref().is_some_and(|s| !s.is_running()) {
                 break;
             }
@@ -536,5 +687,205 @@ mod tests {
         // A missing file is reported in the status line and the console.
         ui_state.start(&mut s, dir.join("missing.py"), &mut status);
         assert!(status.contains("not a file"));
+    }
+
+    // ---- trust, clamping and the worker thread ----
+
+    /// A program that records each start, to prove that Python did not start.
+    fn spy(name: &str) -> (PathBuf, cadektor_script::python::Interpreter) {
+        let dir =
+            std::env::temp_dir().join(format!("cadektor-uispy-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("spy.sh");
+        std::fs::write(
+            &prog,
+            format!(
+                "#!/bin/sh\ntouch {}\nexit 1\n",
+                dir.join("started").display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (
+            dir,
+            cadektor_script::python::Interpreter {
+                program: prog,
+                prefix: vec![],
+            },
+        )
+    }
+
+    /// Runs the UI for some frames, so the worker thread can finish.
+    fn pump(ui_state: &mut ScriptUi, s: &mut Session, status: &mut String) {
+        let ctx = egui::Context::default();
+        for _ in 0..300 {
+            ui_state.tick(&ctx, s, status);
+            if !(ui_state.running.is_some() || !ui_state.queue.is_empty()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the reset did not end");
+    }
+
+    fn untrusted_object(interp: cadektor_script::python::Interpreter) -> (Session, ObjectId) {
+        let mut maker = Session::default();
+        maker.scripting.allow_agent_scripts = true;
+        let def = maker
+            .handle(
+                "plugin.define",
+                json!({"name": "Evil", "shape_type": "point",
+                       "script": "def reset(p, g):\n    return [circle(g.at, 5 * p.n)]\n",
+                       "params": [{"name": "n", "type": "number", "default": 1, "min": 1, "max": 5}]}),
+            )
+            .unwrap()["id"]
+            .clone();
+        let g = maker
+            .handle("plugin.place", json!({"definition": def, "at": [0, 0]}))
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let doc = maker.handle("document.get", json!({})).unwrap();
+        let mut s = Session::default();
+        s.scripting.interpreter = Some(interp);
+        s.handle("document.load", json!({"document": doc})).unwrap();
+        (s, ObjectId(g))
+    }
+
+    #[test]
+    fn selecting_an_untrusted_object_never_starts_python() {
+        let (dir, interp) = spy("select");
+        let (mut s, id) = untrusted_object(interp);
+        let mut ui_state = ScriptUi::default();
+        let mut status = String::new();
+        s.selection = vec![id];
+        // Many frames, with a selected object whose stored value is outside the range.
+        s.editor
+            .execute(&cadektor_core::command::Command::SetData {
+                id,
+                set: [(cadektor_api::PLUGIN_DATA_KEY.to_string(), {
+                    let mut d = s.editor.doc().object(id).unwrap().data
+                        [cadektor_api::PLUGIN_DATA_KEY]
+                        .clone();
+                    d["params"]["n"] = json!(99.0);
+                    d
+                })]
+                .into(),
+                remove: vec![],
+            })
+            .unwrap();
+        for _ in 0..5 {
+            frame(|ui| ui_state.plugin_info(ui, &mut s, &mut status));
+            pump(&mut ui_state, &mut s, &mut status);
+        }
+        assert!(!dir.join("started").exists(), "selecting ran a script");
+        assert!(ui_state.queue.is_empty() && ui_state.running.is_none());
+        // The user asks for a reset: the dialog opens, and still nothing runs.
+        let err = cadektor_api::user_prepare(&s, id, &Map::new())
+            .err()
+            .unwrap();
+        assert_eq!(err.code, UNTRUSTED_CODE);
+        assert!(!dir.join("started").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn showing_a_value_outside_the_range_is_not_an_edit() {
+        let mut s = Session::default();
+        s.handle("plugin.install_example", json!({"name": "Bench"}))
+            .unwrap();
+        let g = s
+            .handle("plugin.place", json!({"definition": "Bench", "at": [0, 0]}))
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let id = ObjectId(g);
+        let mut data =
+            s.editor.doc().object(id).unwrap().data[cadektor_api::PLUGIN_DATA_KEY].clone();
+        data["params"]["slats"] = json!(99.0); // the range is 2 to 12
+        s.editor
+            .execute(&cadektor_core::command::Command::SetData {
+                id,
+                set: [(cadektor_api::PLUGIN_DATA_KEY.to_string(), data)].into(),
+                remove: vec![],
+            })
+            .unwrap();
+        let info = cadektor_api::instance_info(&s, id).unwrap();
+        assert!(info["param_problem"].as_str().unwrap().contains("range"));
+        let mut ui_state = ScriptUi::default();
+        let mut status = String::new();
+        s.selection = vec![id];
+        for _ in 0..4 {
+            frame(|ui| ui_state.plugin_info(ui, &mut s, &mut status));
+        }
+        let edit = ui_state.edit.as_ref().unwrap();
+        assert!(!edit.dirty, "the clamp of the widget was taken as a change");
+        assert_eq!(edit.working["slats"], json!(99.0));
+        assert!(ui_state.queue.is_empty() && ui_state.running.is_none());
+    }
+
+    #[test]
+    fn a_trusted_reset_runs_on_a_worker_thread_and_applies_when_done() {
+        let mut s = Session::default();
+        s.handle("plugin.install_example", json!({"name": "Bench"}))
+            .unwrap();
+        let g = s
+            .handle("plugin.place", json!({"definition": "Bench", "at": [0, 0]}))
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let id = ObjectId(g);
+        let mut ui_state = ScriptUi::default();
+        let mut status = String::new();
+        let job =
+            cadektor_api::user_prepare(&s, id, json!({"slats": 8}).as_object().unwrap()).unwrap();
+        ui_state.submit(job);
+        // A second job for the same object replaces the first one in the queue.
+        let job2 =
+            cadektor_api::user_prepare(&s, id, json!({"slats": 3}).as_object().unwrap()).unwrap();
+        ui_state.submit(job2);
+        assert_eq!(ui_state.queue.len(), 1);
+        pump(&mut ui_state, &mut s, &mut status);
+        assert_eq!(s.editor.doc().children(id).len(), 4); // outline, 2 slat lines, back rest
+        // If the object changes while the script runs, the result is refused.
+        let job = cadektor_api::user_prepare(&s, id, &Map::new()).unwrap();
+        s.editor
+            .execute(&cadektor_core::command::Command::DeleteObjects {
+                ids: vec![s.editor.doc().children(id)[0]],
+            })
+            .unwrap();
+        let result = job.run();
+        assert!(cadektor_api::user_finish(&mut s, job, result).is_err());
+    }
+
+    #[test]
+    fn the_trust_dialog_trusts_only_after_the_user_decides() {
+        let (dir, interp) = spy("dialog");
+        let (mut s, id) = untrusted_object(interp);
+        let mut ui_state = ScriptUi::default();
+        let mut status = String::new();
+        ui_state.review = Some(id);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        ui_state.review_dialog(&ctx, &mut s, &mut status);
+        assert_eq!(
+            ui_state.review,
+            Some(id),
+            "the dialog stays open until a click"
+        );
+        assert!(
+            !s.scripting.trust.is_trusted(
+                &cadektor_api::instance_info(&s, id).unwrap()["script"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            )
+        );
+        assert!(!dir.join("started").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

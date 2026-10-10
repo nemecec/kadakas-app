@@ -259,6 +259,8 @@ The shapes are stored as the members of a group. Display, export (DXF, SVG, IFC)
 | Vertices in all polylines | 100,000 |
 | Size of the answer | 2 MiB |
 | Allowed shapes | `line`, `rect`, `circle`, `arc`, `polyline`, `text` |
+| Circle and arc radius, text height | greater than zero |
+| Text length | 10,000 characters |
 
 If the script runs too long, it is stopped. If a limit is broken, the reset fails.
 
@@ -320,9 +322,13 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 ## Security
 
 - **Scripts run only when a user starts them.** A drawing never runs code when you open it. The shapes of a plug-in object are stored, so they need no script.
-- **Programs and AI agents cannot run scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `-32001`. The host must opt in. Start `cadektor serve`, `cadektor mcp` or the app with `--allow-agent-scripts`.
-- The two shipped examples always run. Their scripts are part of the program.
-- When a user changes a parameter in Object Info, the app runs the script. That is a user action.
+- **Programs and AI agents cannot run untrusted scripts by default.** The calls `script.run` and `plugin.place` with a script of your own fail with the error code `-32001`. The host must opt in. Start `cadektor serve`, `cadektor mcp` or the app with `--allow-agent-scripts`.
+- **A script from a drawing never runs until you trust it.** A plug-in object script is a Python program. A drawing that you download may hold one. When you select such an object, Object Info shows a warning and the button **Review script...**. The dialog **Trust this plug-in?** shows the full source and where it comes from. Nothing runs until you press **Trust this script**.
+- Trust is for the **exact text**. The app keeps the SHA-256 hash of each script you trusted in `trusted_plugins.json` in your config folder. If anyone changes the script, even by one character, the hash changes and the script is untrusted again. Putting the old text back makes it trusted again.
+- The two shipped examples are trusted by their hash. Their scripts are part of the program.
+- **Trust comes only from the dialog.** No API call adds trust. `plugin.update` can change a script, but the new text is untrusted. An agent cannot trust its own script.
+- Opening a drawing, selecting an object and looking at Object Info never run a script. A parameter edit or **Reset** runs it only for a trusted script.
+- The script of a reset runs in a separate thread. The window stays alive and shows a progress mark. A script that starts a background process does not hold the app: the app ends the whole process group when the reset ends or times out (on Windows only the script process is ended).
 - `script.run` also needs the running app (it gives the script the address and token). A headless `cadektor serve` refuses it.
 - A script is **not sandboxed**. It runs as you, with your files and network. Run only scripts that you trust. A plug-in object script runs with `python -I` (no user site folder, no `PYTHONPATH`). It also has the time and size limits above. These guard against mistakes. They do not stop a hostile script.
 - A script file for an agent must be a `.py` file inside an allowed folder (`--allow-dir`).
@@ -334,7 +340,7 @@ To test a script without the app, use `cadektor.plugin.test_reset(script, params
 | Name | Use |
 |---|---|
 | `cadektor.open(path=None, binary=None, allow_dir=(), allow_agent_scripts=False)` | Start `cadektor serve`. Returns a `Document`. |
-| `cadektor.connect(addr=None, token=None)` | Join the running app. |
+| `cadektor.connect(addr=None, token=None, timeout=120)` | Join the running app. After a `RequestTimeout` the connection still works. |
 | `doc.summary()`, `doc.describe()`, `doc.to_json()` | State of the session. |
 | `doc.layers`, `doc.classes`, `doc.layer(x)`, `doc.class_(x)`, `doc.active_layer` | Read layers and classes. |
 | `doc.add_layer(name, elevation)`, `doc.add_class(name, **attrs)` | Make them. |

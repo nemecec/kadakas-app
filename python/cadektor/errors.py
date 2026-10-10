@@ -21,3 +21,8 @@ class CadektorError(Exception):
 
 class ConnectionFailed(Exception):
     """The program did not start, or the connection broke."""
+
+
+class RequestTimeout(TimeoutError):
+    """The session did not answer in time. The connection is still good: the late answer is
+    thrown away when it comes, and the next request works."""

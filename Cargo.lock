@@ -578,6 +578,7 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -724,8 +725,10 @@ name = "cadektor-script"
 version = "0.1.0"
 dependencies = [
  "cadektor-core",
+ "libc",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

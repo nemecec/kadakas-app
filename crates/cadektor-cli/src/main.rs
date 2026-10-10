@@ -129,6 +129,7 @@ impl Backend {
         session.paths = cadektor_api::PathPolicy::restricted(dirs);
         session.gis.urls = cadektor_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
+        session.scripting.trust = cadektor_api::TrustStore::load_default();
         if let Some(f) = file {
             session.editor = cadektor_core::command::Editor::new(load(&f)?);
             session.doc_dir = doc_dir_of(&f);

@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Any, Protocol
 
-from .errors import CadektorError, ConnectionFailed
+from .errors import CadektorError, ConnectionFailed, RequestTimeout
 
 
 class Transport(Protocol):
@@ -56,6 +56,7 @@ class _LineRpc:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._next_id = 1
+        self._abandoned: set[Any] = set()
 
     def _send_line(self, line: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -71,7 +72,17 @@ class _LineRpc:
             if params is not None:
                 message["params"] = params
             self._send_line(json.dumps(message, allow_nan=False))
-            reply = json.loads(self._read_line())
+            try:
+                while True:
+                    reply = json.loads(self._read_line())
+                    if reply.get("id") in self._abandoned:
+                        # The late answer of a request that timed out. Throw it away.
+                        self._abandoned.discard(reply.get("id"))
+                        continue
+                    break
+            except RequestTimeout:
+                self._abandoned.add(req_id)
+                raise
         if reply.get("id") != req_id:
             raise CadektorError(-32603, f"reply {reply.get('id')!r} does not match request {req_id}")
         if "error" in reply:
@@ -127,43 +138,55 @@ class StdioTransport(_LineRpc):
 
 
 class TcpTransport(_LineRpc):
-    """Connects to a running app. The first message is ``auth`` with the token."""
+    """Connects to a running app. The first message is ``auth`` with the token.
+
+    ``timeout`` is the time to wait for one answer, in seconds (``None``: wait for ever). After a
+    timeout the request raises ``RequestTimeout``. The connection stays usable: the late answer is
+    discarded by its ID."""
 
     def __init__(self, host: str, port: int, token: str, timeout: float | None = 120.0) -> None:
         super().__init__()
+        self._timeout = timeout
+        self._buffer = bytearray()
         try:
             self._sock = socket.create_connection((host, port), timeout=timeout)
         except OSError as e:
             raise ConnectionFailed(f"cannot connect to {host}:{port}: {e}") from e
-        self._file = self._sock.makefile("rw", encoding="utf-8", newline="\n")
         try:
             self.request("auth", {"token": token})
-        except (CadektorError, ConnectionFailed, json.JSONDecodeError) as e:
+        except (CadektorError, ConnectionFailed, RequestTimeout, json.JSONDecodeError) as e:
             self.close()
             raise ConnectionFailed(f"{host}:{port} refused the token") from e
 
     def _send_line(self, line: str) -> None:
         try:
-            self._file.write(line + "\n")
-            self._file.flush()
+            self._sock.sendall(line.encode("utf-8") + b"\n")
         except OSError as e:
             raise ConnectionFailed("the connection to the app is closed") from e
 
     def _read_line(self) -> str:
-        try:
-            line = self._file.readline()
-        except OSError as e:
-            raise ConnectionFailed("the connection to the app is closed") from e
-        if not line:
-            raise ConnectionFailed("the connection to the app is closed")
-        return line
+        # Our own buffer: a timeout in the middle of a line must not lose the bytes that came.
+        while True:
+            end = self._buffer.find(b"\n")
+            if end >= 0:
+                line = bytes(self._buffer[:end])
+                del self._buffer[: end + 1]
+                return line.decode("utf-8")
+            try:
+                chunk = self._sock.recv(65536)
+            except (TimeoutError, socket.timeout) as e:
+                raise RequestTimeout(f"no answer in {self._timeout} s") from e
+            except OSError as e:
+                raise ConnectionFailed("the connection to the app is closed") from e
+            if not chunk:
+                raise ConnectionFailed("the connection to the app is closed")
+            self._buffer += chunk
 
     def close(self) -> None:
-        for closer in (self._file.close, self._sock.close):
-            try:
-                closer()
-            except OSError:
-                pass
+        try:
+            self._sock.close()
+        except OSError:
+            pass
 
 
 def resolve_endpoint(addr: str | None, token: str | None) -> tuple[str, int, str]:
@@ -190,6 +213,7 @@ def resolve_endpoint(addr: str | None, token: str | None) -> tuple[str, int, str
             token = info.get("token")
     if token is None:
         raise ConnectionFailed("a token is needed with an explicit address")
+    assert addr is not None  # set above: from the argument, the environment or the file
     host, _, port = addr.rpartition(":")
     if not host or not port.isdigit():
         raise ConnectionFailed(f"address {addr!r} must look like HOST:PORT")

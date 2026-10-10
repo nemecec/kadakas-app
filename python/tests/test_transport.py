@@ -9,24 +9,25 @@ import json
 import socket
 import subprocess
 import threading
+import time
 
 import pytest
 
 import cadektor
 from cadektor import ConnectionFailed
 from cadektor import _rpc
-from conftest import BIN
 
 TOKEN = "t" * 64
 
 
 class Bridge:
-    def __init__(self) -> None:
+    def __init__(self, binary) -> None:
+        self.delay = 0.0
         self.server = socket.socket()
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(5)
         self.port = self.server.getsockname()[1]
-        self.proc = subprocess.Popen([str(BIN), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.proc = subprocess.Popen([str(binary), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.refused = 0
         threading.Thread(target=self._accept, daemon=True).start()
 
@@ -52,7 +53,11 @@ class Bridge:
         for line in f:
             self.proc.stdin.write(line)
             self.proc.stdin.flush()
-            f.write(self.proc.stdout.readline())
+            answer = self.proc.stdout.readline()
+            if self.delay:
+                time.sleep(self.delay)
+                self.delay = 0.0
+            f.write(answer)
             f.flush()
 
     def close(self) -> None:
@@ -62,8 +67,8 @@ class Bridge:
 
 
 @pytest.fixture
-def bridge():
-    b = Bridge()
+def bridge(cadektor_bin):
+    b = Bridge(cadektor_bin)
     yield b
     b.close()
 
@@ -135,10 +140,35 @@ def test_find_binary_rules(monkeypatch):
         _rpc.find_binary()
 
 
-def test_a_dead_process_is_reported():
-    t = _rpc.StdioTransport([], BIN)
+def test_a_dead_process_is_reported(cadektor_bin):
+    t = _rpc.StdioTransport([], cadektor_bin)
     t._proc.kill()
     t._proc.wait()
     with pytest.raises(ConnectionFailed, match="ended"):
         t.request("describe")
     t.close()
+
+
+def test_a_timeout_does_not_break_the_connection(bridge):
+    doc = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    doc.add.circle([0, 0], 5)
+    bridge.delay = 1.0  # the next answer comes late
+    with pytest.raises(cadektor.RequestTimeout):
+        doc.summary()
+    # The late answer is thrown away by its ID. The next call gets its own answer.
+    time.sleep(1.2)
+    assert doc.summary()["object_count"] == 1
+    assert [o.kind for o in doc.objects()] == ["circle"]
+    doc.close()
+
+
+def test_a_late_answer_that_arrives_during_the_next_call_is_skipped(bridge):
+    doc = cadektor.connect(f"127.0.0.1:{bridge.port}", TOKEN, timeout=0.4)
+    bridge.delay = 0.7
+    with pytest.raises(cadektor.RequestTimeout):
+        doc.summary()
+    # No pause: the next call reads the old answer first, skips it, and waits for its own.
+    doc._transport._timeout = 3.0
+    doc._transport._sock.settimeout(3.0)
+    assert doc.summary()["object_count"] == 0
+    doc.close()

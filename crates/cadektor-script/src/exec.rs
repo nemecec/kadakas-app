@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
@@ -68,16 +68,35 @@ impl std::fmt::Display for ExecError {
     }
 }
 
-/// Reads a stream. Keeps at most `cap` bytes. Sets `over` when more arrives and `stop_on_over` is set.
-fn read_capped(mut r: impl Read, cap: usize, over: Arc<AtomicBool>, stop_on_over: bool) -> Vec<u8> {
-    let mut out = Vec::new();
+/// The bytes a reader thread has read so far, and whether the thread has ended.
+#[derive(Default)]
+struct Sink {
+    bytes: Mutex<Vec<u8>>,
+    done: AtomicBool,
+}
+
+/// Reads a stream into the sink. Keeps at most `cap` bytes. Sets `over` when more arrives and
+/// `stop_on_over` is set.
+fn read_capped(
+    mut r: impl Read,
+    cap: usize,
+    over: Arc<AtomicBool>,
+    stop_on_over: bool,
+    sink: Arc<Sink>,
+) {
     let mut buf = [0u8; 8192];
+    let mut kept = 0usize;
     loop {
         match r.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                let room = cap.saturating_sub(out.len());
-                out.extend_from_slice(&buf[..n.min(room)]);
+                let room = cap.saturating_sub(kept);
+                let take = n.min(room);
+                sink.bytes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(&buf[..take]);
+                kept += take;
                 // Without `stop_on_over` we keep draining, so the child never blocks on a full pipe.
                 if n > room && stop_on_over {
                     over.store(true, Ordering::SeqCst);
@@ -86,18 +105,28 @@ fn read_capped(mut r: impl Read, cap: usize, over: Arc<AtomicBool>, stop_on_over
             }
         }
     }
-    out
+    sink.done.store(true, Ordering::SeqCst);
 }
 
-/// Kills the process, and on Unix its whole process group.
+/// Waits until the reader has ended, but not longer than `until`. Returns what it read.
+fn collect(sink: &Sink, until: Instant) -> Vec<u8> {
+    while !sink.done.load(Ordering::SeqCst) && Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    std::mem::take(&mut *sink.bytes.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Kills the process and its whole process group (on Unix), so child processes of the script die too.
 pub fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // The child leads its own group (see `own_group`), so the group ID is its process ID.
+        if let Ok(pid) = i32::try_from(child.id()) {
+            // SAFETY: killpg only sends a signal.
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+        }
     }
     let _ = child.kill();
 }
@@ -127,16 +156,25 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
         let _ = sin.write_all(&input);
     });
     let over = Arc::new(AtomicBool::new(false));
-    let out_t = {
-        let (r, over) = (child.stdout.take().expect("piped"), over.clone());
+    let (out_sink, err_sink) = (Arc::new(Sink::default()), Arc::new(Sink::default()));
+    {
+        let (r, over, sink) = (
+            child.stdout.take().expect("piped"),
+            over.clone(),
+            out_sink.clone(),
+        );
         let cap = limits.max_stdout;
-        thread::spawn(move || read_capped(r, cap, over, true))
-    };
-    let err_t = {
+        thread::spawn(move || read_capped(r, cap, over, true, sink));
+    }
+    {
         let r = child.stderr.take().expect("piped");
-        let (cap, over) = (limits.max_stderr, Arc::new(AtomicBool::new(false)));
-        thread::spawn(move || read_capped(r, cap, over, false))
-    };
+        let (cap, over, sink) = (
+            limits.max_stderr,
+            Arc::new(AtomicBool::new(false)),
+            err_sink.clone(),
+        );
+        thread::spawn(move || read_capped(r, cap, over, false, sink));
+    }
     let start = Instant::now();
     let mut failure = None;
     let status = loop {
@@ -158,13 +196,17 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
         }
         thread::sleep(Duration::from_millis(5));
     };
+    // Always kill the group: a script may leave a background process that holds the pipes open.
+    kill_tree(&mut child);
     if status.is_none() {
-        kill_tree(&mut child);
         let _ = child.wait();
     }
     let _ = writer.join();
-    let stdout = out_t.join().unwrap_or_default();
-    let stderr = err_t.join().unwrap_or_default();
+    // The readers get a short time to finish. A process that left its group may keep a pipe open;
+    // we do not wait for it.
+    let until = Instant::now() + READER_GRACE;
+    let stdout = collect(&out_sink, until);
+    let stderr = collect(&err_sink, until);
     // The output may have filled up just before the process ended.
     if failure.is_none() && over.load(Ordering::SeqCst) {
         failure = Some(ExecError::OutputTooLarge(limits.max_stdout));
@@ -178,6 +220,9 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
         code: status.and_then(|s| s.code()),
     })
 }
+
+/// How long we wait for the output readers after the process has ended.
+const READER_GRACE: Duration = Duration::from_millis(500);
 
 #[cfg(test)]
 mod tests {
@@ -253,5 +298,29 @@ mod tests {
         let e = run(sh("sleep 30 & sleep 30"), b"", limits(150, 100)).unwrap_err();
         assert!(matches!(e, ExecError::Timeout(_)));
         assert!(t.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_background_process_does_not_stall_the_run() {
+        // The shell starts a long background job that keeps the output pipe open, then ends.
+        let t = Instant::now();
+        let o = run(sh("sleep 30 & echo done"), b"", limits(1000, 100)).unwrap();
+        assert_eq!(o.stdout, b"done\n");
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn a_process_that_leaves_its_group_cannot_hold_us() {
+        // `setsid` puts the job in a new group; the kill cannot reach it, but the reader grace ends.
+        let t = Instant::now();
+        let o = run(
+            sh("(setsid sleep 3 >&2 &) ; echo ok"),
+            b"",
+            limits(1000, 100),
+        );
+        if let Ok(o) = o {
+            assert_eq!(o.stdout, b"ok\n");
+        }
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
     }
 }

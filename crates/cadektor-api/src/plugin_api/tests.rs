@@ -149,10 +149,15 @@ fn own_scripts_need_the_flag() {
         )
         .contains("may not run")
     );
+    // The user's own action needs trust in the script, not the flag for agents.
+    let err =
+        user_set_params(&mut s, ObjectId(gid), json!({"n": 2}).as_object().unwrap()).unwrap_err();
+    assert_eq!(err.code, UNTRUSTED_CODE);
+    trust_plugin(&mut s, ObjectId(gid)).unwrap();
     let r = user_set_params(&mut s, ObjectId(gid), json!({"n": 2}).as_object().unwrap()).unwrap();
     assert_eq!(r["ok"], true);
     assert_eq!(centers(&s, gid).len(), 2);
-    assert!(!s.scripting.allow_agent_scripts, "the flag is put back");
+    assert!(!s.scripting.allow_agent_scripts, "the flag is not touched");
 }
 
 #[test]
@@ -734,4 +739,245 @@ fn describe_lists_the_scripting_methods() {
     ] {
         assert!(names.contains(&n), "{n}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Trust: a script from a document never runs until the user trusted its exact text.
+
+/// A program that records every start. If it is the interpreter and the marker stays missing,
+/// no Python was started.
+struct Spy {
+    dir: std::path::PathBuf,
+}
+
+impl Spy {
+    fn new(name: &str) -> Spy {
+        let dir = std::env::temp_dir().join(format!("cadektor-spy-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("spy.sh");
+        std::fs::write(
+            &prog,
+            format!(
+                "#!/bin/sh\ntouch {}\nexit 1\n",
+                dir.join("started").display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Spy { dir }
+    }
+
+    fn interpreter(&self) -> Interpreter {
+        Interpreter {
+            program: self.dir.join("spy.sh"),
+            prefix: vec![],
+        }
+    }
+
+    fn started(&self) -> bool {
+        self.dir.join("started").exists()
+    }
+}
+
+/// A session with a plug-in object from a "downloaded" document: it was made by a session with the
+/// flag, and then loaded into a fresh session that has no flag, no trust, and a spy as interpreter.
+fn downloaded(spy: &Spy) -> (Session, u64, u64) {
+    let mut maker = open_session();
+    let def = define_circles(&mut maker);
+    let g = ok(
+        &mut maker,
+        "plugin.place",
+        json!({"definition": def, "at": [0, 0]}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let doc = ok(&mut maker, "document.get", json!({}));
+    let mut s = Session::default();
+    s.scripting.interpreter = Some(spy.interpreter());
+    ok(&mut s, "document.load", json!({"document": doc}));
+    (s, def, g)
+}
+
+#[test]
+fn an_untrusted_definition_never_starts_python() {
+    let spy = Spy::new("paths");
+    let (mut s, def, g) = downloaded(&spy);
+    let gid = ObjectId(g);
+    // Open, list, select (Object Info reads the object): no script.
+    ok(&mut s, "plugin.list", json!({}));
+    let info = instance_info(&s, gid).unwrap();
+    assert_eq!(info["trusted"], false);
+    assert_eq!(info["origin"], "this document");
+    assert!(info["script"].as_str().unwrap().contains("def reset"));
+    // Edit and Reset, as the user: refused with the code the app turns into the dialog.
+    let one = json!({"n": 2});
+    let one = one.as_object().unwrap();
+    assert_eq!(
+        user_set_params(&mut s, gid, one).unwrap_err().code,
+        UNTRUSTED_CODE
+    );
+    assert_eq!(
+        user_prepare(&s, gid, &serde_json::Map::new())
+            .err()
+            .unwrap()
+            .code,
+        UNTRUSTED_CODE
+    );
+    // Every API path, without the flag.
+    for (m, p) in [
+        ("plugin.place", json!({"definition": def, "at": [0, 0]})),
+        ("plugin.set_params", json!({"id": g, "params": {"n": 2}})),
+        ("plugin.reset", json!({"id": g})),
+        ("plugin.reset", json!({"definition": def})),
+        ("plugin.preview", json!({"definition": def, "at": [0, 0]})),
+        (
+            "plugin.update",
+            json!({"id": def, "script": "x = 1", "reset": true}),
+        ),
+    ] {
+        let e = call(&mut s, m, p).unwrap_err();
+        assert_eq!(e.code, -32001, "{m}: {}", e.message);
+    }
+    assert!(!spy.started(), "an untrusted script started Python");
+    // Trust is by the exact text. The user trusts it; now Python starts (the spy fails the run).
+    trust_plugin(&mut s, gid).unwrap();
+    let r = user_set_params(&mut s, gid, one).unwrap();
+    assert_eq!(r["ok"], false);
+    assert!(spy.started());
+    std::fs::remove_dir_all(&spy.dir).unwrap();
+}
+
+#[test]
+fn changing_a_script_through_the_api_drops_trust() {
+    let spy = Spy::new("update");
+    let (mut s, def, g) = downloaded(&spy);
+    let gid = ObjectId(g);
+    trust_plugin(&mut s, gid).unwrap();
+    assert_eq!(instance_info(&s, gid).unwrap()["trusted"], true);
+    // Any agent can edit a definition (it is data) but the new text has a new hash.
+    ok(
+        &mut s,
+        "plugin.update",
+        json!({"id": def, "script": "import os\ndef reset(p, g):\n    return []\n"}),
+    );
+    let info = instance_info(&s, gid).unwrap();
+    assert_eq!(info["trusted"], false);
+    let err = user_set_params(&mut s, gid, &serde_json::Map::new()).unwrap_err();
+    assert_eq!(err.code, UNTRUSTED_CODE);
+    assert!(!spy.started());
+    // Putting the old text back does not need a new dialog: the user trusted exactly that text.
+    ok(
+        &mut s,
+        "plugin.update",
+        json!({"id": def, "script": CIRCLES}),
+    );
+    assert_eq!(instance_info(&s, gid).unwrap()["trusted"], true);
+    std::fs::remove_dir_all(&spy.dir).unwrap();
+}
+
+#[test]
+fn nothing_in_the_api_adds_trust() {
+    let mut s = open_session();
+    let names: Vec<&str> = crate::METHODS.iter().map(|(n, _)| *n).collect();
+    assert!(!names.iter().any(|n| n.contains("trust")));
+    assert!(s.scripting.trust.is_empty());
+    let def = define_circles(&mut s);
+    ok(
+        &mut s,
+        "plugin.place",
+        json!({"definition": def, "at": [0, 0]}),
+    );
+    assert!(
+        s.scripting.trust.is_empty(),
+        "running with the flag adds no trust"
+    );
+    let e = fail(&mut s, "plugin.trust", json!({"id": def}));
+    assert!(e.contains("unknown method"));
+}
+
+#[test]
+fn shipped_examples_are_trusted_by_hash() {
+    let s = Session::default();
+    for (_, d) in cadektor_script::examples::all() {
+        assert!(s.scripting.trust.is_trusted(&d.script));
+    }
+}
+
+#[test]
+fn agent_script_files_are_private_and_never_follow_a_link() {
+    let mut s = open_session();
+    s.scripting.endpoint = Some(("127.0.0.1:9".into(), "tok".into()));
+    for _ in 0..2 {
+        ok(&mut s, "script.run", json!({"source": "print(1)"}));
+    }
+    assert_eq!(s.scripting.temp_dirs.len(), 2);
+    let dirs: Vec<_> = s
+        .scripting
+        .temp_dirs
+        .iter()
+        .map(|d| d.path().to_path_buf())
+        .collect();
+    assert_ne!(dirs[0], dirs[1], "each run has its own folder");
+    for d in &dirs {
+        assert!(d.join("agent.py").is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(d).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert!(!d.starts_with(std::env::temp_dir().join("cadektor-scripts-0")));
+    }
+    // A planted link at the old fixed place is not used.
+    #[cfg(unix)]
+    {
+        let old = std::env::temp_dir().join(format!("cadektor-scripts-{}", std::process::id()));
+        std::fs::create_dir_all(&old).unwrap();
+        let victim = old.join("victim.txt");
+        std::fs::write(&victim, "keep").unwrap();
+        let _ = std::os::unix::fs::symlink(&victim, old.join("agent-0.py"));
+        ok(&mut s, "script.run", json!({"source": "print(2)"}));
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        std::fs::remove_dir_all(old).unwrap();
+    }
+}
+
+#[test]
+fn text_and_radius_limits_apply_to_generated_shapes() {
+    let mut s = open_session();
+    let d = ok(
+        &mut s,
+        "plugin.define",
+        json!({"name": "Bad", "shape_type": "point",
+               "script": "def reset(p, g):\n    return [circle(g.at, -5)]\n"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        fail(
+            &mut s,
+            "plugin.place",
+            json!({"definition": d, "at": [0, 0]})
+        )
+        .contains("radius")
+    );
+    ok(
+        &mut s,
+        "plugin.update",
+        json!({"id": d, "script": "def reset(p, g):\n    return [text(g.at, 'x' * 20000, 10)]\n"}),
+    );
+    assert!(
+        fail(
+            &mut s,
+            "plugin.place",
+            json!({"definition": d, "at": [0, 0]})
+        )
+        .contains("at most")
+    );
 }

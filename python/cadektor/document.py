@@ -529,10 +529,13 @@ def open(path: str | Path | None = None, *, binary: str | Path | None = None,  #
     return Document(StdioTransport(args, binary))
 
 
-def connect(addr: str | None = None, token: str | None = None) -> Document:
+def connect(addr: str | None = None, token: str | None = None, *,
+            timeout: float | None = 120.0) -> Document:
     """Connect to a running Cadektor app and see its live document.
 
     Without arguments the address and token come from ``CADEKTOR_ADDR`` and ``CADEKTOR_TOKEN``
-    (the app sets them for scripts that it starts) or from the runtime file of the app."""
+    (the app sets them for scripts that it starts) or from the runtime file of the app.
+    ``timeout`` is the time in seconds to wait for one answer (``None``: for ever). A slow call
+    raises ``RequestTimeout``, and the connection stays usable."""
     host, port, tok = resolve_endpoint(addr, token)
-    return Document(TcpTransport(host, port, tok))
+    return Document(TcpTransport(host, port, tok, timeout))

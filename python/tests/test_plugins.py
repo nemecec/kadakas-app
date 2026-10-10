@@ -213,3 +213,13 @@ def test_shipped_scripts_run_in_plain_python_too():
     assert len(shapes) == 3
     with pytest.raises(RuntimeError, match="NameError"):
         test_reset("def reset(p, g):\n    return [nothing]\n", {}, {})
+
+
+def test_a_shipped_plugin_whose_script_was_changed_is_not_trusted(doc):
+    """Changing the script of a definition through the API gives it a new hash: it does not run."""
+    doc.plugins.install_example("Bench")
+    doc.plugins.update("Bench", script="def reset(p, g):\n    return [circle(g.at, 5)]\n")
+    with pytest.raises(CadektorError) as e:
+        doc.plugins.place("Bench", at=[0, 0])
+    assert e.value.is_forbidden
+    assert doc.summary()["object_count"] == 0

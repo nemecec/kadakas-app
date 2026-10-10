@@ -16,15 +16,14 @@ from pathlib import Path
 import pytest
 
 from cadektor import _api
-from conftest import BIN, PYTHON_DIR
-
+PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR / "tools"))
 import codegen  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def describe() -> dict:
-    return codegen.describe_from_binary(str(BIN))
+def describe(cadektor_bin) -> dict:
+    return codegen.describe_from_binary(str(cadektor_bin))
 
 
 def test_generated_api_matches_describe(describe):
@@ -42,8 +41,8 @@ def test_every_method_has_a_python_method_with_its_text(describe):
     assert _api.UNITS == describe["units"]
 
 
-def test_the_codegen_check_mode_agrees(describe):
-    out = subprocess.run([sys.executable, str(PYTHON_DIR / "tools" / "codegen.py"), "--check", "--binary", str(BIN)],
+def test_the_codegen_check_mode_agrees(describe, cadektor_bin):
+    out = subprocess.run([sys.executable, str(PYTHON_DIR / "tools" / "codegen.py"), "--check", "--binary", str(cadektor_bin)],
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
 
@@ -75,14 +74,14 @@ def test_the_wrappers_only_use_methods_that_exist(describe):
     assert sorted(r for r in raw_calls if r not in names and r not in {"file.open", "file.save"}) == []
 
 
-def test_command_ops_used_by_the_wrappers_are_known(describe):
+def test_command_ops_used_by_the_wrappers_are_known(describe, cadektor_bin):
     """The ops in `{"op": "..."}` of the wrappers must be in the Rust command list (checked through a probe)."""
     ops = set()
     for file in ("document.py", "plugins.py"):
         ops |= set(re.findall(r'"op":\s*"([a-z_]+)"', (PYTHON_DIR / "cadektor" / file).read_text(encoding="utf-8")))
     assert {"add_object", "move_objects", "delete_objects", "batch", "add_layer", "add_class", "modify_layer",
             "modify_class", "modify_object", "set_data", "set_active"} <= ops
-    proc = subprocess.Popen([str(BIN), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([str(cadektor_bin), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         for i, op in enumerate(sorted(ops), start=1):
             proc.stdin.write(json.dumps({"id": i, "method": "execute", "params": {"command": {"op": op}}}) + "\n")

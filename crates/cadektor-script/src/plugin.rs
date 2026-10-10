@@ -515,6 +515,23 @@ pub fn parse_shapes(shapes: &Value, limits: &ResetLimits) -> Result<Vec<Generate
         if !shape.is_finite() || !attrs.is_finite() || !shape.is_in_range() {
             return Err(at("a number is not finite or too large".into()));
         }
+        match &shape {
+            Shape::Circle { radius, .. } | Shape::Arc { radius, .. } if *radius <= 0.0 => {
+                return Err(at("the radius must be greater than zero".into()));
+            }
+            Shape::Text { text, height, .. } => {
+                if text.chars().count() > cadektor_core::annot::MAX_TEXT_CHARS {
+                    return Err(at(format!(
+                        "a text has at most {} characters",
+                        cadektor_core::annot::MAX_TEXT_CHARS
+                    )));
+                }
+                if *height <= 0.0 {
+                    return Err(at("the text height must be greater than zero".into()));
+                }
+            }
+            _ => {}
+        }
         out.push(Generated { shape, attrs });
     }
     Ok(out)

@@ -25,11 +25,11 @@ from .document import (
     connect,
     open,
 )
-from .errors import CadektorError, ConnectionFailed
+from .errors import CadektorError, ConnectionFailed, RequestTimeout
 from .plugins import Param, PluginObject, Run
 
 __all__ = [
     "CadektorError", "Class", "ConnectionFailed", "Document", "Layer", "Obj", "Param", "Pending",
-    "PluginObject", "Run", "connect", "open",
+    "PluginObject", "RequestTimeout", "Run", "connect", "open",
 ]
 __version__ = "0.1.0"

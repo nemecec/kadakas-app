@@ -94,6 +94,8 @@ impl CadektorApp {
         // Agents run their own scripts only if the user starts the app with this flag.
         app.session.scripting.allow_agent_scripts =
             args.iter().any(|a| a == "--allow-agent-scripts");
+        // The scripts of plug-in objects that the user trusted before.
+        app.session.scripting.trust = cadektor_api::TrustStore::load_default();
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
@@ -1060,7 +1062,10 @@ impl eframe::App for CadektorApp {
             self.needs_fit = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(script) = self.script_ui.show(&ctx, &mut self.session) {
+        if let Some(script) = self
+            .script_ui
+            .show(&ctx, &mut self.session, &mut self.status)
+        {
             self.ensure_script_endpoint(&ctx);
             self.script_ui
                 .start(&mut self.session, script, &mut self.status);
