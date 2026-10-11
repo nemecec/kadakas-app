@@ -35,9 +35,18 @@ pub const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 /// The longest wait of the thread between two looks at its timers.
 const TICK: Duration = Duration::from_millis(250);
 /// A ping this often keeps proxies from closing a quiet connection.
-const PING_EVERY: Duration = Duration::from_secs(20);
+// Short in the unit tests of this file, so that they can see a ping and a dead peer.
+const PING_EVERY: Duration = if cfg!(test) {
+    Duration::from_millis(100)
+} else {
+    Duration::from_secs(20)
+};
 /// A connection that has been silent this long (the server answers pings) is dead.
-const DEAD_AFTER: Duration = Duration::from_secs(75);
+const DEAD_AFTER: Duration = if cfg!(test) {
+    Duration::from_millis(700)
+} else {
+    Duration::from_secs(75)
+};
 /// How many frames may wait for the reader. The thread stops reading when the queue is full.
 const FRAME_QUEUE: usize = 4096;
 /// How long `close` waits for the thread (to send `bye` and the close frame).
@@ -757,5 +766,312 @@ impl Endpoint for WsEndpoint {
 
     fn connect(&mut self) -> Result<Box<dyn Transport>, TransportError> {
         Ok(Box::new(self.connect_now()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// A WebSocket server for the first connection: `script` gets the open socket.
+    fn ws_server(script: impl FnOnce(WebSocket<TcpStream>) + Send + 'static) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/ws/x", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            if let Ok(ws) = tungstenite::accept(s) {
+                script(ws);
+            }
+        });
+        url
+    }
+
+    /// A TCP server for the first connection, before any WebSocket handshake. Gives `host:port`.
+    fn tcp_server(script: impl FnOnce(TcpStream) + Send + 'static) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            script(s);
+        });
+        format!("{addr}")
+    }
+
+    /// Reads until the transport ends and gives the end.
+    fn end_of(t: &mut WsTransport) -> TransportError {
+        let stop = Instant::now() + Duration::from_secs(10);
+        loop {
+            match t.recv() {
+                Err(e) => return e,
+                Ok(_) => assert!(Instant::now() < stop, "the transport never ended"),
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn ack(n: u64) -> Message {
+        Message::text(format!(r#"{{"type":"ack","op_id":{n},"seq":{n}}}"#))
+    }
+
+    #[test]
+    fn a_passed_deadline_is_an_error() {
+        let e = remaining(Instant::now()).unwrap_err();
+        assert_eq!(e.to_string(), "no connection in 10 seconds");
+        assert!(remaining(Instant::now() + Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn open_errors_have_clear_texts() {
+        assert!(
+            OpenError::Http(404)
+                .to_string()
+                .contains("no such document")
+        );
+        assert!(OpenError::Http(500).to_string().contains("HTTP 500"));
+        assert!(
+            OpenError::Http(403)
+                .to_string()
+                .contains("refused the token")
+        );
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_and_a_stop_end_the_lookup() {
+        let shared = Shared::default();
+        let url = CollabUrl::parse("ws://no-such-host.invalid:9/ws/x").unwrap();
+        let e = resolve(&url, &shared).unwrap_err();
+        assert!(e.to_string().contains("cannot find"), "{e}");
+        let url = CollabUrl::parse("ws://127.0.0.1:9/ws/x").unwrap();
+        assert_eq!(resolve(&url, &shared).unwrap().len(), 1);
+        shared.stop.store(true, Ordering::SeqCst);
+        assert_eq!(resolve(&url, &shared).unwrap_err().to_string(), "closed");
+    }
+
+    #[test]
+    fn tcp_connect_needs_an_address_and_obeys_a_stop() {
+        let shared = Shared::default();
+        let soon = Instant::now() + Duration::from_secs(5);
+        let e = tcp_connect(&[], soon, &shared).unwrap_err();
+        assert_eq!(e.to_string(), "no address");
+        let addr: std::net::SocketAddr = "127.0.0.1:9".parse().unwrap();
+        shared.stop.store(true, Ordering::SeqCst);
+        assert_eq!(
+            tcp_connect(&[addr], soon, &shared).unwrap_err().to_string(),
+            "closed"
+        );
+        let shared = Shared::default();
+        let e = tcp_connect(&[addr], Instant::now(), &shared).unwrap_err();
+        assert!(e.to_string().contains("no connection in"), "{e}");
+    }
+
+    #[test]
+    fn a_token_goes_only_to_addresses_of_this_computer() {
+        let ws = CollabUrl::parse("ws://localhost:9/ws/x").unwrap();
+        let far: std::net::SocketAddr = "8.8.8.8:9".parse().unwrap();
+        let near: std::net::SocketAddr = "127.0.0.1:9".parse().unwrap();
+        assert!(check_token_destination(&ws, true, &[near]).is_ok());
+        assert!(check_token_destination(&ws, true, &[near, far]).is_err());
+        assert!(check_token_destination(&ws, false, &[far]).is_ok());
+        let wss = CollabUrl::parse("wss://localhost:9/ws/x").unwrap();
+        assert!(check_token_destination(&wss, true, &[far]).is_ok());
+        assert!(ip_is_loopback("::1".parse().unwrap()));
+        assert!(ip_is_loopback("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!ip_is_loopback("::ffff:8.8.8.8".parse().unwrap()));
+        assert!(!ip_is_loopback("2001:db8::1".parse().unwrap()));
+        assert!(!ip_is_loopback("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_token_that_a_header_cannot_carry_is_not_sent() {
+        for mode in [TokenMode::Header, TokenMode::Subprotocol] {
+            let addr = tcp_server(|s| {
+                std::thread::sleep(Duration::from_millis(300));
+                drop(s);
+            });
+            let ep = WsEndpoint::new(&format!("ws://{addr}/ws/x"), Some("a\nb"))
+                .unwrap()
+                .with_token_mode(mode);
+            let mut t = ep.connect_now();
+            assert!(matches!(end_of(&mut t), TransportError::Closed));
+            let why = t.failure().unwrap();
+            assert!(why.contains("header cannot carry"), "{why}");
+            assert!(!why.contains("a\nb"));
+        }
+    }
+
+    #[test]
+    fn a_bad_root_certificate_is_an_error_and_the_default_roots_are_kept() {
+        let addr = tcp_server(drop);
+        let ep = WsEndpoint::new(&format!("wss://{addr}/ws/x"), None)
+            .unwrap()
+            .with_root_certificate_der(vec![1, 2, 3]);
+        assert_eq!(ep.url().scheme, "wss");
+        let mut t = ep.connect_now();
+        assert!(matches!(end_of(&mut t), TransportError::Closed));
+        assert!(t.failure().unwrap().contains("bad root certificate"));
+        // Without extra roots, the shared default configuration is built once and used again.
+        for _ in 0..2 {
+            let addr = tcp_server(drop);
+            let mut t = WsEndpoint::new(&format!("wss://{addr}/ws/x"), None)
+                .unwrap()
+                .connect_now();
+            assert!(matches!(end_of(&mut t), TransportError::Closed));
+            assert!(t.failure().is_some());
+        }
+    }
+
+    #[test]
+    fn a_server_that_does_not_speak_websocket_is_an_error() {
+        let addr = tcp_server(|mut s| {
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        });
+        let mut t = WsTransport::connect(&format!("ws://{addr}/ws/x"), None).unwrap();
+        assert!(matches!(end_of(&mut t), TransportError::Closed));
+        assert!(t.failure().is_some());
+    }
+
+    #[test]
+    fn frames_of_other_kinds_are_skipped_and_a_bad_text_is_reported() {
+        let url = ws_server(|mut ws| {
+            ws.send(Message::binary(vec![1, 2, 3])).unwrap();
+            ws.send(Message::Ping(Default::default())).unwrap();
+            ws.send(Message::text("not json")).unwrap();
+            ws.send(ack(7)).unwrap();
+            ws.send(Message::Close(None)).unwrap();
+            let _ = ws.flush();
+            // Wait for the close handshake.
+            while ws.read().is_ok() {}
+        });
+        let mut t = WsTransport::connect(&url, None).unwrap();
+        let mut got = Vec::new();
+        let stop = Instant::now() + Duration::from_secs(10);
+        let end = loop {
+            match t.recv() {
+                Ok(Some(m)) => got.push(Ok(m)),
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                Err(TransportError::BadMessage(m)) => got.push(Err(m)),
+                Err(e) => break e,
+            }
+            assert!(Instant::now() < stop, "the transport never ended");
+        };
+        assert!(matches!(end, TransportError::Closed));
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got[0].is_err());
+        assert!(matches!(&got[1], Ok(ServerMsg::Ack { op_id: 7, .. })));
+        // A send after the end is refused.
+        assert!(matches!(
+            t.send(&ClientMsg::Bye),
+            Err(TransportError::Closed)
+        ));
+    }
+
+    #[test]
+    fn a_slow_reader_gets_every_frame_of_a_flood() {
+        const N: u64 = 30_000;
+        let url = ws_server(|mut ws| {
+            for n in 0..N {
+                if ws.send(ack(n)).is_err() {
+                    return;
+                }
+            }
+            let _ = ws.close(None);
+            let _ = ws.flush();
+            while ws.read().is_ok() {}
+        });
+        let mut t = WsTransport::connect(&url, None).unwrap();
+        // The queue holds FRAME_QUEUE frames. The thread waits when it is full.
+        std::thread::sleep(Duration::from_millis(500));
+        let mut next = 0;
+        let stop = Instant::now() + Duration::from_secs(60);
+        loop {
+            match t.recv() {
+                Ok(Some(ServerMsg::Ack { op_id, .. })) => {
+                    assert_eq!(op_id, next, "frames stay in order");
+                    next += 1;
+                }
+                Ok(Some(m)) => panic!("{m:?}"),
+                Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+                Err(_) => break,
+            }
+            assert!(Instant::now() < stop, "stuck at {next}");
+        }
+        assert_eq!(next, N);
+    }
+
+    #[test]
+    fn a_server_that_vanishes_ends_the_transport() {
+        let url = ws_server(drop);
+        let mut t = WsTransport::connect(&url, None).unwrap();
+        assert!(matches!(end_of(&mut t), TransportError::Closed));
+        assert!(matches!(
+            t.send(&ClientMsg::Bye),
+            Err(TransportError::Closed)
+        ));
+    }
+
+    #[test]
+    fn a_quiet_connection_is_pinged_and_a_silent_one_is_dropped() {
+        // The server reads, so it sees the pings (and answers them).
+        let (tx, rx) = mpsc::channel();
+        let url = ws_server(move |mut ws| {
+            let _ = ws
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(20)));
+            let stop = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < stop {
+                match ws.read() {
+                    Ok(Message::Ping(_)) => {
+                        let _ = ws.flush();
+                        let _ = tx.send(());
+                        break;
+                    }
+                    Ok(_) | Err(tungstenite::Error::Io(_)) => {}
+                    Err(_) => break,
+                }
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let mut t = WsTransport::connect(&url, None).unwrap();
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("a ping came");
+        t.close();
+        // The server never reads: it answers no ping, and the client gives up.
+        let url = ws_server(|ws| {
+            std::thread::sleep(Duration::from_secs(3));
+            drop(ws);
+        });
+        let mut t = WsTransport::connect(&url, None).unwrap();
+        assert!(matches!(end_of(&mut t), TransportError::Closed));
+    }
+
+    #[test]
+    fn close_tells_the_server_and_the_endpoint_describes_itself() {
+        let (tx, rx) = mpsc::channel();
+        let url = ws_server(move |mut ws| {
+            let mut texts = Vec::new();
+            while let Ok(m) = ws.read() {
+                if let Message::Text(t) = m {
+                    texts.push(t.as_str().to_string());
+                }
+            }
+            let _ = tx.send(texts);
+        });
+        let ep = WsEndpoint::new(&url, None).unwrap();
+        assert_eq!(ep.describe(), url);
+        let mut t = ep.connect_now();
+        t.send(&ClientMsg::Bye).unwrap();
+        // Wait for the socket to open, so the close goes out after `bye`.
+        let stop = Instant::now() + Duration::from_secs(10);
+        while !t.shared.connected.load(Ordering::SeqCst) {
+            assert!(Instant::now() < stop);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        t.close();
+        let texts = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert!(texts[0].contains("bye"));
     }
 }

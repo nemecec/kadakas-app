@@ -389,3 +389,31 @@ fn a_frame_above_the_limit_is_refused_before_it_is_sent() {
     assert!(err.contains("limit"), "{err}");
     t.close();
 }
+
+#[test]
+fn the_test_server_ignores_other_frames_and_drops_a_client_that_sends_bad_json() {
+    let server = TestServer::start();
+    assert_eq!(
+        server.base_url(),
+        format!("ws://127.0.0.1:{}", server.port())
+    );
+    assert_eq!(server.url("d"), format!("{}/ws/d", server.base_url()));
+    let stream = std::net::TcpStream::connect(("127.0.0.1", server.port())).unwrap();
+    let (mut ws, _) = tungstenite::client(server.url("d"), stream).unwrap();
+    // A binary frame and a ping are not messages: the server goes on.
+    ws.send(tungstenite::Message::binary(vec![1, 2, 3]))
+        .unwrap();
+    ws.send(tungstenite::Message::Ping(Default::default()))
+        .unwrap();
+    // Text that is not a message ends the connection.
+    ws.send(tungstenite::Message::text("this is not json"))
+        .unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        match ws.read() {
+            Ok(tungstenite::Message::Close(_)) | Err(_) => break,
+            Ok(_) => {}
+        }
+        assert!(Instant::now() < end, "the server kept the connection");
+    }
+}

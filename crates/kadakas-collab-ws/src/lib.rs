@@ -93,3 +93,28 @@ pub fn endpoint_for(url: &str, token: Option<&str>) -> Result<Box<dyn Endpoint>,
     let ep = WsEndpoint::new(url, token).map_err(|e| TransportError::Failed(e.to_string()))?;
     Ok(Box::new(ep))
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_factory_makes_an_endpoint_or_says_why_not() {
+        let ep = endpoint_for("ws://127.0.0.1:1/ws/doc", Some("tok")).unwrap();
+        assert_eq!(ep.describe(), "ws://127.0.0.1:1/ws/doc");
+        let e = endpoint_for("ftp://127.0.0.1:1/ws/doc", None)
+            .err()
+            .unwrap();
+        assert!(matches!(e, TransportError::Failed(_)), "{e:?}");
+        // A token does not go to another host in plain text.
+        assert!(endpoint_for("ws://example.org/ws/doc", Some("tok")).is_err());
+    }
+
+    #[test]
+    fn only_http_token_characters_fit_the_subprotocol() {
+        assert!(token_fits_subprotocol("aB3-._~"));
+        assert!(!token_fits_subprotocol(""));
+        assert!(!token_fits_subprotocol("a b"));
+        assert!(!token_fits_subprotocol("a,b"));
+    }
+}
