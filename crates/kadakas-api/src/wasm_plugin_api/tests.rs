@@ -66,13 +66,14 @@ fn wat_module(manifest: &str, body: &str) -> Vec<u8> {
           (func (export "dealloc") (param i32 i32))
           (func (export "describe") (result i64)
             (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const {len})))
-          (func (export "reset") (param i32 i32) (result i64) {body}))"#,
+          (func (export "reset") (param i32 i32) (result i64) {body})
+          (func (export "tool") (param i32 i32) (result i64) {body}))"#,
         len = manifest.len()
     ))
     .unwrap()
 }
 
-const POINT_MANIFEST: &str = r#"{"id":"test.spin","name":"Spin","version":"1","abi_version":1,"kinds":["object"],"object":{"shape_type":"point"}}"#;
+const POINT_MANIFEST: &str = r#"{"id":"test.spin","name":"Spin","version":"1","abi_version":2,"kinds":["object"],"object":{"shape_type":"point"}}"#;
 
 #[test]
 fn info_and_list_start_empty_and_name_the_engine() {
@@ -81,7 +82,7 @@ fn info_and_list_start_empty_and_name_the_engine() {
     assert_eq!(info["engine"], "wasmtime");
     assert_eq!(info["installed"], 0);
     assert_eq!(info["agent_plugins_allowed"], true);
-    assert_eq!(info["abi_version"], 1);
+    assert_eq!(info["abi_version"], 2);
     assert!(info["limits"]["fuel"].as_u64().unwrap() > 0);
     assert_eq!(ok(&mut s, "plugins.list", json!(null)), json!([]));
     // A wrong params type is refused.
@@ -137,7 +138,8 @@ fn install_refuses_bad_files() {
           (func (export "alloc") (param i32) (result i32) (i32.const 0))
           (func (export "dealloc") (param i32 i32))
           (func (export "describe") (result i64) (i64.const 0))
-          (func (export "reset") (param i32 i32) (result i64) (i64.const 0)))"#,
+          (func (export "reset") (param i32 i32) (result i64) (i64.const 0))
+          (func (export "tool") (param i32 i32) (result i64) (i64.const 0)))"#,
     )
     .unwrap();
     let path = temp_file("wasi.wasm", &wasi);
@@ -563,8 +565,7 @@ fn installed_plugins_stay_when_the_document_is_replaced() {
 #[test]
 fn a_tool_only_plugin_installs_but_cannot_be_placed() {
     let mut s = open_session();
-    let manifest =
-        r#"{"id":"test.tool","name":"Tool","version":"1","abi_version":1,"kinds":["tool"]}"#;
+    let manifest = r#"{"id":"test.tool","name":"Tool","version":"1","abi_version":2,"kinds":["tool"],"tool":{}}"#;
     let path = temp_file("tool.wasm", &wat_module(manifest, "(i64.const 0)"));
     let r = ok(&mut s, "plugins.install", json!({"path": path}));
     assert_eq!(r["kinds"], json!(["tool"]));
@@ -688,7 +689,7 @@ fn describe_lists_the_methods_with_examples() {
 /// parameters are gone. The answer is one rectangle.
 fn planter_v2() -> Vec<u8> {
     let manifest = format!(
-        r#"{{"id":"{PLANTER_ID}","name":"Raised planter","version":"2","abi_version":1,"kinds":["object"],"object":{{"shape_type":"rectangle","params":[{{"name":"wall","type":"length","default":20,"min":10,"max":50}}]}}}}"#
+        r#"{{"id":"{PLANTER_ID}","name":"Raised planter","version":"2","abi_version":2,"kinds":["object"],"object":{{"shape_type":"rectangle","params":[{{"name":"wall","type":"length","default":20,"min":10,"max":50}}]}}}}"#
     );
     let answer = r#"{"status":"ok","shapes":[{"kind":"rect","min":[0,0],"max":[10,10]}]}"#;
     let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
@@ -702,7 +703,8 @@ fn planter_v2() -> Vec<u8> {
           (func (export "describe") (result i64)
             (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const {ml})))
           (func (export "reset") (param i32 i32) (result i64)
-            (i64.or (i64.shl (i64.const 20000) (i64.const 32)) (i64.const {al}))))"#,
+            (i64.or (i64.shl (i64.const 20000) (i64.const 32)) (i64.const {al})))
+          (func (export "tool") (param i32 i32) (result i64) (i64.const 0)))"#,
         m = esc(&manifest),
         a = esc(answer),
         ml = manifest.len(),
@@ -922,3 +924,6 @@ fn list_tells_trusted_from_runnable() {
         (Some(false), Some(true))
     );
 }
+
+#[path = "tool_tests.rs"]
+mod tool_tests;

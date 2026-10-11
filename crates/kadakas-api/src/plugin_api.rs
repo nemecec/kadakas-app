@@ -11,7 +11,7 @@ use kadakas_core::uid::AsUid;
 use serde_json::{Map, Value, json};
 
 use kadakas_core::command::Command;
-use kadakas_core::model::{Attributes, ClassId, LayerId, Object, ObjectId, Shape};
+use kadakas_core::model::{Attributes, ClassId, LayerId, Object, ObjectId};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_script::examples;
 use kadakas_script::host::{RunSpec, ScriptHost, Status};
@@ -22,6 +22,7 @@ use kadakas_script::python::{self, Interpreter};
 use kadakas_script::trust::{Permit, TrustStore};
 
 use crate::errors::{app, bad};
+use crate::plugin_util::{exec, name_of, object_id, opt_params, origin_of, sel};
 use crate::{RpcError, Session};
 
 /// The key in the data of an instance.
@@ -238,12 +239,6 @@ fn find_def(s: &Session, sel: &Value) -> Result<Found, RpcError> {
     found.ok_or_else(|| RpcError::not_found(format!("there is no plug-in object definition {sel}")))
 }
 
-pub(crate) fn sel<'a>(m: &'a Map<String, Value>, keys: &[&str]) -> Result<&'a Value, RpcError> {
-    keys.iter()
-        .find_map(|k| m.get(*k))
-        .ok_or_else(|| bad(format!("give {}", keys.join(" or "))))
-}
-
 fn instances_of(s: &Session, def: ResourceId) -> Vec<ObjectId> {
     s.editor
         .doc()
@@ -283,34 +278,6 @@ fn list(s: &Session) -> Value {
 fn get(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let f = find_def(s, sel(m, &["id", "name"])?)?;
     Ok(def_summary(&f, s, true))
-}
-
-pub(crate) fn name_of(m: &Map<String, Value>, key: &str) -> Result<String, RpcError> {
-    let n = m
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .ok_or_else(|| bad(format!("{key} is required")))?;
-    if n.chars().count() > 100 {
-        return Err(bad("a name has at most 100 characters"));
-    }
-    Ok(n.to_string())
-}
-
-pub(crate) fn exec(
-    s: &mut Session,
-    cmd: &Command,
-) -> Result<Vec<kadakas_core::uid::Uid>, RpcError> {
-    let cmd = s.in_context(cmd.clone());
-    // Plug-in objects change because a script ran, so the change events say so.
-    let before = s.editor.origin();
-    s.editor.set_origin(kadakas_core::change::Origin::Script);
-    let out = s.editor.execute(&cmd).map_err(RpcError::from);
-    s.editor.set_origin(before);
-    let out = out?;
-    s.prune_selection();
-    Ok(out.created)
 }
 
 fn define(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
@@ -470,20 +437,6 @@ fn instance_data(o: &Object) -> Option<&Value> {
     o.data.get(DATA_KEY).filter(|d| d.is_object())
 }
 
-/// The lowest corner of the shapes, to notice that someone moved the object.
-pub(crate) fn origin_of(shapes: impl Iterator<Item = Shape>) -> [f64; 2] {
-    let mut lo = [f64::INFINITY; 2];
-    for sh in shapes {
-        let (a, _) = sh.bounds();
-        lo = [lo[0].min(a.x), lo[1].min(a.y)];
-    }
-    if lo.iter().all(|c| c.is_finite()) {
-        lo
-    } else {
-        [0.0, 0.0]
-    }
-}
-
 /// How a reset ended.
 struct Outcome {
     ok: bool,
@@ -543,14 +496,6 @@ fn allowed(s: &Session, def: &PluginDef) -> Result<(), RpcError> {
 /// Reads the geometry for the definition from the parameters of a request.
 fn geometry_of(def: &PluginDef, m: &Map<String, Value>) -> Result<Geometry, RpcError> {
     Geometry::from_json(def.shape_type, &Value::Object(m.clone())).map_err(bad)
-}
-
-pub(crate) fn opt_params(m: &Map<String, Value>) -> Result<Map<String, Value>, RpcError> {
-    match m.get("params") {
-        None | Some(Value::Null) => Ok(Map::new()),
-        Some(Value::Object(o)) => Ok(o.clone()),
-        Some(_) => Err(bad("params must be an object")),
-    }
 }
 
 fn add_cmds(shapes: &[Generated], layer: Option<LayerId>, class: Option<ClassId>) -> Vec<Command> {
@@ -816,13 +761,6 @@ fn instance_def(s: &Session, id: ObjectId) -> Result<Found, RpcError> {
     let data = instance_data(obj)
         .ok_or_else(|| RpcError::validation(format!("object {id} is not a plug-in object")))?;
     find_def(s, &data["definition"])
-}
-
-pub(crate) fn object_id(m: &Map<String, Value>, key: &str) -> Result<ObjectId, RpcError> {
-    m.get(key)
-        .and_then(AsUid::as_uid)
-        .map(ObjectId)
-        .ok_or_else(|| bad(format!("{key} must be an object ID")))
 }
 
 fn set_params(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {

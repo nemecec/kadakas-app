@@ -1,3 +1,4 @@
+use kadakas_core::model::Shape;
 use kadakas_core::uid::AsUid;
 use serde_json::{Value, json};
 

@@ -8,7 +8,12 @@
 //!
 //! Trust works as for Python plug-in objects: a module runs only if the user trusted its exact
 //! bytes (SHA-256), or the host lets agents run plug-ins (`--allow-agent-scripts`). The app has the
-//! dialog; [`trust_module`] is what the dialog calls. No API method adds trust.
+//! dialog; [`trust_module`] is what the dialog calls. **No API method adds trust**, and none
+//! removes it: an agent cannot decide for the user in either direction.
+//!
+//! This module compiles for the browser too. The browser has no file paths for agents, so
+//! `plugins.install` is a native method; the app installs modules from bytes with
+//! [`install_module`] on every target.
 //!
 //! Upgrade path: `plugins.install` of a new build with the id of an installed plug-in replaces the
 //! old build. Objects keep their shapes. `plugins.object` shows `stale: true` for an object that was
@@ -22,12 +27,14 @@ use std::collections::HashMap;
 use kadakas_core::command::Command;
 use kadakas_core::model::{ClassId, LayerId, Object, ObjectId};
 use kadakas_core::uid::{AsUid, Uid};
-use kadakas_plugin::{Generated, Permit, Plugin, PluginError, Registry, trust};
-use kadakas_plugin_abi::{Geometry, Kind, ParamSchema};
+use kadakas_plugin::{
+    Generated, Permit, Plugin, PluginError, Registry, ToolCall, ToolDone, ToolStep, trust,
+};
+use kadakas_plugin_abi::{Geometry, Kind, Modifiers, ParamSchema, ToolEvent};
 use serde_json::{Map, Value, json};
 
 use crate::errors::{app, bad};
-use crate::plugin_api::{exec, name_of, object_id, opt_params, origin_of, sel};
+use crate::plugin_util::{exec, name_of, object_id, opt_params, origin_of, sel};
 use crate::{RpcError, Session};
 
 /// The key in the data of an instance.
@@ -35,15 +42,15 @@ pub const DATA_KEY: &str = "kadakas.wasm_plugin";
 
 pub const PLUGINS_INFO: (&str, &str) = (
     "plugins.info",
-    "How WebAssembly plug-ins run here. Returns {engine (wasmtime, or unavailable in the browser build), agent_plugins_allowed, installed, limits: {fuel, memory_bytes, max_module_bytes, max_output_bytes, max_shapes, max_vertices}, abi_version}.",
+    "How WebAssembly plug-ins run here. Returns {engine (wasmtime on a computer, webassembly in the browser build), agent_plugins_allowed, installed, persistent (true when installed modules and trust are kept for the next session), limits: {fuel, memory_bytes, max_module_bytes, max_output_bytes, max_shapes, max_vertices}, abi_version, time_limit_ms (the wall-clock limit of one call, or null where the engine has none: the browser)}.",
 );
 pub const PLUGINS_LIST: (&str, &str) = (
     "plugins.list",
-    "The installed plug-ins. Returns [{id, name, version, abi_version, description, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted (a user trusted this exact module), runnable (trusted, or the host allows agents with --allow-agent-scripts), shape_type, params (the schema), instances}]. Only kind object can be placed in this version.",
+    "The installed plug-ins. Returns [{id, name, version, abi_version, description, author, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted (a user trusted this exact module), runnable (trusted, or the host allows agents with --allow-agent-scripts), shape_type, params (the schema of the object), tool_params (the schema of the tool options, or null), instances}]. Kind object is placed with plugins.place, kind tool is driven with plugins.tool_step.",
 );
 pub const PLUGINS_INSTALL: (&str, &str) = (
     "plugins.install",
-    "Load a plug-in module (.wasm) from a file. params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. A new build with the id of an installed plug-in replaces the old build: objects keep their shapes (plugins.object shows stale: true) until you call plugins.reset, and the new build must be trusted again. Returns the entry of plugins.list plus {existing, replaced: hash of the old build or null, stale_objects}.",
+    "Load a plug-in module (.wasm) from a file (not in the browser build). params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. A new build with the id of an installed plug-in replaces the old build: objects keep their shapes (plugins.object shows stale: true) until you call plugins.reset, and the new build must be trusted again. Returns the entry of plugins.list plus {existing, replaced: hash of the old build or null, stale_objects, warning? (the module is installed, but it is not kept for the next session)}.",
 );
 pub const PLUGINS_REMOVE: (&str, &str) = (
     "plugins.remove",
@@ -69,6 +76,10 @@ pub const PLUGINS_PREVIEW: (&str, &str) = (
     "plugins.preview",
     "Run a module without changing the document. params: {plugin: id | name, params?} plus the geometry, as in plugins.place. Returns {shapes: [...]}.",
 );
+pub const PLUGINS_TOOL_STEP: (&str, &str) = (
+    "plugins.tool_step",
+    "Send one event to the tool of a plug-in (kind tool). params: {plugin: id | name, event: {type: start | move | click | finish, at?: [x, y] (drawing coordinates in mm, for move and click)}, modifiers?: {shift?, ctrl?, alt?}, state? (what the last step returned; null at the start), params? (tool options; missing ones use the defaults), commit? (default true), layer?, class?, name?}. The module answers with a preview and, at the end, a result. A tool keeps no memory between calls: send back the state you got. When the result comes and commit is true, the shapes or the plug-in object go into the drawing as one undo step with the change origin script. With commit false nothing changes and the result is only shown. Returns {state, preview: [shapes], hint, done: bool, result?: {kind: shapes | object, ids? (shapes), id? (object), params? and geometry? (object), shapes: count, committed: bool}}.",
+);
 
 /// The plug-ins of a session: the installed modules and the trust of the user.
 #[derive(Default)]
@@ -80,7 +91,8 @@ pub struct WasmPluginState {
 pub fn describe() -> Value {
     json!({
         "summary": "A plug-in is a sandboxed WebAssembly module: it has no files, no network and no clock, it gets a fixed amount of work and memory per call, and it can only turn parameters and a placement into shapes. The same module runs on the desktop, on a server and (later) in the browser. Plug-in objects are stored as groups of plain shapes with the parameters in the group data, so a client without the plug-in still draws them. Python stays for automation scripts. To write a plug-in, see docs/plugins.md.",
-        "trust": "A module runs only if a user trusted its exact bytes (SHA-256) in the app, or the host lets agents run plug-ins (--allow-agent-scripts). No API method adds trust.",
+        "trust": "A module runs only if a user trusted its exact bytes (SHA-256) in the app, or the host lets agents run plug-ins (--allow-agent-scripts). No API method adds or removes trust: the app shows the user the name, version, author, hash, size and kinds of the module, and the user decides.",
+        "tools": "A module of kind tool answers to events (start, move, click, finish) with a preview and a result. Drive it with plugins.tool_step. The module keeps no variables between calls, so it returns a state and you send it back.",
         "upgrade": "Install a new build of the same plug-in id to replace the old build, then call plugins.reset {plugin} to regenerate the objects. plugins.object shows stale: true until then.",
         "limits": "Per call: fuel (an endless loop stops), a memory cap, at most 2 MiB of output, 2000 shapes and 100000 polyline vertices. See plugins.info.",
         "examples": [
@@ -88,6 +100,8 @@ pub fn describe() -> Value {
             {"method": "plugins.list", "params": {}},
             {"method": "plugins.place", "params": {"plugin": "org.kadakas.raised-planter", "min": [0, 0], "max": [2400, 900], "params": {"wall": 150, "corners": "Cut"}}},
             {"method": "plugins.set_params", "params": {"id": "00000000-0000-0000-0000-00000000000c", "params": {"height": 600}}},
+            {"method": "plugins.tool_step", "params": {"plugin": "org.kadakas.stone-row", "event": {"type": "click", "at": [0, 0]}}},
+            {"method": "plugins.tool_step", "params": {"plugin": "org.kadakas.stone-row", "event": {"type": "click", "at": [3000, 0]}, "state": {"start": [0, 0]}}},
             {"method": "plugins.remove", "params": {"plugin": "org.kadakas.raised-planter"}}
         ]
     })
@@ -105,13 +119,14 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
     Some(match method {
         "plugins.info" => Ok(info(s)),
         "plugins.list" => Ok(list(s)),
-        "plugins.install" => install(s, m),
+        "plugins.install" => install_path(s, m),
         "plugins.remove" => remove(s, m),
         "plugins.place" => place(s, m),
         "plugins.set_params" => set_params(s, m),
         "plugins.reset" => reset_many(s, m),
         "plugins.object" => object_info(s, m),
         "plugins.preview" => preview(s, m),
+        "plugins.tool_step" => tool_step(s, m),
         other => Err(RpcError::method_not_found(other)),
     })
 }
@@ -129,6 +144,20 @@ fn engine_error(e: PluginError) -> RpcError {
 
 fn registry(s: &Session) -> &Registry {
     &s.wasm_plugins.registry
+}
+
+/// True if the host lets agents run plug-ins (`--allow-agent-scripts`). The browser build has no
+/// such flag, so agents never run plug-ins there without the user's trust.
+fn agents_allowed(s: &Session) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.scripting.allow_agent_scripts
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = s;
+        false
+    }
 }
 
 /// The data of an instance.
@@ -178,7 +207,7 @@ fn find<'a>(s: &'a Session, sel: &Value) -> Result<&'a Plugin, RpcError> {
 fn permit(s: &Session, p: &Plugin) -> Result<Permit, RpcError> {
     registry(s)
         .trust
-        .permit(p.hash(), s.scripting.allow_agent_scripts)
+        .permit(p.hash(), agents_allowed(s))
         .ok_or_else(|| {
             RpcError::policy(format!(
                 "the plug-in module '{}' (SHA-256 {}) is not trusted. A user must trust it in the app, or the host must allow agents with --allow-agent-scripts",
@@ -201,9 +230,11 @@ fn summary(s: &Session, p: &Plugin, used: &HashMap<String, usize>) -> Value {
         "hash": p.hash(),
         "size": p.size(),
         "trusted": registry(s).trust.is_trusted(p.hash()),
-        "runnable": registry(s).trust.is_trusted(p.hash()) || s.scripting.allow_agent_scripts,
+        "runnable": registry(s).trust.is_trusted(p.hash()) || agents_allowed(s),
+        "author": m.author,
         "shape_type": m.object.as_ref().map(|o| o.shape_type.name()),
         "params": m.object.as_ref().map(|o| o.params.clone()).unwrap_or_default(),
+        "tool_params": m.tool.as_ref().map(|t| t.params.clone()),
         "instances": used.get(&m.id).copied().unwrap_or(0),
     })
 }
@@ -212,8 +243,10 @@ fn info(s: &Session) -> Value {
     let l = registry(s).limits();
     json!({
         "engine": registry(s).engine(),
-        "agent_plugins_allowed": s.scripting.allow_agent_scripts,
+        "agent_plugins_allowed": agents_allowed(s),
         "installed": registry(s).len(),
+        "persistent": registry(s).persistent(),
+        "time_limit_ms": if registry(s).engine() == "wasmtime" { json!(l.max_millis) } else { Value::Null },
         "abi_version": kadakas_plugin_abi::ABI_VERSION,
         "limits": {
             "fuel": l.fuel,
@@ -235,6 +268,7 @@ fn list(s: &Session) -> Value {
 
 /// Reads a module file through one open handle: the file is checked and read from the same
 /// handle, so it cannot change into something else between the two steps.
+#[cfg(not(target_arch = "wasm32"))]
 fn read_module(path: &std::path::Path, max: usize) -> Result<Vec<u8>, RpcError> {
     use std::io::Read;
     let file = std::fs::File::open(path).map_err(app)?;
@@ -253,7 +287,8 @@ fn read_module(path: &std::path::Path, max: usize) -> Result<Vec<u8>, RpcError> 
     Ok(bytes)
 }
 
-fn install(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+#[cfg(not(target_arch = "wasm32"))]
+fn install_path(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let path = m
         .get("path")
         .and_then(Value::as_str)
@@ -262,7 +297,21 @@ fn install(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         .check_path(std::path::Path::new(path), false, &["wasm"])
         .map_err(RpcError::policy)?;
     let bytes = read_module(&file, registry(s).limits().max_module_bytes)?;
-    let hash = trust::hash(&bytes);
+    install_module(s, &bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_path(_s: &mut Session, _m: &Map<String, Value>) -> Result<Value, RpcError> {
+    Err(RpcError::policy(
+        "the browser build has no file paths for agents. The user installs modules in the app",
+    ))
+}
+
+/// Installs a module from its bytes. The app calls this after the user picked a file, on every
+/// target; `plugins.install` calls it after it read a file. Loading runs `describe` in the
+/// sandbox and nothing else. The module is kept for the next session when the registry has a store.
+pub fn install_module(s: &mut Session, bytes: &[u8]) -> Result<Value, RpcError> {
+    let hash = trust::hash(bytes);
     let existing = registry(s).by_hash(&hash).is_some();
     let before: HashMap<String, String> = registry(s)
         .iter()
@@ -271,7 +320,7 @@ fn install(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let id = s
         .wasm_plugins
         .registry
-        .install(&bytes)
+        .install(bytes)
         .map_err(engine_error)?
         .manifest()
         .id
@@ -288,7 +337,51 @@ fn install(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     v["existing"] = json!(existing);
     v["replaced"] = json!(replaced);
     v["stale_objects"] = json!(stale);
+    if let Some(w) = s.wasm_plugins.registry.take_store_warning() {
+        v["warning"] = json!(w);
+    }
     Ok(v)
+}
+
+/// What the trust dialog shows about an installed module: everything the user needs to decide.
+/// The module asks for no permissions (the host grants none), so there are none to show.
+/// `None` if no module with this id is installed.
+pub fn module_review(s: &Session, plugin_id: &str) -> Option<Value> {
+    let p = registry(s).get(plugin_id)?;
+    let m = p.manifest();
+    Some(json!({
+        "id": m.id,
+        "name": m.name,
+        "version": m.version,
+        "author": m.author,
+        "description": m.description,
+        "hash": p.hash(),
+        "size": p.size(),
+        "kinds": m.kinds.iter().map(|k| k.name()).collect::<Vec<_>>(),
+        "trusted": registry(s).trust.is_trusted(p.hash()),
+        "instances": usage(s).get(&m.id).copied().unwrap_or(0),
+    }))
+}
+
+/// The user takes back the trust in the module that the manager showed. Returns an error text if
+/// the list cannot be saved (the trust is gone for this session anyway).
+pub fn forget_module(s: &mut Session, plugin_id: &str) -> Result<(), String> {
+    let hash = registry(s)
+        .get(plugin_id)
+        .ok_or_else(|| format!("there is no installed plug-in '{plugin_id}'"))?
+        .hash()
+        .to_string();
+    s.wasm_plugins
+        .registry
+        .trust
+        .forget(&hash)
+        .map_err(|e| format!("cannot save the trust file: {e}"))
+}
+
+/// Warnings of the registry about the last change (a module that is not kept, a stored module that
+/// failed). Reading clears them.
+pub fn take_store_warning(s: &mut Session) -> Option<String> {
+    s.wasm_plugins.registry.take_store_warning()
 }
 
 /// The user trusts the module that the dialog showed. `shown_hash` is the hash of the module on
@@ -423,27 +516,44 @@ fn place(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     };
     let layer = m.get("layer").and_then(AsUid::as_uid).map(LayerId);
     let class = m.get("class").and_then(AsUid::as_uid).map(ClassId);
+    let name = match m.get("name") {
+        Some(_) => name_of(m, "name")?,
+        None => meta.name.clone(),
+    };
+    add_instance(s, &meta, &params, &geometry, &shapes, layer, class, name)
+}
+
+/// Adds the shapes of a plug-in object to the document as a group with the instance data, in one
+/// undo step. Used by `plugins.place` and by the end of a tool run.
+#[allow(clippy::too_many_arguments)]
+fn add_instance(
+    s: &mut Session,
+    meta: &Meta,
+    params: &Map<String, Value>,
+    geometry: &Geometry,
+    shapes: &[Generated],
+    layer: Option<LayerId>,
+    class: Option<ClassId>,
+    name: String,
+) -> Result<Value, RpcError> {
     let n = shapes.len();
     let planned = s.editor.doc().next_ids(n + 1);
     let group = ObjectId(planned[n]);
     let members: Vec<ObjectId> = planned[..n].iter().copied().map(ObjectId).collect();
     let origin = origin_of(shapes.iter().map(|g| g.shape.clone()));
-    let mut commands = add_cmds(&shapes, layer, class);
+    let mut commands = add_cmds(shapes, layer, class);
     commands.push(Command::Group {
         ids: members.clone(),
-        name: Some(match m.get("name") {
-            Some(_) => name_of(m, "name")?,
-            None => meta.name.clone(),
-        }),
+        name: Some(name),
     });
     commands.push(Command::SetData {
         id: group,
         set: [(
             DATA_KEY.to_string(),
             Instance {
-                meta: &meta,
-                params: &params,
-                geometry: &geometry,
+                meta,
+                params,
+                geometry,
                 origin,
                 class,
                 children: &members,
@@ -794,7 +904,14 @@ fn preview(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let params = p.manifest().resolve_params(&opt_params(m)?).map_err(bad)?;
     let geometry = geometry_of(p, m)?;
     let shapes = p.reset(&permit, &params, &geometry).map_err(engine_error)?;
-    let list: Vec<Value> = shapes
+    let list = shapes_json(&shapes);
+    Ok(json!({"shapes": list}))
+}
+
+// ---------------------------------------------------------------------- tools
+
+fn shapes_json(shapes: &[Generated]) -> Vec<Value> {
+    shapes
         .iter()
         .map(|g| {
             let mut v = serde_json::to_value(&g.shape).expect("json");
@@ -803,8 +920,135 @@ fn preview(s: &Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             }
             v
         })
-        .collect();
-    Ok(json!({"shapes": list}))
+        .collect()
+}
+
+fn modifiers_of(m: &Map<String, Value>) -> Result<Modifiers, RpcError> {
+    match m.get("modifiers") {
+        None | Some(Value::Null) => Ok(Modifiers::default()),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| bad(format!("modifiers must be {{shift?, ctrl?, alt?}}: {e}"))),
+    }
+}
+
+/// Runs one step of the tool of a plug-in without a document or a session: used by the app, which
+/// keeps the state of the run itself. The plug-in must be trusted (or the host must allow agents).
+/// Returns the checked answer of the module. Nothing changes in the document.
+pub fn tool_step_raw(
+    s: &Session,
+    plugin_id: &str,
+    event: &ToolEvent,
+    modifiers: Modifiers,
+    state: &Value,
+    params: &Map<String, Value>,
+) -> Result<ToolStep, RpcError> {
+    let p = find(s, &json!(plugin_id))?;
+    let permit = permit(s, p)?;
+    p.tool_step(
+        &permit,
+        &ToolCall {
+            event,
+            modifiers,
+            state,
+        },
+        params,
+    )
+    .map_err(engine_error)
+}
+
+/// Puts the end of a tool run into the document: plain shapes, or a plug-in object of the module.
+/// One undo step with the change origin `script`. Returns what `plugins.tool_step` reports as the
+/// result.
+pub fn commit_tool_result(
+    s: &mut Session,
+    plugin_id: &str,
+    done: &ToolDone,
+    layer: Option<LayerId>,
+    class: Option<ClassId>,
+    name: Option<String>,
+) -> Result<Value, RpcError> {
+    match done {
+        ToolDone::Shapes(shapes) => {
+            let created = exec(
+                s,
+                &Command::Batch {
+                    commands: add_cmds(shapes, layer, class),
+                },
+            )?;
+            s.selection = created.iter().copied().map(ObjectId).collect();
+            Ok(json!({"kind": "shapes", "ids": created, "shapes": shapes.len(), "committed": true}))
+        }
+        ToolDone::Object {
+            params,
+            geometry,
+            shapes,
+        } => {
+            let meta = Meta::of(find(s, &json!(plugin_id))?);
+            let name = name.unwrap_or_else(|| meta.name.clone());
+            let mut v = add_instance(s, &meta, params, geometry, shapes, layer, class, name)?;
+            v["kind"] = json!("object");
+            v["params"] = json!(params);
+            v["geometry"] = geometry.to_value();
+            v["committed"] = json!(true);
+            Ok(v)
+        }
+    }
+}
+
+fn tool_step(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
+    let id = find(s, sel(m, &["plugin"])?)?.manifest().id.clone();
+    let event: ToolEvent = serde_json::from_value(
+        m.get("event")
+            .cloned()
+            .ok_or_else(|| bad("event is required"))?,
+    )
+    .map_err(|e| {
+        bad(format!(
+            "event must be {{type: start | move | click | finish, at?: [x, y]}}: {e}"
+        ))
+    })?;
+    if matches!(event, ToolEvent::Move { .. } | ToolEvent::Click { .. }) && event.point().is_none()
+    {
+        return Err(bad("this event needs at"));
+    }
+    let state = m.get("state").cloned().unwrap_or(Value::Null);
+    let step = tool_step_raw(s, &id, &event, modifiers_of(m)?, &state, &opt_params(m)?)?;
+    let mut out = json!({
+        "state": step.state,
+        "preview": shapes_json(&step.preview),
+        "hint": step.hint,
+        "done": step.done.is_some(),
+    });
+    if let Some(done) = &step.done {
+        let commit = m.get("commit").and_then(Value::as_bool).unwrap_or(true);
+        out["result"] = if commit {
+            let layer = m.get("layer").and_then(AsUid::as_uid).map(LayerId);
+            let class = m.get("class").and_then(AsUid::as_uid).map(ClassId);
+            let name = match m.get("name") {
+                Some(_) => Some(name_of(m, "name")?),
+                None => None,
+            };
+            commit_tool_result(s, &id, done, layer, class, name)?
+        } else {
+            match done {
+                ToolDone::Shapes(shapes) => {
+                    json!({"kind": "shapes", "shapes": shapes_json(shapes), "committed": false})
+                }
+                ToolDone::Object {
+                    params,
+                    geometry,
+                    shapes,
+                } => json!({
+                    "kind": "object",
+                    "params": params,
+                    "geometry": geometry.to_value(),
+                    "shapes": shapes_json(shapes),
+                    "committed": false,
+                }),
+            }
+        };
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
