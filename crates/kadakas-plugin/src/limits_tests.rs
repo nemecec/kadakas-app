@@ -129,6 +129,11 @@ impl RawInstance for PlainInstance {
     }
 }
 
+/// The test compiler (wasmtime without limits of its own) for other tests.
+pub(super) fn plain_compiler() -> impl Compiler {
+    Plain(wasmtime::Engine::new(&wasmtime::Config::new()).unwrap())
+}
+
 #[test]
 fn a_pointer_move_gets_less_fuel_than_a_click() {
     let l = Limits {

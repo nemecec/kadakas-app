@@ -819,3 +819,6 @@ mod format_tests;
 
 #[path = "fixture_tests.rs"]
 mod fixture_tests;
+
+#[path = "probe_tests.rs"]
+mod probe_tests;
