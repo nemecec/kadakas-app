@@ -29,7 +29,7 @@ macro_rules! style_methods {
     ($ty:literal, $what:literal, $list:ident, $get:ident, $create:ident, $update:ident, $delete:ident) => {
         pub const $list: (&str, &str) = (concat!($ty, ".list"), concat!("The ", $what, "s of the document. Returns {items: [{id, name, ...fields, used_by}]}."));
         pub const $get: (&str, &str) = (concat!($ty, ".get"), concat!("One ", $what, ". params: {id} (the ID or the name)."));
-        pub const $create: (&str, &str) = (concat!($ty, ".create"), concat!("Create a ", $what, ". params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}."));
+        pub const $create: (&str, &str) = (concat!($ty, ".create"), concat!("Create a ", $what, ". params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: \"area\". Returns {id}."));
         pub const $update: (&str, &str) = (concat!($ty, ".update"), concat!("Change a ", $what, ". params: {id, name?, ...fields}. Missing fields stay. Annotations that use it follow the change."));
         pub const $delete: (&str, &str) = (concat!($ty, ".delete"), concat!("Delete a ", $what, ". params: {id, reassign?}. Fails while annotations use it, unless reassign names another one."));
     };
@@ -74,7 +74,7 @@ style_methods!(
 
 pub const DIMENSION_ADD: (&str, &str) = (
     "dimension.add",
-    "Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length, area. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. An area dimension (mode area) needs object, a closed shape (rectangle, circle, closed polyline, landscape area, hardscape, site modifier). It shows the area in the unit of the dimension style (area_unit: m2|ha|ft2|ac, area_precision, area_show_unit, area_round_to), sits at the middle of the shape, and follows the shape: when the shape changes, the area updates (a viewport is not supported). offset is then the paper mm that the label moves up (default 0). offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (real mm2 for area, degrees for angular).",
+    "Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (degrees for angular).",
 );
 pub const CALLOUT_ADD: (&str, &str) = (
     "callout.add",
@@ -173,8 +173,8 @@ pub fn describe() -> Value {
         "concepts": "Sizes of annotations (text, arrows, gaps, symbols) are paper mm. On a design layer they grow with the scale of the layer, so they print at the same size at any scale. In the annotation space of a viewport, positions are paper mm from the lower left corner of the frame, and real lengths (dimension values, scale bars) use the scale of the viewport. Dimensions, callouts and data tags are associative: they follow the objects they are tied to.",
         "resources": {
             "text_style": "{name, font?, size_mm? (paper), bold?, italic?, color?, justify?: left|center|right, line_spacing?}",
-            "dimension_style": "{name, font?, text_size_mm?, unit?: mm|cm|m|in|ft|ft_in, precision? (decimals), show_unit?, angle_precision?, terminator?: arrow|open_arrow|tick|dot|none, terminator_size_mm?, ext_gap_mm?, ext_overshoot_mm?, baseline_spacing_mm?, text_gap_mm?, prefix?, suffix?, tolerance?: {plus, minus}, color?}",
-            "tag_style": "{name, lines: [text with fields in braces], font?, size_mm?, frame?: none|box|underline|circle, leader?, terminator?, pad_mm?}. A field is a worksheet expression over the properties of the tagged object (the names of worksheet.databases): {IdCode}, {Botanical}, {ROUND(Area, 1)} m2, {Plant.spread}, {Soil.Depth}, {IF(Count > 1, Count, \"\")}.",
+            "dimension_style": "{name, font? (default sans-serif), text_size_mm? (paper, default 2.5), unit?: mm|cm|m|in|ft|ft_in (default mm), precision? (decimals, default 0), show_unit? (default false), angle_precision? (default 1), terminator?: arrow|open_arrow|tick|dot|none (default arrow), terminator_size_mm? (2.5), ext_gap_mm? (gap between the object and the extension line, 1), ext_overshoot_mm? (extension line past the dimension line, 2), baseline_spacing_mm? (7), text_gap_mm? (0.8), prefix?, suffix?, tolerance?: {plus, minus} (in the unit of the style), color?: [r, g, b, a], round_to? (round values to a multiple of this many real mm, default none)}",
+            "tag_style": "{name, lines: [text with fields in braces], font?, size_mm?, color?, frame?: none|box|underline|circle, leader?, terminator?: arrow|open_arrow|tick|dot|none, pad_mm?, preset?: \"area\"}. A field is a worksheet expression over the properties of the tagged object (the names of worksheet.databases): {IdCode}, {Botanical}, {ROUND(Area, 1)} m2, {Plant.spread}, {Soil.Depth}, {IF(Count > 1, Count, \"\")}. Area (m2) is the net area: the holes of a landscape area are taken out. {AREA(Area, unit?, decimals?, round_to?, show_unit?)} writes an area with its own format: unit is \"m2\", \"ha\", \"ft2\" or \"ac\" (without it: ft2 when the first dimension standard of the document measures in in, ft or ft_in, else m2), decimals (default for the unit), round_to (round to a multiple of that many units), show_unit (default true). The object that has no area gives an empty text. preset: \"area\" makes the Area tag style (one line, {AREA(Area)}); give name, and other fields to change it.",
             "notes_db": "{name, notes: [{key, text}]} or {name, notes: {key: text}}. Callouts with note and notes_db show the text of the note."
         },
         "examples": [
@@ -183,6 +183,9 @@ pub fn describe() -> Value {
             {"method": "dimension.add", "params": {"mode": "radial", "object": "00000000-0000-0000-0000-000000000007"}},
             {"method": "tag_style.create", "params": {"name": "Plant tag", "lines": ["{IdCode}", "{Botanical}"], "frame": "box"}},
             {"method": "data_tag.tag_all", "params": {"style": "Plant tag", "criteria": "Kind = \"plant\""}},
+            {"method": "tag_style.create", "params": {"name": "Area", "preset": "area"}},
+            {"method": "tag_style.create", "params": {"name": "Bed area", "lines": ["{Name}", "{AREA(Area, \"ha\", 3)}"], "frame": "box"}},
+            {"method": "data_tag.add", "params": {"style": "Area", "object": "00000000-0000-0000-0000-000000000005", "offset": [0, 0]}},
             {"method": "legend.add", "params": {"at": [20, 280], "title": "Plants", "criteria": "Kind = \"plant\"", "group_by": "Style"}},
             {"method": "north_arrow.add", "params": {"at": [380, 260], "size_mm": 15}},
             {"method": "scale_bar.add", "params": {"at": [20, 20], "unit": "m", "segment": 5, "segments": 4}},
@@ -355,7 +358,7 @@ fn body_fields(ty: &str, p: &Value) -> Map<String, Value> {
         .as_object()
         .into_iter()
         .flatten()
-        .filter(|(k, _)| !["id", "name", "reassign"].contains(&k.as_str()))
+        .filter(|(k, _)| !["id", "name", "reassign", "preset"].contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // A notes database may be given as {key: text}.
@@ -384,7 +387,23 @@ fn style_create(s: &mut Session, ty: &str, p: &Value) -> Res {
         .and_then(Value::as_str)
         .ok_or_else(|| bad("params.name is required (text)"))?
         .to_string();
-    let body = style_body(ty, body_fields(ty, p))?;
+    let mut fields = body_fields(ty, p);
+    match p.get("preset").and_then(Value::as_str) {
+        None => {}
+        Some("area") if ty == "tag_style" => {
+            let preset =
+                serde_json::to_value(kadakas_core::annot::style::TagStyle::area()).map_err(app)?;
+            for (k, v) in preset.as_object().into_iter().flatten() {
+                fields.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        Some(other) => {
+            return Err(bad(format!(
+                "unknown preset '{other}' for a {ty}. The only preset is \"area\" (tag_style)"
+            )));
+        }
+    }
+    let body = style_body(ty, fields)?;
     let out = s
         .editor
         .execute(&Command::AddResource { name, body })
@@ -498,16 +517,7 @@ fn prep_dimension(
     })?;
     j.insert("mode".into(), serde_json::to_value(mode).unwrap());
     if !j.contains_key("offset") {
-        let default = if mode == DimMode::Area { 0.0 } else { 8.0 };
-        j.insert("offset".into(), json!(default));
-    }
-    if mode == DimMode::Area && in_viewport {
-        return Err(bad("an area dimension cannot go in a viewport"));
-    }
-    if mode == DimMode::Area && !j.contains_key("object") {
-        return Err(bad(
-            "an area dimension needs object (a closed shape): the area follows it",
-        ));
+        j.insert("offset".into(), json!(8.0));
     }
     let mut anchors: Vec<Value> = match j.get("anchors") {
         Some(Value::Array(a)) => a.iter().map(anchor_json).collect::<Result<_, _>>()?,
@@ -527,14 +537,6 @@ fn prep_dimension(
             .shape;
         let angle = j.remove("angle").and_then(|v| v.as_f64()).unwrap_or(0.78);
         let pts = match (mode, shape) {
-            (DimMode::Area, shape) => {
-                let (Some(area), Some(at)) = (shape.area(), kadakas_core::annot::ref_point(shape))
-                else {
-                    return Err(bad("object must be a closed shape (it has no area)"));
-                };
-                j.insert("area".into(), json!(area));
-                vec![at]
-            }
             (
                 DimMode::Radial | DimMode::Diameter,
                 Shape::Circle { center, radius } | Shape::Arc { center, radius, .. },
@@ -803,8 +805,6 @@ fn computed(doc: &Document, a: &Annot, ctx: &Ctx) -> Value {
                 .map(|v| {
                     if matches!(d.mode, DimMode::Angular) {
                         *v
-                    } else if d.mode == DimMode::Area {
-                        v / (ctx.real * ctx.real)
                     } else {
                         v / ctx.real
                     }

@@ -1,5 +1,5 @@
 use glam::DVec2;
-use kadakas_core::annot::style::{AnnotResource, TagStyle};
+use kadakas_core::annot::style::{AnnotResource, DimensionStyle, LengthUnit, TagStyle};
 use kadakas_core::annot::*;
 use kadakas_core::command::{Command, Editor};
 use kadakas_core::model::{Attributes, Shape};
@@ -469,30 +469,142 @@ fn legends_cap_their_rows_and_use_the_style_colors_of_plants() {
     );
 }
 
+fn sq(x: f64, y: f64, side: f64) -> Vec<kadakas_core::curve::Vertex> {
+    kadakas_core::curve::corners(&[
+        DVec2::new(x, y),
+        DVec2::new(x + side, y),
+        DVec2::new(x + side, y + side),
+        DVec2::new(x, y + side),
+    ])
+}
+
 #[test]
-fn svg_of_an_area_dimension_has_the_area_text() {
+fn the_area_field_shows_the_net_area_of_every_closed_shape() {
     let mut ed = Editor::default();
-    let r = add(
+    let land = add(
         &mut ed,
-        Shape::Rect {
-            min: DVec2::ZERO,
-            max: DVec2::new(3000.0, 2000.0),
+        Shape::LandscapeArea {
+            boundary: sq(0.0, 0.0, 10_000.0),
+            name: "Bed".into(),
         },
     );
-    let d = add(
+    ed.execute(&Command::SetLandscapeArea {
+        ids: vec![land],
+        patch: kadakas_core::landscape::LandscapePatch {
+            holes: Some(vec![sq(2000.0, 2000.0, 2000.0)]),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let paving = add(
         &mut ed,
-        Shape::Annotation(Box::new(Annot::Dimension(Dimension {
-            mode: DimMode::Area,
-            points: vec![DVec2::ZERO],
-            anchors: vec![Some(Anchor::new(r, AnchorTarget::Center))],
-            offset: 0.0,
-            style: None,
-            text: None,
-            detached: false,
-            area: None,
-        }))),
+        Shape::Hardscape {
+            boundary: sq(0.0, 20_000.0, 3000.0),
+            material: "Granite".into(),
+            thickness: None,
+            elevation: None,
+        },
     );
-    let mut out = String::new();
-    svg::object_svg(ed.doc(), ed.doc().object(d).unwrap(), "", &mut out);
-    assert!(out.contains("6.00 m\u{b2}"), "{out}");
+    let pad = add(
+        &mut ed,
+        Shape::SiteModifier {
+            modifier: kadakas_core::site::ModifierKind::Pad {
+                elevation: 100.0,
+                slope: None,
+            },
+            boundary: sq(0.0, 40_000.0, 2000.0),
+        },
+    );
+    let rect = add(
+        &mut ed,
+        Shape::Rect {
+            min: DVec2::new(0.0, 60_000.0),
+            max: DVec2::new(2000.0, 65_000.0),
+        },
+    );
+    let circle = add(
+        &mut ed,
+        Shape::Circle {
+            center: DVec2::new(0.0, 80_000.0),
+            radius: 1000.0,
+        },
+    );
+    let poly = add(
+        &mut ed,
+        Shape::Polyline {
+            points: sq(0.0, 100_000.0, 1000.0),
+            closed: true,
+        },
+    );
+    let text = |id| {
+        let o = ed.doc().object(id).unwrap();
+        render_template(ed.doc(), o, "{AREA(Area)}")
+    };
+    // The holes are taken out of the landscape area: 100 m2 minus 4 m2.
+    assert_eq!(text(land), "96.00 m\u{b2}");
+    assert_eq!(text(paving), "9.00 m\u{b2}");
+    assert_eq!(text(pad), "4.00 m\u{b2}");
+    assert_eq!(text(rect), "10.00 m\u{b2}");
+    assert_eq!(text(circle), "3.14 m\u{b2}");
+    assert_eq!(text(poly), "1.00 m\u{b2}");
+    // The field has its own format: unit, decimals, rounding, no unit.
+    let o = ed.doc().object(land).unwrap();
+    assert_eq!(
+        render_template(ed.doc(), o, "{AREA(Area, \"ha\", 4)}"),
+        "0.0096 ha"
+    );
+    assert_eq!(
+        render_template(ed.doc(), o, "{AREA(Area, \"m2\", 0, 5, FALSE)}"),
+        "95"
+    );
+    assert_eq!(
+        render_template(ed.doc(), o, "{AREA(Area, \"ft2\", 0)}"),
+        "1033 ft\u{b2}"
+    );
+    // A line has no area: the field is empty, not zero.
+    let l = add(
+        &mut ed,
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+    );
+    let o = ed.doc().object(l).unwrap();
+    assert_eq!(render_template(ed.doc(), o, "[{AREA(Area)}]"), "[]");
+}
+
+#[test]
+fn the_default_area_unit_follows_the_dimension_standard() {
+    // A 10 m by 10 m rectangle, with a dimension standard in `unit` (or none).
+    let text = |unit: Option<LengthUnit>, field: &str| {
+        let mut ed = Editor::default();
+        let r = add(
+            &mut ed,
+            Shape::Rect {
+                min: DVec2::ZERO,
+                max: DVec2::new(10_000.0, 10_000.0),
+            },
+        );
+        if let Some(unit) = unit {
+            ed.execute(&Command::AddResource {
+                name: "Std".into(),
+                body: ResourceBody::annot(AnnotResource::DimensionStyle(DimensionStyle {
+                    unit,
+                    ..DimensionStyle::default()
+                })),
+            })
+            .unwrap();
+        }
+        let o = ed.doc().object(r).unwrap();
+        render_template(ed.doc(), o, field)
+    };
+    let default = |unit| text(unit, "{AREA(Area)}");
+    assert_eq!(default(None), "100.00 m\u{b2}");
+    assert!(text(None, "{AREA(Area, \"\")}").starts_with('#'));
+    for unit in [LengthUnit::Ft, LengthUnit::FtIn, LengthUnit::In] {
+        assert_eq!(default(Some(unit)), "1076.4 ft\u{b2}", "{unit:?}");
+    }
+    for unit in [LengthUnit::M, LengthUnit::Mm, LengthUnit::Cm] {
+        assert_eq!(default(Some(unit)), "100.00 m\u{b2}", "{unit:?}");
+    }
 }

@@ -121,11 +121,12 @@ Tool keys switch the active tool.
 | Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Add a graphic legend (`cmd.graphic_legend`) | none | Alt+Shift+E (no VW default) | done |
+| Edit the dimension standard (`cmd.dimension_standards`; opens the style editor, makes a standard if the document has none) | none | none (AutoCAD-like profile: alias DIMSTYLE) | done |
 
 ## Tool modes
 
 The Dimension tool has one group of mode buttons (Horizontal, Vertical, Aligned, Chain, Baseline, Ordinate, Angular, Radial, Diameter,
-Arc length, Area). Group 1 (`U`) picks the next mode. `.` and `,` start the tool in Angular and Radial mode.
+Arc length). Group 1 (`U`) picks the next mode. `.` and `,` start the tool in Angular and Radial mode.
 
 Keys that cycle the groups of mode buttons in the tool bar (UI-11).
 The Polyline, Landscape Area and Hardscape tools have one group of mode buttons: the vertex modes

@@ -635,65 +635,92 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
 }
 
 #[test]
-fn area_dimensions_show_the_area_and_follow_the_shape() {
+fn the_area_tag_style_labels_areas_on_layers_and_sheets() {
     let mut s = Session::with_sequential_ids();
-    let rect = exec(
+    let bed = exec(
         &mut s,
-        json!({"op":"add_object","shape":{"kind":"rect","min":[0,0],"max":[4000,5000]}}),
+        json!({"op":"add_object","shape":{"kind":"landscape_area","name":"Bed","boundary":[
+            {"p":[0,0],"kind":"corner"},{"p":[10000,0],"kind":"corner"},
+            {"p":[10000,10000],"kind":"corner"},{"p":[0,10000],"kind":"corner"}]}}),
     )[0];
     let style = ok(
         &mut s,
-        "dimension_style.create",
-        json!({"name":"Areas","area_unit":"ft2","area_precision":0}),
+        "tag_style.create",
+        json!({"name":"Area","preset":"area"}),
     )["id"]
         .clone();
-    let plain = ok(
+    let got = ok(&mut s, "tag_style.get", json!({"id": style}));
+    assert_eq!(got["lines"], json!(["{AREA(Area)}"]));
+    // Other fields change the preset, and a wrong preset is refused.
+    let big = ok(
         &mut s,
-        "dimension.add",
-        json!({"mode":"area","object":rect}),
-    );
-    assert_eq!(plain["texts"], json!(["20.00 m\u{b2}"]));
-    assert_eq!(plain["values"], json!([20.0e6]));
-    let styled = ok(
-        &mut s,
-        "dimension.add",
-        json!({"mode":"area","object":rect,"style":style}),
-    );
-    assert_eq!(styled["texts"], json!(["215 ft\u{b2}"]));
-    // The shape changes: both labels follow.
-    exec(
-        &mut s,
-        json!({"op":"modify_object","id":rect,"shape":{"kind":"rect","min":[0,0],"max":[1000,1000]}}),
-    );
-    let id = plain["id"].as_uid().unwrap();
+        "tag_style.create",
+        json!({"name":"Hectares","preset":"area","lines":["{AREA(Area, \"ha\", 4)}"],"frame":"box"}),
+    )["id"]
+        .clone();
     assert_eq!(
-        item(&mut s, id)["computed"]["texts"],
-        json!(["1.00 m\u{b2}"])
-    );
-    let id = styled["id"].as_uid().unwrap();
-    assert_eq!(
-        item(&mut s, id)["computed"]["texts"],
-        json!(["11 ft\u{b2}"])
-    );
-    // Errors.
-    assert!(
-        err(
-            &mut s,
-            "dimension.add",
-            json!({"mode":"area","points":[[0,0]]})
-        )
-        .contains("needs object")
-    );
-    let ln = line(&mut s, [0.0, 0.0], [1.0, 1.0]);
-    assert!(
-        err(&mut s, "dimension.add", json!({"mode":"area","object":ln})).contains("closed shape")
+        ok(&mut s, "tag_style.get", json!({"id": big}))["frame"],
+        "box"
     );
     assert!(
         err(
             &mut s,
-            "dimension.add",
-            json!({"mode":"area","object":rect,"style":"nope"})
+            "tag_style.create",
+            json!({"name":"X","preset":"nope"})
         )
-        .contains("nope")
+        .contains("preset")
+    );
+    assert!(
+        err(
+            &mut s,
+            "text_style.create",
+            json!({"name":"X","preset":"area"})
+        )
+        .contains("preset")
+    );
+    // On the design layer.
+    let tag = ok(
+        &mut s,
+        "data_tag.add",
+        json!({"style":style,"object":bed,"offset":[0,0]}),
+    );
+    let id = tag["id"].as_uid().unwrap();
+    assert_eq!(tag["lines"], json!(["100.00 m\u{b2}"]));
+    // On a sheet: the label is in the annotation space of a viewport.
+    let sheet = ok(&mut s, "sheet.create", json!({"name":"S","paper":"a3"}))["layer"]
+        .as_uid()
+        .unwrap();
+    let vp = ok(
+        &mut s,
+        "viewport.create",
+        json!({"sheet":sheet,"scale":100,"view":"plan"}),
+    )["id"]
+        .as_uid()
+        .unwrap();
+    let on_sheet = ok(
+        &mut s,
+        "data_tag.add",
+        json!({"style":big,"object":bed,"viewport":vp}),
+    );
+    assert_eq!(on_sheet["lines"], json!(["0.0100 ha"]));
+    // A hole is taken out, and both labels follow.
+    ok(
+        &mut s,
+        "landscape_area.set",
+        json!({"id":bed,"holes":[[[2000,2000],[4000,2000],[4000,4000],[2000,4000]]]}),
+    );
+    assert_eq!(
+        item(&mut s, id)["computed"]["lines"],
+        json!(["96.00 m\u{b2}"])
+    );
+    // An imperial dimension standard changes the default unit of the field.
+    ok(
+        &mut s,
+        "dimension_style.create",
+        json!({"name":"US","unit":"ft_in"}),
+    );
+    assert_eq!(
+        item(&mut s, id)["computed"]["lines"],
+        json!(["1033.3 ft\u{b2}"])
     );
 }

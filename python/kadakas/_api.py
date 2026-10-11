@@ -1815,7 +1815,7 @@ class Api:
         return self._call("text_style.get", params or None)
 
     def text_style_create(self, **params: Any) -> Any:
-        """Create a text style. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a text style. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``text_style.create``."""
         return self._call("text_style.create", params or None)
@@ -1845,7 +1845,7 @@ class Api:
         return self._call("dimension_style.get", params or None)
 
     def dimension_style_create(self, **params: Any) -> Any:
-        """Create a dimension style (dimension standard). params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a dimension style (dimension standard). params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``dimension_style.create``."""
         return self._call("dimension_style.create", params or None)
@@ -1875,7 +1875,7 @@ class Api:
         return self._call("tag_style.get", params or None)
 
     def tag_style_create(self, **params: Any) -> Any:
-        """Create a data tag style. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a data tag style. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``tag_style.create``."""
         return self._call("tag_style.create", params or None)
@@ -1905,7 +1905,7 @@ class Api:
         return self._call("notes_db.get", params or None)
 
     def notes_db_create(self, **params: Any) -> Any:
-        """Create a notes database. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a notes database. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``notes_db.create``."""
         return self._call("notes_db.create", params or None)
@@ -1923,7 +1923,7 @@ class Api:
         return self._call("notes_db.delete", params or None)
 
     def dimension_add(self, **params: Any) -> Any:
-        """Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length, area. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. An area dimension (mode area) needs object, a closed shape (rectangle, circle, closed polyline, landscape area, hardscape, site modifier). It shows the area in the unit of the dimension style (area_unit: m2|ha|ft2|ac, area_precision, area_show_unit, area_round_to), sits at the middle of the shape, and follows the shape: when the shape changes, the area updates (a viewport is not supported). offset is then the paper mm that the label moves up (default 0). offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (real mm2 for area, degrees for angular).
+        """Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (degrees for angular).
 
         JSON-RPC method ``dimension.add``."""
         return self._call("dimension.add", params or None)

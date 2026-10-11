@@ -62,7 +62,6 @@ fn dim(mode: DimMode, points: Vec<DVec2>) -> Dimension {
         style: None,
         text: None,
         detached: false,
-        area: None,
     }
 }
 

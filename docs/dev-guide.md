@@ -24,7 +24,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-collab` | Collaboration client (PLAT-07, PLAT-08): wire protocol, merge rules, client state machine, per-user undo, offline log, presence, transport trait. No network code and no server (the server is the separate `kadakas-server` repository). `testkit` feature: an in-memory reference sequencer for tests | core |
 | `kadakas-collab-ws` | The WebSocket for the collaboration client: `WsEndpoint` and `WsTransport` (native: a blocking client with one reader thread, `ws` and `wss` with rustls and webpki roots, token in the `Authorization` header with a fall back to the `kadakas.token.<jwt>` sub-protocol; browser: a `web-sys` WebSocket behind `cfg(wasm32)`). `test-server` feature: an in-process WebSocket server on the reference sequencer, for tests | collab, core |
 | `kadakas-render` | Camera, standard views, picking, CPU rasterizer | core |
-| `kadakas-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants |
+| `kadakas-sheet` | Worksheets: spreadsheet grid, formulas, database rows over objects (pure, wasm-compatible) | core, plants, units |
 | `kadakas-annot` | Data tags, legends and annotation output on top of the worksheet code (pure, wasm-compatible) | core, sheet |
 | `kadakas-site` | Site model: TIN, contours, slope, site modifiers, cut and fill, grading (pure, wasm-compatible) | core |
 | `kadakas-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |

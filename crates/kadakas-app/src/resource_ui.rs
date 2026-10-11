@@ -73,6 +73,13 @@ pub fn paint_thumbnail(ui: &mut Ui, t: &Thumbnail, side: f32) {
     }
 }
 
+/// The name of a resource type for the list: the annotation styles have readable names, the other
+/// types show their API name.
+fn type_label(ty: &str) -> String {
+    kadakas_ui_core::style_edit::StyleKind::from_type_name(ty)
+        .map_or_else(|| ty.to_string(), |k| k.label())
+}
+
 fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Option<Value> {
     match s.handle(method, params) {
         Ok(v) => Some(v),
@@ -102,14 +109,14 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 .selected_text(if st.ty == 0 {
                     tr!("resource-ui-all-types")
                 } else {
-                    TYPES[st.ty].to_string()
+                    type_label(TYPES[st.ty])
                 })
                 .show_ui(ui, |ui| {
                     for (i, t) in TYPES.iter().enumerate() {
                         let label = if i == 0 {
                             tr!("resource-ui-all-types")
                         } else {
-                            t.to_string()
+                            type_label(t)
                         };
                         let icon = crate::icons::resource_icon(t);
                         if crate::icons::select_button(ui, icon, &label, st.ty == i).clicked() {
@@ -137,7 +144,12 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                                 }
                             }
                             _ => {
-                                ui.label(&r.name);
+                                // A double-click on the name opens the style editor.
+                                let name = ui.add(egui::Label::new(&r.name).sense(Sense::click()));
+                                if name.double_clicked() && crate::style_ui::has_editor(r.type_name)
+                                {
+                                    action = Some((r.id, "edit"));
+                                }
                             }
                         }
                         ui.horizontal(|ui| {
@@ -150,7 +162,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                             }
                             ui.small(tr!(
                                 "resource-ui-used-by",
-                                type_name = r.type_name,
+                                type_name = type_label(r.type_name),
                                 used_by = r.used_by
                             ));
                         });
@@ -209,7 +221,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
             }
             ui.menu_button(tr!("style-ui-new-style"), |ui| {
                 for kind in kadakas_ui_core::style_edit::StyleKind::ALL {
-                    if ui.button(crate::style_ui::kind_label(kind)).clicked() {
+                    if ui.button(kind.label()).clicked() {
                         st.styles.create(session, kind, status);
                         ui.close();
                     }

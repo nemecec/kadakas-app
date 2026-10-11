@@ -191,6 +191,7 @@ actions! {
     ToolScaleBar => "tool.scale_bar", msg!("action-tool-scale-bar"), ["Alt+Shift+B"], true;
     ToolRevisionCloud => "tool.revision_cloud", msg!("action-tool-revision-cloud"), ["Alt+Shift+V"], true;
     CmdGraphicLegend => "cmd.graphic_legend", msg!("action-cmd-graphic-legend"), ["Alt+Shift+E"], true;
+    CmdDimensionStandards => "cmd.dimension_standards", msg!("action-cmd-dimension-standards"), [], true;
     ToolRotate => "tool.rotate", msg!("action-tool-rotate"), ["Alt+="], true;
     ToolMirror => "tool.mirror", msg!("action-tool-mirror"), ["="], true;
     ToolScale => "tool.scale", msg!("action-tool-scale"), [], true;

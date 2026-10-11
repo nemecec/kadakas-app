@@ -10,7 +10,7 @@ use kadakas_core::model::Color;
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
 use kadakas_ui_core::style_edit::{
-    self, Choice, Follow, StyleEditor, StyleKind, area_units, default_tolerance, dimension_samples,
+    self, Choice, Follow, StyleEditor, StyleKind, default_tolerance, dimension_samples,
     length_units, set_enabled,
 };
 
@@ -75,12 +75,13 @@ impl StyleWindows {
         for (i, w) in self.open.iter_mut().enumerate() {
             match w.editor.sync(session.editor.doc()) {
                 Follow::Gone => {
+                    *status = tr!("style-ui-gone", name = w.editor.name.clone());
                     done.push(i);
                     continue;
                 }
                 Follow::Conflict => w.conflict = true,
                 Follow::Reloaded => w.conflict = false,
-                Follow::Same => {}
+                Follow::Merged | Follow::Same => {}
             }
             let title = title(&w.editor);
             let mut open = true;
@@ -102,28 +103,12 @@ impl StyleWindows {
     }
 }
 
-fn kind_name(kind: StyleKind) -> String {
-    match kind {
-        StyleKind::Dimension => tr!("style-ui-kind-dimension"),
-        StyleKind::Text => tr!("style-ui-kind-text"),
-        StyleKind::Tag => tr!("style-ui-kind-tag"),
-        StyleKind::Notes => tr!("style-ui-kind-notes"),
-    }
-}
-
-/// The name of a kind, for the "New style" menu.
-pub fn kind_label(kind: StyleKind) -> String {
-    kind_name(kind)
-}
-
 fn title(e: &StyleEditor) -> String {
-    let name = e.name.clone();
-    match e.kind() {
-        StyleKind::Dimension => tr!("style-ui-title-dimension", name = name),
-        StyleKind::Text => tr!("style-ui-title-text", name = name),
-        StyleKind::Tag => tr!("style-ui-title-tag", name = name),
-        StyleKind::Notes => tr!("style-ui-title-notes", name = name),
-    }
+    tr!(
+        "style-ui-title",
+        kind = e.kind().label(),
+        name = e.name.clone()
+    )
 }
 
 /// Saves the draft. True when the document has the draft afterwards.
@@ -138,8 +123,8 @@ fn save(e: &mut StyleEditor, session: &mut Session, status: &mut String) -> bool
                 false
             }
         }
-        Err(message) => {
-            *status = tr!("style-ui-error", message = message);
+        Err(problem) => {
+            *status = tr!("style-ui-error", message = problem.text());
             false
         }
     }
@@ -170,7 +155,13 @@ fn window_body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut St
     if let Some(p) = &problem {
         ui.colored_label(
             ui.visuals().error_fg_color,
-            tr!("style-ui-problem", message = p),
+            tr!("style-ui-problem", message = p.text()),
+        );
+    }
+    for w in e.note_warnings(session.editor.doc()) {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            tr!("style-ui-note-warning", key = w.key, callouts = w.callouts),
         );
     }
     let mut close = false;
@@ -189,8 +180,8 @@ fn window_body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut St
                 egui::Button::new(tr!("style-ui-apply")),
             )
             .clicked()
+            && save(e, session, status)
         {
-            save(e, session, status);
             w.conflict = false;
         }
         if ui
@@ -198,6 +189,7 @@ fn window_body(ui: &mut Ui, w: &mut Open, session: &mut Session, status: &mut St
             .clicked()
         {
             e.revert();
+            w.conflict = false;
         }
         if ui.button(tr!("common-cancel")).clicked() {
             close = true;
@@ -348,45 +340,8 @@ fn dimension_fields(ui: &mut Ui, e: &mut StyleEditor) {
             ui.end_row();
             color_field(ui, tr!("style-ui-color"), &mut s.color);
         });
-    ui.add_space(6.0);
-    ui.strong(tr!("style-ui-area-section"));
-    egui::Grid::new("style-ui-dimension-area")
-        .num_columns(2)
-        .show(ui, |ui| {
-            ui.label(tr!("style-ui-area-unit"));
-            egui::ComboBox::from_id_salt("style-ui-area-unit")
-                .selected_text(s.area_unit.short_name())
-                .show_ui(ui, |ui| {
-                    for (u, name) in area_units() {
-                        ui.selectable_value(&mut s.area_unit, u, name);
-                    }
-                });
-            ui.end_row();
-            decimals_field(ui, tr!("style-ui-area-precision"), &mut s.area_precision);
-            ui.label(tr!("style-ui-area-show-unit"));
-            ui.checkbox(&mut s.area_show_unit, "");
-            ui.end_row();
-            ui.label(tr!("style-ui-area-round-to"));
-            ui.horizontal(|ui| {
-                let mut on = s.area_round_to.is_some();
-                if ui.checkbox(&mut on, "").changed() {
-                    set_enabled(&mut s.area_round_to, on, 1.0);
-                }
-                if let Some(r) = &mut s.area_round_to {
-                    ui.add(DragValue::new(r).speed(0.1).range(0.0001..=1.0e9));
-                    ui.label(s.area_unit.short_name());
-                }
-            });
-            ui.end_row();
-        });
-    ui.add_space(6.0);
-    let [length, area, angle] = dimension_samples(s);
-    ui.label(tr!(
-        "style-ui-samples",
-        length = length,
-        area = area,
-        angle = angle
-    ));
+    let [length, angle] = dimension_samples(s);
+    ui.label(tr!("style-ui-samples", length = length, angle = angle));
 }
 
 fn text_fields(ui: &mut Ui, e: &mut StyleEditor) {
@@ -608,7 +563,6 @@ mod tests {
                     if let Some(d) = o.editor.dimension() {
                         d.tolerance = Some(default_tolerance());
                         d.round_to = Some(5.0);
-                        d.area_round_to = Some(0.5);
                         d.color = Some(Color([1, 2, 3, 255]));
                     }
                     if let Some(t) = o.editor.text() {
@@ -637,20 +591,20 @@ mod tests {
         assert_eq!(w.count(), 1);
         let before = s.editor.revision();
         let e = &mut w.open[0].editor;
-        e.dimension().unwrap().area_precision = 5;
+        e.dimension().unwrap().precision = 5;
         assert!(save(e, &mut s, &mut status));
         assert_ne!(s.editor.revision(), before);
         assert!(!e.is_dirty());
         assert!(matches!(
             annot_of(&s, id),
-            Some(AnnotResource::DimensionStyle(d)) if d.area_precision == 5
+            Some(AnnotResource::DimensionStyle(d)) if d.precision == 5
         ));
         // Nothing changed: nothing runs.
         let rev = s.editor.revision();
         assert!(save(e, &mut s, &mut status));
         assert_eq!(s.editor.revision(), rev);
         // A bad draft is refused with a message.
-        e.dimension().unwrap().area_precision = 9;
+        e.dimension().unwrap().precision = 9;
         assert!(!save(e, &mut s, &mut status));
         assert!(
             status.contains('9') || status.contains("precision"),
@@ -671,10 +625,35 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_style_closes_its_window_and_says_so() {
+        let mut s = Session::with_sequential_ids();
+        let mut w = StyleWindows::default();
+        let mut status = String::new();
+        let id = new_style(&mut w, &mut s, StyleKind::Text, &mut status);
+        s.editor
+            .execute(&Command::DeleteResource { id, reassign: None })
+            .unwrap();
+        let ctx = Context::default();
+        frame(&mut w, &ctx, &mut s, &mut status);
+        assert_eq!(w.count(), 0);
+        assert!(status.contains("Text style"), "{status}");
+        // The same in Estonian.
+        kadakas_l10n::with_language("et", || {
+            let mut w = StyleWindows::default();
+            let id = new_style(&mut w, &mut s, StyleKind::Tag, &mut status);
+            s.editor
+                .execute(&Command::DeleteResource { id, reassign: None })
+                .unwrap();
+            frame(&mut w, &ctx, &mut s, &mut status);
+            assert!(status.contains("enam ei ole"), "{status}");
+        });
+    }
+
+    #[test]
     fn helper_functions() {
         assert!(has_editor("tag_style") && !has_editor("hatch"));
         for k in StyleKind::ALL {
-            assert!(!kind_label(k).is_empty());
+            assert!(!k.label().is_empty());
         }
         let _ = TagStyle::default();
     }

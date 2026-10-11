@@ -9,15 +9,15 @@
 //! - The lists (the lines of a tag style, the notes of a notes database) have add, remove and move
 //!   methods that keep the selection inside the list.
 
-use kadakas_core::annot::dim;
 use kadakas_core::annot::style::{
     AnnotResource, DimensionStyle, Justify, LengthUnit, MAX_NOTES, MAX_TAG_LINES, Note, NotesDb,
     TagFrame, TagStyle, Terminator, TextStyle, Tolerance,
 };
+use kadakas_core::annot::{Annot, dim};
 use kadakas_core::command::Command;
-use kadakas_core::model::Document;
+use kadakas_core::model::{Document, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
-use kadakas_units::AreaUnit;
+use kadakas_l10n::tr;
 
 /// The kinds of style that have an editor. The `type_name` is the type name of the resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +48,16 @@ impl StyleKind {
 
     pub fn from_type_name(name: &str) -> Option<StyleKind> {
         StyleKind::ALL.into_iter().find(|k| k.type_name() == name)
+    }
+
+    /// The name of the kind in the language of the UI ("Dimension standard").
+    pub fn label(self) -> String {
+        match self {
+            StyleKind::Dimension => tr!("uic-style-edit-kind-dimension"),
+            StyleKind::Text => tr!("uic-style-edit-kind-text"),
+            StyleKind::Tag => tr!("uic-style-edit-kind-tag"),
+            StyleKind::Notes => tr!("uic-style-edit-kind-notes"),
+        }
     }
 
     /// The name that a new style of this kind gets, English because it is document content.
@@ -161,11 +171,6 @@ pub fn length_units() -> [(LengthUnit, &'static str); 6] {
     LengthUnit::ALL.map(|u| (u, u.short_name()))
 }
 
-/// The area units of a dimension standard, with their short names.
-pub fn area_units() -> [(AreaUnit, &'static str); 4] {
-    AreaUnit::ALL.map(|u| (u, u.short_name()))
-}
-
 /// Turns an optional number on (with `default`) or off. Used for the tolerance, the rounding and
 /// the color of a style: a checkbox in the window.
 pub fn set_enabled<T>(value: &mut Option<T>, on: bool, default: T) {
@@ -184,14 +189,10 @@ pub fn default_tolerance() -> Tolerance {
     }
 }
 
-/// Sample texts of a dimension standard: a length, an area and an angle, as the style writes them.
+/// Sample texts of a dimension standard: a length and an angle, as the style writes them.
 /// The window shows them so the person sees the effect of a change at once.
-pub fn dimension_samples(s: &DimensionStyle) -> [String; 3] {
-    [
-        dim::format_length(12_345.6, s),
-        dim::format_area(87.65e6, s),
-        dim::format_angle(37.25, s),
-    ]
+pub fn dimension_samples(s: &DimensionStyle) -> [String; 2] {
+    [dim::format_length(12_345.6, s), dim::format_angle(37.25, s)]
 }
 
 /// What a call of [`StyleEditor::sync`] found.
@@ -201,11 +202,50 @@ pub enum Follow {
     Same,
     /// The resource changed in the document and the draft was clean, so the draft was reloaded.
     Reloaded,
-    /// The resource changed in the document but the draft has edits. The draft stays; saving
-    /// writes it over the new content.
+    /// The resource changed in the document and the draft has edits. The changes were merged
+    /// field by field: the edits of the person stay, the other changes came in. No field changed
+    /// on both sides.
+    Merged,
+    /// As `Merged`, but one field or the name changed on both sides. The edit of the person won.
+    /// The window says so.
     Conflict,
     /// The resource is gone (deleted, or its creation was undone).
     Gone,
+}
+
+/// Why a draft cannot be saved. The window shows `text()` in the language of the UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Problem {
+    /// The name is empty.
+    NameMissing,
+    /// Another style of the same kind has the name.
+    NameTaken { kind: StyleKind, name: String },
+    /// A value is not valid. The text is the English text of the check in the core.
+    Invalid(String),
+}
+
+impl Problem {
+    /// The problem as a sentence in the language of the UI.
+    pub fn text(&self) -> String {
+        match self {
+            Problem::NameMissing => tr!("uic-style-edit-name-missing"),
+            Problem::NameTaken { kind, name } => {
+                tr!(
+                    "uic-style-edit-name-taken",
+                    kind = kind.label(),
+                    name = name.clone()
+                )
+            }
+            Problem::Invalid(m) => tr!("uic-style-edit-invalid", message = m.clone()),
+        }
+    }
+}
+
+/// A note key that the person changed or removed while callouts use it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteWarning {
+    pub key: String,
+    pub callouts: usize,
 }
 
 /// An editor window's model for one style.
@@ -247,9 +287,10 @@ impl StyleEditor {
         kind_of(&self.draft)
     }
 
-    /// True when the draft differs from the last saved or loaded content.
+    /// True when the draft differs from the last saved or loaded content. The name counts
+    /// without the spaces at its ends, as the command keeps it.
     pub fn is_dirty(&self) -> bool {
-        self.name != self.saved_name || self.draft != self.saved
+        self.name.trim() != self.saved_name || self.draft != self.saved
     }
 
     /// Throws the edits away.
@@ -261,23 +302,28 @@ impl StyleEditor {
 
     /// Why the draft cannot be saved, or `None`. The checks are those of the command: the name,
     /// and the values of the style.
-    pub fn problem(&self, doc: &Document) -> Option<String> {
+    pub fn problem(&self, doc: &Document) -> Option<Problem> {
         let name = self.name.trim();
         if name.is_empty() {
-            return Some("a style needs a name".into());
+            return Some(Problem::NameMissing);
         }
-        let type_name = self.kind().type_name();
+        let kind = self.kind();
         if doc.resources.iter().any(|r| {
-            r.id != self.id && r.body.type_name() == type_name && r.name.eq_ignore_ascii_case(name)
+            r.id != self.id
+                && r.body.type_name() == kind.type_name()
+                && r.name.eq_ignore_ascii_case(name)
         }) {
-            return Some(format!("a {type_name} named '{name}' exists"));
+            return Some(Problem::NameTaken {
+                kind,
+                name: name.to_string(),
+            });
         }
-        self.draft.validate().err()
+        self.draft.validate().err().map(Problem::Invalid)
     }
 
     /// The command that saves the draft: one `ModifyResource`, one undo step. `Ok(None)` when
     /// nothing changed; `Err` with the problem when the draft is not valid.
-    pub fn save_command(&self, doc: &Document) -> Result<Option<Command>, String> {
+    pub fn save_command(&self, doc: &Document) -> Result<Option<Command>, Problem> {
         if let Some(p) = self.problem(doc) {
             return Err(p);
         }
@@ -286,7 +332,7 @@ impl StyleEditor {
         }
         Ok(Some(Command::ModifyResource {
             id: self.id,
-            name: (self.name != self.saved_name).then(|| self.name.trim().to_string()),
+            name: (self.name.trim() != self.saved_name).then(|| self.name.trim().to_string()),
             body: (self.draft != self.saved).then(|| ResourceBody::annot(self.draft.clone())),
         }))
     }
@@ -298,7 +344,9 @@ impl StyleEditor {
         self.saved = self.draft.clone();
     }
 
-    /// Follows the document. See [`Follow`].
+    /// Follows the document. See [`Follow`]. When the person has edits and the resource changed
+    /// elsewhere, this is a three-way merge with the last loaded content as the base: a field the
+    /// person did not change takes the new value, a field the person changed stays.
     pub fn sync(&mut self, doc: &Document) -> Follow {
         let Some(r) = doc.resources.get(self.id) else {
             return Follow::Gone;
@@ -309,17 +357,65 @@ impl StyleEditor {
         if r.name == self.saved_name && **a == self.saved {
             return Follow::Same;
         }
-        let dirty = self.is_dirty();
-        self.saved_name = r.name.clone();
-        self.saved = (**a).clone();
-        if dirty {
-            Follow::Conflict
-        } else {
+        let theirs_name = r.name.clone();
+        let theirs = (**a).clone();
+        if !self.is_dirty() {
+            self.saved_name = theirs_name;
+            self.saved = theirs;
             self.name = self.saved_name.clone();
             self.draft = self.saved.clone();
             self.clamp_selection();
-            Follow::Reloaded
+            return Follow::Reloaded;
         }
+        let (name, name_conflict) =
+            merge3(&self.saved_name, &theirs_name, self.name.trim().to_string());
+        let (body, body_conflict) = merge_body(&self.saved, &theirs, &self.draft);
+        self.saved_name = theirs_name;
+        self.saved = theirs;
+        self.name = name;
+        self.draft = body;
+        self.clamp_selection();
+        if name_conflict || body_conflict {
+            Follow::Conflict
+        } else {
+            Follow::Merged
+        }
+    }
+
+    /// The note keys that the draft of a notes database changed or removed while callouts of the
+    /// document use them. A callout shows no text for a key that is gone.
+    pub fn note_warnings(&self, doc: &Document) -> Vec<NoteWarning> {
+        let (AnnotResource::NotesDatabase(draft), AnnotResource::NotesDatabase(saved)) =
+            (&self.draft, &self.saved)
+        else {
+            return Vec::new();
+        };
+        let norm = |k: &str| k.trim().to_lowercase();
+        let keep: std::collections::HashSet<String> =
+            draft.notes.iter().map(|n| norm(&n.key)).collect();
+        saved
+            .notes
+            .iter()
+            .filter(|n| !keep.contains(&norm(&n.key)))
+            .filter_map(|n| {
+                let callouts = doc
+                    .objects
+                    .values()
+                    .filter(|o| match &o.shape {
+                        Shape::Annotation(a) => matches!(
+                            &**a,
+                            Annot::Callout(c) if c.notes_db == Some(self.id)
+                                && c.note.as_deref().is_some_and(|k| norm(k) == norm(&n.key))
+                        ),
+                        _ => false,
+                    })
+                    .count();
+                (callouts > 0).then(|| NoteWarning {
+                    key: n.key.clone(),
+                    callouts,
+                })
+            })
+            .collect()
     }
 
     fn clamp_selection(&mut self) {
@@ -438,6 +534,107 @@ impl StyleEditor {
             _ => None,
         }
     }
+}
+
+/// Merges one value of three: `base` is what both sides started from. The result and a flag that
+/// says both sides changed it to different values (then `mine` wins).
+fn merge3<T: PartialEq + Clone>(base: &T, theirs: &T, mine: T) -> (T, bool) {
+    if mine == *base {
+        (theirs.clone(), false)
+    } else if theirs == base || mine == *theirs {
+        (mine, false)
+    } else {
+        (mine, true)
+    }
+}
+
+/// A three-way merge of the bodies, field by field. A field that the person did not change takes
+/// the other side's value. The flag says one field changed on both sides to different values.
+fn merge_body(
+    base: &AnnotResource,
+    theirs: &AnnotResource,
+    mine: &AnnotResource,
+) -> (AnnotResource, bool) {
+    use serde_json::Value;
+    let json = |r: &AnnotResource| serde_json::to_value(r).ok();
+    let (Some(Value::Object(b)), Some(Value::Object(t)), Some(Value::Object(m))) =
+        (json(base), json(theirs), json(mine))
+    else {
+        return (mine.clone(), true);
+    };
+    let mut keys: Vec<&String> = b.keys().chain(t.keys()).chain(m.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    let mut out = serde_json::Map::new();
+    let mut conflict = false;
+    for k in keys {
+        let none = Value::Null;
+        let (bv, tv, mv) = (
+            b.get(k).unwrap_or(&none),
+            t.get(k).unwrap_or(&none),
+            m.get(k).unwrap_or(&none),
+        );
+        let (v, c) = merge3(bv, tv, mv.clone());
+        conflict |= c;
+        out.insert(k.clone(), v);
+    }
+    match serde_json::from_value::<AnnotResource>(Value::Object(out)) {
+        Ok(r) => (r, conflict),
+        Err(_) => (mine.clone(), true),
+    }
+}
+
+/// The first style of a kind in the document (the dimension standard that the document uses).
+pub fn first_of(doc: &Document, kind: StyleKind) -> Option<ResourceId> {
+    doc.resources
+        .iter()
+        .find(|r| r.body.type_name() == kind.type_name())
+        .map(|r| r.id)
+}
+
+/// The commands of the "Add default styles" button: a text style, a dimension standard and a data
+/// tag style when the document has none of that type, and the built-in "Area" tag style when no
+/// tag style has that name. Empty when nothing is missing.
+pub fn missing_default_styles(doc: &Document) -> Vec<Command> {
+    use kadakas_core::annot::style::AREA_TAG_NAME;
+    let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
+    let add = |name: &str, r: AnnotResource| Command::AddResource {
+        name: name.into(),
+        body: ResourceBody::annot(r),
+    };
+    let mut cmds = Vec::new();
+    if !has("text_style") {
+        cmds.push(add(
+            "Text 3 mm",
+            AnnotResource::TextStyle(TextStyle::default()),
+        ));
+    }
+    if !has("dimension_style") {
+        cmds.push(add(
+            "Dimension 2.5 mm",
+            AnnotResource::DimensionStyle(DimensionStyle::default()),
+        ));
+    }
+    if !has("tag_style") {
+        cmds.push(add(
+            "Plant tag",
+            AnnotResource::TagStyle(TagStyle {
+                lines: vec!["{IdCode}".into(), "{Botanical}".into()],
+                ..TagStyle::default()
+            }),
+        ));
+    }
+    if doc
+        .resources
+        .find_annot("tag_style", AREA_TAG_NAME)
+        .is_none()
+    {
+        cmds.push(add(
+            AREA_TAG_NAME,
+            AnnotResource::TagStyle(TagStyle::area()),
+        ));
+    }
+    cmds
 }
 
 /// The command that creates a style of this kind. `name` is made unique among the styles of the

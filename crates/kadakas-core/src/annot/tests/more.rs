@@ -492,141 +492,324 @@ fn defaults_and_the_dimension_arm_of_draw() {
     let _ = site;
 }
 
-// ---------------------------------------------------------------- area dimensions
+// ---------------------------------------------------------------- tags follow every command
 
-fn area_dim(ed: &mut Editor, shape: ObjectId, style: Option<ResourceId>) -> ObjectId {
+fn tag_style_res(ed: &mut Editor) -> ResourceId {
+    res(ed, "Tag", AnnotResource::TagStyle(TagStyle::area()))
+}
+
+fn tag_of(ed: &mut Editor, style: ResourceId, object: ObjectId) -> ObjectId {
     add_annot(
         ed,
-        Annot::Dimension(Dimension {
-            anchors: vec![Some(Anchor {
-                object: shape,
-                target: AnchorTarget::Center,
-                count: None,
-            })],
+        Annot::DataTag(DataTag {
             style,
-            area: None,
-            ..dim(DimMode::Area, vec![v(0.0, 0.0)])
+            object,
+            offset: v(10.0, 5.0),
+            at: DVec2::ZERO,
+            anchor: DVec2::ZERO,
         }),
     )
 }
 
-fn area_of(ed: &Editor, id: ObjectId) -> Dimension {
-    let Annot::Dimension(d) = annot_of(ed, id) else {
+/// The tag sits at the reference point of its object plus its paper offset.
+fn assert_tag_follows(ed: &Editor, tag: ObjectId, object: ObjectId) {
+    let Annot::DataTag(t) = annot_of(ed, tag) else {
         panic!()
     };
-    d
+    let o = ed.doc().object(t.object).unwrap();
+    let p = ref_point(&o.shape).unwrap();
+    let paper = ed
+        .doc()
+        .layer(ed.doc().object(tag).unwrap().layer)
+        .unwrap()
+        .scale;
+    assert_eq!(t.object, object);
+    assert!((t.anchor - p).length() < 1e-6, "{:?} {:?}", t.anchor, p);
+    assert!((t.at - (p + t.offset * paper)).length() < 1e-6);
+}
+
+fn square(x: f64, y: f64, side: f64) -> Vec<crate::curve::Vertex> {
+    vec![
+        vtx(x, y),
+        vtx(x + side, y),
+        vtx(x + side, y + side),
+        vtx(x, y + side),
+    ]
 }
 
 #[test]
-fn an_area_dimension_shows_the_area_and_follows_the_shape() {
+fn tags_follow_rotate_scale_mirror_and_area_commands() {
+    use crate::edit2d::Transform;
     let mut ed = Editor::default();
-    let r = add(
+    let style = tag_style_res(&mut ed);
+    let land = add(
         &mut ed,
-        Shape::Rect {
-            min: v(0.0, 0.0),
-            max: v(4000.0, 5000.0),
+        Shape::LandscapeArea {
+            boundary: square(0.0, 0.0, 4000.0),
+            name: "Bed".into(),
         },
     );
-    let a = area_dim(&mut ed, r, None);
-    let d = area_of(&ed, a);
-    assert_eq!(d.area, Some(20.0e6));
-    assert_eq!(d.points, vec![v(2000.0, 2500.0)]);
-    assert_eq!(
-        dim::texts(&d, &DimensionStyle::default(), &ctx100()),
-        vec!["20.00 m\u{b2}"]
-    );
-    // The shape changes: the label follows and the area updates.
-    modify(
+    let paving = add(
         &mut ed,
-        r,
+        Shape::Hardscape {
+            boundary: square(10_000.0, 0.0, 2000.0),
+            material: "Granite".into(),
+            thickness: None,
+            elevation: None,
+        },
+    );
+    let rect = add(
+        &mut ed,
+        Shape::Rect {
+            min: v(20_000.0, 0.0),
+            max: v(22_000.0, 1000.0),
+        },
+    );
+    let poly = add(
+        &mut ed,
+        Shape::Polyline {
+            points: square(30_000.0, 0.0, 1500.0),
+            closed: true,
+        },
+    );
+    let tags = [
+        (land, tag_of(&mut ed, style, land)),
+        (paving, tag_of(&mut ed, style, paving)),
+        (rect, tag_of(&mut ed, style, rect)),
+        (poly, tag_of(&mut ed, style, poly)),
+    ];
+    let check = |ed: &Editor| {
+        tags.iter()
+            .for_each(|(o, t)| assert_tag_follows(ed, *t, *o))
+    };
+    check(&ed);
+    ed.execute(&Command::RotateObjects {
+        ids: vec![rect, poly],
+        center: v(500.0, 500.0),
+        angle: 0.7,
+    })
+    .unwrap();
+    check(&ed);
+    ed.execute(&Command::TransformObjects {
+        ids: vec![rect, poly],
+        transform: Transform::Scale {
+            center: v(0.0, 0.0),
+            sx: 2.0,
+            sy: None,
+        },
+        copy: false,
+    })
+    .unwrap();
+    check(&ed);
+    ed.execute(&Command::TransformObjects {
+        ids: vec![rect, poly],
+        transform: Transform::Mirror {
+            a: v(0.0, 0.0),
+            b: v(1.0, 3.0),
+        },
+        copy: false,
+    })
+    .unwrap();
+    check(&ed);
+    // Landscape areas and hardscapes cannot be scaled or turned, but they move.
+    ed.execute(&Command::TransformObjects {
+        ids: vec![land, paving],
+        transform: Transform::Move {
+            delta: v(700.0, -300.0),
+        },
+        copy: false,
+    })
+    .unwrap();
+    check(&ed);
+    ed.execute(&Command::SetLandscapeArea {
+        ids: vec![land],
+        patch: crate::landscape::LandscapePatch {
+            holes: Some(vec![square(1700.0, 200.0, 1000.0)]),
+            name: Some("Renamed".into()),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    check(&ed);
+    ed.execute(&Command::SetHardscape {
+        ids: vec![paving],
+        patch: crate::hardscape::HardscapePatch {
+            thickness: Some(80.0),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    check(&ed);
+}
+
+#[test]
+fn a_tag_follows_its_object_when_a_group_moves() {
+    let mut ed = Editor::default();
+    let style = tag_style_res(&mut ed);
+    let a = add(
+        &mut ed,
         Shape::Rect {
             min: v(0.0, 0.0),
             max: v(1000.0, 1000.0),
         },
     );
-    let d = area_of(&ed, a);
-    assert_eq!(d.area, Some(1.0e6));
-    assert_eq!(d.points, vec![v(500.0, 500.0)]);
-    // A circle is exact too.
-    let c = add(
+    let b = add(
         &mut ed,
         Shape::Circle {
-            center: v(0.0, 0.0),
-            radius: 1000.0,
+            center: v(5000.0, 0.0),
+            radius: 500.0,
         },
     );
-    let ac = area_dim(&mut ed, c, None);
-    let area = area_of(&ed, ac).area.unwrap();
-    assert!((area - std::f64::consts::PI * 1.0e6).abs() < 1e-6);
-    // Undo puts the old area back.
-    assert!(ed.undo());
-    assert!(ed.undo());
-    assert_eq!(area_of(&ed, a).area, Some(1.0e6));
+    let tag = tag_of(&mut ed, style, b);
+    let g = ObjectId(
+        ed.execute(&Command::Group {
+            ids: vec![a, b],
+            name: None,
+        })
+        .unwrap()
+        .created[0],
+    );
+    assert_tag_follows(&ed, tag, b);
+    ed.execute(&Command::MoveObjects {
+        ids: vec![g],
+        delta: v(300.0, -200.0),
+    })
+    .unwrap();
+    assert_tag_follows(&ed, tag, b);
+    let Annot::DataTag(t) = annot_of(&ed, tag) else {
+        panic!()
+    };
+    assert_eq!(t.anchor, v(5300.0, -200.0));
 }
 
 #[test]
-fn an_area_dimension_keeps_its_last_value_when_the_shape_is_deleted() {
+fn copies_of_annotations_link_to_the_copies_of_their_objects() {
     let mut ed = Editor::default();
-    let r = add(
+    let style = tag_style_res(&mut ed);
+    let rect = add(
         &mut ed,
         Shape::Rect {
             min: v(0.0, 0.0),
-            max: v(2000.0, 2000.0),
+            max: v(1000.0, 2000.0),
         },
     );
-    let a = area_dim(&mut ed, r, None);
-    ed.execute(&Command::DeleteObjects { ids: vec![r] })
+    let tag = tag_of(&mut ed, style, rect);
+    let dim_id = add_annot(
+        &mut ed,
+        Annot::Dimension(Dimension {
+            anchors: vec![
+                Some(Anchor::new(rect, AnchorTarget::Vertex { index: 0 })),
+                Some(Anchor::new(rect, AnchorTarget::Vertex { index: 1 })),
+            ],
+            ..dim(horiz(), vec![v(0.0, 0.0), v(1000.0, 0.0)])
+        }),
+    );
+    let callout = add_annot(
+        &mut ed,
+        Annot::Callout(Callout {
+            at: v(3000.0, 3000.0),
+            text: "x".into(),
+            note: None,
+            notes_db: None,
+            style: None,
+            leaders: vec![Leader {
+                points: vec![v(1000.0, 2000.0)],
+                anchor: Some(Anchor::new(rect, AnchorTarget::Vertex { index: 2 })),
+            }],
+            shoulder_mm: 5.0,
+            terminator: Terminator::Arrow,
+            detached: false,
+        }),
+    );
+    // The tag alone: it still tags the original, and its label stays where the copy put it.
+    let out = ed
+        .execute(&Command::CopyObjects {
+            ids: vec![tag],
+            delta: v(2000.0, 0.0),
+        })
         .unwrap();
-    let d = area_of(&ed, a);
-    assert!(d.anchors.is_empty());
-    assert_eq!(d.area, Some(4.0e6));
-    assert!(Annot::Dimension(d.clone()).problem().is_none());
-    let bad = Dimension {
-        area: Some(-1.0),
-        ..d
-    };
-    assert!(Annot::Dimension(bad).problem().is_some());
-}
-
-#[test]
-fn area_styles_set_the_unit_the_decimals_and_the_rounding() {
-    let d = Dimension {
-        area: Some(12.34e6),
-        ..dim(DimMode::Area, vec![v(0.0, 0.0)])
-    };
-    let ctx = ctx100();
-    let mut s = DimensionStyle::default();
-    assert_eq!(dim::texts(&d, &s, &ctx), vec!["12.34 m\u{b2}"]);
-    s.area_unit = kadakas_units::AreaUnit::Ft2;
-    s.area_precision = 0;
-    assert_eq!(dim::texts(&d, &s, &ctx), vec!["133 ft\u{b2}"]);
-    s.area_unit = kadakas_units::AreaUnit::M2;
-    s.area_precision = 1;
-    s.area_round_to = Some(0.5);
-    s.area_show_unit = false;
-    s.prefix = "A=".into();
-    s.suffix = "!".into();
-    assert_eq!(dim::texts(&d, &s, &ctx), vec!["A=12.5!"]);
-    // A custom text replaces the value.
-    let t = Dimension {
-        text: Some("Lawn".into()),
-        ..d.clone()
-    };
-    assert_eq!(dim::texts(&t, &s, &ctx), vec!["Lawn"]);
-    // The label is one text, moved up by the offset.
-    let o = Dimension { offset: 10.0, ..d };
-    let prims = dim::prims(&o, &s, &ctx);
-    assert_eq!(prims.len(), 1);
-    let Prim::Text { at, .. } = &prims[0] else {
+    let copy = ObjectId(out.created[0]);
+    let Annot::DataTag(t) = annot_of(&ed, copy) else {
         panic!()
     };
-    assert!(at.y > 900.0);
-    // Checks.
-    s.area_round_to = Some(0.0);
-    assert!(s.validate().is_err());
-    s.area_round_to = None;
-    s.area_precision = 9;
-    assert!(s.validate().is_err());
-    assert_eq!(DimMode::from_name("Area Dimension"), Some(DimMode::Area));
-    assert_eq!(DimMode::Area.point_range(), (1, 1));
+    let Annot::DataTag(orig) = annot_of(&ed, tag) else {
+        panic!()
+    };
+    assert_eq!(t.object, rect);
+    assert!((t.at - (orig.at + v(2000.0, 0.0))).length() < 1e-6);
+    // The dimension and the callout alone: no link to the original, the points stay.
+    let out = ed
+        .execute(&Command::CopyObjects {
+            ids: vec![dim_id, callout],
+            delta: v(0.0, 5000.0),
+        })
+        .unwrap();
+    let Annot::Dimension(d) = annot_of(&ed, ObjectId(out.created[0])) else {
+        panic!()
+    };
+    assert!(d.anchors.is_empty());
+    assert_eq!(d.points, vec![v(0.0, 5000.0), v(1000.0, 5000.0)]);
+    let Annot::Callout(c) = annot_of(&ed, ObjectId(out.created[1])) else {
+        panic!()
+    };
+    assert_eq!(c.leaders[0].anchor, None);
+    assert_eq!(c.leaders[0].points, vec![v(1000.0, 7000.0)]);
+    // The shape and the annotations together: the copies are linked to each other.
+    let out = ed
+        .execute(&Command::CopyObjects {
+            ids: vec![rect, tag, dim_id, callout],
+            delta: v(20_000.0, 0.0),
+        })
+        .unwrap();
+    let (r2, t2, d2, c2) = (
+        ObjectId(out.created[0]),
+        ObjectId(out.created[1]),
+        ObjectId(out.created[2]),
+        ObjectId(out.created[3]),
+    );
+    assert_tag_follows(&ed, t2, r2);
+    let Annot::Dimension(d) = annot_of(&ed, d2) else {
+        panic!()
+    };
+    assert_eq!(
+        d.anchors
+            .iter()
+            .flatten()
+            .map(|a| a.object)
+            .collect::<Vec<_>>(),
+        vec![r2, r2]
+    );
+    assert_eq!(d.points, vec![v(20_000.0, 0.0), v(21_000.0, 0.0)]);
+    let Annot::Callout(c) = annot_of(&ed, c2) else {
+        panic!()
+    };
+    assert_eq!(c.leaders[0].anchor.map(|a| a.object), Some(r2));
+    // The same through a transformed copy and an array.
+    let out = ed
+        .execute(&Command::TransformObjects {
+            ids: vec![rect, tag],
+            transform: crate::edit2d::Transform::Move {
+                delta: v(0.0, 30_000.0),
+            },
+            copy: true,
+        })
+        .unwrap();
+    assert_tag_follows(&ed, ObjectId(out.created[1]), ObjectId(out.created[0]));
+    let out = ed
+        .execute(&Command::ArrayObjects {
+            ids: vec![rect, tag],
+            array: crate::edit2d::spec::ArrayParams {
+                layout: crate::edit2d::spec::ArrayLayout::Linear {
+                    count: 2,
+                    offset: Some(v(0.0, 9000.0)),
+                    distance: None,
+                    angle: None,
+                },
+                resize: None,
+                rotate: None,
+                retain: true,
+            },
+        })
+        .unwrap();
+    assert_tag_follows(&ed, ObjectId(out.created[1]), ObjectId(out.created[0]));
 }

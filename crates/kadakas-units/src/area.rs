@@ -23,6 +23,19 @@ pub enum AreaUnit {
 impl AreaUnit {
     pub const ALL: [AreaUnit; 4] = [AreaUnit::M2, AreaUnit::Ha, AreaUnit::Ft2, AreaUnit::Ac];
 
+    /// Reads the name of a unit: `m2`, `m²`, `sqm`, `ha`, `hectare`, `ft2`, `sqft`, `ac`, `acre`
+    /// and so on (case and spaces ignored). `None` for another text.
+    pub fn from_name(name: &str) -> Option<AreaUnit> {
+        let n = name.trim().to_lowercase().replace(' ', "");
+        Some(match n.as_str() {
+            "m\u{b2}" | "m2" | "m^2" | "sqm" | "sqmeter" | "sqmeters" => AreaUnit::M2,
+            "ha" | "hectare" | "hectares" => AreaUnit::Ha,
+            "ft\u{b2}" | "ft2" | "ft^2" | "sqft" | "sf" | "sqfeet" | "sqfoot" => AreaUnit::Ft2,
+            "ac" | "acre" | "acres" => AreaUnit::Ac,
+            _ => return None,
+        })
+    }
+
     /// Square millimeters in one unit.
     pub fn mm2_per_unit(self) -> f64 {
         match self {
@@ -178,13 +191,10 @@ fn split_number(text: &str, nf: &NumberFormat) -> Option<(f64, String)> {
 /// `sq ft`, `sf`; `ac`, `acre(s)`.
 pub fn parse_area(text: &str, default: AreaUnit, nf: &NumberFormat) -> Option<f64> {
     let (value, rest) = split_number(text, nf)?;
-    let unit = match rest.as_str() {
-        "" => default,
-        "m\u{b2}" | "m2" | "m^2" | "sqm" | "sqmeter" | "sqmeters" => AreaUnit::M2,
-        "ha" | "hectare" | "hectares" => AreaUnit::Ha,
-        "ft\u{b2}" | "ft2" | "ft^2" | "sqft" | "sf" | "sqfeet" | "sqfoot" => AreaUnit::Ft2,
-        "ac" | "acre" | "acres" => AreaUnit::Ac,
-        _ => return None,
+    let unit = if rest.is_empty() {
+        default
+    } else {
+        AreaUnit::from_name(&rest)?
     };
     let mm2 = value * unit.mm2_per_unit();
     mm2.is_finite().then_some(mm2)
@@ -246,6 +256,19 @@ mod tests {
         );
         for bad in ["", "abc", "5 parsecs", "m3"] {
             assert_eq!(p(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn unit_names_are_read() {
+        assert_eq!(AreaUnit::from_name(" M2 "), Some(AreaUnit::M2));
+        assert_eq!(AreaUnit::from_name("m\u{b2}"), Some(AreaUnit::M2));
+        assert_eq!(AreaUnit::from_name("Hectares"), Some(AreaUnit::Ha));
+        assert_eq!(AreaUnit::from_name("sq ft"), Some(AreaUnit::Ft2));
+        assert_eq!(AreaUnit::from_name("acre"), Some(AreaUnit::Ac));
+        assert_eq!(AreaUnit::from_name("yd2"), None);
+        for u in AreaUnit::ALL {
+            assert_eq!(AreaUnit::from_name(u.short_name()), Some(u));
         }
     }
 

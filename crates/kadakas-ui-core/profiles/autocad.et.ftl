@@ -42,3 +42,4 @@ panels-radius-of-new-arc-vertices-type-a = Uute kaaretippude raadius. Kaare rež
 plant-ui-none-use-the-data-bar = (puudub: kasuta dünaamilist sisendit)
 uic-tools-pick-a-mode-in-the-data-bar = Vali režiim dünaamilises sisendis: tugimüür, kaldejoon, kõrgusmärk, tähis või lõikejoon. Esc katkestab.
 uic-tools-click-to-place-set-values-in-the = Klõpsa asetamiseks. Sisesta väärtused dünaamilises sisendis.
+uic-style-edit-kind-dimension = Mõõtmestiil

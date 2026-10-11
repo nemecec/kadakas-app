@@ -966,6 +966,27 @@ mod real_commands {
         ]
     }
 
+    /// A session whose IDs come from a seed, so the same actions make the same IDs and a failing
+    /// case replays. The two sessions of a test use two salts, so their IDs never meet.
+    pub(super) fn seeded(salt: u64) -> Session {
+        let mut doc = kadakas_core::model::Document::default();
+        doc.seed_ids(1_700_000_000_000, salt);
+        let mut s = Session::with_document(doc);
+        s.scripting.allow_agent_scripts = true;
+        // Instrumented builds run slowly. The wall-clock limit of a plug-in call must not decide
+        // the result of a test; the fuel is the exact limit.
+        s.wasm_plugins.registry.set_limits(kadakas_plugin::Limits {
+            max_millis: 60_000,
+            ..kadakas_plugin::Limits::default()
+        });
+        s
+    }
+
+    pub(super) const PLANTER: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
+    );
+
     fn object_ids(s: &Session) -> Vec<String> {
         s.editor
             .doc()
@@ -1169,21 +1190,118 @@ mod real_commands {
         }
     }
 
+    /// The IDs of the plug-in objects of a session.
+    fn planters(s: &Session) -> Vec<String> {
+        s.editor
+            .doc()
+            .objects
+            .values()
+            .filter(|o| o.data.values().any(|v| v.get("plugin").is_some()))
+            .map(|o| o.id.0.to_string())
+            .collect()
+    }
+
+    fn settle(sessions: &mut [Session; 2], hub: &Hub, now: &mut u64) {
+        for _ in 0..8 {
+            for s in sessions.iter_mut() {
+                *now += 100;
+                hub.set_time(*now);
+                s.handle("collab.sync", json!({"now_ms": *now})).unwrap();
+            }
+        }
+    }
+
+    /// A plug-in that stops with an error (no fuel) on one side, while the other side changes
+    /// the same objects, undoes and groups: nothing may get lost or split.
+    #[test]
+    fn a_plugin_error_during_concurrent_edits_still_converges() {
+        let a = seeded(11);
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
+        let mut sessions = [a, seeded(12)];
+        for s in &mut sessions {
+            s.handle("plugins.install", json!({"path": PLANTER}))
+                .unwrap();
+            s.set_collab_endpoint(Box::new(hub.endpoint()));
+            s.handle("collab.connect", json!({"now_ms": 1})).unwrap();
+        }
+        let mut now = 1_000;
+        for x in [0, 5_000] {
+            sessions[0]
+                .handle(
+                    "plugins.place",
+                    json!({"plugin": "org.kadakas.raised-planter", "min": [x, 0], "max": [x + 2000, 800]}),
+                )
+                .unwrap();
+        }
+        settle(&mut sessions, &hub, &mut now);
+        let ids = planters(&sessions[1]);
+        assert_eq!(ids.len(), 2, "both planters reached B");
+        // B has no fuel: every plug-in call of B is an error. The error leaves the old shapes.
+        // B gets a plug-in with almost no fuel: the module cannot even describe itself, so B
+        // has no working plug-in. Every plug-in call of B is an error, and the shapes stay.
+        {
+            let b = &mut sessions[1];
+            b.wasm_plugins.registry.remove("org.kadakas.raised-planter");
+            b.wasm_plugins.registry.set_limits(kadakas_plugin::Limits {
+                fuel: 1_000,
+                max_millis: 60_000,
+                ..kadakas_plugin::Limits::default()
+            });
+            assert!(
+                b.handle("plugins.install", json!({"path": PLANTER}))
+                    .is_err()
+            );
+        }
+        now += 100;
+        hub.set_time(now);
+        // Both sides work at the same time, offline from each other until the end.
+        let failed = sessions[1].handle(
+            "plugins.set_params",
+            json!({"id": ids[0], "params": {"wall": 120.0}}),
+        );
+        assert!(failed.is_err(), "B must see the plug-in error");
+        sessions[0]
+            .handle(
+                "plugins.set_params",
+                json!({"id": ids[0], "params": {"wall": 90.0}}),
+            )
+            .unwrap();
+        exec(&mut sessions[0], json!({"op": "group", "ids": ids.clone()}));
+        let _ = sessions[1].handle("collab.undo", json!({"now_ms": now}));
+        let _ = sessions[1].handle(
+            "plugins.set_params",
+            json!({"id": ids[1], "params": {"wall": 200.0}}),
+        );
+        let _ = sessions[0].handle("collab.undo", json!({"now_ms": now}));
+        exec(
+            &mut sessions[1],
+            json!({"op": "move_objects", "ids": [ids[1]], "delta": [10, 5]}),
+        );
+        settle(&mut sessions, &hub, &mut now);
+        for s in &sessions {
+            assert_eq!(s.collab_client().unwrap().pending().len(), 0);
+            let mut doc = s.editor.doc().clone();
+            assert!(doc.validate().is_ok(), "{:?}", doc.validate());
+        }
+        assert!(same(&sessions[0], &sessions[1]));
+        let server = hub.with(|s| s.replica().canonical_text());
+        for s in &sessions {
+            let c = s.collab_client().unwrap();
+            assert_eq!(c.confirmed().canonical_text(), server);
+            assert_eq!(c.view().canonical_text(), server);
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(30))]
 
         #[test]
         fn two_sessions_with_real_commands_converge(acts in prop::collection::vec(act(), 1..45)) {
-            let a = Session::default();
+            let a = seeded(1);
             let hub = Hub::new(Sequencer::new(docsync::replica_of(a.editor.doc())));
-            let mut sessions = [a, Session::default()];
-            let planter = concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../kadakas-plugin/tests/fixtures/raised_planter.wasm"
-            );
+            let mut sessions = [a, seeded(2)];
             for s in &mut sessions {
-                s.scripting.allow_agent_scripts = true;
-                let _ = s.handle("plugins.install", json!({"path": planter}));
+                let _ = s.handle("plugins.install", json!({"path": PLANTER}));
                 s.set_collab_endpoint(Box::new(hub.endpoint()));
                 let r = s.handle("collab.connect", json!({"now_ms": 1}));
                 prop_assert!(r.is_ok());

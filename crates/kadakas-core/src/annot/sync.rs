@@ -49,12 +49,6 @@ pub fn resync(doc: &Document, a: &Annot, paper: f64, rederive_offset: bool) -> O
                             *center + DVec2::from_angle(*start + sweep) * *radius,
                         ];
                     }
-                    (DimMode::Area, Some(shape)) => {
-                        if let (Some(area), Some(at)) = (shape.area(), ref_point(shape)) {
-                            d.area = Some(area);
-                            d.points = vec![at];
-                        }
-                    }
                     _ => {}
                 }
             } else {

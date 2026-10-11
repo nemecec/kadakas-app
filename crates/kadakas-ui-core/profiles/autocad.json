@@ -89,6 +89,7 @@
     "Z": "view.zoom_fit",
     "ZE": "view.zoom_fit",
     "DIM": "tool.dimension",
+    "DIMSTYLE": "cmd.dimension_standards",
     "DLI": "tool.dimension",
     "DAN": "tool.angular_dimension",
     "DRA": "tool.radial_dimension",

@@ -35,7 +35,6 @@ fn dim(mode: DimMode, points: &[(f64, f64)], offset: f64) -> Shape {
         style: None,
         text: None,
         detached: false,
-        area: None,
     })))
 }
 
@@ -485,37 +484,4 @@ fn faces_are_polygons_or_one_mesh_per_layer() {
     // Two faces share the edge (10, 0)-(10, 10): five vertices, three triangles.
     assert_eq!((m[1].vertices.len(), m[1].triangles.len()), (5, 3));
     assert_eq!(report.skipped_total(), 0);
-}
-
-#[test]
-fn an_area_dimension_exports_as_text() {
-    let mut ed = Editor::with_sequential_ids();
-    let rect = add(
-        &mut ed,
-        Shape::Rect {
-            min: DVec2::new(0.0, 0.0),
-            max: DVec2::new(4000.0, 5000.0),
-        },
-    );
-    add(
-        &mut ed,
-        Shape::Annotation(Box::new(Annot::Dimension(Dimension {
-            mode: DimMode::Area,
-            points: vec![DVec2::ZERO],
-            anchors: vec![Some(kadakas_core::annot::Anchor::new(
-                kadakas_core::model::ObjectId(rect),
-                kadakas_core::annot::AnchorTarget::Center,
-            ))],
-            offset: 0.0,
-            style: None,
-            text: None,
-            detached: false,
-            area: None,
-        }))),
-    );
-    let (text, report) = export(ed.doc(), &ExportOptions::default());
-    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
-    // No native DIMENSION for an area: the label is a text.
-    assert_eq!(count(&text, "DIMENSION"), 0);
-    assert!(text.contains("20.00 m"), "the area text is in the file");
 }

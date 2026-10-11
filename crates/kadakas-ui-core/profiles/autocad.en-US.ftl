@@ -45,3 +45,4 @@ panels-radius-of-new-arc-vertices-type-a = Radius of new arc vertices. Type a va
 plant-ui-none-use-the-data-bar = (none: use dynamic input)
 uic-tools-pick-a-mode-in-the-data-bar = Pick a mode in dynamic input: landscape wall, grade, spot elevation, stake or section line. Esc cancels.
 uic-tools-click-to-place-set-values-in-the = Click to place. Set values in dynamic input.
+uic-style-edit-kind-dimension = Dimension style

@@ -7,7 +7,7 @@ use kadakas_core::annot::draw::{Fill, Prim};
 use kadakas_core::annot::{Annot, Legend};
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
-use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
 
 use crate::canvas::{Style, color32};
@@ -306,38 +306,13 @@ pub fn panel_buttons(ui: &mut Ui, doc: &Document, requests: &mut PanelRequests) 
     {
         requests.legend = true;
     }
-    let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
-    if !has("dimension_style") || !has("tag_style") || !has("text_style") {
+    let missing = kadakas_ui_core::style_edit::missing_default_styles(doc);
+    if !missing.is_empty() {
         let r = ui
             .button(tr!("annot-ui-add-default-styles"))
             .on_hover_text(tr!("annot-ui-adds-a-text-style-a-dimension-style"));
         if r.clicked() {
-            use kadakas_core::annot::style::{AnnotResource, DimensionStyle, TagStyle, TextStyle};
-            let add = |name: &str, r: AnnotResource| Command::AddResource {
-                name: name.into(),
-                body: ResourceBody::annot(r),
-            };
-            if !has("text_style") {
-                cmds.push(add(
-                    "Text 3 mm",
-                    AnnotResource::TextStyle(TextStyle::default()),
-                ));
-            }
-            if !has("dimension_style") {
-                cmds.push(add(
-                    "Dimension 2.5 mm",
-                    AnnotResource::DimensionStyle(DimensionStyle::default()),
-                ));
-            }
-            if !has("tag_style") {
-                cmds.push(add(
-                    "Plant tag",
-                    AnnotResource::TagStyle(TagStyle {
-                        lines: vec!["{IdCode}".into(), "{Botanical}".into()],
-                        ..TagStyle::default()
-                    }),
-                ));
-            }
+            cmds.extend(missing);
         }
     }
 }
@@ -353,31 +328,6 @@ fn num(ui: &mut Ui, commit: &mut bool, label: &str, v: &mut f64, speed: f64) {
 pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
     let mut commit = false;
     match a {
-        Annot::Dimension(d) if d.mode == kadakas_core::annot::DimMode::Area => {
-            ui.label(tr!("annot-ui-area"));
-            ui.label(kadakas_units::current().area_text(d.area.unwrap_or(0.0)));
-            ui.end_row();
-            num(
-                ui,
-                &mut commit,
-                &tr!("annot-ui-label-offset-paper-mm"),
-                &mut d.offset,
-                0.5,
-            );
-            ui.label(tr!("annot-ui-text"));
-            let mut t = d.text.clone().unwrap_or_default();
-            let r = ui.text_edit_singleline(&mut t);
-            d.text = (!t.is_empty()).then_some(t);
-            commit |= r.lost_focus();
-            ui.end_row();
-            ui.label(tr!("annot-ui-linked-shape"));
-            ui.label(if d.anchors.iter().flatten().next().is_some() {
-                tr!("annot-ui-linked")
-            } else {
-                tr!("annot-ui-not-linked")
-            });
-            ui.end_row();
-        }
         Annot::Dimension(d) => {
             num(
                 ui,

@@ -36,12 +36,10 @@ pub enum DimToolMode {
     Diameter,
     /// Click an arc.
     ArcLength,
-    /// Click a closed shape. The label shows its area and follows the shape.
-    Area,
 }
 
 impl DimToolMode {
-    pub const ALL: [DimToolMode; 11] = [
+    pub const ALL: [DimToolMode; 10] = [
         DimToolMode::Horizontal,
         DimToolMode::Vertical,
         DimToolMode::Aligned,
@@ -52,7 +50,6 @@ impl DimToolMode {
         DimToolMode::Radial,
         DimToolMode::Diameter,
         DimToolMode::ArcLength,
-        DimToolMode::Area,
     ];
 
     pub fn label(self) -> String {
@@ -67,7 +64,6 @@ impl DimToolMode {
             DimToolMode::Radial => tr!("uic-annot-tool-radial"),
             DimToolMode::Diameter => tr!("uic-annot-tool-diameter"),
             DimToolMode::ArcLength => tr!("uic-annot-tool-arc-length"),
-            DimToolMode::Area => tr!("uic-annot-tool-area"),
         }
     }
 
@@ -89,7 +85,6 @@ impl DimToolMode {
                 tr!("uic-annot-tool-click-a-circle-or-an-arc")
             }
             DimToolMode::ArcLength => tr!("uic-annot-tool-click-an-arc"),
-            DimToolMode::Area => tr!("uic-annot-tool-click-a-closed-shape"),
         }
     }
 
@@ -122,7 +117,6 @@ impl DimToolMode {
             DimToolMode::Radial => DimMode::Radial,
             DimToolMode::Diameter => DimMode::Diameter,
             DimToolMode::ArcLength => DimMode::ArcLength,
-            DimToolMode::Area => DimMode::Area,
         }
     }
 
@@ -140,11 +134,6 @@ impl DimToolMode {
             self,
             DimToolMode::Radial | DimToolMode::Diameter | DimToolMode::ArcLength
         )
-    }
-
-    /// The mode that clicks a closed shape.
-    fn is_area(self) -> bool {
-        self == DimToolMode::Area
     }
 
     /// Number of clicks before the line is placed or the dimension is made.
@@ -247,7 +236,6 @@ fn dimension(
         style,
         text: None,
         detached: false,
-        area: None,
     })
 }
 
@@ -326,23 +314,6 @@ impl ToolMachine {
         let s = &cx.settings.annot;
         let mode = s.dim_mode;
         match input {
-            Input::Press { p, .. } if mode.is_area() => {
-                let Some(obj) =
-                    hit::hit_object(cx.annot, cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
-                else {
-                    return vec![Effect::Notice(tr!("uic-annot-tool-click-a-closed-shape-2"))];
-                };
-                let (Some(_), Some(at)) = (obj.shape.area(), annot::ref_point(&obj.shape)) else {
-                    return vec![Effect::Notice(tr!("uic-annot-tool-click-a-closed-shape-2"))];
-                };
-                vec![add(dimension(
-                    DimMode::Area,
-                    vec![at],
-                    vec![Some(Anchor::new(obj.id, AnchorTarget::Center))],
-                    0.0,
-                    s.dim_style,
-                ))]
-            }
             Input::Press { p, .. } if mode.is_curve() => {
                 let Some(obj) =
                     hit::hit_object(cx.annot, cx.doc, p, cx.tol).and_then(|id| cx.doc.object(id))
@@ -534,7 +505,7 @@ impl ToolMachine {
         };
         let shape = |a: Annot| Some(Preview::Shape(Shape::Annotation(Box::new(a))));
         match self.tool {
-            Tool::Dimension if s.dim_mode.is_curve() || s.dim_mode.is_area() => None,
+            Tool::Dimension if s.dim_mode.is_curve() => None,
             Tool::Dimension => {
                 let mode = s.dim_mode;
                 let m = mode.mode();
@@ -889,40 +860,6 @@ mod tests {
             click(&mut m, &doc, &s, DVec2::new(-9000.0, 0.0))[0],
             Effect::Notice(_)
         ));
-    }
-
-    #[test]
-    fn the_area_mode_labels_a_closed_shape_and_refuses_the_rest() {
-        let doc = doc_with(vec![
-            Shape::Rect {
-                min: DVec2::ZERO,
-                max: DVec2::new(4000.0, 2000.0),
-            },
-            Shape::Line {
-                a: DVec2::new(0.0, 5000.0),
-                b: DVec2::new(2000.0, 5000.0),
-            },
-        ]);
-        let mut s = ToolSettings::default();
-        s.annot.dim_mode = DimToolMode::Area;
-        assert_eq!(DimToolMode::Area.mode(), DimMode::Area);
-        assert!(!DimToolMode::Area.help().is_empty());
-        let mut m = machine(Tool::Dimension);
-        let Annot::Dimension(d) = made(&click(&mut m, &doc, &s, DVec2::new(4000.0, 1000.0))) else {
-            panic!()
-        };
-        assert_eq!(d.mode, DimMode::Area);
-        assert_eq!(d.points, vec![DVec2::new(2000.0, 1000.0)]);
-        assert_eq!(d.anchors.len(), 1);
-        assert!(matches!(
-            click(&mut m, &doc, &s, DVec2::new(1000.0, 5000.0))[0],
-            Effect::Notice(_)
-        ));
-        assert!(matches!(
-            click(&mut m, &doc, &s, DVec2::new(-9000.0, 0.0))[0],
-            Effect::Notice(_)
-        ));
-        assert_eq!(m.preview(DVec2::ZERO, &cx(&doc, &s)), Preview::None);
     }
 
     #[test]

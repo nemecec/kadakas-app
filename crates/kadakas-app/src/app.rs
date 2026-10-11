@@ -1056,6 +1056,28 @@ impl KadakasApp {
         }
     }
 
+    /// Opens the style editor on the first dimension standard. A document without one gets a new
+    /// standard first.
+    fn edit_dimension_standard(&mut self) {
+        use kadakas_ui_core::style_edit::{StyleKind, first_of};
+        match first_of(self.session.editor.doc(), StyleKind::Dimension) {
+            Some(id) => {
+                self.resource_ui.styles.open(&self.session, id);
+            }
+            None => {
+                let mut status = String::new();
+                self.resource_ui.styles.create(
+                    &mut self.session,
+                    StyleKind::Dimension,
+                    &mut status,
+                );
+                if !status.is_empty() {
+                    self.status = status;
+                }
+            }
+        }
+    }
+
     /// Adds a graphic legend at the top left of the view.
     fn add_legend(&mut self) {
         let at = self.canvas_rect.map_or(DVec2::ZERO, |r| {
@@ -1098,6 +1120,10 @@ impl KadakasApp {
             Action::ToolRadialDim => self.settings.annot.dim_mode = DimToolMode::Radial,
             Action::CmdGraphicLegend => {
                 self.add_legend();
+                return;
+            }
+            Action::CmdDimensionStandards => {
+                self.edit_dimension_standard();
                 return;
             }
             _ => {}
@@ -2760,6 +2786,32 @@ mod tests {
             app.undo();
         }
         assert_eq!(app.session.editor.doc().objects.len(), 2);
+    }
+
+    #[test]
+    fn the_dimension_standards_command_opens_or_makes_the_standard() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        app.run_action(&ctx, Action::CmdDimensionStandards);
+        let doc = app.session.editor.doc();
+        let id = kadakas_ui_core::style_edit::first_of(
+            doc,
+            kadakas_ui_core::style_edit::StyleKind::Dimension,
+        )
+        .expect("a standard was made");
+        assert!(app.resource_ui.styles.is_open(id));
+        // A second run opens the same one and makes no new standard.
+        app.run_action(&ctx, Action::CmdDimensionStandards);
+        assert_eq!(app.resource_ui.styles.count(), 1);
+        let n = app
+            .session
+            .editor
+            .doc()
+            .resources
+            .iter()
+            .filter(|r| r.body.type_name() == "dimension_style")
+            .count();
+        assert_eq!(n, 1);
     }
 
     #[test]
