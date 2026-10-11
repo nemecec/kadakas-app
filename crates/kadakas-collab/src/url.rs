@@ -62,6 +62,8 @@ impl CollabUrl {
         if host.is_empty() {
             return Err(UrlError("the address has no host".into()));
         }
+        check_host(host)?;
+        check_path(path)?;
         let default_port = if scheme == "wss" { 443 } else { 80 };
         Ok(CollabUrl {
             scheme: scheme.to_string(),
@@ -76,14 +78,42 @@ impl CollabUrl {
         self.host.trim_start_matches('[').trim_end_matches(']')
     }
 
-    /// True for `localhost`, `*.localhost`, `127.0.0.0/8` and `::1`.
+    /// True for an IP address of this computer (`127.0.0.0/8`, `::1`) and for the exact name
+    /// `localhost`. Any other name is not trusted by its spelling: `localhost` itself must still
+    /// resolve to loopback addresses only (the transport checks it before it sends a token).
     pub fn is_loopback(&self) -> bool {
         let h = self.bare_host();
         h == "localhost"
-            || h.ends_with(".localhost")
-            || h == "::1"
             || h.parse::<std::net::Ipv4Addr>()
                 .is_ok_and(|a| a.is_loopback())
+            || h.parse::<std::net::Ipv6Addr>()
+                .is_ok_and(|a| a.is_loopback())
+    }
+
+    /// True if the host is an IP address and not a name.
+    pub fn host_is_ip(&self) -> bool {
+        self.bare_host().parse::<std::net::IpAddr>().is_ok()
+    }
+
+    /// The document ID if the path ends in `/ws/<UUID>`, in the canonical lower case text.
+    pub fn document(&self) -> Option<String> {
+        let mut parts = self.path.rsplit('/');
+        let last = parts.next()?;
+        if parts.next()? != "ws" {
+            return None;
+        }
+        kadakas_core::uid::Uid::parse(last).map(|u| u.to_string())
+    }
+
+    /// Scheme, host and port: the part of the address that decides where a token may go.
+    pub fn origin(&self) -> String {
+        format!("{}://{}:{}", self.scheme, self.host, self.port)
+    }
+
+    /// The whole address in one fixed form (scheme, host, port and path). Two addresses of the
+    /// same document have the same identity.
+    pub fn identity(&self) -> String {
+        format!("{}{}", self.origin(), self.path)
     }
 
     /// The address as text, without anything secret: `scheme://host:port/path`.
@@ -129,6 +159,46 @@ impl CollabUrl {
     }
 }
 
+/// Letters, digits, `-` and `.` for a name; hex digits, `:` and `.` inside brackets for IPv6.
+fn check_host(host: &str) -> Result<(), UrlError> {
+    let ok = if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        inner.parse::<std::net::Ipv6Addr>().is_ok()
+    } else {
+        host.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+            && !host.starts_with('.')
+            && !host.starts_with('-')
+            && !host.contains("..")
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(UrlError(
+            "the host of the address has bad characters".into(),
+        ))
+    }
+}
+
+/// No `%` (an escape could hide `..`), no `\`, no spaces or control characters, no `.` or `..`
+/// segments.
+fn check_path(path: &str) -> Result<(), UrlError> {
+    if path
+        .bytes()
+        .any(|b| b == b'%' || b == b'\\' || b <= b' ' || b == 0x7f)
+    {
+        return Err(UrlError(
+            "the path of the address must not have %, backslashes, spaces or control characters"
+                .into(),
+        ));
+    }
+    if path.split('/').any(|seg| seg == "." || seg == "..") {
+        return Err(UrlError(
+            "the path of the address must not have . or .. parts".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn split_host_port(authority: &str) -> Result<(&str, Option<u16>), UrlError> {
     let bad = || UrlError("the port is not a number".into());
     if authority.starts_with('[') {
@@ -169,6 +239,52 @@ mod tests {
         assert_eq!(u.display(), "wss://collab.example.org/");
         assert!(CollabUrl::parse("ws://[::1]:9/ws/x").unwrap().is_loopback());
         assert_eq!(CollabUrl::parse("https://a.b/x").unwrap().scheme, "wss");
+        // Only IP addresses of this computer and the exact name localhost count as local.
+        for not_local in [
+            "ws://foo.localhost",
+            "ws://localhost.evil.org",
+            "ws://127.0.0.1.nip.io",
+            "ws://[::2]",
+        ] {
+            assert!(
+                !CollabUrl::parse(not_local).unwrap().is_loopback(),
+                "{not_local}"
+            );
+        }
+        assert!(CollabUrl::parse("ws://127.255.0.9").unwrap().is_loopback());
+        assert_eq!(u.origin(), "wss://collab.example.org:443");
+    }
+
+    #[test]
+    fn the_document_segment_must_be_a_uuid() {
+        let id = "0190f1c2-7a3b-7c1d-8e2f-123456789abc";
+        let u = CollabUrl::parse(&format!("ws://h/base/ws/{}", id.to_uppercase())).unwrap();
+        assert_eq!(u.document().as_deref(), Some(id));
+        assert_eq!(
+            u.identity(),
+            format!("ws://h:80/base/ws/{}", id.to_uppercase())
+        );
+        for bad in ["ws://h/ws/notauuid", "ws://h/ws/", "ws://h/x/", "ws://h/ws"] {
+            assert_eq!(CollabUrl::parse(bad).unwrap().document(), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn refuses_odd_paths_and_hosts() {
+        for bad in [
+            "ws://h/ws/../x",
+            "ws://h/./ws",
+            "ws://h/ws/%2e%2e",
+            "ws://h/a b",
+            "ws://h/a\\b",
+            "ws://ho st/x",
+            "ws://-h/x",
+            "ws://h..x/x",
+            "ws://[zz::1]/x",
+            "ws://h_x/x",
+        ] {
+            assert!(CollabUrl::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

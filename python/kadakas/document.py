@@ -398,7 +398,7 @@ class Collab:
         ``url`` is the server (``ws://127.0.0.1:8787``, or ``wss://host/ws/<document>``), ``doc``
         the document ID, ``token`` the token that the server admin made for you. All three may be
         left out when the program has defaults (``KADAKAS_COLLAB_URL``, ``KADAKAS_COLLAB_TOKEN``).
-        A server that is not on this computer must be allowed with ``kadakas.open(allow_url=...)``
+        A server that is not on this computer must be allowed with ``kadakas.open(allow_collab_url=...)``
         and must use ``wss://``. ``store`` is a path without extension for the offline log.
 
         The shared document replaces the open one, and edits made before the client is online
@@ -684,18 +684,21 @@ class Document:
 def open(path: str | Path | None = None, *, binary: str | Path | None = None,  # noqa: A001
          allow_dir: Sequence[str | Path] = (), allow_agent_scripts: bool = False,
          allow_converters: bool = False, allow_url: Sequence[str] = (),
-         collab_url: str | None = None, collab_token: str | None = None) -> Document:
+         allow_collab_url: Sequence[str] = (), collab_url: str | None = None, collab_token: str | None = None) -> Document:
     """Start ``kadakas serve`` and return a ``Document`` for its session.
 
     ``path`` is a document file to open at the start. ``allow_dir`` lists the folders that the
-    session may read and write (default: the current folder). ``allow_url`` lists the servers
-    (map services, and collaboration servers that are not on this computer) that it may use.
+    session may read and write (default: the current folder). ``allow_url`` lists the servers for map
+    services. ``allow_collab_url`` lists the collaboration servers that are not on this computer
+    (they must use ``wss://``); ``collab_url`` is allowed without an entry.
     ``collab_url`` and ``collab_token`` are the defaults of ``doc.collab.connect``; the token goes
     to the program in its environment, not on the command line. The process ends with ``close()``."""
     args: list[str] = []
     env: dict[str, str] = {}
     for u in allow_url:
         args += ["--allow-url", u]
+    for u in allow_collab_url:
+        args += ["--allow-collab-url", u]
     if collab_url:
         env["KADAKAS_COLLAB_URL"] = collab_url
     if collab_token:

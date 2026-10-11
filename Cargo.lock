@@ -2670,6 +2670,7 @@ dependencies = [
  "kadakas-collab",
  "kadakas-collab-ws",
  "kadakas-core",
+ "libc",
  "rcgen",
  "rustls",
  "rustls-native-certs",

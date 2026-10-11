@@ -661,26 +661,45 @@ normal `undo` is cleared, because its steps no longer fit. While a session is co
 
 ### 9.1 Connecting a program to a server (the client)
 
-**The call.** `collab.connect {url, token, doc}`:
+**The call.** `collab.connect {url, token, doc, store?, replace?, discard?}`:
 
 - `url` is `ws://host:port` or `wss://host` (also `http://` and `https://`, as the same) together
-  with `doc`, the document ID. A full address `ws://host:port/ws/<document ID>` works without `doc`.
-  An address with a user name, a password, a query or a fragment is refused: a secret must not be
-  in an address.
+  with `doc`, the document ID. A full address `ws://host:port/ws/<document ID>` works without `doc`;
+  the last part must be a UUID. An address with a user name, a password, a query or a fragment is
+  refused (a secret must not be in an address), and so is a path with `.` or `..` parts, `%`,
+  backslashes or spaces, and a host name with odd characters.
 - `token` is the token that the admin of the server made for you (a JWT). It is optional for a
   server that lets the client sign in with `hello` only.
-- `store` (a path without extension) keeps the offline log in two files, so the edits of a closed
-  program are not lost.
+- `store` (a path without extension) keeps the offline log in files, so the edits of a closed
+  program are not lost. A third file `<store>.doc.json` says which document the store is for; a
+  store of another document is refused.
 - Without `url`, the call uses the endpoint that the host gave, or the default URL (below).
+- The call returns at once. The connection is made in the background (name lookup, TCP, TLS and
+  the upgrade, all inside 10 seconds), so `collab.connect` and `collab.sync` never block for
+  seconds. The state is `connecting` until the server answered. A connection that fails shows in
+  `collab.status` (`last_error`) and as a client that goes offline and tries again.
 
-**Wait until the client is online before you edit.** The shared document replaces the open one when
-the first snapshot arrives. An edit made before that is lost. Call `collab.sync` until
-`status.state` is `online` (the Python call `doc.collab.connect` does this by default).
+**Which document.** The whole address of the document (scheme, host, port, path) is the identity
+of a connection. A call with another address starts a new client: the old document is never copied
+into the new one. Edits that still wait for the old document refuse the call, unless you pass
+`discard: true`. The same address again keeps the client, and so do the edits that wait.
+
+**Wait until the client is online before you edit.** The shared document replaces the open one
+when the first snapshot arrives. The program protects you from two losses:
+
+- While the client has no snapshot yet, a call that changes the document is taken back and fails
+  with a conflict error ("wait until `collab.status.state` is `online`").
+- `collab.connect` refuses when the open document has changes that nobody saved (since the start,
+  `file.save` or `file.open`), because the shared document would replace them. Save the document or
+  pass `replace: true`.
+
+Call `collab.sync` until `status.state` is `online`. The Python call `doc.collab.connect` does
+this by default.
 
 **Defaults and the command line.** The program sets the defaults for `collab.connect` from the
 environment variables `KADAKAS_COLLAB_URL` and `KADAKAS_COLLAB_TOKEN`, or from the flags
 `--collab-url` and `--collab-token` of `kadakas serve` and `kadakas mcp`. A flag shows in the list
-of processes, so prefer the variables. A call without `url` or `token` uses them.
+of processes, so prefer the variables.
 
 ```
 export KADAKAS_COLLAB_URL=ws://127.0.0.1:8787
@@ -688,47 +707,80 @@ export KADAKAS_COLLAB_TOKEN=<token>
 kadakas serve        # then: {"method": "collab.connect", "params": {"doc": "<document ID>"}}
 ```
 
-**Tokens are secrets.** They are kept in memory only. The client never writes a token to the
-journal, the checkpoint or any other file, and it never puts one in the status, the events, an error
-text or a log. The `describe()` text of an endpoint is the address without anything secret.
+**Tokens are secrets.**
 
-**The address policy.** The same rule as `--allow-url` for map services:
+- They are kept in memory only. The client never writes a token to the journal, the checkpoint or
+  any other file, and it never puts one in the status, the events, an error text or a log. The
+  `Debug` text of the configuration and of `hello` hides it. The `describe()` text of an endpoint
+  is the address without anything secret.
+- The program removes every `KADAKAS_*TOKEN*` variable from its own environment as soon as it has
+  read the flags, and it removes them again from the environment of every child process it starts
+  (Python scripts, converters). A script cannot read the token.
+- **The default token goes only to the default URL** (same scheme, host and port). Any other
+  address, also one on this computer, needs a `token` of its own in the call, or gets none.
+- A new token for the same address (the old one ran out): call `collab.connect {token}`. The
+  endpoint is made again with the new token, and the next `hello` carries it.
+- A token goes over `ws://` only to this computer (`127.0.0.0/8`, `::1` and the exact name
+  `localhost`, which must resolve to such addresses). The transport refuses to send a token over
+  `ws://` to any other host.
 
-- A server on this computer (`localhost`, `127.0.0.0/8`, `::1`) is always allowed.
-- Any other server must be on the list of `--allow-url` (a host name, `*.domain`, or an address
-  prefix such as `wss://collab.example.org/`). The default list is empty.
+**The address policy.**
+
+- A server on this computer (an IP address of `127.0.0.0/8` or `::1`, or the exact name
+  `localhost`) is always allowed. A name like `foo.localhost` or `127.0.0.1.nip.io` does not
+  count: it needs an entry.
+- Any other server must be on the list of `--allow-collab-url` (or the variable
+  `KADAKAS_COLLAB_ALLOW_URL`, a comma list): a host name, `*.domain`, or an address prefix such as
+  `wss://collab.example.org/`. The default list is empty. The address of `--collab-url` is allowed
+  without an entry, because the owner gave it. This is **not** the list of `--allow-url`, which is
+  for map services.
 - A server that is not on this computer must use `wss://`. The token would cross the network.
-- `kadakas serve` without the WebSocket support (a host that gave no factory) refuses every URL.
+- A host that gave the session no WebSocket support (`kadakas-api` alone) refuses every URL.
 
-**Signing in on the upgrade.** The client sends the token with the upgrade request: first as
-`Authorization: Bearer <token>`. If the server answers the upgrade with an HTTP error (for example a
-proxy that removes the header), it tries once more with the sub-protocols
-`kadakas.v1, kadakas.token.<token>`, which is also the way for a browser. It also sends the token in
-`hello`. A refused token ends with the error "the server refused the token (HTTP 401)".
+**Signing in on the upgrade.** The client sends the token with the upgrade request as
+`Authorization: Bearer <token>`. The sub-protocols `kadakas.v1, kadakas.token.<token>` are the
+fall back for a proxy that does not pass the header; they are used only when the host asks for
+it (`TokenMode::Auto`) and only after HTTP 400, 426 or 431. A browser always uses them. It also
+sends the token in `hello`.
+
+**A refused token ends the tries.** The answer 401 or 403 to the upgrade fails the client with
+`auth_failed` (state `failed`, an event `failed`), like a refused `hello`. The session does not
+try again; call `collab.connect {token}` with a new token. Other failures (the server is down, a
+5xx answer, a lost network) keep the tries going.
 
 **Frames and keep-alive.** One message is one text frame. The client sends no frame above 64 MiB
 (`MAX_FRAME_BYTES`) and reads frames up to 1 GiB (`MAX_SNAPSHOT_BYTES`). It sends a WebSocket ping
-every 20 s and drops a connection that was silent for 75 s.
+every 20 s and drops a connection that was silent for 75 s. At most 4096 frames wait for the
+reader; the thread stops reading while the queue is full.
 
 **Reconnecting.** A session that connected with a `url` connects again by itself after a lost
-connection, with a wait of 250 ms, 500 ms, 1 s and so on up to 30 s (the same steps as the retry of
-section 4.6). The tries happen inside `collab.sync`, `collab.presence` and `collab.undo`, so the
-document only changes when the caller asks for it. `collab.status` shows `reconnecting` and
-`last_error`. Edits made while offline wait in the queue and go out after the reconnect. A client
-that is `failed` (a refused token or protocol, a frame it cannot read) does not try again: call
-`collab.connect` with a good token. `collab.disconnect` stops the tries.
+connection, with a wait of 250 ms, 500 ms, 1 s and so on up to 30 s (the steps of section 4.6),
+each wait 20% shorter or longer at random. The wait starts again at 250 ms only after the client
+was online for 10 s, or got a sequence number from the server; a server that accepts the
+connection and closes it at once does not reset it. The tries happen inside `collab.sync`,
+`collab.presence` and `collab.undo`, so the document only changes when the caller asks for it.
+`collab.status` shows `reconnecting` and `last_error`. Edits made while offline wait in the queue
+and go out after the reconnect. A client that is `failed` (a refused token or protocol, a frame it
+cannot read) does not try again. `collab.disconnect` stops the tries.
+
+**The browser.** A page cannot set headers and cannot read the status of a refused upgrade: a 401
+shows as a closed socket with the close code 1006, the same as a lost network. The client then
+tries again with the back-off. A browser host should check the token itself (for example its
+expiry).
 
 **The crates.**
 
 | Crate | Content |
 |---|---|
-| `kadakas-collab` | `Backoff` and `Reconnector` (a back-off, and a link that connects again), `CollabUrl` (the address and the policy match), the `Transport` and `Endpoint` traits. Pure. |
-| `kadakas-collab-ws` | `WsEndpoint` and `WsTransport`. Native: a blocking client, one thread per connection, rustls with the `ring` provider and the Mozilla roots of `webpki-roots` (feature `native-roots` adds the roots of the operating system; `with_root_certificate_der` adds one). Browser (`wasm32`): the `WebSocket` of the browser through `web-sys`; the token goes in the sub-protocol and messages wait while the socket opens. Feature `test-server`: an in-process WebSocket server on the reference sequencer, for tests. |
+| `kadakas-collab` | `Backoff` and `Reconnector` (back-off with jitter, a link that connects again, a stop after a refused token), `CollabUrl` (the address, the checks, the allow-list match, the identity), the `Transport` and `Endpoint` traits, `TransportError::Refused`. Pure. |
+| `kadakas-collab-ws` | `WsEndpoint` and `WsTransport`. Native: one thread per connection that connects, reads and writes (`poll(2)` on Unix, a short wait elsewhere), rustls with the `ring` provider and the Mozilla roots of `webpki-roots` (feature `native-roots` adds the roots of the operating system; `with_root_certificate_der` adds one). Browser (`wasm32`): the `WebSocket` of the browser through `web-sys`. Feature `test-server`: an in-process WebSocket server on the reference sequencer, for tests. |
 | `kadakas-api` | `Session::set_collab_endpoint_factory`, `set_collab_defaults`, `set_collab_allowed_urls`. |
+| `kadakas-sys` | `process::scrub_secrets` and `remove_secrets_from_env`. |
 
 The tests of these crates need no Docker. The tests against the real server (concurrent edits, a
 restart of the server, offline edits, presence, per-user undo, a plug-in object in a session that
-does not have the plug-in) are in the `kadakas-server` repository, in `tests/e2e`.
+does not have the plug-in, a new token, a switch to another document) are in the `kadakas-server`
+repository, in `tests/e2e`.
 
 ## 10. Not in version 1
 

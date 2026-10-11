@@ -14,10 +14,19 @@
 //! # Signing in
 //!
 //! The token goes with the upgrade request, so the server can refuse a caller before it loads
-//! the document (see `docs/collaboration.md`, section 4.1). [`TokenMode::Auto`] (the default)
-//! sends `Authorization: Bearer <token>`; if the server answers the upgrade with an HTTP error
-//! (for example a proxy removed the header), it tries once more with the sub-protocols
-//! `kadakas.v1, kadakas.token.<token>`. The client also sends the token in its `hello`.
+//! the document (see `docs/collaboration.md`, section 4.1). [`TokenMode::Header`] (the default)
+//! sends `Authorization: Bearer <token>`. [`TokenMode::Auto`] tries once more with the
+//! sub-protocols `kadakas.v1, kadakas.token.<token>` when the server answers the upgrade with
+//! HTTP 400, 426 or 431 (a proxy that does not pass the header). A 401 or 403 is a refusal: the
+//! client fails with `auth_failed` and does not try again. The client also sends the token in its
+//! `hello`. A token goes over `ws://` only to this computer, never to another host.
+//!
+//! # Connecting
+//!
+//! `connect` returns at once. The thread of the connection does the name lookup, the TCP
+//! connection, the TLS handshake and the upgrade in one total deadline of 10 seconds. Messages
+//! that are sent before the socket is open wait in a queue. A failure shows as `Closed` (or
+//! `Refused` for 401 and 403) from `recv`, and `Transport::failure` says why.
 //!
 //! # Limits
 //!
@@ -55,10 +64,11 @@ use kadakas_collab::transport::{Endpoint, TransportError};
 /// How the token goes with the upgrade request.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TokenMode {
-    /// `Authorization: Bearer`, and the sub-protocol if the server answers with an HTTP error.
-    #[default]
+    /// `Authorization: Bearer`, and once more with the sub-protocol if the server answers the
+    /// upgrade with HTTP 400, 426 or 431.
     Auto,
     /// Only `Authorization: Bearer`.
+    #[default]
     Header,
     /// Only the sub-protocols `kadakas.v1, kadakas.token.<token>`.
     Subprotocol,

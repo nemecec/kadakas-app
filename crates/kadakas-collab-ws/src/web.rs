@@ -5,6 +5,15 @@
 //! and `recv` reads the queue, so the `Transport` calls never wait. The host calls
 //! `Link::pump` (for example once per frame, or from a timer).
 //!
+//! **Limits of the browser.** A page cannot set headers (so the token travels in the
+//! sub-protocol), and it cannot read the HTTP status of a refused upgrade: a server that answers
+//! 401 shows as a closed socket with the close code 1006, the same as a lost network. The client
+//! then reconnects with the back-off and does not learn that the token is bad; a browser host
+//! should check the token with its own request (for example the expiry of the JWT) or treat
+//! repeated 1006 closes before any message as a sign-in problem. Messages that are sent while the
+//! socket opens wait in a queue; there is no deadline for the connection except the one of the
+//! browser.
+//!
 //! The state is only in this file and only for the main thread of the browser. `Transport` asks
 //! for `Send`; a browser tab has one thread, so the types here say so with an `unsafe impl`.
 
@@ -133,10 +142,15 @@ unsafe impl Send for WsEndpoint {}
 
 impl WsEndpoint {
     pub fn new(url: &str, token: Option<&str>) -> Result<WsEndpoint, UrlError> {
-        Ok(WsEndpoint {
-            url: CollabUrl::parse(url)?,
-            token: token.filter(|t| !t.is_empty()).map(str::to_string),
-        })
+        let url = CollabUrl::parse(url)?;
+        let token = token.filter(|t| !t.is_empty()).map(str::to_string);
+        if token.is_some() && url.scheme == "ws" && !url.is_loopback() {
+            return Err(UrlError(
+                "the token is not sent over ws:// to a server that is not on this computer: use wss://"
+                    .into(),
+            ));
+        }
+        Ok(WsEndpoint { url, token })
     }
 
     fn connect_now(&self) -> Result<WsTransport, TransportError> {

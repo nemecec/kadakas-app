@@ -101,6 +101,19 @@ struct RemoteArgs {
     /// The folder of the open document is always allowed. Not used with --connect: the app decides.
     #[arg(long = "allow-dir", value_name = "DIR")]
     allow_dir: Vec<PathBuf>,
+    /// A collaboration server that is not on this computer and that agents may connect to with
+    /// `collab.connect`: a host name (`collab.example.org`), a pattern (`*.example.org`) or an
+    /// address prefix (`wss://collab.example.org/`). Repeat for more, or give a comma list in
+    /// `KADAKAS_COLLAB_ALLOW_URL`. This is not the list of `--allow-url` (map services). The
+    /// address of `--collab-url` is allowed without an entry. Default: none. The server must
+    /// use `wss://`.
+    #[arg(
+        long = "allow-collab-url",
+        value_name = "URL",
+        env = "KADAKAS_COLLAB_ALLOW_URL",
+        value_delimiter = ','
+    )]
+    allow_collab_url: Vec<String>,
     /// A web address that agents may fetch for map services (WMS, WMTS, WFS): a host name
     /// (`maps.example.org`), a pattern (`*.example.org`) or an address prefix
     /// (`https://maps.example.org/wms/`). Repeat for more. Default: none, so agents cannot use the network.
@@ -160,8 +173,8 @@ impl Backend {
         };
         session.paths =
             kadakas_api::PathPolicy::restricted(dirs).with_converters(remote.allow_converters);
-        // The same list decides which collaboration servers (not on this computer) may be used.
-        session.set_collab_allowed_urls(remote.allow_url.clone());
+        // Collaboration servers that are not on this computer have a list of their own.
+        session.set_collab_allowed_urls(remote.allow_collab_url);
         session.set_collab_endpoint_factory(Box::new(|url, token| {
             kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
         }));
@@ -472,6 +485,10 @@ fn export_command(
 
 fn main() {
     let cli = Cli::parse();
+    // The flags (and their environment variables) are read. Remove the secrets from the
+    // environment now, while there is one thread, so no child process inherits them (scripts,
+    // converters) and nothing lists them.
+    kadakas_sys::process::remove_secrets_from_env();
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
         Cmd::Mcp {

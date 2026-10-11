@@ -111,6 +111,40 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// True for the name of an environment variable that holds a secret of Kadakas: it starts with
+/// `KADAKAS_` and has `TOKEN` in it (`KADAKAS_COLLAB_TOKEN`, `KADAKAS_TOKEN`, ...).
+pub fn is_secret_env_name(name: &str) -> bool {
+    name.starts_with("KADAKAS_") && name.contains("TOKEN")
+}
+
+/// Keeps the secrets of Kadakas out of a child process: removes every `KADAKAS_*TOKEN*` variable
+/// of this process from the environment of `cmd`. Call it for every program that Kadakas starts
+/// (converters, interpreters, scripts), before the code sets a variable on purpose.
+pub fn scrub_secrets(cmd: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_secret_env_name) {
+            cmd.env_remove(&name);
+        }
+    }
+}
+
+/// Removes every `KADAKAS_*TOKEN*` variable from the environment of this process, after the
+/// program has read the ones it needs. Then no child process can inherit one, and nothing that
+/// lists the environment shows it.
+///
+/// Call it at the top of `main`, while the process has only one thread: changing the environment
+/// is not safe while another thread reads it.
+pub fn remove_secrets_from_env() {
+    let names: Vec<_> = std::env::vars_os()
+        .filter(|(n, _)| n.to_str().is_some_and(is_secret_env_name))
+        .map(|(n, _)| n)
+        .collect();
+    for n in names {
+        // SAFETY: the caller promises that no other thread runs (see the doc comment).
+        unsafe { std::env::remove_var(n) };
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -210,5 +244,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the grandchild is still alive");
+    }
+
+    #[test]
+    fn secret_names_and_scrubbing() {
+        assert!(is_secret_env_name("KADAKAS_COLLAB_TOKEN"));
+        assert!(is_secret_env_name("KADAKAS_TOKEN"));
+        assert!(!is_secret_env_name("KADAKAS_BIN"));
+        assert!(!is_secret_env_name("OTHER_TOKEN"));
+        // SAFETY: this test is the only one in this crate that sets this variable.
+        unsafe { std::env::set_var("KADAKAS_TEST_ONLY_TOKEN_X", "secret") };
+        let mut cmd = Command::new("true");
+        scrub_secrets(&mut cmd);
+        assert!(
+            cmd.get_envs()
+                .any(|(k, v)| k == "KADAKAS_TEST_ONLY_TOKEN_X" && v.is_none())
+        );
     }
 }

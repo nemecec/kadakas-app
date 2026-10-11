@@ -714,14 +714,41 @@ fn serve_refuses_a_server_that_is_not_on_this_computer() {
         json!({"url": "wss://collab.example.org", "doc": COLLAB_DOC}),
     );
     let msg = v["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("--allow-url collab.example.org"), "{msg}");
+    assert!(
+        msg.contains("--allow-collab-url collab.example.org"),
+        "{msg}"
+    );
     drop(a);
     // With the flag the policy passes and the connection fails later (no such host).
+    let mut a = Agent::start(&["--allow-collab-url", "collab.invalid"], &[], &dir);
+    let v = a.call(
+        "collab.connect",
+        json!({"url": "wss://collab.invalid", "doc": COLLAB_DOC}),
+    );
+    // The policy passed. The connection is made in the background and fails there.
+    assert!(v.get("error").is_none(), "{v}");
+    drop(a);
+    // The map list does not allow it, and the variable with a comma list does.
     let mut a = Agent::start(&["--allow-url", "collab.invalid"], &[], &dir);
     let v = a.call(
         "collab.connect",
         json!({"url": "wss://collab.invalid", "doc": COLLAB_DOC}),
     );
-    let msg = v["error"]["message"].as_str().unwrap();
-    assert!(!msg.contains("allow-url"), "{msg}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-collab-url")
+    );
+    drop(a);
+    let mut a = Agent::start(
+        &[],
+        &[("KADAKAS_COLLAB_ALLOW_URL", "x.example.org,collab.invalid")],
+        &dir,
+    );
+    let v = a.call(
+        "collab.connect",
+        json!({"url": "wss://collab.invalid", "doc": COLLAB_DOC}),
+    );
+    assert!(v.get("error").is_none(), "{v}");
 }

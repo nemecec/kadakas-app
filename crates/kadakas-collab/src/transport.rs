@@ -27,6 +27,10 @@ pub enum TransportError {
     /// The transport could not connect or send.
     #[error("transport failed: {0}")]
     Failed(String),
+    /// The server refused the credentials (for example HTTP 401 or 403 on the upgrade). Trying
+    /// again with the same token cannot work, so a host stops.
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// One connection to a server, from the client side.
@@ -37,6 +41,11 @@ pub trait Transport: Send {
     fn recv(&mut self) -> Result<Option<ServerMsg>, TransportError>;
     /// Closes the connection.
     fn close(&mut self);
+    /// Why the connection failed or ended, if the transport knows. The text never holds a
+    /// token.
+    fn failure(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Where to connect: it makes transports. The host keeps the address and the sign-in details
@@ -144,12 +153,16 @@ pub struct PumpReport {
     pub sent: usize,
     /// True if the connection ended during the call.
     pub lost: bool,
+    /// True if the server refused the credentials (the client is `Failed`).
+    pub refused: bool,
 }
 
 /// A client with its connection.
 pub struct Link {
     pub client: Client,
     transport: Option<Box<dyn Transport>>,
+    /// Why the last connection failed or ended, if the transport said. Never holds a token.
+    pub last_error: Option<String>,
 }
 
 impl Link {
@@ -157,6 +170,7 @@ impl Link {
         Link {
             client,
             transport: None,
+            last_error: None,
         }
     }
 
@@ -213,7 +227,15 @@ impl Link {
                     report.lost = true;
                     break;
                 }
-                Err(_) => {
+                Err(TransportError::Refused(why)) => {
+                    self.client.auth_refused(&why);
+                    self.last_error = Some(why);
+                    report.lost = true;
+                    report.refused = true;
+                    break;
+                }
+                Err(e) => {
+                    self.last_error = Some(t.failure().unwrap_or_else(|| e.to_string()));
                     report.lost = true;
                     break;
                 }
@@ -286,20 +308,69 @@ impl Default for Backoff {
     }
 }
 
-/// Connects a [`Link`] again after the connection was lost, with a [`Backoff`] between tries. The
-/// host calls [`Reconnector::poll`] before every [`Link::pump`]. A client that is `Failed` (the
-/// server brought a frame that it cannot read) or that the host disconnected on purpose is not
-/// connected again: the host sets `enabled` to false for that.
-#[derive(Debug, Default)]
+/// How long a connection must stay online before the back-off starts again with the short wait.
+/// An ack or an entry from the server counts too (the server works).
+pub const BACKOFF_RESET_AFTER_MS: u64 = 10_000;
+
+/// Connects a [`Link`] again after the connection was lost, with a [`Backoff`] between tries
+/// (with up to 20% more or less, so many clients do not come back at the same moment). The host
+/// calls [`Reconnector::poll`] before every [`Link::pump`].
+///
+/// The back-off starts again with the short wait only after the client has been online for
+/// [`BACKOFF_RESET_AFTER_MS`], or after it got a sequence number from the server. A server that
+/// accepts the connection and closes it at once does not reset it.
+///
+/// It does not connect a client that is `Failed` (a refused token or protocol, a frame that
+/// cannot be read), and it stops for good (`enabled` becomes false) when the server refuses the
+/// credentials at the door ([`TransportError::Refused`]).
+#[derive(Debug)]
 pub struct Reconnector {
     pub enabled: bool,
+    /// Vary each wait by up to 20%. Tests switch it off.
+    pub jitter: bool,
     backoff: Backoff,
     next_at_ms: u64,
+    /// When the client went online, and its sequence number then.
+    online: Option<(u64, u64)>,
+    rng: u64,
+}
+
+impl Default for Reconnector {
+    fn default() -> Self {
+        Reconnector {
+            enabled: false,
+            jitter: true,
+            backoff: Backoff::new(),
+            next_at_ms: 0,
+            online: None,
+            rng: 0,
+        }
+    }
 }
 
 impl Reconnector {
     pub fn new() -> Reconnector {
         Reconnector::default()
+    }
+
+    /// The next wait, in milliseconds, with the jitter.
+    fn wait_ms(&mut self, now_ms: u64) -> u64 {
+        let base = self.backoff.next_delay_ms();
+        if !self.jitter {
+            return base;
+        }
+        if self.rng == 0 {
+            self.rng = now_ms ^ 0x9E37_79B9_7F4A_7C15;
+            if self.rng == 0 {
+                self.rng = 1;
+            }
+        }
+        // xorshift64
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        let unit = (self.rng % 10_000) as f64 / 10_000.0; // [0, 1)
+        (base as f64 * (0.8 + 0.4 * unit)) as u64
     }
 
     /// Makes one try if the link is offline and the wait is over. Returns the error of a try that
@@ -316,19 +387,39 @@ impl Reconnector {
         }
         match link.client.state() {
             ConnState::Online => {
-                self.backoff.reset();
-                self.next_at_ms = 0;
+                let seq = link.client.confirmed_seq();
+                match self.online {
+                    None => self.online = Some((now_ms, seq)),
+                    Some((since, at)) => {
+                        if now_ms.saturating_sub(since) >= BACKOFF_RESET_AFTER_MS || seq != at {
+                            self.backoff.reset();
+                        }
+                    }
+                }
                 return None;
             }
-            ConnState::Offline => {}
+            ConnState::Offline => self.online = None,
+            // Connecting, syncing, or failed for good.
             _ => return None,
         }
         if link.is_connected() || now_ms < self.next_at_ms {
             return None;
         }
-        // The wait grows with every try. It starts short again only when the client is online.
-        self.next_at_ms = now_ms + self.backoff.next_delay_ms();
-        link.connect(endpoint).err()
+        // The wait grows with every try.
+        self.next_at_ms = now_ms + self.wait_ms(now_ms);
+        match link.connect(endpoint) {
+            Ok(()) => None,
+            Err(TransportError::Refused(why)) => {
+                link.client.auth_refused(&why);
+                link.last_error = Some(why.clone());
+                self.enabled = false;
+                Some(TransportError::Refused(why))
+            }
+            Err(e) => {
+                link.last_error = Some(e.to_string());
+                Some(e)
+            }
+        }
     }
 }
 
@@ -538,6 +629,7 @@ mod tests {
         let mut link = Link::new(client());
         let mut ep = Failing(0);
         let mut r = Reconnector::new();
+        r.jitter = false;
         // Not enabled: nothing happens.
         assert!(r.poll(&mut link, &mut ep, 0).is_none());
         assert_eq!(ep.0, 0);
@@ -550,5 +642,143 @@ mod tests {
         assert!(r.poll(&mut link, &mut ep, 1600).is_none());
         assert!(r.poll(&mut link, &mut ep, 1750).is_some());
         assert_eq!(ep.0, 3);
+    }
+
+    /// An endpoint whose transports fail in a way the test chooses.
+    struct Scripted {
+        tries: usize,
+        refuse: bool,
+    }
+
+    struct Dead(Option<TransportError>);
+
+    impl Transport for Dead {
+        fn send(&mut self, _: &ClientMsg) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn recv(&mut self) -> Result<Option<ServerMsg>, TransportError> {
+            Err(self.0.take().unwrap_or(TransportError::Closed))
+        }
+        fn close(&mut self) {}
+        fn failure(&self) -> Option<String> {
+            Some("it died".into())
+        }
+    }
+
+    impl Endpoint for Scripted {
+        fn describe(&self) -> String {
+            "scripted".into()
+        }
+        fn connect(&mut self) -> Result<Box<dyn Transport>, TransportError> {
+            self.tries += 1;
+            Ok(Box::new(Dead(self.refuse.then(|| {
+                TransportError::Refused("the server refused the token (HTTP 401)".into())
+            }))))
+        }
+    }
+
+    #[test]
+    fn a_refused_token_fails_the_client_and_stops_the_reconnects() {
+        let mut link = Link::new(client());
+        let mut ep = Scripted {
+            tries: 0,
+            refuse: true,
+        };
+        let mut r = Reconnector::new();
+        r.enabled = true;
+        r.jitter = false;
+        assert!(r.poll(&mut link, &mut ep, 0).is_none());
+        let rep = link.pump(1);
+        assert!(rep.refused && rep.lost);
+        assert_eq!(link.client.state(), ConnState::Failed);
+        let events = link.client.take_events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            crate::client::ClientEvent::Failed {
+                code: crate::protocol::ErrorCode::AuthFailed,
+                ..
+            }
+        )));
+        assert!(link.last_error.as_deref().unwrap().contains("401"));
+        // No more tries, however long we wait.
+        for t in [100, 10_000, 100_000] {
+            assert!(r.poll(&mut link, &mut ep, t).is_none());
+        }
+        assert_eq!(ep.tries, 1);
+    }
+
+    #[test]
+    fn a_lost_connection_keeps_the_reason() {
+        let mut link = Link::new(client());
+        let mut ep = Scripted {
+            tries: 0,
+            refuse: false,
+        };
+        link.connect(&mut ep).unwrap();
+        let rep = link.pump(1);
+        assert!(rep.lost && !rep.refused);
+        assert_eq!(link.last_error.as_deref(), Some("it died"));
+        assert_eq!(link.client.state(), ConnState::Offline);
+    }
+
+    #[test]
+    fn the_wait_has_a_jitter_of_20_percent() {
+        let mut r = Reconnector::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for i in 0..200 {
+            r.backoff.reset();
+            let w = r.wait_ms(1000 + i);
+            assert!((200..=300).contains(&w), "{w}");
+            seen.insert(w);
+        }
+        assert!(seen.len() > 10, "the waits vary");
+    }
+
+    #[test]
+    fn the_backoff_resets_after_ten_seconds_online_or_a_sequence_number() {
+        use crate::replica::Replica;
+        let mut link = Link::new(client());
+        let mut ep = Scripted {
+            tries: 0,
+            refuse: false,
+        };
+        let mut r = Reconnector::new();
+        r.enabled = true;
+        r.jitter = false;
+        // Fail a few times: the wait grows.
+        for t in [0, 300, 900] {
+            r.poll(&mut link, &mut ep, t);
+            link.pump(t);
+        }
+        assert_eq!(r.backoff.next_ms, 2000);
+        // Online for a short time only (a server that closes at once): no reset.
+        let mut done = Link::new(client());
+        done.client.connect();
+        let _ = done.client.take_outbox();
+        done.client.handle(
+            ServerMsg::Welcome {
+                protocol: 1,
+                log_id: "l".into(),
+                head_seq: 0,
+                your_last_op: 0,
+                peers: vec![],
+            },
+            0,
+        );
+        done.client.handle(
+            ServerMsg::Snapshot {
+                log_id: "l".into(),
+                seq: 0,
+                state: Replica::new(),
+                chain: None,
+            },
+            0,
+        );
+        assert_eq!(done.client.state(), ConnState::Online);
+        r.poll(&mut done, &mut ep, 5_000);
+        r.poll(&mut done, &mut ep, 8_000);
+        assert_eq!(r.backoff.next_ms, 2000);
+        r.poll(&mut done, &mut ep, 15_001);
+        assert_eq!(r.backoff.next_ms, Backoff::FIRST_MS);
     }
 }

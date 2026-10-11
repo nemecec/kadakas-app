@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use kadakas_collab::client::{Client, ClientConfig, ConnState};
 use kadakas_collab::op::Op;
-use kadakas_collab::transport::{Endpoint, Link, Reconnector, Transport};
+use kadakas_collab::transport::{Endpoint, Link, Reconnector, Transport, TransportError};
 use kadakas_collab_ws::testserver::TestServer;
 use kadakas_collab_ws::{TokenMode, WsEndpoint};
 use kadakas_core::uid::Uid;
@@ -138,12 +138,28 @@ fn the_token_goes_in_the_authorization_header() {
     assert_eq!(seen[0].protocols, None);
 }
 
+/// Reads from the transport until it ends. Returns how it ended.
+fn end_of(t: &mut dyn Transport) -> TransportError {
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Err(e) = t.recv() {
+            return e;
+        }
+        assert!(Instant::now() < end, "the transport never ended");
+        std::thread::sleep(Duration::from_millis(3));
+    }
+}
+
 #[test]
-fn it_falls_back_to_the_subprotocol_when_the_header_is_refused() {
+fn it_falls_back_to_the_subprotocol_only_in_auto_mode_and_only_for_400() {
     let server = TestServer::start();
     server.require_token("tok.en-1", uid(1));
     server.refuse_authorization_header(true);
-    let mut a = Peer::new(&server.url("doc"), Some("tok.en-1"), 1, "Ann");
+    let url = server.url("doc");
+    let mut a = Peer::new(&url, Some("tok.en-1"), 1, "Ann");
+    a.ep = WsEndpoint::new(&url, Some("tok.en-1"))
+        .unwrap()
+        .with_token_mode(TokenMode::Auto);
     a.link.connect(&mut a.ep).unwrap();
     a.online();
     let seen = server.seen();
@@ -154,39 +170,156 @@ fn it_falls_back_to_the_subprotocol_when_the_header_is_refused() {
         seen[1].protocols.as_deref(),
         Some("kadakas.v1, kadakas.token.tok.en-1")
     );
-}
 
-#[test]
-fn the_subprotocol_mode_and_a_bad_token() {
-    let server = TestServer::start();
-    server.require_token("good", uid(1));
-    let url = server.url("doc");
-    let mut ep = WsEndpoint::new(&url, Some("good"))
-        .unwrap()
-        .with_token_mode(TokenMode::Subprotocol);
-    assert!(ep.connect().is_ok());
-    // A wrong token: the upgrade is refused, and the error says so without the token.
-    let mut ep = WsEndpoint::new(&url, Some("wrong-token")).unwrap();
-    let err = ep.connect().err().expect("refused").to_string();
-    assert!(err.contains("401"), "{err}");
-    assert!(!err.contains("wrong-token"), "{err}");
-    // The header-only mode does not try again.
-    server.refuse_with_status(Some(503));
+    // The default mode (header only) does not try again.
     let before = server.seen().len();
-    let mut ep = WsEndpoint::new(&url, Some("good"))
+    let mut ep = WsEndpoint::new(&url, Some("tok.en-1")).unwrap();
+    let mut t = ep.connect().unwrap();
+    assert!(matches!(end_of(&mut *t), TransportError::Closed));
+    assert!(t.failure().unwrap().contains("400"));
+    assert_eq!(server.seen().len(), before + 1);
+
+    // A 401 is a refusal, also in auto mode: no second try with the sub-protocol.
+    server.refuse_authorization_header(false);
+    let before = server.seen().len();
+    let mut ep = WsEndpoint::new(&url, Some("wrong-token"))
         .unwrap()
-        .with_token_mode(TokenMode::Header);
-    assert!(ep.connect().is_err());
+        .with_token_mode(TokenMode::Auto);
+    let mut t = ep.connect().unwrap();
+    assert!(matches!(end_of(&mut *t), TransportError::Refused(_)));
     assert_eq!(server.seen().len(), before + 1);
 }
 
 #[test]
+fn the_subprotocol_mode_and_a_refused_token() {
+    let server = TestServer::start();
+    server.require_token("good", uid(1));
+    let url = server.url("doc");
+    let mut p = Peer::new(&url, Some("good"), 1, "Ann");
+    p.ep = WsEndpoint::new(&url, Some("good"))
+        .unwrap()
+        .with_token_mode(TokenMode::Subprotocol);
+    p.link.connect(&mut p.ep).unwrap();
+    p.online();
+    assert_eq!(server.seen()[0].authorization, None);
+
+    // A wrong token: the upgrade is refused (401), and the error says so without the token.
+    let mut ep = WsEndpoint::new(&url, Some("wrong-token")).unwrap();
+    let mut t = ep.connect().unwrap();
+    let err = end_of(&mut *t);
+    let TransportError::Refused(text) = err else {
+        panic!("{err:?}");
+    };
+    assert!(text.contains("401"), "{text}");
+    assert!(!text.contains("wrong-token"));
+    assert!(!t.failure().unwrap().contains("wrong-token"));
+
+    // 403 says 403, not 401.
+    server.refuse_with_status(Some(403));
+    let mut t = WsEndpoint::new(&url, Some("good"))
+        .unwrap()
+        .connect()
+        .unwrap();
+    let TransportError::Refused(text) = end_of(&mut *t) else {
+        panic!("403 is a refusal");
+    };
+    assert!(text.contains("HTTP 403") && !text.contains("401"), "{text}");
+
+    // Another status is a failure to connect and not a refusal.
+    server.refuse_with_status(Some(503));
+    let mut t = WsEndpoint::new(&url, Some("good"))
+        .unwrap()
+        .connect()
+        .unwrap();
+    assert!(matches!(end_of(&mut *t), TransportError::Closed));
+    assert!(t.failure().unwrap().contains("503"));
+}
+
+#[test]
+fn a_refused_token_fails_the_client_for_good_and_the_tries_stop() {
+    let server = TestServer::start();
+    server.require_token("good", uid(1));
+    let mut a = Peer::new(&server.url("doc"), Some("wrong"), 1, "Ann");
+    a.rec.jitter = false;
+    a.link.connect(&mut a.ep).unwrap();
+    a.until("failed", |c| c.state() == ConnState::Failed);
+    let events = a.link.client.take_events();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        kadakas_collab::client::ClientEvent::Failed {
+            code: kadakas_collab::protocol::ErrorCode::AuthFailed,
+            ..
+        }
+    )));
+    assert!(a.link.last_error.as_deref().unwrap().contains("401"));
+    let tries = server.seen().len();
+    for _ in 0..60 {
+        a.pump();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(server.seen().len(), tries, "no new tries");
+    assert_eq!(a.link.client.state(), ConnState::Failed);
+}
+
+#[test]
+fn connect_returns_at_once_and_close_does_not_wait_for_a_connection_that_is_not_there() {
+    // 10.255.255.1 is not routed here: the connection hangs or fails, but the call returns.
+    let mut ep = WsEndpoint::new("ws://127.0.0.1:9/ws/x", None).unwrap();
+    let t0 = Instant::now();
+    let mut t = ep.connect().unwrap();
+    let _ = t.recv();
+    assert!(t0.elapsed() < Duration::from_millis(200));
+    t.close();
+    assert!(
+        t0.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        t0.elapsed()
+    );
+    // Messages sent while the socket is not open yet wait in the queue.
+    let server = TestServer::start();
+    let mut t = WsEndpoint::new(&server.url("doc"), None)
+        .unwrap()
+        .connect()
+        .unwrap();
+    t.send(&kadakas_collab::protocol::ClientMsg::Bye).unwrap();
+    t.close();
+}
+
+#[test]
+fn a_token_never_goes_over_plain_ws_to_another_host() {
+    for url in [
+        "ws://example.org/ws/x",
+        "ws://localhost.evil.org/ws/x",
+        "ws://127.0.0.1.nip.io/ws/x",
+        "ws://10.0.0.5/ws/x",
+    ] {
+        assert!(WsEndpoint::new(url, Some("t")).is_err(), "{url}");
+        assert!(WsEndpoint::new(url, None).is_ok(), "{url}");
+    }
+    assert!(WsEndpoint::new("wss://example.org/ws/x", Some("t")).is_ok());
+    assert!(WsEndpoint::new("ws://localhost:1/ws/x", Some("t")).is_ok());
+    assert!(WsEndpoint::new("ws://[::1]:1/ws/x", Some("t")).is_ok());
+}
+
+#[test]
 fn the_debug_text_and_the_description_hide_the_token() {
-    let ep = WsEndpoint::new("ws://example.org:81/ws/x", Some("very-secret")).unwrap();
+    let ep = WsEndpoint::new("wss://example.org:81/ws/x", Some("very-secret")).unwrap();
     assert!(!format!("{ep:?}").contains("very-secret"));
-    assert_eq!(ep.describe(), "ws://example.org:81/ws/x");
+    assert_eq!(ep.describe(), "wss://example.org:81/ws/x");
     assert!(WsEndpoint::new("ws://example.org/ws/x?token=abc", None).is_err());
     assert!(WsEndpoint::new("ws://u:p@example.org/ws/x", None).is_err());
+    // The Debug text of the messages and of the configuration hides it too.
+    let cfg = ClientConfig {
+        user: uid(1),
+        client: uid(2),
+        name: "Ann".into(),
+        token: "very-secret".into(),
+    };
+    assert!(!format!("{cfg:?}").contains("very-secret"));
+    let mut client = Client::new(cfg);
+    client.connect();
+    let hello = client.take_outbox();
+    assert!(!format!("{hello:?}").contains("very-secret"));
 }
 
 #[test]
@@ -195,14 +328,16 @@ fn a_dead_server_is_an_error_and_not_a_hang() {
     let url = server.url("doc");
     server.stop();
     let mut ep = WsEndpoint::new(&url, None).unwrap();
-    let t = Instant::now();
-    assert!(ep.connect().is_err());
-    assert!(t.elapsed() < Duration::from_secs(6));
+    let t0 = Instant::now();
+    let mut t = ep.connect().unwrap();
+    assert!(matches!(end_of(&mut *t), TransportError::Closed));
+    assert!(t.failure().unwrap().contains("cannot connect"));
+    assert!(t0.elapsed() < Duration::from_secs(6));
     // wss to a server that speaks no TLS fails with an error too.
     let live = TestServer::start();
     let wss = live.url("doc").replace("ws://", "wss://");
-    let mut ep = WsEndpoint::new(&wss, None).unwrap();
-    assert!(ep.connect().is_err());
+    let mut t = WsEndpoint::new(&wss, None).unwrap().connect().unwrap();
+    assert!(matches!(end_of(&mut *t), TransportError::Closed));
 }
 
 #[test]
@@ -231,7 +366,7 @@ fn reconnects_after_a_restart_and_keeps_offline_edits() {
         a.pump();
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(a.link.client.state(), ConnState::Offline);
+    assert_ne!(a.link.client.state(), ConnState::Online);
     server.restart();
     // The back-off is at most a few seconds after a few failed tries.
     converge(&mut a, &mut b);

@@ -92,6 +92,7 @@ pub fn file_call(
     if saving {
         let text = document_text(s.editor.doc())?;
         write(&p, text.as_bytes()).map_err(RpcError::app)?;
+        s.collab_mark_saved();
         s.doc_dir = dir_of(&p);
         Ok(FileDone::Saved(p))
     } else {

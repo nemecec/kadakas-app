@@ -74,7 +74,7 @@ def test_open_gives_the_token_in_the_environment_and_not_in_the_arguments(monkey
     import kadakas.document as d
 
     monkeypatch.setattr(d, "StdioTransport", Spy)
-    d.open(allow_url=["maps.example.org"], collab_url="ws://127.0.0.1:8787", collab_token="secret")
-    assert seen["args"] == ["--allow-url", "maps.example.org"]
+    d.open(allow_url=["maps.example.org"], allow_collab_url=["c.example.org"], collab_url="ws://127.0.0.1:8787", collab_token="secret")
+    assert seen["args"] == ["--allow-url", "maps.example.org", "--allow-collab-url", "c.example.org"]
     assert seen["env"] == {"KADAKAS_COLLAB_URL": "ws://127.0.0.1:8787", "KADAKAS_COLLAB_TOKEN": "secret"}
     assert "secret" not in " ".join(seen["args"])

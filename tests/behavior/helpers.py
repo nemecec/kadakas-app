@@ -22,8 +22,9 @@ class StdioClient:
     A reader thread moves the output lines into a queue, so a read can time out on every system
     (select() works on pipes only on Unix)."""
 
-    def __init__(self, args, timeout=10.0):
-        self.timeout = timeout
+    def __init__(self, args, timeout=None):
+        # A busy machine (a parallel build) makes calls slow: the limit is set by the environment.
+        self.timeout = float(os.environ.get("KADAKAS_TEST_TIMEOUT", "60")) if timeout is None else timeout
         self.proc = subprocess.Popen(
             [str(BIN), *args],
             stdin=subprocess.PIPE,
@@ -135,7 +136,10 @@ class JsonRpc(StdioClient):
             msg["params"] = params
         self.send(msg)
         line = self.read_line()
-        assert line is not None, f"no response to {method}"
+        if line is None:
+            # No answer in time: do not leave a stuck program behind.
+            self.proc.kill()
+        assert line is not None, f"no response to {method} in {self.timeout} s"
         resp = json.loads(line)
         assert resp.get("jsonrpc") == "2.0", resp
         assert resp.get("id") == req_id, f"id mismatch for {method}: sent {req_id}, got {resp}"
