@@ -317,6 +317,53 @@ fn it_reconnects_by_itself_and_offline_edits_arrive() {
     );
 }
 
+#[test]
+fn edits_stay_refused_between_the_tries_of_a_first_connection() {
+    // The server is down while the first connection is made. The client is offline between
+    // the tries, but the snapshot can still come and replace the document: an edit now would be
+    // lost, so it is refused, and the status says why.
+    let mut srv = server();
+    srv.stop();
+    let mut a = ws_session();
+    call(
+        &mut a,
+        "collab.connect",
+        json!({"url": srv.base_url(), "doc": DOC, "user": user(1), "name": "Ann"}),
+    );
+    let mut saw_offline = false;
+    let end = Instant::now() + Duration::from_secs(15);
+    while !saw_offline {
+        let st = call(&mut a, "collab.sync", json!({}))["status"].clone();
+        assert_eq!(st["waiting_for_snapshot"], true, "{st}");
+        saw_offline = st["state"] == "offline" && st["last_error"].is_string();
+        assert!(Instant::now() < end, "the first try never failed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let e = a
+        .handle(
+            "execute",
+            json!({"command": {"op": "add_object",
+                "shape": {"kind": "rect", "min": [0, 0], "max": [10, 10]}}}),
+        )
+        .expect_err("refused");
+    assert_eq!(e.kind, "conflict");
+    assert_eq!(ids(&mut a).len(), 0);
+    // When the server is back, the snapshot arrives and edits are allowed.
+    srv.restart();
+    settle(&mut [&mut a], "online", |ss| state(ss[0]) == "online");
+    assert_eq!(
+        call(&mut a, "collab.status", json!({}))["waiting_for_snapshot"],
+        false
+    );
+    add_rect(&mut a, 0);
+    // A disconnect on purpose ends the wait.
+    call(&mut a, "collab.disconnect", json!({}));
+    assert_eq!(
+        call(&mut a, "collab.status", json!({}))["waiting_for_snapshot"],
+        false
+    );
+}
+
 // ----- which document, which token, what is refused -----
 
 fn doc_id(n: u64) -> String {

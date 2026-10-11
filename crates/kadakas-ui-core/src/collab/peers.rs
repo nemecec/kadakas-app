@@ -71,7 +71,22 @@ impl Peer {
         };
         translate(msg!("uic-collab-guest"), &[("id", Arg::Text(tail))])
     }
+
+    /// The label cut to [`MAX_LABEL_CHARS`] characters, with an ellipsis, for the canvas (a name
+    /// can be 64 characters long, and a label must not cover the drawing).
+    pub fn short_label(&self) -> String {
+        let label = self.label();
+        if label.chars().count() <= MAX_LABEL_CHARS {
+            return label;
+        }
+        let mut cut: String = label.chars().take(MAX_LABEL_CHARS - 1).collect();
+        cut.push('\u{2026}');
+        cut
+    }
 }
+
+/// The longest name that is drawn on the canvas, in characters.
+pub const MAX_LABEL_CHARS: usize = 32;
 
 /// FNV-1a, a small stable hash. The color of a user must not change between runs.
 fn hash(text: &str) -> usize {
@@ -354,6 +369,27 @@ mod tests {
             ..book.peers()[0].clone()
         };
         assert_eq!(short.label(), "Guest ab");
+    }
+
+    #[test]
+    fn a_long_name_is_cut_for_the_canvas() {
+        let mut book = PeerBook::default();
+        let long = "\u{c4}".repeat(60);
+        book.update(&json!([peer_json("c1", "u1", &long, None)]), 0);
+        let p = &book.peers()[0];
+        assert_eq!(
+            p.label().chars().count(),
+            60,
+            "the list shows the whole name"
+        );
+        let short = p.short_label();
+        assert_eq!(short.chars().count(), MAX_LABEL_CHARS);
+        assert!(short.ends_with('\u{2026}'));
+        book.update(&json!([peer_json("c1", "u1", "Ann", None)]), 0);
+        assert_eq!(book.peers()[0].short_label(), "Ann");
+        let exact = "x".repeat(MAX_LABEL_CHARS);
+        book.update(&json!([peer_json("c1", "u1", &exact, None)]), 0);
+        assert_eq!(book.peers()[0].short_label(), exact);
     }
 
     #[test]

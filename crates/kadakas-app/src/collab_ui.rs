@@ -38,14 +38,39 @@ pub fn now_ms() -> u64 {
     js_sys::Date::now() as u64
 }
 
-/// A question that waits for the answer of the person.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Confirm {
+/// What the question is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
     /// The open document has changes that nobody saved; the server copy replaces it.
-    Replace(ConnectRequest),
+    Replace,
     /// Edits that were made offline wait for another document or user; they would be dropped.
-    Discard(ConnectRequest),
+    Discard,
 }
+
+/// A question that waits for the answer of the person. The flags hold the answers that were given
+/// already, so a second question does not lose the first answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub ask: Ask,
+    pub request: ConnectRequest,
+    pub replace: bool,
+    pub discard: bool,
+}
+
+/// A way to lose waiting edits that needs a question: leave the shared document, or close the
+/// program, while edits wait for the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Leave {
+    Disconnect,
+    Close,
+}
+
+fn issue_of(e: &kadakas_api::RpcError) -> ConnectIssue {
+    classify_connect_error(e.reason, &e.message)
+}
+
+/// The id of the token field (its edit state is removed after the call, see `wipe_secret`).
+const TOKEN_FIELD: &str = "collab-token-field";
 
 /// What this user shows: the pointer, the selection and the view.
 pub struct Own {
@@ -86,6 +111,15 @@ pub struct CollabUi {
     endpoint: Option<String>,
     last_notice: Option<Notice>,
     name: String,
+    /// A question about leaving while edits wait.
+    leave: Option<Leave>,
+    /// The person agreed to close while edits wait.
+    allow_close: bool,
+    close_now: bool,
+    /// The person chose "Save first" in the question about unsaved work.
+    save_requested: bool,
+    /// The token field must be wiped in the next frame.
+    wipe_token: bool,
 }
 
 impl CollabUi {
@@ -104,6 +138,11 @@ impl CollabUi {
             active: false,
             endpoint: None,
             last_notice: None,
+            leave: None,
+            allow_close: false,
+            close_now: false,
+            save_requested: false,
+            wipe_token: false,
         }
     }
 
@@ -136,9 +175,23 @@ impl CollabUi {
         self.view.waiting_for_snapshot = on;
     }
 
-    /// True while the session is joined or joining a shared document.
+    /// True while the session is joined or joining a shared document (the API refuses the normal
+    /// undo; Connect would be refused too).
     pub fn is_connected(&self) -> bool {
         self.view.api_connected
+    }
+
+    /// True while the open document belongs to the shared one: connected, joining, waiting for
+    /// the next try after a lost link, or failed. New, Open and recovery must not replace it
+    /// then, and Disconnect has something to do.
+    pub fn is_active(&self) -> bool {
+        self.view.is_active()
+    }
+
+    /// True if the session has a collaboration client in any state: Edit > Undo is the
+    /// per-user undo then.
+    pub fn is_linked(&self) -> bool {
+        self.view.linked
     }
 
     pub fn open_dialog(&mut self) {
@@ -186,18 +239,64 @@ impl CollabUi {
                 self.view = view;
                 None
             }
-            Err(e) => match classify_connect_error(e.reason, &e.message) {
-                ConnectIssue::NeedsReplace => {
-                    self.confirm = Some(Confirm::Replace(request.clone()));
-                    None
-                }
-                ConnectIssue::NeedsDiscard => {
-                    self.confirm = Some(Confirm::Discard(request.clone()));
+            Err(e) => match issue_of(&e) {
+                ConnectIssue::NeedsReplace | ConnectIssue::NeedsDiscard => {
+                    let ask = if matches!(issue_of(&e), ConnectIssue::NeedsReplace) {
+                        Ask::Replace
+                    } else {
+                        Ask::Discard
+                    };
+                    self.confirm = Some(Confirm {
+                        ask,
+                        request: request.clone(),
+                        replace,
+                        discard,
+                    });
                     None
                 }
                 ConnectIssue::AlreadyConnected => Some(tr!("collab-ui-already-connected")),
                 ConnectIssue::Failed(m) => Some(tr!("collab-ui-connect-failed", error = m)),
             },
+        }
+    }
+
+    /// Disconnect from the menu: with edits that the server has not confirmed, the person is
+    /// asked first (the edits stay in the program until it closes, but nobody else sees them).
+    pub fn ask_disconnect(&mut self, session: &mut Session, now_ms: u64) -> Option<String> {
+        if self.view.pending > 0 {
+            self.leave = Some(Leave::Disconnect);
+            return None;
+        }
+        Some(self.disconnect(session, now_ms))
+    }
+
+    /// The window is asked to close. True if it may close now; else the question is shown.
+    pub fn ask_close(&mut self) -> bool {
+        if self.allow_close || self.view.pending == 0 || !self.view.is_active() {
+            return true;
+        }
+        self.leave = Some(Leave::Close);
+        false
+    }
+
+    /// True once after the person agreed to close: the window sends the close command again.
+    pub fn take_close_now(&mut self) -> bool {
+        std::mem::take(&mut self.close_now)
+    }
+
+    /// True once after the person chose "Save first".
+    pub fn take_save_request(&mut self) -> bool {
+        std::mem::take(&mut self.save_requested)
+    }
+
+    /// The number of edits that the server has not confirmed (the browser warns before the
+    /// page closes while it is above zero).
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub fn pending(&self) -> usize {
+        if self.view.is_active() {
+            self.view.pending
+        } else {
+            0
         }
     }
 
@@ -338,10 +437,72 @@ impl CollabUi {
         } else if self.open {
             self.connect_window(ctx, session, now);
         }
+        if self.leave.is_some() {
+            status = self.leave_window(ctx, session, now).or(status);
+        }
         if self.waiting_for_snapshot() && self.joining_modal(ctx) {
             status = Some(self.disconnect(session, now));
         }
+        self.wipe_secret(ctx);
         status
+    }
+
+    /// The question before waiting edits stay behind: Disconnect or Close.
+    fn leave_window(
+        &mut self,
+        ctx: &egui::Context,
+        session: &mut Session,
+        now: u64,
+    ) -> Option<String> {
+        let leave = self.leave?;
+        let count = self.view.pending;
+        let (title, text, button) = match leave {
+            Leave::Disconnect => (
+                tr!("collab-ui-leave-disconnect-title"),
+                tr!("collab-ui-leave-disconnect-text", count = count),
+                tr!("collab-ui-disconnect"),
+            ),
+            Leave::Close => (
+                tr!("collab-ui-leave-close-title"),
+                tr!("collab-ui-leave-close-text", count = count),
+                tr!("collab-ui-leave-close-button"),
+            ),
+        };
+        let mut answer = None;
+        egui::Window::new(title)
+            .id(egui::Id::new("win-collab-leave"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.label(text);
+                ui.horizontal(|ui| {
+                    if ui.button(button).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(tr!("common-cancel")).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        self.leave_answer(session, answer?, now)
+    }
+
+    /// The answer to the question about leaving.
+    pub fn leave_answer(&mut self, session: &mut Session, yes: bool, now: u64) -> Option<String> {
+        let leave = self.leave.take()?;
+        if !yes {
+            return None;
+        }
+        match leave {
+            Leave::Disconnect => Some(self.disconnect(session, now)),
+            Leave::Close => {
+                self.allow_close = true;
+                self.close_now = true;
+                None
+            }
+        }
     }
 
     fn connect_window(&mut self, ctx: &egui::Context, session: &mut Session, now: u64) {
@@ -367,6 +528,7 @@ impl CollabUi {
                         ui.label(tr!("collab-ui-token"));
                         let token = ui.add(
                             egui::TextEdit::singleline(&mut self.form.token)
+                                .id(egui::Id::new(TOKEN_FIELD))
                                 .password(true)
                                 .desired_width(300.0),
                         );
@@ -414,9 +576,10 @@ impl CollabUi {
         self.name = self.form.name.clone();
         match self.connect(session, &req, false, false, now) {
             None => {
-                // The secret leaves the dialog as soon as the call has the value. A wrong
+                // The secret leaves the dialog when the call is settled (`wipe_secret`): not
+                // while a question waits, because the answer joins with the same token. A wrong
                 // address keeps it, so the person need not type it again.
-                self.form.clear_secret();
+                self.wipe_token = self.confirm.is_none();
                 self.form_error = None;
                 true
             }
@@ -434,19 +597,20 @@ impl CollabUi {
         now: u64,
     ) -> Option<String> {
         let confirm = self.confirm.clone()?;
-        let (title, text, button) = match &confirm {
-            Confirm::Replace(_) => (
+        let (title, text, button) = match confirm.ask {
+            Ask::Replace => (
                 tr!("collab-ui-replace-title"),
                 tr!("collab-ui-replace-text"),
                 tr!("collab-ui-replace-button"),
             ),
-            Confirm::Discard(_) => (
+            Ask::Discard => (
                 tr!("collab-ui-discard-title"),
                 tr!("collab-ui-discard-text"),
                 tr!("collab-ui-discard-button"),
             ),
         };
         let mut answer = None;
+        let mut save_first = false;
         egui::Window::new(title)
             .id(egui::Id::new("win-collab-confirm"))
             .collapsible(false)
@@ -459,24 +623,50 @@ impl CollabUi {
                     if ui.button(button).clicked() {
                         answer = Some(true);
                     }
+                    if confirm.ask == Ask::Replace
+                        && ui.button(tr!("collab-ui-save-first")).clicked()
+                    {
+                        save_first = true;
+                    }
                     if ui.button(tr!("common-cancel")).clicked() {
                         answer = Some(false);
                     }
                 });
             });
+        if save_first {
+            // The question goes; the window saves the document, and the person connects again.
+            self.confirm = None;
+            self.save_requested = true;
+            self.wipe_token = false;
+            return None;
+        }
         answer.and_then(|yes| self.answer(session, yes, now))
     }
 
-    /// The answer to a question (`Confirm`): yes joins with `replace` or `discard`, no drops
-    /// the question.
+    /// The answer to a question (`Confirm`): yes joins with `replace` or `discard` (and with
+    /// the answers that were given before), no drops the question.
     pub fn answer(&mut self, session: &mut Session, yes: bool, now: u64) -> Option<String> {
-        let confirm = self.confirm.take()?;
+        let c = self.confirm.take()?;
         if !yes {
+            self.wipe_token = true;
             return None;
         }
-        match confirm {
-            Confirm::Replace(r) => self.connect(session, &r, true, false, now),
-            Confirm::Discard(r) => self.connect(session, &r, false, true, now),
+        let replace = c.replace || c.ask == Ask::Replace;
+        let discard = c.discard || c.ask == Ask::Discard;
+        let said = self.connect(session, &c.request, replace, discard, now);
+        // A new question keeps the token; anything else settles it.
+        self.wipe_token = self.confirm.is_none();
+        said
+    }
+
+    /// Wipes the token field and its edit state (the undo history of the field holds the old
+    /// text) when a call is settled.
+    fn wipe_secret(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.wipe_token) {
+            self.form.clear_secret();
+            ctx.data_mut(|d| {
+                d.remove::<egui::text_edit::TextEditState>(egui::Id::new(TOKEN_FIELD))
+            });
         }
     }
 
@@ -484,8 +674,15 @@ impl CollabUi {
     /// chose to give up.
     fn joining_modal(&self, ctx: &egui::Context) -> bool {
         let mut give_up = false;
+        let stalled = self.view.stalled;
         egui::Modal::new(egui::Id::new("collab-joining")).show(ctx, |ui| {
             ui.label(tr!("collab-ui-joining"));
+            if stalled {
+                ui.colored_label(
+                    Color32::from_rgb(200, 140, 0),
+                    tr!("uic-collab-note-no-answer"),
+                );
+            }
             if ui.button(tr!("collab-ui-disconnect")).clicked() {
                 give_up = true;
             }
@@ -616,7 +813,8 @@ pub fn paint_peers(
             Stroke::new(1.0, Color32::WHITE),
         ));
         // The name on a small label in the color of the user.
-        let galley = painter.layout_no_wrap(p.label(), FontId::proportional(12.0), Color32::WHITE);
+        let galley =
+            painter.layout_no_wrap(p.short_label(), FontId::proportional(12.0), Color32::WHITE);
         let pos = Pos2::new(at.x + 12.0, at.y + 14.0);
         let label = Rect::from_min_size(pos, galley.size()).expand2(vec2(4.0, 2.0));
         painter.rect_filled(label, 3.0, color);
@@ -624,23 +822,26 @@ pub fn paint_peers(
     }
 }
 
-/// The browser build: the address fragment and the test hook.
+/// The browser build: the address fragment, the warning before the page closes, and (behind the
+/// cargo feature `test-hook`) the test hook.
 #[cfg(target_arch = "wasm32")]
 pub mod web {
     use super::*;
-    use js_sys::{Array, Reflect};
     use kadakas_ui_core::collab::Fragment;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::{JsCast as _, JsValue};
 
     thread_local! {
-        static HOOK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// The edits that the server has not confirmed (the page asks before it closes).
+        static PENDING: Cell<usize> = const { Cell::new(0) };
     }
 
     /// Reads `#collab=<ws url>&doc=<id>&token=<t>` and removes the token from the address bar
     /// with `history.replaceState`. The fragment never goes to a server. The token is removed
     /// also when the rest of the fragment is not valid.
-    pub fn take_fragment() -> Option<Fragment> {
-        let win = web_sys::window()?;
+    fn consume(win: &web_sys::Window) -> Option<Fragment> {
         let loc = win.location();
         let hash = loc.hash().ok().filter(|h| !h.is_empty())?;
         let parsed = Fragment::parse(&hash);
@@ -659,67 +860,133 @@ pub mod web {
         parsed
     }
 
-    /// The test hook exists only when the address has the query `kadakas_test=1` at the start.
-    /// It lets a browser test (`scripts/test-browser.sh` of kadakas-server) run API calls and read
-    /// the state: `window.kadakasTest.cmds.push(JSON.stringify({id, method, params}))`, then
-    /// read `window.kadakasTest.results[id]` (a JSON text). `window.kadakasTest.state` is a JSON
-    /// text that the window renews in each frame. Without the query, nothing is installed.
-    pub fn install_test_hook() {
+    /// The fragment of the address at the start of the page.
+    pub fn take_fragment() -> Option<Fragment> {
+        consume(&web_sys::window()?)
+    }
+
+    /// A fragment that is pasted into the address bar of the open page (`hashchange`) is
+    /// consumed the same way: the token leaves the address bar at once, and the fragment goes to
+    /// the inbox for the window to join.
+    pub fn watch_hash(inbox: Rc<RefCell<Vec<Fragment>>>) {
         let Some(win) = web_sys::window() else { return };
-        let on = win.location().search().is_ok_and(|s| {
-            s.trim_start_matches('?')
-                .split('&')
-                .any(|p| p == "kadakas_test=1")
+        let w = win.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            if let Some(f) = consume(&w) {
+                inbox.borrow_mut().push(f);
+            }
         });
-        if !on {
-            return;
+        let _ = win.add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+
+    /// The window tells the page how many edits wait for the server.
+    pub fn set_pending(n: usize) {
+        PENDING.with(|p| p.set(n));
+    }
+
+    /// Asks the browser to confirm before the page closes while edits wait for the server.
+    pub fn warn_before_close() {
+        let Some(win) = web_sys::window() else { return };
+        let cb = Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(
+            |e: web_sys::BeforeUnloadEvent| {
+                if PENDING.with(Cell::get) > 0 {
+                    e.prevent_default();
+                    e.set_return_value("pending");
+                }
+            },
+        );
+        let _ = win.add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+
+    #[cfg(feature = "test-hook")]
+    mod hook {
+        use super::*;
+        use js_sys::{Array, Reflect};
+
+        thread_local! {
+            static HOOK: Cell<bool> = const { Cell::new(false) };
         }
-        HOOK.with(|h| h.set(true));
-        let hook = js_sys::Object::new();
-        let _ = Reflect::set(&hook, &"cmds".into(), &Array::new());
-        let _ = Reflect::set(&hook, &"results".into(), &js_sys::Object::new());
-        let _ = Reflect::set(&hook, &"state".into(), &"{}".into());
-        let _ = Reflect::set(&win, &"kadakasTest".into(), &hook);
+
+        pub fn install() {
+            let Some(win) = web_sys::window() else { return };
+            let on = win.location().search().is_ok_and(|s| {
+                s.trim_start_matches('?')
+                    .split('&')
+                    .any(|p| p == "kadakas_test=1")
+            });
+            if !on {
+                return;
+            }
+            HOOK.with(|h| h.set(true));
+            let hook = js_sys::Object::new();
+            let _ = Reflect::set(&hook, &"cmds".into(), &Array::new());
+            let _ = Reflect::set(&hook, &"results".into(), &js_sys::Object::new());
+            let _ = Reflect::set(&hook, &"state".into(), &"{}".into());
+            let _ = Reflect::set(&win, &"kadakasTest".into(), &hook);
+        }
+
+        pub fn frame(session: &mut Session, collab: &CollabUi, canvas: Option<Rect>) {
+            if !HOOK.with(Cell::get) {
+                return;
+            }
+            let Some(win) = web_sys::window() else { return };
+            let Ok(hook) = Reflect::get(&win, &"kadakasTest".into()) else {
+                return;
+            };
+            if let Ok(cmds) = Reflect::get(&hook, &"cmds".into())
+                && let Ok(cmds) = cmds.dyn_into::<Array>()
+            {
+                let results = Reflect::get(&hook, &"results".into()).unwrap_or(JsValue::NULL);
+                while cmds.length() > 0 {
+                    let text = cmds.shift().as_string().unwrap_or_default();
+                    let call: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                    let answer = match call["method"].as_str() {
+                        Some(m) => match session.handle(m, call["params"].clone()) {
+                            Ok(v) => json!({"ok": v}),
+                            Err(e) => json!({"error": e.message, "kind": e.kind}),
+                        },
+                        None => json!({"error": "no method"}),
+                    };
+                    let key = call["id"].to_string();
+                    let _ = Reflect::set(&results, &key.into(), &answer.to_string().into());
+                }
+            }
+            let state = json!({
+                "objects": session.editor.doc().objects.len(),
+                "link": collab.view().link.id(),
+                "waiting": collab.waiting_for_snapshot(),
+                "stalled": collab.view().stalled,
+                "label": collab.view().label(),
+                // The drawing area in screen pixels (points of the window), so a test can
+                // aim at it without fixed coordinates.
+                "canvas": canvas.map(|r| json!({"x": r.min.x, "y": r.min.y, "w": r.width(), "h": r.height()})),
+                "peers": collab.peers().iter().map(|p| json!({
+                    "name": p.label(), "cursor": p.cursor, "selected": p.selection.len(),
+                })).collect::<Vec<_>>(),
+            });
+            let _ = Reflect::set(&hook, &"state".into(), &state.to_string().into());
+        }
+    }
+
+    /// The test hook exists only in a build with the cargo feature `test-hook`, and then only
+    /// when the address of the page has the query `kadakas_test=1` at the start. A page can run
+    /// API calls and read the state of the window through `window.kadakasTest`:
+    /// `cmds.push(JSON.stringify({id, method, params}))`, `results[id]` (a JSON text) and `state`
+    /// (a JSON text that the window renews in each frame). `scripts/test-browser.sh` of the
+    /// `kadakas-server` repository builds with the feature.
+    pub fn install_test_hook() {
+        #[cfg(feature = "test-hook")]
+        hook::install();
     }
 
     /// One frame of the test hook: runs the waiting calls and publishes the state.
-    pub fn test_hook(session: &mut Session, collab: &CollabUi) {
-        if !HOOK.with(std::cell::Cell::get) {
-            return;
-        }
-        let Some(win) = web_sys::window() else { return };
-        let Ok(hook) = Reflect::get(&win, &"kadakasTest".into()) else {
-            return;
-        };
-        if let Ok(cmds) = Reflect::get(&hook, &"cmds".into())
-            && let Ok(cmds) = cmds.dyn_into::<Array>()
-        {
-            let results = Reflect::get(&hook, &"results".into()).unwrap_or(JsValue::NULL);
-            while cmds.length() > 0 {
-                let text = cmds.shift().as_string().unwrap_or_default();
-                let call: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                let answer = match call["method"].as_str() {
-                    Some(m) => match session.handle(m, call["params"].clone()) {
-                        Ok(v) => json!({"ok": v}),
-                        Err(e) => json!({"error": e.message, "kind": e.kind}),
-                    },
-                    None => json!({"error": "no method"}),
-                };
-                let key = call["id"].to_string();
-                let _ = Reflect::set(&results, &key.into(), &answer.to_string().into());
-            }
-        }
-        let state = json!({
-            "objects": session.editor.doc().objects.len(),
-            "link": format!("{:?}", collab.view().link),
-            "waiting": collab.waiting_for_snapshot(),
-            "stalled": collab.view().stalled,
-            "label": collab.view().label(),
-            "peers": collab.peers().iter().map(|p| json!({
-                "name": p.label(), "cursor": p.cursor, "selected": p.selection.len(),
-            })).collect::<Vec<_>>(),
-        });
-        let _ = Reflect::set(&hook, &"state".into(), &state.to_string().into());
+    pub fn test_hook(session: &mut Session, collab: &CollabUi, canvas: Option<Rect>) {
+        #[cfg(feature = "test-hook")]
+        hook::frame(session, collab, canvas);
+        #[cfg(not(feature = "test-hook"))]
+        let _ = (session, collab, canvas);
     }
 }
 
@@ -874,7 +1141,8 @@ mod tests {
         let said = p.ub.disconnect(&mut p.b, p.t);
         assert!(said.contains("Disconnected"));
         assert_eq!(p.ub.view().link, Link::Offline);
-        assert_eq!(p.ub.route(&mut p.b), UndoRoute::Local);
+        // The client is still there (offline), and holds the undo steps of the person.
+        assert_eq!(p.ub.route(&mut p.b), UndoRoute::Collab);
         assert!(p.ub.peers().is_empty());
         p.rounds(&nothing(), &nothing());
         assert!(p.ua.peers().is_empty(), "the person who left is gone");
@@ -892,7 +1160,15 @@ mod tests {
         add_rect(&mut c, 8000);
         let mut uc = CollabUi::new(Defaults::default());
         assert_eq!(uc.connect(&mut c, &anon("Cy"), false, false, 2_000), None);
-        assert_eq!(uc.confirm(), Some(&Confirm::Replace(anon("Cy"))));
+        assert_eq!(
+            uc.confirm(),
+            Some(&Confirm {
+                ask: Ask::Replace,
+                request: anon("Cy"),
+                replace: false,
+                discard: false
+            })
+        );
         assert!(!uc.is_connected(), "nothing happened yet");
         assert_eq!(count(&c), 2);
         // No: the question goes, the drawing stays.
@@ -1023,8 +1299,19 @@ mod tests {
         free.set_collab_endpoint_factory(Box::new(|url, token| {
             kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
         }));
+        // The token of a Replace question stays until the question is answered.
         assert!(ui.submit(&mut free, 1_000));
-        assert!(ui.form.token.is_empty() && ui.form_error.is_none());
+        assert!(ui.wipe_token && ui.form_error.is_none());
+        // The wipe happens in the next frame, and takes the edit state of the field with it.
+        let ctx = egui::Context::default();
+        let id = egui::Id::new(TOKEN_FIELD);
+        ctx.data_mut(|d| d.insert_persisted(id, egui::text_edit::TextEditState::default()));
+        ui.wipe_secret(&ctx);
+        assert!(ui.form.token.is_empty());
+        assert!(
+            ctx.data_mut(|d| d.get_persisted::<egui::text_edit::TextEditState>(id))
+                .is_none()
+        );
         assert!(ui.is_connected());
         assert_eq!(ui.name, "Dee");
     }
@@ -1082,6 +1369,15 @@ mod tests {
                 .as_deref()
                 .is_some_and(|e| !e.contains("good"))
         );
+    }
+
+    fn question(ask: Ask) -> Confirm {
+        Confirm {
+            ask,
+            request: anon("Ann"),
+            replace: false,
+            discard: false,
+        }
     }
 
     fn run_ui(f: impl FnMut(&mut Ui)) -> egui::FullOutput {
@@ -1144,11 +1440,11 @@ mod tests {
             assert_eq!(ui.show(u.ctx(), &mut p.a, 1_000), None);
         });
         // The question about unsaved work.
-        ui.confirm = Some(Confirm::Replace(anon("Ann")));
+        ui.confirm = Some(question(Ask::Replace));
         let _ = ctx.run_ui(Default::default(), |u| {
             ui.show(u.ctx(), &mut p.a, 1_000);
         });
-        ui.confirm = Some(Confirm::Discard(anon("Ann")));
+        ui.confirm = Some(question(Ask::Discard));
         let _ = ctx.run_ui(Default::default(), |u| {
             ui.show(u.ctx(), &mut p.a, 1_000);
         });
@@ -1203,6 +1499,136 @@ mod tests {
         assert_eq!(paint(&far, 0), none);
         far[0].cursor = None;
         assert_eq!(paint(&far, 0), none);
+    }
+
+    #[test]
+    fn a_question_keeps_the_token_and_the_answers_that_were_given() {
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(&Document::default())));
+        let mut s = Session::default();
+        s.set_collab_endpoint(Box::new(hub.endpoint()));
+        add_rect(&mut s, 0);
+        let mut ui = CollabUi::new(Defaults::default());
+        ui.form.url = "ws://127.0.0.1:1".into();
+        ui.form.doc = DOC.into();
+        ui.form.token = "secret".into();
+        // The person already agreed to drop waiting edits; the open document is unsaved too.
+        let mut req = anon("Ann");
+        req.token = Some("secret".into());
+        assert_eq!(ui.connect(&mut s, &req, false, true, 1_000), None);
+        let q = ui.confirm().cloned().expect("a question");
+        assert_eq!((q.ask, q.replace, q.discard), (Ask::Replace, false, true));
+        assert_eq!(q.request.token.as_deref(), Some("secret"));
+        // While the question waits, the token is not wiped.
+        ui.wipe_token = false;
+        assert_eq!(ui.form.token, "secret");
+        // Yes: the call carries both answers, and the token is wiped after the answer.
+        assert_eq!(ui.answer(&mut s, true, 2_000), None);
+        assert!(ui.is_connected() && ui.wipe_token);
+        // No: the question goes and the token is wiped too.
+        let mut ui = CollabUi::new(Defaults::default());
+        ui.confirm = Some(question(Ask::Discard));
+        assert_eq!(ui.answer(&mut Session::default(), false, 1), None);
+        assert!(ui.wipe_token && ui.confirm().is_none());
+    }
+
+    #[test]
+    fn leaving_with_waiting_edits_asks_first() {
+        let mut p = Pair::new();
+        p.rounds(&nothing(), &nothing());
+        // Nothing waits: Disconnect and Close go at once.
+        assert!(p.ua.ask_close());
+        // Edits wait for the server.
+        p.ua.view.pending = 3;
+        assert_eq!(p.ua.pending(), 3);
+        assert!(!p.ua.ask_close());
+        assert_eq!(p.ua.leave, Some(Leave::Close));
+        let ctx = egui::Context::default();
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                let _ = ctx.run_ui(Default::default(), |u| {
+                    p.ua.show(u.ctx(), &mut p.a, 1_000);
+                });
+            });
+        }
+        // No: nothing changes. Yes: the window may close, and does not ask again.
+        assert_eq!(p.ua.leave_answer(&mut p.a, false, 1_000), None);
+        assert!(!p.ua.take_close_now());
+        assert!(!p.ua.ask_close());
+        assert_eq!(p.ua.leave_answer(&mut p.a, true, 1_000), None);
+        assert!(p.ua.take_close_now() && !p.ua.take_close_now());
+        assert!(p.ua.ask_close());
+        // Disconnect asks the same way.
+        assert_eq!(p.ua.ask_disconnect(&mut p.a, 1_000), None);
+        assert_eq!(p.ua.leave, Some(Leave::Disconnect));
+        let said = p.ua.leave_answer(&mut p.a, true, 1_000).unwrap();
+        assert!(said.contains("Disconnected"));
+        assert_eq!(p.ua.pending(), 0);
+        assert_eq!(
+            p.ua.leave_answer(&mut p.a, true, 1_000),
+            None,
+            "no question left"
+        );
+        // Without edits waiting, Disconnect goes at once.
+        assert!(p.ub.ask_disconnect(&mut p.b, 1_000).is_some());
+    }
+
+    /// The wait between two tries of a first connection (a browser with a wrong token, a server
+    /// that is down) is still "joining": no edit, no New, Open or recovery, and Disconnect works.
+    #[test]
+    fn the_wait_between_two_tries_still_blocks_the_window() {
+        let mut srv =
+            TestServer::start_with(Sequencer::new(docsync::replica_of(&Document::default())));
+        srv.stop();
+        let mut s = Session::default();
+        s.set_collab_endpoint_factory(Box::new(|url, token| {
+            kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
+        }));
+        let mut ui = CollabUi::new(Defaults::default());
+        let req = ConnectRequest {
+            url: Some(srv.base_url()),
+            doc: Some(DOC.into()),
+            token: None,
+            user: Some(Uid::from_u128(7).to_string()),
+            name: Some("Ann".into()),
+        };
+        assert_eq!(ui.connect(&mut s, &req, false, false, now_ms()), None);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut t = now_ms();
+        loop {
+            t += TICK_MS;
+            ui.tick(&mut s, t, &nothing());
+            let st = s.handle("collab.status", Value::Null).unwrap();
+            if st["state"] == "offline" && st["last_error"].is_string() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "the first try never failed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Between two tries: waiting, active, linked, and an edit is refused by the API.
+        assert!(ui.waiting_for_snapshot() && ui.is_active() && ui.is_linked());
+        assert!(
+            !ui.is_connected(),
+            "Connect stays possible, for a new token"
+        );
+        assert_eq!(ui.route(&mut s), UndoRoute::Collab);
+        let e = s
+            .handle(
+                "execute",
+                json!({"command": {"op": "add_object",
+                    "shape": {"kind": "rect", "min": [0, 0], "max": [10, 10]}}}),
+            )
+            .expect_err("refused");
+        assert_eq!(e.kind, "conflict");
+        // The stall note shows in the box.
+        let _ = run_ui(|u| {
+            assert!(!ui.joining_modal(u.ctx()));
+        });
+        let said = ui.disconnect(&mut s, t);
+        assert!(said.contains("Disconnected"));
+        assert!(!ui.is_active() && !ui.waiting_for_snapshot());
     }
 
     #[test]

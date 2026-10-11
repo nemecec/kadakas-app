@@ -2007,7 +2007,7 @@ class Api:
         return self._call("revision.list", params or None)
 
     def collab_status(self, **params: Any) -> Any:
-        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, so the document will be replaced and an edit now would be lost), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
+        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, also in the wait between two tries of a first connection, so the document will be replaced and an edit now would be lost; edits are refused with a conflict error), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
 
         JSON-RPC method ``collab.status``."""
         return self._call("collab.status", params or None)

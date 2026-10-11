@@ -807,9 +807,10 @@ that the others see.
   one. The default token still goes only to the default URL (the API decides).
 - `--allow-collab-url` (or `KADAKAS_COLLAB_ALLOW_URL`) works as for `kadakas serve`. A server that
   is not on this computer needs an entry (or must be the default URL) and `wss://`.
-- A token (a JWT) whose `exp` claim is in the past is refused by the window before any call ("The token has run out"), because a browser cannot see a refused upgrade.
+- A token (a JWT) whose `exp` claim is more than 60 s in the past (leeway for a wrong clock) is refused by the window before any call ("The token has run out"), because a browser cannot see a refused upgrade.
 - The token field is a password field. The token is never written to the preferences, to the
-  layout file or to a log. The dialog wipes the field when the call has taken the value.
+  layout file or to a log. The dialog wipes the field, and the edit state of the field (its undo
+  history), when the call is settled.
 - The server wants `hello.user` to be the user of the token. The window reads the `sub` claim of the
   token (a JWT; no signature check, the server does that) and passes it as `user`.
 
@@ -817,13 +818,28 @@ that the others see.
 saved. The window shows a question ("Replace the open document?") and calls again with `replace:
 true` only after the person agrees. Edits that were made offline for another document or user get a
 second question and `discard: true`. The window reads these cases from the stable `reason` of the
-error of the API (`unsaved_changes`, `edits_wait`, `already_connected`), never from its text. The
-window tells the session when it saved the document, so a saved document joins without a question.
+error of the API (`unsaved_changes`, `edits_wait`, `already_connected`), never from its text. This
+`reason` exists in the process only: it is **not** in the JSON-RPC answer, so an agent (Python, MCP)
+sees only `kind: conflict` and must read the message or call `file.save` first. The window tells
+the session when it saved the document (in the browser, the revision that the download started
+with, so edits made during the download stay unsaved), so a saved document joins without a question.
+The first question has the buttons Replace, Save first (the question goes, the document is saved, and
+the person connects again) and Cancel. The two questions keep each other's answer, so a second
+question never loses the first answer. The token stays in the dialog until the questions are
+answered.
 
 **While joining.** Until the first snapshot has arrived (`waiting_for_snapshot` in `collab.status`)
 the window shows a box that blocks the window, the keys do nothing, and an edit that still gets
-through is refused. The box has a Disconnect button. File > New and File > Open are refused while the
-session is joined, because the new document would be pushed into the shared one as edits.
+through is refused. This holds also in the wait between two tries of a first connection (the client
+is `offline` then, but the session tries again by itself; a browser with a wrong token or a server
+that is down stays here), and the box shows the "No answer" note when it lasts. The box has a
+Disconnect button. While a link is active (joined, joining, waiting for the next try, or failed),
+File > New, File > Open (also the file picker), the recovery of an unsaved copy after a crash, and
+the browser Open are refused, because the new document would be pushed into the shared one as edits.
+The recovery dialog waits (its files stay) until the link is gone. Connect stays possible during
+the wait between tries, so a new token can be given. After Disconnect the person can open another
+document; connecting to the same address later would send that document as edits, so the person
+should connect to another document or restart the program.
 
 **The status item.** The status bar shows `Collaboration: <state>`:
 
@@ -857,22 +873,31 @@ ID, and two users on one document get different colors while the palette (8 colo
 one. The People palette (Window menu) lists you and the others with their color, a mark for a quiet
 user and the number of selected objects. Presence is never in the document.
 
-**Undo and redo.** While the session is joined, Edit > Undo, Edit > Redo and their keys call
-`collab.undo` and `collab.redo`, so a person never takes back the work of somebody else. If a change
-was kept because another person changed it later, the status line says so. Offline, the normal undo
-works.
+**Undo and redo.** While the session has a collaboration client (joined, joining, between two
+tries, or offline after a Disconnect), Edit > Undo, Edit > Redo and their keys call `collab.undo`
+and `collab.redo`, so a person never takes back the work of somebody else; the menu items follow the
+`can_undo` and `can_redo` of the client. If a change was kept because another person changed it
+later, the status line says so. Without a client, the normal undo works.
+
+**Waiting edits.** Disconnect with edits that the server has not confirmed (`pending` above zero), and
+closing the window, ask first. In the browser the page asks with the `beforeunload` question of the
+browser. A person who disconnects keeps the edits in the program until it closes.
 
 **The browser.** The web build reads the address fragment `#collab=<ws url>&doc=<id>&token=<t>`
 (and optionally `&name=<n>`), joins at once, and removes the token pair from the address bar with
-`history.replaceState`, also when the rest of the fragment is not valid. A fragment never goes to a
+`history.replaceState`, also when the rest of the fragment is not valid. A link that is pasted into
+the address bar of the open page (`hashchange`) is consumed the same way, and joins if the page is
+not joined already. A fragment never goes to a
 server. The address in the fragment counts as the default server for that page (the person opened the
 link), and the API still requires `wss://` for any server that is not on this computer. The browser
 uses the sub-protocol for the token (section 9.1).
 
-**The test hook (web build only).** When the address of the page has the query `?kadakas_test=1`, the
-page has `window.kadakasTest` for browser tests: `cmds` (push `JSON.stringify({id, method, params})` to
+**The test hook (web build only).** A web build made with the cargo feature `test-hook`
+(`KADAKAS_WEB_FEATURES=test-hook scripts/build-web.sh`) has `window.kadakasTest` when the address of the
+page also has the query `?kadakas_test=1`: `cmds` (push `JSON.stringify({id, method, params})` to
 run an API call), `results` (the answers, by id) and `state` (JSON with the number of objects, the
-link state and the other people). Without the query, nothing is installed. The browser test of the
+link state as `offline`, `connecting`, `connected`, `reconnecting`, `refused` or `failed`, the other
+people, and the drawing area in screen pixels). A normal web build has no hook at all. The browser test of the
 `kadakas-server` repository (`scripts/test-browser.sh`) uses it only to read the state and to run
 some API calls; it draws with the mouse.
 

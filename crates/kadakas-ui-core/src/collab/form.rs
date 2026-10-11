@@ -58,12 +58,17 @@ pub fn token_user(token: &str) -> Option<String> {
 
 /// True if the token (a JWT) has an `exp` claim in the past. A browser cannot see why a
 /// WebSocket was refused (an old token looks like a lost network), so the window checks the expiry
-/// itself before it connects. A token without a readable `exp` is not called expired.
+/// itself before it connects. A token without a readable `exp` is not called expired. The clock
+/// of the computer may be a little wrong, so a token counts as expired only [`CLOCK_LEEWAY_SECS`]
+/// after its `exp` (the server still has the last word).
 pub fn token_expired(token: &str, now_secs: u64) -> bool {
     token_claims(token)
         .and_then(|c| c.get("exp").and_then(Value::as_u64))
-        .is_some_and(|exp| exp <= now_secs)
+        .is_some_and(|exp| exp.saturating_add(CLOCK_LEEWAY_SECS) <= now_secs)
 }
+
+/// The leeway for the clock of the computer when a token is checked for its expiry.
+pub const CLOCK_LEEWAY_SECS: u64 = 60;
 
 /// Why the form cannot make a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -590,7 +595,12 @@ mod tests {
         // {"exp":1000}
         let token = "e30.eyJleHAiOjEwMDB9.c2ln";
         assert!(!token_expired(token, 999));
-        assert!(token_expired(token, 1000));
+        assert!(
+            !token_expired(token, 1000),
+            "a clock that is a little ahead"
+        );
+        assert!(!token_expired(token, 1000 + CLOCK_LEEWAY_SECS - 1));
+        assert!(token_expired(token, 1000 + CLOCK_LEEWAY_SECS));
         assert!(token_expired(&format!(" {token} "), 5000));
         // No exp claim, no JWT, empty: not expired.
         for t in [JWT, JWT_WITHOUT_SUB, "opaque", "", "a.b.c"] {

@@ -80,8 +80,11 @@ pub struct MenuExtras<'a> {
     pub can_back: bool,
     pub can_forward: bool,
     pub has_selection: bool,
-    /// The session has joined (or is joining) a shared document.
-    pub collab_connected: bool,
+    /// Connect works: the session is not joined or joining. It stays on during the wait between
+    /// two tries, so a new token can be given.
+    pub collab_can_connect: bool,
+    /// Disconnect works: a shared document is joined, joining, waiting for the next try or failed.
+    pub collab_can_disconnect: bool,
     /// Requests that `MenuAction` (which is `Copy`) cannot hold. The menu fills this list.
     pub requests: Vec<MenuRequest>,
 }
@@ -320,16 +323,24 @@ fn command_item(
         }
         Cmd::WindowLayouts => window_layouts(ui, extras),
         Cmd::Collaboration => {
-            let connected = extras.collab_connected;
+            let (can_connect, can_disconnect) =
+                (extras.collab_can_connect, extras.collab_can_disconnect);
             ui.menu_button(c.label(), |ui| {
                 let label = tr!("collab-ui-connect");
-                menu_item(ui, keys, &label, !connected, MenuAction::CollabConnect, out);
+                menu_item(
+                    ui,
+                    keys,
+                    &label,
+                    can_connect,
+                    MenuAction::CollabConnect,
+                    out,
+                );
                 let label = tr!("collab-ui-disconnect");
                 menu_item(
                     ui,
                     keys,
                     &label,
-                    connected,
+                    can_disconnect,
                     MenuAction::CollabDisconnect,
                     out,
                 );
@@ -1817,7 +1828,8 @@ mod tests {
             can_back: false,
             can_forward: false,
             has_selection: false,
-            collab_connected: false,
+            collab_can_connect: true,
+            collab_can_disconnect: false,
             requests: Vec::new(),
         };
         let _ = ctx.run_ui(Default::default(), |ui| {

@@ -48,3 +48,19 @@ collab-ui-selected =
         [one] { $count } object selected
        *[other] { $count } objects selected
     }
+collab-ui-save-first = Save first
+collab-ui-quick-connect = Collaboration: Connect...
+collab-ui-quick-disconnect = Collaboration: Disconnect
+collab-ui-leave-disconnect-title = Disconnect with waiting edits?
+collab-ui-leave-disconnect-text =
+    { $count ->
+        [one] One edit has not reached the server yet. If you disconnect, nobody else sees it until you connect again. It stays in this program until you close it.
+       *[other] { $count } edits have not reached the server yet. If you disconnect, nobody else sees them until you connect again. They stay in this program until you close it.
+    }
+collab-ui-leave-close-title = Close with waiting edits?
+collab-ui-leave-close-text =
+    { $count ->
+        [one] One edit has not reached the server yet. If you close the program now, it is lost.
+       *[other] { $count } edits have not reached the server yet. If you close the program now, they are lost.
+    }
+collab-ui-leave-close-button = Close anyway

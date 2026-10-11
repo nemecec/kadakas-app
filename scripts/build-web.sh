@@ -14,6 +14,12 @@ fi
 if [ "${1:-}" = "--serve" ]; then
   exec trunk serve
 fi
-trunk build --release
+# KADAKAS_WEB_FEATURES: cargo features of the app crate, for example `test-hook` (the browser
+# test of kadakas-server turns it on; a normal web build has no test hook).
+if [ -n "${KADAKAS_WEB_FEATURES:-}" ]; then
+  trunk build --release --features "$KADAKAS_WEB_FEATURES"
+else
+  trunk build --release
+fi
 echo "Done. Serve the dist-web folder with any static web server, for example:"
 echo "  python3 -m http.server -d dist-web 8080"

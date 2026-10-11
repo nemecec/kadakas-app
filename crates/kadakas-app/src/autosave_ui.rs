@@ -169,8 +169,13 @@ impl AutosaveUi {
         }
     }
 
-    /// Shows the dialogs. Returns a document when the user opens a recovered copy.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<Recovered> {
+    /// Shows the dialogs. Returns a document when the user opens a recovered copy. With
+    /// `can_open` false (a shared document is joined: the recovered copy would replace it) the
+    /// recovery dialog waits, and the recovery files stay as they are.
+    pub fn show(&mut self, ctx: &egui::Context, can_open: bool) -> Option<Recovered> {
+        if !can_open {
+            return None;
+        }
         self.recovery_dialog(ctx)
     }
 
@@ -403,6 +408,32 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         old.simulate_crash();
+    }
+
+    #[test]
+    fn no_recovered_copy_is_offered_while_a_shared_document_is_joined() {
+        let dir = temp("blocked");
+        crashed_session(&dir);
+        let mut ui = AutosaveUi::inert();
+        ui.crashed = find_crashed_with(&dir, Duration::ZERO);
+        assert_eq!(ui.crashed.len(), 1);
+        let files = |dir: &std::path::Path| std::fs::read_dir(dir).unwrap().count();
+        let before = files(&dir);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |u| {
+            assert!(ui.show(u.ctx(), false).is_none());
+        });
+        assert_eq!(
+            ui.crashed.len(),
+            1,
+            "the recovery dialog did not take the copy"
+        );
+        assert_eq!(files(&dir), before, "the recovery files are untouched");
+        // With no link, the dialog is drawn (and waits for the person).
+        let _ = ctx.run_ui(Default::default(), |u| {
+            assert!(ui.show(u.ctx(), true).is_none());
+        });
+        assert_eq!(ui.crashed.len(), 1);
     }
 
     #[test]

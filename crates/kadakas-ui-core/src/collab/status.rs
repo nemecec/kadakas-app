@@ -34,6 +34,19 @@ impl Link {
     pub fn text(self) -> String {
         translate(self.message_id(), &[])
     }
+
+    /// A stable name for tests and tools (not for people): `offline`, `connecting`, `connected`,
+    /// `reconnecting`, `refused` or `failed`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Link::Offline => "offline",
+            Link::Connecting => "connecting",
+            Link::Connected => "connected",
+            Link::Reconnecting => "reconnecting",
+            Link::Refused => "refused",
+            Link::Failed => "failed",
+        }
+    }
 }
 
 /// The class of an error that the server or the client reports.
@@ -183,6 +196,9 @@ pub struct StatusView {
     /// The API treats the session as connected: the normal undo is refused, the per-user undo
     /// works.
     pub api_connected: bool,
+    /// The session has a collaboration client in any state (also offline between two tries, or
+    /// after a Disconnect). The per-user undo is for this case: the client holds the undo steps.
+    pub linked: bool,
     pub last_error: Option<String>,
     /// The first connection has had no answer for [`NO_ANSWER_MS`] (the link is `Connecting`).
     pub stalled: bool,
@@ -198,6 +214,7 @@ impl Default for StatusView {
             can_undo: false,
             can_redo: false,
             api_connected: false,
+            linked: false,
             last_error: None,
             stalled: false,
         }
@@ -245,7 +262,9 @@ impl StatusView {
         text
     }
 
-    /// True while the link is up or being made (the program tries to be connected).
+    /// True while the link is up, being made, waiting for the next try, or failed. Then the
+    /// open document belongs to the shared one: it must not be replaced (New, Open, recovery),
+    /// and Disconnect has something to do.
     pub fn is_active(&self) -> bool {
         !matches!(self.link, Link::Offline)
     }
@@ -331,6 +350,10 @@ impl Tracker {
             can_undo: flag("can_undo"),
             can_redo: flag("can_redo"),
             api_connected: matches!(state, "connecting" | "syncing" | "online"),
+            linked: matches!(
+                state,
+                "offline" | "connecting" | "syncing" | "online" | "failed"
+            ),
             last_error: status["last_error"].as_str().map(str::to_string),
             stalled,
         };
@@ -347,10 +370,11 @@ pub enum UndoRoute {
     Collab,
 }
 
-/// While the session is connected, the normal undo is refused by the API and could take back an
-/// edit of another user, so the per-user undo must be used.
+/// While the session has a collaboration client (also between two tries of a reconnect, and
+/// after a Disconnect), the per-user undo is used: it never takes back the work of another
+/// person, and the normal undo is refused while connected.
 pub fn undo_route(status: &StatusView) -> UndoRoute {
-    if status.api_connected {
+    if status.linked {
         UndoRoute::Collab
     } else {
         UndoRoute::Local
@@ -421,7 +445,7 @@ mod tests {
                        "can_undo": true, "can_redo": true, "last_error": "boom"});
         let v = t.observe(&s, &[], 0).0;
         assert_eq!((v.pending, v.peers), (3, 2));
-        assert!(v.waiting_for_snapshot && v.can_undo && v.can_redo && v.api_connected);
+        assert!(v.waiting_for_snapshot && v.can_undo && v.can_redo && v.api_connected && v.linked);
         assert_eq!(v.last_error.as_deref(), Some("boom"));
         assert!(v.is_active());
         // A status with missing fields reads as zero and false.
@@ -498,6 +522,32 @@ mod tests {
     }
 
     #[test]
+    fn links_have_stable_names() {
+        let names: Vec<&str> = [
+            Link::Offline,
+            Link::Connecting,
+            Link::Connected,
+            Link::Reconnecting,
+            Link::Refused,
+            Link::Failed,
+        ]
+        .iter()
+        .map(|l| l.id())
+        .collect();
+        assert_eq!(
+            names,
+            [
+                "offline",
+                "connecting",
+                "connected",
+                "reconnecting",
+                "refused",
+                "failed"
+            ]
+        );
+    }
+
+    #[test]
     fn the_label_counts_waiting_edits() {
         let mut v = StatusView {
             link: Link::Connected,
@@ -537,12 +587,13 @@ mod tests {
     }
 
     #[test]
-    fn undo_goes_to_the_per_user_undo_while_connected() {
+    fn undo_goes_to_the_per_user_undo_while_a_client_exists() {
         let mut t = Tracker::default();
         for (state, route) in [
             ("none", UndoRoute::Local),
-            ("offline", UndoRoute::Local),
-            ("failed", UndoRoute::Local),
+            ("", UndoRoute::Local),
+            ("offline", UndoRoute::Collab),
+            ("failed", UndoRoute::Collab),
             ("connecting", UndoRoute::Collab),
             ("syncing", UndoRoute::Collab),
             ("online", UndoRoute::Collab),

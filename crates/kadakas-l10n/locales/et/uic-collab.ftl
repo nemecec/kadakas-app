@@ -3,7 +3,7 @@
 uic-collab-link-offline = Ühenduseta
 uic-collab-link-connecting = Ühendumine
 uic-collab-link-connected = Ühendatud
-uic-collab-link-reconnecting = Ühendumine uuesti
+uic-collab-link-reconnecting = Taasühendumine
 uic-collab-link-refused = Tagasi lükatud
 uic-collab-link-stalled = Vastust pole
 uic-collab-link-failed = Ühendus ebaõnnestus

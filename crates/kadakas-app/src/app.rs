@@ -128,6 +128,12 @@ pub struct KadakasApp {
     /// Set when a download of the document has finished. Then the browser copy is not needed.
     #[cfg(target_arch = "wasm32")]
     web_saved: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The revision of the document when the last download started (what that save holds).
+    #[cfg(target_arch = "wasm32")]
+    web_save_rev: Option<u64>,
+    /// Fragments that were pasted into the address bar of the open page (`hashchange`).
+    #[cfg(target_arch = "wasm32")]
+    web_fragments: std::rc::Rc<std::cell::RefCell<Vec<kadakas_ui_core::collab::Fragment>>>,
 }
 
 /// A name to show to the others: the user name of the operating system. Empty if unknown (the
@@ -317,6 +323,8 @@ impl KadakasApp {
         if let Some(fragment) = crate::collab_ui::web::take_fragment() {
             app.join_from_fragment(fragment);
         }
+        crate::collab_ui::web::watch_hash(app.web_fragments.clone());
+        crate::collab_ui::web::warn_before_close();
         crate::collab_ui::web::install_test_hook();
         app
     }
@@ -424,6 +432,10 @@ impl KadakasApp {
             web_inbox: Default::default(),
             #[cfg(target_arch = "wasm32")]
             web_saved: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            web_save_rev: None,
+            #[cfg(target_arch = "wasm32")]
+            web_fragments: Default::default(),
         }
     }
 
@@ -466,6 +478,21 @@ impl KadakasApp {
         if let Some(s) = self.collab.show(ctx, &mut self.session, now) {
             self.status = s;
         }
+        if self.collab.take_save_request() {
+            self.save(false, ctx);
+        }
+        // Closing the window while edits wait for the server: ask first.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if ctx.input(|i| i.viewport().close_requested()) && !self.collab.ask_close() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            if self.collab.take_close_now() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        crate::collab_ui::web::set_pending(self.collab.pending());
     }
 
     fn exec(&mut self, cmd: &Command) {
@@ -478,11 +505,13 @@ impl KadakasApp {
         crate::annot_ui::set_revision(self.session.editor.revision());
     }
 
-    fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
-        // A new or opened document would be pushed into the shared one as thousands of edits.
-        if self.collab.is_connected() {
+    /// Replaces the open document. False (and a message) while the session belongs to a shared
+    /// document: a new or opened document would be pushed into it as thousands of edits. The
+    /// caller must not drop what it holds (a recovered copy) when this says false.
+    fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) -> bool {
+        if self.collab.is_active() {
             self.status = tr!("collab-ui-blocked-replace");
-            return;
+            return false;
         }
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
@@ -495,6 +524,7 @@ impl KadakasApp {
         self.machine.cancel();
         self.needs_fit = true;
         self.view3d.request_fit();
+        true
     }
 
     /// True while the 2D plan canvas shows, not the 3D view.
@@ -714,7 +744,9 @@ impl KadakasApp {
 
     fn apply_menu(&mut self, ctx: &egui::Context, action: MenuAction) {
         match action {
-            MenuAction::New => self.replace_document(Document::default(), None),
+            MenuAction::New => {
+                self.replace_document(Document::default(), None);
+            }
             MenuAction::Undo => self.undo(),
             MenuAction::Redo => self.redo(),
             MenuAction::Delete => self.delete_selection(),
@@ -744,7 +776,9 @@ impl KadakasApp {
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
-                self.status = self.collab.disconnect(&mut self.session, now);
+                if let Some(text) = self.collab.ask_disconnect(&mut self.session, now) {
+                    self.status = text;
+                }
             }
             MenuAction::Open => self.open_file(ctx),
             MenuAction::Save => self.save(false, ctx),
@@ -802,6 +836,10 @@ impl KadakasApp {
     /// Web: the browser asks for a file. The bytes arrive in `web_inbox` and `take_web_files` reads them.
     #[cfg(target_arch = "wasm32")]
     fn open_file(&mut self, ctx: &egui::Context) {
+        if self.collab.is_active() {
+            self.status = tr!("collab-ui-blocked-replace");
+            return;
+        }
         let (inbox, ctx) = (self.web_inbox.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             if let Some(f) = rfd::AsyncFileDialog::new()
@@ -824,6 +862,8 @@ impl KadakasApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .map_or("drawing.kad".into(), |n| n.to_string_lossy().into_owned());
+        // The download takes time: the save holds the document as it is now.
+        self.web_save_rev = Some(self.session.editor.revision());
         match serde_json::to_vec_pretty(self.session.editor.doc()) {
             Ok(bytes) => self.download(&name, bytes, Some(self.web_saved.clone())),
             Err(e) => self.status = e.to_string(),
@@ -863,8 +903,19 @@ impl KadakasApp {
     fn take_web_files(&mut self) {
         // The browser copy goes only after a download really worked.
         if self.web_saved.take() {
-            self.session.collab_mark_saved();
+            if let Some(revision) = self.web_save_rev.take() {
+                self.session.collab_mark_saved_at(revision);
+            }
             self.autosave.saved();
+        }
+        // A link that was pasted into the address bar: the token is gone from it already.
+        let fragments: Vec<_> = self.web_fragments.borrow_mut().drain(..).collect();
+        for fragment in fragments {
+            if self.collab.is_active() {
+                self.status = tr!("collab-ui-already-connected");
+            } else {
+                self.join_from_fragment(fragment);
+            }
         }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
         for (name, bytes) in files {
@@ -883,6 +934,11 @@ impl KadakasApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self, ctx: &egui::Context) {
+        // Check before the file picker: a person should not pick a file and then be refused.
+        if self.collab.is_active() {
+            self.status = tr!("collab-ui-blocked-replace");
+            return;
+        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Kadakas", &["kad"])
             .pick_file()
@@ -1761,8 +1817,11 @@ impl KadakasApp {
             });
         }
         for (label, m) in [
-            (tr!("collab-ui-connect"), MenuAction::CollabConnect),
-            (tr!("collab-ui-disconnect"), MenuAction::CollabDisconnect),
+            (tr!("collab-ui-quick-connect"), MenuAction::CollabConnect),
+            (
+                tr!("collab-ui-quick-disconnect"),
+                MenuAction::CollabDisconnect,
+            ),
         ] {
             out.push(QuickItem {
                 label,
@@ -2174,7 +2233,7 @@ impl eframe::App for KadakasApp {
         self.about.show(&ctx);
         self.collab_frame(&ctx);
         #[cfg(target_arch = "wasm32")]
-        crate::collab_ui::web::test_hook(&mut self.session, &self.collab);
+        crate::collab_ui::web::test_hook(&mut self.session, &self.collab, self.canvas_rect);
         if self.autosave.take_prefs_request() {
             self.prefs_ui.open();
         }
@@ -2191,8 +2250,11 @@ impl eframe::App for KadakasApp {
         );
         crate::profiles::customize_window(&ctx, &mut self.profiles);
         self.sync_profile();
-        if let Some(r) = self.autosave.show(&ctx) {
-            self.replace_document(r.doc, None);
+        // A recovered copy is offered only while no shared document is joined: it would replace
+        // the open document, and the recovery files must stay until it is opened.
+        if let Some(r) = self.autosave.show(&ctx, !self.collab.is_active())
+            && self.replace_document(r.doc, None)
+        {
             self.status = r.status;
         }
         self.entry.sync(
@@ -2209,11 +2271,15 @@ impl eframe::App for KadakasApp {
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
 
-        // Connected, Undo and Redo work on your own edits (the per-user undo).
-        let (can_undo, can_redo) = (
-            self.session.editor.can_undo() || self.collab.can_undo(false),
-            self.session.editor.can_redo() || self.collab.can_undo(true),
-        );
+        // With a shared document, Undo and Redo work on your own edits (the per-user undo).
+        let (can_undo, can_redo) = if self.collab.is_linked() {
+            (self.collab.can_undo(false), self.collab.can_undo(true))
+        } else {
+            (
+                self.session.editor.can_undo(),
+                self.session.editor.can_redo(),
+            )
+        };
         let mut actions = Vec::new();
         let mut requests = Vec::new();
         egui::Panel::top("menu").show(ui, |ui| {
@@ -2234,7 +2300,8 @@ impl eframe::App for KadakasApp {
                 can_back: self.view_history.can_go_back(),
                 can_forward: self.view_history.can_go_forward(),
                 has_selection: !self.session.selection.is_empty(),
-                collab_connected: self.collab.is_connected(),
+                collab_can_connect: !self.collab.is_connected(),
+                collab_can_disconnect: self.collab.is_active(),
                 requests: Vec::new(),
             };
             let state = panels::MenuState {
@@ -3260,6 +3327,31 @@ mod tests {
         assert_eq!(app.session.editor.doc().objects.len(), 2);
         app.replace_document(Document::default(), None);
         assert_eq!(app.session.editor.doc().objects.len(), 0);
+    }
+
+    #[test]
+    fn a_new_or_opened_document_and_a_recovered_copy_wait_while_a_link_exists() {
+        let (mut app, mut other, hub) = joined_app();
+        rounds(&mut app, &mut other, &hub, 2_000);
+        assert!(app.collab.is_active());
+        app.exec(&add_rect_command(0.0));
+        // New and Open are refused, also in the wait between two tries (the view says active).
+        assert!(!app.replace_document(Document::default(), None));
+        assert!(app.status.contains("Disconnect"), "{}", app.status);
+        assert_eq!(app.session.editor.doc().objects.len(), 1);
+        app.status.clear();
+        app.open_file(&egui::Context::default());
+        assert!(
+            app.status.contains("Disconnect"),
+            "the file picker is not shown"
+        );
+        // The recovery dialog does not open (and so cannot drop the recovery files).
+        let ctx = egui::Context::default();
+        assert!(app.autosave.show(&ctx, !app.collab.is_active()).is_none());
+        // Without a link, a replace works and says so.
+        app.apply_menu(&ctx, MenuAction::CollabDisconnect);
+        assert!(!app.collab.is_active());
+        assert!(app.replace_document(Document::default(), None));
     }
 
     #[test]

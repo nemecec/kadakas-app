@@ -22,7 +22,7 @@ collab-ui-status = Koostöö: { $state }
 collab-ui-token-expired = Luba on aegunud. Uus luba tuleb küsida serveri haldurilt.
 collab-ui-already-connected = Ühendus on juba olemas. Esmalt tuleb ühendus katkestada.
 collab-ui-connect-failed = Ühendumine ebaõnnestus: { $error }
-collab-ui-disconnected = Ühendus katkestati. Muudatused jätkuvad võrguühenduseta.
+collab-ui-disconnected = Ühendus katkestati. Töö jätkub võrguühenduseta.
 collab-ui-error = Koostöö viga: { $error }
 collab-ui-problems =
     { $count ->
@@ -34,17 +34,33 @@ collab-ui-undo-skipped =
         [one] Üks muudatus jäeti alles, sest keegi teine muutis seda hiljem.
        *[other] { $count } muudatust jäeti alles, sest teised muutsid neid hiljem.
     }
-collab-ui-nothing-to-undo = Midagi pole võtta tagasi.
-collab-ui-nothing-to-redo = Midagi pole uuesti teha.
+collab-ui-nothing-to-undo = Omi muudatusi pole tagasi võtta.
+collab-ui-nothing-to-redo = Omi muudatusi pole uuesti teha.
 collab-ui-blocked-replace = Enne teise dokumendi avamist või loomist tuleb ühisdokumendi ühendus katkestada.
 collab-ui-web-joining = Liitumine serveriga { $server }...
 collab-ui-you = Ise: { $name }
 collab-ui-you-unnamed = Ise
 collab-ui-nobody = Kedagi teist siin pole.
 collab-ui-not-connected = Ühendus puudub. Ühendumiseks sobib Fail > Koostöö > Ühenda.
-collab-ui-quiet = { $name } (vaikib)
+collab-ui-quiet = { $name } (tegevusetu)
 collab-ui-selected =
     { $count ->
         [one] { $count } objekt valitud
        *[other] { $count } objekti valitud
     }
+collab-ui-save-first = Salvesta enne
+collab-ui-quick-connect = Koostöö: Ühenda
+collab-ui-quick-disconnect = Koostöö: Katkesta ühendus
+collab-ui-leave-disconnect-title = Kas katkestada ühendus, kui muudatused on ootel?
+collab-ui-leave-disconnect-text =
+    { $count ->
+        [one] Üks muudatus ei ole veel serverisse jõudnud. Ühenduse katkestamisel ei näe seda keegi teine enne uuesti ühendumist. See jääb programmi, kuni programm suletakse.
+       *[other] { $count } muudatust ei ole veel serverisse jõudnud. Ühenduse katkestamisel ei näe neid keegi teine enne uuesti ühendumist. Need jäävad programmi, kuni programm suletakse.
+    }
+collab-ui-leave-close-title = Kas sulgeda, kui muudatused on ootel?
+collab-ui-leave-close-text =
+    { $count ->
+        [one] Üks muudatus ei ole veel serverisse jõudnud. Programmi sulgemisel läheb see kaotsi.
+       *[other] { $count } muudatust ei ole veel serverisse jõudnud. Programmi sulgemisel lähevad need kaotsi.
+    }
+collab-ui-leave-close-button = Sulge ikkagi

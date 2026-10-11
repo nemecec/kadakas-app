@@ -66,7 +66,7 @@ use crate::{RpcError, Session};
 
 pub const STATUS: (&str, &str) = (
     "collab.status",
-    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, so the document will be replaced and an edit now would be lost), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
+    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, also in the wait between two tries of a first connection, so the document will be replaced and an edit now would be lost; edits are refused with a conflict error), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
 );
 pub const CONNECT: (&str, &str) = (
     "collab.connect",
@@ -168,6 +168,12 @@ impl Session {
         self.collab.clean_rev = Some(self.editor.revision());
     }
 
+    /// The document was saved as it was at this revision (a save that takes time, such as a
+    /// download in the browser, must not call later edits saved).
+    pub fn collab_mark_saved_at(&mut self, revision: u64) {
+        self.collab.clean_rev = Some(revision);
+    }
+
     /// Lets `collab.connect {url}` make WebSocket endpoints (see [`EndpointFactory`]).
     pub fn set_collab_endpoint_factory(&mut self, factory: EndpointFactory) {
         self.collab.factory = Some(factory);
@@ -209,11 +215,19 @@ pub(crate) fn knows_object(s: &Session, id: Uid) -> bool {
 pub(crate) const WAIT_MESSAGE: &str = "this session has joined a shared document, but its first snapshot has not arrived: the edit was taken back. Wait until collab.status.state is online (call collab.sync), then edit";
 
 /// True while the client is connecting and has no state of the shared document yet. An edit now
-/// would be lost when the snapshot replaces the document.
+/// would be lost when the snapshot replaces the document. This includes the wait between two
+/// tries: the client is `offline` then, but the session tries again by itself, so the snapshot
+/// can still come (a wrong token or a server that is down in a browser looks like this for a
+/// long time).
 pub(crate) fn awaiting_snapshot(s: &Session) -> bool {
+    let trying = s.collab.reconnect.enabled;
     s.collab.link.as_ref().is_some_and(|l| {
-        matches!(l.client.state(), ConnState::Connecting | ConnState::Syncing)
-            && !l.client.has_shadow()
+        !l.client.has_shadow()
+            && match l.client.state() {
+                ConnState::Connecting | ConnState::Syncing => true,
+                ConnState::Offline => trying,
+                ConnState::Online | ConnState::Failed => false,
+            }
     })
 }
 
