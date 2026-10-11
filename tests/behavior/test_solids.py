@@ -56,7 +56,7 @@ def test_sweep_segments_pitch_and_the_cap(cad):
     assert got["quantities"]["volume_m3"] > 0.1
     ramp = cad.result("sweep.add", {"profile": rect(800, 0, 400, 150), "sweep_angle": 720, "pitch": 1500, "segment_angle": 8})
     assert cad.result("sweep.get", {"id": ramp["id"]})["bounds_mm"]["max"][2] == approx(3150)
-    capped = cad.result("sweep.set", {"id": pot["id"], "sweep_angle": 3600, "segment_angle": 0.1})
+    capped = cad.result("sweep.set", {"id": pot["id"], "sweep_angle": 3600, "segment_angle": 0.1, "pitch": 3000})
     assert len(capped["warnings"]) == 1
     assert cad.result("sweep.get", {"id": pot["id"]})["segments"] == 720
     surface = cad.result("sweep.add", {"profile": [[100, 0], [500, 800]], "closed": False})

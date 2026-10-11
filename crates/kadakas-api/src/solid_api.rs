@@ -33,7 +33,7 @@ pub const EXTRUDE_FROM_SHAPES: (&str, &str) = (
 );
 pub const SWEEP_ADD: (&str, &str) = (
     "sweep.add",
-    "Add a sweep (shape kind 'sweep') in one undo step: a profile turned around an axis. params: {profile: [vertices] (x is the distance from the axis, y the position along it; a closed profile makes a solid with end caps, an open one a surface), closed? (default true), origin? ([x, y, z] of a point of the axis, mm; z is measured from the layer), axis? ([x, y, z] direction, default [0, 0, 1]), rotation? (degrees, the angle of the profile plane around the axis at the start), sweep_angle? (degrees, default 360, at most 3600), segment_angle? (degrees, default 10, from 0.1 to 180: the smaller, the rounder), pitch? (rise along the axis for each full turn in mm, default 0; a spiral), name?, layer?, class?, parent?}. At most 720 segments: a smaller segment angle is lowered to that and the result says so in warnings. A profile that crosses the axis or itself is refused. Returns {id, quantities, warnings}.",
+    "Add a sweep (shape kind 'sweep') in one undo step: a profile turned around an axis. params: {profile: [vertices] (x is the distance from the axis, y the position along it; a closed profile makes a solid with end caps, an open one a surface), closed? (default true), origin? ([x, y, z] of a point of the axis, mm; z is measured from the layer), axis? ([x, y, z] direction, default [0, 0, 1]), rotation? (degrees, the angle of the profile plane around the axis at the start), sweep_angle? (degrees, default 360, at most 3600; more than 360 needs a pitch at least as large as the profile along the axis, or the turns cross each other), segment_angle? (degrees, default 10, from 0.1 to 180: the smaller, the rounder), pitch? (rise along the axis for each full turn in mm, default 0; a spiral), name?, layer?, class?, parent?}. At most 720 segments: a smaller segment angle is lowered to that and the result says so in warnings. A profile that crosses the axis or itself is refused. Returns {id, quantities, warnings}.",
 );
 pub const SWEEP_SET: (&str, &str) = (
     "sweep.set",
@@ -69,7 +69,7 @@ pub fn describe() -> Value {
             {"method": "extrude.from_shapes", "params": {"ids": ["00000000-0000-0000-0000-000000000003"], "height": 2500}},
             {"method": "sweep.add", "params": {"profile": [[0, 0], [400, 0], [300, 800], [0, 800]], "origin": [5000, 5000, 0], "name": "Pot"}},
             {"method": "sweep.add", "params": {"profile": [[800, 0], [1200, 0], [1200, 150], [800, 150]], "sweep_angle": 720, "pitch": 1500, "segment_angle": 8}},
-            {"method": "polygon3d.add", "params": {"points": [[0, 0, 0], [4000, 0, 300], [4000, 3000, 600], [0, 3000, 300]], "fill": "#a0b890"}}
+            {"method": "polygon3d.add", "params": {"points": [[0, 0, 0], [4000, 0, 300], [4000, 3000, 600], [0, 3000, 300]], "fill": [160, 184, 144, 255]}}
         ]
     })
 }
@@ -485,17 +485,20 @@ fn add_polygon(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
             _ => {}
         }
     }
-    let out = s.editor.execute(&cmd).map_err(RpcError::from)?;
-    let id = ObjectId(out.created[0]);
+    // The name goes in the object data. The add and the data are one undo step.
+    let mut plan = s.editor.doc().id_plan();
+    let id = ObjectId(plan.take());
+    let mut commands = vec![cmd];
     if let Some(name) = m.get("name").and_then(Value::as_str) {
-        s.editor
-            .execute(&Command::SetData {
-                id,
-                set: [("name".to_string(), json!(name))].into_iter().collect(),
-                remove: Vec::new(),
-            })
-            .map_err(RpcError::from)?;
+        commands.push(Command::SetData {
+            id,
+            set: [("name".to_string(), json!(name))].into_iter().collect(),
+            remove: Vec::new(),
+        });
     }
+    s.editor
+        .execute(&Command::Batch { commands })
+        .map_err(RpcError::from)?;
     Ok(json!({"id": id}))
 }
 

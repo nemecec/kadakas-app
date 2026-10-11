@@ -79,7 +79,7 @@ impl SolidDialog {
                     .num_columns(2)
                     .show(ui, |ui| match kind {
                         Kind::Extrude => {
-                            ui.label(tr!("solid-ui-height"));
+                            ui.label(tr!("solid-ui-extrusion"));
                             ui.add(
                                 DragValue::new(&mut self.extrude.height)
                                     .speed(10.0)
@@ -177,7 +177,7 @@ fn degrees(f: &mut Fields, ui: &mut Ui, label: &str, deg: &mut f64, min: f64, ma
 /// Object Info of an extrude.
 pub fn extrude_fields(ui: &mut Ui, f: &mut Fields, e: &mut Extrude) {
     f.text(ui, &tr!("solid-ui-name"), &mut e.name);
-    f.length_scalar(ui, &tr!("solid-ui-height"), &mut e.height, 10.0);
+    f.length_scalar(ui, &tr!("solid-ui-extrusion"), &mut e.height, 10.0);
     f.length_scalar(ui, &tr!("solid-ui-base"), &mut e.base, 10.0);
     f.count(ui, e.profile.len());
     if !e.holes.is_empty() {
@@ -185,13 +185,40 @@ pub fn extrude_fields(ui: &mut Ui, f: &mut Fields, e: &mut Extrude) {
         ui.label(format!("{}", e.holes.len()));
         ui.end_row();
     }
+    // The figures are made again only when a value changed, not in every frame.
+    let (problem, volume) = cached(ui, e.fingerprint(), || {
+        let problem = e.problem();
+        let volume = problem.is_none().then(|| e.volume());
+        (problem, volume)
+    });
     ui.label(tr!("solid-ui-volume"));
-    ui.label(match e.mesh() {
-        Some(m) => kadakas_units::current().volume_text(m.volume()),
+    ui.label(match volume {
+        Some(v) => kadakas_units::current().volume_text(v),
         None => "-".to_string(),
     });
     ui.end_row();
-    if let Some(why) = e.problem() {
+    warning(ui, problem);
+}
+
+/// Figures for Object Info, kept by the fingerprint of the solid.
+fn cached<T: Clone + Send + Sync + 'static>(
+    ui: &Ui,
+    fingerprint: u64,
+    make: impl FnOnce() -> T,
+) -> T {
+    let id = ui.id().with(("solid-info", std::any::type_name::<T>()));
+    if let Some((f, v)) = ui.data(|d| d.get_temp::<(u64, T)>(id))
+        && f == fingerprint
+    {
+        return v;
+    }
+    let v = make();
+    ui.data_mut(|d| d.insert_temp(id, (fingerprint, v.clone())));
+    v
+}
+
+fn warning(ui: &mut Ui, problem: Option<String>) {
+    if let Some(why) = problem {
         ui.label(
             egui::RichText::new(why)
                 .small()
@@ -254,21 +281,21 @@ pub fn sweep_fields(ui: &mut Ui, f: &mut Fields, s: &mut Sweep) {
         format!("{}", s.segments())
     });
     ui.end_row();
-    if s.closed
-        && let Some(m) = s.mesh()
-    {
+    let (problem, volume) = cached(ui, s.fingerprint(), || {
+        let problem = s.problem();
+        let volume = if problem.is_none() && s.closed {
+            s.mesh().map(|m| m.volume())
+        } else {
+            None
+        };
+        (problem, volume)
+    });
+    if let Some(v) = volume {
         ui.label(tr!("solid-ui-volume"));
-        ui.label(kadakas_units::current().volume_text(m.volume()));
+        ui.label(kadakas_units::current().volume_text(v));
         ui.end_row();
     }
-    if let Some(why) = s.problem() {
-        ui.label(
-            egui::RichText::new(why)
-                .small()
-                .color(egui::Color32::from_rgb(190, 110, 0)),
-        );
-        ui.end_row();
-    }
+    warning(ui, problem);
 }
 
 /// Object Info of a 3D polygon: the heights of the vertices move together.

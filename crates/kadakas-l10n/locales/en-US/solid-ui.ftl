@@ -1,11 +1,11 @@
 # Extrude, Sweep and the 3D Polygon (3D-03): the Model dialogs, Object Info and the tool options.
 solid-ui-extrude = Extrude
 solid-ui-sweep = Sweep
-solid-ui-height = Height
+solid-ui-extrusion = Extrusion
 solid-ui-base = Base
 solid-ui-keep-the-shapes = Keep the 2D shapes
-solid-ui-sweep-angle = Sweep angle
-solid-ui-segment-angle = Segment angle
+solid-ui-sweep-angle = Arc Angle
+solid-ui-segment-angle = Segment Angle
 solid-ui-pitch = Pitch (rise per turn)
 solid-ui-axis = Axis
 solid-ui-vertical-axis-at-the-profile = A vertical axis at the left edge of the profile
@@ -16,7 +16,7 @@ solid-ui-name = Name
 solid-ui-holes = Holes
 solid-ui-volume = Volume
 solid-ui-closed-profile = Closed profile
-solid-ui-profile-angle = Profile angle
+solid-ui-profile-angle = Start Angle
 solid-ui-axis-point = Axis point
 solid-ui-axis-direction = Axis direction
 solid-ui-segments = Segments

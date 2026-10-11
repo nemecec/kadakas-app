@@ -1748,12 +1748,9 @@ impl KadakasApp {
         }
     }
 
-    /// Add, subtract, clip, intersect or compose the selected shapes. For Subtract the lowest shape
-    /// of the drawing is the base and the others cut it. For Clip the topmost one cuts the others.
     /// Model > Extrude and Model > Sweep: turns the selected 2D shapes into solids in one undo step.
     /// The new solids become the selection.
     fn make_solids(&mut self, req: SolidRequest) {
-        use kadakas_core::model::Shape;
         use kadakas_core::solid_batch;
         let doc = self.session.editor.doc();
         let ids = self.session.selection.clone();
@@ -1767,10 +1764,10 @@ impl KadakasApp {
             },
             SolidRequest::Sweep(mut opts, use_line) => {
                 if use_line {
-                    // The first selected line is the axis.
+                    // The first selected line (or two-vertex polyline) is the axis.
                     opts.axis_id = ids.iter().copied().find(|id| {
                         doc.object(*id)
-                            .is_some_and(|o| matches!(o.shape, Shape::Line { .. }))
+                            .is_some_and(|o| kadakas_core::solid_batch::is_axis_shape(&o.shape))
                     });
                     if opts.axis_id.is_none() {
                         self.status = tr!("app-select-a-line-for-the-axis-too");
@@ -1805,6 +1802,8 @@ impl KadakasApp {
         };
     }
 
+    /// Add, subtract, clip, intersect or compose the selected shapes. For Subtract the lowest shape
+    /// of the drawing is the base and the others cut it. For Clip the topmost one cuts the others.
     fn surface_op(&mut self, op: SurfaceOp) {
         let doc = self.session.editor.doc();
         let mut ids = self.session.selection.clone();

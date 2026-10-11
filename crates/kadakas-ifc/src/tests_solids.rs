@@ -95,3 +95,26 @@ fn a_solid_with_a_problem_is_skipped_with_a_reason() {
     assert!(named(&f, "IFCBUILDINGELEMENTPROXY").is_empty());
     assert!(format!("{report:?}").contains("zero"), "{report:?}");
 }
+
+#[test]
+fn ifc2x3_writes_a_sweep_as_a_surface_model() {
+    let mut ed = Editor::with_sequential_ids();
+    add(
+        &mut ed,
+        Shape::Sweep(Box::new(Sweep::new(rect(100.0, 0.0, 400.0, 900.0)))),
+    );
+    add(
+        &mut ed,
+        Shape::Extrude(Box::new(Extrude::new(rect(0.0, 0.0, 1000.0, 500.0), 300.0))),
+    );
+    let opts = IfcOptions {
+        version: "IFC2X3".into(),
+        ..IfcOptions::default()
+    };
+    let (bytes, _) = export_bytes(ed.doc(), &opts).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let f = step::parse(&text).unwrap();
+    assert!(text.contains("'SurfaceModel'") && !text.contains("'Tessellation'"));
+    assert_eq!(named(&f, "IFCEXTRUDEDAREASOLID").len(), 1);
+    assert!(f.dangling().is_empty());
+}

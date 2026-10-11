@@ -159,7 +159,7 @@ fn a_sweep_has_segments_and_the_cap_is_reported() {
     let r = ok(
         &mut s,
         "sweep.set",
-        json!({"id": id, "sweep_angle": 3600, "segment_angle": 0.1}),
+        json!({"id": id, "sweep_angle": 3600, "segment_angle": 0.1, "pitch": 3000}),
     );
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1);
     assert_eq!(ok(&mut s, "sweep.get", json!({"id": id}))["segments"], 720);
@@ -399,8 +399,8 @@ fn a_3d_polygon_has_heights_and_can_be_a_face() {
 
 #[test]
 fn solids_render_export_and_respect_the_object_limit() {
-    let dir = std::env::temp_dir().join(format!("kadakas-solids-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let mut s = Session::with_sequential_ids();
     ok(
         &mut s,
@@ -433,7 +433,6 @@ fn solids_render_export_and_respect_the_object_limit() {
     );
     let png = ok(&mut s, "render.png", json!({"width": 64, "height": 48}));
     assert!(png.to_string().len() > 100);
-    let _ = std::fs::remove_dir_all(&dir);
     // The limit of objects counts solids as it counts all objects.
     let mut limited = Session::with_sequential_ids();
     limited.set_limits(SessionLimits {
@@ -488,4 +487,82 @@ fn describe_lists_the_methods_and_the_solids_text() {
             .contains("Extrude Along Path is not built")
     );
     assert_eq!(d["solids"]["examples"].as_array().unwrap().len(), 5);
+}
+
+#[test]
+fn every_example_of_describe_runs() {
+    let mut s = Session::with_sequential_ids();
+    let d = ok(&mut s, "describe", json!({}));
+    let examples = d["solids"]["examples"].as_array().unwrap().clone();
+    assert!(!examples.is_empty());
+    for ex in examples {
+        let method = ex["method"].as_str().unwrap();
+        let r = call(&mut s, method, ex["params"].clone());
+        assert!(r.is_ok(), "{method}: {r:?}");
+    }
+    // The polygon with a fill is a face.
+    assert_eq!(s.editor.doc().objects.len(), 4);
+}
+
+#[test]
+fn a_named_3d_polygon_is_one_undo_step() {
+    let mut s = Session::with_sequential_ids();
+    let r = ok(
+        &mut s,
+        "polygon3d.add",
+        json!({"points": [[0, 0, 0], [1, 0, 1], [1, 1, 2]], "name": "Deck"}),
+    );
+    assert_eq!(s.editor.doc().objects.len(), 1);
+    let o = s.editor.doc().objects.values().next().unwrap();
+    assert_eq!(o.data["name"], "Deck");
+    assert_eq!(json!(o.id), r["id"]);
+    assert!(ok(&mut s, "undo", json!({}))["done"].as_bool().unwrap());
+    assert!(s.editor.doc().objects.is_empty());
+}
+
+#[test]
+fn turns_that_cross_and_typos_in_options_are_refused() {
+    let mut s = Session::with_sequential_ids();
+    let sq = rect(100.0, 0.0, 100.0, 100.0);
+    assert!(
+        err(
+            &mut s,
+            "sweep.add",
+            json!({"profile": sq, "sweep_angle": 720})
+        )
+        .contains("needs a pitch")
+    );
+    assert!(
+        err(
+            &mut s,
+            "sweep.add",
+            json!({"profile": sq, "sweep_angle": 720, "pitch": 50})
+        )
+        .contains("smaller than the profile")
+    );
+    ok(
+        &mut s,
+        "sweep.add",
+        json!({"profile": sq, "sweep_angle": 720, "pitch": 150}),
+    );
+    let a = add(
+        &mut s,
+        json!({"kind": "rect", "min": [0, 0], "max": [10, 10]}),
+    );
+    assert!(
+        err(
+            &mut s,
+            "sweep.from_shapes",
+            json!({"ids": [a], "sweepAngle": 90})
+        )
+        .contains("unknown field")
+    );
+    assert!(
+        err(
+            &mut s,
+            "extrude.from_shapes",
+            json!({"ids": [a], "hieght": 90})
+        )
+        .contains("unknown field")
+    );
 }

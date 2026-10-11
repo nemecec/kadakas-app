@@ -126,7 +126,7 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | North Arrow, Scale Bar | Põhjanool, Mõõtkavariba | |
 | Extrude, Sweep (Model menu) | Väljapressimine, Pöördkeha | Sweep is a profile turned around an axis; the AutoCAD-like profile says Revolve / Pööre |
 | 3D Polygon | 3D-hulknurk | the AutoCAD-like profile says 3D Polyline / 3D-murdjoon |
-| Sweep angle, Segment angle, Pitch (of a spiral) | Pöördenurk, Lõigunurk, Samm | |
+| Arc Angle, Start Angle, Segment Angle, Pitch (of a sweep) | Kaare nurk, Alguse nurk, Lõigunurk, Samm | the Sweep dialog; Extrusion is Väljapress |
 | Dimension standard, Notes database | Mõõtmestamise standard, Märkuste andmebaas | style editors |
 | Area (dimension) | Pindala | the Area mode of the Dimension tool |
 
