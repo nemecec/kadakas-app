@@ -86,6 +86,11 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Two process-wide values are explicit exceptions for the UI: the active language (`kadakas-l10n`) and the current units (`kadakas-units`). They are preferences of the person. They are not document data, and an API session never reads them.
 - New ids are UUIDv7 (`Document::alloc_id`). A web build must call `kadakas_core::uid::set_host_seed(ms, salt)` once before it makes a document (the app does this in `new_web` with `Date.now()` and `crypto.getRandomValues`), because `std` has no clock or process there. Tests and fixtures use `Document::with_sequential_ids()` or `kadakas serve --sequential-ids`.
 
+## Toolchain
+
+- The minimum Rust version is 1.96 (`rust-version` in the workspace `Cargo.toml`). wasmtime 49 needs it. Use the current stable toolchain; CI uses `stable`.
+- Raise `rust-version` only when a dependency needs a newer compiler, and then to the lowest version that works, not to the newest.
+
 ## Quality rules
 
 - Write unit tests for all logic. Add property tests (proptest) where random input can find bugs.

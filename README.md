@@ -19,7 +19,7 @@ See `docs/feature-spec.md` for the plan.
 
 ## Build
 
-You need a recent stable Rust toolchain. On Linux you also need `libxkbcommon-dev` and `libgtk-3-dev`.
+You need Rust 1.96 or newer (the stable toolchain). On Linux you also need `libxkbcommon-dev` and `libgtk-3-dev`.
 
 ```sh
 cargo build --release

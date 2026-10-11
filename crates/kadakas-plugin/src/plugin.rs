@@ -188,7 +188,11 @@ pub fn scan(wasm: &[u8], limits: &Limits) -> Result<(), PluginError> {
                 )));
             }
             Payload::CodeSectionEntry(body) => {
-                let size = body.range().len();
+                // The range is in `u64`. A size that does not fit in `usize` counts as the
+                // largest size, so it is refused.
+                let range = body.range();
+                let size =
+                    usize::try_from(range.end.saturating_sub(range.start)).unwrap_or(usize::MAX);
                 if size > limits.max_function_bytes {
                     return Err(PluginError::Limit(format!(
                         "a function has {size} bytes. The limit is {}",
