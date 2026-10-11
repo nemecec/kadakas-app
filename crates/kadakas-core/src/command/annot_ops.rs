@@ -1,11 +1,58 @@
 //! After a command, annotations follow the objects they are tied to (see `annot::sync`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
-use crate::annot::{Annot, sync};
+use crate::annot::{Anchor, Annot, sync};
 
 impl Tx<'_> {
+    /// Fixes the links of a copy of an annotation. `map` has the new ID of every object that was
+    /// copied in the same command.
+    ///
+    /// - A link to an object that was copied too goes to the copy.
+    /// - A dimension or callout anchor to an object that was not copied is dropped: the copy keeps
+    ///   its points and does not jump back to the original.
+    /// - A data tag copied alone keeps tagging the original object, and its label stays where the
+    ///   copy put it (the offset is calculated again).
+    pub(super) fn remap_copy_refs(&self, o: &mut Object, map: &HashMap<ObjectId, ObjectId>) {
+        let layer = o.layer;
+        let Shape::Annotation(a) = &mut o.shape else {
+            return;
+        };
+        let remap = |anchor: &mut Option<Anchor>| {
+            if let Some(x) = anchor {
+                match map.get(&x.object) {
+                    Some(new) => x.object = *new,
+                    None => *anchor = None,
+                }
+            }
+        };
+        match a.as_mut() {
+            Annot::DataTag(t) => {
+                if let Some(new) = map.get(&t.object) {
+                    t.object = *new;
+                } else if let Some(p) = self
+                    .doc
+                    .object(t.object)
+                    .and_then(|x| crate::annot::ref_point(&x.shape))
+                {
+                    let paper = self.doc.layer(layer).map_or(1.0, |l| l.scale);
+                    if paper > 0.0 {
+                        t.offset = (t.at - p) / paper;
+                    }
+                }
+            }
+            Annot::Dimension(d) => {
+                d.anchors.iter_mut().for_each(remap);
+                while d.anchors.last().is_some_and(Option::is_none) {
+                    d.anchors.pop();
+                }
+            }
+            Annot::Callout(c) => c.leaders.iter_mut().for_each(|l| remap(&mut l.anchor)),
+            _ => {}
+        }
+    }
+
     /// Brings the annotations that depend on changed objects up to date.
     pub(super) fn annot_after(&mut self, cmd: &Command) -> Result<(), CommandError> {
         match cmd {
@@ -61,7 +108,19 @@ impl Tx<'_> {
                 // The other annotations lose their anchors and keep their places.
                 self.annot_sync(&HashSet::new(), false);
             }
-            _ => {}
+            // Any other command (rotate, scale, mirror, copy, array, a new landscape area or
+            // hardscape, a group move...): annotations follow every object the command changed.
+            _ => {
+                let changed: HashSet<ObjectId> = self
+                    .before
+                    .keys()
+                    .copied()
+                    .chain(self.added_set.iter().copied())
+                    .collect();
+                if !changed.is_empty() {
+                    self.annot_sync(&changed, false);
+                }
+            }
         }
         Ok(())
     }
@@ -69,13 +128,27 @@ impl Tx<'_> {
     /// Updates annotations that follow one of the `changed` objects, or that are in `changed`
     /// themselves (`moved`: they were moved by hand).
     fn annot_sync(&mut self, changed: &HashSet<ObjectId>, moved: bool) {
+        // The objects the command touched count too: a group move changes its members, not only
+        // the ids it names.
+        let touched: HashSet<ObjectId> = if changed.is_empty() {
+            HashSet::new()
+        } else {
+            self.before
+                .keys()
+                .copied()
+                .chain(self.added_set.iter().copied())
+                .collect()
+        };
         let mut updates: Vec<(ObjectId, Annot)> = Vec::new();
         for o in self.doc.objects.values() {
             let Shape::Annotation(a) = &o.shape else {
                 continue;
             };
             let own = changed.contains(&o.id);
-            let follows = a.depends_on().iter().any(|d| changed.contains(d));
+            let follows = a
+                .depends_on()
+                .iter()
+                .any(|d| changed.contains(d) || touched.contains(d));
             // With nothing changed (a delete) every annotation is looked at.
             if !(changed.is_empty() || own || follows) {
                 continue;

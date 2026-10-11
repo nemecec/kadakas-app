@@ -7,7 +7,7 @@ use kadakas_core::annot::draw::{Fill, Prim};
 use kadakas_core::annot::{Annot, Legend};
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
-use kadakas_core::resource::{ResourceBody, ResourceId};
+use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
 
 use crate::canvas::{Style, color32};
@@ -163,8 +163,25 @@ fn styles(doc: &Document, ty: &str) -> Vec<(ResourceId, String)> {
         .collect()
 }
 
+/// The "Edit style..." button under a style list. It asks the app to open the style editor.
+fn edit_button(ui: &mut Ui, style: Option<ResourceId>, requests: &mut PanelRequests) {
+    let r = ui.add_enabled(
+        style.is_some(),
+        egui::Button::new(tr!("style-ui-edit-style")),
+    );
+    if r.clicked() {
+        requests.edit_style = style;
+    }
+}
+
 /// The options of the annotation tools in the Tool bar.
-pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &Document) {
+pub fn tool_options(
+    ui: &mut Ui,
+    tool: Tool,
+    settings: &mut ToolSettings,
+    doc: &Document,
+    requests: &mut PanelRequests,
+) {
     let s = &mut settings.annot;
     ui.add_space(6.0);
     match tool {
@@ -191,6 +208,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             ) {
                 s.dim_style = c;
             }
+            edit_button(ui, s.dim_style, requests);
             ui.horizontal(|ui| {
                 ui.label(tr!("annot-ui-line-offset"));
                 ui.add(
@@ -214,6 +232,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             ) {
                 s.text_style = c;
             }
+            edit_button(ui, s.text_style, requests);
             ui.label(tr!("annot-ui-text"));
             ui.text_edit_singleline(&mut s.callout_text);
         }
@@ -228,6 +247,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
             ) {
                 s.tag_style = c;
             }
+            edit_button(ui, s.tag_style, requests);
         }
         Tool::NorthArrow => {
             ui.horizontal(|ui| {
@@ -271,6 +291,8 @@ pub struct PanelRequests {
     pub commands: Vec<Command>,
     /// The Graphic Legend button was pressed.
     pub legend: bool,
+    /// An "Edit style..." button was pressed: open the style editor on this resource.
+    pub edit_style: Option<ResourceId>,
 }
 
 /// The buttons of the Annotation part of the tool panel: the Graphic Legend command and default
@@ -284,38 +306,13 @@ pub fn panel_buttons(ui: &mut Ui, doc: &Document, requests: &mut PanelRequests) 
     {
         requests.legend = true;
     }
-    let has = |ty: &str| doc.resources.iter().any(|r| r.body.type_name() == ty);
-    if !has("dimension_style") || !has("tag_style") || !has("text_style") {
+    let missing = kadakas_ui_core::style_edit::missing_default_styles(doc);
+    if !missing.is_empty() {
         let r = ui
             .button(tr!("annot-ui-add-default-styles"))
             .on_hover_text(tr!("annot-ui-adds-a-text-style-a-dimension-style"));
         if r.clicked() {
-            use kadakas_core::annot::style::{AnnotResource, DimensionStyle, TagStyle, TextStyle};
-            let add = |name: &str, r: AnnotResource| Command::AddResource {
-                name: name.into(),
-                body: ResourceBody::annot(r),
-            };
-            if !has("text_style") {
-                cmds.push(add(
-                    "Text 3 mm",
-                    AnnotResource::TextStyle(TextStyle::default()),
-                ));
-            }
-            if !has("dimension_style") {
-                cmds.push(add(
-                    "Dimension 2.5 mm",
-                    AnnotResource::DimensionStyle(DimensionStyle::default()),
-                ));
-            }
-            if !has("tag_style") {
-                cmds.push(add(
-                    "Plant tag",
-                    AnnotResource::TagStyle(TagStyle {
-                        lines: vec!["{IdCode}".into(), "{Botanical}".into()],
-                        ..TagStyle::default()
-                    }),
-                ));
-            }
+            cmds.extend(missing);
         }
     }
 }

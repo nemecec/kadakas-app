@@ -121,6 +121,7 @@ Tool keys switch the active tool.
 | Function | Vectorworks 2026 default (Mac / Windows) | Kadakas binding | Status |
 |---|---|---|---|
 | Add a graphic legend (`cmd.graphic_legend`) | none | Alt+Shift+E (no VW default) | done |
+| Edit the dimension standard (`cmd.dimension_standards`; opens the style editor, makes a standard if the document has none) | none | none (AutoCAD-like profile: alias DIMSTYLE) | done |
 
 ## Tool modes
 

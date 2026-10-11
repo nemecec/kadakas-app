@@ -2977,6 +2977,7 @@ version = "0.1.0"
 dependencies = [
  "kadakas-core",
  "kadakas-plants",
+ "kadakas-units",
  "proptest",
  "serde",
  "serde_json",

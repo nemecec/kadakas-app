@@ -229,6 +229,35 @@ impl Default for TagStyle {
     }
 }
 
+impl TagStyle {
+    /// The built-in "Area" tag style: one line with the net area of the tagged object (holes
+    /// taken out) in the area unit of the document (see [`default_area_unit`]).
+    pub fn area() -> TagStyle {
+        TagStyle {
+            lines: vec!["{AREA(Area)}".into()],
+            ..TagStyle::default()
+        }
+    }
+}
+
+/// The name of the built-in area tag style.
+pub const AREA_TAG_NAME: &str = "Area";
+
+/// The area unit of a document when a formula names none: square feet when the first dimension
+/// standard measures in inches or feet, square meters otherwise.
+pub fn default_area_unit(doc: &crate::model::Document) -> kadakas_units::AreaUnit {
+    let imperial = doc
+        .resources
+        .iter()
+        .find_map(|r| doc.resources.dimension_style(r.id))
+        .is_some_and(|s| s.unit.is_imperial());
+    if imperial {
+        kadakas_units::AreaUnit::Ft2
+    } else {
+        kadakas_units::AreaUnit::M2
+    }
+}
+
 /// Most lines in a tag style.
 pub const MAX_TAG_LINES: usize = 20;
 

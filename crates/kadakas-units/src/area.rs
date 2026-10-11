@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::length::LengthUnit;
-use crate::number::{NumberFormat, is_group_space};
+use crate::number::{NumberFormat, is_group_space, round_half_away, trim_negative_zero};
 
 /// The unit in which areas show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +22,19 @@ pub enum AreaUnit {
 
 impl AreaUnit {
     pub const ALL: [AreaUnit; 4] = [AreaUnit::M2, AreaUnit::Ha, AreaUnit::Ft2, AreaUnit::Ac];
+
+    /// Reads the name of a unit: `m2`, `m²`, `sqm`, `ha`, `hectare`, `ft2`, `sqft`, `ac`, `acre`
+    /// and so on (case and spaces ignored). `None` for another text.
+    pub fn from_name(name: &str) -> Option<AreaUnit> {
+        let n = name.trim().to_lowercase().replace(' ', "");
+        Some(match n.as_str() {
+            "m\u{b2}" | "m2" | "m^2" | "sqm" | "sqmeter" | "sqmeters" => AreaUnit::M2,
+            "ha" | "hectare" | "hectares" => AreaUnit::Ha,
+            "ft\u{b2}" | "ft2" | "ft^2" | "sqft" | "sf" | "sqfeet" | "sqfoot" => AreaUnit::Ft2,
+            "ac" | "acre" | "acres" => AreaUnit::Ac,
+            _ => return None,
+        })
+    }
 
     /// Square millimeters in one unit.
     pub fn mm2_per_unit(self) -> f64 {
@@ -66,6 +79,28 @@ pub fn format_area(mm2: f64, unit: AreaUnit, decimals: usize, nf: &NumberFormat)
         nf.format(mm2 / unit.mm2_per_unit(), decimals),
         unit.suffix()
     )
+}
+
+/// An area in mm² as a drawing text does: fixed decimals with a point, an optional rounding to a
+/// multiple of `round_to` units, and the suffix of the unit when `show_unit` is set. No sign for a
+/// negative zero.
+pub fn format_area_drawing(
+    mm2: f64,
+    unit: AreaUnit,
+    decimals: usize,
+    round_to: Option<f64>,
+    show_unit: bool,
+) -> String {
+    let mut v = mm2 / unit.mm2_per_unit();
+    if let Some(inc) = round_to.filter(|i| i.is_finite() && *i > 0.0) {
+        v = round_half_away(v / inc, 0) * inc;
+    }
+    let n = trim_negative_zero(format!("{:.decimals$}", round_half_away(v, decimals)));
+    if show_unit {
+        format!("{n}{}", unit.suffix())
+    } else {
+        n
+    }
 }
 
 /// The unit for volumes: cubic meters for metric lengths, cubic yards for imperial ones (the
@@ -156,13 +191,10 @@ fn split_number(text: &str, nf: &NumberFormat) -> Option<(f64, String)> {
 /// `sq ft`, `sf`; `ac`, `acre(s)`.
 pub fn parse_area(text: &str, default: AreaUnit, nf: &NumberFormat) -> Option<f64> {
     let (value, rest) = split_number(text, nf)?;
-    let unit = match rest.as_str() {
-        "" => default,
-        "m\u{b2}" | "m2" | "m^2" | "sqm" | "sqmeter" | "sqmeters" => AreaUnit::M2,
-        "ha" | "hectare" | "hectares" => AreaUnit::Ha,
-        "ft\u{b2}" | "ft2" | "ft^2" | "sqft" | "sf" | "sqfeet" | "sqfoot" => AreaUnit::Ft2,
-        "ac" | "acre" | "acres" => AreaUnit::Ac,
-        _ => return None,
+    let unit = if rest.is_empty() {
+        default
+    } else {
+        AreaUnit::from_name(&rest)?
     };
     let mm2 = value * unit.mm2_per_unit();
     mm2.is_finite().then_some(mm2)
@@ -225,6 +257,54 @@ mod tests {
         for bad in ["", "abc", "5 parsecs", "m3"] {
             assert_eq!(p(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn unit_names_are_read() {
+        assert_eq!(AreaUnit::from_name(" M2 "), Some(AreaUnit::M2));
+        assert_eq!(AreaUnit::from_name("m\u{b2}"), Some(AreaUnit::M2));
+        assert_eq!(AreaUnit::from_name("Hectares"), Some(AreaUnit::Ha));
+        assert_eq!(AreaUnit::from_name("sq ft"), Some(AreaUnit::Ft2));
+        assert_eq!(AreaUnit::from_name("acre"), Some(AreaUnit::Ac));
+        assert_eq!(AreaUnit::from_name("yd2"), None);
+        for u in AreaUnit::ALL {
+            assert_eq!(AreaUnit::from_name(u.short_name()), Some(u));
+        }
+    }
+
+    #[test]
+    fn drawing_areas_round_and_show_the_unit() {
+        let ha = 1.0e10;
+        assert_eq!(
+            format_area_drawing(ha, AreaUnit::M2, 2, None, true),
+            "10000.00 m\u{b2}"
+        );
+        assert_eq!(format_area_drawing(ha, AreaUnit::Ha, 1, None, false), "1.0");
+        assert_eq!(
+            format_area_drawing(12.3e6, AreaUnit::M2, 1, Some(0.5), true),
+            "12.5 m\u{b2}"
+        );
+        assert_eq!(
+            format_area_drawing(12.2e6, AreaUnit::M2, 2, Some(5.0), false),
+            "10.00"
+        );
+        assert_eq!(
+            format_area_drawing(ha, AreaUnit::Ac, 3, None, true),
+            "2.471 ac"
+        );
+        assert_eq!(
+            format_area_drawing(100.0 * 304.8 * 304.8, AreaUnit::Ft2, 0, None, true),
+            "100 ft\u{b2}"
+        );
+        // A bad increment is ignored.
+        assert_eq!(
+            format_area_drawing(2.0e6, AreaUnit::M2, 0, Some(0.0), false),
+            "2"
+        );
+        assert_eq!(
+            format_area_drawing(-0.0, AreaUnit::M2, 1, None, false),
+            "0.0"
+        );
     }
 
     #[test]

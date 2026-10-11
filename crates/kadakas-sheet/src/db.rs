@@ -146,6 +146,10 @@ impl Env for ObjEnv<'_> {
     fn blank_is_zero(&self) -> bool {
         false
     }
+
+    fn area_unit(&self) -> kadakas_units::AreaUnit {
+        kadakas_core::annot::style::default_area_unit(self.doc)
+    }
 }
 
 /// Adds up values. Errors in the values give that error. `None` if nothing can be added up.

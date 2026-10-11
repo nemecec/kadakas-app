@@ -13,6 +13,7 @@
     "cmd.compose": [
       "Cmd/Ctrl+Alt+Shift+P"
     ],
+    "cmd.dimension_standards": [],
     "cmd.duplicate_array": [
       "Cmd/Ctrl+Alt+Shift+D"
     ],

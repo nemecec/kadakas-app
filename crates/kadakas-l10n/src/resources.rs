@@ -50,6 +50,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "sheets-ui.ftl",
     "site-ui.ftl",
     "snap-ui.ftl",
+    "style-ui.ftl",
     "theme.ftl",
     "uic-annot-tool.ftl",
     "uic-collab.ftl",
@@ -63,6 +64,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "uic-plant-tool.ftl",
     "uic-profile.ftl",
     "uic-snap.ftl",
+    "uic-style-edit.ftl",
     "uic-tools.ftl"
 );
 
@@ -105,6 +107,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "sheets-ui.ftl",
     "site-ui.ftl",
     "snap-ui.ftl",
+    "style-ui.ftl",
     "theme.ftl",
     "uic-annot-tool.ftl",
     "uic-collab.ftl",
@@ -118,6 +121,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "uic-plant-tool.ftl",
     "uic-profile.ftl",
     "uic-snap.ftl",
+    "uic-style-edit.ftl",
     "uic-tools.ftl"
 );
 
@@ -132,8 +136,16 @@ pub fn source_files(tag: &str) -> Option<&'static [(&'static str, &'static str)]
 /// All message ids of a language, with attributes as `id.attribute`. An error names the file and
 /// the line of a syntax error, so the CI check shows the problem.
 pub fn message_ids(tag: &str) -> Result<BTreeSet<String>, String> {
-    use fluent_syntax::ast::{Entry, Resource};
     let files = source_files(tag).ok_or_else(|| format!("unknown language {tag}"))?;
+    message_ids_in(tag, files)
+}
+
+/// `message_ids` for the given files (name, content) of a language.
+pub(crate) fn message_ids_in(
+    tag: &str,
+    files: &[(&str, &str)],
+) -> Result<BTreeSet<String>, String> {
+    use fluent_syntax::ast::{Entry, Resource};
     let mut ids = BTreeSet::new();
     for (name, text) in files {
         let res: Resource<&str> = match fluent_syntax::parser::parse(*text) {
@@ -237,10 +249,15 @@ pub fn message_variables(tag: &str) -> Result<BTreeMap<String, BTreeSet<String>>
 /// both define, and a message that does not format cleanly (a variable that is missing, a
 /// plural selector that fails). The CI check shows them.
 pub fn problems(tag: &str) -> Vec<String> {
+    match source_files(tag) {
+        Some(files) => problems_in(tag, files),
+        None => vec![format!("unknown language {tag}")],
+    }
+}
+
+/// `problems` for the given files (name, content) of a language.
+pub(crate) fn problems_in(tag: &str, files: &[(&str, &str)]) -> Vec<String> {
     let mut out = Vec::new();
-    let Some(files) = source_files(tag) else {
-        return vec![format!("unknown language {tag}")];
-    };
     let mut seen: BTreeMap<String, &str> = BTreeMap::new();
     for (name, text) in files {
         let Ok(res) = fluent_syntax::parser::parse(*text) else {
@@ -258,10 +275,14 @@ pub fn problems(tag: &str) -> Vec<String> {
             }
         }
     }
-    let Ok(vars) = message_variables(tag) else {
-        return out;
-    };
-    let localizer = crate::Localizer::new(tag);
+    let mut vars = BTreeMap::new();
+    for (_, text) in files {
+        match variables_in(text) {
+            Ok(v) => vars.extend(v),
+            Err(_) => return out,
+        }
+    }
+    let localizer = crate::Localizer::from_texts(tag, files.iter().map(|(_, text)| *text));
     for (id, names) in &vars {
         // Give every variable a number, then text: both must format without an error.
         for text in [false, true] {
@@ -332,6 +353,61 @@ mod tests {
         assert!(ids.contains("common-test-hello"));
         assert!(ids.contains("common-test-hello.title"));
         assert!(message_ids("xx").unwrap_err().contains("unknown"));
+    }
+
+    #[test]
+    fn variables_are_found_in_functions_and_selectors() {
+        let v =
+            variables_in("a = { NUMBER($n) }\nb = { $c ->\n    [one] x\n   *[other] { $d }\n}\n")
+                .unwrap();
+        assert_eq!(v["a"], ["n".to_string()].into());
+        assert_eq!(v["b"], ["c".to_string(), "d".to_string()].into());
+        // Attributes, named arguments and nested placeables.
+        let v = variables_in(
+            "m = text\n    .title = { $t }\nn = { NUMBER($x, minimumFractionDigits: 1) } { { $z } }\n",
+        )
+        .unwrap();
+        assert_eq!(v["m.title"], ["t".to_string()].into());
+        assert_eq!(v["n"], ["x".to_string(), "z".to_string()].into());
+        assert_eq!(variables_in("a = {"), Err(1));
+        assert_eq!(variables_in("a = b\nc = {"), Err(2));
+    }
+
+    #[test]
+    fn the_ids_of_given_files_report_a_syntax_error_with_its_line() {
+        let ok = message_ids_in("en-US", &[("a.ftl", "x = 1\ny =\n    .t = 2\n")]).unwrap();
+        assert!(ok.contains("x") && ok.contains("y.t") && !ok.contains("y"));
+        let e = message_ids_in("en-US", &[("a.ftl", "x = 1\ny = {\n")]).unwrap_err();
+        assert_eq!(e, "en-US/a.ftl: syntax error near line 3");
+    }
+
+    #[test]
+    fn problems_name_a_duplicate_a_syntax_error_and_a_message_that_fails() {
+        let files = [
+            ("a.ftl", "x = 1\nok = { $n }\n"),
+            ("b.ftl", "x = 2\n"),
+            ("c.ftl", "broken = {\n"),
+        ];
+        let p = problems_in("en-US", &files);
+        assert!(
+            p.contains(&"en-US: message x is in a.ftl and in b.ftl".to_string()),
+            "{p:?}"
+        );
+        assert!(
+            p.contains(&"en-US/c.ftl: syntax error".to_string()),
+            "{p:?}"
+        );
+        // A syntax error stops the format check: only the first two problems are listed.
+        assert_eq!(p.len(), 2, "{p:?}");
+        // A reference to a message that is not there, and a plural selector that is fine.
+        let files = [(
+            "a.ftl",
+            "g = { missing }\nh = { $n ->\n    [one] 1\n   *[other] { $n }\n}\n",
+        )];
+        let p = problems_in("et", &files);
+        assert!(p.iter().any(|m| m.starts_with("et: g: ")), "{p:?}");
+        assert!(!p.iter().any(|m| m.starts_with("et: h: ")), "{p:?}");
+        assert!(problems_in("en-US", &[("a.ftl", "a = 1\n")]).is_empty());
     }
 
     #[test]

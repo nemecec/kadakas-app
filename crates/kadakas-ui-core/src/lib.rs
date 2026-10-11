@@ -22,6 +22,7 @@ pub mod plugin_form;
 pub mod plugin_tool;
 pub mod profile;
 pub mod snap;
+pub mod style_edit;
 pub mod tools;
 pub mod view;
 pub mod view_history;
