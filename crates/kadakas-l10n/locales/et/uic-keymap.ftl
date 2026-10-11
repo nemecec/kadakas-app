@@ -42,6 +42,7 @@ action-cmd-rotate-right-90 = Pööra paremale 90 kraadi
 action-cmd-flip-horizontal = Pööra horisontaalselt ümber
 action-cmd-flip-vertical = Pööra vertikaalselt ümber
 action-ui-quick-search = Käskude kiirotsing
+action-ui-command-line = Käsurida: sisesta käsu lühend
 action-view-history-previous = Eelmine vaade ajaloos
 action-view-history-next = Järgmine vaade ajaloos
 action-snap-cues = Lülita SmartCursor-vihjed sisse/välja

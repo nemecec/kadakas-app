@@ -17,6 +17,7 @@ pub mod hit;
 pub mod keymap;
 pub mod keys;
 pub mod massing;
+pub mod profile;
 pub mod snap;
 pub mod tools;
 pub mod view;

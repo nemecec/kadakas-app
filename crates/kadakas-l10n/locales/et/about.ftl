@@ -9,4 +9,4 @@ about-kadakas-uses-open-source-libraries-icons-and = Kadakas kasutab avatud läh
 about-licenses = Litsentsid...
 about-back = Tagasi
 about-trademark = Vectorworks on ettevõtte Vectorworks, Inc. kaubamärk. Kadakas on sõltumatu projekt ning see ei ole seotud ettevõttega Vectorworks, Inc., ei ole selle heaks kiidetud ega toetatud.
-about-other-trademarks = AutoCAD, DWG ja DXF on ettevõtte Autodesk, Inc. kaubamärgid. Nimetame neid tooteid ainult selleks, et kirjeldada failivorminguid, mida Kadakas loeb või kirjutab, või et võrrelda töövooge. Kadakas ei ole nende omanikega seotud.
+about-other-trademarks = AutoCAD, DWG ja DXF on ettevõtte Autodesk, Inc. kaubamärgid. Nimetame neid tooteid ainult selleks, et kirjeldada failivorminguid, mida Kadakas loeb või kirjutab, võrrelda töövooge või öelda, milline on töölaua profiil (sisseehitatud profiil "AutoCAD-i-sarnane"). Kadakas ei ole nende omanikega seotud.

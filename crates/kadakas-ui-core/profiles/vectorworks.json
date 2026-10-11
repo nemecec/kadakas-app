@@ -1,0 +1,453 @@
+{
+  "aliases": {},
+  "description": "The default workspace.",
+  "format": 1,
+  "id": "vectorworks",
+  "keymap": {
+    "cmd.add_surface": [
+      "Cmd/Ctrl+Alt+Shift+A"
+    ],
+    "cmd.clip_surface": [
+      "Cmd/Ctrl+Alt+Shift+C"
+    ],
+    "cmd.compose": [
+      "Cmd/Ctrl+Alt+Shift+P"
+    ],
+    "cmd.duplicate_array": [
+      "Cmd/Ctrl+Alt+Shift+D"
+    ],
+    "cmd.flip_horizontal": [
+      "Cmd/Ctrl+Shift+H"
+    ],
+    "cmd.flip_vertical": [
+      "Cmd/Ctrl+Shift+V"
+    ],
+    "cmd.graphic_legend": [
+      "Alt+Shift+E"
+    ],
+    "cmd.intersect_surface": [
+      "Cmd/Ctrl+Alt+Shift+I"
+    ],
+    "cmd.rotate_left_90": [
+      "Cmd/Ctrl+L"
+    ],
+    "cmd.rotate_right_90": [
+      "Cmd/Ctrl+Shift+R"
+    ],
+    "cmd.subtract_surface": [],
+    "databar.focus": [
+      "Tab"
+    ],
+    "databar.prev": [
+      "Shift+Tab"
+    ],
+    "edit.cancel": [
+      "Escape"
+    ],
+    "edit.delete": [
+      "Delete",
+      "Backspace"
+    ],
+    "edit.enter_group": [
+      "Cmd/Ctrl+OpenBracket"
+    ],
+    "edit.exit_group": [
+      "Cmd/Ctrl+CloseBracket"
+    ],
+    "edit.finish": [
+      "Enter"
+    ],
+    "edit.group": [
+      "Cmd/Ctrl+G"
+    ],
+    "edit.nudge_down": [
+      "Shift+Down"
+    ],
+    "edit.nudge_left": [
+      "Shift+Left"
+    ],
+    "edit.nudge_right": [
+      "Shift+Right"
+    ],
+    "edit.nudge_up": [
+      "Shift+Up"
+    ],
+    "edit.redo": [
+      "Cmd/Ctrl+Y",
+      "Cmd/Ctrl+Shift+Z"
+    ],
+    "edit.select_all": [
+      "Cmd/Ctrl+A"
+    ],
+    "edit.undo": [
+      "Cmd/Ctrl+Z"
+    ],
+    "edit.ungroup": [
+      "Cmd/Ctrl+U"
+    ],
+    "file.export_pdf": [
+      "Cmd/Ctrl+P"
+    ],
+    "file.new": [
+      "Cmd/Ctrl+N"
+    ],
+    "file.open": [
+      "Cmd/Ctrl+O"
+    ],
+    "file.save": [
+      "Cmd/Ctrl+S"
+    ],
+    "file.save_as": [
+      "Cmd/Ctrl+Shift+S"
+    ],
+    "mode.group1": [
+      "U"
+    ],
+    "mode.group2": [
+      "I"
+    ],
+    "mode.group3": [
+      "O"
+    ],
+    "mode.group4": [
+      "P"
+    ],
+    "mode.group5": [
+      "OpenBracket"
+    ],
+    "mode.group6": [
+      "CloseBracket"
+    ],
+    "snap.acquire": [
+      "T"
+    ],
+    "snap.cues": [
+      "Y"
+    ],
+    "snap.relative_angles": [
+      "Slash"
+    ],
+    "snap.suspend": [
+      "Backtick"
+    ],
+    "tool.angular_dimension": [
+      "Period"
+    ],
+    "tool.callout": [
+      "Alt+1"
+    ],
+    "tool.chamfer": [
+      "Alt+7"
+    ],
+    "tool.circle": [
+      "6"
+    ],
+    "tool.data_tag": [
+      "Alt+Shift+T"
+    ],
+    "tool.dimension": [
+      "N"
+    ],
+    "tool.extend": [],
+    "tool.fillet": [
+      "7"
+    ],
+    "tool.grading": [],
+    "tool.hardscape": [
+      "Alt+Shift+H"
+    ],
+    "tool.irrigation": [
+      "Alt+Shift+I"
+    ],
+    "tool.landscape_area": [
+      "Alt+Shift+A"
+    ],
+    "tool.line": [
+      "2"
+    ],
+    "tool.massing": [
+      "Alt+Shift+M"
+    ],
+    "tool.mirror": [
+      "Equals"
+    ],
+    "tool.north_arrow": [
+      "Alt+Shift+N"
+    ],
+    "tool.offset": [
+      "Shift+Minus"
+    ],
+    "tool.plant": [
+      "Alt+Shift+P"
+    ],
+    "tool.polyline": [
+      "5"
+    ],
+    "tool.radial_dimension": [
+      "Comma"
+    ],
+    "tool.rect": [
+      "4"
+    ],
+    "tool.revision_cloud": [
+      "Alt+Shift+V"
+    ],
+    "tool.rotate": [
+      "Alt+Equals"
+    ],
+    "tool.scale": [],
+    "tool.scale_bar": [
+      "Alt+Shift+B"
+    ],
+    "tool.select": [
+      "X"
+    ],
+    "tool.site_modifier": [
+      "Alt+Shift+G"
+    ],
+    "tool.split": [
+      "L"
+    ],
+    "tool.text": [
+      "1"
+    ],
+    "tool.trim": [
+      "Alt+Shift+L"
+    ],
+    "ui.command_line": [],
+    "ui.quick_search": [
+      "F"
+    ],
+    "view.back": [
+      "Alt+Shift+8"
+    ],
+    "view.dashed_hidden_line": [
+      "Cmd/Ctrl+Shift+D"
+    ],
+    "view.flyover": [
+      "Shift+C"
+    ],
+    "view.front": [
+      "Alt+Shift+2"
+    ],
+    "view.hidden_line": [
+      "Cmd/Ctrl+Shift+E"
+    ],
+    "view.history_next": [
+      "Cmd/Ctrl+Shift+Period"
+    ],
+    "view.history_previous": [
+      "Cmd/Ctrl+Shift+Comma"
+    ],
+    "view.left": [
+      "Alt+Shift+4"
+    ],
+    "view.left_isometric": [
+      "Alt+Shift+1"
+    ],
+    "view.left_rear_isometric": [
+      "Alt+Shift+7"
+    ],
+    "view.pan_down": [
+      "Down"
+    ],
+    "view.pan_hold": [
+      "Space"
+    ],
+    "view.pan_left": [
+      "Left"
+    ],
+    "view.pan_right": [
+      "Right"
+    ],
+    "view.pan_up": [
+      "Up"
+    ],
+    "view.projection": [
+      "Alt+Shift+J"
+    ],
+    "view.realistic": [
+      "Cmd/Ctrl+Shift+F"
+    ],
+    "view.right": [
+      "Alt+Shift+6"
+    ],
+    "view.right_isometric": [
+      "Alt+Shift+3"
+    ],
+    "view.right_rear_isometric": [
+      "Alt+Shift+9"
+    ],
+    "view.shaded": [
+      "Cmd/Ctrl+Shift+G"
+    ],
+    "view.top": [
+      "Alt+Shift+5"
+    ],
+    "view.top_plan": [
+      "Alt+Shift+0",
+      "Cmd/Ctrl+5"
+    ],
+    "view.wireframe": [
+      "Cmd/Ctrl+Shift+W"
+    ],
+    "view.zoom_fit": [
+      "Cmd/Ctrl+6",
+      "Home"
+    ],
+    "view.zoom_in": [
+      "Cmd/Ctrl+1"
+    ],
+    "view.zoom_out": [
+      "Cmd/Ctrl+2"
+    ]
+  },
+  "menus": [
+    {
+      "id": "file",
+      "items": [
+        "file.new",
+        "file.open",
+        "file.save",
+        "file.save_as",
+        "file.export_svg",
+        "file.export_pdf",
+        "-",
+        "file.import",
+        "file.export",
+        "-",
+        "file.map_sources",
+        "file.change_crs",
+        "-",
+        "file.scripts",
+        "-",
+        "file.preferences"
+      ]
+    },
+    {
+      "id": "edit",
+      "items": [
+        "edit.undo",
+        "edit.redo",
+        "-",
+        "edit.delete",
+        "edit.select_all",
+        "-",
+        "ui.quick_search"
+      ]
+    },
+    {
+      "id": "modify",
+      "items": [
+        "cmd.duplicate_array",
+        "-",
+        "cmd.rotate_left_90",
+        "cmd.rotate_right_90",
+        "cmd.flip_horizontal",
+        "cmd.flip_vertical",
+        "-",
+        "cmd.add_surface",
+        "cmd.subtract_surface",
+        "cmd.clip_surface",
+        "cmd.intersect_surface",
+        "cmd.compose"
+      ]
+    },
+    {
+      "id": "site",
+      "items": [
+        "site.create_model",
+        "site.update_model"
+      ]
+    },
+    {
+      "id": "view",
+      "items": [
+        "view.zoom_fit",
+        "view.history_previous",
+        "view.history_next",
+        "-",
+        "view.show_grid",
+        "view.snapping",
+        "view.theme",
+        "view.icon_size"
+      ]
+    },
+    {
+      "id": "window",
+      "items": [
+        "window.panels",
+        "-",
+        "window.layouts"
+      ]
+    },
+    {
+      "id": "help",
+      "items": [
+        "help.about"
+      ]
+    }
+  ],
+  "name": "Vectorworks-like",
+  "terms": {},
+  "tool_sets": [
+    {
+      "id": "basic",
+      "tools": [
+        "tool.select",
+        "tool.line",
+        "tool.rect",
+        "tool.circle",
+        "tool.polyline",
+        "tool.text"
+      ]
+    },
+    {
+      "id": "modify",
+      "tools": [
+        "tool.rotate",
+        "tool.mirror",
+        "tool.scale",
+        "tool.offset",
+        "tool.fillet",
+        "tool.chamfer",
+        "tool.trim",
+        "tool.extend",
+        "tool.split"
+      ]
+    },
+    {
+      "id": "landscape",
+      "tools": [
+        "tool.plant",
+        "tool.landscape_area",
+        "tool.hardscape"
+      ]
+    },
+    {
+      "id": "site",
+      "tools": [
+        "tool.site_modifier",
+        "tool.grading",
+        "tool.massing"
+      ]
+    },
+    {
+      "id": "irrigation",
+      "tools": [
+        "tool.irrigation"
+      ]
+    },
+    {
+      "id": "annotation",
+      "tools": [
+        "tool.dimension",
+        "tool.callout",
+        "tool.data_tag",
+        "tool.north_arrow",
+        "tool.scale_bar",
+        "tool.revision_cloud"
+      ]
+    }
+  ]
+}

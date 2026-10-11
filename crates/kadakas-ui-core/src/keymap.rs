@@ -211,6 +211,7 @@ actions! {
     CmdFlipHorizontal => "cmd.flip_horizontal", msg!("action-cmd-flip-horizontal"), ["Cmd/Ctrl+Shift+H"], true;
     CmdFlipVertical => "cmd.flip_vertical", msg!("action-cmd-flip-vertical"), ["Cmd/Ctrl+Shift+V"], true;
     QuickSearch => "ui.quick_search", msg!("action-ui-quick-search"), ["F"], true;
+    CommandLine => "ui.command_line", msg!("action-ui-command-line"), [], true;
     ViewHistoryPrevious => "view.history_previous", msg!("action-view-history-previous"), ["Cmd/Ctrl+Shift+,"], true;
     ViewHistoryNext => "view.history_next", msg!("action-view-history-next"), ["Cmd/Ctrl+Shift+."], true;
     SnapCues => "snap.cues", msg!("action-snap-cues"), ["Y"], true;
@@ -411,7 +412,7 @@ pub fn allowed_in_text_field(action: Action, chord: Chord) -> bool {
     chord.command && !matches!(action, Action::Undo | Action::Redo | Action::SelectAll)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Keymap {
     by_action: BTreeMap<Action, Vec<Chord>>,
     lookup: HashMap<Chord, Action>,
@@ -528,6 +529,36 @@ impl Keymap {
             .map(|(a, cs)| (a.id(), cs.iter().map(Chord::to_text).collect()))
             .collect();
         serde_json::to_string_pretty(&map).expect("strings serialize")
+    }
+
+    /// Gives `action` exactly these chords (duplicates are dropped). A chord that another action
+    /// holds moves to `action`: the other action loses it. Returns each moved chord with the
+    /// action that lost it, so a Shortcuts editor can say so.
+    pub fn set_chords(&mut self, action: Action, chords: &[Chord]) -> Vec<(Chord, Action)> {
+        let mut own: Vec<Chord> = Vec::new();
+        for c in chords {
+            if !own.contains(c) {
+                own.push(*c);
+            }
+        }
+        let mut moved = Vec::new();
+        for c in &own {
+            for (other, list) in self.by_action.iter_mut() {
+                if *other != action && list.contains(c) {
+                    list.retain(|x| x != c);
+                    moved.push((*c, *other));
+                }
+            }
+        }
+        self.by_action.insert(action, own);
+        *self = Keymap::from_bindings(std::mem::take(&mut self.by_action));
+        moved
+    }
+
+    /// The other action that already holds `chord`, if `action` cannot take it without
+    /// stealing. A Shortcuts editor asks this before it calls `set_chords`.
+    pub fn conflict_for(&self, action: Action, chord: Chord) -> Option<Action> {
+        self.action_for(chord).filter(|a| *a != action)
     }
 
     /// The action of a key event and the chord that matched. Digit chords such as `Alt+Shift+1`

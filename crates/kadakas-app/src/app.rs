@@ -30,6 +30,7 @@ use crate::view3d::{self, View3d};
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
 use kadakas_ui_core::annot_pick::Prims;
+use kadakas_ui_core::profile::Outcome;
 use kadakas_ui_core::snap::{self, SnapResult};
 use kadakas_ui_core::tools::{
     Ctx, DimToolMode, Input, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
@@ -77,9 +78,9 @@ pub struct KadakasApp {
     shots: Vec<screenshot::Pending>,
     shot_key: u64,
     status: String,
-    /// The workspace profile from `--profile NAME` or `KADAKAS_PROFILE` (PLAT-06). Stored only: it changes nothing yet.
-    #[allow(dead_code)]
-    profile: String,
+    /// The workspace profiles (PLAT-04): the keymap, menus, tool sets, terms and command
+    /// aliases of the active one are what the program uses.
+    profiles: crate::profiles::Profiles,
     path: Option<std::path::PathBuf>,
     /// The window title must be set in the next frame.
     title_dirty: bool,
@@ -139,6 +140,16 @@ fn web_entropy() -> u64 {
     }
 }
 
+/// The letter or digit of a key, if it is one. The command field takes these.
+fn typed_char(key: Key) -> Option<char> {
+    let name = key.name();
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphanumeric() => Some(c),
+        _ => None,
+    }
+}
+
 impl KadakasApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
@@ -149,7 +160,7 @@ impl KadakasApp {
         let mut app = Self::blank();
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         let args: Vec<String> = std::env::args().collect();
-        app.profile =
+        let requested_profile =
             crate::agent::parse_profile(&args, std::env::var("KADAKAS_PROFILE").ok().as_deref());
         // Agents start a DWG converter only with --allow-converters (default: off). The file dialogs are not limited.
         app.session.paths = kadakas_api::PathPolicy::restricted(allow_dirs)
@@ -183,8 +194,31 @@ impl KadakasApp {
         for w in prefs_warning.iter().chain(layout_warning.iter()) {
             eprintln!("kadakas: {w}");
         }
-        let (keys, warnings) = keymap::load();
-        app.keys = keys;
+        // The profile of `--profile NAME` or `KADAKAS_PROFILE`, else the one of the last session.
+        // The old keymap.json belongs to the Vectorworks-like profile: it is read once here and
+        // becomes the keymap of that profile, so one keymap is the truth.
+        let (legacy_keys, key_warnings) = keymap::load();
+        let (profiles, mut warnings) = crate::profiles::Profiles::load(Some(legacy_keys));
+        warnings.extend(key_warnings);
+        app.profiles = profiles;
+        let wanted = if requested_profile.is_empty() {
+            app.profiles.saved_active()
+        } else {
+            Some(requested_profile.clone())
+        };
+        if let Some(name) = wanted
+            && !app.profiles.select_named(&name)
+            && !requested_profile.is_empty()
+        {
+            warnings.push(tr!(
+                "profiles-ui-unknown-profile",
+                name = name,
+                fallback = app.profiles.active_profile().display_name()
+            ));
+        }
+        let _ = app.profiles.take_changed();
+        kadakas_l10n::set_overlay(&app.profiles.active_profile().overlay());
+        app.keys = app.profiles.active_profile().keymap.clone();
         for w in &warnings {
             eprintln!("kadakas: {w}");
         }
@@ -244,7 +278,7 @@ impl KadakasApp {
 
     fn blank() -> Self {
         KadakasApp {
-            profile: String::new(),
+            profiles: Default::default(),
             session: Session::default(),
             view: View::default(),
             needs_fit: true,
@@ -494,6 +528,36 @@ impl KadakasApp {
             .collect();
     }
 
+    /// Puts the active profile to work: its keymap and its terms. A change of the profile applies
+    /// at once. `switched` is true when the person picked another profile; then its default
+    /// units apply too.
+    fn apply_profile(&mut self, switched: bool) {
+        kadakas_l10n::set_overlay(&self.profiles.active_profile().overlay());
+        self.apply_profile_state(switched);
+    }
+
+    /// The part of `apply_profile` that is not the process-wide terminology overlay.
+    fn apply_profile_state(&mut self, switched: bool) {
+        let p = self.profiles.active_profile();
+        let (units, name) = (p.units, p.display_name());
+        self.keys = self.profiles.active_profile().keymap.clone();
+        if switched {
+            if let Some(u) = units {
+                self.prefs.units = u;
+            }
+            self.status = tr!("profiles-ui-profile-active", name = name);
+        }
+        self.machine.cancel();
+    }
+
+    /// Applies and saves what the profile windows changed.
+    fn sync_profile(&mut self) {
+        if let Some(switched) = self.profiles.take_changed() {
+            self.apply_profile(switched);
+            self.profiles.flush();
+        }
+    }
+
     fn apply_menu(&mut self, ctx: &egui::Context, action: MenuAction) {
         match action {
             MenuAction::New => self.replace_document(Document::default(), None),
@@ -505,6 +569,7 @@ impl KadakasApp {
             MenuAction::CreateSiteModel => self.create_site_model(),
             MenuAction::UpdateSiteModel => self.update_site_model(),
             MenuAction::Preferences => self.prefs_ui.open(),
+            MenuAction::Tool(t) => self.run_action(ctx, Action::for_tool(t)),
             MenuAction::DuplicateArray
             | MenuAction::AddSurface
             | MenuAction::SubtractSurface
@@ -849,7 +914,14 @@ impl KadakasApp {
                     self.machine.set_tool(Tool::Select);
                 }
             }
+            // Enter with nothing to finish goes to the command alias field of the profile.
+            Action::Finish if !self.machine.is_busy() && self.profiles.has_aliases() => {
+                self.profiles.request_command_focus();
+                // The Enter key must not reach the field in the same frame.
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            }
             Action::Finish => self.send(Input::Enter),
+            Action::CommandLine => self.profiles.request_command_focus(),
             Action::ToolMode1 => self.mode_group(1),
             Action::ToolMode2 => self.mode_group(2),
             Action::ToolMode3 => self.mode_group(3),
@@ -960,6 +1032,10 @@ impl KadakasApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        // The Shortcuts window is waiting for a key, or took one in this frame.
+        if self.profiles.grabs_keys() {
+            return;
+        }
         // egui drops focus on Esc before this runs, so the focus state of the last frame counts too.
         let typing = ctx.egui_wants_keyboard_input() || self.entry.active;
         let events: Vec<(Key, Option<Key>, egui::Modifiers, bool)> = ctx.input(|i| {
@@ -980,6 +1056,17 @@ impl KadakasApp {
         for (key, physical, mods, repeat) in events {
             let Some((action, chord)) = keymap::action_for_event(&self.keys, key, physical, mods)
             else {
+                // A profile with command aliases takes the letters and digits that no key
+                // uses: they start the alias in the command field.
+                if !typing
+                    && !repeat
+                    && !mods.command
+                    && !mods.ctrl
+                    && !mods.alt
+                    && let Some(c) = typed_char(key)
+                {
+                    self.profiles.type_into_field(&c.to_string());
+                }
                 continue;
             };
             if repeat && !action.repeats() {
@@ -1444,6 +1531,7 @@ impl KadakasApp {
                     | Action::NudgeDown
             ) || a.id().starts_with("mode.")
                 || !a.implemented()
+                || (a == Action::CommandLine && !self.profiles.has_aliases())
         };
         for a in Action::ALL.iter().copied().filter(|a| !skip(*a)) {
             out.push(QuickItem {
@@ -1735,6 +1823,7 @@ impl KadakasApp {
                         ui,
                         &mut self.machine,
                         &self.keys,
+                        self.profiles.active_profile(),
                         &mut self.settings,
                         self.session.editor.doc(),
                         &mut self.annot_requests,
@@ -1902,9 +1991,12 @@ impl eframe::App for KadakasApp {
                 language: &mut self.prefs.language,
                 units: &mut self.prefs.units,
                 active_language: self.language,
+                profiles: &mut self.profiles,
             },
             &mut self.autosave,
         );
+        crate::profiles::customize_window(&ctx, &mut self.profiles);
+        self.sync_profile();
         if let Some(r) = self.autosave.show(&ctx) {
             self.replace_document(r.doc, None);
             self.status = r.status;
@@ -1915,6 +2007,7 @@ impl eframe::App for KadakasApp {
             self.arc_fields(),
         );
         self.handle_keys(&ctx);
+        self.profiles.end_frame();
         // The camera follows the chosen view, whoever chose it: a key, the view bar or an agent.
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
@@ -1945,15 +2038,19 @@ impl eframe::App for KadakasApp {
                 has_selection: !self.session.selection.is_empty(),
                 requests: Vec::new(),
             };
+            let state = panels::MenuState {
+                can_undo,
+                can_redo,
+                can_site,
+                can_update_site: can_update,
+            };
             actions = panels::menu_bar(
                 ui,
                 &self.keys,
-                can_undo,
-                can_redo,
+                self.profiles.active_profile(),
+                &state,
                 &mut extras,
                 &mut self.show_grid,
-                can_site,
-                can_update,
             );
             requests = std::mem::take(&mut extras.requests);
         });
@@ -1993,9 +2090,13 @@ impl eframe::App for KadakasApp {
         if self.session.view.view != before {
             self.set_standard_view(self.session.view.view);
         }
+        let mut alias = None;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let d = &self.session.editor.doc();
+                if let Some(outcome) = crate::profiles::command_line_ui(ui, &mut self.profiles) {
+                    alias = Some(outcome);
+                }
                 ui.label(&self.status);
                 ui.separator();
                 ui.label(self.machine.hint_for(&self.settings));
@@ -2025,6 +2126,15 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        // A request that the field did not take (no field in this profile) must not wait.
+        self.profiles.focus_command = false;
+        match alias {
+            Some(Outcome::Run(a) | Outcome::Repeat(a)) => self.run_action(&ctx, a),
+            Some(Outcome::Unknown(alias)) => {
+                self.status = tr!("profiles-ui-unknown-alias", alias = alias)
+            }
+            Some(Outcome::Nothing) | None => {}
+        }
         let mut commit = false;
         let readout = self
             .readout
@@ -2370,6 +2480,142 @@ mod tests {
             app.undo();
         }
         assert_eq!(app.session.editor.doc().objects.len(), 2);
+    }
+
+    #[test]
+    fn the_autocad_like_profile_changes_keys_tool_sets_and_aliases() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        assert!(app.profiles.select_named("autocad-like"));
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        assert!(app.status.contains("AutoCAD"), "{}", app.status);
+        let key = |k| egui::Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // The key 2 was the Line tool in the Vectorworks-like profile. Here no key runs a tool:
+        // the letters and digits go to the command field.
+        frame(&mut app, &ctx, vec![key(egui::Key::Num2)]);
+        assert_eq!(app.machine.tool(), Tool::Select);
+        assert_eq!(app.profiles.command_line.text(), "2");
+        app.profiles.command_line.clear();
+        frame(&mut app, &ctx, vec![key(egui::Key::L)]);
+        assert_eq!(app.machine.tool(), Tool::Select);
+        assert_eq!(app.profiles.command_line.text(), "L");
+        assert!(app.profiles.focus_command);
+        app.profiles.command_line.clear();
+        app.profiles.focus_command = false;
+        // Enter with nothing to finish goes to the command alias field.
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+        assert!(app.profiles.focus_command);
+        // An alias runs its action.
+        app.profiles.command_line.set_text("pl");
+        let aliases = app.profiles.active_profile().aliases.clone();
+        match app.profiles.command_line.enter(&aliases) {
+            Outcome::Run(a) => app.run_action(&ctx, a),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(app.machine.tool(), Tool::Polyline);
+        // The tool panel and the field draw, with the terms of the profile.
+        let terms = app.profiles.active_profile().overlay();
+        let terms: Vec<(String, String)> = terms
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        let terms: Vec<(&str, &str)> = terms.iter().map(|(a, b)| (&**a, &**b)).collect();
+        kadakas_l10n::with_overlay(&terms, || {
+            dock_frame(&mut app, &ctx);
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::Panel::bottom("status").show(ui, |ui| {
+                    let o = crate::profiles::command_line_ui(ui, &mut app.profiles);
+                    assert_eq!(o, None);
+                });
+            });
+            assert_eq!(Action::ToolSelect.label(), "Select");
+            assert_eq!(tr!("panels-class"), "Layer");
+        });
+        assert_eq!(Action::ToolSelect.label(), "Selection tool");
+        // Back to the Vectorworks-like profile: the old keys return.
+        assert!(
+            app.profiles
+                .select(kadakas_ui_core::profile::VECTORWORKS_ID)
+        );
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        // The alias field had the focus, and keys go to a field first: use a fresh context.
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![key(egui::Key::Num2)]);
+        assert_eq!(app.machine.tool(), Tool::Line);
+    }
+
+    #[test]
+    fn enter_and_letters_move_the_focus_to_the_command_field() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        assert!(app.profiles.select_named("autocad"));
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        let id = crate::profiles::command_field_id();
+        let key = |k| egui::Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // A frame like `update`: the keys first, then the field in the status bar.
+        let run = |app: &mut KadakasApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let c = ui.ctx().clone();
+                app.handle_keys(&c);
+                egui::Panel::bottom("status").show(ui, |ui| {
+                    let _ = crate::profiles::command_line_ui(ui, &mut app.profiles);
+                });
+                app.profiles.focus_command = false;
+            });
+        };
+        run(&mut app, vec![]);
+        assert!(!ctx.memory(|m| m.has_focus(id)));
+        run(&mut app, vec![key(egui::Key::Enter)]);
+        run(&mut app, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(id)), "Enter focuses the field");
+        // Surrender the focus. A letter starts the alias and focuses the field again.
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        run(&mut app, vec![]);
+        assert!(!ctx.memory(|m| m.has_focus(id)));
+        run(&mut app, vec![key(egui::Key::P)]);
+        run(&mut app, vec![]);
+        assert_eq!(app.profiles.command_line.text(), "P");
+        assert!(ctx.memory(|m| m.has_focus(id)));
+        // In the Vectorworks-like profile there is no field, and Enter does nothing there.
+        assert!(
+            app.profiles
+                .select(kadakas_ui_core::profile::VECTORWORKS_ID)
+        );
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        let ctx2 = egui::Context::default();
+        let _ = ctx2.run_ui(Default::default(), |ui| {
+            egui::Panel::bottom("status").show(ui, |ui| {
+                assert!(crate::profiles::command_line_ui(ui, &mut app.profiles).is_none());
+            });
+        });
+        assert!(!ctx2.memory(|m| m.has_focus(id)));
+        app.run_action(&ctx2, Action::CommandLine);
+        assert!(!app.profiles.focus_command);
+        assert!(
+            app.quick_items()
+                .iter()
+                .all(|i| i.label != Action::CommandLine.label())
+        );
     }
 
     #[test]

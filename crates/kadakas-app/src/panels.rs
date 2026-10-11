@@ -16,6 +16,8 @@ use crate::canvas::color32;
 use crate::databar::{self, DataEntry};
 use crate::icon_size::{IconRole, IconSize};
 use crate::keymap::{Action, Keymap};
+use kadakas_ui_core::profile::layout::visible_items;
+use kadakas_ui_core::profile::{Cmd, Item, Profile};
 use kadakas_ui_core::snap::SnapResult;
 use kadakas_ui_core::tools::{
     DEFAULT_ARC_RADIUS, Tool, ToolMachine, ToolSettings, VertexMode, has_vertex_modes,
@@ -60,6 +62,8 @@ pub enum MenuAction {
     PreviousView,
     NextView,
     QuickSearch,
+    /// A tool in a menu of the profile: choosing it selects the tool.
+    Tool(Tool),
 }
 
 /// What the menu needs besides the keys: the settings it changes and what is possible now.
@@ -103,152 +107,174 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The menu action of a command of a profile menu. The commands that are blocks of the menu
+/// (View > Snapping, Window and so on) have none; the menu draws them itself.
+pub fn menu_action(c: Cmd) -> Option<MenuAction> {
+    use MenuAction as M;
+    Some(match c {
+        Cmd::New => M::New,
+        Cmd::Open => M::Open,
+        Cmd::Save => M::Save,
+        Cmd::SaveAs => M::SaveAs,
+        Cmd::ExportSvg => M::ExportSvg,
+        Cmd::ExportPdf => M::ExportPdf,
+        Cmd::Import => M::Import,
+        Cmd::Export => M::Export,
+        Cmd::MapSources => M::MapSources,
+        Cmd::ChangeCrs => M::ChangeCrs,
+        Cmd::Scripts => M::Scripts,
+        Cmd::Preferences => M::Preferences,
+        Cmd::Undo => M::Undo,
+        Cmd::Redo => M::Redo,
+        Cmd::Delete => M::Delete,
+        Cmd::SelectAll => M::SelectAll,
+        Cmd::QuickSearch => M::QuickSearch,
+        Cmd::DuplicateArray => M::DuplicateArray,
+        Cmd::RotateLeft90 => M::RotateLeft90,
+        Cmd::RotateRight90 => M::RotateRight90,
+        Cmd::FlipHorizontal => M::FlipHorizontal,
+        Cmd::FlipVertical => M::FlipVertical,
+        Cmd::AddSurface => M::AddSurface,
+        Cmd::SubtractSurface => M::SubtractSurface,
+        Cmd::ClipSurface => M::ClipSurface,
+        Cmd::IntersectSurface => M::IntersectSurface,
+        Cmd::Compose => M::Compose,
+        Cmd::CreateSiteModel => M::CreateSiteModel,
+        Cmd::UpdateSiteModel => M::UpdateSiteModel,
+        Cmd::ZoomFit => M::ZoomFit,
+        Cmd::PreviousView => M::PreviousView,
+        Cmd::NextView => M::NextView,
+        Cmd::ShowGrid
+        | Cmd::Snapping
+        | Cmd::Theme
+        | Cmd::IconSize
+        | Cmd::WindowPanels
+        | Cmd::WindowLayouts
+        | Cmd::About => return None,
+    })
+}
+
+/// What the menu knows about the state of the program, for the enabled state of items.
+pub struct MenuState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub can_site: bool,
+    pub can_update_site: bool,
+}
+
+/// True when a command needs a selection.
+fn needs_selection(c: Cmd) -> bool {
+    matches!(
+        c,
+        Cmd::DuplicateArray
+            | Cmd::RotateLeft90
+            | Cmd::RotateRight90
+            | Cmd::FlipHorizontal
+            | Cmd::FlipVertical
+            | Cmd::AddSurface
+            | Cmd::SubtractSurface
+            | Cmd::ClipSurface
+            | Cmd::IntersectSurface
+            | Cmd::Compose
+    )
+}
+
+/// The menu bar of a profile: its menus, in its order.
 pub fn menu_bar(
     ui: &mut Ui,
     keys: &Keymap,
-    can_undo: bool,
-    can_redo: bool,
+    profile: &Profile,
+    state: &MenuState,
     extras: &mut MenuExtras,
     show_grid: &mut bool,
-    can_site: bool,
-    can_update_site: bool,
 ) -> Vec<MenuAction> {
-    use MenuAction::*;
     let mut out = Vec::new();
     egui::MenuBar::new().ui(ui, |ui| {
-        let item =
-            |ui: &mut Ui, label: &str, enabled: bool, a: MenuAction, out: &mut Vec<MenuAction>| {
-                let button = crate::icons::button(ui, crate::icons::menu_icon(a), label)
-                    .shortcut_text(menu_key(a).map(|k| keys.hint(k)).unwrap_or_default());
-                if ui.add_enabled(enabled, button).clicked() {
-                    out.push(a);
-                    ui.close();
+        for menu in &profile.menus {
+            ui.menu_button(menu.title(), |ui| {
+                let items = visible_items(&menu.items, cfg!(not(target_arch = "wasm32")));
+                for item in items {
+                    match item {
+                        Item::Separator => {
+                            ui.separator();
+                        }
+                        Item::Tool(t) => {
+                            let a = MenuAction::Tool(t);
+                            menu_item(ui, keys, &t.name(), true, a, &mut out);
+                        }
+                        Item::Command(c) => {
+                            command_item(ui, keys, c, state, extras, show_grid, &mut out)
+                        }
+                    }
                 }
-            };
-        ui.menu_button(tr!("panels-file"), |ui| {
-            item(ui, &tr!("panels-new"), true, New, &mut out);
-            // In the browser, Open picks a file and Save downloads it.
-            item(ui, &tr!("panels-open"), true, Open, &mut out);
-            item(ui, &tr!("panels-save"), true, Save, &mut out);
-            item(ui, &tr!("panels-save-as"), true, SaveAs, &mut out);
-            item(ui, &tr!("panels-export-svg"), true, ExportSvg, &mut out);
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                item(ui, &tr!("panels-export-pdf"), true, ExportPdf, &mut out);
-                ui.separator();
-                item(ui, &tr!("panels-import"), true, Import, &mut out);
-                item(ui, &tr!("panels-export"), true, Export, &mut out);
-                ui.separator();
-                item(ui, &tr!("panels-map-sources"), true, MapSources, &mut out);
-                item(ui, &tr!("panels-change-crs"), true, ChangeCrs, &mut out);
-                ui.separator();
-                item(ui, &tr!("panels-scripts"), true, Scripts, &mut out);
-            }
-            ui.separator();
-            item(ui, &tr!("panels-preferences"), true, Preferences, &mut out);
-        });
-        ui.menu_button(tr!("panels-edit"), |ui| {
-            item(ui, &tr!("panels-undo"), can_undo, Undo, &mut out);
-            item(ui, &tr!("panels-redo"), can_redo, Redo, &mut out);
-            ui.separator();
-            item(ui, &tr!("panels-delete"), true, Delete, &mut out);
-            item(ui, &tr!("panels-select-all"), true, SelectAll, &mut out);
-            ui.separator();
-            item(ui, &tr!("panels-quick-search"), true, QuickSearch, &mut out);
-        });
-        let sel = extras.has_selection;
-        ui.menu_button(tr!("panels-modify"), |ui| {
-            item(
-                ui,
-                &tr!("panels-duplicate-array"),
-                sel,
-                DuplicateArray,
-                &mut out,
-            );
-            ui.separator();
-            item(
-                ui,
-                &tr!("panels-rotate-left-90"),
-                sel,
-                RotateLeft90,
-                &mut out,
-            );
-            item(
-                ui,
-                &tr!("panels-rotate-right-90"),
-                sel,
-                RotateRight90,
-                &mut out,
-            );
-            item(
-                ui,
-                &tr!("panels-flip-horizontal"),
-                sel,
-                FlipHorizontal,
-                &mut out,
-            );
-            item(
-                ui,
-                &tr!("panels-flip-vertical"),
-                sel,
-                FlipVertical,
-                &mut out,
-            );
-            ui.separator();
-            item(ui, &tr!("panels-add-surface"), sel, AddSurface, &mut out);
-            item(
-                ui,
-                &tr!("panels-subtract-surface"),
-                sel,
-                SubtractSurface,
-                &mut out,
-            );
-            item(ui, &tr!("panels-clip-surface"), sel, ClipSurface, &mut out);
-            item(
-                ui,
-                &tr!("panels-intersect-surface"),
-                sel,
-                IntersectSurface,
-                &mut out,
-            );
-            item(ui, &tr!("panels-compose"), sel, Compose, &mut out);
-        });
-        ui.menu_button(tr!("panels-site"), |ui| {
-            item(
-                ui,
-                &tr!("panels-create-site-model-from-selection"),
-                can_site,
-                CreateSiteModel,
-                &mut out,
-            );
-            item(
-                ui,
-                &tr!("panels-update-site-model"),
-                can_update_site,
-                UpdateSiteModel,
-                &mut out,
-            );
-        });
-        ui.menu_button(tr!("panels-view"), |ui| {
-            item(ui, &tr!("panels-zoom-to-fit"), true, ZoomFit, &mut out);
-            item(
-                ui,
-                &tr!("panels-previous-view"),
-                extras.can_back,
-                PreviousView,
-                &mut out,
-            );
-            item(
-                ui,
-                &tr!("panels-next-view"),
-                extras.can_forward,
-                NextView,
-                &mut out,
-            );
-            ui.separator();
-            ui.checkbox(show_grid, tr!("panels-show-grid"));
-            ui.menu_button(tr!("panels-snapping"), |ui| {
+            });
+        }
+        // Preferences is how a person reaches the profiles. A profile without that command
+        // still gets a way to it.
+        if lacks_preferences(profile) {
+            ui.menu_button(Cmd::Preferences.label(), |ui| {
+                let label = Cmd::Preferences.label();
+                menu_item(ui, keys, &label, true, MenuAction::Preferences, &mut out);
+            });
+        }
+    });
+    out
+}
+
+/// True when no menu of the profile has the Preferences command (menus that are empty, or
+/// that a profile file left it out of).
+pub fn lacks_preferences(profile: &Profile) -> bool {
+    !profile
+        .menus
+        .iter()
+        .any(|m| m.items.contains(&Item::Command(Cmd::Preferences)))
+}
+
+fn menu_item(
+    ui: &mut Ui,
+    keys: &Keymap,
+    label: &str,
+    enabled: bool,
+    a: MenuAction,
+    out: &mut Vec<MenuAction>,
+) {
+    let button = crate::icons::button(ui, crate::icons::menu_icon(a), label)
+        .shortcut_text(menu_key(a).map(|k| keys.hint(k)).unwrap_or_default());
+    if ui.add_enabled(enabled, button).clicked() {
+        out.push(a);
+        ui.close();
+    }
+}
+
+fn command_item(
+    ui: &mut Ui,
+    keys: &Keymap,
+    c: Cmd,
+    state: &MenuState,
+    extras: &mut MenuExtras,
+    show_grid: &mut bool,
+    out: &mut Vec<MenuAction>,
+) {
+    if let Some(a) = menu_action(c) {
+        let enabled = match c {
+            Cmd::Undo => state.can_undo,
+            Cmd::Redo => state.can_redo,
+            Cmd::CreateSiteModel => state.can_site,
+            Cmd::UpdateSiteModel => state.can_update_site,
+            Cmd::PreviousView => extras.can_back,
+            Cmd::NextView => extras.can_forward,
+            c if needs_selection(c) => extras.has_selection,
+            _ => true,
+        };
+        menu_item(ui, keys, &c.label(), enabled, a, out);
+        return;
+    }
+    match c {
+        Cmd::ShowGrid => {
+            ui.checkbox(show_grid, c.label());
+        }
+        Cmd::Snapping => {
+            ui.menu_button(c.label(), |ui| {
                 for (name, label, tip) in crate::snap_ui::CATEGORIES {
                     let mut on = extras.snap.set.get(name).unwrap_or(false);
                     if ui
@@ -262,63 +288,71 @@ pub fn menu_bar(
                 ui.separator();
                 ui.checkbox(extras.cues, tr!("panels-smartcursor-cues"));
             });
-            ui.menu_button(tr!("panels-theme"), |ui| {
+        }
+        Cmd::Theme => {
+            ui.menu_button(c.label(), |ui| {
                 for t in crate::theme::ThemeChoice::ALL {
                     ui.selectable_value(extras.theme, t, t.label());
                 }
             });
-            ui.menu_button(tr!("panels-icon-size"), |ui| {
+        }
+        Cmd::IconSize => {
+            ui.menu_button(c.label(), |ui| {
                 for z in IconSize::ALL {
                     ui.selectable_value(extras.icon_size, z, z.label());
                 }
             });
-        });
-        ui.menu_button(tr!("panels-window"), |ui| {
+        }
+        Cmd::WindowPanels => {
             for tab in crate::layout::Tab::ALL {
                 if tab.closeable() && ui.button(tr!("panels-show", name = tab.title())).clicked() {
                     extras.requests.push(MenuRequest::ShowTab(tab));
                     ui.close();
                 }
             }
-            ui.separator();
-            if ui.button(tr!("panels-save-layout-as")).clicked() {
-                extras.requests.push(MenuRequest::SaveLayoutAs);
-                ui.close();
-            }
-            if ui.button(tr!("panels-reset-layout")).clicked() {
-                extras.requests.push(MenuRequest::ResetLayout);
-                ui.close();
-            }
-            if !extras.layout_names.is_empty() {
-                ui.separator();
-                ui.label(tr!("panels-saved-layouts"));
-                for name in extras.layout_names.clone() {
-                    ui.horizontal(|ui| {
-                        if ui.button(&name).clicked() {
-                            extras.requests.push(MenuRequest::LoadLayout(name.clone()));
-                            ui.close();
-                        }
-                        if ui
-                            .small_button("\u{d7}")
-                            .on_hover_text(tr!("panels-delete-this-layout"))
-                            .clicked()
-                        {
-                            extras
-                                .requests
-                                .push(MenuRequest::DeleteLayout(name.clone()));
-                        }
-                    });
-                }
-            }
-        });
-        ui.menu_button(tr!("panels-help"), |ui| {
-            if ui.button(tr!("panels-about-kadakas")).clicked() {
+        }
+        Cmd::WindowLayouts => window_layouts(ui, extras),
+        Cmd::About => {
+            if ui.button(c.label()).clicked() {
                 extras.requests.push(MenuRequest::About);
                 ui.close();
             }
-        });
-    });
-    out
+        }
+        _ => {}
+    }
+}
+
+/// The layout commands of the Window menu.
+fn window_layouts(ui: &mut Ui, extras: &mut MenuExtras) {
+    if ui.button(tr!("panels-save-layout-as")).clicked() {
+        extras.requests.push(MenuRequest::SaveLayoutAs);
+        ui.close();
+    }
+    if ui.button(tr!("panels-reset-layout")).clicked() {
+        extras.requests.push(MenuRequest::ResetLayout);
+        ui.close();
+    }
+    if !extras.layout_names.is_empty() {
+        ui.separator();
+        ui.label(tr!("panels-saved-layouts"));
+        for name in extras.layout_names.clone() {
+            ui.horizontal(|ui| {
+                if ui.button(&name).clicked() {
+                    extras.requests.push(MenuRequest::LoadLayout(name.clone()));
+                    ui.close();
+                }
+                if ui
+                    .small_button("\u{d7}")
+                    .on_hover_text(tr!("panels-delete-this-layout"))
+                    .clicked()
+                {
+                    extras
+                        .requests
+                        .push(MenuRequest::DeleteLayout(name.clone()));
+                }
+            });
+        }
+    }
 }
 
 /// The key of a view, for a tooltip. Empty for a view without a key.
@@ -451,6 +485,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::PreviousView => Action::ViewHistoryPrevious,
         MenuAction::NextView => Action::ViewHistoryNext,
         MenuAction::QuickSearch => Action::QuickSearch,
+        MenuAction::Tool(t) => Action::for_tool(t),
         MenuAction::ExportSvg
         | MenuAction::Import
         | MenuAction::Export
@@ -527,54 +562,40 @@ pub fn tool_panel(
     ui: &mut Ui,
     m: &mut ToolMachine,
     keys: &Keymap,
+    profile: &Profile,
     settings: &mut ToolSettings,
     doc: &kadakas_core::model::Document,
     requests: &mut crate::annot_ui::PanelRequests,
 ) {
     ui.heading(tr!("panels-tools"));
     ui.separator();
-    ui.label(tr!("panels-basic"));
-    for t in Tool::BASIC {
-        tool_button(ui, m, keys, t);
+    let current = m.tool();
+    let mut extras_shown = false;
+    let mut buttons_shown = false;
+    for (i, set) in profile.tool_sets.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(8.0);
+        }
+        ui.label(set.title());
+        for t in &set.tools {
+            tool_button(ui, m, keys, *t);
+        }
+        // The Graphic Legend and style buttons sit with the dimension tools.
+        if set.tools.contains(&Tool::Dimension) && !buttons_shown {
+            crate::annot_ui::panel_buttons(ui, doc, requests);
+            buttons_shown = true;
+        }
+        // The options of the current tool sit under the set that holds it.
+        if set.tools.contains(&current) && !extras_shown {
+            tool_extras(ui, m, settings, doc);
+            extras_shown = true;
+        }
     }
-    if m.tool() == Tool::Select {
-        select_mode_bar(ui, settings);
+    if !buttons_shown {
+        crate::annot_ui::panel_buttons(ui, doc, requests);
     }
-    ui.add_space(8.0);
-    ui.label(tr!("panels-modify"));
-    for t in Tool::MODIFY {
-        tool_button(ui, m, keys, t);
-    }
-    if kadakas_ui_core::tools::is_modify(m.tool()) {
-        modify_options(ui, m, settings);
-    }
-    ui.add_space(8.0);
-    ui.label(tr!("panels-landscape"));
-    for t in Tool::LANDSCAPE {
-        tool_button(ui, m, keys, t);
-    }
-    ui.add_space(8.0);
-    ui.label(tr!("panels-site"));
-    for t in Tool::SITE {
-        tool_button(ui, m, keys, t);
-    }
-    ui.add_space(8.0);
-    ui.label(tr!("panels-irrigation"));
-    for t in Tool::IRRIGATION {
-        tool_button(ui, m, keys, t);
-    }
-    if m.tool() == Tool::Irrigation && crate::irrigation_ui::tool_options(ui, settings, doc) {
-        // A new mode starts a new object.
-        m.cancel();
-    }
-    ui.add_space(8.0);
-    ui.label(tr!("panels-annotation"));
-    for t in Tool::ANNOTATION {
-        tool_button(ui, m, keys, t);
-    }
-    crate::annot_ui::panel_buttons(ui, doc, requests);
-    if Tool::ANNOTATION.contains(&m.tool()) {
-        crate::annot_ui::tool_options(ui, m.tool(), settings, doc);
+    if !extras_shown {
+        tool_extras(ui, m, settings, doc);
     }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
@@ -585,6 +606,28 @@ pub fn tool_panel(
     if m.tool() == Tool::Plant && crate::plant_ui::plant_mode_bar(ui, settings, doc) {
         // A new mode starts a new placement.
         m.cancel();
+    }
+}
+
+/// The options that belong to the current tool, under its tool set.
+fn tool_extras(
+    ui: &mut Ui,
+    m: &mut ToolMachine,
+    settings: &mut ToolSettings,
+    doc: &kadakas_core::model::Document,
+) {
+    if m.tool() == Tool::Select {
+        select_mode_bar(ui, settings);
+    }
+    if kadakas_ui_core::tools::is_modify(m.tool()) {
+        modify_options(ui, m, settings);
+    }
+    if m.tool() == Tool::Irrigation && crate::irrigation_ui::tool_options(ui, settings, doc) {
+        // A new mode starts a new object.
+        m.cancel();
+    }
+    if Tool::ANNOTATION.contains(&m.tool()) {
+        crate::annot_ui::tool_options(ui, m.tool(), settings, doc);
     }
 }
 
@@ -1703,6 +1746,48 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_without_a_preferences_command_still_gets_a_way_to_it() {
+        let mut p = Profile::vectorworks();
+        assert!(!lacks_preferences(&p));
+        for m in &mut p.menus {
+            m.items.clear();
+        }
+        assert!(lacks_preferences(&p));
+        p.menus.clear();
+        assert!(lacks_preferences(&p));
+        // The bar draws without a menu of the profile.
+        let ctx = egui::Context::default();
+        let state = MenuState {
+            can_undo: false,
+            can_redo: false,
+            can_site: false,
+            can_update_site: false,
+        };
+        let mut snap = kadakas_core::snapping::Settings::default();
+        let (mut cues, mut theme, mut size, mut grid) = (
+            true,
+            crate::theme::ThemeChoice::System,
+            IconSize::Medium,
+            true,
+        );
+        let mut extras = MenuExtras {
+            snap: &mut snap,
+            cues: &mut cues,
+            theme: &mut theme,
+            icon_size: &mut size,
+            layout_names: Vec::new(),
+            can_back: false,
+            can_forward: false,
+            has_selection: false,
+            requests: Vec::new(),
+        };
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let out = menu_bar(ui, &Keymap::defaults(), &p, &state, &mut extras, &mut grid);
+            assert!(out.is_empty());
+        });
+    }
+
+    #[test]
     fn vertex_edits_become_set_vertex_commands() {
         let mut s = Session::default();
         let id = add(&mut s, rounded());
@@ -1789,21 +1874,24 @@ mod tests {
         let mut settings = ToolSettings::default();
         let mut machine = ToolMachine::default();
         let keys = Keymap::defaults();
-        for sel in [id, poly] {
-            s.selection = vec![sel];
-            for tool in [Tool::Select, Tool::Polyline] {
-                machine.set_tool(tool);
-                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    object_info(ui, &mut s, &mut edit, &mut status);
-                    tool_panel(
-                        ui,
-                        &mut machine,
-                        &keys,
-                        &mut settings,
-                        &Default::default(),
-                        &mut Default::default(),
-                    );
-                });
+        for profile in Profile::builtins() {
+            for sel in [id, poly] {
+                s.selection = vec![sel];
+                for tool in [Tool::Select, Tool::Polyline, Tool::Rotate, Tool::Dimension] {
+                    machine.set_tool(tool);
+                    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        object_info(ui, &mut s, &mut edit, &mut status);
+                        tool_panel(
+                            ui,
+                            &mut machine,
+                            &keys,
+                            &profile,
+                            &mut settings,
+                            &Default::default(),
+                            &mut Default::default(),
+                        );
+                    });
+                }
             }
         }
         assert!(

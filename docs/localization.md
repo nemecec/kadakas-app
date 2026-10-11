@@ -122,6 +122,10 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Callout, Data Tag, Revision Cloud | Viide, Andmesilt, Muudatuspilv | |
 | North Arrow, Scale Bar | Põhjanool, Mõõtkavariba | |
 
+## Terminology overlays (PLAT-04)
+
+A workspace profile can rename terms. Its `terms` section holds one `.ftl` text per language tag. The messages in it replace the messages with the same id, for example `panels-class = Layer` for an AutoCAD-like profile. The overlay is process wide, like the language (`kadakas_l10n::set_overlay`), and it applies only while that language is active. Only the messages in the `OVERLAYABLE` list of `overlay.rs` can be replaced, and never the groups `about-*`, `script-ui-*`, `autosave-ui-*`, `profiles-ui-*`, `uic-profile-*` and `common-*`. A message that you want a profile to rename must be in that list. A text is at most 64 KB. A profile that wants a new term in Estonian needs an Estonian text too. `check_overlay` finds a syntax error, an id that does not exist or may not be replaced, a variable that the original message lacks, and a reference to another message; the profile loader shows these as problems. A text with a syntax error is dropped, and the program drops every other message that fails a rule. The built-in texts are `crates/kadakas-ui-core/profiles/autocad.en-US.ftl` and `autocad.et.ftl`. A test checks them. See `docs/profiles.md`.
+
 ## The language preference
 
 The default language comes from the system. On the desktop, the program reads the locale list of the operating system (`sys-locale`). In the browser, it reads `navigator.languages`.

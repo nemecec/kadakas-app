@@ -522,7 +522,7 @@ pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
 
 /// The workspace profile from `--profile NAME` (or `--profile=NAME`), else from the env value.
 /// A name has 1 to 40 characters: letters, digits, `-` and `_`. Anything else gives an empty name.
-/// The launcher (PLAT-06) passes the profile this way. The app only stores it for now.
+/// The launcher (PLAT-06) passes the profile this way. The app picks the profile with this name (PLAT-04).
 pub fn parse_profile(args: &[String], env: Option<&str>) -> String {
     let mut found = None;
     let mut it = args.iter();

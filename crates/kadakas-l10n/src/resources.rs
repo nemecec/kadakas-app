@@ -40,6 +40,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "prefs-ui.ftl",
     "prefs.ftl",
     "present-ui.ftl",
+    "profiles-ui.ftl",
     "quick-search.ftl",
     "resource-ui.ftl",
     "rules-ui.ftl",
@@ -56,6 +57,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "uic-keymap.ftl",
     "uic-modify-tool.ftl",
     "uic-plant-tool.ftl",
+    "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-tools.ftl"
 );
@@ -89,6 +91,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "prefs-ui.ftl",
     "prefs.ftl",
     "present-ui.ftl",
+    "profiles-ui.ftl",
     "quick-search.ftl",
     "resource-ui.ftl",
     "rules-ui.ftl",
@@ -105,6 +108,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "uic-keymap.ftl",
     "uic-modify-tool.ftl",
     "uic-plant-tool.ftl",
+    "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-tools.ftl"
 );
@@ -146,9 +150,9 @@ pub fn message_ids(tag: &str) -> Result<BTreeSet<String>, String> {
     Ok(ids)
 }
 
-/// The variables (`$name`) that each message uses, with attributes as `id.attribute`. A
-/// translation must use the variables of the English message, so the check compares them.
-pub fn message_variables(tag: &str) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+/// The variables (`$name`) of each message in one `.ftl` text, with attributes as
+/// `id.attribute`. A syntax error gives `Err(line)`.
+pub(crate) fn variables_in(text: &str) -> Result<BTreeMap<String, BTreeSet<String>>, usize> {
     use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
 
     fn in_pattern(p: &Pattern<&str>, out: &mut BTreeSet<String>) {
@@ -187,25 +191,36 @@ pub fn message_variables(tag: &str) -> Result<BTreeMap<String, BTreeSet<String>>
         }
     }
 
+    let res = fluent_syntax::parser::parse(text).map_err(|(_, errors)| {
+        let first = errors.first().map(|e| e.pos.start).unwrap_or(0);
+        text[..first.min(text.len())].matches('\n').count() + 1
+    })?;
+    let mut all = BTreeMap::new();
+    for entry in res.body {
+        if let Entry::Message(m) = entry {
+            if let Some(v) = &m.value {
+                let mut set = BTreeSet::new();
+                in_pattern(v, &mut set);
+                all.insert(m.id.name.to_string(), set);
+            }
+            for a in &m.attributes {
+                let mut set = BTreeSet::new();
+                in_pattern(&a.value, &mut set);
+                all.insert(format!("{}.{}", m.id.name, a.id.name), set);
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// The variables (`$name`) that each message uses, with attributes as `id.attribute`. A
+/// translation must use the variables of the English message, so the check compares them.
+pub fn message_variables(tag: &str) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
     let files = source_files(tag).ok_or_else(|| format!("unknown language {tag}"))?;
     let mut all = BTreeMap::new();
     for (name, text) in files {
-        let res = fluent_syntax::parser::parse(*text)
-            .map_err(|_| format!("{tag}/{name}: syntax error"))?;
-        for entry in res.body {
-            if let Entry::Message(m) = entry {
-                if let Some(v) = &m.value {
-                    let mut set = BTreeSet::new();
-                    in_pattern(v, &mut set);
-                    all.insert(m.id.name.to_string(), set);
-                }
-                for a in &m.attributes {
-                    let mut set = BTreeSet::new();
-                    in_pattern(&a.value, &mut set);
-                    all.insert(format!("{}.{}", m.id.name, a.id.name), set);
-                }
-            }
-        }
+        let vars = variables_in(text).map_err(|_| format!("{tag}/{name}: syntax error"))?;
+        all.extend(vars);
     }
     Ok(all)
 }
