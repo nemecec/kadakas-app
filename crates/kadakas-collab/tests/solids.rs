@@ -37,7 +37,11 @@ fn document() -> Document {
         Shape::Extrude(Box::new(e)),
         Shape::Sweep(Box::new(s)),
         Shape::Polyline3d {
-            points: vec![DVec3::ZERO, DVec3::new(10.0, 0.0, 5.0), DVec3::new(10.0, 10.0, 9.0)],
+            points: vec![
+                DVec3::ZERO,
+                DVec3::new(10.0, 0.0, 5.0),
+                DVec3::new(10.0, 10.0, 9.0),
+            ],
             closed: true,
         },
     ] {
@@ -60,7 +64,12 @@ fn the_new_kinds_round_trip_through_the_replica() {
     assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
     assert_eq!(m.doc.objects.len(), 3);
     for (id, o) in &doc.objects {
-        assert_eq!(m.doc.object(*id).unwrap().shape, o.shape, "{}", o.shape.kind());
+        assert_eq!(
+            m.doc.object(*id).unwrap().shape,
+            o.shape,
+            "{}",
+            o.shape.kind()
+        );
     }
 }
 
@@ -109,17 +118,25 @@ fn bad_solids_are_refused_by_the_check_and_quarantined_when_they_arrive() {
     let ok = json!({"kind": "extrude", "profile": [[0, 0], [10, 0], [10, 10]], "height": 5});
     assert!(validate_entity(Kind::Object, Uid::from_num(900), &props(ok.clone())).is_ok());
     let zero = json!({"kind": "extrude", "profile": [[0, 0], [10, 0], [10, 10]], "height": 0});
-    assert!(validate_entity(Kind::Object, Uid::from_num(900), &props(zero.clone()))
-        .unwrap_err()
-        .contains("zero"));
-    let bow = json!({"kind": "extrude", "profile": [[0, 0], [10, 10], [10, 0], [0, 10]], "height": 5});
-    assert!(validate_entity(Kind::Object, Uid::from_num(900), &props(bow))
-        .unwrap_err()
-        .contains("itself"));
-    let sweep = json!({"kind": "sweep", "profile": [[-5, 0], [5, 0], [5, 9]], "sweep_angle_deg": 90});
-    assert!(validate_entity(Kind::Object, Uid::from_num(900), &props(sweep))
-        .unwrap_err()
-        .contains("axis"));
+    assert!(
+        validate_entity(Kind::Object, Uid::from_num(900), &props(zero.clone()))
+            .unwrap_err()
+            .contains("zero")
+    );
+    let bow =
+        json!({"kind": "extrude", "profile": [[0, 0], [10, 10], [10, 0], [0, 10]], "height": 5});
+    assert!(
+        validate_entity(Kind::Object, Uid::from_num(900), &props(bow))
+            .unwrap_err()
+            .contains("itself")
+    );
+    let sweep =
+        json!({"kind": "sweep", "profile": [[-5, 0], [5, 0], [5, 9]], "sweep_angle_deg": 90});
+    assert!(
+        validate_entity(Kind::Object, Uid::from_num(900), &props(sweep))
+            .unwrap_err()
+            .contains("axis")
+    );
     let far = json!({"kind": "sweep", "profile": [[1, 0], [5, 0], [5, 9]], "origin": [1e12, 0, 0]});
     assert!(validate_entity(Kind::Object, Uid::from_num(900), &props(far)).is_err());
     // A bad shape from another client leaves the object out and names the reason.
@@ -138,5 +155,9 @@ fn bad_solids_are_refused_by_the_check_and_quarantined_when_they_arrive() {
     let m = materialize(&replica, &doc);
     assert_eq!(m.doc.objects.len(), 3);
     assert_eq!(m.quarantined.len(), 1);
-    assert!(m.quarantined[0].reason.contains("zero"), "{:?}", m.quarantined);
+    assert!(
+        m.quarantined[0].reason.contains("zero"),
+        "{:?}",
+        m.quarantined
+    );
 }

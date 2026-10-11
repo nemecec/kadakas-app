@@ -26,7 +26,7 @@ One file for each icon, in `assets/icons/kadakas/`. Names are lower case with hy
 |---|---|
 | Draw | select (arrow pointer), lasso (loop with a tail), line (diagonal with end dots), rectangle, circle (center cross), arc (three points), polyline (zigzag with dots), polygon, text (A with baseline) |
 | Annotate | dimension, callout (bubble with leader), data-tag, north-arrow, scale-bar, revision-cloud |
-| Landscape | plant (crown with spokes), existing-tree (dashed crown, trunk dot), landscape-area (outline with plant dots), hardscape (pavers), site-model (contours), site-modifier (pad on contours), grade (slope arrow, percent), landscape-wall (coping), spot-elevation, section-line, irrigation-outlet (spray fan), irrigation-line (pipe with joints), massing (block) |
+| Landscape | plant (crown with spokes), existing-tree (dashed crown, trunk dot), landscape-area (outline with plant dots), hardscape (pavers), site-model (contours), site-modifier (pad on contours), grade (slope arrow, percent), landscape-wall (coping), spot-elevation, section-line, irrigation-outlet (spray fan), irrigation-line (pipe with joints), massing (block), extrude (prism), sweep (turned profile), polygon3d (polygon with a drop line) |
 | Document | viewport, sheet-layer, design-layer, class, symbol, group, hatch, worksheet, record |
 | View | view-3d, flyover, top-plan, render-shaded, render-wireframe, render-hidden-line, render-dashed, smart-cursor |
 | Surface | surface-add, surface-subtract, surface-intersect, surface-clip, compose |

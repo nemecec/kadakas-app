@@ -124,6 +124,9 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Dimension | Mõõtmestamine (tool), Mõõt (value) | |
 | Callout, Data Tag, Revision Cloud | Viide, Andmesilt, Muudatuspilv | |
 | North Arrow, Scale Bar | Põhjanool, Mõõtkavariba | |
+| Extrude, Sweep (Model menu) | Väljapressimine, Pöördkeha | Sweep is a profile turned around an axis; the AutoCAD-like profile says Revolve / Pööre |
+| 3D Polygon | 3D-hulknurk | the AutoCAD-like profile says 3D Polyline / 3D-murdjoon |
+| Sweep angle, Segment angle, Pitch (of a spiral) | Pöördenurk, Lõigunurk, Samm | |
 
 ## Terminology overlays (PLAT-04)
 

@@ -2847,7 +2847,11 @@ mod tests {
         };
         // Nothing selected: a message and no dialog.
         app.run_action(&ctx, Action::CmdExtrude);
-        assert!(app.status.contains("Select the 2D shapes"), "{}", app.status);
+        assert!(
+            app.status.contains("Select the 2D shapes"),
+            "{}",
+            app.status
+        );
         assert!(!app.solid_dlg.is_open());
         let rect = add(
             &mut app,
@@ -2888,8 +2892,10 @@ mod tests {
         );
         app.session.selection = vec![rect, line];
         app.run_action(&ctx, Action::CmdSweep);
-        let mut opts = kadakas_core::solid_batch::SweepOptions::default();
-        opts.sweep_angle_deg = 90.0;
+        let mut opts = kadakas_core::solid_batch::SweepOptions {
+            sweep_angle_deg: 90.0,
+            ..Default::default()
+        };
         app.make_solids(SolidRequest::Sweep(opts.clone(), true));
         assert!(app.status.contains("solid made"), "{}", app.status);
         // Without a line in the selection the line axis is refused with a message.

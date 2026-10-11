@@ -29,24 +29,13 @@ enum Kind {
 }
 
 /// The values of the Extrude and Sweep dialogs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SolidDialog {
     open: Option<Kind>,
     extrude: ExtrudeOptions,
     sweep: SweepOptions,
     /// True: the selected line is the axis. False: a vertical axis at the profile.
     axis_is_line: bool,
-}
-
-impl Default for SolidDialog {
-    fn default() -> Self {
-        SolidDialog {
-            open: None,
-            extrude: ExtrudeOptions::default(),
-            sweep: SweepOptions::default(),
-            axis_is_line: false,
-        }
-    }
 }
 
 impl SolidDialog {
@@ -58,6 +47,7 @@ impl SolidDialog {
         self.open = Some(Kind::Sweep);
     }
 
+    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }

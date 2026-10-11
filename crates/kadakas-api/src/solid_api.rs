@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 use kadakas_core::DVec3;
 use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, ClassId, LayerId, ObjectId, Shape};
-use kadakas_core::solid3d::{self, Extrude, Sweep};
 use kadakas_core::solid_batch::{self, ExtrudeOptions, Made, SweepOptions};
+use kadakas_core::solid3d::{self, Extrude, Sweep};
 
 use crate::errors::bad;
 use crate::{RpcError, Session};
@@ -183,7 +183,10 @@ fn mesh_numbers(shape: &Shape) -> (Value, Value) {
             "surface_area_m2": mesh.area() / 1e6,
             "triangles": mesh.triangles.len(),
         }),
-        shape.solid_bounds3().map_or(Value::Null, |(lo, hi)| json!({"min": arr3(lo), "max": arr3(hi)})),
+        shape.solid_bounds3().map_or(
+            Value::Null,
+            |(lo, hi)| json!({"min": arr3(lo), "max": arr3(hi)}),
+        ),
     )
 }
 
@@ -198,7 +201,11 @@ const EXTRUDE_FIELDS: [(&str, &str); 5] = [
 ];
 
 fn patched_extrude(base: &Extrude, m: &Map<String, Value>) -> Result<Extrude, RpcError> {
-    let v = patch_json(serde_json::to_value(base).expect("json"), m, &EXTRUDE_FIELDS)?;
+    let v = patch_json(
+        serde_json::to_value(base).expect("json"),
+        m,
+        &EXTRUDE_FIELDS,
+    )?;
     let out: Extrude = serde_json::from_value(v).map_err(bad)?;
     match out.problem() {
         Some(why) => Err(bad(why)),
@@ -454,7 +461,11 @@ fn add_polygon(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
         return Err(bad("missing 'points'"));
     };
     for k in m.keys() {
-        if !["points", "closed", "fill", "name", "layer", "class", "parent"].contains(&k.as_str()) {
+        if ![
+            "points", "closed", "fill", "name", "layer", "class", "parent",
+        ]
+        .contains(&k.as_str())
+        {
             return Err(bad(format!(
                 "unknown field '{k}'. Fields: points, closed, fill, name, layer, class, parent"
             )));
@@ -548,7 +559,9 @@ fn get_polygon(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcErro
     };
     let (lo, hi) = points
         .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+            (a.min(p.z), b.max(p.z))
+        });
     let face = *closed && doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     Ok(json!({
         "id": id,

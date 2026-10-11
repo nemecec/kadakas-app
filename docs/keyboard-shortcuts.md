@@ -71,7 +71,7 @@ The profile therefore has **no single-letter key for a tool**. The reason: the f
 | Shift+T | Acquire a smart point |
 | Shift+U, I, O, P, K, J | Tool mode groups 1 to 6 |
 
-Aliases (a selection; the file has all of them): `L` line, `PL` polyline, `REC` rectangle, `C` circle, `T` or `MT` text, `M` selection tool (drag to move), `CO` or `AR` Duplicate Array (Kadakas has no plain Copy tool), `RO` rotate, `MI` mirror, `SC` scale, `O` offset, `F` fillet, `CHA` chamfer, `TR` trim, `EX` extend, `BR` split, `X` or `UG` ungroup, `G` group, `E` or `DEL` delete, `U` undo, `Z` or `ZE` zoom to fit, `DLI` dimension, `DAN` angular dimension, `DRA` radial dimension, `MLD` callout, `REVCLOUD` revision cloud, `UNI`, `SU`, `IN` the surface commands, `PLOT` PDF export. Kadakas-only aliases: `PLANT`, `LANDAREA`, `HARDSCAPE`, `SITEMOD`, `GRADING`, `MASSING`, `IRRIGATION`, `DATATAG`, `NORTHARROW`, `SCALEBAR`, `LEGEND`.
+Aliases (a selection; the file has all of them): `EXTRUDE` or `EXT` Extrude, `REVOLVE` or `REV` Sweep, `3DPOLY` or `3P` 3D Polygon, `L` line, `PL` polyline, `REC` rectangle, `C` circle, `T` or `MT` text, `M` selection tool (drag to move), `CO` or `AR` Duplicate Array (Kadakas has no plain Copy tool), `RO` rotate, `MI` mirror, `SC` scale, `O` offset, `F` fillet, `CHA` chamfer, `TR` trim, `EX` extend, `BR` split, `X` or `UG` ungroup, `G` group, `E` or `DEL` delete, `U` undo, `Z` or `ZE` zoom to fit, `DLI` dimension, `DAN` angular dimension, `DRA` radial dimension, `MLD` callout, `REVCLOUD` revision cloud, `UNI`, `SU`, `IN` the surface commands, `PLOT` PDF export. Kadakas-only aliases: `PLANT`, `LANDAREA`, `HARDSCAPE`, `SITEMOD`, `GRADING`, `MASSING`, `IRRIGATION`, `DATATAG`, `NORTHARROW`, `SCALEBAR`, `LEGEND`.
 
 ## Tools
 

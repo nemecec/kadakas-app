@@ -24,7 +24,6 @@ mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
-mod solid_api;
 mod plants_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;
@@ -32,6 +31,7 @@ mod present_api;
 mod query_api;
 mod rules_api;
 mod sheets_api;
+mod solid_api;
 mod survey_api;
 mod symbols_api;
 #[cfg(not(target_arch = "wasm32"))]

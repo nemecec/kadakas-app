@@ -44,8 +44,10 @@ mod tests {
     #[test]
     fn the_points_get_the_height_and_few_points_make_nothing() {
         let pts = corners(&[DVec2::ZERO, DVec2::X, DVec2::Y]);
-        let mut s = Polygon3dSettings::default();
-        s.z = 250.0;
+        let mut s = Polygon3dSettings {
+            z: 250.0,
+            ..Default::default()
+        };
         let Some(Shape::Polyline3d { points, closed }) = s.shape(&pts) else {
             panic!()
         };
