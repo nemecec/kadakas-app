@@ -245,7 +245,9 @@ pub fn top_surface(
 /// Area of the triangles in 3D, in square model units.
 pub fn mesh_area(points: &[DVec3], indices: &[u32]) -> f64 {
     indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
             let (a, b, c) = (
                 points[t[0] as usize],
@@ -260,7 +262,9 @@ pub fn mesh_area(points: &[DVec3], indices: &[u32]) -> f64 {
 /// Area of the triangles seen from above, in square model units.
 pub fn plan_mesh_area(points: &[DVec3], indices: &[u32]) -> f64 {
     indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
             let (a, b, c) = (
                 points[t[0] as usize].truncate(),
@@ -513,7 +517,7 @@ mod tests {
         assert!((plan_mesh_area(&pts, &idx) - 9.0e6).abs() < 1.0);
         assert!(mesh_area(&pts, &idx) > 9.0e6);
         // Edges are no longer than the step.
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             for k in 0..3 {
                 let (a, b) = (
                     pts[t[k] as usize].truncate(),

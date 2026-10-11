@@ -365,7 +365,9 @@ fn raster_view(doc: &Document, vp: &Viewport, budget: &mut u64) -> Option<ImageP
     let img = kadakas_render::styled::render_styled(&d, &scene, &cam, &style, w, h, 2);
     let rgb: Vec<u8> = img
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2]])
         .collect();
     Some(ImagePrim {

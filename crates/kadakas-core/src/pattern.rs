@@ -208,7 +208,7 @@ pub fn hatch_segments(def: &HatchDef, rings: &[Vec<DVec2>], scale: f64) -> Vec<P
             let k = k0 + j as i64;
             let p0 = origin + n * (k as f64 * spacing);
             let phase = k as f64 * line.offset * f;
-            for pair in ts.chunks_exact(2) {
+            for pair in ts.as_chunks::<2>().0 {
                 let (t0, t1) = (pair[0], pair[1]);
                 if t1 <= t0 {
                     continue;

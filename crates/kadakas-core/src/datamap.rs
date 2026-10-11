@@ -188,11 +188,11 @@ impl DataMap {
         for (i, r) in self.rules.iter().enumerate() {
             let at = |m: String| format!("rule {}: {m}", i + 1);
             match &r.source {
-                Source::Property { name } => name_ok("property", name).map_err(&at)?,
-                Source::PlantField { field } => name_ok("plant field", field).map_err(&at)?,
+                Source::Property { name } => name_ok("property", name).map_err(at)?,
+                Source::PlantField { field } => name_ok("plant field", field).map_err(at)?,
                 Source::RecordField { record, field } => {
-                    name_ok("record", record).map_err(&at)?;
-                    name_ok("field", field).map_err(&at)?;
+                    name_ok("record", record).map_err(at)?;
+                    name_ok("field", field).map_err(at)?;
                 }
                 Source::Constant { value } => {
                     if value.is_null()
@@ -208,12 +208,12 @@ impl DataMap {
             }
             match &r.target {
                 Target::IfcProperty { pset, property, .. } => {
-                    name_ok("property set", pset).map_err(&at)?;
-                    name_ok("IFC property", property).map_err(&at)?;
+                    name_ok("property set", pset).map_err(at)?;
+                    name_ok("IFC property", property).map_err(at)?;
                 }
                 Target::RecordField { record, field } => {
-                    name_ok("record", record).map_err(&at)?;
-                    name_ok("field", field).map_err(&at)?;
+                    name_ok("record", record).map_err(at)?;
+                    name_ok("field", field).map_err(at)?;
                 }
             }
         }

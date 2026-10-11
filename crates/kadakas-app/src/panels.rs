@@ -359,11 +359,9 @@ fn command_item(
                 }
             });
         }
-        Cmd::About => {
-            if ui.button(c.label()).clicked() {
-                extras.requests.push(MenuRequest::About);
-                ui.close();
-            }
+        Cmd::About if ui.button(c.label()).clicked() => {
+            extras.requests.push(MenuRequest::About);
+            ui.close();
         }
         _ => {}
     }
