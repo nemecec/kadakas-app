@@ -97,7 +97,10 @@ fn an_upgrade_replaces_the_stored_build_and_a_failing_medium_is_a_warning() {
     reg.install(&other).unwrap();
     let names: Vec<String> = mem.list().unwrap().into_iter().map(|(n, _)| n).collect();
     let h = trust::hash(&other);
-    assert_eq!(names, vec![format!("{h}.manifest.json"), format!("{h}.wasm")]);
+    assert_eq!(
+        names,
+        vec![format!("{h}.manifest.json"), format!("{h}.wasm")]
+    );
     // The medium refuses writes: the install works, with a warning that is read once.
     *mem.fail_writes.lock().unwrap() = Some("quota".into());
     reg.install(PLANTER).unwrap();
@@ -162,7 +165,9 @@ fn a_stored_module_is_listed_without_running_and_checked_when_it_is_first_needed
     let hash = p.hash().to_string();
     let permit = ModuleTrust::in_memory().permit(&hash, true).unwrap();
     assert_eq!(
-        p.reset(&permit, &Map::new(), &rect(2000.0, 800.0)).unwrap().len(),
+        p.reset(&permit, &Map::new(), &rect(2000.0, 800.0))
+            .unwrap()
+            .len(),
         3
     );
     assert!(p.is_active());

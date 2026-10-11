@@ -5,7 +5,10 @@ use crate::plugin::clean_message;
 
 #[test]
 fn a_message_loses_format_characters_and_control_characters() {
-    assert_eq!(clean_message("no\u{202E} way\u{200B}\nat all"), "no way at all");
+    assert_eq!(
+        clean_message("no\u{202E} way\u{200B}\nat all"),
+        "no way at all"
+    );
     assert_eq!(clean_message("\u{FEFF}"), "");
 }
 

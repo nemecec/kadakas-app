@@ -29,6 +29,10 @@ struct Review {
     id: String,
     /// Start the tool of the module after the user trusts it.
     then_tool: bool,
+    /// What the dialog shows, read once when the dialog opened. The Trust button trusts the hash in
+    /// here, and nothing else: if the module under this id changes while the dialog is open (an
+    /// agent installs another build), the dialog closes and asks again.
+    info: Value,
 }
 
 /// State of the Plug-ins window, the trust dialog, the Object Info form and the running tool.
@@ -38,6 +42,12 @@ pub struct PluginUi {
     review: Option<Review>,
     form: Option<(ObjectId, Form)>,
     run: Option<ToolRun>,
+    /// The last pointer move that waits for the next frame. A frame sends at most one move to the
+    /// module, however many the pointer made, so a slow tool cannot queue up calls.
+    pending_move: Option<(glam::DVec2, egui::Modifiers)>,
+    /// How many calls the tool runs have made (for tests).
+    #[cfg(test)]
+    calls: u64,
     /// Problems to show once: stored modules that were not loaded.
     notes: Vec<String>,
     /// Web: the bytes of modules that the browser has picked and compiled.
@@ -122,11 +132,12 @@ impl PluginUi {
 
     fn take_report(&mut self, report: kadakas_plugin::StoreReport) {
         for r in report.rejected {
-            self.notes.push(tr!(
-                "plugin-ui-stored-problem",
-                name = r.name,
-                reason = r.reason
-            ));
+            // A module built for another ABI version gets its own note, once.
+            self.notes.push(if r.reason.contains("uses ABI version") {
+                tr!("plugin-ui-old-abi", message = r.reason)
+            } else {
+                tr!("plugin-ui-stored-problem", name = r.name, reason = r.reason)
+            });
         }
     }
 
@@ -137,7 +148,7 @@ impl PluginUi {
         let (boot, ctx) = (self.boot.clone(), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let backend = kadakas_plugin::web::backend();
-            let limits = kadakas_plugin::Limits::default();
+            let limits = kadakas_plugin::runtime::default_limits();
             let store = kadakas_plugin::ModuleStore::new(
                 backend,
                 limits.max_module_bytes,
@@ -179,11 +190,11 @@ impl PluginUi {
                     *status = tr!("plugin-ui-not-kept", message = w);
                 }
                 if v["trusted"] != json!(true) {
-                    self.review = Some(Review {
-                        id: ftext(&v, "id"),
-                        then_tool: false,
-                    });
+                    self.open_review(session, &ftext(&v, "id"), false);
                 }
+            }
+            Err(e) if e.message.contains("uses ABI version") => {
+                *status = tr!("plugin-ui-old-abi", message = e.message)
             }
             Err(e) => *status = tr!("plugin-ui-install-failed", message = e.message),
         }
@@ -215,7 +226,7 @@ impl PluginUi {
             {
                 let bytes = f.read().await;
                 // Compile now, asynchronously. The install after it needs no synchronous compile.
-                let limits = kadakas_plugin::Limits::default();
+                let limits = kadakas_plugin::runtime::default_limits();
                 let _ = kadakas_plugin::web::precompile(&bytes, &limits).await;
                 inbox.borrow_mut().push(bytes);
                 ctx.request_repaint();
@@ -235,6 +246,7 @@ impl PluginUi {
                 self.install_bytes(session, &bytes, status);
             }
         }
+        self.flush_move(session, status);
         if let Some(note) = self.notes.pop() {
             *status = note;
         }
@@ -296,10 +308,7 @@ impl PluginUi {
             });
             ui.horizontal(|ui| {
                 if ui.button(tr!("plugin-ui-review")).clicked() {
-                    self.review = Some(Review {
-                        id: id.clone(),
-                        then_tool: false,
-                    });
+                    self.open_review(session, &id.clone(), false);
                 }
                 if e["trusted"] == json!(true)
                     && ui.button(tr!("plugin-ui-stop-trusting")).clicked()
@@ -328,13 +337,29 @@ impl PluginUi {
         }
     }
 
-    /// The trust dialog. Trust is for the hash that the dialog shows.
+    /// Opens the trust dialog for a module. Reads what the dialog shows now; see [`Review`].
+    fn open_review(&mut self, session: &Session, id: &str, then_tool: bool) {
+        if let Some(info) = kadakas_api::review_wasm_plugin(session, id) {
+            self.review = Some(Review {
+                id: id.to_string(),
+                then_tool,
+                info,
+            });
+        }
+    }
+
+    /// The trust dialog. Trust is for the hash that the dialog showed when it opened.
     fn review_dialog(&mut self, ctx: &egui::Context, session: &mut Session, status: &mut String) {
         let Some(review) = &self.review else { return };
-        let Some(info) = kadakas_api::review_wasm_plugin(session, &review.id) else {
+        // The module under this id must still be the one that the dialog shows.
+        let info = review.info.clone();
+        let now = kadakas_api::review_wasm_plugin(session, &review.id);
+        if now.as_ref().map(|n| n["hash"].clone()) != Some(info["hash"].clone()) {
             self.review = None;
+            *status = tr!("plugin-ui-changed");
             return;
-        };
+        }
+        let problem = ftext(&info, "problem");
         let mut decision = None;
         egui::Window::new(tr!("plugin-ui-trust-title"))
             .id(egui::Id::new("win-trust-wasm-plug-in"))
@@ -385,8 +410,20 @@ impl PluginUi {
                 ui.label(tr!("plugin-ui-no-permissions"));
                 ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("plugin-ui-warning"));
                 ui.small(tr!("plugin-ui-agents"));
+                if !problem.is_empty() {
+                    ui.colored_label(
+                        Color32::from_rgb(200, 40, 40),
+                        tr!("plugin-ui-problem", message = problem.as_str()),
+                    );
+                }
                 ui.horizontal(|ui| {
-                    if ui.button(tr!("plugin-ui-trust")).clicked() {
+                    if ui
+                        .add_enabled(
+                            problem.is_empty(),
+                            egui::Button::new(tr!("plugin-ui-trust")),
+                        )
+                        .clicked()
+                    {
                         decision = Some(true);
                     }
                     if ui.button(tr!("plugin-ui-cancel")).clicked() {
@@ -399,6 +436,7 @@ impl PluginUi {
         match decision {
             Some(true) => {
                 let shown = ftext(&info, "hash");
+                // The hash is the one from when the dialog opened, not a fresh read.
                 match kadakas_api::trust_wasm_plugin(session, &id, &shown) {
                     Ok(()) => {
                         *status = tr!("plugin-ui-trusted-status", name = ftext(&info, "name"))
@@ -458,10 +496,7 @@ impl PluginUi {
         if !trusted {
             ui.colored_label(Color32::from_rgb(200, 120, 0), tr!("plugin-ui-needs-trust"));
             if ui.button(tr!("plugin-ui-review")).clicked() {
-                self.review = Some(Review {
-                    id: ftext(&info, "plugin"),
-                    then_tool: false,
-                });
+                self.open_review(session, &ftext(&info, "plugin"), false);
             }
         }
         if let Some(err) = info["error"].as_str() {
@@ -547,10 +582,7 @@ impl PluginUi {
         let trusted = kadakas_api::review_wasm_plugin(session, id)
             .is_some_and(|r| r["trusted"] == json!(true));
         if !trusted {
-            self.review = Some(Review {
-                id: id.to_string(),
-                then_tool: true,
-            });
+            self.open_review(session, &id.to_string(), true);
             return;
         }
         let name = kadakas_api::review_wasm_plugin(session, id)
@@ -580,6 +612,7 @@ impl PluginUi {
 
     /// Escape, or another tool was chosen: the run ends and the preview goes. The module is not asked.
     pub fn cancel(&mut self) {
+        self.pending_move = None;
         if let Some(r) = &mut self.run {
             r.cancel();
         }
@@ -587,23 +620,24 @@ impl PluginUi {
     }
 
     /// The pointer moved on the canvas (`pixel` is the size of a pixel in mm).
-    pub fn pointer_moved(
-        &mut self,
-        session: &mut Session,
-        p: glam::DVec2,
-        pixel: f64,
-        mods: egui::Modifiers,
-        status: &mut String,
-    ) {
+    pub fn pointer_moved(&mut self, p: glam::DVec2, pixel: f64, mods: egui::Modifiers) {
         let Some(p) = self.run.as_mut().and_then(|r| r.move_to(p, pixel)) else {
             return;
         };
-        self.send(
-            session,
-            json!({"type": "move", "at": [p.x, p.y]}),
-            mods,
-            status,
-        );
+        // Only the newest move is kept. `flush_move` sends it once per frame.
+        self.pending_move = Some((p, mods));
+    }
+
+    /// Sends the pending pointer move, if there is one. The app calls this once per frame.
+    pub fn flush_move(&mut self, session: &mut Session, status: &mut String) {
+        if let Some((p, mods)) = self.pending_move.take() {
+            self.send(
+                session,
+                json!({"type": "move", "at": [p.x, p.y]}),
+                mods,
+                status,
+            );
+        }
     }
 
     /// A click on the canvas.
@@ -614,6 +648,8 @@ impl PluginUi {
         mods: egui::Modifiers,
         status: &mut String,
     ) {
+        // The click carries its own point: a move that waits is out of date.
+        self.pending_move = None;
         if let Some(r) = &mut self.run {
             r.clicked();
         }
@@ -627,6 +663,7 @@ impl PluginUi {
 
     /// Enter or a double click.
     pub fn finish(&mut self, session: &mut Session, status: &mut String) {
+        self.pending_move = None;
         self.send(
             session,
             json!({"type": "finish"}),
@@ -645,6 +682,10 @@ impl PluginUi {
         mods: egui::Modifiers,
         status: &mut String,
     ) {
+        #[cfg(test)]
+        {
+            self.calls += 1;
+        }
         let Some(run) = self.run.as_mut().filter(|r| !r.is_over()) else {
             return;
         };
@@ -670,10 +711,7 @@ impl PluginUi {
             Err(e) if e.code == POLICY_CODE => {
                 run.cancel();
                 self.run = None;
-                self.review = Some(Review {
-                    id,
-                    then_tool: true,
-                });
+                self.open_review(session, &id, true);
                 return;
             }
             Err(e) if e.message.starts_with(GUEST_PREFIX) => {
@@ -956,13 +994,8 @@ mod tests {
         );
         let none = egui::Modifiers::NONE;
         ui.clicked(&mut s, glam::DVec2::new(0.0, 0.0), none, &mut status);
-        ui.pointer_moved(
-            &mut s,
-            glam::DVec2::new(3000.0, 0.0),
-            1.0,
-            none,
-            &mut status,
-        );
+        ui.pointer_moved(glam::DVec2::new(3000.0, 0.0), 1.0, none);
+        ui.flush_move(&mut s, &mut status);
         assert_eq!(ui.preview().len(), 4);
         assert_eq!(s.editor.doc().objects.len(), 0);
         ui.clicked(&mut s, glam::DVec2::new(3000.0, 0.0), none, &mut status);
@@ -1124,5 +1157,155 @@ mod tests {
             )
             .unwrap_err();
         assert!(e.message.starts_with(GUEST_PREFIX), "{}", e.message);
+    }
+
+    #[test]
+    fn many_pointer_moves_in_a_frame_make_one_call() {
+        let (mut s, mut ui, mut status) = session_with_stones();
+        trust(&mut s);
+        ui.review = None;
+        ui.start_tool(&mut s, STONES_ID, &mut status);
+        let none = egui::Modifiers::NONE;
+        ui.clicked(&mut s, glam::DVec2::ZERO, none, &mut status);
+        let before = ui.calls;
+        for i in 1..=50 {
+            ui.pointer_moved(glam::DVec2::new(100.0 * f64::from(i), 0.0), 1.0, none);
+        }
+        // Nothing is sent while the frame draws.
+        assert_eq!(ui.calls, before);
+        ui.flush_move(&mut s, &mut status);
+        assert_eq!(ui.calls, before + 1);
+        // The newest point won: 5000 mm of row, 7 stones.
+        assert_eq!(ui.preview().len(), 7);
+        // A frame without a new move sends nothing.
+        ui.flush_move(&mut s, &mut status);
+        assert_eq!(ui.calls, before + 1);
+        // A click drops the move that waits.
+        ui.pointer_moved(glam::DVec2::new(9000.0, 0.0), 1.0, none);
+        ui.clicked(&mut s, glam::DVec2::new(3000.0, 0.0), none, &mut status);
+        ui.flush_move(&mut s, &mut status);
+        assert_eq!(s.editor.doc().objects.len(), 5);
+    }
+
+    #[test]
+    fn the_dialog_trusts_the_module_it_showed_and_closes_if_another_build_takes_its_place() {
+        let (mut s, mut ui, mut status) = session_with_stones();
+        let shown = ui.review.as_ref().unwrap().info["hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Another build with the same id is installed while the dialog is open. A custom section
+        // at the end changes the hash and nothing else.
+        let mut swapped = STONES.to_vec();
+        swapped.extend([0, 3, 1, b'x', 0]);
+        kadakas_api::install_wasm_plugin(&mut s, &swapped).unwrap();
+        let now = kadakas_api::review_wasm_plugin(&s, STONES_ID).unwrap();
+        assert_ne!(now["hash"].as_str().unwrap(), shown);
+        // The dialog closes with a note and trusts nothing.
+        let ctx = egui::Context::default();
+        frame(&ctx, |u| ui.show(u.ctx(), &mut s, &mut status));
+        assert!(ui.review.is_none());
+        assert!(status.contains("changed"), "{status}");
+        assert!(
+            !s.wasm_plugins
+                .registry
+                .trust
+                .is_trusted(now["hash"].as_str().unwrap())
+        );
+        assert!(!s.wasm_plugins.registry.trust.is_trusted(&shown));
+        // The function that trusts also refuses the old hash.
+        assert!(kadakas_api::trust_wasm_plugin(&mut s, STONES_ID, &shown).is_err());
+    }
+
+    #[test]
+    fn a_module_of_another_abi_version_gets_a_note() {
+        let mut s = Session::with_sequential_ids();
+        let mut ui = PluginUi::default();
+        let mut status = String::new();
+        // The version number is in the manifest that the module returns, so build a module that
+        // returns a manifest of version 1.
+        let manifest = r#"{"id":"old.one","name":"Old","version":"1","abi_version":1,"kinds":["object"],"object":{"shape_type":"point"}}"#;
+        ui.install_bytes(&mut s, &old_module(manifest), &mut status);
+        assert!(status.contains("another version"), "{status}");
+        assert!(ui.review.is_none());
+    }
+
+    /// A tiny module (written by hand in binary) whose `describe` returns `manifest`.
+    fn old_module(manifest: &str) -> Vec<u8> {
+        fn leb(mut n: usize, out: &mut Vec<u8>) {
+            loop {
+                let b = (n & 0x7f) as u8;
+                n >>= 7;
+                if n == 0 {
+                    out.push(b);
+                    break;
+                }
+                out.push(b | 0x80);
+            }
+        }
+        fn section(id: u8, body: &[u8], out: &mut Vec<u8>) {
+            out.push(id);
+            leb(body.len(), out);
+            out.extend(body);
+        }
+        let packed = (1024u64 << 32) | manifest.len() as u64;
+        let mut m = b"\0asm\x01\0\0\0".to_vec();
+        // types: (i32)->i32, ()->i64, (i32,i32)->i64, (i32,i32)->()
+        section(
+            1,
+            &[
+                4, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7e, 0x60, 2, 0x7f, 0x7f, 1, 0x7e, 0x60, 2,
+                0x7f, 0x7f, 0,
+            ],
+            &mut m,
+        );
+        // functions: alloc, dealloc, describe, reset, tool
+        section(3, &[5, 0, 3, 1, 2, 2], &mut m);
+        section(5, &[1, 0, 1], &mut m);
+        let mut ex = vec![6u8];
+        for (name, kind, idx) in [
+            ("memory", 2u8, 0u8),
+            ("alloc", 0, 0),
+            ("dealloc", 0, 1),
+            ("describe", 0, 2),
+            ("reset", 0, 3),
+            ("tool", 0, 4),
+        ] {
+            ex.push(name.len() as u8);
+            ex.extend(name.as_bytes());
+            ex.push(kind);
+            ex.push(idx);
+        }
+        section(7, &ex, &mut m);
+        let mut body_describe = vec![0u8, 0x42];
+        // i64.const packed (signed LEB)
+        let mut v = packed as i64;
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            let done = (v == 0 && b & 0x40 == 0) || (v == -1 && b & 0x40 != 0);
+            body_describe.push(if done { b } else { b | 0x80 });
+            if done {
+                break;
+            }
+        }
+        body_describe.push(0x0b);
+        let mut code = vec![5u8];
+        for body in [
+            vec![0u8, 0x41, 0, 0x0b],
+            vec![0u8, 0x0b],
+            body_describe,
+            vec![0u8, 0x42, 0, 0x0b],
+            vec![0u8, 0x42, 0, 0x0b],
+        ] {
+            leb(body.len(), &mut code);
+            code.extend(body);
+        }
+        section(10, &code, &mut m);
+        let mut data = vec![1u8, 0, 0x41, 0x80, 0x08, 0x0b];
+        leb(manifest.len(), &mut data);
+        data.extend(manifest.as_bytes());
+        section(11, &data, &mut m);
+        m
     }
 }

@@ -200,7 +200,9 @@ impl ParamSchema {
             ));
         }
         if self.fields.len() > MAX_FIELDS {
-            return Err(format!("parameter {n}: a record has at most {MAX_FIELDS} fields"));
+            return Err(format!(
+                "parameter {n}: a record has at most {MAX_FIELDS} fields"
+            ));
         }
         match self.ty {
             ParamType::Choice if self.options.is_empty() => {

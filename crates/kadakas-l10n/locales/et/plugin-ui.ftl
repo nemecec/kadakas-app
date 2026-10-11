@@ -65,3 +65,6 @@ plugin-ui-tool-done-shapes =
         [one] Lisati { $count } kujund.
        *[other] Lisati { $count } kujundit.
     }
+plugin-ui-changed = Lisamoodul muutus, kui dialoog oli lahti. See tuleb uuesti üle vaadata.
+plugin-ui-problem = Seda lisamoodulit ei saa usaldada: { $message }
+plugin-ui-old-abi = See lisamoodul on ehitatud lisamooduli liidese teise versiooni jaoks ja seda ei laaditud. Uue järgu saab küsida autorilt. { $message }

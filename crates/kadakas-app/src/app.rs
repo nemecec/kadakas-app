@@ -1559,13 +1559,7 @@ impl KadakasApp {
                     self.plugin_ui
                         .clicked(&mut self.session, self.cursor, mods, &mut self.status);
                 } else if hover.is_some() {
-                    self.plugin_ui.pointer_moved(
-                        &mut self.session,
-                        self.cursor,
-                        pixel,
-                        mods,
-                        &mut self.status,
-                    );
+                    self.plugin_ui.pointer_moved(self.cursor, pixel, mods);
                 }
                 if resp.double_clicked() {
                     self.plugin_ui.finish(&mut self.session, &mut self.status);

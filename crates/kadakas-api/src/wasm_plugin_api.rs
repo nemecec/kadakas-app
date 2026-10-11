@@ -349,7 +349,12 @@ pub fn install_module(s: &mut Session, bytes: &[u8]) -> Result<Value, RpcError> 
 pub fn module_review(s: &Session, plugin_id: &str) -> Option<Value> {
     let p = registry(s).get(plugin_id)?;
     let m = p.manifest();
+    // A module from the store has run nothing so far. Showing it to the user runs `describe` in
+    // the sandbox, as an install does, and compares the answer with the stored description. If
+    // they differ, the dialog shows the problem and the module cannot be trusted.
+    let problem = p.activate().err().map(|e| e.to_string());
     Some(json!({
+        "problem": problem,
         "id": m.id,
         "name": m.name,
         "version": m.version,
@@ -396,6 +401,9 @@ pub fn trust_module(s: &mut Session, plugin_id: &str, shown_hash: &str) -> Resul
     };
     if hash != shown_hash {
         return Err("the module changed after you read it. Review it again".into());
+    }
+    if let Some(p) = registry(s).get(plugin_id) {
+        p.activate().map_err(|e| e.to_string())?;
     }
     s.wasm_plugins
         .registry

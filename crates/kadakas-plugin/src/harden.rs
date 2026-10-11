@@ -261,7 +261,10 @@ impl Reencode for Hardener {
             )));
         }
         let mut out = wasm_encoder::reencode::utils::table_type(self, t)?;
-        out.maximum = Some(t.maximum.map_or(MAX_TABLE_ELEMENTS, |m| m.min(MAX_TABLE_ELEMENTS)));
+        out.maximum = Some(
+            t.maximum
+                .map_or(MAX_TABLE_ELEMENTS, |m| m.min(MAX_TABLE_ELEMENTS)),
+        );
         Ok(out)
     }
 
@@ -728,13 +731,19 @@ mod tests {
 
     #[test]
     fn probe_2_exception_handlers_are_refused() {
-        assert!(matches!(harden(&wat(PROBE_EH), &LIMITS), Err(PluginError::Invalid(_))));
+        assert!(matches!(
+            harden(&wat(PROBE_EH), &LIMITS),
+            Err(PluginError::Invalid(_))
+        ));
         assert!(crate::plugin::scan(&wat(PROBE_EH), &crate::Limits::default()).is_err());
     }
 
     #[test]
     fn probe_3_garbage_collected_arrays_are_refused() {
-        assert!(matches!(harden(&wat(PROBE_GC), &LIMITS), Err(PluginError::Invalid(_))));
+        assert!(matches!(
+            harden(&wat(PROBE_GC), &LIMITS),
+            Err(PluginError::Invalid(_))
+        ));
         assert!(crate::plugin::scan(&wat(PROBE_GC), &crate::Limits::default()).is_err());
     }
 
@@ -758,7 +767,9 @@ mod tests {
         let grow = r#"(module (memory (export "memory") 1) (table (export "t") 1 funcref)
           (func (export "grow") (param i32) (result i32) (table.grow 0 (ref.null func) (local.get 0))))"#;
         let (mut store, instance) = instantiate(&harden(&wat(grow), &LIMITS).unwrap());
-        let f = instance.get_typed_func::<i32, i32>(&mut store, "grow").unwrap();
+        let f = instance
+            .get_typed_func::<i32, i32>(&mut store, "grow")
+            .unwrap();
         assert_eq!(f.call(&mut store, 100_000).unwrap(), -1);
         assert_eq!(f.call(&mut store, 10).unwrap(), 1);
         let five = r#"(module (memory (export "memory") 1)

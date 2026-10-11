@@ -193,9 +193,10 @@ impl Plugin {
         if let Some(m) = self.module.get() {
             return Ok(m.as_ref());
         }
-        let pending = self.pending.as_ref().ok_or_else(|| {
-            PluginError::Invalid("the plug-in has no module".into())
-        })?;
+        let pending = self
+            .pending
+            .as_ref()
+            .ok_or_else(|| PluginError::Invalid("the plug-in has no module".into()))?;
         let module = pending.runtime.load(&pending.wasm, &self.limits)?;
         let described = Manifest::from_bytes(&module.describe()?).map_err(PluginError::Invalid)?;
         if described != self.manifest {

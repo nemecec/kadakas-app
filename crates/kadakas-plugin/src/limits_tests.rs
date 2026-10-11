@@ -1,9 +1,9 @@
 //! Tests of the fuel of each kind of call (the browser gives a pointer move less than a click).
 
 use super::*;
+use crate::PluginRuntime;
 use crate::metered::{Compiler, MeteredRuntime, RawError, RawInstance, RawModule};
 use crate::runtime::CallKind;
-use crate::PluginRuntime;
 
 #[test]
 fn each_kind_of_call_has_its_own_fuel() {
@@ -105,7 +105,10 @@ impl RawInstance for PlainInstance {
     fn read(&mut self, ptr: u32, len: u32) -> Option<Vec<u8>> {
         let memory = self.instance.get_memory(&mut self.store, "memory")?;
         let end = (ptr as usize).checked_add(len as usize)?;
-        memory.data(&self.store).get(ptr as usize..end).map(<[u8]>::to_vec)
+        memory
+            .data(&self.store)
+            .get(ptr as usize..end)
+            .map(<[u8]>::to_vec)
     }
     fn set_fuel(&mut self, fuel: i64) -> Result<(), RawError> {
         self.instance

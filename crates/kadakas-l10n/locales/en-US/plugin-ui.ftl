@@ -65,3 +65,6 @@ plugin-ui-tool-done-shapes =
         [one] Added { $count } shape.
        *[other] Added { $count } shapes.
     }
+plugin-ui-changed = The plug-in changed while the dialog was open. Review it again.
+plugin-ui-problem = The plug-in cannot be trusted: { $message }
+plugin-ui-old-abi = This plug-in was built for another version of the plug-in interface and was not loaded. Ask its author for a new build. { $message }
