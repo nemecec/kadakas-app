@@ -1,0 +1,25 @@
+## prefs-ui: prefs_ui.rs
+
+prefs-ui-preferences = Preferences
+prefs-ui-appearance = Appearance
+prefs-ui-icon-size = Icon size
+prefs-ui-language = Language
+prefs-ui-units-and-formats = Units and formats
+prefs-ui-language-of-the-program = Language of the program
+prefs-ui-system-default = System default ({ $language })
+prefs-ui-automatic = Automatic (from the language)
+prefs-ui-length = Lengths
+prefs-ui-area = Areas
+prefs-ui-angles = Angles
+prefs-ui-inch-fractions = Inch fractions
+prefs-ui-decimal-inches = Decimal inches
+prefs-ui-decimal-separator = Decimal separator
+prefs-ui-point-example = Point (1234.5)
+prefs-ui-comma-example = Comma (1234,5)
+prefs-ui-digit-grouping = Digit grouping
+prefs-ui-no-grouping = None (1234567)
+prefs-ui-date-format = Date format
+prefs-ui-example = Example: { $length }, { $area }, { $angle }, { $number }, { $date }
+prefs-ui-decimal-degrees = Decimal degrees
+prefs-ui-degrees-minutes-seconds = Degrees, minutes, seconds
+prefs-ui-bearing = Bearing (N 45° E)

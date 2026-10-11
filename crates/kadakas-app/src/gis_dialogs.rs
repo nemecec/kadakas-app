@@ -6,6 +6,7 @@
 //! each frame (`Session::gis_poll`), so the UI never waits for a server.
 
 use kadakas_api::Session;
+use kadakas_l10n::tr;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,12 +20,12 @@ enum Kind {
 impl Kind {
     const ALL: [Kind; 4] = [Kind::Wms, Kind::Wmts, Kind::Wfs, Kind::Image];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Kind::Wms => "WMS map",
-            Kind::Wmts => "WMTS map",
-            Kind::Wfs => "WFS features",
-            Kind::Image => "Geoimage file",
+            Kind::Wms => tr!("gis-dialogs-wms-map"),
+            Kind::Wmts => tr!("gis-dialogs-wmts-map"),
+            Kind::Wfs => tr!("gis-dialogs-wfs-features"),
+            Kind::Image => tr!("gis-dialogs-geoimage-file"),
         }
     }
 }
@@ -106,12 +107,8 @@ fn entries_of(kind: Kind, v: &Value) -> Vec<Entry> {
 /// The parameters of the add call, or the reason it cannot be made.
 fn add_params(d: &GisDialogs) -> Result<(&'static str, Value), String> {
     let url = d.url.trim();
-    let pick = |what: &str| -> Result<String, String> {
-        d.selected
-            .first()
-            .cloned()
-            .ok_or_else(|| format!("Pick a {what} first"))
-    };
+    let pick =
+        |reason: String| -> Result<String, String> { d.selected.first().cloned().ok_or(reason) };
     let mut p = serde_json::Map::new();
     let text = |p: &mut serde_json::Map<String, Value>, k: &str, v: &str| {
         if !v.trim().is_empty() {
@@ -121,7 +118,7 @@ fn add_params(d: &GisDialogs) -> Result<(&'static str, Value), String> {
     match d.kind {
         Kind::Wms => {
             if d.selected.is_empty() {
-                return Err("Pick at least one layer first".into());
+                return Err(tr!("gis-dialogs-pick-at-least-one-layer-first"));
             }
             p.insert("url".into(), json!(url));
             p.insert("layers".into(), json!(d.selected));
@@ -133,7 +130,10 @@ fn add_params(d: &GisDialogs) -> Result<(&'static str, Value), String> {
         }
         Kind::Wmts => {
             p.insert("url".into(), json!(url));
-            p.insert("layer".into(), json!(pick("layer")?));
+            p.insert(
+                "layer".into(),
+                json!(pick(tr!("gis-dialogs-pick-a-layer-first"))?),
+            );
             text(&mut p, "format", &d.format);
             p.insert("max_px".into(), json!(d.max_px));
             p.insert("opacity".into(), json!(d.opacity));
@@ -141,13 +141,16 @@ fn add_params(d: &GisDialogs) -> Result<(&'static str, Value), String> {
         }
         Kind::Wfs => {
             p.insert("url".into(), json!(url));
-            p.insert("type_name".into(), json!(pick("feature type")?));
+            p.insert(
+                "type_name".into(),
+                json!(pick(tr!("gis-dialogs-pick-a-feature-type-first"))?),
+            );
             text(&mut p, "crs", &d.crs);
             Ok(("gis.wfs.import", Value::Object(p)))
         }
         Kind::Image => {
             if d.image_path.trim().is_empty() {
-                return Err("Choose a picture file first".into());
+                return Err(tr!("gis-dialogs-choose-a-picture-file-first"));
             }
             p.insert("path".into(), json!(d.image_path.trim()));
             text(&mut p, "crs", &d.crs);
@@ -208,22 +211,26 @@ impl GisDialogs {
                 match result {
                     Ok(v) => {
                         self.entries = entries_of(self.kind, &v);
-                        self.message = format!(
-                            "{}: {} {}",
-                            v["title"]
-                                .as_str()
-                                .filter(|t| !t.is_empty())
-                                .unwrap_or("Server"),
-                            self.entries.len(),
-                            if self.kind == Kind::Wfs {
-                                "feature types"
-                            } else {
-                                "layers"
-                            }
-                        );
+                        let title = v["title"]
+                            .as_str()
+                            .filter(|t| !t.is_empty())
+                            .map_or_else(|| tr!("gis-dialogs-server"), str::to_string);
+                        self.message = if self.kind == Kind::Wfs {
+                            tr!(
+                                "gis-dialogs-loaded-feature-types",
+                                title = title,
+                                count = self.entries.len()
+                            )
+                        } else {
+                            tr!(
+                                "gis-dialogs-loaded-layers",
+                                title = title,
+                                count = self.entries.len()
+                            )
+                        };
                         self.selected.clear();
                     }
-                    Err(e) => self.message = format!("Error: {e}"),
+                    Err(e) => self.message = tr!("gis-dialogs-error", e = e),
                 }
             } else {
                 if self.add_job == Some(id) {
@@ -235,7 +242,7 @@ impl GisDialogs {
                         self.message = done_text(&v);
                         *status = self.message.clone();
                     }
-                    Err(e) => self.message = format!("Error: {e}"),
+                    Err(e) => self.message = tr!("gis-dialogs-error", e = e),
                 }
             }
         }
@@ -254,7 +261,8 @@ impl GisDialogs {
             self.allow_loaded = true;
         }
         let mut open = true;
-        egui::Window::new("Map Sources")
+        egui::Window::new(tr!("gis-dialogs-map-sources"))
+            .id(egui::Id::new("win-map-sources"))
             .open(&mut open)
             .default_width(460.0)
             .show(ctx, |ui| {
@@ -270,104 +278,139 @@ impl GisDialogs {
                 ui.separator();
                 if self.kind == Kind::Image {
                     ui.horizontal(|ui| {
-                        ui.label("File");
-                        ui.add(egui::TextEdit::singleline(&mut self.image_path).desired_width(260.0));
-                        if ui.button("Browse...").clicked()
+                        ui.label(tr!("gis-dialogs-file"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.image_path).desired_width(260.0),
+                        );
+                        if ui.button(tr!("gis-dialogs-browse")).clicked()
                             && let Some(p) = rfd::FileDialog::new()
-                                .add_filter("Pictures", &["png", "jpg", "jpeg", "tif", "tiff"])
+                                .add_filter(
+                                    tr!("gis-dialogs-pictures"),
+                                    &["png", "jpg", "jpeg", "tif", "tiff"],
+                                )
                                 .pick_file()
                         {
                             self.image_path = p.display().to_string();
                         }
                     });
-                    ui.small("A PNG or JPEG needs a world file next to it (.pgw, .jgw, .wld). A GeoTIFF carries its place.");
+                    ui.small(tr!("gis-dialogs-a-png-or-jpeg-needs-a-world"));
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label("Server address");
+                        ui.label(tr!("gis-dialogs-server-address"));
                         ui.add(egui::TextEdit::singleline(&mut self.url).desired_width(300.0));
                         let busy = self.caps_job.is_some();
-                        if ui.add_enabled(!busy && !self.url.trim().is_empty(), egui::Button::new("Load layers")).clicked() {
+                        if ui
+                            .add_enabled(
+                                !busy && !self.url.trim().is_empty(),
+                                egui::Button::new(tr!("gis-dialogs-load-layers")),
+                            )
+                            .clicked()
+                        {
                             let method = match self.kind {
                                 Kind::Wms => "gis.wms.capabilities",
                                 Kind::Wmts => "gis.wmts.capabilities",
                                 _ => "gis.wfs.capabilities",
                             };
-                            match session.gis_call_trusted(method, json!({"url": self.url.trim()})) {
+                            match session.gis_call_trusted(method, json!({"url": self.url.trim()}))
+                            {
                                 Ok(v) => {
                                     self.caps_job = v["job"].as_u64();
-                                    self.message = "Loading...".into();
+                                    self.message = tr!("gis-dialogs-loading");
                                 }
-                                Err(e) => self.message = format!("Error: {}", e.message),
+                                Err(e) => {
+                                    self.message = tr!("gis-dialogs-error-2", message = e.message)
+                                }
                             }
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Filter");
+                        ui.label(tr!("gis-dialogs-filter"));
                         ui.text_edit_singleline(&mut self.filter);
                     });
                     let f = self.filter.to_lowercase();
-                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                        for e in self
-                            .entries
-                            .iter()
-                            .filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f) || e.title.to_lowercase().contains(&f))
-                        {
-                            let on = self.selected.contains(&e.name);
-                            let label = if e.title.is_empty() || e.title == e.name {
-                                e.name.clone()
-                            } else {
-                                format!("{}  ({})", e.title, e.name)
-                            };
-                            if ui.selectable_label(on, label).clicked() {
-                                if self.kind == Kind::Wms {
-                                    // A WMS can draw several layers together.
-                                    if on {
-                                        self.selected.retain(|n| n != &e.name);
-                                    } else {
-                                        self.selected.push(e.name.clone());
-                                    }
+                    egui::ScrollArea::vertical()
+                        .max_height(180.0)
+                        .show(ui, |ui| {
+                            for e in self.entries.iter().filter(|e| {
+                                f.is_empty()
+                                    || e.name.to_lowercase().contains(&f)
+                                    || e.title.to_lowercase().contains(&f)
+                            }) {
+                                let on = self.selected.contains(&e.name);
+                                let label = if e.title.is_empty() || e.title == e.name {
+                                    e.name.clone()
                                 } else {
-                                    self.selected = vec![e.name.clone()];
+                                    format!("{}  ({})", e.title, e.name)
+                                };
+                                if ui.selectable_label(on, label).clicked() {
+                                    if self.kind == Kind::Wms {
+                                        // A WMS can draw several layers together.
+                                        if on {
+                                            self.selected.retain(|n| n != &e.name);
+                                        } else {
+                                            self.selected.push(e.name.clone());
+                                        }
+                                    } else {
+                                        self.selected = vec![e.name.clone()];
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label("CRS");
-                    ui.add(egui::TextEdit::singleline(&mut self.crs).desired_width(110.0).hint_text("automatic"));
+                    ui.label(tr!("gis-dialogs-crs"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.crs)
+                            .desired_width(110.0)
+                            .hint_text(tr!("gis-dialogs-automatic")),
+                    );
                     if matches!(self.kind, Kind::Wms | Kind::Wmts) {
-                        ui.label("Format");
-                        ui.add(egui::TextEdit::singleline(&mut self.format).desired_width(90.0).hint_text("image/png"));
+                        ui.label(tr!("gis-dialogs-format"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.format)
+                                .desired_width(90.0)
+                                .hint_text("image/png"),
+                        );
                     }
                 });
                 if self.kind != Kind::Wfs {
                     ui.horizontal(|ui| {
-                        ui.label("Pixels");
-                        ui.add(egui::DragValue::new(&mut self.max_px).range(64..=4096).speed(16));
-                        ui.label("Opacity");
+                        ui.label(tr!("gis-dialogs-pixels"));
+                        ui.add(
+                            egui::DragValue::new(&mut self.max_px)
+                                .range(64..=4096)
+                                .speed(16),
+                        );
+                        ui.label(tr!("gis-dialogs-opacity"));
                         ui.add(egui::Slider::new(&mut self.opacity, 0.0..=1.0));
                     });
-                    ui.small("The map covers the drawing plus a margin. It becomes an underlay below the vector objects.");
+                    ui.small(tr!("gis-dialogs-the-map-covers-the-drawing-plus-a"));
                 } else {
-                    ui.small("The features become vector objects. Their attributes go into the object data.");
+                    ui.small(tr!(
+                        "gis-dialogs-the-features-become-vector-objects-their-attributes"
+                    ));
                 }
                 ui.horizontal(|ui| {
                     let busy = self.add_job.is_some();
-                    if ui.add_enabled(!busy, egui::Button::new("Add to drawing")).clicked() {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(tr!("gis-dialogs-add-to-drawing")))
+                        .clicked()
+                    {
                         match add_params(self) {
                             Ok((method, p)) => match session.gis_call_trusted(method, p) {
                                 Ok(v) if v["job"].is_u64() => {
                                     self.add_job = v["job"].as_u64();
-                                    self.message = "Fetching...".into();
+                                    self.message = tr!("gis-dialogs-fetching");
                                 }
                                 Ok(v) => {
                                     *changed = true;
                                     self.message = done_text(&v);
                                     *status = self.message.clone();
                                 }
-                                Err(e) => self.message = format!("Error: {}", e.message),
+                                Err(e) => {
+                                    self.message = tr!("gis-dialogs-error-2", message = e.message)
+                                }
                             },
                             Err(e) => self.message = e,
                         }
@@ -380,19 +423,31 @@ impl GisDialogs {
                     ui.label(&self.message);
                 }
                 ui.separator();
-                ui.collapsing("Agents and the cache", |ui| {
-                    ui.label("Addresses that agents may fetch (one per line: host, *.domain or address prefix). Empty: none.");
-                    if ui.add(egui::TextEdit::multiline(&mut self.allow_text).desired_rows(3).desired_width(420.0)).changed() {
-                        session.gis.urls = kadakas_api::UrlPolicy::allow_list(self.allow_text.lines().map(str::to_string));
+                ui.collapsing(tr!("gis-dialogs-agents-and-the-cache"), |ui| {
+                    ui.label(tr!("gis-dialogs-addresses-that-agents-may-fetch-one-per"));
+                    if ui
+                        .add(
+                            egui::TextEdit::multiline(&mut self.allow_text)
+                                .desired_rows(3)
+                                .desired_width(420.0),
+                        )
+                        .changed()
+                    {
+                        session.gis.urls = kadakas_api::UrlPolicy::allow_list(
+                            self.allow_text.lines().map(str::to_string),
+                        );
                     }
                     if let Ok(c) = session.gis_call_trusted("gis.sources", json!({})) {
                         ui.horizontal(|ui| {
-                            ui.label(format!(
-                                "Tile cache: {} files, {:.1} MB",
-                                c["cache"]["files"].as_u64().unwrap_or(0),
-                                c["cache"]["bytes"].as_u64().unwrap_or(0) as f64 / 1.0e6
+                            ui.label(tr!(
+                                "gis-dialogs-tile-cache-files-mb",
+                                files = c["cache"]["files"].as_u64().unwrap_or(0),
+                                megabytes = kadakas_units::current().number_text(
+                                    c["cache"]["bytes"].as_u64().unwrap_or(0) as f64 / 1.0e6,
+                                    1
+                                )
                             ));
-                            if ui.button("Clear").clicked() {
+                            if ui.button(tr!("gis-dialogs-clear")).clicked() {
                                 let _ = session.gis_call_trusted("gis.cache.clear", json!({}));
                             }
                         });
@@ -410,29 +465,46 @@ impl GisDialogs {
         changed: &mut bool,
     ) {
         let mut open = true;
-        egui::Window::new("Change CRS")
+        egui::Window::new(tr!("gis-dialogs-change-crs"))
+            .id(egui::Id::new("win-change-crs"))
             .open(&mut open)
             .default_width(420.0)
             .show(ctx, |ui| {
-                let current = session.editor.doc().georef.as_ref().map(|g| g.crs.clone()).unwrap_or_default();
+                let current = session
+                    .editor
+                    .doc()
+                    .georef
+                    .as_ref()
+                    .map(|g| g.crs.clone())
+                    .unwrap_or_default();
                 if current.is_empty() {
-                    ui.label("The document has no CRS yet. Give one to start:");
+                    ui.label(tr!("gis-dialogs-the-document-has-no-crs-yet-give"));
                 } else {
-                    ui.label(format!("Current CRS: {current}"));
+                    ui.label(tr!("gis-dialogs-current-crs", current = current));
                 }
                 ui.horizontal(|ui| {
-                    ui.label("New CRS");
-                    if ui.add(egui::TextEdit::singleline(&mut self.target_crs).desired_width(160.0).hint_text("EPSG:32635")).changed() {
+                    ui.label(tr!("gis-dialogs-new-crs"));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.target_crs)
+                                .desired_width(160.0)
+                                .hint_text("EPSG:32635"),
+                        )
+                        .changed()
+                    {
                         self.preview = None;
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Preview").clicked() {
+                    if ui.button(tr!("gis-dialogs-preview")).clicked() {
                         let r = if current.is_empty() {
-                            Err("Set the CRS below to begin (no objects are converted).".to_string())
+                            Err(tr!("gis-dialogs-set-the-crs-below-to-begin-no"))
                         } else {
                             session
-                                .gis_call_trusted("gis.reproject", json!({"crs": self.target_crs.trim(), "dry_run": true}))
+                                .gis_call_trusted(
+                                    "gis.reproject",
+                                    json!({"crs": self.target_crs.trim(), "dry_run": true}),
+                                )
                                 .map_err(|e| e.message)
                         };
                         match r {
@@ -443,17 +515,31 @@ impl GisDialogs {
                             }
                         }
                     }
-                    let label = if current.is_empty() { "Set CRS" } else { "Convert" };
-                    if ui.add_enabled(!self.target_crs.trim().is_empty(), egui::Button::new(label)).clicked() {
+                    let label = if current.is_empty() {
+                        tr!("gis-dialogs-set-crs")
+                    } else {
+                        tr!("gis-dialogs-convert")
+                    };
+                    if ui
+                        .add_enabled(!self.target_crs.trim().is_empty(), egui::Button::new(label))
+                        .clicked()
+                    {
                         let r = if current.is_empty() {
-                            session.gis_call_trusted("gis.georef.set", json!({"crs": self.target_crs.trim()}))
+                            session.gis_call_trusted(
+                                "gis.georef.set",
+                                json!({"crs": self.target_crs.trim()}),
+                            )
                         } else {
-                            session.gis_call_trusted("gis.reproject", json!({"crs": self.target_crs.trim()}))
+                            session.gis_call_trusted(
+                                "gis.reproject",
+                                json!({"crs": self.target_crs.trim()}),
+                            )
                         };
                         match r {
                             Ok(_) => {
                                 *changed = true;
-                                *status = format!("CRS is now {}", self.target_crs.trim());
+                                *status =
+                                    tr!("gis-dialogs-crs-is-now", crs = self.target_crs.trim());
                                 self.preview = None;
                             }
                             Err(e) => self.crs_message(e.message),
@@ -462,21 +548,32 @@ impl GisDialogs {
                 });
                 if let Some(r) = &self.preview {
                     ui.separator();
-                    ui.label(format!(
-                        "{} objects change. Scale factor {:.6}. Rotation {:.4}\u{b0} (was {:.4}\u{b0}).",
-                        r["objects_changed"], r["scale_factor"].as_f64().unwrap_or(1.0),
-                        r["new_rotation_deg"].as_f64().unwrap_or(0.0), r["old_rotation_deg"].as_f64().unwrap_or(0.0)
+                    let u = kadakas_units::current();
+                    ui.label(tr!(
+                        "gis-dialogs-objects-change",
+                        count = r["objects_changed"].as_u64().unwrap_or(0),
+                        factor = u.number_text(r["scale_factor"].as_f64().unwrap_or(1.0), 6),
+                        new = u.number_text(r["new_rotation_deg"].as_f64().unwrap_or(0.0), 4),
+                        old = u.number_text(r["old_rotation_deg"].as_f64().unwrap_or(0.0), 4)
                     ));
-                    ui.label(format!(
-                        "New origin: E {:.0}, N {:.0}. Largest shift {:.1} mm.",
-                        r["new_origin"][0].as_f64().unwrap_or(0.0), r["new_origin"][1].as_f64().unwrap_or(0.0),
-                        r["max_shift_mm"].as_f64().unwrap_or(0.0)
+                    ui.label(tr!(
+                        "gis-dialogs-new-origin",
+                        east = u.number_text(r["new_origin"][0].as_f64().unwrap_or(0.0), 0),
+                        north = u.number_text(r["new_origin"][1].as_f64().unwrap_or(0.0), 0),
+                        shift = u.length_text_d(r["max_shift_mm"].as_f64().unwrap_or(0.0), 1)
                     ));
                     for w in r["warnings"].as_array().into_iter().flatten() {
                         ui.small(format!("- {}", w.as_str().unwrap_or("")));
                     }
                     for s in r["skipped"].as_array().into_iter().flatten().take(8) {
-                        ui.small(format!("Not converted: object {} ({}): {}", s["id"], s["kind"].as_str().unwrap_or(""), s["reason"].as_str().unwrap_or("")));
+                        ui.small(tr!(
+                            "gis-dialogs-not-converted-object",
+                            id = s["id"]
+                                .as_str()
+                                .map_or_else(|| s["id"].to_string(), str::to_string),
+                            kind = s["kind"].as_str().unwrap_or(""),
+                            reason = s["reason"].as_str().unwrap_or("")
+                        ));
                     }
                 }
                 if !self.message.is_empty() {
@@ -487,25 +584,32 @@ impl GisDialogs {
     }
 
     fn crs_message(&mut self, m: String) {
-        self.message = format!("Error: {m}");
+        self.message = tr!("gis-dialogs-error-3", m = m);
     }
 }
 
 /// The text for a finished call.
 fn done_text(v: &Value) -> String {
     if let Some(s) = v.get("stats") {
-        format!(
-            "Map added: {} tiles ({} from the cache), CRS {}",
-            s["tiles"],
-            s["from_cache"],
-            s["crs"].as_str().unwrap_or("")
+        tr!(
+            "gis-dialogs-map-added-tiles-from-the-cache-crs",
+            tiles = s["tiles"].as_u64().unwrap_or(0),
+            cached = s["from_cache"].as_u64().unwrap_or(0),
+            crs = s["crs"].as_str().unwrap_or("")
         )
     } else if let Some(n) = v.get("imported") {
-        format!("{n} objects imported")
+        tr!(
+            "gis-dialogs-objects-imported",
+            count = n.as_u64().unwrap_or(0)
+        )
     } else if v.get("width").is_some() {
-        format!("Picture added ({} x {} px)", v["width"], v["height"])
+        tr!(
+            "gis-dialogs-picture-added-x-px",
+            width = v["width"].as_u64().unwrap_or(0),
+            height = v["height"].as_u64().unwrap_or(0)
+        )
     } else {
-        "Done".into()
+        tr!("gis-dialogs-done")
     }
 }
 

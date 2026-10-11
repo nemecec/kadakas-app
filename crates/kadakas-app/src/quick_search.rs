@@ -8,6 +8,7 @@ use crate::keymap::Action;
 use crate::layout::Tab;
 use crate::panels::MenuAction;
 use crate::theme::ThemeChoice;
+use kadakas_l10n::tr;
 
 /// What a result does when you run it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +146,8 @@ impl QuickSearch {
         if enter && let Some(i) = hits.get(self.selected) {
             chosen = Some(items[*i].command);
         }
-        egui::Window::new("Quick search")
+        egui::Window::new(tr!("quick-search-quick-search"))
+            .id(egui::Id::new("win-quick-search"))
             .title_bar(false)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
             .resizable(false)
@@ -154,7 +156,7 @@ impl QuickSearch {
             .show(ctx, |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text("Type a command")
+                        .hint_text(tr!("quick-search-type-a-command"))
                         .desired_width(f32::INFINITY),
                 );
                 if self.focus {
@@ -166,7 +168,7 @@ impl QuickSearch {
                 }
                 ui.add_space(4.0);
                 if hits.is_empty() {
-                    ui.weak("No command matches");
+                    ui.weak(tr!("quick-search-no-command-matches"));
                 }
                 for (row, i) in hits.iter().enumerate() {
                     let it = &items[*i];

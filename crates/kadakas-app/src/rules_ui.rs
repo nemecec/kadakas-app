@@ -2,9 +2,11 @@
 //! (color by a property) and the survey point of the georeference. Every action is an API call, so the
 //! window, the API and scripts do the same thing and each action is one undo step.
 
+use crate::units_ui::DragValueExt as _;
 use egui::{DragValue, Ui};
 use kadakas_api::Session;
 use kadakas_core::viewrules::Phase;
+use kadakas_l10n::tr;
 use serde_json::json;
 
 /// What the section remembers between frames.
@@ -50,7 +52,7 @@ fn fields() -> Vec<String> {
 
 fn report(status: &mut String, r: Result<serde_json::Value, kadakas_api::RpcError>) {
     if let Err(e) = r {
-        *status = format!("Error: {}", e.message);
+        *status = tr!("rules-ui-error", message = e.message);
     }
 }
 
@@ -58,30 +60,42 @@ fn report(status: &mut String, r: Result<serde_json::Value, kadakas_api::RpcErro
 pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let key = egui::Id::new("rules_ui_state");
     let mut st: RulesState = ui.data_mut(|d| d.get_temp(key)).unwrap_or_default();
-    egui::CollapsingHeader::new("Display rules")
+    egui::CollapsingHeader::new(tr!("rules-ui-display-rules"))
+        .id_salt("rules-ui-display-rules")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();
             let rules = doc.drawing.view_rules.clone();
             let georeferenced = doc.georef.is_some();
-            let selection: Vec<kadakas_core::uid::Uid> = session.selection.iter().map(|i| i.0).collect();
+            let selection: Vec<kadakas_core::uid::Uid> =
+                session.selection.iter().map(|i| i.0).collect();
 
-            ui.strong("Northing/easting grid");
+            ui.strong(tr!("rules-ui-northing-easting-grid"));
             ui.horizontal(|ui| {
                 let mut on = rules.ne_grid.is_some();
                 if ui
-                    .add_enabled(georeferenced, egui::Checkbox::new(&mut on, "Show"))
-                    .on_hover_text("Needs a georeference (set it with the survey point below)")
+                    .add_enabled(
+                        georeferenced,
+                        egui::Checkbox::new(&mut on, tr!("rules-ui-show")),
+                    )
+                    .on_hover_text(tr!("rules-ui-needs-a-georeference-set-it-with-the"))
                     .changed()
                 {
-                    let spacing = if on { json!(st.grid_spacing) } else { json!(null) };
-                    report(status, session.handle("grid.set", json!({"spacing": spacing})));
+                    let spacing = if on {
+                        json!(st.grid_spacing)
+                    } else {
+                        json!(null)
+                    };
+                    report(
+                        status,
+                        session.handle("grid.set", json!({"spacing": spacing})),
+                    );
                 }
                 let r = ui.add(
                     DragValue::new(&mut st.grid_spacing)
                         .speed(1.0)
                         .range(0.01..=100_000.0)
-                        .suffix(" m"),
+                        .length_m(),
                 );
                 if (r.drag_stopped() || r.lost_focus()) && rules.ne_grid.is_some() {
                     report(
@@ -92,17 +106,20 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             });
 
             ui.add_space(6.0);
-            ui.strong("Survey point");
+            ui.strong(tr!("rules-ui-survey-point"));
             ui.horizontal(|ui| {
-                ui.label("E");
+                ui.label(tr!("rules-ui-e"));
                 ui.add(DragValue::new(&mut st.easting).speed(1.0));
-                ui.label("N");
+                ui.label(tr!("rules-ui-n"));
                 ui.add(DragValue::new(&mut st.northing).speed(1.0));
             });
             let one = selection.len() == 1;
             if ui
-                .add_enabled(one, egui::Button::new("Set from selected point"))
-                .on_hover_text("The selected survey point, plant or circle gets this map position. The drawing does not move.")
+                .add_enabled(
+                    one,
+                    egui::Button::new(tr!("rules-ui-set-from-selected-point")),
+                )
+                .on_hover_text(tr!("rules-ui-the-selected-survey-point-plant-or-circle"))
                 .clicked()
             {
                 report(
@@ -115,17 +132,24 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             }
 
             ui.add_space(6.0);
-            ui.strong("Phases");
+            ui.strong(tr!("rules-ui-phases"));
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("rules_phase")
-                    .selected_text(st.phase.id())
+                    .selected_text(crate::enum_names::name("phase", st.phase.id()))
                     .show_ui(ui, |ui| {
                         for p in Phase::ALL {
-                            ui.selectable_value(&mut st.phase, p, p.id());
+                            ui.selectable_value(
+                                &mut st.phase,
+                                p,
+                                crate::enum_names::name("phase", p.id()),
+                            );
                         }
                     });
                 if ui
-                    .add_enabled(!selection.is_empty(), egui::Button::new("Set phase"))
+                    .add_enabled(
+                        !selection.is_empty(),
+                        egui::Button::new(tr!("rules-ui-set-phase")),
+                    )
                     .clicked()
                 {
                     report(
@@ -139,8 +163,8 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             });
             let mut show = rules.phases.is_some_and(|p| p.enabled);
             if ui
-                .checkbox(&mut show, "Show phase display")
-                .on_hover_text("Existing objects grey, demolished objects red")
+                .checkbox(&mut show, tr!("rules-ui-show-phase-display"))
+                .on_hover_text(tr!("rules-ui-existing-objects-grey-demolished-objects-red"))
                 .changed()
             {
                 let p = if rules.phases.is_some() {
@@ -152,7 +176,10 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             }
             if let Some(p) = rules.phases {
                 let mut hide = !p.demolished.visible;
-                if ui.checkbox(&mut hide, "Hide demolished").changed() {
+                if ui
+                    .checkbox(&mut hide, tr!("rules-ui-hide-demolished"))
+                    .changed()
+                {
                     report(
                         status,
                         session.handle("phase.display", json!({"demolished": {"visible": !hide}})),
@@ -161,7 +188,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             }
 
             ui.add_space(6.0);
-            ui.strong("Data visualization");
+            ui.strong(tr!("rules-ui-data-visualization"));
             egui::ComboBox::from_id_salt("rules_field")
                 .selected_text(st.field.clone())
                 .show_ui(ui, |ui| {
@@ -170,7 +197,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
                     }
                 });
             ui.horizontal(|ui| {
-                if ui.button("By value").clicked() {
+                if ui.button(tr!("rules-ui-by-value")).clicked() {
                     report(
                         status,
                         session.handle(
@@ -179,7 +206,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
                         ),
                     );
                 }
-                if ui.button("By range").clicked() {
+                if ui.button(tr!("rules-ui-by-range")).clicked() {
                     report(
                         status,
                         session.handle(
@@ -190,7 +217,10 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
                 }
                 ui.add(DragValue::new(&mut st.bins).speed(0.2).range(2..=12));
                 if ui
-                    .add_enabled(rules.visualization.is_some(), egui::Button::new("Clear"))
+                    .add_enabled(
+                        rules.visualization.is_some(),
+                        egui::Button::new(tr!("rules-ui-clear")),
+                    )
                     .clicked()
                 {
                     report(status, session.handle("visualization.clear", json!({})));
@@ -198,21 +228,19 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             });
             if let Some(v) = &rules.visualization {
                 let (rows, none) = kadakas_core::viewrules::legend(session.editor.doc(), v);
-                ui.label(format!("Colored by {}", v.field));
+                ui.label(tr!("rules-ui-colored-by", field = v.field));
                 for r in rows {
                     ui.horizontal(|ui| {
                         let [cr, cg, cb, _] = r.color.0;
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(14.0, 14.0),
-                            egui::Sense::hover(),
-                        );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         ui.painter()
                             .rect_filled(rect, 2.0, egui::Color32::from_rgb(cr, cg, cb));
                         ui.label(format!("{}  ({})", r.label, r.count));
                     });
                 }
                 if none > 0 {
-                    ui.weak(format!("{none} object(s) stay as they are"));
+                    ui.weak(tr!("rules-ui-object-s-stay-as-they-are", none = none));
                 }
             }
         });

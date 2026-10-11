@@ -1,5 +1,6 @@
 //! Document files: JSON of `Document`. The extension is `.kad`.
 
+use kadakas_l10n::tr;
 use std::path::{Path, PathBuf};
 
 use kadakas_api::Session;
@@ -13,7 +14,7 @@ pub fn parse_document(text: &str) -> Result<Document, String> {
 
 pub fn read_document(path: &Path) -> Result<Document, String> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        .map_err(|e| tr!("file-io-cannot-read", path = path.display(), e = e))?;
     parse_document(&text)
 }
 
@@ -29,13 +30,13 @@ pub fn write_document(path: &Path, doc: &Document) -> Result<(), String> {
 pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
     let text = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
     fsio::write_atomic(path, text.as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        .map_err(|e| tr!("file-io-cannot-write", path = path.display(), e = e))
 }
 
 /// Writes the SVG of the session's document (the same SVG as `render.svg`), atomically.
 pub fn write_svg(path: &Path, session: &Session) -> Result<(), String> {
     fsio::write_atomic(path, session.render_svg(1600).as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        .map_err(|e| tr!("file-io-cannot-write", path = path.display(), e = e))
 }
 
 /// Adds `.kad` unless the name already ends in `.kad`.

@@ -6,6 +6,7 @@
 use kadakas_api::Session;
 use kadakas_core::present::{RenderMode, RenderStyle, SunSettings};
 use kadakas_core::resource::ResourceId;
+use kadakas_l10n::tr;
 use serde_json::{Value, json};
 
 /// Applies a built-in render style (`Shaded`, `Realistic`, `Hidden Line`, ...): the style becomes a
@@ -109,7 +110,7 @@ pub fn assign_to_selection(
     material: Option<ResourceId>,
 ) -> Result<(), String> {
     if session.selection.is_empty() {
-        return Err("select objects first".into());
+        return Err(tr!("present-ui-select-objects-first"));
     }
     let ids: Vec<kadakas_core::uid::Uid> = session.selection.iter().map(|o| o.0).collect();
     session
@@ -134,20 +135,22 @@ fn material_picker(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         .collect();
     let shared = shared_material(session);
     let label = match shared {
-        None if session.selection.is_empty() => "Select objects".to_string(),
-        None => "Mixed".to_string(),
-        Some(None) => "None".to_string(),
+        None if session.selection.is_empty() => tr!("present-ui-select-objects"),
+        None => tr!("present-ui-mixed"),
+        Some(None) => tr!("present-ui-none"),
         Some(Some(id)) => materials
             .iter()
             .find(|(m, _)| *m == id)
-            .map_or("None".to_string(), |(_, n)| n.clone()),
+            .map_or(tr!("present-ui-none"), |(_, n)| n.clone()),
     };
-    ui.label("Material");
+    ui.label(tr!("present-ui-material"));
     ui.add_enabled_ui(!session.selection.is_empty(), |ui| {
         egui::ComboBox::from_id_salt("selection_material")
             .selected_text(label)
             .show_ui(ui, |ui| {
-                if ui.selectable_label(shared == Some(None), "None").clicked()
+                if ui
+                    .selectable_label(shared == Some(None), tr!("present-ui-none"))
+                    .clicked()
                     && let Err(e) = assign_to_selection(session, None)
                 {
                     error = Some(e);
@@ -162,7 +165,9 @@ fn material_picker(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
                     }
                 }
                 ui.separator();
-                if ui.button("Add built-in materials").clicked()
+                if ui
+                    .button(tr!("present-ui-add-built-in-materials"))
+                    .clicked()
                     && let Err(e) = session
                         .handle("material.add_defaults", json!({}))
                         .map(|_| ())
@@ -221,7 +226,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, gpu_ready: bool) -> Option
             let label = active
                 .and_then(|id| session.editor.doc().resources.get(id))
                 .map_or("Shaded".to_string(), |r| r.name.clone());
-            ui.label("Style");
+            ui.label(tr!("present-ui-style"));
             let (builtin, own) = style_names(session);
             egui::ComboBox::from_id_salt("render_style")
                 .selected_text(label)
@@ -252,12 +257,12 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, gpu_ready: bool) -> Option
                 }
             };
             if style.mode == RenderMode::Shaded {
-                flag(ui, "Edges", "edges", style.edges);
-                flag(ui, "Textures", "textures", style.textures);
-                flag(ui, "Sun", "sun", style.sun);
-                flag(ui, "Shadows", "shadows", style.shadows);
+                flag(ui, &tr!("present-ui-edges"), "edges", style.edges);
+                flag(ui, &tr!("present-ui-textures"), "textures", style.textures);
+                flag(ui, &tr!("present-ui-sun"), "sun", style.sun);
+                flag(ui, &tr!("present-ui-shadows"), "shadows", style.shadows);
             }
-            ui.menu_button("Sun settings", |ui| {
+            ui.menu_button(tr!("present-ui-sun-settings"), |ui| {
                 if let Some(e) = sun_panel(ui, session) {
                     error = Some(e);
                 }
@@ -295,7 +300,7 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         };
         num(
             ui,
-            "Latitude",
+            &tr!("present-ui-latitude"),
             "latitude",
             &mut s.latitude,
             0.05,
@@ -303,7 +308,7 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         );
         num(
             ui,
-            "Longitude",
+            &tr!("present-ui-longitude"),
             "longitude",
             &mut s.longitude,
             0.05,
@@ -311,7 +316,7 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         );
         num(
             ui,
-            "Time zone (h from UTC)",
+            &tr!("present-ui-time-zone-h-from-utc"),
             "tz_offset",
             &mut s.tz_offset,
             0.5,
@@ -319,26 +324,38 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         );
         num(
             ui,
-            "North angle",
+            &tr!("present-ui-north-angle"),
             "north_angle",
             &mut s.north_angle,
             1.0,
             -360.0..=360.0,
         );
-        ui.label("Summer time");
+        ui.label(tr!("present-ui-summer-time"));
         let mut dst = s.dst;
         if ui.checkbox(&mut dst, "").changed() {
             edits.push(SunEdit::Set(json!({"dst": dst})));
         }
         ui.end_row();
-        ui.label("Date");
+        ui.label(tr!("present-ui-date"));
         ui.horizontal(|ui| {
             let (mut y, mut m, mut d) = (s.year, s.month, s.day);
-            let c1 = ui
-                .add(egui::DragValue::new(&mut y).range(1900..=2100))
-                .changed();
-            let c2 = ui.add(egui::DragValue::new(&mut m).range(1..=12)).changed();
-            let c3 = ui.add(egui::DragValue::new(&mut d).range(1..=31)).changed();
+            let (mut c1, mut c2, mut c3) = (false, false, false);
+            // The day, month and year come in the order of the date format (11.10.2026).
+            for part in date_parts(kadakas_units::current().date) {
+                match part {
+                    DatePart::Year => {
+                        c1 = ui
+                            .add(egui::DragValue::new(&mut y).range(1900..=2100))
+                            .changed();
+                    }
+                    DatePart::Month => {
+                        c2 = ui.add(egui::DragValue::new(&mut m).range(1..=12)).changed();
+                    }
+                    DatePart::Day => {
+                        c3 = ui.add(egui::DragValue::new(&mut d).range(1..=31)).changed();
+                    }
+                }
+            }
             if c1 || c2 || c3 {
                 // Keep the day inside the month.
                 let d = d.min(kadakas_core::sun::days_in_month(y, m));
@@ -348,7 +365,7 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
             }
         });
         ui.end_row();
-        ui.label("Time");
+        ui.label(tr!("present-ui-time"));
         let mut hour = s.hour;
         if ui
             .add(
@@ -364,18 +381,21 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
         ui.end_row();
     });
     ui.horizontal(|ui| {
-        if ui.button("From georeference").clicked() {
+        if ui.button(tr!("present-ui-from-georeference")).clicked() {
             edits.push(SunEdit::FromGeoref);
         }
         if ui
-            .add_enabled(current.is_some(), egui::Button::new("Remove sun"))
+            .add_enabled(
+                current.is_some(),
+                egui::Button::new(tr!("present-ui-remove-sun")),
+            )
             .clicked()
         {
             edits.push(SunEdit::Off);
         }
     });
     if current.is_none() && edits.is_empty() {
-        ui.label("No sun yet. Change a value to set one.");
+        ui.label(tr!("present-ui-no-sun-yet-change-a-value-to"));
     } else {
         ui.label(position_text(&s));
     }
@@ -387,13 +407,38 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
     error
 }
 
+/// A part of a date.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DatePart {
+    Year,
+    Month,
+    Day,
+}
+
+/// The order in which the parts of a date are written.
+fn date_parts(format: kadakas_units::DateFormat) -> [DatePart; 3] {
+    use kadakas_units::DateFormat;
+    match format {
+        DateFormat::Iso => [DatePart::Year, DatePart::Month, DatePart::Day],
+        DateFormat::Dmy => [DatePart::Day, DatePart::Month, DatePart::Year],
+        DateFormat::Mdy => [DatePart::Month, DatePart::Day, DatePart::Year],
+    }
+}
+
 /// "Azimuth 180.0, elevation 53.3" for the sun settings, or a note when the sun is down.
 pub fn position_text(s: &SunSettings) -> String {
     let p = s.position();
     if p.elevation > 0.0 {
-        format!("Azimuth {:.1}, elevation {:.1}", p.azimuth, p.elevation)
+        tr!(
+            "present-ui-azimuth-elevation",
+            azimuth = kadakas_units::current().number_text(p.azimuth, 1),
+            elevation = kadakas_units::current().number_text(p.elevation, 1)
+        )
     } else {
-        format!("Sun below the horizon (elevation {:.1})", p.elevation)
+        tr!(
+            "present-ui-sun-below-the-horizon",
+            elevation = kadakas_units::current().number_text(p.elevation, 1)
+        )
     }
 }
 

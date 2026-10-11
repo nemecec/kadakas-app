@@ -2,6 +2,8 @@
 //! modes in Object Info, and the 2D extras (joint pattern, border, holes and plants). All changes
 //! are commands. The geometry comes from `kadakas_core::hardscape` and `landscape`.
 
+use crate::units_ui::DragValueExt as _;
+use kadakas_l10n::tr;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -65,41 +67,48 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
     let s = &mut settings.areas;
     match tool {
         Tool::Hardscape => {
-            ui.label("Hardscape style");
+            ui.label(tr!("area-ui-hardscape-style"));
             if let Some(c) = style_combo(
                 ui,
                 "hardscape_tool_style",
                 s.hardscape_style,
                 &hardscape_styles(doc),
-                "(none: plain slab)",
+                &tr!("area-ui-none-plain-slab"),
             ) {
                 s.hardscape_style = c;
             }
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.path, false, "Slab");
-                ui.selectable_value(&mut s.path, true, "Path");
+                ui.selectable_value(&mut s.path, false, tr!("area-ui-slab"));
+                ui.selectable_value(&mut s.path, true, tr!("area-ui-path"));
             });
             if s.path {
                 ui.horizontal(|ui| {
-                    ui.label("Width");
+                    ui.label(tr!("area-ui-width"));
                     ui.add(
                         DragValue::new(&mut s.width)
                             .speed(10.0)
                             .range(1.0..=1.0e6)
-                            .suffix(" mm"),
+                            .length(),
                     );
                 });
                 egui::ComboBox::from_id_salt("hardscape_tool_join")
-                    .selected_text(format!("{} join", s.join.id()))
+                    .selected_text(tr!(
+                        "area-ui-join",
+                        join = crate::enum_names::name("join", s.join.id())
+                    ))
                     .show_ui(ui, |ui| {
                         for j in Join::ALL {
-                            ui.selectable_value(&mut s.join, j, j.id());
+                            ui.selectable_value(
+                                &mut s.join,
+                                j,
+                                crate::enum_names::name("join", j.id()),
+                            );
                         }
                     });
             }
         }
         Tool::LandscapeArea => {
-            ui.label("Landscape area style");
+            ui.label(tr!("area-ui-landscape-area-style"));
             if let Some(c) = style_combo(
                 ui,
                 "landscape_tool_style",
@@ -143,10 +152,10 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     let d = hardscape::data(obj).unwrap_or_default();
     let styles = hardscape_styles(doc);
     ui.separator();
-    ui.strong("Hardscape");
+    ui.strong(tr!("area-ui-hardscape"));
     let mut patch = HardscapePatch::default();
     ui.horizontal(|ui| {
-        ui.label("Style");
+        ui.label(tr!("area-ui-style"));
         if let Some(c) = style_combo(ui, ("hardscape_style_of", id), d.style, &styles, "(none)") {
             match c {
                 Some(s) => patch.style = Some(s),
@@ -155,17 +164,21 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Mode");
+        ui.label(tr!("area-ui-mode"));
         let can_path = !d.center.is_empty();
-        if ui.selectable_label(d.mode == Mode::Slab, "Slab").clicked() && d.mode != Mode::Slab {
+        if ui
+            .selectable_label(d.mode == Mode::Slab, tr!("area-ui-slab"))
+            .clicked()
+            && d.mode != Mode::Slab
+        {
             patch.mode = Some(Mode::Slab);
         }
         if ui
             .add_enabled(
                 can_path,
-                egui::Button::selectable(d.mode == Mode::Path, "Path"),
+                egui::Button::selectable(d.mode == Mode::Path, tr!("area-ui-path")),
             )
-            .on_disabled_hover_text("Draw a path with the Hardscape tool in Path mode")
+            .on_disabled_hover_text(tr!("area-ui-draw-a-path-with-the-hardscape-tool"))
             .clicked()
             && d.mode != Mode::Path
         {
@@ -175,12 +188,12 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     if d.mode == Mode::Path {
         let mut width = d.width;
         let r = ui.horizontal(|ui| {
-            ui.label("Width");
+            ui.label(tr!("area-ui-width"));
             ui.add(
                 DragValue::new(&mut width)
                     .speed(10.0)
                     .range(1.0..=1.0e6)
-                    .suffix(" mm"),
+                    .length(),
             )
         });
         if (r.inner.drag_stopped() || r.inner.lost_focus()) && width != d.width {
@@ -188,10 +201,13 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         }
         let mut join = d.join;
         egui::ComboBox::from_id_salt(("hardscape_join", id))
-            .selected_text(format!("{} join", join.id()))
+            .selected_text(tr!(
+                "area-ui-join",
+                join = crate::enum_names::name("join", join.id())
+            ))
             .show_ui(ui, |ui| {
                 for j in Join::ALL {
-                    ui.selectable_value(&mut join, j, j.id());
+                    ui.selectable_value(&mut join, j, crate::enum_names::name("join", j.id()));
                 }
             });
         if join != d.join {
@@ -201,14 +217,18 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     // Slope.
     let mut kind = d.slope.id();
     ui.horizontal(|ui| {
-        ui.label("Slope");
+        ui.label(tr!("area-ui-slope"));
         egui::ComboBox::from_id_salt(("hardscape_slope", id))
-            .selected_text(kind)
+            .selected_text(crate::enum_names::name("slope", kind))
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut kind, "none", "none");
-                ui.selectable_value(&mut kind, "cross", "cross slope");
+                ui.selectable_value(&mut kind, "none", crate::enum_names::name("slope", "none"));
+                ui.selectable_value(
+                    &mut kind,
+                    "cross",
+                    crate::enum_names::name("slope", "cross"),
+                );
                 if matches!(d.slope, Slope::Edges { .. }) {
-                    ui.label("edges (set by the API)");
+                    ui.label(tr!("area-ui-edges-set-by-the-api"));
                 }
             });
     });
@@ -232,7 +252,7 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
                     .suffix(" %"),
             );
             let r2 = if d.mode == Mode::Slab {
-                Some(ui.add(DragValue::new(&mut a).speed(1.0).suffix("\u{b0}")))
+                Some(ui.add(DragValue::new(&mut a).speed(1.0).degrees()))
             } else {
                 None
             };
@@ -257,26 +277,33 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     let mut e = elevation;
     let r = ui.horizontal(|ui| {
         ui.label(if d.drape {
-            "Height above ground"
+            tr!("area-ui-height-above-ground")
         } else {
-            "Elevation"
+            tr!("area-ui-elevation")
         });
         ui.add(
             DragValue::new(&mut e)
                 .speed(5.0)
                 .range(-1.0e8..=1.0e8)
-                .suffix(" mm"),
+                .length(),
         )
     });
     if (r.inner.drag_stopped() || r.inner.lost_focus()) && e != elevation {
         patch.elevation = Some(e);
     }
     let mut drape = d.drape;
-    if ui.checkbox(&mut drape, "Drape on site model").changed() {
+    if ui
+        .checkbox(&mut drape, tr!("area-ui-drape-on-site-model"))
+        .changed()
+    {
         patch.drape = Some(drape);
     }
     let mut pad = d.site_modifier;
-    if ui.checkbox(&mut pad, "Site modifier (acts as a pad)").on_hover_text("The formation level under the build-up changes the proposed surface of the site model on this layer").changed() {
+    if ui
+        .checkbox(&mut pad, tr!("area-ui-site-modifier-acts-as-a-pad"))
+        .on_hover_text(tr!("area-ui-the-formation-level-under-the-build-up"))
+        .changed()
+    {
         patch.site_modifier = Some(pad);
     }
     // Quantities.
@@ -299,28 +326,28 @@ fn hardscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         egui::Grid::new(("hardscape_qty", id))
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("Plan area");
-                ui.label(format!("{:.2} m\u{b2}", q.plan_area_m2));
+                ui.label(tr!("area-ui-plan-area"));
+                ui.label(kadakas_units::current().area_text(q.plan_area_m2 * 1e6));
                 ui.end_row();
                 if (q.surface_area_m2 - q.plan_area_m2).abs() > 1e-6 {
                     ui.label(if q.draped {
-                        "Draped area"
+                        tr!("area-ui-draped-area")
                     } else {
-                        "Surface area"
+                        tr!("area-ui-surface-area")
                     });
-                    ui.label(format!("{:.2} m\u{b2}", q.surface_area_m2));
+                    ui.label(kadakas_units::current().area_text(q.surface_area_m2 * 1e6));
                     ui.end_row();
                 }
-                ui.label("Perimeter");
-                ui.label(format!("{:.2} m", q.perimeter_m));
+                ui.label(tr!("area-ui-perimeter"));
+                ui.label(kadakas_units::current().length_text_d(q.perimeter_m * 1000.0, 1));
                 ui.end_row();
                 for l in &q.layers {
                     ui.label(format!("{} {}", l.kind, l.material));
-                    ui.label(format!("{:.3} m\u{b3}", l.volume_m3));
+                    ui.label(kadakas_units::current().volume_text(l.volume_m3 * 1e9));
                     ui.end_row();
                 }
-                ui.label("Volume");
-                ui.label(format!("{:.3} m\u{b3}", q.volume_m3));
+                ui.label(tr!("area-ui-volume"));
+                ui.label(kadakas_units::current().volume_text(q.volume_m3 * 1e9));
                 ui.end_row();
             });
     }
@@ -335,10 +362,10 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
     let d = landscape::data(obj).unwrap_or_default();
     let styles = landscape_styles(doc);
     ui.separator();
-    ui.strong("Landscape area");
+    ui.strong(tr!("area-ui-landscape-area"));
     let mut patch = LandscapePatch::default();
     ui.horizontal(|ui| {
-        ui.label("Style");
+        ui.label(tr!("area-ui-style"));
         if let Some(c) = style_combo(ui, ("landscape_style_of", id), d.style, &styles, "(none)") {
             match c {
                 Some(s) => patch.style = Some(s),
@@ -347,17 +374,20 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         }
     });
     let mut show = landscape::shows_plants(doc, obj);
-    if ui.checkbox(&mut show, "Show plants").changed() {
+    if ui.checkbox(&mut show, tr!("area-ui-show-plants")).changed() {
         patch.show_plants = Some(show);
     }
     let mut drape = d.drape;
-    if ui.checkbox(&mut drape, "Drape on site model").changed() {
+    if ui
+        .checkbox(&mut drape, tr!("area-ui-drape-on-site-model"))
+        .changed()
+    {
         patch.drape = Some(drape);
     }
     if !d.holes.is_empty() {
         ui.horizontal(|ui| {
-            ui.label(format!("{} hole(s)", d.holes.len()));
-            if ui.button("Clear holes").clicked() {
+            ui.label(tr!("area-ui-hole-s", count = d.holes.len()));
+            if ui.button(tr!("area-ui-clear-holes")).clicked() {
                 patch.holes = Some(Vec::new());
             }
         });
@@ -378,17 +408,20 @@ fn landscape_info(ui: &mut Ui, session: &mut Session, obj: &Object, status: &mut
         egui::Grid::new(("landscape_qty", id))
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("Net area");
-                ui.label(format!(
-                    "{:.2} m\u{b2}  (holes {:.2})",
-                    q.net_area_m2, q.holes_area_m2
+                ui.label(tr!("area-ui-net-area"));
+                ui.label(tr!(
+                    "area-ui-net-area-holes",
+                    area = kadakas_units::current().area_text(q.net_area_m2 * 1e6),
+                    holes = kadakas_units::current().area_text(q.holes_area_m2 * 1e6)
                 ));
                 ui.end_row();
                 for r in &q.rows {
                     ui.label(&r.name);
-                    ui.label(format!(
-                        "{} plants  ({:.1} %, {:.1} per m\u{b2})",
-                        r.count, r.percent, r.density_per_m2
+                    ui.label(tr!(
+                        "area-ui-plants-percent-density",
+                        count = r.count,
+                        percent = kadakas_units::current().number_text(r.percent, 1),
+                        density = crate::units_ui::format_per_area(r.density_per_m2)
                     ));
                     ui.end_row();
                 }

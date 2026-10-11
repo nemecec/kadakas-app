@@ -1,0 +1,28 @@
+## uic-annot-tool: tools/annot_tool.rs
+
+uic-annot-tool-horizontal = Horisontaalne
+uic-annot-tool-vertical = Vertikaalne
+uic-annot-tool-aligned = Paralleelne
+uic-annot-tool-chain = Ahel
+uic-annot-tool-baseline = Baasjoon
+uic-annot-tool-ordinate = Ordinaat
+uic-annot-tool-angular = Nurk
+uic-annot-tool-radial = Raadius
+uic-annot-tool-diameter = Diameeter
+uic-annot-tool-arc-length = Kaare pikkus
+uic-annot-tool-click-two-points-then-click-where-the = Klõpsa kahel punktil ja siis kohal, kuhu mõõtjoon tuleb.
+uic-annot-tool-click-the-points-enter-or-double-click = Klõpsa punktidel. Enter või topeltklõps lõpetab.
+uic-annot-tool-click-the-datum-then-the-points-enter = Klõpsa baaspunktil ja siis teistel punktidel. Enter või topeltklõps lõpetab.
+uic-annot-tool-click-the-vertex-then-a-point-on = Klõpsa tipul, siis punktil esimesel ja punktil teisel kiirel.
+uic-annot-tool-click-a-circle-or-an-arc = Klõpsa ringil või kaarel.
+uic-annot-tool-click-an-arc = Klõpsa kaarel.
+uic-annot-tool-click-a-circle-or-an-arc-2 = Klõpsa ringil või kaarel
+uic-annot-tool-arc-length-needs-an-arc = Kaare pikkuse jaoks on vaja kaart
+uic-annot-tool-create-a-tag-style-first-data-tag = Loo kõigepealt sildi stiil (paneel Andmesilt või API meetod tag_style.create)
+uic-annot-tool-click-the-object-to-tag = Klõpsa objektil, mida sildistada
+uic-annot-tool-this-object-cannot-be-tagged = Seda objekti ei saa sildistada
+uic-annot-tool-click-the-point-to-point-at-then = Klõpsa punktil, mida viide näitab, ja siis kohal, kuhu tekst tuleb.
+uic-annot-tool-click-the-object-to-tag-the-tag = Klõpsa objektil, mida sildistada. Sildi stiil on tööriistaribal.
+uic-annot-tool-click-to-place-the-north-arrow = Klõpsa põhjanoole asetamiseks.
+uic-annot-tool-click-to-place-the-scale-bar-it = Klõpsa mõõtkavariba asetamiseks. See järgib kihi mõõtkava.
+uic-annot-tool-click-the-corners-around-the-changes-enter = Klõpsa muudatuste ümber olevatel nurkadel. Enter või topeltklõps lõpetab.

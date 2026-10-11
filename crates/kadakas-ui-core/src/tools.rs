@@ -8,6 +8,7 @@ use kadakas_core::curve;
 use kadakas_core::model::{
     Attributes, Document, ModifierKind, ObjectId, Shape, Vertex, VertexKind,
 };
+use kadakas_l10n::tr;
 
 use crate::hit;
 
@@ -71,10 +72,10 @@ pub enum SelectMode {
 impl SelectMode {
     pub const ALL: [SelectMode; 2] = [SelectMode::Rectangle, SelectMode::Lasso];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            SelectMode::Rectangle => "Rectangle",
-            SelectMode::Lasso => "Lasso",
+            SelectMode::Rectangle => tr!("uic-tools-rectangle"),
+            SelectMode::Lasso => tr!("uic-tools-lasso"),
         }
     }
 }
@@ -92,10 +93,10 @@ pub enum ModifierMode {
 impl ModifierMode {
     pub const ALL: [ModifierMode; 2] = [ModifierMode::Pad, ModifierMode::GradeLimits];
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            ModifierMode::Pad => "Pad",
-            ModifierMode::GradeLimits => "Grade Limits",
+            ModifierMode::Pad => tr!("uic-tools-pad"),
+            ModifierMode::GradeLimits => tr!("uic-tools-grade-limits"),
         }
     }
 }
@@ -132,36 +133,36 @@ impl Tool {
         Tool::Split,
     ];
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            Tool::Select => "Selection",
-            Tool::Line => "Line",
-            Tool::Rect => "Rectangle",
-            Tool::Circle => "Circle",
-            Tool::Polyline => "Polyline",
-            Tool::Text => "Text",
-            Tool::Plant => "Plant",
-            Tool::LandscapeArea => "Landscape Area",
-            Tool::Hardscape => "Hardscape",
-            Tool::Massing => "Massing Model",
-            Tool::SiteModifier => "Site Modifiers",
-            Tool::Irrigation => "Irrigation",
-            Tool::Grading => "Grading",
-            Tool::Dimension => "Dimension",
-            Tool::Callout => "Callout",
-            Tool::DataTag => "Data Tag",
-            Tool::NorthArrow => "North Arrow",
-            Tool::ScaleBar => "Scale Bar",
-            Tool::RevisionCloud => "Revision Cloud",
-            Tool::Rotate => "Rotate",
-            Tool::Mirror => "Mirror",
-            Tool::Scale => "Scale",
-            Tool::Offset => "Offset",
-            Tool::Fillet => "Fillet",
-            Tool::Chamfer => "Chamfer",
-            Tool::Trim => "Trim",
-            Tool::Extend => "Extend",
-            Tool::Split => "Split",
+            Tool::Select => tr!("uic-tools-selection"),
+            Tool::Line => tr!("uic-tools-line"),
+            Tool::Rect => tr!("uic-tools-rectangle"),
+            Tool::Circle => tr!("uic-tools-circle"),
+            Tool::Polyline => tr!("uic-tools-polyline"),
+            Tool::Text => tr!("uic-tools-text"),
+            Tool::Plant => tr!("uic-tools-plant"),
+            Tool::LandscapeArea => tr!("uic-tools-landscape-area"),
+            Tool::Hardscape => tr!("uic-tools-hardscape"),
+            Tool::Massing => tr!("uic-tools-massing-model"),
+            Tool::SiteModifier => tr!("uic-tools-site-modifiers"),
+            Tool::Irrigation => tr!("uic-tools-irrigation"),
+            Tool::Grading => tr!("uic-tools-grading"),
+            Tool::Dimension => tr!("uic-tools-dimension"),
+            Tool::Callout => tr!("uic-tools-callout"),
+            Tool::DataTag => tr!("uic-tools-data-tag"),
+            Tool::NorthArrow => tr!("uic-tools-north-arrow"),
+            Tool::ScaleBar => tr!("uic-tools-scale-bar"),
+            Tool::RevisionCloud => tr!("uic-tools-revision-cloud"),
+            Tool::Rotate => tr!("uic-tools-rotate"),
+            Tool::Mirror => tr!("uic-tools-mirror"),
+            Tool::Scale => tr!("uic-tools-scale"),
+            Tool::Offset => tr!("uic-tools-offset"),
+            Tool::Fillet => tr!("uic-tools-fillet"),
+            Tool::Chamfer => tr!("uic-tools-chamfer"),
+            Tool::Trim => tr!("uic-tools-trim"),
+            Tool::Extend => tr!("uic-tools-extend"),
+            Tool::Split => tr!("uic-tools-split"),
         }
     }
 }
@@ -204,14 +205,14 @@ impl VertexMode {
         VertexMode::Arc,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            VertexMode::Corner => "Corner",
-            VertexMode::Bezier => "B\u{e9}zier",
-            VertexMode::Cubic => "Cubic",
-            VertexMode::Arc => "Arc",
-            VertexMode::TangentArc => "Tangent arc",
-            VertexMode::PointOnArc => "Point on arc",
+            VertexMode::Corner => tr!("uic-tools-corner"),
+            VertexMode::Bezier => tr!("uic-tools-bezier"),
+            VertexMode::Cubic => tr!("uic-tools-cubic"),
+            VertexMode::Arc => tr!("uic-tools-arc"),
+            VertexMode::TangentArc => tr!("uic-tools-tangent-arc"),
+            VertexMode::PointOnArc => tr!("uic-tools-point-on-arc"),
         }
     }
 
@@ -327,24 +328,30 @@ impl ToolSettings {
         if tool == Tool::Irrigation && group == 1 {
             self.irrigation.mode = self.irrigation.mode.next();
             machine.cancel();
-            format!("Irrigation mode: {}", self.irrigation.mode.label())
+            tr!(
+                "uic-tools-irrigation-mode",
+                mode = self.irrigation.mode.label()
+            )
         } else if tool == Tool::Dimension && group == 1 {
             self.annot.dim_mode = self.annot.dim_mode.next();
             machine.cancel();
-            format!("Dimension mode: {}", self.annot.dim_mode.label())
+            tr!(
+                "uic-tools-dimension-mode",
+                mode = self.annot.dim_mode.label()
+            )
         } else if tool == Tool::Plant && group == 1 {
             self.plant.mode = self.plant.mode.next();
             machine.cancel();
-            format!("Placement mode: {}", self.plant.mode.label())
+            tr!("uic-tools-placement-mode", mode = self.plant.mode.label())
         } else if !has_vertex_modes(tool) {
-            format!("The {} tool has no mode buttons", tool.name())
+            tr!("uic-tools-the-tool-has-no-mode-buttons", tool = tool.name())
         } else if group == 1 {
             self.vertex_mode = self.vertex_mode.next();
-            format!("Vertex mode: {}", self.vertex_mode.label())
+            tr!("uic-tools-vertex-mode", mode = self.vertex_mode.label())
         } else {
-            format!(
-                "The {} tool has only one group of mode buttons",
-                tool.name()
+            tr!(
+                "uic-tools-the-tool-has-only-one-group-of",
+                tool = tool.name()
             )
         }
     }
@@ -923,57 +930,76 @@ impl ToolMachine {
 
     /// Text for the data bar: the live measurement of the current operation.
     pub fn readout(&self, cursor: DVec2, settings: &ToolSettings) -> String {
+        let units = kadakas_units::current();
+        let len = |v: f64| units.length_text_d(v, 1);
         let seg = |a: DVec2, b: DVec2| {
             let d = b - a;
-            format!(
-                "Length {:.1} mm  Angle {:.1}\u{b0}",
-                d.length(),
-                d.y.atan2(d.x).to_degrees()
+            tr!(
+                "uic-tools-readout-segment",
+                length = len(d.length()),
+                angle = units.angle_text(d.y.atan2(d.x).to_degrees())
             )
         };
         match (&self.state, self.tool) {
             (State::Points(p), Tool::Rect) => {
                 let d = (cursor - p[0]).abs();
-                format!("Width {:.1}  Height {:.1} mm", d.x, d.y)
+                tr!(
+                    "uic-tools-readout-size",
+                    width = len(d.x),
+                    height = len(d.y)
+                )
             }
-            (State::Points(p), Tool::Circle) => format!("Radius {:.1} mm", p[0].distance(cursor)),
+            (State::Points(p), Tool::Circle) => tr!(
+                "uic-tools-readout-radius",
+                radius = len(p[0].distance(cursor))
+            ),
             (State::Points(p), _) => {
                 let last = *p.last().unwrap_or(&cursor);
-                format!("{}  Points {}", seg(last, cursor), p.len())
+                tr!(
+                    "uic-tools-points",
+                    segment = seg(last, cursor),
+                    points = p.len()
+                )
             }
             (State::Path(h), _) => {
                 let verts = h.last().map_or(&[][..], |v| v.as_slice());
                 let last = verts.last().map_or(cursor, |v| v.p);
                 let mode = settings.vertex_mode;
                 let radius = if mode == VertexMode::Arc {
-                    format!("  Radius {:.1} mm", settings.arc_radius)
+                    tr!(
+                        "uic-tools-readout-arc-radius",
+                        radius = len(settings.arc_radius)
+                    )
                 } else {
                     String::new()
                 };
-                format!(
-                    "{}  Points {}  Mode {}{radius}",
-                    seg(last, cursor),
-                    verts.len(),
-                    mode.label()
+                tr!(
+                    "uic-tools-points-mode",
+                    segment = seg(last, cursor),
+                    points = verts.len(),
+                    mode = mode.label(),
+                    radius = radius
                 )
             }
-            (State::Drag { start, .. }, _) => format!(
-                "Move dX {:.1}  dY {:.1} mm",
-                cursor.x - start.x,
-                cursor.y - start.y
+            (State::Drag { start, .. }, _) => tr!(
+                "uic-tools-readout-move",
+                dx = len(cursor.x - start.x),
+                dy = len(cursor.y - start.y)
             ),
             (State::Box { start, .. }, _) => {
                 let d = (cursor - *start).abs();
-                format!("Box {:.1} x {:.1} mm", d.x, d.y)
+                tr!("uic-tools-readout-box", width = len(d.x), height = len(d.y))
             }
-            (State::Lasso { points, .. }, _) => format!("Lasso {} points", points.len()),
+            (State::Lasso { points, .. }, _) => {
+                tr!("uic-tools-lasso-points", points = points.len())
+            }
             (State::Modify(_), _) => self.modify_readout(cursor),
             (State::Idle, _) => String::new(),
         }
     }
 
     /// Hint for the status line, with the mode of the annotation tools.
-    pub fn hint_for(&self, settings: &ToolSettings) -> &'static str {
+    pub fn hint_for(&self, settings: &ToolSettings) -> String {
         if Tool::ANNOTATION.contains(&self.tool) {
             self.annot_hint(settings)
         } else {
@@ -982,19 +1008,19 @@ impl ToolMachine {
     }
 
     /// Hint for the status line.
-    pub fn hint(&self) -> &'static str {
+    pub fn hint(&self) -> String {
         if is_modify(self.tool) {
             return modify_tool::hint(self.tool, self.modify_step());
         }
         match (self.tool, self.is_busy()) {
             (Tool::Select, _) => {
-                "Click to select, Shift-click to toggle, drag to move or box select. Delete removes."
+                tr!("uic-tools-click-to-select-shift-click-to-toggle")
             }
             (Tool::Line | Tool::Rect | Tool::Circle, false) => {
-                "Click the first point. Esc returns to Selection."
+                tr!("uic-tools-click-the-first-point-esc-returns-to")
             }
-            (Tool::Line | Tool::Rect, true) => "Click the second point. Esc cancels.",
-            (Tool::Circle, true) => "Click a point on the circle. Esc cancels.",
+            (Tool::Line | Tool::Rect, true) => tr!("uic-tools-click-the-second-point-esc-cancels"),
+            (Tool::Circle, true) => tr!("uic-tools-click-a-point-on-the-circle-esc"),
             (
                 Tool::Polyline
                 | Tool::LandscapeArea
@@ -1003,10 +1029,10 @@ impl ToolMachine {
                 | Tool::Massing,
                 _,
             ) => {
-                "Click points. Pick a vertex mode in the Tool bar (U cycles). Double-click or Enter finishes. Esc cancels."
+                tr!("uic-tools-click-points-pick-a-vertex-mode-in")
             }
             (Tool::Grading, _) => {
-                "Pick a mode in the Data bar: landscape wall, grade, spot elevation, stake or section line. Esc cancels."
+                tr!("uic-tools-pick-a-mode-in-the-data-bar")
             }
             (
                 Tool::Dimension
@@ -1017,16 +1043,16 @@ impl ToolMachine {
                 | Tool::RevisionCloud,
                 _,
             ) => {
-                "Click to annotate. Pick the mode and style in the Tool bar. Enter finishes lists of points. Esc cancels."
+                tr!("uic-tools-click-to-annotate-pick-the-mode-and")
             }
-            (Tool::Text, _) => "Click to place. Set values in the Data bar.",
+            (Tool::Text, _) => tr!("uic-tools-click-to-place-set-values-in-the"),
             (Tool::Irrigation, _) => {
-                "Pick a mode (Outlet, Line, POC, Valve, Controller) in the Tool bar. Click to place. A line: Enter or double-click finishes. Esc cancels."
+                tr!("uic-tools-pick-a-mode-outlet-line-poc-valve")
             }
             (Tool::Plant, _) => {
-                "Pick a placement mode and a plant style in the Tool bar. Click to place. Enter finishes path, fill and poly. Esc cancels."
+                tr!("uic-tools-pick-a-placement-mode-and-a-plant")
             }
-            _ => "",
+            _ => String::new(),
         }
     }
 }
@@ -1213,7 +1239,11 @@ mod tests {
                 ModifierMode::GradeLimits.name(),
                 ModifierMode::Pad.name()
             ),
-            ("Site Modifiers", "Grade Limits", "Pad")
+            (
+                "Site Modifiers".to_string(),
+                "Grade Limits".to_string(),
+                "Pad".to_string()
+            )
         );
         assert!(h.m.hint().contains("Click points"));
     }

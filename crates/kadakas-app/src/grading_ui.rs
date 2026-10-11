@@ -2,7 +2,9 @@
 //! section line), the plan drawing of these objects and of the slope and elevation analysis.
 //! The math is in `kadakas_site::grading`. The tool makes the same objects as the API methods.
 
+use crate::units_ui::DragValueExt as _;
 use egui::epaint::{Mesh, PathShape, PathStroke, Vertex as EguiVertex};
+use kadakas_l10n::tr;
 use std::sync::Arc;
 
 use egui::{Color32, FontId, Painter, Pos2, Stroke, Ui};
@@ -21,31 +23,31 @@ pub fn options(ui: &mut Ui, s: &mut GradingSettings) {
     }
     match s.mode {
         GradingMode::Wall => {
-            ui.label("Thickness");
+            ui.label(tr!("grading-ui-thickness"));
             ui.add(
                 egui::DragValue::new(&mut s.wall_thickness)
                     .speed(10.0)
                     .range(10.0..=5000.0)
-                    .suffix(" mm"),
+                    .length(),
             );
-            ui.label("Height above ground");
+            ui.label(tr!("grading-ui-height-above-ground"));
             ui.add(
                 egui::DragValue::new(&mut s.wall_height)
                     .speed(10.0)
                     .range(-5000.0..=20000.0)
-                    .suffix(" mm"),
+                    .length(),
             );
         }
         GradingMode::Grade => {
-            ui.label("Without a site model:");
-            ui.label("Start elevation");
+            ui.label(tr!("grading-ui-without-a-site-model"));
+            ui.label(tr!("grading-ui-start-elevation"));
             ui.add(
                 egui::DragValue::new(&mut s.grade_elevation)
                     .speed(10.0)
                     .range(-1.0e8..=1.0e8)
-                    .suffix(" mm"),
+                    .length(),
             );
-            ui.label("Slope");
+            ui.label(tr!("grading-ui-slope"));
             ui.add(
                 egui::DragValue::new(&mut s.grade_percent)
                     .speed(0.1)
@@ -54,11 +56,11 @@ pub fn options(ui: &mut Ui, s: &mut GradingSettings) {
             );
         }
         GradingMode::Stake => {
-            ui.label("Name");
+            ui.label(tr!("grading-ui-name"));
             ui.add(egui::TextEdit::singleline(&mut s.stake_name).desired_width(60.0));
         }
         GradingMode::Section => {
-            ui.label("Name");
+            ui.label(tr!("grading-ui-name"));
             ui.add(egui::TextEdit::singleline(&mut s.section_name).desired_width(60.0));
         }
         GradingMode::Spot => {}

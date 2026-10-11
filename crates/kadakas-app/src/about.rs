@@ -2,21 +2,26 @@
 //! parts. The license text is built into the program (`THIRD_PARTY_NOTICES.txt`), so the dialog
 //! works in the web build too.
 
+use kadakas_l10n::tr;
 /// The licenses of the libraries, fonts and icons that we ship (made by `scripts/notices.sh`).
 pub const NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES.txt");
 
 /// The license of Kadakas itself.
 pub const LICENSE: &str = "Apache-2.0 OR MIT";
 
-/// The note about the Vectorworks trademark.
-pub const TRADEMARK: &str = "Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc.";
+/// The note about the Vectorworks trademark, in the language of the UI.
+pub fn trademark() -> String {
+    tr!("about-trademark")
+}
 
-/// Other trademarks that the documents name.
-pub const OTHER_TRADEMARKS: &str = "AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Kadakas reads or writes, or to compare workflows. Kadakas is not affiliated with their owners.";
+/// Other trademarks that the documents name, in the language of the UI.
+pub fn other_trademarks() -> String {
+    tr!("about-other-trademarks")
+}
 
 /// The version line, for example `Version 0.1.0`.
 pub fn version_line() -> String {
-    format!("Version {}", env!("CARGO_PKG_VERSION"))
+    tr!("about-version", version = env!("CARGO_PKG_VERSION"))
 }
 
 /// The state of the About dialog.
@@ -51,7 +56,8 @@ impl About {
             return;
         }
         let mut open = true;
-        egui::Window::new("About Kadakas")
+        egui::Window::new(tr!("about-about-kadakas"))
+            .id(egui::Id::new("win-about-kadakas"))
             .open(&mut open)
             .collapsible(false)
             .default_width(520.0)
@@ -67,23 +73,23 @@ impl About {
     }
 
     fn main_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Kadakas");
+        ui.heading(tr!("about-kadakas"));
         ui.label(version_line());
-        ui.label("CAD for landscape architects.");
+        ui.label(tr!("about-cad-for-landscape-architects"));
         ui.add_space(6.0);
-        ui.label(format!("License: {LICENSE}"));
-        ui.label("Kadakas uses open source libraries, icons and fonts. See Licenses.");
+        ui.label(tr!("about-license", license = LICENSE));
+        ui.label(tr!("about-kadakas-uses-open-source-libraries-icons-and"));
         ui.add_space(6.0);
-        ui.label(TRADEMARK);
-        ui.label(OTHER_TRADEMARKS);
+        ui.label(trademark());
+        ui.label(other_trademarks());
         ui.add_space(6.0);
-        if ui.button("Licenses...").clicked() {
+        if ui.button(tr!("about-licenses")).clicked() {
             self.show_licenses();
         }
     }
 
     fn licenses_view(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Back").clicked() {
+        if ui.button(tr!("about-back")).clicked() {
             self.licenses = false;
         }
         ui.separator();
@@ -115,8 +121,15 @@ mod tests {
 
     #[test]
     fn trademark_note_is_exact() {
-        assert!(TRADEMARK.starts_with("Vectorworks is a trademark of Vectorworks, Inc."));
-        assert!(TRADEMARK.contains("not affiliated with, endorsed by, or sponsored by"));
+        let t = trademark();
+        assert!(t.starts_with("Vectorworks is a trademark of Vectorworks, Inc."));
+        assert!(t.contains("not affiliated with, endorsed by, or sponsored by"));
+        assert!(other_trademarks().contains("Autodesk, Inc."));
+        // The Estonian text names the same owners.
+        kadakas_l10n::with_language("et", || {
+            assert!(trademark().contains("Vectorworks, Inc."));
+            assert!(other_trademarks().contains("Autodesk, Inc."));
+        });
         assert!(version_line().starts_with("Version "));
     }
 

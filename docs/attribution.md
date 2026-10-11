@@ -28,6 +28,12 @@ New with the launcher (PLAT-06, `kadakas-update`): `ed25519-dalek` and `curve255
 
 New with the collaboration WebSocket (PLAT-09, `kadakas-collab-ws`): `tungstenite` (MIT OR Apache-2.0, the Snapview contributors) speaks the WebSocket protocol; its helpers are `http`, `httparse`, `bytes`, `sha1`, `data-encoding` and `utf-8`. `rustls` (Apache-2.0 OR ISC OR MIT) with the crypto provider `ring` makes the TLS connection, and `webpki-roots` (CDLA-Permissive-2.0, the Mozilla list of root certificates as data) is the list of roots; both were already in use through `ureq`. The optional feature `native-roots` adds `rustls-native-certs` (Apache-2.0 OR ISC OR MIT) and its helpers (`openssl-probe`, `security-framework`, `schannel`). For the browser build: `web-sys`, `js-sys` and `wasm-bindgen` (MIT OR Apache-2.0), already in use by the app. The test crate `rcgen` (MIT OR Apache-2.0) makes a certificate for the TLS test; it is a development dependency and does not ship. The protocol text names the WebSocket sub-protocol convention (RFC 6455) and `Authorization: Bearer` (RFC 6750).
 
+## Localization and formats (PLAT-05)
+
+`kadakas-l10n` uses Project Fluent, the localization system of Mozilla (https://projectfluent.org): `fluent-bundle`, `fluent-syntax`, `fluent-langneg` and `intl-memoizer` (from https://github.com/projectfluent/fluent-rs, Apache-2.0 OR MIT), and `unic-langid`, `unic-langid-impl` and `intl_pluralrules` (by Zibi Braniecki, MIT OR Apache-2.0; the plural rules come from the Unicode CLDR). `tinystr` (Unicode-3.0, ICU4X) comes with them. The app reads the system language with `sys-locale` (1Password, MIT OR Apache-2.0; native builds only). All are in `THIRD_PARTY_NOTICES.txt`. The Fluent file format is an open specification. The plural categories of Estonian and English follow the Unicode CLDR plural rules. The texts in `crates/kadakas-l10n/locales/` (English and Estonian) are own work, under the project license (Apache-2.0 OR MIT).
+
+`kadakas-units` has no third-party code except `serde`. The conversion factors are exact definitions: 1 in = 25.4 mm (international yard and pound agreement, 1959), 1 ft = 12 in, 1 yd = 3 ft, 1 ac = 43 560 ft², 1 ha = 10 000 m². The calendar conversion (days and civil dates) follows the public domain algorithms of Howard Hinnant (https://howardhinnant.github.io/date_algorithms.html). The bearing forms (quadrant bearings, degrees-minutes-seconds) are common surveying practice.
+
 ## Icons
 
 | Item | License | Source |

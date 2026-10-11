@@ -6,6 +6,7 @@
 //! in the config folder, see `prefs`). Named layouts are saved there too: Window > Save Layout As.
 //! A layout without the drawing tab is not used: the default layout is used instead.
 
+use kadakas_l10n::tr;
 use std::collections::BTreeMap;
 
 use egui_dock::{DockState, NodeIndex};
@@ -35,15 +36,15 @@ impl Tab {
         Tab::Snapping,
     ];
 
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> String {
         match self {
-            Tab::Drawing => "Drawing",
-            Tab::Tools => "Tools",
-            Tab::ObjectInfo => "Object Info",
-            Tab::Navigation => "Navigation",
-            Tab::Resources => "Resources",
-            Tab::Schedule => "Plant Schedule",
-            Tab::Snapping => "Snapping",
+            Tab::Drawing => tr!("layout-drawing"),
+            Tab::Tools => tr!("layout-tools"),
+            Tab::ObjectInfo => tr!("layout-object-info"),
+            Tab::Navigation => tr!("layout-navigation"),
+            Tab::Resources => tr!("layout-resources"),
+            Tab::Schedule => tr!("layout-plant-schedule"),
+            Tab::Snapping => tr!("layout-snapping"),
         }
     }
 
@@ -145,13 +146,13 @@ impl Layouts {
             }) {
                 Ok(f) => Some(f),
                 Err(e) => {
-                    warning = Some(format!("{} is ignored: {e}", path.display()));
+                    warning = Some(tr!("layout-is-ignored", path = path.display(), e = e));
                     None
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
-                warning = Some(format!("{} is ignored: {e}", path.display()));
+                warning = Some(tr!("layout-is-ignored", path = path.display(), e = e));
                 None
             }
         };
@@ -219,10 +220,10 @@ impl Layouts {
     pub fn save_as(&mut self, name: &str) -> Result<(), String> {
         let name = name.trim();
         if name.is_empty() {
-            return Err("give the layout a name".into());
+            return Err(tr!("layout-give-the-layout-a-name"));
         }
         let Some(cur) = self.current.clone() else {
-            return Err("no layout".into());
+            return Err(tr!("layout-no-layout"));
         };
         self.saved.insert(name.to_string(), cur);
         Ok(())

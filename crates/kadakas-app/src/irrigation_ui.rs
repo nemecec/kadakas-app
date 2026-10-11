@@ -1,6 +1,8 @@
 //! Irrigation in the app: drawing, picking, snapping, the Tool bar options, the fields in
 //! Object Info and the Calculate command with its warnings.
 
+use crate::units_ui::DragValueExt as _;
+use kadakas_l10n::tr;
 use std::cell::RefCell;
 
 use egui::epaint::{Mesh, PathShape, PathStroke};
@@ -161,13 +163,18 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
                unit: &str| {
         ui.horizontal(|ui| {
             ui.label(label);
-            ui.add(DragValue::new(v).speed(speed).range(range).suffix(unit));
+            let drag = DragValue::new(v).speed(speed).range(range);
+            ui.add(match unit {
+                "\u{b0}" => drag.degrees(),
+                "direction" => drag.direction(),
+                other => drag.suffix(other),
+            });
         });
     };
     match s.mode {
         IrrMode::Outlet => {
             ui.horizontal(|ui| {
-                ui.label("Model");
+                ui.label(tr!("irrigation-ui-model"));
                 ComboBox::from_id_salt("irr_model")
                     .selected_text(&s.model)
                     .show_ui(ui, |ui| {
@@ -176,25 +183,36 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
                         }
                     });
             });
-            num(ui, "Arc", &mut s.arc, 1.0, 1.0..=360.0, "\u{b0}");
             num(
                 ui,
-                "Direction",
+                &tr!("irrigation-ui-arc"),
+                &mut s.arc,
+                1.0,
+                1.0..=360.0,
+                "\u{b0}",
+            );
+            num(
+                ui,
+                &tr!("irrigation-ui-direction"),
                 &mut s.direction,
                 1.0,
                 -360.0..=360.0,
-                "\u{b0}",
+                "direction",
             );
         }
         IrrMode::Line => {
             ui.horizontal(|ui| {
-                ui.label("Type");
+                ui.label(tr!("irrigation-ui-type"));
                 for t in LineType::ALL {
-                    ui.selectable_value(&mut s.line_type, t, t.id());
+                    ui.selectable_value(
+                        &mut s.line_type,
+                        t,
+                        crate::enum_names::name("line-type", t.id()),
+                    );
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Material");
+                ui.label(tr!("irrigation-ui-material"));
                 ComboBox::from_id_salt("irr_material")
                     .selected_text(&s.material)
                     .show_ui(ui, |ui| {
@@ -204,7 +222,7 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
                     });
             });
             ui.horizontal(|ui| {
-                ui.label("Size");
+                ui.label(tr!("irrigation-ui-size"));
                 ComboBox::from_id_salt("irr_size")
                     .selected_text(&s.size)
                     .show_ui(ui, |ui| {
@@ -220,12 +238,12 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
         }
         IrrMode::Poc => {
             ui.horizontal(|ui| {
-                ui.label("Name");
+                ui.label(tr!("irrigation-ui-name"));
                 ui.text_edit_singleline(&mut s.name);
             });
             num(
                 ui,
-                "Static pressure",
+                &tr!("irrigation-ui-static-pressure"),
                 &mut s.static_pressure,
                 5.0,
                 1.0..=5000.0,
@@ -233,7 +251,7 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
             );
             num(
                 ui,
-                "Available flow",
+                &tr!("irrigation-ui-available-flow"),
                 &mut s.available_flow,
                 1.0,
                 1.0..=100000.0,
@@ -242,32 +260,48 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
         }
         IrrMode::Valve => {
             let mut zone = f64::from(s.zone);
-            num(ui, "Zone (0 = next)", &mut zone, 1.0, 0.0..=9999.0, "");
+            num(
+                ui,
+                &tr!("irrigation-ui-zone-0-next"),
+                &mut zone,
+                1.0,
+                0.0..=9999.0,
+                "",
+            );
             s.zone = zone as u32;
             num(
                 ui,
-                "Flow factor kv",
+                &tr!("irrigation-ui-flow-factor-kv"),
                 &mut s.kv,
                 0.1,
                 0.01..=1000.0,
                 " m\u{b3}/h",
             );
             ui.horizontal(|ui| {
-                ui.label("Name");
+                ui.label(tr!("irrigation-ui-name"));
                 ui.text_edit_singleline(&mut s.name);
             });
         }
         IrrMode::Controller => {
             ui.horizontal(|ui| {
-                ui.label("Name");
+                ui.label(tr!("irrigation-ui-name"));
                 ui.text_edit_singleline(&mut s.name);
             });
             let mut n = f64::from(s.stations);
-            num(ui, "Stations", &mut n, 1.0, 1.0..=999.0, "");
+            num(
+                ui,
+                &tr!("irrigation-ui-stations"),
+                &mut n,
+                1.0,
+                1.0..=999.0,
+                "",
+            );
             s.stations = n as u32;
         }
     }
-    ui.small("Select an irrigation object and use Calculate in Object Info.");
+    ui.small(tr!(
+        "irrigation-ui-select-an-irrigation-object-and-use-calculate"
+    ));
     s.mode != before
 }
 
@@ -283,14 +317,14 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             radius,
             zone,
         } => {
-            f.xy(ui, "Position", at);
-            f.text(ui, "Model", model);
-            f.scalar(ui, "Arc (deg)", arc, 1.0);
-            f.scalar(ui, "Direction (deg)", direction, 1.0);
+            f.xy(ui, &tr!("irrigation-ui-position"), at);
+            f.text(ui, &tr!("irrigation-ui-model"), model);
+            f.scalar(ui, &tr!("irrigation-ui-arc-deg"), arc, 1.0);
+            f.scalar(ui, &tr!("irrigation-ui-direction-deg"), direction, 1.0);
             let mut r = radius.unwrap_or(0.0);
-            f.scalar(ui, "Radius", &mut r, 10.0);
+            f.length_scalar(ui, &tr!("irrigation-ui-radius"), &mut r, 10.0);
             *radius = (r > 0.0).then_some(r);
-            ui.label("Zone");
+            ui.label(tr!("irrigation-ui-zone"));
             ui.label(zone.map_or("-".to_string(), |z| z.to_string()));
             ui.end_row();
         }
@@ -301,22 +335,29 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             material,
             ..
         } => {
-            ui.label("Type");
+            ui.label(tr!("irrigation-ui-type"));
             ui.horizontal(|ui| {
                 for t in LineType::ALL {
-                    if ui.selectable_label(*line_type == t, t.id()).clicked() && *line_type != t {
+                    if ui
+                        .selectable_label(
+                            *line_type == t,
+                            crate::enum_names::name("line-type", t.id()),
+                        )
+                        .clicked()
+                        && *line_type != t
+                    {
                         *line_type = t;
                         f.commit = true;
                     }
                 }
             });
             ui.end_row();
-            f.text(ui, "Size", size);
-            f.text(ui, "Material", material);
+            f.text(ui, &tr!("irrigation-ui-size"), size);
+            f.text(ui, &tr!("irrigation-ui-material"), material);
             f.count(ui, points.len());
-            ui.label("Length");
+            ui.label(tr!("irrigation-ui-length"));
             let len: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
-            ui.label(format!("{:.2} m", len / 1000.0));
+            ui.label(kadakas_units::current().length_text_d(len, 1));
             ui.end_row();
         }
         IrrigationShape::Poc {
@@ -327,16 +368,26 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             supply_loss,
             meter_loss,
         } => {
-            f.xy(ui, "Position", at);
-            f.text(ui, "Name", name);
-            f.scalar(ui, "Static pressure (kPa)", static_pressure, 5.0);
-            f.scalar(ui, "Available flow (l/min)", available_flow, 1.0);
+            f.xy(ui, &tr!("irrigation-ui-position"), at);
+            f.text(ui, &tr!("irrigation-ui-name"), name);
+            f.scalar(
+                ui,
+                &tr!("irrigation-ui-static-pressure-kpa"),
+                static_pressure,
+                5.0,
+            );
+            f.scalar(
+                ui,
+                &tr!("irrigation-ui-available-flow-l-min"),
+                available_flow,
+                1.0,
+            );
             for (label, v) in [
-                ("Supply loss (kPa)", supply_loss),
-                ("Meter loss (kPa)", meter_loss),
+                (tr!("irrigation-ui-supply-loss-kpa"), supply_loss),
+                (tr!("irrigation-ui-meter-loss-kpa"), meter_loss),
             ] {
                 let mut x = v.unwrap_or(0.0);
-                f.scalar(ui, label, &mut x, 1.0);
+                f.scalar(ui, &label, &mut x, 1.0);
                 *v = (x > 0.0).then_some(x);
             }
         }
@@ -348,24 +399,24 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             controller,
             station,
         } => {
-            f.xy(ui, "Position", at);
+            f.xy(ui, &tr!("irrigation-ui-position"), at);
             let mut z = f64::from(*zone);
-            f.scalar(ui, "Zone", &mut z, 1.0);
+            f.scalar(ui, &tr!("irrigation-ui-zone"), &mut z, 1.0);
             *zone = z.round().max(1.0) as u32;
-            f.text(ui, "Name", name);
-            f.scalar(ui, "Flow factor kv", kv, 0.1);
+            f.text(ui, &tr!("irrigation-ui-name"), name);
+            f.scalar(ui, &tr!("irrigation-ui-flow-factor-kv"), kv, 0.1);
             let mut c = controller.clone().unwrap_or_default();
-            f.text(ui, "Controller", &mut c);
+            f.text(ui, &tr!("irrigation-ui-controller"), &mut c);
             *controller = (!c.trim().is_empty()).then_some(c);
             let mut st = f64::from(station.unwrap_or(0));
-            f.scalar(ui, "Station (0 = none)", &mut st, 1.0);
+            f.scalar(ui, &tr!("irrigation-ui-station-0-none"), &mut st, 1.0);
             *station = (st >= 1.0).then_some(st as u32);
         }
         IrrigationShape::Controller { at, name, stations } => {
-            f.xy(ui, "Position", at);
-            f.text(ui, "Name", name);
+            f.xy(ui, &tr!("irrigation-ui-position"), at);
+            f.text(ui, &tr!("irrigation-ui-name"), name);
             let mut n = f64::from(*stations);
-            f.scalar(ui, "Stations", &mut n, 1.0);
+            f.scalar(ui, &tr!("irrigation-ui-stations"), &mut n, 1.0);
             *stations = n.round().max(1.0) as u32;
         }
     }
@@ -407,57 +458,61 @@ pub fn calculate(session: &mut Session, status: &mut String) -> usize {
     };
     let n = calc.warnings.len();
     *status = match (a.solution.zones.len(), n) {
-        (0, _) => "Calculated: no zone has water. See the warnings in Object Info.".to_string(),
-        (z, 0) => format!("Calculated {z} zone(s): no warnings"),
-        (z, n) => format!("Calculated {z} zone(s): {n} warning(s). See Object Info."),
+        (0, _) => tr!("irrigation-ui-calculated-no-zone-has-water-see-the"),
+        (z, 0) => tr!("irrigation-ui-calculated-zone-s-no-warnings", z = z),
+        (z, n) => tr!(
+            "irrigation-ui-calculated-zone-s-warning-s-see-object",
+            z = z,
+            n = n
+        ),
     };
     CALC.with(|c| *c.borrow_mut() = Some(calc));
     n
 }
 
 fn kpa(x: f64) -> String {
-    format!("{x:.1} kPa")
+    format!("{} kPa", kadakas_units::current().number_text(x, 1))
 }
 
 /// Calculate, the result for the selected object, and the warnings of the calculation.
 pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut String) {
     ui.separator();
-    ui.strong("Irrigation");
+    ui.strong(tr!("irrigation-ui-irrigation"));
     // Pick catalog parts from lists.
     catalog_pickers(ui, session, id, status);
     if ui
-        .button("Calculate")
-        .on_hover_text("Flow, pressure and zones of the whole network")
+        .button(tr!("irrigation-ui-calculate"))
+        .on_hover_text(tr!("irrigation-ui-flow-pressure-and-zones-of-the-whole"))
         .clicked()
     {
         calculate(session, status);
     }
     let Some(calc) = last_calculation() else {
-        ui.label("Not calculated yet.");
+        ui.label(tr!("irrigation-ui-not-calculated-yet"));
         return;
     };
     if calc.revision != session.editor.revision() {
         ui.colored_label(
             Color32::from_rgb(200, 120, 0),
-            "Out of date: calculate again.",
+            tr!("irrigation-ui-out-of-date-calculate-again"),
         );
     }
     if calc.assigned > 0 {
-        ui.small(format!(
-            "The last calculation stored the zone in {} outlet(s).",
-            calc.assigned
+        ui.small(tr!(
+            "irrigation-ui-the-last-calculation-stored-the-zone-in",
+            assigned = calc.assigned
         ));
     }
     // The result for this object.
     for z in &calc.zones {
         if let Some(o) = z.outlets.iter().find(|o| o.id == Some(id.0)) {
-            ui.label(format!(
-                "Zone {}: {:.2} l/min, pressure {} (minimum {}, margin {})",
-                z.zone,
-                o.flow_lpm,
-                kpa(o.pressure_kpa),
-                kpa(o.min_kpa),
-                kpa(o.margin_kpa)
+            ui.label(tr!(
+                "irrigation-ui-zone-flow-pressure",
+                zone = z.zone,
+                flow = kadakas_units::current().number_text(o.flow_lpm, 2),
+                pressure = kpa(o.pressure_kpa),
+                minimum = kpa(o.min_kpa),
+                margin = kpa(o.margin_kpa)
             ));
         }
     }
@@ -470,16 +525,20 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mu
         _ => None,
     };
     if let Some(z) = zone_of_object.and_then(|z| calc.zones.iter().find(|r| r.zone == z)) {
-        ui.label(format!(
-            "Zone {} total: {:.2} l/min of {:.1} available, highest velocity {:.2} m/s",
-            z.zone, z.flow_lpm, z.available_lpm, z.max_velocity_ms
+        let u = kadakas_units::current();
+        ui.label(tr!(
+            "irrigation-ui-zone-total",
+            zone = z.zone,
+            flow = u.number_text(z.flow_lpm, 2),
+            available = u.number_text(z.available_lpm, 1),
+            velocity = u.number_text(z.max_velocity_ms, 2)
         ));
         if let Some(c) = &z.critical {
-            ui.label(format!(
-                "Critical outlet: {} at {} (margin {})",
-                c.label,
-                kpa(c.pressure_kpa),
-                kpa(c.margin_kpa)
+            ui.label(tr!(
+                "irrigation-ui-critical-outlet-at-margin",
+                label = c.label,
+                pressure = kpa(c.pressure_kpa),
+                margin = kpa(c.margin_kpa)
             ));
         }
     }
@@ -491,16 +550,19 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mu
     for w in &mine {
         ui.colored_label(Color32::from_rgb(200, 40, 40), &w.message);
     }
-    egui::CollapsingHeader::new(format!("All warnings ({})", calc.warnings.len()))
-        .id_salt("irr_warnings")
-        .show(ui, |ui| {
-            if calc.warnings.is_empty() {
-                ui.label("None");
-            }
-            for w in &calc.warnings {
-                ui.label(format!("{}: {}", w.kind, w.message));
-            }
-        });
+    egui::CollapsingHeader::new(tr!(
+        "irrigation-ui-all-warnings",
+        count = calc.warnings.len()
+    ))
+    .id_salt("irr_warnings")
+    .show(ui, |ui| {
+        if calc.warnings.is_empty() {
+            ui.label(tr!("irrigation-ui-none"));
+        }
+        for w in &calc.warnings {
+            ui.label(format!("{}: {}", w.kind, w.message));
+        }
+    });
 }
 
 /// Lists of catalog parts: change the model of an outlet, or the size and material of a line.
@@ -514,7 +576,7 @@ fn catalog_pickers(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mu
     match i.as_ref() {
         IrrigationShape::Outlet { model, .. } => {
             ui.horizontal(|ui| {
-                ui.label("Catalog model");
+                ui.label(tr!("irrigation-ui-catalog-model"));
                 ComboBox::from_id_salt(("irr_pick_model", id))
                     .selected_text(model)
                     .show_ui(ui, |ui| {
@@ -531,9 +593,9 @@ fn catalog_pickers(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mu
         }
         IrrigationShape::Line { size, material, .. } => {
             ui.horizontal(|ui| {
-                ui.label("Catalog pipe");
+                ui.label(tr!("irrigation-ui-catalog-pipe"));
                 ComboBox::from_id_salt(("irr_pick_pipe", id))
-                    .selected_text(format!("{material} {size}"))
+                    .selected_text(tr!("irrigation-ui-text", material = material, size = size))
                     .show_ui(ui, |ui| {
                         for p in &cat.pipes {
                             let name = format!("{} {}", p.material, p.size);

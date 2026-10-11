@@ -15,7 +15,9 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 
 | Crate | Content | Depends on |
 |---|---|---|
-| `kadakas-core` | Document model, UUID ids (`uid`), commands, undo, the change-event log (`change`), geometry (`geom`: shared polygon and segment helpers), the ground trait (`ground`), caches (`cache`: `RevCache`, `LruCache`), curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | none of ours |
+| `kadakas-units` | Units and formats (PLAT-05): lengths (mm, cm, m, in, ft, feet-inches with fractions), areas, volumes, angles (decimal, DMS, bearing), numbers (decimal point or comma, digit grouping), dates. Formats and parses; the current `Units` of the UI process; `Settings` for the preferences (pure, wasm-compatible) | none of ours |
+| `kadakas-l10n` | Localization with Project Fluent (PLAT-05): the `.ftl` files of `locales/` built in with `include_str!`, locale negotiation with the en-US fallback, the `tr!` macro, the process language (pure, wasm-compatible). Rules: `docs/localization.md` | none of ours |
+| `kadakas-core` | Document model, UUID ids (`uid`), commands, undo, the change-event log (`change`), geometry (`geom`: shared polygon and segment helpers), the ground trait (`ground`), caches (`cache`: `RevCache`, `LruCache`), curves, 2D editing (`edit2d`: transforms, arrays, offset, trim, fillet, booleans), snapping math, visibility modes, command schema, mesh, file format and its versions | units |
 | `kadakas-sys` | Platform helpers without document data: atomic and private file writes, process groups and pid checks, config, state, runtime and cache folders, private temp folders, the agent runtime file (native only) | none of ours |
 | `kadakas-crs` | Coordinate systems: EPSG lookup, transformers, axis order (proj4rs; wasm-compatible) | core |
 | `kadakas-plants` | Plant placement algorithms, the plant catalog and its CSV, plant schedules and the plant list worksheet (pure, wasm-compatible) | core |
@@ -39,8 +41,8 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-cli` | The `kadakas` program: `serve`, `mcp` (domain tools, `--mcp-flat`), `render`, `import`, `export` | core, sys, api |
 | `kadakas-launcher` | The launcher program (PLAT-06): an egui window that shows versions, channel, flavor and profile, and has Launch, Check, Update and Roll back. The window code only draws; the state is in `model.rs`. Left out of the coverage bar like the app (native only) | sys, update |
 | `kadakas-sign-manifest` (in `scripts/sign-manifest`) | The CI tool `sign-manifest`: `keygen`, `public`, `build`, `sign`, `verify` for update manifests. Holds the signing code (feature `sign` of `kadakas-update`); the launcher does not | sys, update (feature `sign`) |
-| `kadakas-ui-core` | What every UI program needs, without egui (PLAT-03): the tool state machines and tool settings, picking and box selection (the caller owns the annotation cache and passes it in `Ctx`), `effects::apply` (runs the effects of a tool in the group you are in and selects new objects), the snapping glue and smart-point key, view state (pan, zoom, screen and model transforms) and view history, the Data bar entry logic, keys and the keymap (action ids, default keys, JSON format for profiles). Input is abstracted (`keys::Key`, `Modifiers`, `tools::Input` with model coordinates). Pure and wasm-compatible | core, annot, irrigation, plants, render, site |
-| `kadakas-app` | egui and wgpu desktop app and web build. A thin adapter: it turns egui input into ui-core events and draws the ui-core previews | core, ui-core, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
+| `kadakas-ui-core` | What every UI program needs, without egui (PLAT-03): the tool state machines and tool settings, picking and box selection (the caller owns the annotation cache and passes it in `Ctx`), `effects::apply` (runs the effects of a tool in the group you are in and selects new objects), the snapping glue and smart-point key, view state (pan, zoom, screen and model transforms) and view history, the Data bar entry logic, keys and the keymap (action ids, default keys, JSON format for profiles). Input is abstracted (`keys::Key`, `Modifiers`, `tools::Input` with model coordinates). Pure and wasm-compatible | core, annot, irrigation, plants, render, site, units, l10n |
+| `kadakas-app` | egui and wgpu desktop app and web build. A thin adapter: it turns egui input into ui-core events and draws the ui-core previews | core, ui-core, units, l10n, render, sheet, annot, site, irrigation, plants, print, api; native only: sys, gis, script |
 
 The layers, from the bottom (a crate uses only crates above it; `cargo tree` is the truth):
 
@@ -55,7 +57,7 @@ core            sys
   |
   io (annot, site, crs, sys)  ->  gis (crs, io),  ifc (crs, io, site, sys)
   script (sys)    plugin-abi  ->  plugin (core, plugin-abi; sys on native)
-  ui-core (core, annot, irrigation, plants, render, site)  ->  app (and any other UI program)
+  ui-core (core, annot, irrigation, plants, render, site, units, l10n)  ->  app (and any other UI program)
   api  = everything above (collab: core only);  cli = core, sys, api;  app = api and the UI crates
 ```
 
@@ -67,7 +69,7 @@ Nothing below `api` depends on `script` any more: `io` runs its converter throug
 - The launcher holds no secret. It has public keys only (`crates/kadakas-launcher/trusted-keys.txt`). Private keys exist in CI secrets only. Signing code lives behind the `sign` feature of `kadakas-update`, and only `sign-manifest` and tests turn it on.
 - UI logic that has no egui code (tools, picking, snapping glue, view state, keymap) belongs in `kadakas-ui-core`, so another UI program can reuse it. The app only converts egui input into ui-core events and draws. Do not add `egui` to ui-core.
 - Put each feature in its own crate or module, for example `kadakas-io` for file formats and `kadakas-site` for terrain. Keep the interface small.
-- Core, crs, plants, collab, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
+- Units, l10n, core, crs, plants, collab, render, site, annot, x3d, ui-core, plugin-abi, plugin, api and app must build for `wasm32-unknown-unknown` (the wasm check covers them). `crs` uses `proj4rs` without its default features on wasm, because the `aeqd` feature compiles C code. Keep file access, threads and GPU code out of the pure crates; put native-only code behind `#[cfg(not(target_arch = "wasm32"))]`.
 - All document changes go through `Command` values. The GUI, the API and scripts use the same commands, so every change can be undone.
 - When you add a `Shape` variant or an API method, keep the edits to shared files small and in one place.
 - Agents must reach every document feature through the API. Add an example to `describe`.
@@ -81,6 +83,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - A session owns all of its state. A library crate has no `static` with document data. A `static` is allowed for an id allocator (the editor revision, the GUID counter) or for a table that never changes.
 - Every cache is per session and bounded: `RevCache` for one entry by revision, `LruCache` for many. The site analysis cache is in `SiteCache`, which `Session` owns.
 - `SessionLimits` sets the limits of one session: objects, memory, undo history bytes, request time, picture size and so on. `Session::set_limits` changes them. A call that changes the document and breaks the object or memory limit is undone. A session that is over the limit without a change only drops its caches, so reads and saves keep working. `document.load` and `file.open` refuse a document that does not fit before they replace the open one. The estimate counts the objects, the undo steps and the change log.
+- Two process-wide values are explicit exceptions for the UI: the active language (`kadakas-l10n`) and the current units (`kadakas-units`). They are preferences of the person. They are not document data, and an API session never reads them.
 - New ids are UUIDv7 (`Document::alloc_id`). A web build must call `kadakas_core::uid::set_host_seed(ms, salt)` once before it makes a document (the app does this in `new_web` with `Date.now()` and `crypto.getRandomValues`), because `std` has no clock or process there. Tests and fixtures use `Document::with_sequential_ids()` or `kadakas serve --sequential-ids`.
 
 ## Quality rules
@@ -91,6 +94,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Dependencies must have a permissive license. CI runs `cargo deny check` (settings in `deny.toml`). After you add or update a dependency, run `scripts/notices.sh` and commit `THIRD_PARTY_NOTICES.txt`; the installers ship it (`packager.toml`, `resources`).
 - Attribution: every new dependency, asset (icon, font, image), dataset or cited formula or standard updates `docs/attribution.md`. Crates go in `THIRD_PARTY_NOTICES.txt` through `scripts/notices.sh`; other items go in `docs/notices-extra.txt`, which the script appends. Reviewers check this. Name a trademark only with its owner's note (see `docs/attribution.md`).
 - Test helpers must run on Windows too: use `target/debug/kadakas.exe` there, and read pipes with a thread and a queue, not with `select`.
+- Every text that a person reads in the UI goes in a `.ftl` file under `crates/kadakas-l10n/locales/en-US/`, with the Estonian text in `locales/et/`. In code, use `tr!("id")` and never a string literal in an egui call. A number that a person reads or types goes through `kadakas-units` (`current()` and `DragValueExt`). Do not write `format!("{:.1} mm", x)` in the UI. API and JSON-RPC texts stay English. `cargo test -p kadakas-l10n` is the CI check for this rule. See `docs/localization.md`.
 - Reject numbers that are not finite. Saved files must always open again.
 - Plain English in documents and comments: short sentences, active voice.
 
@@ -100,7 +104,7 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-crs -p kadakas-plants -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```

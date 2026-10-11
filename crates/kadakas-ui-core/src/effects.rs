@@ -3,6 +3,7 @@
 
 use kadakas_core::command::{Command, Editor};
 use kadakas_core::model::{Document, ObjectId};
+use kadakas_l10n::tr;
 
 use crate::tools::Effect;
 
@@ -70,7 +71,7 @@ pub fn apply(
                             *selection = out.created.into_iter().map(ObjectId).collect();
                         }
                     }
-                    Err(e) => messages.push(format!("Error: {e}")),
+                    Err(e) => messages.push(tr!("uic-effects-error", e = e.to_string())),
                 }
             }
         }

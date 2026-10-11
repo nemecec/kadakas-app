@@ -5,6 +5,9 @@
 //! The state of these panels lives in the egui memory, so the callers only pass `ui` and the
 //! session.
 
+use crate::units_ui::DragValueExt as _;
+use kadakas_l10n::tr;
+use kadakas_units::DateFormat;
 use std::collections::HashMap;
 
 use egui::{Color32, DragValue, Id, Ui};
@@ -59,12 +62,12 @@ struct Pending(HashMap<(ObjectId, String, String), Value>);
 pub fn info_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut String) -> bool {
     let mut data: bool = load(ui, "info_tab_is_data");
     ui.horizontal(|ui| {
-        if ui.selectable_label(!data, "Shape").clicked() {
+        if ui.selectable_label(!data, tr!("data-ui-shape")).clicked() {
             data = false;
         }
         if ui
-            .selectable_label(data, "Data")
-            .on_hover_text("Records attached to the object")
+            .selectable_label(data, tr!("data-ui-data"))
+            .on_hover_text(tr!("data-ui-records-attached-to-the-object"))
             .clicked()
         {
             data = true;
@@ -120,13 +123,13 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
     let mut pending: Pending = load(ui, "data_tab_pending");
     let mut commands: Vec<Command> = Vec::new();
     if sel.len() > 1 {
-        ui.weak(format!(
-            "{} objects selected. Values of the first are shown, and edits go to all.",
-            sel.len()
+        ui.weak(tr!(
+            "data-ui-objects-selected-values-of-the-first-are",
+            count = sel.len()
         ));
     }
     if formats.is_empty() {
-        ui.weak("No record formats yet. Create one in the Resource Manager.");
+        ui.weak(tr!("data-ui-no-record-formats-yet-create-one-in"));
     }
     for (rid, name, fmt, values) in &attached {
         egui::CollapsingHeader::new(name)
@@ -166,8 +169,8 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
                         }
                     });
                 if ui
-                    .button("Remove record")
-                    .on_hover_text("Detach the record and its values")
+                    .button(tr!("data-ui-remove-record"))
+                    .on_hover_text(tr!("data-ui-detach-the-record-and-its-values"))
                     .clicked()
                 {
                     commands.push(Command::DetachRecord {
@@ -197,7 +200,7 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
                         ui.selectable_value(&mut choice, Some(*i), n);
                     }
                 });
-            if ui.button("Attach record").clicked()
+            if ui.button(tr!("data-ui-attach-record")).clicked()
                 && let Some((i, _, ids)) = free_ids.iter().find(|(i, ..)| Some(*i) == choice)
             {
                 commands.push(Command::AttachRecord {
@@ -218,7 +221,26 @@ fn data_tab(ui: &mut Ui, session: &mut Session, sel: &[ObjectId], status: &mut S
 /// One editor for a record field. Returns the shown value and whether the edit is finished.
 fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
     match f.ty {
-        FieldType::Text | FieldType::Unknown | FieldType::Date | FieldType::Time => {
+        FieldType::Date => {
+            // A date is stored as YYYY-MM-DD and shown in the date format of the person.
+            let stored = shown.as_str().unwrap_or("").to_string();
+            let units = kadakas_units::current();
+            let mut s = DateFormat::Iso
+                .parse(&stored)
+                .map_or(stored, |d| units.date_text(d));
+            let r = ui.text_edit_singleline(&mut s);
+            // While the person types, the text stays as typed. A finished date is stored as
+            // YYYY-MM-DD.
+            let value = if r.has_focus() {
+                s
+            } else {
+                units
+                    .parse_date(&s)
+                    .map_or(s, |d| DateFormat::Iso.format(d))
+            };
+            (Value::String(value), r.lost_focus())
+        }
+        FieldType::Text | FieldType::Unknown | FieldType::Time => {
             let mut s = shown
                 .as_str()
                 .map(str::to_string)
@@ -237,25 +259,24 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
         | FieldType::Volume
         | FieldType::Angle => {
             let mut n = shown.as_f64().unwrap_or(0.0);
-            let suffix = match f.ty {
-                FieldType::Dimension => " mm".to_string(),
-                FieldType::Area => " m\u{b2}".to_string(),
-                FieldType::Volume => " m\u{b3}".to_string(),
-                FieldType::Angle => "\u{b0}".to_string(),
-                _ if f.unit.is_empty() => String::new(),
-                _ => format!(" {}", f.unit),
-            };
             let speed = if f.ty == FieldType::Dimension {
                 10.0
             } else {
                 0.1
             };
-            let r = ui.add(
-                DragValue::new(&mut n)
-                    .speed(speed)
-                    .range(-record::MAX_FIELD..=record::MAX_FIELD)
-                    .suffix(suffix),
-            );
+            let drag = DragValue::new(&mut n)
+                .speed(speed)
+                .range(-record::MAX_FIELD..=record::MAX_FIELD);
+            // The units of the person show for the fields that have a unit of their own.
+            let drag = match f.ty {
+                FieldType::Dimension => drag.length(),
+                FieldType::Area => drag.area_m2(),
+                FieldType::Volume => drag.volume_m3(),
+                FieldType::Angle => drag.degrees(),
+                _ if f.unit.is_empty() => drag,
+                _ => drag.suffix(format!(" {}", f.unit)),
+            };
+            let r = ui.add(drag);
             (Value::from(n), r.drag_stopped() || r.lost_focus())
         }
         FieldType::Boolean => {
@@ -311,20 +332,20 @@ pub fn resource_sections(ui: &mut Ui, session: &mut Session, status: &mut String
     worksheets_list(ui, session, status);
 }
 
-fn type_label(t: FieldType) -> &'static str {
+fn type_label(t: FieldType) -> String {
     match t {
-        FieldType::Text => "Text",
-        FieldType::Integer => "Integer",
-        FieldType::Number => "Number",
-        FieldType::Boolean => "Boolean",
-        FieldType::Dimension => "Dimension",
-        FieldType::Area => "Area",
-        FieldType::Choice => "Choice list",
-        FieldType::Date => "Date",
-        FieldType::Time => "Time",
-        FieldType::Volume => "Volume",
-        FieldType::Angle => "Angle",
-        FieldType::Unknown => "Unknown",
+        FieldType::Text => tr!("data-ui-text"),
+        FieldType::Integer => tr!("data-ui-integer"),
+        FieldType::Number => tr!("data-ui-number"),
+        FieldType::Boolean => tr!("data-ui-boolean"),
+        FieldType::Dimension => tr!("data-ui-dimension"),
+        FieldType::Area => tr!("data-ui-area"),
+        FieldType::Choice => tr!("data-ui-choice-list"),
+        FieldType::Date => tr!("data-ui-date"),
+        FieldType::Time => tr!("data-ui-time"),
+        FieldType::Volume => tr!("data-ui-volume"),
+        FieldType::Angle => tr!("data-ui-angle"),
+        FieldType::Unknown => tr!("data-ui-unknown"),
     }
 }
 
@@ -373,7 +394,7 @@ fn set_default(f: &mut FieldDef, text: &str) {
 fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
     let mut commit = false;
     ui.horizontal(|ui| {
-        ui.label("Name");
+        ui.label(tr!("data-ui-name"));
         commit |= ui.text_edit_singleline(name).lost_focus();
     });
     let mut remove = None;
@@ -404,14 +425,14 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
             }
             if ui
                 .small_button("x")
-                .on_hover_text("Remove the field")
+                .on_hover_text(tr!("data-ui-remove-the-field"))
                 .clicked()
             {
                 remove = Some(i);
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Default");
+            ui.label(tr!("data-ui-default"));
             let mut d = default_text(f);
             if ui
                 .add(egui::TextEdit::singleline(&mut d).desired_width(70.0))
@@ -419,19 +440,19 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
             {
                 set_default(f, &d);
             }
-            ui.label("Unit");
+            ui.label(tr!("data-ui-unit"));
             commit |= ui
                 .add(egui::TextEdit::singleline(&mut f.unit).desired_width(40.0))
                 .lost_focus();
         });
         if f.ty == FieldType::Choice {
             ui.horizontal(|ui| {
-                ui.label("Choices");
+                ui.label(tr!("data-ui-choices"));
                 let mut text = f.choices.join(", ");
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut text)
                         .desired_width(160.0)
-                        .hint_text("A, B, C"),
+                        .hint_text(tr!("data-ui-a-b-c")),
                 );
                 if r.changed() {
                     f.choices = text
@@ -448,7 +469,7 @@ fn format_form(ui: &mut Ui, name: &mut String, fmt: &mut RecordFormat) -> bool {
         fmt.fields.remove(i);
         commit = true;
     }
-    if ui.button("Add field").clicked() {
+    if ui.button(tr!("data-ui-add-field")).clicked() {
         let n = fmt.fields.len() + 1;
         fmt.fields
             .push(FieldDef::new(&format!("Field {n}"), FieldType::Text));
@@ -461,7 +482,8 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut selected: Option<kadakas_core::uid::Uid> = load(ui, "record_format_selected");
     let mut buf: FormatBuffer = load(ui, "record_format_buffer");
     let mut commands: Vec<Command> = Vec::new();
-    egui::CollapsingHeader::new("Record formats")
+    egui::CollapsingHeader::new(tr!("data-ui-record-formats"))
+        .id_salt("data-ui-record-formats")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -484,8 +506,8 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
                 selected = None;
             }
             if ui
-                .button("New")
-                .on_hover_text("Create a record format")
+                .button(tr!("data-ui-new"))
+                .on_hover_text(tr!("data-ui-create-a-record-format"))
                 .clicked()
             {
                 let mut f = RecordFormat::default();
@@ -496,12 +518,15 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
                 });
             }
             if rows.is_empty() {
-                ui.weak("No record formats yet.");
+                ui.weak(tr!("data-ui-no-record-formats-yet"));
             }
             for (id, name, used) in &rows {
                 if ui
-                    .selectable_label(selected == Some(id.0), format!("{name}  ({used})"))
-                    .on_hover_text("Objects that have the record are in brackets")
+                    .selectable_label(
+                        selected == Some(id.0),
+                        tr!("data-ui-text-2", name = name, used = used),
+                    )
+                    .on_hover_text(tr!("data-ui-objects-that-have-the-record-are-in"))
                     .clicked()
                 {
                     selected = Some(id.0);
@@ -553,12 +578,13 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
             ui.separator();
             let used = rows.iter().find(|r| r.0 == id).map_or(0, |r| r.2);
             if used > 0 {
-                ui.weak(format!(
-                    "{used} object(s) have this record. Remove it from them to delete the format."
+                ui.weak(tr!(
+                    "data-ui-object-s-have-this-record-remove-it",
+                    used = used
                 ));
             }
             if ui
-                .add_enabled(used == 0, egui::Button::new("Delete format"))
+                .add_enabled(used == 0, egui::Button::new(tr!("data-ui-delete-format")))
                 .clicked()
             {
                 commands.push(Command::DeleteResource { id, reassign: None });
@@ -582,7 +608,8 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
 fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut st: SheetState = load(ui, "sheet_state");
     let mut commands: Vec<Command> = Vec::new();
-    egui::CollapsingHeader::new("Worksheets")
+    egui::CollapsingHeader::new(tr!("data-ui-worksheets"))
+        .id_salt("data-ui-worksheets")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -594,8 +621,8 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
                 .collect();
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button("New")
-                    .on_hover_text("Create an empty worksheet")
+                    .button(tr!("data-ui-new"))
+                    .on_hover_text(tr!("data-ui-create-an-empty-worksheet"))
                     .clicked()
                 {
                     commands.push(Command::AddResource {
@@ -604,7 +631,7 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
                     });
                 }
                 egui::ComboBox::from_id_salt("sheet_template")
-                    .selected_text("New report")
+                    .selected_text(tr!("data-ui-new-report"))
                     .show_ui(ui, |ui| {
                         for t in templates::TEMPLATES {
                             if ui
@@ -622,7 +649,7 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
                     });
             });
             if rows.is_empty() {
-                ui.weak("No worksheets yet. Start from a report.");
+                ui.weak(tr!("data-ui-no-worksheets-yet-start-from-a-report"));
             }
             for (id, name) in &rows {
                 ui.horizontal(|ui| {
@@ -633,7 +660,7 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
                         st.selected = Some(*id);
                         st.open = true;
                     }
-                    if ui.small_button("Delete").clicked() {
+                    if ui.small_button(tr!("data-ui-delete")).clicked() {
                         commands.push(Command::DeleteResource {
                             id: *id,
                             reassign: None,
@@ -816,15 +843,15 @@ pub fn table_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut
         .map(|r| r.name.clone())
         .unwrap_or_default();
     ui.separator();
-    ui.strong(format!("Worksheet table: {name}"));
+    ui.strong(tr!("data-ui-worksheet-table", name = name));
     let mut h = d.text_height;
     let r = ui.horizontal(|ui| {
-        ui.label("Text height");
+        ui.label(tr!("data-ui-text-height"));
         ui.add(
             DragValue::new(&mut h)
                 .speed(0.1)
                 .range(0.1..=10_000.0)
-                .suffix(" mm"),
+                .paper_mm(),
         )
     });
     if (r.inner.drag_stopped() || r.inner.lost_focus()) && h != d.text_height {
@@ -840,8 +867,8 @@ pub fn table_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut
         );
     }
     if ui
-        .button("Fit frame to table")
-        .on_hover_text("Resize the frame to the calculated table. The top left corner stays.")
+        .button(tr!("data-ui-fit-frame-to-table"))
+        .on_hover_text(tr!("data-ui-resize-the-frame-to-the-calculated-table"))
         .clicked()
         && let Some((_, c)) = session.worksheet_result(d.worksheet)
     {
@@ -866,15 +893,16 @@ fn cell_ref(row: u32, col: u32) -> String {
     CellRef { row, col }.to_string()
 }
 
-fn summary_label(s: Option<Summary>) -> &'static str {
-    match s {
+fn summary_label(s: Option<Summary>) -> String {
+    let id = match s {
         None => "none",
         Some(Summary::Sum) => "sum",
         Some(Summary::Average) => "average",
         Some(Summary::Min) => "min",
         Some(Summary::Max) => "max",
         Some(Summary::Count) => "count",
-    }
+    };
+    crate::enum_names::name("summary", id)
 }
 
 fn save_def(
@@ -906,7 +934,8 @@ pub fn windows(ctx: &egui::Context, session: &mut Session, status: &mut String) 
         return;
     }
     let mut open = true;
-    egui::Window::new("Worksheet")
+    egui::Window::new(tr!("data-ui-worksheet"))
+        .id(egui::Id::new("win-worksheet"))
         .open(&mut open)
         .default_size([760.0, 520.0])
         .show(ctx, |ui| sheet_window(ui, session, &mut st, status));
@@ -930,7 +959,7 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
         st.selected = sheets.first().map(|s| s.0);
     }
     let Some(id) = st.selected else {
-        ui.label("No worksheet yet. Create one in the Resource Manager.");
+        ui.label(tr!("data-ui-no-worksheet-yet-create-one-in-the"));
         return;
     };
     ui.horizontal(|ui| {
@@ -954,7 +983,7 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
                     .find(|s| s.0 == id)
                     .map(|s| s.1.clone())
                     .unwrap_or_default();
-                if ui.button("Export CSV...").clicked() {
+                if ui.button(tr!("data-ui-export-csv")).clicked() {
                     *status = export_file(
                         &name,
                         "csv",
@@ -963,8 +992,8 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
                     );
                 }
                 if ui
-                    .button("Export XLSX...")
-                    .on_hover_text("Values, not formulas")
+                    .button(tr!("data-ui-export-xlsx"))
+                    .on_hover_text(tr!("data-ui-values-not-formulas"))
                     .clicked()
                 {
                     *status = export_file(
@@ -977,10 +1006,10 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
             }
             #[cfg(target_arch = "wasm32")]
             let _ = (&computed, &status);
-            ui.weak(format!("{} errors", computed.error_count()));
+            ui.weak(tr!("data-ui-errors", count = computed.error_count()));
             if ui
-                .button("Place in drawing")
-                .on_hover_text("Add the worksheet as a table on the active layer")
+                .button(tr!("data-ui-place-in-drawing"))
+                .on_hover_text(tr!("data-ui-add-the-worksheet-as-a-table-on"))
                 .clicked()
             {
                 let l = kadakas_sheet::layout(
@@ -1036,7 +1065,7 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
         let r = ui.add(
             egui::TextEdit::singleline(&mut st.cell_text)
                 .desired_width(ui.available_width() - 200.0)
-                .hint_text("Value or =formula"),
+                .hint_text(tr!("data-ui-value-or-formula")),
         );
         commit |= r.lost_focus();
         let fmt = def
@@ -1058,12 +1087,12 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
                         }
                     }),
             )
-            .on_hover_text("Decimals");
+            .on_hover_text(tr!("data-ui-decimals"));
         let mut unit = fmt.unit.clone();
         let u = ui.add(
             egui::TextEdit::singleline(&mut unit)
                 .desired_width(40.0)
-                .hint_text("unit"),
+                .hint_text(tr!("data-ui-unit-hint")),
         );
         if d.changed() || u.lost_focus() {
             let new = CellFormat {
@@ -1162,32 +1191,63 @@ fn database_setup(
     let mut commit = false;
     let mut message: Option<String> = None;
     let fields = criteria_fields(session.editor.doc());
-    egui::CollapsingHeader::new("Database rows").default_open(false).show(ui, |ui| {
-        ui.weak("A database block lists the objects that match the criteria. Columns are expressions such as Area, Layer, Style, Count or Soil.Depth.");
-        let mut remove = None;
-        for (bi, db) in edit.databases.iter_mut().enumerate() {
-            let title = if db.name.is_empty() { format!("Database {}", bi + 1) } else { db.name.clone() };
-            egui::CollapsingHeader::new(title).id_salt(("db", bi)).default_open(true).show(ui, |ui| {
-                commit |= db_form(ui, db, &fields);
-                if ui.button("Remove database").clicked() {
-                    remove = Some(bi);
-                }
-            });
-        }
-        if let Some(i) = remove {
-            edit.databases.remove(i);
-            commit = true;
-        }
-        if ui.button("Add database").clicked() {
-            edit.databases.push(DatabaseDef {
-                criteria: "Kind = \"plant\"".into(),
-                columns: vec![ColumnDef { header: "Style".into(), expr: "Style".into(), ..Default::default() }, ColumnDef { header: "Count".into(), expr: "Count".into(), summary: Some(Summary::Sum), ..Default::default() }],
-                anchor: format!("A{}", base.cells.keys().filter_map(|k| CellRef::parse(k)).map(|c| c.row).max().unwrap_or(0) + 2),
-                ..Default::default()
-            });
-            commit = true;
-        }
-    });
+    egui::CollapsingHeader::new(tr!("data-ui-database-rows"))
+        .id_salt("data-ui-database-rows")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.weak(tr!("data-ui-a-database-block-lists-the-objects-that"));
+            let mut remove = None;
+            for (bi, db) in edit.databases.iter_mut().enumerate() {
+                let title = if db.name.is_empty() {
+                    tr!("data-ui-database", name = bi + 1)
+                } else {
+                    db.name.clone()
+                };
+                egui::CollapsingHeader::new(title)
+                    .id_salt(("db", bi))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        commit |= db_form(ui, db, &fields);
+                        if ui.button(tr!("data-ui-remove-database")).clicked() {
+                            remove = Some(bi);
+                        }
+                    });
+            }
+            if let Some(i) = remove {
+                edit.databases.remove(i);
+                commit = true;
+            }
+            if ui.button(tr!("data-ui-add-database")).clicked() {
+                edit.databases.push(DatabaseDef {
+                    criteria: "Kind = \"plant\"".into(),
+                    columns: vec![
+                        ColumnDef {
+                            header: "Style".into(),
+                            expr: "Style".into(),
+                            ..Default::default()
+                        },
+                        ColumnDef {
+                            header: "Count".into(),
+                            expr: "Count".into(),
+                            summary: Some(Summary::Sum),
+                            ..Default::default()
+                        },
+                    ],
+                    anchor: format!(
+                        "A{}",
+                        base.cells
+                            .keys()
+                            .filter_map(|k| CellRef::parse(k))
+                            .map(|c| c.row)
+                            .max()
+                            .unwrap_or(0)
+                            + 2
+                    ),
+                    ..Default::default()
+                });
+                commit = true;
+            }
+        });
     if commit && *edit != *base {
         match edit.validate() {
             Ok(()) => {
@@ -1294,7 +1354,7 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
     }
     let mut added = false;
     ui.horizontal_wrapped(|ui| {
-        ui.label("Add");
+        ui.label(tr!("data-ui-add"));
         egui::ComboBox::from_id_salt("clause_name")
             .width(90.0)
             .selected_text(b.name.clone())
@@ -1314,7 +1374,7 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
         ui.add(
             egui::TextEdit::singleline(&mut b.value)
                 .desired_width(80.0)
-                .hint_text("value"),
+                .hint_text(tr!("data-ui-value")),
         );
         egui::ComboBox::from_id_salt("clause_join")
             .width(50.0)
@@ -1324,8 +1384,8 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
                 ui.selectable_value(&mut b.or, true, "OR");
             });
         if ui
-            .button("Add")
-            .on_hover_text("Add this test to the criteria")
+            .button(tr!("data-ui-add"))
+            .on_hover_text(tr!("data-ui-add-this-test-to-the-criteria"))
             .clicked()
             && !b.value.trim().is_empty()
         {
@@ -1336,7 +1396,7 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
             );
             added = true;
         }
-        if ui.button("Clear").clicked() {
+        if ui.button(tr!("data-ui-clear")).clicked() {
             criteria.clear();
             added = true;
         }
@@ -1348,37 +1408,41 @@ fn criteria_builder(ui: &mut Ui, criteria: &mut String, fields: &[String]) -> bo
 fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
     let mut commit = false;
     ui.horizontal(|ui| {
-        ui.label("Rows");
+        ui.label(tr!("data-ui-rows"));
         let before = db.source;
         egui::ComboBox::from_id_salt("db_source")
             .selected_text(if db.source == kadakas_sheet::RowSource::Objects {
-                "objects"
+                tr!("data-ui-objects")
             } else {
-                "plant list"
+                tr!("data-ui-plant-list")
             })
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut db.source, kadakas_sheet::RowSource::Objects, "objects")
-                    .on_hover_text("One row per object");
+                ui.selectable_value(
+                    &mut db.source,
+                    kadakas_sheet::RowSource::Objects,
+                    tr!("data-ui-objects"),
+                )
+                .on_hover_text(tr!("data-ui-one-row-per-object"));
                 ui.selectable_value(
                     &mut db.source,
                     kadakas_sheet::RowSource::PlantList,
-                    "plant list",
+                    tr!("data-ui-plant-list"),
                 )
-                .on_hover_text("One row per plant style, with the plants of landscape area mixes");
+                .on_hover_text(tr!("data-ui-one-row-per-plant-style-with-the"));
             });
         commit |= db.source != before;
     });
     ui.horizontal(|ui| {
-        ui.label("Name");
+        ui.label(tr!("data-ui-name"));
         commit |= ui
             .add(egui::TextEdit::singleline(&mut db.name).desired_width(110.0))
             .lost_focus();
-        ui.label("Top left");
+        ui.label(tr!("data-ui-top-left"));
         commit |= ui
             .add(egui::TextEdit::singleline(&mut db.anchor).desired_width(40.0))
             .lost_focus();
     });
-    ui.label("Criteria");
+    ui.label(tr!("data-ui-criteria"));
     commit |= criteria_builder(ui, &mut db.criteria, fields);
     commit |= ui
         .add(
@@ -1388,7 +1452,7 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
                 .hint_text("Kind = \"plant\" AND Layer = \"Planting\""),
         )
         .lost_focus();
-    ui.label("Columns");
+    ui.label(tr!("data-ui-columns"));
     let mut remove = None;
     for (i, c) in db.columns.iter_mut().enumerate() {
         ui.horizontal(|ui| {
@@ -1396,14 +1460,14 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
                 .add(
                     egui::TextEdit::singleline(&mut c.header)
                         .desired_width(80.0)
-                        .hint_text("Header"),
+                        .hint_text(tr!("data-ui-header")),
                 )
                 .lost_focus();
             commit |= ui
                 .add(
                     egui::TextEdit::singleline(&mut c.expr)
                         .desired_width(110.0)
-                        .hint_text("Expression"),
+                        .hint_text(tr!("data-ui-expression")),
                 )
                 .lost_focus();
             let before = c.summary;
@@ -1411,7 +1475,7 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
                 .width(70.0)
                 .selected_text(summary_label(c.summary))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut c.summary, None, "none");
+                    ui.selectable_value(&mut c.summary, None, tr!("data-ui-none"));
                     for s in [
                         Summary::Sum,
                         Summary::Average,
@@ -1437,7 +1501,7 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
                             }
                         }),
                 )
-                .on_hover_text("Decimals");
+                .on_hover_text(tr!("data-ui-decimals"));
             c.decimals = u8::try_from(d).ok();
             commit |= r.drag_stopped() || r.lost_focus();
             if ui.small_button("x").clicked() {
@@ -1461,7 +1525,7 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
         };
         commit = true;
     }
-    if ui.button("Add column").clicked() {
+    if ui.button(tr!("data-ui-add-column")).clicked() {
         db.columns.push(ColumnDef {
             header: format!("Column {}", db.columns.len() + 1),
             expr: "Id".into(),
@@ -1470,9 +1534,15 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
         commit = true;
     }
     ui.horizontal(|ui| {
-        ui.label("Sort by");
+        ui.label(tr!("data-ui-sort-by"));
         let mut first = db.sort.first().map(|k| k.column);
-        if column_combo(ui, "sort_by", &mut first, &db.columns, "(none)") {
+        if column_combo(
+            ui,
+            "sort_by",
+            &mut first,
+            &db.columns,
+            &tr!("data-ui-none-in-parentheses"),
+        ) {
             let desc = db.sort.first().is_some_and(|k| k.descending);
             db.sort = first
                 .map(|column| SortKey {
@@ -1484,40 +1554,52 @@ fn db_form(ui: &mut Ui, db: &mut DatabaseDef, fields: &[String]) -> bool {
             commit = true;
         }
         if let Some(k) = db.sort.first_mut()
-            && ui.checkbox(&mut k.descending, "descending").changed()
+            && ui
+                .checkbox(&mut k.descending, tr!("data-ui-descending"))
+                .changed()
         {
             commit = true;
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Group by");
-        commit |= column_combo(ui, "group_by", &mut db.group_by, &db.columns, "(none)");
+        ui.label(tr!("data-ui-group-by"));
+        commit |= column_combo(
+            ui,
+            "group_by",
+            &mut db.group_by,
+            &db.columns,
+            &tr!("data-ui-none-in-parentheses"),
+        );
         if db.group_by.is_some() {
             let before = db.group_mode;
             egui::ComboBox::from_id_salt("group_mode")
                 .selected_text(if db.group_mode == GroupMode::Detail {
-                    "details and subtotals"
+                    tr!("data-ui-details-and-subtotals")
                 } else {
-                    "one row per group"
+                    tr!("data-ui-one-row-per-group")
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut db.group_mode,
                         GroupMode::Detail,
-                        "details and subtotals",
+                        tr!("data-ui-details-and-subtotals"),
                     );
                     ui.selectable_value(
                         &mut db.group_mode,
                         GroupMode::Summary,
-                        "one row per group",
+                        tr!("data-ui-one-row-per-group"),
                     );
                 });
             commit |= db.group_mode != before;
         }
     });
     ui.horizontal(|ui| {
-        commit |= ui.checkbox(&mut db.header, "Header row").changed();
-        commit |= ui.checkbox(&mut db.total, "Total row").changed();
+        commit |= ui
+            .checkbox(&mut db.header, tr!("data-ui-header-row"))
+            .changed();
+        commit |= ui
+            .checkbox(&mut db.total, tr!("data-ui-total-row"))
+            .changed();
     });
     commit
 }
@@ -1533,8 +1615,8 @@ fn export_file(name: &str, ext: &str, label: &str, bytes: Vec<u8>) -> String {
         return String::new();
     };
     match kadakas_sys::fsio::write_atomic(&path, &bytes) {
-        Ok(()) => format!("Exported {}", path.display()),
-        Err(e) => format!("Cannot write {}: {e}", path.display()),
+        Ok(()) => tr!("data-ui-exported", path = path.display()),
+        Err(e) => tr!("data-ui-cannot-write", path = path.display(), e = e),
     }
 }
 

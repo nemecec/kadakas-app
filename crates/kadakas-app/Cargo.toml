@@ -15,6 +15,8 @@ kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
+kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
@@ -33,13 +35,14 @@ resvg = { version = "0.48.1", default-features = false }
 getrandom = "0.4.3"
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+sys-locale = "0.3.2"
 
 # The web build: WebGPU first, WebGL2 as the fallback (eframe picks at start).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wgpu = { version = "29", default-features = false, features = ["webgpu", "webgl"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto", "Navigator"] }
 js-sys = "0.3"
 
 [dev-dependencies]

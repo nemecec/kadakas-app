@@ -8,6 +8,7 @@ use kadakas_core::model::{Attributes, Shape};
 use kadakas_core::plants::tag::group_tag;
 use kadakas_core::plants::variation::Variation;
 use kadakas_core::resource::ResourceId;
+use kadakas_l10n::tr;
 use kadakas_plants::placement::{self, Pattern, PlaceSpec};
 use serde_json::{Map, Value};
 
@@ -44,30 +45,30 @@ impl PlantMode {
         PlantMode::Hedgerow,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            PlantMode::Single => "Single",
-            PlantMode::Path => "Along path",
-            PlantMode::Grid => "Grid",
-            PlantMode::Triangular => "Triangular",
-            PlantMode::Fill => "Fill area",
-            PlantMode::Poly => "Poly",
-            PlantMode::Hedgerow => "Hedgerow",
+            PlantMode::Single => tr!("uic-plant-tool-single"),
+            PlantMode::Path => tr!("uic-plant-tool-along-path"),
+            PlantMode::Grid => tr!("uic-plant-tool-grid"),
+            PlantMode::Triangular => tr!("uic-plant-tool-triangular"),
+            PlantMode::Fill => tr!("uic-plant-tool-fill-area"),
+            PlantMode::Poly => tr!("uic-plant-tool-poly"),
+            PlantMode::Hedgerow => tr!("uic-plant-tool-hedgerow"),
         }
     }
 
-    pub fn help(self) -> &'static str {
+    pub fn help(self) -> String {
         match self {
-            PlantMode::Single => "Click to place one plant.",
+            PlantMode::Single => tr!("uic-plant-tool-click-to-place-one-plant"),
             PlantMode::Path => {
-                "Click the points of a path. Enter or double-click places the plants along it."
+                tr!("uic-plant-tool-click-the-points-of-a-path-enter")
             }
-            PlantMode::Grid => "Click two corners. Plants go on a rectangular grid.",
-            PlantMode::Triangular => "Click two corners. Plants go on a staggered grid.",
-            PlantMode::Fill => "Click the corners of an area. Enter or double-click fills it.",
-            PlantMode::Poly => "Click a point for each plant. Enter or double-click places them.",
+            PlantMode::Grid => tr!("uic-plant-tool-click-two-corners-plants-go-on-a"),
+            PlantMode::Triangular => tr!("uic-plant-tool-click-two-corners-plants-go-on-a-2"),
+            PlantMode::Fill => tr!("uic-plant-tool-click-the-corners-of-an-area-enter"),
+            PlantMode::Poly => tr!("uic-plant-tool-click-a-point-for-each-plant-enter"),
             PlantMode::Hedgerow => {
-                "Click the points of a path. Enter or double-click places staggered rows along it."
+                tr!("uic-plant-tool-click-the-points-of-a-path-enter-2")
             }
         }
     }
@@ -91,12 +92,12 @@ pub enum By {
 }
 
 impl By {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            By::Spacing => "Spacing",
-            By::Count => "Count",
-            By::SpacingAndCount => "Spacing and count",
-            By::Density => "Density",
+            By::Spacing => tr!("uic-plant-tool-spacing"),
+            By::Count => tr!("uic-plant-tool-count"),
+            By::SpacingAndCount => tr!("uic-plant-tool-spacing-and-count"),
+            By::Density => tr!("uic-plant-tool-density"),
         }
     }
 }
@@ -252,11 +253,11 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
     let by = ps.effective_by();
     Ok(match ps.mode {
         PlantMode::Single => PlaceSpec::Single {
-            at: *pts.first().ok_or("click a point")?,
+            at: *pts.first().ok_or(tr!("uic-plant-tool-click-a-point"))?,
         },
         PlantMode::Path => {
             if pts.len() < 2 {
-                return Err("a path needs 2 or more points".into());
+                return Err(tr!("uic-plant-tool-a-path-needs-2-or-more-points"));
             }
             let spacing = matches!(by, By::Spacing | By::SpacingAndCount).then_some(spacing_x);
             let count = matches!(by, By::Count | By::SpacingAndCount).then_some(ps.count);
@@ -269,7 +270,7 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
         }
         PlantMode::Grid | PlantMode::Triangular => {
             let [a, b] = pts else {
-                return Err("click two corners".into());
+                return Err(tr!("uic-plant-tool-click-two-corners"));
             };
             let (min, max) = (a.min(*b), a.max(*b));
             if ps.mode == PlantMode::Grid {
@@ -292,7 +293,7 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
         }
         PlantMode::Fill => {
             if pts.len() < 3 {
-                return Err("an area needs 3 or more points".into());
+                return Err(tr!("uic-plant-tool-an-area-needs-3-or-more-points"));
             }
             PlaceSpec::Fill {
                 boundary: vertices,
@@ -307,7 +308,7 @@ pub fn spec_for(ps: &PlantSettings, pts: &[DVec2], spread: f64) -> Result<PlaceS
         PlantMode::Poly => PlaceSpec::Poly { points: vertices },
         PlantMode::Hedgerow => {
             if pts.len() < 2 {
-                return Err("a path needs 2 or more points".into());
+                return Err(tr!("uic-plant-tool-a-path-needs-2-or-more-points"));
             }
             PlaceSpec::Hedgerow {
                 path: vertices,
@@ -366,7 +367,7 @@ fn finish(cx: &Ctx, pts: &[DVec2]) -> Vec<Effect> {
         .and_then(|spec| placement::place(&spec).map_err(|e| e.0));
     match result {
         Ok(positions) => vec![Effect::Exec(place_command(cx, positions))],
-        Err(e) => vec![Effect::Notice(format!("Plant: {e}"))],
+        Err(e) => vec![Effect::Notice(tr!("uic-plant-tool-plant", e = e))],
     }
 }
 

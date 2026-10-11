@@ -10,6 +10,8 @@ description = "What every Kadakas UI program needs, without egui: tool state mac
 [dependencies]
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
+kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }

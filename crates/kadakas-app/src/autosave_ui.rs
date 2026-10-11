@@ -1,6 +1,7 @@
 //! The autosave state of the app, the recovery dialog and the Autosave settings (shown in `prefs_ui`).
 
 use kadakas_core::model::Document;
+use kadakas_l10n::tr;
 
 use crate::autosave::{AutosaveSettings, Scheduler};
 
@@ -63,7 +64,7 @@ impl AutosaveUi {
             self.crashed = crate::autosave::find_crashed(&dir);
             match crate::autosave::Recovery::start(dir) {
                 Ok(r) => self.recovery = Some(r),
-                Err(e) => self.error = Some(format!("Autosave is off: {e}")),
+                Err(e) => self.error = Some(tr!("autosave-ui-autosave-is-off", e = e)),
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -126,7 +127,9 @@ impl AutosaveUi {
             if self.keep.is_some() {
                 self.keep_until = Some(seq);
             }
-            self.error = r.last_error().map(|e| format!("Last autosave failed: {e}"));
+            self.error = r
+                .last_error()
+                .map(|e| tr!("autosave-ui-last-autosave-failed", e = e));
         }
     }
 
@@ -137,13 +140,13 @@ impl AutosaveUi {
             Ok(text) if crate::autosave::fits_browser_storage(text.len()) => {
                 crate::autosave::web::put(&text)
                     .err()
-                    .map(|e| format!("Last autosave failed: {e}"))
+                    .map(|e| tr!("autosave-ui-last-autosave-failed", e = e))
             }
-            Ok(text) => Some(format!(
-                "No autosave: the drawing is {} MB, more than the browser can store",
-                text.len() / 1_000_000 + 1
+            Ok(text) => Some(tr!(
+                "autosave-ui-no-autosave-the-drawing-is-mb-more",
+                size = text.len() / 1_000_000 + 1
             )),
-            Err(e) => Some(format!("No autosave: {e}")),
+            Err(e) => Some(tr!("autosave-ui-no-autosave", e = e)),
         };
     }
 
@@ -175,44 +178,47 @@ impl AutosaveUi {
     /// saved at once.
     pub fn settings_section(&mut self, ui: &mut egui::Ui) {
         let before = self.settings.clone();
-        ui.heading("Autosave");
+        ui.heading(tr!("autosave-ui-autosave"));
         let s = &mut self.settings;
-        ui.checkbox(&mut s.enabled, "Save a recovery copy while I work");
+        ui.checkbox(
+            &mut s.enabled,
+            tr!("autosave-ui-save-a-recovery-copy-while-i-work"),
+        );
         ui.add_enabled_ui(s.enabled, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Every");
+                ui.label(tr!("autosave-ui-every"));
                 ui.add(
                     egui::DragValue::new(&mut s.interval_minutes)
                         .range(1..=AutosaveSettings::MAX_MINUTES),
                 );
-                ui.label("minutes with changes");
+                ui.label(tr!("autosave-ui-minutes-with-changes"));
             });
             ui.horizontal(|ui| {
-                ui.label("Or after");
+                ui.label(tr!("autosave-ui-or-after"));
                 ui.add(egui::DragValue::new(&mut s.every_ops).range(0..=10_000));
-                ui.label("operations (0 = off)");
+                ui.label(tr!("autosave-ui-operations-0-off"));
             });
             ui.horizontal(|ui| {
-                ui.label("Keep the last");
+                ui.label(tr!("autosave-ui-keep-the-last"));
                 ui.add(egui::DragValue::new(&mut s.keep).range(1..=AutosaveSettings::MAX_KEEP));
-                ui.label("versions");
+                ui.label(tr!("autosave-ui-versions-label"));
             });
             #[cfg(not(target_arch = "wasm32"))]
             ui.checkbox(
                 &mut s.save_over_file,
-                "Also save over my file (off: recovery copies only)",
+                tr!("autosave-ui-also-save-over-my-file-off-recovery"),
             );
         });
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(dir) = crate::autosave::recovery_dir() {
-            ui.label(format!("Recovery folder: {}", dir.display()));
-            if ui.button("Show recovery folder").clicked() {
+            ui.label(tr!("autosave-ui-recovery-folder", path = dir.display()));
+            if ui.button(tr!("autosave-ui-show-recovery-folder")).clicked() {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = crate::autosave::reveal(&dir);
             }
         }
         #[cfg(target_arch = "wasm32")]
-        ui.label("The browser keeps one recovery copy in its local storage.");
+        ui.label(tr!("autosave-ui-the-browser-keeps-one-recovery-copy-in"));
         if let Some(e) = &self.error {
             ui.colored_label(ui.visuals().warn_fg_color, e);
         }
@@ -220,7 +226,7 @@ impl AutosaveUi {
         if self.settings != before {
             #[cfg(not(target_arch = "wasm32"))]
             if let Err(e) = crate::autosave::save_settings(&self.settings) {
-                self.error = Some(format!("Cannot save the preferences: {e}"));
+                self.error = Some(tr!("autosave-ui-cannot-save-the-preferences", e = e));
             }
         }
     }
@@ -236,7 +242,10 @@ impl AutosaveUi {
     fn open_recovered(&mut self, i: usize) -> Option<Recovered> {
         match self.crashed[i].load() {
             Ok((doc, from)) => {
-                let status = format!("Recovered {}. Save it to keep it.", from.display());
+                let status = tr!(
+                    "autosave-ui-recovered-save-it-to-keep-it",
+                    name = from.display()
+                );
                 let session = self.crashed.remove(i);
                 if self.settings.enabled && self.recovery.is_some() {
                     // An older pending session is safe once the newer one is kept.
@@ -252,7 +261,7 @@ impl AutosaveUi {
                 Some(Recovered { doc, status })
             }
             Err(e) => {
-                self.error = Some(format!("Cannot open the recovered copy: {e}"));
+                self.error = Some(tr!("autosave-ui-cannot-open-the-recovered-copy", e = e));
                 None
             }
         }
@@ -268,36 +277,42 @@ impl AutosaveUi {
             Discard(usize),
         }
         let mut choice = None;
-        egui::Window::new("Recover unsaved work")
+        egui::Window::new(tr!("autosave-ui-recover-unsaved-work"))
+            .id(egui::Id::new("win-recover-unsaved-work"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Kadakas did not close cleanly last time. It kept these recovery copies.");
+                ui.label(tr!("autosave-ui-kadakas-did-not-close-cleanly-last-time"));
                 let now = crate::autosave::now_unix();
                 for (i, c) in self.crashed.iter().enumerate() {
                     ui.separator();
                     let from = c
                         .original
                         .as_ref()
-                        .map_or("an untitled drawing".to_string(), |p| {
+                        .map_or(tr!("autosave-ui-an-untitled-drawing"), |p| {
                             p.display().to_string()
                         });
                     let age = c.saved_unix.map_or(String::new(), |t| {
-                        format!(
-                            ", saved {}",
-                            crate::autosave::age_text(now.saturating_sub(t))
+                        tr!(
+                            "autosave-ui-saved",
+                            when = crate::autosave::age_text(now.saturating_sub(t))
                         )
                     });
-                    ui.label(format!("{from}{age} ({} versions)", c.versions.len()));
+                    ui.label(tr!(
+                        "autosave-ui-versions",
+                        from = from,
+                        age = age,
+                        count = c.versions.len()
+                    ));
                     ui.horizontal(|ui| {
-                        if ui.button("Open recovered copy").clicked() {
+                        if ui.button(tr!("autosave-ui-open-recovered-copy")).clicked() {
                             choice = Some(Choice::Open(i));
                         }
-                        if ui.button("Discard").clicked() {
+                        if ui.button(tr!("autosave-ui-discard")).clicked() {
                             choice = Some(Choice::Discard(i));
                         }
-                        if ui.button("Show location").clicked() {
+                        if ui.button(tr!("autosave-ui-show-location")).clicked() {
                             let _ = crate::autosave::reveal(c.folder());
                         }
                     });
@@ -322,17 +337,18 @@ impl AutosaveUi {
     fn recovery_dialog(&mut self, ctx: &egui::Context) -> Option<Recovered> {
         self.web_copy.as_ref()?;
         let mut choice = None;
-        egui::Window::new("Recover unsaved work")
+        egui::Window::new(tr!("autosave-ui-recover-unsaved-work"))
+            .id(egui::Id::new("win-recover-unsaved-work"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("This browser kept an autosaved copy from an earlier visit.");
+                ui.label(tr!("autosave-ui-this-browser-kept-an-autosaved-copy-from"));
                 ui.horizontal(|ui| {
-                    if ui.button("Open recovered copy").clicked() {
+                    if ui.button(tr!("autosave-ui-open-recovered-copy")).clicked() {
                         choice = Some(true);
                     }
-                    if ui.button("Discard").clicked() {
+                    if ui.button(tr!("autosave-ui-discard")).clicked() {
                         choice = Some(false);
                     }
                 });
@@ -346,10 +362,10 @@ impl AutosaveUi {
         match crate::file_io::parse_document(&text) {
             Ok(doc) => Some(Recovered {
                 doc,
-                status: "Recovered the browser copy. Save it to keep it.".into(),
+                status: tr!("autosave-ui-recovered-the-browser-copy-save-it-to"),
             }),
             Err(e) => {
-                self.error = Some(format!("Cannot open the recovered copy: {e}"));
+                self.error = Some(tr!("autosave-ui-cannot-open-the-recovered-copy", e = e));
                 None
             }
         }

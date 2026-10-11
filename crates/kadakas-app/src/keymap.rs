@@ -2,6 +2,7 @@
 //! `kadakas_ui_core::keymap`. This module turns egui keys into ui-core keys, and finds and reads
 //! the user file.
 
+use kadakas_l10n::tr;
 pub use kadakas_ui_core::keymap::{Action, Chord, Keymap, allowed_in_text_field};
 use kadakas_ui_core::keys::{Key, Modifiers};
 
@@ -56,7 +57,11 @@ pub fn load() -> (Keymap, Vec<String>) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Keymap::defaults(), vec![]),
         Err(e) => (
             Keymap::defaults(),
-            vec![format!("keymap file {} ignored: {e}", path.display())],
+            vec![tr!(
+                "keymap-keymap-file-ignored",
+                path = path.display(),
+                e = e
+            )],
         ),
     }
 }

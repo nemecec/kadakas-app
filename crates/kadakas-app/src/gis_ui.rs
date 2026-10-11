@@ -1,6 +1,8 @@
 //! Massing models and map underlays in the app: drawing, property fields and the textures of
 //! underlays. The dialogs for map sources are in `gis_dialogs`.
 
+use crate::units_ui::DragValueExt as _;
+use kadakas_l10n::tr;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,7 +85,12 @@ pub fn roof_lines(m: &Massing, view: &View, offset: DVec2) -> Vec<[Pos2; 2]> {
 
 fn num(ui: &mut Ui, label: &str, v: &mut f64, speed: f64, suffix: &str) -> bool {
     ui.label(label);
-    let r = ui.add(DragValue::new(v).speed(speed).suffix(suffix));
+    let drag = DragValue::new(v).speed(speed);
+    let r = ui.add(match suffix {
+        " mm" => drag.length(),
+        "\u{b0}" => drag.degrees(),
+        other => drag.suffix(other),
+    });
     ui.end_row();
     r.drag_stopped() || r.lost_focus()
 }
@@ -91,14 +98,18 @@ fn num(ui: &mut Ui, label: &str, v: &mut f64, speed: f64, suffix: &str) -> bool 
 /// Fields of a massing model for the property panel. Returns true when a change is ready to commit.
 pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
     let mut commit = false;
-    ui.label("Name");
+    ui.label(tr!("gis-ui-name"));
     commit |= ui.text_edit_singleline(&mut m.name).lost_focus();
     ui.end_row();
     let mut by_floors = m.floors.is_some();
-    ui.label("Height by");
+    ui.label(tr!("gis-ui-height-by"));
     ui.horizontal(|ui| {
-        let a = ui.radio_value(&mut by_floors, false, "Height").changed();
-        let b = ui.radio_value(&mut by_floors, true, "Floors").changed();
+        let a = ui
+            .radio_value(&mut by_floors, false, tr!("gis-ui-height"))
+            .changed();
+        let b = ui
+            .radio_value(&mut by_floors, true, tr!("gis-ui-floors"))
+            .changed();
         if a || b {
             m.floors = by_floors.then(|| m.floor_count());
             commit = true;
@@ -106,17 +117,23 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
     });
     ui.end_row();
     if let Some(floors) = &mut m.floors {
-        ui.label("Floors");
+        ui.label(tr!("gis-ui-floors"));
         let mut n = *floors as i64;
         let r = ui.add(DragValue::new(&mut n).range(1..=300));
         *floors = n.clamp(1, 300) as u32;
         commit |= r.drag_stopped() || r.lost_focus();
         ui.end_row();
-        commit |= num(ui, "Floor height", &mut m.floor_height, 50.0, " mm");
+        commit |= num(
+            ui,
+            &tr!("gis-ui-floor-height"),
+            &mut m.floor_height,
+            50.0,
+            " mm",
+        );
     } else {
-        commit |= num(ui, "Eave height", &mut m.height, 50.0, " mm");
+        commit |= num(ui, &tr!("gis-ui-eave-height"), &mut m.height, 50.0, " mm");
     }
-    ui.label("Roof");
+    ui.label(tr!("gis-ui-roof"));
     let before = m.roof;
     egui::ComboBox::from_id_salt("massing_roof")
         .selected_text(m.roof.name())
@@ -128,17 +145,20 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
     commit |= m.roof != before;
     ui.end_row();
     if m.roof != RoofStyle::Flat {
-        commit |= num(ui, "Pitch", &mut m.pitch_deg, 1.0, "\u{b0}");
+        commit |= num(ui, &tr!("gis-ui-pitch"), &mut m.pitch_deg, 1.0, "\u{b0}");
     }
-    ui.label("Base");
+    ui.label(tr!("gis-ui-base"));
     let mut on_site = m.base.is_none();
     ui.horizontal(|ui| {
-        if ui.checkbox(&mut on_site, "On the site model").changed() {
+        if ui
+            .checkbox(&mut on_site, tr!("gis-ui-on-the-site-model"))
+            .changed()
+        {
             m.base = if on_site { None } else { Some(0.0) };
             commit = true;
         }
         if let Some(b) = &mut m.base {
-            let r = ui.add(DragValue::new(b).speed(50.0).suffix(" mm"));
+            let r = ui.add(DragValue::new(b).speed(50.0).length());
             commit |= r.drag_stopped() || r.lost_focus();
         }
     });
@@ -152,15 +172,15 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
         ui.end_row();
     }
     let q = m.quantities();
-    ui.label("Floor area");
-    ui.label(format!(
-        "{:.1} m2 ({} floors)",
-        q.gross_floor_area / 1e6,
-        q.floors
+    ui.label(tr!("gis-ui-floor-area"));
+    ui.label(tr!(
+        "gis-ui-area-floors",
+        area = kadakas_units::current().area_text_d(q.gross_floor_area, 1),
+        floors = q.floors
     ));
     ui.end_row();
-    ui.label("Volume");
-    ui.label(format!("{:.1} m3", q.volume / 1e9));
+    ui.label(tr!("gis-ui-volume"));
+    ui.label(kadakas_units::current().volume_text(q.volume));
     ui.end_row();
     commit
 }
@@ -168,18 +188,18 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
 /// Fields of an underlay for the property panel.
 pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
     let mut commit = false;
-    ui.label("Name");
+    ui.label(tr!("gis-ui-name"));
     commit |= ui.text_edit_singleline(&mut u.name).lost_focus();
     ui.end_row();
-    ui.label("Opacity");
+    ui.label(tr!("gis-ui-opacity"));
     let r = ui.add(egui::Slider::new(&mut u.opacity, 0.0..=1.0));
     commit |= r.drag_stopped() || r.lost_focus();
     ui.end_row();
-    ui.label("Raster");
-    ui.label(format!("{} x {} px", u.width, u.height));
+    ui.label(tr!("gis-ui-raster"));
+    ui.label(tr!("gis-ui-x-px", width = u.width, height = u.height));
     ui.end_row();
     if !u.source.is_empty() {
-        ui.label("Source");
+        ui.label(tr!("gis-ui-source"));
         ui.label(&u.source);
         ui.end_row();
     }
@@ -188,8 +208,8 @@ pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
 
 /// The options in the Data bar.
 pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
-    ui.radio_value(&mut s.by_floors, false, "Height");
-    ui.radio_value(&mut s.by_floors, true, "Floors");
+    ui.radio_value(&mut s.by_floors, false, tr!("gis-ui-height"));
+    ui.radio_value(&mut s.by_floors, true, tr!("gis-ui-floors"));
     if s.by_floors {
         let mut n = s.floors as i64;
         ui.add(DragValue::new(&mut n).range(1..=300));
@@ -199,18 +219,18 @@ pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
             DragValue::new(&mut s.floor_height)
                 .speed(50.0)
                 .range(500.0..=20000.0)
-                .suffix(" mm"),
+                .length(),
         );
     } else {
         ui.add(
             DragValue::new(&mut s.height)
                 .speed(50.0)
                 .range(100.0..=500000.0)
-                .suffix(" mm"),
+                .length(),
         );
     }
     egui::ComboBox::from_id_salt("massing_tool_roof")
-        .selected_text(format!("Roof: {}", s.roof.name()))
+        .selected_text(tr!("gis-ui-roof-2", roof = s.roof.name()))
         .show_ui(ui, |ui| {
             for r in [RoofStyle::Flat, RoofStyle::Gable, RoofStyle::Hip] {
                 ui.selectable_value(&mut s.roof, r, r.name());
@@ -221,7 +241,7 @@ pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
             DragValue::new(&mut s.pitch_deg)
                 .speed(1.0)
                 .range(1.0..=80.0)
-                .suffix("\u{b0}"),
+                .degrees(),
         );
     }
 }

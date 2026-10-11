@@ -4,6 +4,7 @@
 //! `keymap.json` (see `keymap::user_file`). `KADAKAS_PREFS_DIR` sets another folder. A file that
 //! cannot be read is ignored and the defaults apply; a write that fails shows in the status line.
 
+use kadakas_l10n::tr;
 use std::path::PathBuf;
 
 use kadakas_core::snapping::Settings;
@@ -30,6 +31,10 @@ pub struct Prefs {
     /// An unknown value in the file gives Medium; the rest of the file still counts.
     #[serde(deserialize_with = "icon_size_or_default")]
     pub icon_size: IconSize,
+    /// The language of the program: the language of the system, or a fixed one.
+    pub language: crate::locale::LanguageChoice,
+    /// Units and formats. What is not chosen follows the language.
+    pub units: kadakas_units::Settings,
 }
 
 impl Default for Prefs {
@@ -39,6 +44,8 @@ impl Default for Prefs {
             snap: Settings::default(),
             cues: true,
             icon_size: IconSize::default(),
+            language: crate::locale::LanguageChoice::SYSTEM,
+            units: kadakas_units::Settings::default(),
         }
     }
 }
@@ -60,20 +67,20 @@ pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
             Ok(p) if p.snap.problem().is_none() => (p, None),
             Ok(_) => (
                 Prefs::default(),
-                Some(format!(
-                    "{} has bad snapping numbers and is ignored",
-                    path.display()
+                Some(tr!(
+                    "prefs-has-bad-snapping-numbers-and-is-ignored",
+                    path = path.display()
                 )),
             ),
             Err(e) => (
                 Prefs::default(),
-                Some(format!("{} is ignored: {e}", path.display())),
+                Some(tr!("prefs-is-ignored", path = path.display(), e = e)),
             ),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Prefs::default(), None),
         Err(e) => (
             Prefs::default(),
-            Some(format!("{} is ignored: {e}", path.display())),
+            Some(tr!("prefs-is-ignored", path = path.display(), e = e)),
         ),
     }
 }
@@ -88,11 +95,14 @@ pub fn load() -> (Prefs, Option<String>) {
 /// Writes a file of the prefs folder. The file is written whole in a temporary file first, so a
 /// crash cannot leave half a file.
 pub fn write_file(dir: &std::path::Path, name: &str, text: &str) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| tr!("prefs-cannot-make", path = dir.display(), e = e))?;
     let path = dir.join(name);
     let tmp = dir.join(format!("{name}.tmp"));
-    std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    std::fs::write(&tmp, text)
+        .map_err(|e| tr!("prefs-cannot-write", path = tmp.display(), e = e))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
 }
 
 pub fn save_to(dir: &std::path::Path, prefs: &Prefs) -> Result<(), String> {

@@ -5,6 +5,7 @@
 //! 16. The app stores the choice in the egui context each frame, so the icon code needs no extra
 //! arguments for it.
 
+use kadakas_l10n::tr;
 use serde::{Deserialize, Serialize};
 
 /// The icon size that the user chose in the preferences.
@@ -32,11 +33,11 @@ pub enum IconRole {
 impl IconSize {
     pub const ALL: [IconSize; 3] = [IconSize::Small, IconSize::Medium, IconSize::Large];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            IconSize::Small => "Small",
-            IconSize::Medium => "Medium",
-            IconSize::Large => "Large",
+            IconSize::Small => tr!("icon-size-small"),
+            IconSize::Medium => tr!("icon-size-medium"),
+            IconSize::Large => tr!("icon-size-large"),
         }
     }
 

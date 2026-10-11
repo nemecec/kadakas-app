@@ -9,7 +9,7 @@ use std::f64::consts::TAU;
 use glam::DVec2;
 
 use super::draw::{Ctx, Fill, Prim, circle_points, text_width};
-use super::style::{DimensionStyle, LengthUnit, Terminator};
+use super::style::{DimensionStyle, Terminator};
 use super::{Axis, DimMode, Dimension};
 
 /// The measured values of a dimension: lengths in layer units (angles in degrees), one per
@@ -75,12 +75,7 @@ pub fn offset_for(mode: DimMode, p: &[DVec2], through: DVec2, paper: f64) -> f64
     (through - p[0]).dot(direction(axis, p).perp()) / paper
 }
 
-/// Rounds to a number of decimals, halves away from zero (2.5 gives 3, -2.5 gives -3).
-pub fn round_half_away(x: f64, decimals: usize) -> f64 {
-    let k = 10f64.powi(decimals as i32);
-    let r = (x * k).round() / k;
-    if r.is_finite() { r } else { x }
-}
+pub use kadakas_units::round_half_away;
 
 /// Puts the two ray points of an angular dimension in the order that measures the angle the user
 /// meant, like the click order in a CAD program: clicks that turn clockwise measure the
@@ -94,62 +89,21 @@ pub fn angular_order(vertex: DVec2, p1: DVec2, p2: DVec2) -> (DVec2, DVec2) {
     }
 }
 
-fn trim_number(s: String) -> String {
-    if s.starts_with('-') && s[1..].chars().all(|c| c == '0' || c == '.') {
-        s[1..].to_string()
-    } else {
-        s
-    }
-}
-
-/// A length in real mm as text in the units of the style.
+/// A length in real mm as text in the units of the style. The rounding and the feet-inches form
+/// come from `kadakas-units`, which the UI uses too.
 pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
-    let p = style.precision as usize;
     let mm = match style.round_to {
         Some(inc) if inc > 0.0 => (mm / inc).round() * inc,
         _ => mm,
     };
-    match style.unit {
-        LengthUnit::FtIn => {
-            let total = mm / 25.4;
-            let sign = if total < 0.0 { "-" } else { "" };
-            let total = total.abs();
-            let mut feet = (total / 12.0).floor();
-            let mut inches = total - feet * 12.0;
-            inches = round_half_away(inches, p);
-            if inches >= 12.0 {
-                feet += 1.0;
-                inches -= 12.0;
-            }
-            if feet == 0.0 {
-                format!("{sign}{inches:.p$}\"")
-            } else {
-                format!("{sign}{feet:.0}'-{inches:.p$}\"")
-            }
-        }
-        unit => {
-            let k = match unit {
-                LengthUnit::Mm => 1.0,
-                LengthUnit::Cm => 10.0,
-                LengthUnit::M => 1000.0,
-                LengthUnit::In => 25.4,
-                _ => 304.8,
-            };
-            let n = trim_number(format!("{:.p$}", round_half_away(mm / k, p)));
-            if style.show_unit {
-                format!("{n}{}", unit.suffix())
-            } else {
-                n
-            }
-        }
-    }
+    kadakas_units::format_drawing(mm, style.unit, style.precision as usize, style.show_unit)
 }
 
 /// An angle in degrees as text.
 pub fn format_angle(deg: f64, style: &DimensionStyle) -> String {
     format!(
         "{}\u{b0}",
-        trim_number(format!(
+        kadakas_units::trim_negative_zero(format!(
             "{:.*}",
             style.angle_precision as usize,
             round_half_away(deg, style.angle_precision as usize)
@@ -162,7 +116,7 @@ fn tolerance_text(style: &DimensionStyle) -> String {
         return String::new();
     };
     let num = |x: f64| {
-        trim_number(format!(
+        kadakas_units::trim_negative_zero(format!(
             "{:.*}",
             style.precision as usize,
             round_half_away(x, style.precision as usize)

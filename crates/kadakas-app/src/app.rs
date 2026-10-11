@@ -5,6 +5,7 @@ use glam::DVec2;
 use kadakas_api::Session;
 use kadakas_core::command::Command;
 use kadakas_core::model::{Document, ObjectId, Shape};
+use kadakas_l10n::tr;
 use kadakas_render::{RenderMode, StandardView};
 use serde_json::Value;
 
@@ -58,6 +59,10 @@ pub struct KadakasApp {
     prefs: Prefs,
     prefs_saved: Prefs,
     theme_applied: Option<ThemeChoice>,
+    /// The language and the units that the program uses now (see `locale`), and the tag of the
+    /// language.
+    locale_applied: (crate::locale::LanguageChoice, kadakas_units::Settings),
+    language: &'static str,
     /// The panels and the canvas use the dark theme.
     dark: bool,
     layouts: Layouts,
@@ -169,6 +174,8 @@ impl KadakasApp {
         app.prefs = prefs;
         app.prefs_saved = prefs;
         app.session.snap = prefs.snap;
+        app.language = crate::locale::apply(prefs.language, &prefs.units);
+        app.locale_applied = (prefs.language, prefs.units);
         theme::apply(&cc.egui_ctx, prefs.theme);
         app.theme_applied = Some(prefs.theme);
         let (layouts, layout_warning) = Layouts::load();
@@ -185,7 +192,11 @@ impl KadakasApp {
             [] => String::new(),
             [one] => one.clone(),
             [first, rest @ ..] => {
-                format!("{first} (+{} more keymap warnings, see stderr)", rest.len())
+                tr!(
+                    "app-more-keymap-warnings-see-stderr",
+                    first = first,
+                    count = rest.len()
+                )
             }
         };
         app.status = key_note.clone();
@@ -199,13 +210,14 @@ impl KadakasApp {
                 info_path,
             ) {
                 Ok(server) => {
-                    app.status = format!(
-                        "Agent server listening on {} (token in the agent runtime file) {key_note}",
-                        server.addr
+                    app.status = tr!(
+                        "app-agent-server-listening-on-token-in-the",
+                        addr = server.addr,
+                        key_note = key_note
                     );
                     app.agent = Some(server);
                 }
-                Err(e) => app.status = format!("Agent server failed on port {port}: {e}"),
+                Err(e) => app.status = tr!("app-agent-server-failed-on-port", port = port, e = e),
             }
         }
         app
@@ -222,7 +234,10 @@ impl KadakasApp {
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
         }
-        app.status = "Web build: files open and save through the browser".into();
+        // The language of the browser (`navigator.languages`) and the units that go with it.
+        let prefs = app.prefs;
+        app.language = crate::locale::apply(prefs.language, &prefs.units);
+        app.status = tr!("app-web-build-files-open-and-save-through");
         app.autosave.begin();
         app
     }
@@ -243,6 +258,11 @@ impl KadakasApp {
             prefs: Prefs::default(),
             prefs_saved: Prefs::default(),
             theme_applied: None,
+            locale_applied: (
+                crate::locale::LanguageChoice::SYSTEM,
+                kadakas_units::Settings::default(),
+            ),
+            language: kadakas_l10n::FALLBACK,
             dark: false,
             layouts: Layouts::default(),
             layout_name: None,
@@ -252,7 +272,7 @@ impl KadakasApp {
             view_history: ViewHistory::default(),
             shots: Vec::new(),
             shot_key: 0,
-            status: "Ready".into(),
+            status: tr!("app-ready"),
             path: None,
             title_dirty: false,
             info: InfoEdit::default(),
@@ -324,7 +344,7 @@ impl KadakasApp {
         if !view.is_plan() {
             self.machine.cancel();
             if !self.gpu_ready {
-                self.status = "The 3D view needs the wgpu renderer".into();
+                self.status = tr!("app-the-3d-view-needs-the-wgpu-renderer");
             }
         }
     }
@@ -357,9 +377,9 @@ impl KadakasApp {
         {
             Ok(out) => {
                 self.session.selection = out.created.into_iter().map(ObjectId).collect();
-                self.status = "Grouped".into();
+                self.status = tr!("app-grouped");
             }
-            Err(e) => self.status = format!("Error: {e}"),
+            Err(e) => self.status = tr!("app-error", e = e),
         }
     }
 
@@ -372,7 +392,7 @@ impl KadakasApp {
             .filter(|i| self.session.editor.doc().is_group(*i))
             .collect();
         if groups.is_empty() {
-            self.status = "Select a group to ungroup".into();
+            self.status = tr!("app-select-a-group-to-ungroup");
             return;
         }
         let members: Vec<ObjectId> = groups
@@ -386,9 +406,9 @@ impl KadakasApp {
         {
             Ok(_) => {
                 self.session.selection = members;
-                self.status = "Ungrouped".into();
+                self.status = tr!("app-ungrouped");
             }
-            Err(e) => self.status = format!("Error: {e}"),
+            Err(e) => self.status = tr!("app-error", e = e),
         }
     }
 
@@ -402,32 +422,31 @@ impl KadakasApp {
             .first()
             .filter(|_| self.session.selection.len() == 1)
         else {
-            self.status = "Select one group or symbol to edit".into();
+            self.status = tr!("app-select-one-group-or-symbol-to-edit");
             return;
         };
         if doc.is_group(id) {
             self.session.context.push(id);
             self.session.selection.clear();
-            self.status = "Editing group. Exit with the Exit group key".into();
+            self.status = tr!("app-editing-group-exit-with-the-exit-group");
         } else if matches!(doc.object(id).map(|o| &o.shape), Some(Shape::Symbol { .. })) {
             match self.session.editor.execute(&Command::EditSymbol { id }) {
                 Ok(out) => {
                     self.session.context.push(ObjectId(out.created[0]));
                     self.session.selection.clear();
-                    self.status =
-                        "Editing the symbol. Exit to apply the changes to all instances".into();
+                    self.status = tr!("app-editing-the-symbol-exit-to-apply-the");
                 }
-                Err(e) => self.status = format!("Error: {e}"),
+                Err(e) => self.status = tr!("app-error", e = e),
             }
         } else {
-            self.status = "Select one group or symbol to edit".into();
+            self.status = tr!("app-select-one-group-or-symbol-to-edit");
         }
     }
 
     /// Exit group. Leaving the edit group of a symbol applies the changes to the definition.
     fn exit_group(&mut self) {
         let Some(g) = self.session.edit_context() else {
-            self.status = "You are not in a group".into();
+            self.status = tr!("app-you-are-not-in-a-group");
             return;
         };
         let editing = self
@@ -442,12 +461,12 @@ impl KadakasApp {
                 .editor
                 .execute(&Command::ExitSymbolEdit { group: g })
             {
-                self.status = format!("Error: {e}");
+                self.status = tr!("app-error", e = e);
                 return;
             }
             self.session.context.pop();
             self.session.selection.clear();
-            self.status = "Symbol updated".into();
+            self.status = tr!("app-symbol-updated");
         } else {
             self.session.context.pop();
             self.session.selection = vec![g];
@@ -456,8 +475,8 @@ impl KadakasApp {
 
     fn create_site_model(&mut self) {
         self.status = match crate::site_ui::create_site_model(&mut self.session) {
-            Ok(id) => format!("Created site model {id}"),
-            Err(e) => format!("Error: {e}"),
+            Ok(id) => tr!("app-created-site-model", id = id),
+            Err(e) => tr!("app-error", e = e),
         };
     }
 
@@ -535,7 +554,7 @@ impl KadakasApp {
             match crate::agent::start(0, std::sync::Arc::new(move || wake.request_repaint()), None)
             {
                 Ok(server) => self.agent = Some(server),
-                Err(e) => self.status = format!("Cannot start the session for scripts: {e}"),
+                Err(e) => self.status = tr!("app-cannot-start-the-session-for-scripts", e = e),
             }
         }
         if let Some(a) = &self.agent {
@@ -549,8 +568,11 @@ impl KadakasApp {
             .path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} - Kadakas")));
+            .map_or(tr!("app-untitled"), |n| n.to_string_lossy().into_owned());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(tr!(
+            "app-kadakas",
+            name = name
+        )));
     }
 
     /// Web: the browser asks for a file. The bytes arrive in `web_inbox` and `take_web_files` reads them.
@@ -598,7 +620,7 @@ impl KadakasApp {
         done: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     ) {
         let name = name.to_string();
-        self.status = format!("Downloading {name}");
+        self.status = tr!("app-downloading", name = name);
         wasm_bindgen_futures::spawn_local(async move {
             if let Some(h) = rfd::AsyncFileDialog::new()
                 .set_file_name(&name)
@@ -626,10 +648,10 @@ impl KadakasApp {
                 .and_then(|t| file_io::parse_document(&t));
             match parsed {
                 Ok(doc) => {
-                    self.status = format!("Opened {name}");
+                    self.status = tr!("app-opened", name = name);
                     self.replace_document(doc, Some(name.into()));
                 }
-                Err(e) => self.status = format!("Cannot open {name}: {e}"),
+                Err(e) => self.status = tr!("app-cannot-open", name = name, e = e),
             }
         }
     }
@@ -644,7 +666,7 @@ impl KadakasApp {
         };
         match file_io::read_document(&path) {
             Ok(doc) => {
-                self.status = format!("Opened {}", path.display());
+                self.status = tr!("app-opened-2", name = path.display());
                 self.replace_document(doc, Some(path));
                 self.set_title(ctx);
             }
@@ -669,7 +691,7 @@ impl KadakasApp {
         };
         match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
-                self.status = format!("Saved {}", path.display());
+                self.status = tr!("app-saved", name = path.display());
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -687,7 +709,7 @@ impl KadakasApp {
             return;
         };
         self.status = match file_io::write_svg(&p, &self.session) {
-            Ok(()) => format!("Exported {}", p.display()),
+            Ok(()) => tr!("app-exported", name = p.display()),
             Err(e) => e,
         };
     }
@@ -696,7 +718,7 @@ impl KadakasApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn export_pdf(&mut self) {
         if self.session.editor.doc().sheet_layers().next().is_none() {
-            self.status = "Add a sheet layer first (Navigation > Sheet Layers > +)".into();
+            self.status = tr!("app-add-a-sheet-layer-first-navigation-sheet");
             return;
         }
         let Some(p) = rfd::FileDialog::new()
@@ -707,8 +729,8 @@ impl KadakasApp {
             return;
         };
         self.status = match self.session.export_file_trusted(serde_json::json!({"path": p.display().to_string(), "format": "pdf", "overwrite": true})) {
-            Ok(r) => format!("Exported {} sheet(s) to {}", r["pages"], p.display()),
-            Err(e) => format!("Error: {}", e.message),
+            Ok(r) => tr!("app-exported-sheet-s-to", count = r["pages"].as_u64().unwrap_or(0), path = p.display()),
+            Err(e) => tr!("app-error-2", message = e.message),
         };
     }
 
@@ -732,7 +754,7 @@ impl KadakasApp {
                     c.y as f64 + pan.y * self.view.zoom,
                 );
             }
-            self.status = format!("Restored view '{}'", v.name);
+            self.status = tr!("app-restored-view", name = v.name);
         }
     }
 
@@ -843,9 +865,7 @@ impl KadakasApp {
                 if self.plan() {
                     self.set_standard_view(StandardView::RightIsometric);
                 }
-                self.status =
-                    "Flyover: drag to orbit, Shift-drag or middle-drag to pan, wheel to zoom"
-                        .into();
+                self.status = tr!("app-flyover-drag-to-orbit-shift-drag-or");
             }
             Action::ViewProjection => {
                 self.session.view.projection = self.session.view.projection.toggled();
@@ -862,7 +882,7 @@ impl KadakasApp {
             }
             Action::CmdDuplicateArray => {
                 if self.session.selection.is_empty() {
-                    self.status = "Select the objects to duplicate first".into();
+                    self.status = tr!("app-select-the-objects-to-duplicate-first");
                 } else {
                     self.array_dlg.open();
                 }
@@ -881,18 +901,20 @@ impl KadakasApp {
             Action::ViewHistoryNext => self.step_view_history(false),
             Action::SnapCues => {
                 self.prefs.cues = !self.prefs.cues;
-                self.status = format!(
-                    "SmartCursor cues {}",
-                    if self.prefs.cues { "on" } else { "off" }
-                );
+                self.status = if self.prefs.cues {
+                    tr!("app-smartcursor-cues-on")
+                } else {
+                    tr!("app-smartcursor-cues-off")
+                };
             }
             Action::SnapRelativeAngles => {
                 let on = !self.session.snap.relative_angles;
                 self.session.snap.relative_angles = on;
-                self.status = format!(
-                    "Angles relative to the prior segment {}",
-                    if on { "on" } else { "off" }
-                );
+                self.status = if on {
+                    tr!("app-angles-relative-to-the-prior-segment-on")
+                } else {
+                    tr!("app-angles-relative-to-the-prior-segment-off")
+                };
             }
             Action::SnapAcquire => self.acquire_smart(),
             Action::ZoomIn => self.pending_zoom *= 2.0,
@@ -908,10 +930,10 @@ impl KadakasApp {
             | Action::DataBarFocus
             | Action::DataBarPrev => {}
             a if !a.implemented() => {
-                self.status = format!(
-                    "{} ({}) is planned, not built yet",
-                    a.label(),
-                    self.keys.hint(a)
+                self.status = tr!(
+                    "app-is-planned-not-built-yet",
+                    name = a.label(),
+                    keys = self.keys.hint(a)
                 )
             }
             _ => {}
@@ -1238,6 +1260,12 @@ impl egui_dock::TabViewer for DockViewer<'_> {
         tab.title().into()
     }
 
+    /// The id of a tab does not come from its title, so the state of a tab survives a change of
+    /// the language.
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(("kadakas_dock_tab", format!("{tab:?}")))
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         self.app.tab_ui(ui, *tab);
     }
@@ -1271,7 +1299,7 @@ impl KadakasApp {
     /// Previous View and Next View.
     fn step_view_history(&mut self, back: bool) {
         if !self.plan() {
-            self.status = "The view history is for the plan. Switch to Top/Plan".into();
+            self.status = tr!("app-the-view-history-is-for-the-plan");
             return;
         }
         let here = self.view_snapshot();
@@ -1289,9 +1317,9 @@ impl KadakasApp {
             }
             None => {
                 self.status = if back {
-                    "No earlier view".into()
+                    tr!("app-no-earlier-view")
                 } else {
-                    "No later view".into()
+                    tr!("app-no-later-view")
                 }
             }
         }
@@ -1313,10 +1341,10 @@ impl KadakasApp {
         lo.is_finite().then(|| (lo + hi) / 2.0)
     }
 
-    fn transform_selection(&mut self, transform: Transform, what: &str) {
+    fn transform_selection(&mut self, transform: Transform, when_empty: String) {
         let ids = self.session.selection.clone();
         if ids.is_empty() {
-            self.status = format!("Select the objects to {what} first");
+            self.status = when_empty;
             return;
         }
         self.exec(&Command::TransformObjects {
@@ -1328,9 +1356,12 @@ impl KadakasApp {
 
     fn turn_selection(&mut self, angle: f64) {
         if let Some(center) = self.selection_center() {
-            self.transform_selection(Transform::Rotate { center, angle }, "rotate");
+            self.transform_selection(
+                Transform::Rotate { center, angle },
+                tr!("app-select-the-objects-to-rotate-first"),
+            );
         } else {
-            self.status = "Select the objects to rotate first".into();
+            self.status = tr!("app-select-the-objects-to-rotate-first");
         }
     }
 
@@ -1342,9 +1373,12 @@ impl KadakasApp {
             } else {
                 (c, c + DVec2::X)
             };
-            self.transform_selection(Transform::Mirror { a, b }, "flip");
+            self.transform_selection(
+                Transform::Mirror { a, b },
+                tr!("app-select-the-objects-to-flip-first"),
+            );
         } else {
-            self.status = "Select the objects to flip first".into();
+            self.status = tr!("app-select-the-objects-to-flip-first");
         }
     }
 
@@ -1355,7 +1389,7 @@ impl KadakasApp {
         let mut ids = self.session.selection.clone();
         ids.sort_by_key(|id| doc.objects.get_index_of(id).unwrap_or(usize::MAX));
         if ids.len() < 2 {
-            self.status = "Select two or more shapes first".into();
+            self.status = tr!("app-select-two-or-more-shapes-first");
             return;
         }
         let result = if op == SurfaceOp::Subtract {
@@ -1367,10 +1401,10 @@ impl KadakasApp {
         match result {
             Ok(cmd) => {
                 if panels::run_command(&mut self.session, &cmd, &mut self.status).is_some() {
-                    self.status = "Done".into();
+                    self.status = tr!("app-done");
                 }
             }
-            Err(e) => self.status = format!("Error: {e}"),
+            Err(e) => self.status = tr!("app-error", e = e),
         }
     }
 
@@ -1383,8 +1417,7 @@ impl KadakasApp {
             tol,
             &self.session.snap,
             &mut self.session.smart,
-        )
-        .into();
+        );
     }
 
     /// The commands that quick search offers.
@@ -1420,58 +1453,61 @@ impl KadakasApp {
             });
         }
         for (label, m) in [
-            ("Preferences", MenuAction::Preferences),
-            ("Export SVG", MenuAction::ExportSvg),
-            ("Select All", MenuAction::SelectAll),
+            (tr!("app-preferences"), MenuAction::Preferences),
+            (tr!("app-export-svg"), MenuAction::ExportSvg),
+            (tr!("app-select-all"), MenuAction::SelectAll),
         ] {
             out.push(QuickItem {
-                label: label.into(),
+                label,
                 keys: String::new(),
                 command: QuickCommand::Menu(m),
             });
         }
         #[cfg(not(target_arch = "wasm32"))]
         for (label, m) in [
-            ("Import", MenuAction::Import),
-            ("Export", MenuAction::Export),
-            ("Map Sources", MenuAction::MapSources),
-            ("Change CRS", MenuAction::ChangeCrs),
-            ("Scripts", MenuAction::Scripts),
-            ("Export PDF", MenuAction::ExportPdf),
+            (tr!("app-import"), MenuAction::Import),
+            (tr!("app-export"), MenuAction::Export),
+            (tr!("app-map-sources"), MenuAction::MapSources),
+            (tr!("app-change-crs"), MenuAction::ChangeCrs),
+            (tr!("app-scripts"), MenuAction::Scripts),
+            (tr!("app-export-pdf"), MenuAction::ExportPdf),
         ] {
             out.push(QuickItem {
-                label: label.into(),
+                label,
                 keys: String::new(),
                 command: QuickCommand::Menu(m),
             });
         }
         for t in ThemeChoice::ALL {
             out.push(QuickItem {
-                label: format!("Theme: {}", t.label()),
+                label: tr!("app-theme", theme = t.label()),
                 keys: String::new(),
                 command: QuickCommand::Theme(t),
             });
         }
         for (name, label, _) in crate::snap_ui::CATEGORIES {
             out.push(QuickItem {
-                label: format!("Snapping: toggle {label}"),
+                label: tr!(
+                    "app-snapping-toggle",
+                    label = kadakas_l10n::translate(label, &[])
+                ),
                 keys: String::new(),
                 command: QuickCommand::SnapToggle(name),
             });
         }
         for tab in Tab::ALL.iter().copied().filter(|t| t.closeable()) {
             out.push(QuickItem {
-                label: format!("Show {}", tab.title()),
+                label: tr!("app-show", name = tab.title()),
                 keys: String::new(),
                 command: QuickCommand::ShowTab(tab),
             });
         }
         for (label, c) in [
-            ("Save Layout As", QuickCommand::SaveLayout),
-            ("Reset Layout", QuickCommand::ResetLayout),
+            (tr!("app-save-layout-as"), QuickCommand::SaveLayout),
+            (tr!("app-reset-layout"), QuickCommand::ResetLayout),
         ] {
             out.push(QuickItem {
-                label: label.into(),
+                label,
                 keys: String::new(),
                 command: c,
             });
@@ -1487,7 +1523,12 @@ impl KadakasApp {
             QuickCommand::SnapToggle(name) => {
                 let on = self.session.snap.set.get(name).unwrap_or(false);
                 self.session.snap.set.set(name, !on);
-                self.status = format!("Snap {name}: {}", if on { "off" } else { "on" });
+                let label = crate::snap_ui::category_name(name);
+                self.status = if on {
+                    tr!("app-snap-off", name = label)
+                } else {
+                    tr!("app-snap-on", name = label)
+                };
             }
             QuickCommand::ShowTab(t) => self.layouts.show_tab(t),
             QuickCommand::SaveLayout => self.layout_name = Some(String::new()),
@@ -1502,7 +1543,7 @@ impl KadakasApp {
                 MenuRequest::SaveLayoutAs => self.layout_name = Some(String::new()),
                 MenuRequest::LoadLayout(n) => {
                     if !self.layouts.apply(&n) {
-                        self.status = format!("No layout named {n}");
+                        self.status = tr!("app-no-layout-named", n = n);
                     }
                 }
                 MenuRequest::DeleteLayout(n) => {
@@ -1521,19 +1562,21 @@ impl KadakasApp {
             return;
         };
         let mut done = None;
-        egui::Window::new("Save Layout As")
+        egui::Window::new(tr!("app-save-layout-as"))
+            .id(egui::Id::new("win-save-layout-as"))
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                let r = ui.add(egui::TextEdit::singleline(name).hint_text("Name of the layout"));
+                let r = ui
+                    .add(egui::TextEdit::singleline(name).hint_text(tr!("app-name-of-the-layout")));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                     done = Some(true);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button(tr!("app-save")).clicked() {
                         done = Some(true);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr!("app-cancel")).clicked() {
                         done = Some(false);
                     }
                 });
@@ -1544,7 +1587,7 @@ impl KadakasApp {
                 match self.layouts.save_as(&name) {
                     Ok(()) => {
                         self.save_layouts();
-                        self.status = format!("Saved layout {}", name.trim());
+                        self.status = tr!("app-saved-layout", name = name.trim());
                     }
                     Err(e) => self.status = e,
                 }
@@ -1762,6 +1805,12 @@ impl eframe::App for KadakasApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // A new language or new units work at once: every text is made again in each frame.
+        if self.locale_applied != (self.prefs.language, self.prefs.units) {
+            self.language = crate::locale::apply(self.prefs.language, &self.prefs.units);
+            self.locale_applied = (self.prefs.language, self.prefs.units);
+            ctx.request_repaint();
+        }
         if self.theme_applied != Some(self.prefs.theme) {
             theme::apply(&ctx, self.prefs.theme);
             self.theme_applied = Some(self.prefs.theme);
@@ -1846,8 +1895,16 @@ impl eframe::App for KadakasApp {
         if self.autosave.take_prefs_request() {
             self.prefs_ui.open();
         }
-        self.prefs_ui
-            .show(&ctx, &mut self.prefs.icon_size, &mut self.autosave);
+        self.prefs_ui.show(
+            &ctx,
+            crate::prefs_ui::PrefsEdit {
+                icon_size: &mut self.prefs.icon_size,
+                language: &mut self.prefs.language,
+                units: &mut self.prefs.units,
+                active_language: self.language,
+            },
+            &mut self.autosave,
+        );
         if let Some(r) = self.autosave.show(&ctx) {
             self.replace_document(r.doc, None);
             self.status = r.status;
@@ -1944,21 +2001,25 @@ impl eframe::App for KadakasApp {
                 ui.label(self.machine.hint_for(&self.settings));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.plan() {
-                        ui.label(format!(
-                            "{} objects, {} selected, zoom {:.3} px/mm, 1:{}",
-                            d.objects.len(),
-                            self.session.selection.len(),
-                            self.view.zoom,
-                            d.layer(d.active_layer).map_or(100.0, |l| l.scale)
+                        let u = kadakas_units::current();
+                        ui.label(tr!(
+                            "app-status-objects-zoom",
+                            objects = d.objects.len(),
+                            selected = self.session.selection.len(),
+                            zoom = u.number_text(self.view.zoom, 3),
+                            scale = u
+                                .number
+                                .plain()
+                                .format_trim(d.layer(d.active_layer).map_or(100.0, |l| l.scale), 3)
                         ));
                     } else {
                         let v = self.session.view;
-                        ui.label(format!(
-                            "{} objects, {} selected, {}, {}",
-                            d.objects.len(),
-                            self.session.selection.len(),
-                            v.view.label(),
-                            v.projection.id()
+                        ui.label(tr!(
+                            "app-objects-selected",
+                            objects = d.objects.len(),
+                            selected = self.session.selection.len(),
+                            view = crate::enum_names::standard_view(v.view),
+                            projection = crate::enum_names::name("projection", v.projection.id())
                         ));
                     }
                 });
@@ -2098,6 +2159,62 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
         });
+    }
+
+    #[test]
+    fn the_window_draws_in_every_language_and_in_every_unit_system() {
+        use kadakas_units::{AngleFormat, AreaUnit, LengthUnit, Settings, with_units};
+        let systems = [
+            Settings::default(),
+            Settings {
+                length: LengthUnit::FtIn,
+                area: AreaUnit::Ac,
+                angle: AngleFormat::Bearing,
+                ..Settings::default()
+            },
+            Settings {
+                length: LengthUnit::M,
+                angle: AngleFormat::Dms,
+                ..Settings::default()
+            },
+        ];
+        for lang in kadakas_l10n::languages() {
+            for settings in &systems {
+                kadakas_l10n::with_language(lang.tag, || {
+                    with_units(settings.resolve(lang.tag), || {
+                        let ctx = egui::Context::default();
+                        let mut app = KadakasApp::blank();
+                        let id = app
+                            .session
+                            .editor
+                            .execute(&Command::AddObject {
+                                shape: Shape::Rect {
+                                    min: DVec2::ZERO,
+                                    max: DVec2::new(2000.0, 1500.0),
+                                },
+                                layer: None,
+                                class: None,
+                                attrs: Default::default(),
+                            })
+                            .unwrap()
+                            .created[0];
+                        app.session.selection = vec![ObjectId(id)];
+                        dock_frame(&mut app, &ctx);
+                        app.machine.set_tool(Tool::Line);
+                        frame(&mut app, &ctx, vec![]);
+                        // The status line speaks the language.
+                        app.session.selection.clear();
+                        app.run_action(&ctx, Action::CmdAddSurface);
+                        let want = if lang.tag == "et" {
+                            "Vali kõigepealt kaks või rohkem kujundit"
+                        } else {
+                            "Select two or more shapes first"
+                        };
+                        assert_eq!(app.status, want);
+                    })
+                });
+            }
+        }
     }
 
     #[test]
@@ -2297,6 +2414,11 @@ mod tests {
         assert!(app.session.snap.set.angle);
         app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
         assert!(!app.session.snap.set.angle);
+        assert_eq!(app.status, "Snap Angle: off");
+        kadakas_l10n::with_language("et", || {
+            app.run_quick(&ctx, QuickCommand::SnapToggle("angle"));
+            assert_eq!(app.status, "Haaramine Nurk: sees");
+        });
         app.run_quick(&ctx, QuickCommand::Action(Action::ToolFillet));
         assert_eq!(app.machine.tool(), Tool::Fillet);
         app.run_quick(&ctx, QuickCommand::ShowTab(Tab::Snapping));

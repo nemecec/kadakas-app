@@ -9,6 +9,7 @@
 //! file that nobody holds means an unclean shutdown, and the autosaved versions next to it are
 //! offered to the user. A clean exit deletes the lock file and the versions.
 
+use kadakas_l10n::tr;
 use serde_json::{Value, json};
 
 /// The preferences for autosave. `sanitized` keeps the values in a sensible range.
@@ -128,12 +129,11 @@ pub fn fits_browser_storage(len: usize) -> bool {
 
 /// "5 minutes ago" for the recovery dialog.
 pub fn age_text(secs: u64) -> String {
-    let plural = |n: u64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
     match secs {
-        0..=59 => "less than a minute ago".into(),
-        60..=3599 => plural(secs / 60, "minute"),
-        3600..=86399 => plural(secs / 3600, "hour"),
-        _ => plural(secs / 86400, "day"),
+        0..=59 => tr!("autosave-less-than-a-minute-ago"),
+        60..=3599 => tr!("autosave-minutes-ago", n = secs / 60),
+        3600..=86399 => tr!("autosave-hours-ago", n = secs / 3600),
+        _ => tr!("autosave-days-ago", n = secs / 86400),
     }
 }
 
@@ -144,6 +144,8 @@ pub use crate::autosave_fs::*;
 /// the page can rely on, so the copy stays until the user saves (downloads), discards or opens it.
 #[cfg(target_arch = "wasm32")]
 pub mod web {
+    use kadakas_l10n::tr;
+
     const KEY: &str = "kadakas.autosave";
 
     fn storage() -> Option<web_sys::Storage> {
@@ -152,9 +154,9 @@ pub mod web {
 
     /// Stores the document text. The browser limits the size (about 5 MB).
     pub fn put(text: &str) -> Result<(), String> {
-        let s = storage().ok_or("browser storage is not available")?;
+        let s = storage().ok_or(tr!("autosave-browser-storage-is-not-available"))?;
         s.set_item(KEY, text)
-            .map_err(|_| "browser storage is full".to_string())
+            .map_err(|_| tr!("autosave-browser-storage-is-full"))
     }
 
     pub fn get() -> Option<String> {
