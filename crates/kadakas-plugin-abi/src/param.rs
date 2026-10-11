@@ -43,6 +43,11 @@ pub struct ParamSchema {
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+    /// The unit of a number, such as `pcs` or `%`, for the editor. A length is always in mm, and the
+    /// editor shows the length unit of the person, so a length needs no unit here. The unit is
+    /// text of the plug-in author: the host shows it as it is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -73,6 +78,7 @@ impl ParamSchema {
             default: Value::Null,
             min: None,
             max: None,
+            unit: String::new(),
             options: vec![],
             fields: vec![],
         }
@@ -87,6 +93,12 @@ impl ParamSchema {
     /// Sets the label.
     pub fn with_label(mut self, label: &str) -> Self {
         self.label = label.into();
+        self
+    }
+
+    /// Sets the unit text of a number.
+    pub fn with_unit(mut self, unit: &str) -> Self {
+        self.unit = unit.into();
         self
     }
 
@@ -151,6 +163,14 @@ impl ParamSchema {
         }
         if self.ty != ParamType::Choice && !self.options.is_empty() {
             return Err(format!("parameter {n}: only a choice has options"));
+        }
+        if self.unit.chars().count() > 16 || self.unit.chars().any(char::is_control) {
+            return Err(format!(
+                "parameter {n}: the unit has at most 16 characters and no control characters"
+            ));
+        }
+        if !self.unit.is_empty() && self.ty != ParamType::Number {
+            return Err(format!("parameter {n}: only a number has a unit"));
         }
         for v in [self.min, self.max].into_iter().flatten() {
             if !v.is_finite() {
@@ -289,6 +309,36 @@ mod tests {
             ..ParamSchema::new("h", ParamType::Number)
         };
         assert!(half.coerce(&json!(2)).unwrap_err().contains("-inf"));
+    }
+
+    #[test]
+    fn a_number_can_have_a_unit_and_nothing_else_can() {
+        let p = ParamSchema::new("n", ParamType::Number).with_unit("pcs");
+        p.validate().unwrap();
+        let again: ParamSchema = serde_json::from_value(json!(p)).unwrap();
+        assert_eq!(again.unit, "pcs");
+        assert!(
+            !json!(ParamSchema::new("n", ParamType::Number))
+                .as_object()
+                .unwrap()
+                .contains_key("unit")
+        );
+        let e = ParamSchema::new("n", ParamType::Number)
+            .with_unit(&"u".repeat(17))
+            .validate()
+            .unwrap_err();
+        assert!(e.contains("16"));
+        assert!(
+            ParamSchema::new("n", ParamType::Number)
+                .with_unit("a\u{7}")
+                .validate()
+                .is_err()
+        );
+        let e = ParamSchema::new("n", ParamType::Length)
+            .with_unit("mm")
+            .validate()
+            .unwrap_err();
+        assert!(e.contains("only a number"));
     }
 
     #[test]
