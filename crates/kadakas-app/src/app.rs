@@ -24,6 +24,7 @@ use crate::prefs::{self, Prefs};
 use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
 use crate::screenshot;
+use crate::solid_ui::{Request as SolidRequest, SolidDialog};
 use crate::theme::{self, ThemeChoice};
 use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
@@ -73,6 +74,7 @@ pub struct KadakasApp {
     layout_checked: f64,
     quick: QuickSearch,
     array_dlg: ArrayDialog,
+    solid_dlg: SolidDialog,
     view_history: ViewHistory,
     /// Screenshot requests of agents that wait for a picture.
     shots: Vec<screenshot::Pending>,
@@ -396,6 +398,7 @@ impl KadakasApp {
             layout_checked: 0.0,
             quick: QuickSearch::default(),
             array_dlg: ArrayDialog::default(),
+            solid_dlg: SolidDialog::default(),
             view_history: ViewHistory::default(),
             shots: Vec::new(),
             shot_key: 0,
@@ -765,6 +768,8 @@ impl KadakasApp {
             | MenuAction::ClipSurface
             | MenuAction::IntersectSurface
             | MenuAction::Compose
+            | MenuAction::Extrude
+            | MenuAction::Sweep
             | MenuAction::RotateLeft90
             | MenuAction::RotateRight90
             | MenuAction::FlipHorizontal
@@ -1206,6 +1211,15 @@ impl KadakasApp {
                     self.status = tr!("app-select-the-objects-to-duplicate-first");
                 } else {
                     self.array_dlg.open();
+                }
+            }
+            Action::CmdExtrude | Action::CmdSweep => {
+                if self.session.selection.is_empty() {
+                    self.status = tr!("app-select-2d-shapes-to-turn-into-a-solid-first");
+                } else if action == Action::CmdExtrude {
+                    self.solid_dlg.open_extrude();
+                } else {
+                    self.solid_dlg.open_sweep();
                 }
             }
             Action::CmdAddSurface => self.surface_op(SurfaceOp::Add),
@@ -1732,6 +1746,60 @@ impl KadakasApp {
         } else {
             self.status = tr!("app-select-the-objects-to-flip-first");
         }
+    }
+
+    /// Model > Extrude and Model > Sweep: turns the selected 2D shapes into solids in one undo step.
+    /// The new solids become the selection.
+    fn make_solids(&mut self, req: SolidRequest) {
+        use kadakas_core::solid_batch;
+        let doc = self.session.editor.doc();
+        let ids = self.session.selection.clone();
+        let made = match req {
+            SolidRequest::Extrude(opts) => match opts.check() {
+                Ok(()) => solid_batch::extrude(doc, &ids, &opts),
+                Err(e) => {
+                    self.status = tr!("app-error", e = e);
+                    return;
+                }
+            },
+            SolidRequest::Sweep(mut opts, use_line) => {
+                if use_line {
+                    // The first selected line (or two-vertex polyline) is the axis.
+                    opts.axis_id = ids.iter().copied().find(|id| {
+                        doc.object(*id)
+                            .is_some_and(|o| kadakas_core::solid_batch::is_axis_shape(&o.shape))
+                    });
+                    if opts.axis_id.is_none() {
+                        self.status = tr!("app-select-a-line-for-the-axis-too");
+                        return;
+                    }
+                }
+                match opts.check() {
+                    Ok(()) => solid_batch::sweep(doc, &ids, &opts),
+                    Err(e) => {
+                        self.status = tr!("app-error", e = e);
+                        return;
+                    }
+                }
+            }
+        };
+        let (made_count, skipped) = (made.created.len(), made.skipped.len());
+        if let Some(cmd) = &made.command {
+            self.exec(cmd);
+            self.session.selection = made.created.iter().map(|c| c.1).collect();
+        }
+        self.status = match (made_count, skipped) {
+            (0, _) => tr!(
+                "app-no-solid-made-reason",
+                reason = made
+                    .skipped
+                    .first()
+                    .map(|s| s.1.clone())
+                    .unwrap_or_default()
+            ),
+            (n, 0) => tr!("app-solids-made", count = n),
+            (n, k) => tr!("app-solids-made-skipped", count = n, skipped = k),
+        };
     }
 
     /// Add, subtract, clip, intersect or compose the selected shapes. For Subtract the lowest shape
@@ -2470,6 +2538,9 @@ impl eframe::App for KadakasApp {
         if let Some(cmd) = self.array_dlg.show(&ctx, &self.session.selection, center) {
             self.exec(&cmd);
         }
+        if let Some(req) = self.solid_dlg.show(&ctx, &self.session.selection) {
+            self.make_solids(req);
+        }
         let items = if self.quick.is_open() {
             self.quick_items()
         } else {
@@ -2786,6 +2857,108 @@ mod tests {
             app.undo();
         }
         assert_eq!(app.session.editor.doc().objects.len(), 2);
+    }
+
+    #[test]
+    fn model_extrude_and_sweep_make_solids_from_the_selection() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        let add = |app: &mut KadakasApp, shape: Shape| {
+            let out = app
+                .session
+                .editor
+                .execute(&Command::AddObject {
+                    shape,
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            ObjectId(out.created[0])
+        };
+        // Nothing selected: a message and no dialog.
+        app.run_action(&ctx, Action::CmdExtrude);
+        assert!(
+            app.status.contains("Select the 2D shapes"),
+            "{}",
+            app.status
+        );
+        assert!(!app.solid_dlg.is_open());
+        let rect = add(
+            &mut app,
+            Shape::Rect {
+                min: DVec2::new(0.0, 0.0),
+                max: DVec2::new(1000.0, 500.0),
+            },
+        );
+        let text = add(
+            &mut app,
+            Shape::Text {
+                at: DVec2::ZERO,
+                text: "t".into(),
+                height: 10.0,
+            },
+        );
+        app.session.selection = vec![rect, text];
+        app.run_action(&ctx, Action::CmdExtrude);
+        assert!(app.solid_dlg.is_open());
+        app.make_solids(SolidRequest::Extrude(Default::default()));
+        assert!(app.status.contains("Solids made: 1"), "{}", app.status);
+        assert_eq!(app.session.selection.len(), 1);
+        let solid = app.session.selection[0];
+        assert_eq!(
+            app.session.editor.doc().object(solid).unwrap().shape.kind(),
+            "extrude"
+        );
+        assert!(app.session.editor.doc().object(rect).is_none());
+        app.undo();
+        assert!(app.session.editor.doc().object(rect).is_some());
+        // Sweep with the selected line as the axis.
+        let line = add(
+            &mut app,
+            Shape::Line {
+                a: DVec2::new(0.0, -2000.0),
+                b: DVec2::new(3000.0, -2000.0),
+            },
+        );
+        app.session.selection = vec![rect, line];
+        app.run_action(&ctx, Action::CmdSweep);
+        let mut opts = kadakas_core::solid_batch::SweepOptions {
+            sweep_angle_deg: 90.0,
+            ..Default::default()
+        };
+        app.make_solids(SolidRequest::Sweep(opts.clone(), true));
+        assert!(app.status.contains("solid made"), "{}", app.status);
+        // Without a line in the selection the line axis is refused with a message.
+        app.undo();
+        app.session.selection = vec![rect];
+        app.make_solids(SolidRequest::Sweep(opts.clone(), true));
+        assert!(app.status.contains("line for the axis"), "{}", app.status);
+        // Wrong numbers and shapes that cannot be turned give a message.
+        opts.sweep_angle_deg = 0.0;
+        app.make_solids(SolidRequest::Sweep(opts, false));
+        assert!(app.status.contains("sweep_angle"), "{}", app.status);
+        let bad = kadakas_core::solid_batch::ExtrudeOptions {
+            height: 0.0,
+            ..Default::default()
+        };
+        app.make_solids(SolidRequest::Extrude(bad));
+        assert!(app.status.contains("height"), "{}", app.status);
+        app.session.selection = vec![text];
+        app.make_solids(SolidRequest::Extrude(Default::default()));
+        assert!(app.status.contains("No solid made"), "{}", app.status);
+        app.make_solids(SolidRequest::Sweep(Default::default(), false));
+        assert!(app.status.contains("No solid made"), "{}", app.status);
+        // The 3D polygon tool and the Model menu commands exist in the default profile.
+        let model = app
+            .profiles
+            .active_profile()
+            .menus
+            .iter()
+            .find(|m| m.id == "model")
+            .expect("a Model menu")
+            .clone();
+        assert_eq!(model.items.len(), 4);
     }
 
     #[test]

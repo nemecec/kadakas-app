@@ -31,6 +31,7 @@ mod present_api;
 mod query_api;
 mod rules_api;
 mod sheets_api;
+mod solid_api;
 mod survey_api;
 mod symbols_api;
 #[cfg(not(target_arch = "wasm32"))]
@@ -334,6 +335,18 @@ pub const METHODS: &[(&str, &str)] = &[
     massing_api::MASSING_GET,
     massing_api::MASSING_FROM_SHAPES,
     massing_api::MASSING_REPORT,
+    // Extrude, sweep and 3D polygon (see solid_api.rs).
+    solid_api::EXTRUDE_ADD,
+    solid_api::EXTRUDE_SET,
+    solid_api::EXTRUDE_GET,
+    solid_api::EXTRUDE_FROM_SHAPES,
+    solid_api::SWEEP_ADD,
+    solid_api::SWEEP_SET,
+    solid_api::SWEEP_GET,
+    solid_api::SWEEP_FROM_SHAPES,
+    solid_api::POLYGON3D_ADD,
+    solid_api::POLYGON3D_SET,
+    solid_api::POLYGON3D_GET,
     // Hardscapes and landscape areas (see hardscape_api.rs).
     hardscape_api::HARDSCAPE_STYLE_LIST,
     hardscape_api::HARDSCAPE_STYLE_GET,
@@ -984,6 +997,7 @@ impl Session {
                 "hardscapes": hardscape_api::describe(),
                 "presentation": present_api::describe(),
                 "massing": massing_api::describe(),
+                "solids": solid_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
                     "sheets": sheets_api::describe(),
@@ -1290,6 +1304,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = massing_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = solid_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = irrigation_api::handle(self, method, p.clone()) {

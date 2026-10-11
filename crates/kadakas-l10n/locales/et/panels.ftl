@@ -170,3 +170,7 @@ panels-add-class = Lisa klass
 panels-cursor-position = X { $x }  Y { $y } { $unit }
 panels-range-to = { $low } kuni { $high }
 panels-area-value = Pindala { $area }
+panels-extrude = Väljapressimine...
+panels-sweep = Pöördkeha...
+panels-model = Mudel
+panels-3d-modeling = 3D-modelleerimine

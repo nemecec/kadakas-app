@@ -18,6 +18,7 @@ pub mod hit;
 pub mod keymap;
 pub mod keys;
 pub mod massing;
+pub mod polygon3d;
 pub mod profile;
 pub mod snap;
 pub mod style_edit;

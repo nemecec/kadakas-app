@@ -48,6 +48,8 @@ mod export;
 mod tests;
 #[cfg(test)]
 mod tests_massing;
+#[cfg(test)]
+mod tests_solids;
 
 use std::io::Write;
 use std::path::Path;

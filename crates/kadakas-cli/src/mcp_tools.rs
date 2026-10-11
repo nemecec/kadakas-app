@@ -107,8 +107,15 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "site",
-        summary: "Site models (terrain), contours, volumes, source data checks, survey point import, pads with retaining edges, the survey point of the georeference, and massing models (buildings).",
-        prefixes: &["site", "massing", "pad", "survey", "georef"],
+        summary: "Site models (terrain), contours, volumes, source data checks, survey point import, pads with retaining edges, and the survey point of the georeference.",
+        prefixes: &["site", "pad", "survey", "georef"],
+        read_only: false,
+        open_world: false,
+    },
+    Domain {
+        name: "model_3d",
+        summary: "3D modeling objects: massing models (buildings), extrudes, sweeps (a profile turned around an axis, spirals) and 3D polygons, with Model > Extrude and Model > Sweep from 2D shapes.",
+        prefixes: &["massing", "extrude", "sweep", "polygon3d"],
         read_only: false,
         open_world: false,
     },

@@ -547,6 +547,30 @@ fn shape_core(
                 &st,
             ));
         }
+        Shape::Extrude(e) => {
+            // The profile and the holes.
+            for ring in std::iter::once(&e.profile).chain(e.holes.iter()) {
+                let segs = if curve::all_straight(ring) {
+                    mapped(&curve::positions(ring), xf)
+                } else {
+                    curve_segs(&curve::path(ring, true), xf)
+                };
+                out.push(path(segs, true, &st));
+            }
+        }
+        Shape::Sweep(sw) => {
+            // Plan view: the box around the solid.
+            let (lo, hi) = sw.bounds3();
+            let (lo, hi) = (lo.truncate(), hi.truncate());
+            out.push(path(
+                mapped(
+                    &[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
+                    xf,
+                ),
+                true,
+                &st,
+            ));
+        }
         Shape::Massing(m) => {
             let segs = if curve::all_straight(&m.footprint) {
                 mapped(&curve::positions(&m.footprint), xf)

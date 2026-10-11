@@ -159,6 +159,22 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
             style: *style,
             height: *height,
         },
+        Shape::Extrude(e) => {
+            let mut turned = (**e).clone();
+            for v in turned
+                .profile
+                .iter_mut()
+                .chain(turned.holes.iter_mut().flatten())
+            {
+                v.p = p(v.p);
+            }
+            Shape::Extrude(Box::new(turned))
+        }
+        Shape::Sweep(s) => {
+            let mut turned = (**s).clone();
+            turned.rotate_z(center, angle);
+            Shape::Sweep(Box::new(turned))
+        }
         Shape::Massing(m) => {
             let mut turned = (**m).clone();
             for v in &mut turned.footprint {

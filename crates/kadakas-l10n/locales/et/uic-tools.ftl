@@ -66,3 +66,5 @@ uic-tools-readout-radius = Raadius { $radius }
 uic-tools-readout-arc-radius = Raadius { $radius }
 uic-tools-readout-move = Nihe dX { $dx }  dY { $dy }
 uic-tools-readout-box = Kast { $width } x { $height }
+uic-tools-polygon3d = 3D-hulknurk
+uic-tools-click-the-points-of-the-3d-polygon-double = Punktid märgitakse klõpsuga. Topeltklõps või Enter lõpetab, Esc katkestab. Kõrgus seatakse valikuribal.

@@ -36,6 +36,8 @@ pub mod section;
 pub mod sheets;
 pub mod site;
 pub mod snapping;
+pub mod solid3d;
+pub mod solid_batch;
 pub mod sun;
 pub mod survey;
 pub mod svg;
@@ -46,4 +48,4 @@ pub mod viewrules;
 pub mod visibility;
 pub mod worksheet_table;
 
-pub use glam::{DVec2, DVec3};
+pub use glam::{DMat2, DVec2, DVec3};

@@ -54,6 +54,10 @@ pub enum MenuAction {
     ClipSurface,
     IntersectSurface,
     Compose,
+    /// Model > Extrude.
+    Extrude,
+    /// Model > Sweep.
+    Sweep,
     RotateLeft90,
     RotateRight90,
     FlipHorizontal,
@@ -148,6 +152,8 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::ClipSurface => M::ClipSurface,
         Cmd::IntersectSurface => M::IntersectSurface,
         Cmd::Compose => M::Compose,
+        Cmd::Extrude => M::Extrude,
+        Cmd::Sweep => M::Sweep,
         Cmd::CreateSiteModel => M::CreateSiteModel,
         Cmd::UpdateSiteModel => M::UpdateSiteModel,
         Cmd::ZoomFit => M::ZoomFit,
@@ -186,6 +192,8 @@ fn needs_selection(c: Cmd) -> bool {
             | Cmd::ClipSurface
             | Cmd::IntersectSurface
             | Cmd::Compose
+            | Cmd::Extrude
+            | Cmd::Sweep
     )
 }
 
@@ -523,6 +531,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         MenuAction::ClipSurface => Action::CmdClipSurface,
         MenuAction::IntersectSurface => Action::CmdIntersectSurface,
         MenuAction::Compose => Action::CmdCompose,
+        MenuAction::Extrude => Action::CmdExtrude,
+        MenuAction::Sweep => Action::CmdSweep,
         MenuAction::RotateLeft90 => Action::CmdRotateLeft90,
         MenuAction::RotateRight90 => Action::CmdRotateRight90,
         MenuAction::FlipHorizontal => Action::CmdFlipHorizontal,
@@ -888,6 +898,7 @@ pub fn data_bar(
                 ui.add(egui::TextEdit::singleline(&mut s.material).desired_width(140.0));
             }
             Tool::Massing => crate::gis_ui::massing_bar(&mut s.massing, ui),
+            Tool::Polygon3d => crate::solid_ui::polygon3d_bar(&mut s.polygon3d, ui),
             Tool::SiteModifier => {
                 for mode in kadakas_ui_core::tools::ModifierMode::ALL {
                     ui.selectable_value(&mut s.modifier_mode, mode, mode.name());
@@ -1235,26 +1246,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 f.length_scalar(ui, &tr!("panels-z"), &mut p.z, 10.0);
             }
             Shape::Polyline3d { points, closed } => {
-                ui.label(tr!("panels-closed"));
-                f.commit |= ui.checkbox(closed, "").changed();
-                ui.end_row();
-                f.count(ui, points.len());
-                let (lo, hi) = points
-                    .iter()
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
-                        (lo.min(p.z), hi.max(p.z))
-                    });
-                ui.label(tr!("panels-z-range"));
-                ui.label(if points.is_empty() {
-                    "-".to_string()
-                } else {
-                    tr!(
-                        "panels-range-to",
-                        low = kadakas_units::current().length_text_d(lo, 1),
-                        high = kadakas_units::current().length_text_d(hi, 1)
-                    )
-                });
-                ui.end_row();
+                crate::solid_ui::polygon3d_fields(ui, &mut f, points, closed)
             }
             Shape::Text { at, text, height } => {
                 f.xy(ui, &tr!("panels-position"), at);
@@ -1367,6 +1359,8 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 f.count(ui, m.footprint.len());
             }
             Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
+            Shape::Extrude(e) => crate::solid_ui::extrude_fields(ui, &mut f, e),
+            Shape::Sweep(sw) => crate::solid_ui::sweep_fields(ui, &mut f, sw),
             Shape::Underlay(u) => f.commit |= crate::gis_ui::underlay_fields(ui, u),
             Shape::SiteModel {
                 points,

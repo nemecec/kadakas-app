@@ -82,3 +82,12 @@ app-angles-relative-to-the-prior-segment-on = Angles relative to the prior segme
 app-angles-relative-to-the-prior-segment-off = Angles relative to the prior segment off
 app-snap-on = Snap { $name }: on
 app-snap-off = Snap { $name }: off
+app-select-2d-shapes-to-turn-into-a-solid-first = Select the 2D shapes first
+app-select-a-line-for-the-axis-too = Select a line for the axis too
+app-no-solid-made-reason = No solid made: { $reason }
+app-solids-made =
+    { $count ->
+        [one] { $count } solid made
+       *[other] { $count } solids made
+    }
+app-solids-made-skipped = Solids made: { $count }, skipped: { $skipped }

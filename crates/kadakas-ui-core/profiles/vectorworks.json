@@ -17,6 +17,7 @@
     "cmd.duplicate_array": [
       "Cmd/Ctrl+Alt+Shift+D"
     ],
+    "cmd.extrude": [],
     "cmd.flip_horizontal": [
       "Cmd/Ctrl+Shift+H"
     ],
@@ -36,6 +37,7 @@
       "Cmd/Ctrl+Shift+R"
     ],
     "cmd.subtract_surface": [],
+    "cmd.sweep": [],
     "databar.focus": [
       "Tab"
     ],
@@ -181,6 +183,7 @@
     "tool.plant": [
       "Alt+Shift+P"
     ],
+    "tool.polygon3d": [],
     "tool.polyline": [
       "5"
     ],
@@ -357,6 +360,15 @@
       ]
     },
     {
+      "id": "model",
+      "items": [
+        "cmd.extrude",
+        "cmd.sweep",
+        "-",
+        "tool.polygon3d"
+      ]
+    },
+    {
       "id": "site",
       "items": [
         "site.create_model",
@@ -433,6 +445,12 @@
         "tool.site_modifier",
         "tool.grading",
         "tool.massing"
+      ]
+    },
+    {
+      "id": "3d",
+      "tools": [
+        "tool.polygon3d"
       ]
     },
     {

@@ -180,6 +180,9 @@ actions! {
     ToolHardscape => "tool.hardscape", msg!("action-tool-hardscape"), ["Alt+Shift+H"], true;
     ToolSiteModifier => "tool.site_modifier", msg!("action-tool-site-modifier"), ["Alt+Shift+G"], true;
     ToolMassing => "tool.massing", msg!("action-tool-massing"), ["Alt+Shift+M"], true;
+    ToolPolygon3d => "tool.polygon3d", msg!("action-tool-polygon3d"), [], true;
+    CmdExtrude => "cmd.extrude", msg!("action-cmd-extrude"), [], true;
+    CmdSweep => "cmd.sweep", msg!("action-cmd-sweep"), [], true;
     ToolIrrigation => "tool.irrigation", msg!("action-tool-irrigation"), ["Alt+Shift+I"], true;
     ToolGrading => "tool.grading", msg!("action-tool-grading"), [], true;
     ToolDimension => "tool.dimension", msg!("action-tool-dimension"), ["N"], true;
@@ -292,6 +295,7 @@ impl Action {
             Action::ToolHardscape => Tool::Hardscape,
             Action::ToolSiteModifier => Tool::SiteModifier,
             Action::ToolMassing => Tool::Massing,
+            Action::ToolPolygon3d => Tool::Polygon3d,
             Action::ToolIrrigation => Tool::Irrigation,
             Action::ToolGrading => Tool::Grading,
             Action::ToolDimension | Action::ToolAngularDim | Action::ToolRadialDim => {
@@ -328,6 +332,7 @@ impl Action {
             Tool::Hardscape => Action::ToolHardscape,
             Tool::SiteModifier => Action::ToolSiteModifier,
             Tool::Massing => Action::ToolMassing,
+            Tool::Polygon3d => Action::ToolPolygon3d,
             Tool::Irrigation => Action::ToolIrrigation,
             Tool::Grading => Action::ToolGrading,
             Tool::Dimension => Action::ToolDimension,
