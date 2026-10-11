@@ -24,12 +24,14 @@ pub mod native;
 pub mod plugin;
 pub mod registry;
 pub mod runtime;
+pub mod store;
 pub mod stub;
 pub mod trust;
 
 pub use plugin::{Generated, Plugin, ToolCall, ToolDone, ToolStep};
-pub use registry::Registry;
+pub use registry::{Registry, StoreReport};
 pub use runtime::{Limits, LoadedModule, PluginError, PluginRuntime, default_runtime};
+pub use store::{MemoryBackend, ModuleStore, StoreBackend, StoreError};
 pub use trust::{ModuleTrust, Permit};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

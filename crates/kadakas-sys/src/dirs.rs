@@ -1,4 +1,4 @@
-//! The per-user folders of Kadakas: config, state, runtime and cache.
+//! The per-user folders of Kadakas: config, data, state, runtime and cache.
 //!
 //! Each function returns the `kadakas` folder inside the base folder of the platform. The
 //! `*_for` variants take the system name and an environment lookup, so tests can check every
@@ -48,6 +48,25 @@ pub fn config_dir_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Optio
         _ => match var(&env, "XDG_CONFIG_HOME") {
             Some(x) => x,
             None => var(&env, "HOME")?.join(".config"),
+        },
+    };
+    Some(base.join(APP))
+}
+
+/// Data that the user installs or collects and wants to keep, such as plug-in modules.
+/// Windows `%APPDATA%\kadakas`, macOS `~/Library/Application Support/kadakas`,
+/// elsewhere `$XDG_DATA_HOME/kadakas` or `~/.local/share/kadakas`.
+pub fn data_dir() -> Option<PathBuf> {
+    data_dir_for(std::env::consts::OS, real_env)
+}
+
+pub fn data_dir_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let base = match os {
+        "windows" => var(&env, "APPDATA")?,
+        "macos" => mac_support(&env)?,
+        _ => match var(&env, "XDG_DATA_HOME") {
+            Some(x) => x,
+            None => var(&env, "HOME")?.join(".local").join("share"),
         },
     };
     Some(base.join(APP))
@@ -152,6 +171,28 @@ mod tests {
     }
 
     #[test]
+    fn data_folder_per_platform() {
+        let t = |os, e| tail(data_dir_for(os, e));
+        assert_eq!(
+            t("macos", env(&[("HOME", "/Users/me")])).as_deref(),
+            Some("/Users/me/Library/Application Support/kadakas")
+        );
+        assert_eq!(
+            t("linux", env(&[("HOME", "/h")])).as_deref(),
+            Some("/h/.local/share/kadakas")
+        );
+        assert_eq!(
+            t("linux", env(&[("XDG_DATA_HOME", "/d")])).as_deref(),
+            Some("/d/kadakas")
+        );
+        assert_eq!(
+            t("windows", env(&[("APPDATA", "C:/A")])).as_deref(),
+            Some("C:/A/kadakas")
+        );
+        assert_eq!(t("linux", env(&[])), None);
+    }
+
+    #[test]
     fn state_folder_per_platform() {
         let t = |os, e| tail(state_dir_for(os, e));
         assert_eq!(
@@ -237,6 +278,7 @@ mod tests {
         // The real lookups run without a panic.
         let _ = (
             config_dir(),
+            data_dir(),
             state_dir(),
             runtime_dir(),
             cache_dir(),

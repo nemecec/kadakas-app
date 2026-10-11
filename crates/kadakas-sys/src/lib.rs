@@ -2,7 +2,7 @@
 //!
 //! - [`fsio`]: atomic file writes with a `.bak` copy and a flush to disk.
 //! - [`process`]: process groups, kill of a whole process tree, process liveness.
-//! - [`dirs`]: the per-user config, state, runtime and cache folders.
+//! - [`dirs`]: the per-user config, data, state, runtime and cache folders.
 //! - [`tmp`]: private temporary folders.
 //! - [`agent`]: the runtime file that tells agent clients how to reach a running app.
 //!

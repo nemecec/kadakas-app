@@ -804,3 +804,6 @@ fn an_installed_module_is_not_compiled_twice() {
 
 #[path = "tool_tests.rs"]
 mod tool_tests;
+
+#[path = "persist_tests.rs"]
+mod persist_tests;

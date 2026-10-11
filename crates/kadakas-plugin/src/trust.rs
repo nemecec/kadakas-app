@@ -5,13 +5,18 @@
 //! module, as for Python scripts. The approval is for the SHA-256 hash of the module file. A new
 //! build of the plug-in has a new hash and needs a new approval.
 //!
-//! The store is a small JSON file in the config folder: hash -> name of the plug-in when it was
-//! trusted. The same rule as for scripts holds: the user decides in a dialog of the app, and no
-//! API call adds trust. Agents can run plug-ins only when the host allows it (`--allow-agent-scripts`).
+//! The list is a small JSON file in the plug-in folder of the user data folder (or a blob in the
+//! browser storage): hash -> name of the plug-in when it was trusted. The same rule as for scripts
+//! holds: the user decides in a dialog of the app, and no API call adds trust. Agents can run plug-ins only when the host allows it (`--allow-agent-scripts`).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::store::FileBackend;
+use crate::store::{MAX_TRUST_BYTES, MAX_TRUST_ENTRIES, StoreBackend, TRUST_FILE, parse_trust};
 
 /// The SHA-256 of a module, as lower case hex.
 pub fn hash(wasm: &[u8]) -> String {
@@ -44,18 +49,29 @@ impl Permit {
 }
 
 /// The trusted module hashes of the user.
-#[derive(Clone, Debug, Default)]
+///
+/// With a backend (see [`crate::store`]) the list is saved after every change. The list is read
+/// with care: a broken, huge or foreign file is an empty list.
+#[derive(Clone, Default)]
 pub struct ModuleTrust {
-    #[cfg(not(target_arch = "wasm32"))]
-    path: Option<std::path::PathBuf>,
+    backend: Option<(Arc<dyn StoreBackend>, String)>,
     /// hash -> name of the plug-in when it was trusted
     entries: BTreeMap<String, String>,
 }
 
-/// The trust file of the user, in the config folder.
+impl std::fmt::Debug for ModuleTrust {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModuleTrust")
+            .field("entries", &self.entries.len())
+            .field("saved", &self.backend.is_some())
+            .finish()
+    }
+}
+
+/// The trust file of the user, in the plug-in folder of the user data folder.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn default_path() -> Option<std::path::PathBuf> {
-    Some(kadakas_sys::dirs::config_dir()?.join("trusted_wasm_plugins.json"))
+    Some(crate::store::default_home()?.join(TRUST_FILE))
 }
 
 impl ModuleTrust {
@@ -64,20 +80,32 @@ impl ModuleTrust {
         Self::default()
     }
 
-    /// The store in a file. A missing or broken file is an empty store.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load(path: std::path::PathBuf) -> Self {
-        let entries = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<BTreeMap<String, String>>(&t).ok())
-            .unwrap_or_default();
+    /// A list that is kept in the blob `key` of a backend. A missing or broken blob is an empty
+    /// list.
+    pub fn with_backend(backend: Arc<dyn StoreBackend>, key: &str) -> Self {
+        let entries = match backend.read(key, MAX_TRUST_BYTES) {
+            Ok(Some(bytes)) => parse_trust(&bytes),
+            _ => BTreeMap::new(),
+        };
         ModuleTrust {
-            path: Some(path),
+            backend: Some((backend, key.to_string())),
             entries,
         }
     }
 
-    /// The store of the user in the config folder.
+    /// The list in a file. A missing or broken file is an empty list.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load(path: std::path::PathBuf) -> Self {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(TRUST_FILE)
+            .to_string();
+        let dir = path.parent().map(std::path::Path::to_path_buf);
+        Self::with_backend(Arc::new(FileBackend::new(dir.unwrap_or_default())), &name)
+    }
+
+    /// The list of the user in the plug-in folder of the user data folder.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_default() -> Self {
         default_path().map_or_else(Self::in_memory, Self::load)
@@ -96,34 +124,39 @@ impl ModuleTrust {
         })
     }
 
-    /// Trusts the module with this hash. Saves the file when the store has one.
+    /// Trusts the module with this hash. Saves the list when the store has a backend. If the
+    /// list cannot be saved, the module is still trusted for this session and the error says why
+    /// the trust will not last.
     pub fn trust(&mut self, module_hash: &str, name: &str) -> std::io::Result<()> {
+        if self.entries.len() >= MAX_TRUST_ENTRIES && !self.entries.contains_key(module_hash) {
+            return Err(std::io::Error::other(format!(
+                "the trust list has {MAX_TRUST_ENTRIES} entries. Remove one first"
+            )));
+        }
         self.entries
             .insert(module_hash.to_string(), name.to_string());
         self.save()
     }
 
-    /// Removes the trust of a module. Saves the file when the store has one.
+    /// Removes the trust of a module. Saves the list when the store has a backend.
     pub fn forget(&mut self, module_hash: &str) -> std::io::Result<()> {
         self.entries.remove(module_hash);
         self.save()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save(&self) -> std::io::Result<()> {
-        let Some(path) = &self.path else {
-            return Ok(());
-        };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let text = serde_json::to_string_pretty(&self.entries).expect("json");
-        kadakas_sys::fsio::write_private(path, text.as_bytes())
+    /// True if the list is kept on a medium that outlives the session.
+    pub fn persistent(&self) -> bool {
+        self.backend.as_ref().is_some_and(|(b, _)| b.persistent())
     }
 
-    #[cfg(target_arch = "wasm32")]
     fn save(&self) -> std::io::Result<()> {
-        Ok(())
+        let Some((backend, key)) = &self.backend else {
+            return Ok(());
+        };
+        let text = serde_json::to_string_pretty(&self.entries).expect("json");
+        backend
+            .write(key, text.as_bytes())
+            .map_err(std::io::Error::other)
     }
 
     pub fn len(&self) -> usize {
@@ -186,7 +219,40 @@ mod tests {
         std::fs::write(&path, "not json").unwrap();
         assert!(ModuleTrust::load(path).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
-        let _ = default_path();
-        let _ = ModuleTrust::load_default();
+        // The path of the user list is built, but a test never reads or writes it.
+        assert!(default_path().is_none_or(|p| p.ends_with("trusted_wasm_plugins.json")));
+    }
+
+    #[test]
+    fn trust_can_live_in_any_backend_and_a_failed_save_is_reported() {
+        let mem = Arc::new(crate::store::MemoryBackend::new());
+        let mut t = ModuleTrust::with_backend(mem.clone(), "t.json");
+        assert!(t.is_empty() && !t.persistent());
+        let h = hash(b"one");
+        t.trust(&h, "One").unwrap();
+        assert!(format!("{t:?}").contains("saved"));
+        // A second list on the same backend sees the entry.
+        assert!(ModuleTrust::with_backend(mem.clone(), "t.json").is_trusted(&h));
+        // A save that fails keeps the trust for the session and says so.
+        *mem.fail_writes.lock().unwrap() = Some("quota".into());
+        let two = hash(b"two");
+        let e = t.trust(&two, "Two").unwrap_err();
+        assert!(e.to_string().contains("quota"));
+        assert!(t.is_trusted(&two));
+        assert!(t.forget(&two).is_err());
+        // A damaged blob is an empty list.
+        mem.fail_writes.lock().unwrap().take();
+        StoreBackend::write(mem.as_ref(), "bad.json", b"{").unwrap();
+        assert!(ModuleTrust::with_backend(mem.clone(), "bad.json").is_empty());
+        // A list over the cap takes no new entry.
+        let big: BTreeMap<String, String> = (0..MAX_TRUST_ENTRIES)
+            .map(|i| (hash(format!("m{i}").as_bytes()), "n".into()))
+            .collect();
+        StoreBackend::write(mem.as_ref(), "big.json", &serde_json::to_vec(&big).unwrap()).unwrap();
+        let mut full = ModuleTrust::with_backend(mem, "big.json");
+        assert_eq!(full.len(), MAX_TRUST_ENTRIES);
+        assert!(full.trust(&hash(b"new"), "N").is_err() && !full.is_trusted(&hash(b"new")));
+        // A hash that is in the list already can be trusted again.
+        full.trust(&hash(b"m0"), "again").unwrap();
     }
 }
