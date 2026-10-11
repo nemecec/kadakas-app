@@ -498,6 +498,7 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
     ui.separator();
     let mut commands: Vec<Command> = Vec::new();
     egui::CollapsingHeader::new(tr!("plant-ui-plant-styles"))
+        .id_salt("plant-ui-plant-styles")
         .default_open(true)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -678,7 +679,7 @@ fn import_csv_file(session: &mut Session) -> String {
             let warnings = v["warnings"].as_array().map_or(0, Vec::len);
             tr!(
                 "plant-ui-imported-plant-style-s-skipped-warning-s",
-                imported = v["created_count"],
+                imported = v["created_count"].as_u64().unwrap_or(0),
                 skipped = v["skipped"].as_array().map_or(0, Vec::len),
                 warnings = warnings
             )
@@ -761,8 +762,8 @@ pub fn plant_schedule(ui: &mut Ui, session: &mut Session, status: &mut String) {
         };
         *status =
             match kadakas_sys::fsio::write_atomic(&path, schedule::schedule_csv(&sch).as_bytes()) {
-                Ok(()) => tr!("plant-ui-exported-to", arg1 = path.display()),
-                Err(e) => tr!("plant-ui-cannot-write", arg1 = path.display(), e = e),
+                Ok(()) => tr!("plant-ui-exported-to", path = path.display()),
+                Err(e) => tr!("plant-ui-cannot-write", path = path.display(), e = e),
             };
     }
     #[cfg(target_arch = "wasm32")]

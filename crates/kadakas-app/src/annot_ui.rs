@@ -197,7 +197,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
                     DragValue::new(&mut s.offset_mm)
                         .speed(0.5)
                         .range(-200.0..=200.0)
-                        .length(),
+                        .paper_mm(),
                 );
             })
             .response
@@ -236,7 +236,7 @@ pub fn tool_options(ui: &mut Ui, tool: Tool, settings: &mut ToolSettings, doc: &
                     DragValue::new(&mut s.north_size_mm)
                         .speed(0.5)
                         .range(2.0..=300.0)
-                        .length(),
+                        .paper_mm(),
                 );
             });
         }

@@ -295,7 +295,9 @@ impl ToolMachine {
                 let a = (cursor - *c).to_angle() - (m.pts[1] - *c).to_angle();
                 tr!(
                     "uic-modify-tool-readout-turn",
-                    angle = kadakas_units::current().angle_text_d(a.to_degrees(), 2)
+                    angle = kadakas_units::current()
+                        .plain_angle()
+                        .angle_text_d(a.to_degrees(), 2)
                 )
             }
             (Tool::Scale, 2) => {

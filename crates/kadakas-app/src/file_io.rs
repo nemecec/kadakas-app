@@ -36,7 +36,7 @@ pub fn write_document_raw(path: &Path, doc: &Document) -> Result<(), String> {
 /// Writes the SVG of the session's document (the same SVG as `render.svg`), atomically.
 pub fn write_svg(path: &Path, session: &Session) -> Result<(), String> {
     fsio::write_atomic(path, session.render_svg(1600).as_bytes())
-        .map_err(|e| tr!("file-io-cannot-write", arg1 = path.display(), e = e))
+        .map_err(|e| tr!("file-io-cannot-write", path = path.display(), e = e))
 }
 
 /// Adds `.kad` unless the name already ends in `.kad`.

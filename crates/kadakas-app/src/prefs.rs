@@ -80,7 +80,7 @@ pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Prefs::default(), None),
         Err(e) => (
             Prefs::default(),
-            Some(tr!("prefs-is-ignored", arg1 = path.display(), e = e)),
+            Some(tr!("prefs-is-ignored", path = path.display(), e = e)),
         ),
     }
 }
@@ -102,7 +102,7 @@ pub fn write_file(dir: &std::path::Path, name: &str, text: &str) -> Result<(), S
     std::fs::write(&tmp, text)
         .map_err(|e| tr!("prefs-cannot-write", path = tmp.display(), e = e))?;
     std::fs::rename(&tmp, &path)
-        .map_err(|e| tr!("prefs-cannot-write", arg1 = path.display(), e = e))
+        .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
 }
 
 pub fn save_to(dir: &std::path::Path, prefs: &Prefs) -> Result<(), String> {

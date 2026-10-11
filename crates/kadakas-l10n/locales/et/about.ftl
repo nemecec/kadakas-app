@@ -1,7 +1,7 @@
 ## about: about.rs
 
 about-version = Versioon { $version }
-about-about-kadakas = Kadaka teave
+about-about-kadakas = Teave: Kadakas
 about-kadakas = Kadakas
 about-cad-for-landscape-architects = CAD maastikuarhitektidele.
 about-license = Litsents: { $license }

@@ -153,9 +153,30 @@ impl NumberFormat {
         v.is_finite().then_some(v)
     }
 
+    /// True for a number like `1,500` that this format reads as a number with groups (when the
+    /// grouping symbol is the comma, `1,500` is 1500), while a format with a decimal comma would
+    /// read it as 1.5. A person who types it may mean the other one.
+    pub fn is_ambiguous(&self, text: &str) -> bool {
+        let Some(sep) = self.grouping.symbol().filter(|s| *s == ',' || *s == '.') else {
+            return false;
+        };
+        let t = text.trim();
+        t.matches(sep).count() == 1
+            && t.chars().all(|c| c.is_ascii_digit() || c == sep)
+            && valid_groups(t, sep)
+            && self.parse(t).is_some_and(|v| v >= 1000.0)
+    }
+
     fn parse_unsigned(&self, body: &str) -> Option<f64> {
         if body.is_empty() {
             return None;
+        }
+        // An exponent: `1e3`, `2,5E-2`.
+        if let Some(at) = body.find(['e', 'E']) {
+            let exp: i32 = body[at + 1..].parse().ok()?;
+            let mantissa = self.parse_unsigned(&body[..at])?;
+            let v = mantissa * 10f64.powi(exp.clamp(-400, 400));
+            return v.is_finite().then_some(v);
         }
         // Spaces between groups of digits.
         let joined;
@@ -249,7 +270,8 @@ fn valid_groups(s: &str, sep: char) -> bool {
     let Some(first) = parts.next() else {
         return false;
     };
-    (1..=3).contains(&first.len()) && parts.all(|p| p.len() == 3)
+    // A group of digits does not start with a zero: `0,500` is not 500.
+    (1..=3).contains(&first.len()) && !first.starts_with('0') && parts.all(|p| p.len() == 3)
 }
 
 #[cfg(test)]
@@ -347,7 +369,7 @@ mod tests {
             " ",
             "-",
             "abc",
-            "1e5",
+            "1e",
             "inf",
             "NaN",
             ".",

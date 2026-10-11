@@ -129,11 +129,51 @@ impl Units {
                     self.length.suffix()
                 )
             }
-            LengthUnit::In | LengthUnit::FtIn if self.inch_fraction == 0 => {
+            LengthUnit::In | LengthUnit::FtIn if self.inch_fraction == 0 || !mm.is_finite() => {
                 format_length(mm, self.length, places, 0, &plain)
             }
-            _ => format_length(mm, self.length, 2, self.inch_fraction, &plain),
+            // A length that is not on the grid of fractions shows as decimal inches, so that
+            // the text is not a rounded copy of the value.
+            _ => {
+                let grid = f64::from(self.inch_fraction);
+                let on_grid = ((mm / 25.4) * grid - ((mm / 25.4) * grid).round()).abs() < 1e-6;
+                if on_grid {
+                    format_length(mm, self.length, 2, self.inch_fraction, &plain)
+                } else {
+                    format_length(mm, self.length, places, 0, &plain)
+                }
+            }
         }
+    }
+
+    /// These units for an angle that is not a direction (a sweep, a step, a pitch, an arc of
+    /// 360 degrees). A bearing only makes sense for a direction, so it becomes degrees,
+    /// minutes and seconds here.
+    pub fn plain_angle(&self) -> Units {
+        Units {
+            angle: if self.angle == AngleFormat::Bearing {
+                AngleFormat::Dms
+            } else {
+                self.angle
+            },
+            ..*self
+        }
+    }
+
+    /// If `text` starts with a number like `1,500` that the active format reads as a thousands
+    /// group (1500) while another format would read it as a decimal fraction (1.5), this is the
+    /// decimal separator of the active format. The Data bar refuses such a number and names the
+    /// separator. `None` for an unambiguous number.
+    pub fn ambiguous_number(&self, text: &str) -> Option<char> {
+        let t = text.trim();
+        let t = t.strip_prefix(['-', '+', '\u{2212}']).unwrap_or(t);
+        let run: String = t
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
+            .collect();
+        self.number
+            .is_ambiguous(&run)
+            .then(|| self.number.decimal.symbol())
     }
 
     /// An angle for a widget that a person drags or edits (`45.5°`, `45°30'00"`).
@@ -317,14 +357,18 @@ impl Settings {
     /// The units that these settings give in a language.
     pub fn resolve(&self, language: &str) -> Units {
         let (number, date) = Units::conventions(language);
+        let decimal = self.decimal.unwrap_or(number.decimal);
+        let mut grouping = self.grouping.unwrap_or(number.grouping);
+        // The same symbol for the decimal separator and for the groups cannot be read. Use a
+        // space for the groups then.
+        if grouping.symbol() == Some(decimal.symbol()) {
+            grouping = Grouping::Space;
+        }
         Units {
             length: self.length,
             area: self.area,
             angle: self.angle,
-            number: NumberFormat {
-                decimal: self.decimal.unwrap_or(number.decimal),
-                grouping: self.grouping.unwrap_or(number.grouping),
-            },
+            number: NumberFormat { decimal, grouping },
             date: self.date.unwrap_or(date),
             inch_fraction: self.inch_fraction.unwrap_or(DEFAULT_FRACTION),
         }
@@ -354,10 +398,15 @@ pub fn set_current(units: Units) {
 
 /// Runs `f` with other units on this thread only. For tests.
 pub fn with_units<R>(units: Units, f: impl FnOnce() -> R) -> R {
-    let before = OVERRIDE.with(|o| o.replace(Some(units)));
-    let out = f();
-    OVERRIDE.with(|o| o.set(before));
-    out
+    /// Puts the old override back, also when `f` panics.
+    struct Restore(Option<Units>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERRIDE.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(OVERRIDE.with(|o| o.replace(Some(units))));
+    f()
 }
 
 #[cfg(test)]
@@ -478,6 +527,75 @@ mod tests {
     }
 
     #[test]
+    fn a_length_off_the_grid_shows_as_decimal_inches() {
+        let u = Units {
+            length: LengthUnit::FtIn,
+            ..Units::METRIC
+        };
+        // 1/16 inch is the grid. 1000 mm is not on it.
+        assert_eq!(u.length_compact(25.4 * 66.5), "5' 6 1/2\"");
+        assert_eq!(u.length_compact(1000.0), "3' 3.3701\"");
+        let t = u.length_compact(1000.0);
+        assert!((u.parse_length(&t).unwrap() - 1000.0).abs() < 0.01);
+        let u = Units {
+            length: LengthUnit::In,
+            ..Units::METRIC
+        };
+        assert_eq!(u.length_compact(1000.0), "39.3701\"");
+        assert_eq!(u.length_compact(25.4 * 6.25), "6 1/4\"");
+    }
+
+    #[test]
+    fn a_bearing_is_for_directions_only() {
+        let mut u = Units::METRIC;
+        u.angle = AngleFormat::Bearing;
+        assert_eq!(u.angle_compact(45.0), "N 45\u{b0}00'00.0\" E");
+        let p = u.plain_angle();
+        assert_eq!(p.angle, AngleFormat::Dms);
+        assert_eq!(p.angle_compact(360.0), "360\u{b0}00'00.0\"");
+        assert_eq!(p.angle_compact(-90.0), "-90\u{b0}00'00.0\"");
+        let mut d = Units::METRIC;
+        d.angle = AngleFormat::Decimal;
+        assert_eq!(d.plain_angle().angle, AngleFormat::Decimal);
+    }
+
+    #[test]
+    fn a_grouping_symbol_never_equals_the_decimal_symbol() {
+        let s = Settings {
+            decimal: Some(Decimal::Comma),
+            grouping: Some(Grouping::Comma),
+            ..Settings::default()
+        };
+        assert_eq!(s.resolve("en-US").number.grouping, Grouping::Space);
+        let s = Settings {
+            decimal: Some(Decimal::Point),
+            grouping: Some(Grouping::Point),
+            ..Settings::default()
+        };
+        assert_eq!(s.resolve("et").number.grouping, Grouping::Space);
+        // The language alone never gives a conflict, and a free choice stays.
+        for lang in ["en-US", "et", "xx"] {
+            let n = Settings::default().resolve(lang).number;
+            assert_ne!(n.grouping.symbol(), Some(n.decimal.symbol()));
+        }
+    }
+
+    #[test]
+    fn a_number_like_1_500_is_ambiguous_with_a_comma_for_groups() {
+        let en = Settings::default().resolve("en-US");
+        assert_eq!(en.ambiguous_number("1,500"), Some('.'));
+        assert_eq!(en.ambiguous_number("-1,500 mm"), Some('.'));
+        assert_eq!(en.ambiguous_number("1,5"), None);
+        assert_eq!(en.ambiguous_number("1500"), None);
+        assert_eq!(en.ambiguous_number("0,500"), None);
+        assert_eq!(en.ambiguous_number("1,234,567"), None);
+        let et = Settings::default().resolve("et");
+        assert_eq!(et.ambiguous_number("1,500"), None);
+        // A leading zero is no group: `0,500` is one half.
+        assert_eq!(en.parse_number("0,500"), Some(0.5));
+    }
+
+    #[test]
     fn angle_forms_in_fields() {
         let mut u = Units::METRIC;
         u.angle = AngleFormat::Dms;
@@ -510,6 +628,18 @@ mod tests {
             assert_eq!(current(), et());
         });
         assert_eq!(Units::default(), Units::METRIC);
+    }
+
+    #[test]
+    fn the_units_override_is_restored_after_a_panic() {
+        let result = std::panic::catch_unwind(|| {
+            with_units(et(), || {
+                assert_eq!(current(), et());
+                panic!("on purpose");
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(current(), Units::METRIC);
     }
 
     #[test]

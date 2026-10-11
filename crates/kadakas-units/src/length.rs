@@ -196,6 +196,9 @@ pub fn format_length(
             let sign = if mm < 0.0 && shown > 0.0 { "-" } else { "" };
             if feet == 0.0 {
                 format!("{sign}{text}\"")
+            } else if text.contains('/') && !text.contains(' ') {
+                // Feet and a bare fraction: show the zero inches, `4' 0 5/8"`.
+                format!("{sign}{feet:.0}' 0 {text}\"")
             } else {
                 format!("{sign}{feet:.0}' {text}\"")
             }
@@ -266,13 +269,24 @@ impl Scanner<'_> {
 
     /// A number, a fraction (`1/2`) or a mixed number (`6 1/2`). The value is in the unit that
     /// follows it.
-    fn quantity(&mut self) -> Option<f64> {
+    fn quantity(&mut self) -> Option<(f64, bool)> {
         let start = self.i;
         while self
             .peek(0)
             .is_some_and(|ch| ch.is_ascii_digit() || ch == '.' || ch == ',')
         {
             self.i += 1;
+        }
+        // An exponent: `1e3`.
+        if matches!(self.peek(0), Some('e' | 'E'))
+            && (self.peek(1).is_some_and(|c| c.is_ascii_digit())
+                || (matches!(self.peek(1), Some('+' | '-'))
+                    && self.peek(2).is_some_and(|c| c.is_ascii_digit())))
+        {
+            self.i += 2;
+            while self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
+                self.i += 1;
+            }
         }
         // A group of three digits after a space belongs to the number: `1 234,5`.
         loop {
@@ -316,7 +330,7 @@ impl Scanner<'_> {
             self.i += 1;
             let den: f64 = self.digits().parse().ok()?;
             let num: f64 = whole_text.parse().ok()?;
-            return (den > 0.0).then_some(num / den);
+            return (den > 0.0).then_some((num / den, true));
         }
         // A fraction after spaces: `6 1/2`.
         if int_only {
@@ -329,12 +343,12 @@ impl Scanner<'_> {
                     let den: f64 = self.digits().parse().ok()?;
                     let whole: f64 = whole_text.parse().ok()?;
                     let num: f64 = num.parse().ok()?;
-                    return (den > 0.0).then_some(whole + num / den);
+                    return (den > 0.0).then_some((whole + num / den, true));
                 }
             }
             self.i = save;
         }
-        self.nf.parse(&text)
+        self.nf.parse(&text).map(|v| (v, false))
     }
 
     /// The unit after a quantity. `Ok(None)`: no unit there. `Err`: something that is no unit.
@@ -402,21 +416,38 @@ pub fn parse_length(text: &str, default: LengthUnit, nf: &NumberFormat) -> Optio
     let mut previous: Option<Marker> = None;
     let mut first = true;
     loop {
-        s.skip_spaces();
-        // `5'-6"`: a dash between two terms.
+        // `5'-6"`: a dash right after the unit is the separator. A dash after a space is a
+        // sign, and a sign belongs only at the start.
         if !first && s.peek(0) == Some('-') && s.peek(1).is_some_and(|ch| ch.is_ascii_digit()) {
             s.i += 1;
+        } else {
+            s.skip_spaces();
         }
         if s.peek(0).is_none() {
             break;
         }
-        let value = s.quantity()?;
+        let (value, fractional) = s.quantity()?;
         let unit = match s.marker().ok()? {
             Some(m) => m,
             None if first => marker_of(default),
             None if previous == Some(Marker::Ft) => Marker::In,
             None => return None,
         };
+        // Whole feet only (`5' 6 1/2"`, not `5 1/2'`), and the units go from large to small.
+        if fractional && unit == Marker::Ft {
+            return None;
+        }
+        if let Some(p) = previous
+            && !matches!(
+                (p, unit),
+                (Marker::Ft, Marker::In)
+                    | (Marker::M, Marker::Cm)
+                    | (Marker::M, Marker::Mm)
+                    | (Marker::Cm, Marker::Mm)
+            )
+        {
+            return None;
+        }
         total += value * unit.mm();
         previous = Some(unit);
         first = false;
@@ -579,6 +610,30 @@ mod tests {
     }
 
     #[test]
+    fn exponents_orders_and_dashes() {
+        let ft = LengthUnit::FtIn;
+        assert_eq!(p("1e3"), Some(1000.0));
+        assert_eq!(p("2.5e-1 m"), Some(250.0));
+        assert_eq!(
+            parse_length("5'-6\"", ft, &POINT),
+            Some(304.8 * 5.0 + 25.4 * 6.0)
+        );
+        assert_eq!(
+            parse_length("2 m 30 cm 5 mm", LengthUnit::Mm, &POINT),
+            Some(2305.0)
+        );
+        // A bare fraction of an inch below a foot shows the zero inches.
+        assert_eq!(
+            f(304.8 * 4.0 + 25.4 * 0.625, LengthUnit::FtIn),
+            "4' 0 5/8\""
+        );
+        assert_eq!(
+            parse_length("4' 0 5/8\"", ft, &POINT),
+            Some(304.8 * 4.0 + 25.4 * 0.625)
+        );
+    }
+
+    #[test]
     fn bad_text_is_refused() {
         for bad in [
             "",
@@ -593,7 +648,10 @@ mod tests {
             "5 m 6",
             "m",
             "5' 6 1/\"",
-            "1e3",
+            "5' -6\"",
+            "6\" 5'",
+            "5 1/2'",
+            "1e3x",
             "nan",
             "5 6 7",
         ] {

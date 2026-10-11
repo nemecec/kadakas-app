@@ -294,7 +294,7 @@ pub fn modifier_fields(ui: &mut Ui, modifier: &mut ModifierKind, boundary: &[Ver
                 ui.end_row();
                 let mut deg = s.direction.to_degrees();
                 ui.label(tr!("site-ui-falls-toward"));
-                let r = ui.add(DragValue::new(&mut deg).speed(1.0).degrees());
+                let r = ui.add(DragValue::new(&mut deg).speed(1.0).direction());
                 s.direction = deg.to_radians();
                 commit |= r.drag_stopped() || r.lost_focus();
                 ui.end_row();

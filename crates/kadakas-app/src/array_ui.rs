@@ -189,7 +189,7 @@ impl ArrayDialog {
                                 ui.label(tr!("array-ui-r"));
                                 ui.add(len(&mut self.distance));
                                 ui.label(tr!("array-ui-angle"));
-                                ui.add(DragValue::new(&mut self.angle_deg).speed(1.0).degrees());
+                                ui.add(DragValue::new(&mut self.angle_deg).speed(1.0).direction());
                             });
                         } else {
                             ui.horizontal(|ui| {
@@ -220,7 +220,7 @@ impl ArrayDialog {
                             ui.add(
                                 DragValue::new(&mut self.grid_angle_deg)
                                     .speed(1.0)
-                                    .degrees(),
+                                    .direction(),
                             );
                         });
                     }
@@ -270,7 +270,7 @@ impl ArrayDialog {
                     ui.checkbox(&mut self.rotate, tr!("array-ui-rotate-duplicates"));
                     ui.add_enabled(
                         self.rotate,
-                        DragValue::new(&mut self.rotate_deg).speed(1.0).degrees(),
+                        DragValue::new(&mut self.rotate_deg).speed(1.0).direction(),
                     );
                 });
                 ui.checkbox(&mut self.retain, tr!("array-ui-retain-the-original-object"));

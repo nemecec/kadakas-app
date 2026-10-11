@@ -61,6 +61,7 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let key = egui::Id::new("rules_ui_state");
     let mut st: RulesState = ui.data_mut(|d| d.get_temp(key)).unwrap_or_default();
     egui::CollapsingHeader::new(tr!("rules-ui-display-rules"))
+        .id_salt("rules-ui-display-rules")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();

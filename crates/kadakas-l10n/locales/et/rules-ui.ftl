@@ -2,7 +2,7 @@
 
 rules-ui-error = Viga: { $message }
 rules-ui-display-rules = Kuvamisreeglid
-rules-ui-northing-easting-grid = Põhja- ja idakoordinaatide võrk
+rules-ui-northing-easting-grid = Põhja- ja idakoordinaatide ruudustik
 rules-ui-show = Näita
 rules-ui-needs-a-georeference-set-it-with-the = Vajab georeferentsi (sea see allolevast mõõdistuspunktist)
 rules-ui-survey-point = Mõõdistuspunkt

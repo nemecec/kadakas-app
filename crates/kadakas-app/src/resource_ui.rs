@@ -80,6 +80,7 @@ fn call(s: &mut Session, method: &str, params: Value, status: &mut String) -> Op
 /// The section of the palette. It lists every resource of the document.
 pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: &mut String) {
     egui::CollapsingHeader::new(tr!("resource-ui-resources-all-types"))
+        .id_salt("resource-ui-resources-all-types")
         .default_open(false)
         .show(ui, |ui| {
             let revision = session.editor.revision();

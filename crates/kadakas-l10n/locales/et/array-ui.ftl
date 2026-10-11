@@ -3,7 +3,7 @@
 array-ui-linear = Lineaarne
 array-ui-rectangular = Ristkülikvõrk
 array-ui-circular = Ringjas
-array-ui-duplicate-array = Dubleeri massiivina
+array-ui-duplicate-array = Paljunda massiivina
 array-ui-number-of-duplicates = Koopiate arv
 array-ui-cartesian-offset = Nihe ristkoordinaatides
 array-ui-polar-offset = Nihe polaarkoordinaatides
@@ -13,7 +13,7 @@ array-ui-columns = Veerge
 array-ui-rows = Ridu
 array-ui-distance-between-columns = Veergude vahe
 array-ui-distance-between-rows = Ridade vahe
-array-ui-turn-the-grid = Pööra võrku
+array-ui-turn-the-grid = Pööra ruudustikku
 array-ui-angle-between = Nurk koopiate vahel
 array-ui-center-x = Keskpunkt X
 array-ui-use-the-center-of-the-selection = Kasuta valiku keskpunkti

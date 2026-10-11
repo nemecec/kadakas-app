@@ -10,7 +10,7 @@ irrigation-ui-name = Nimi
 irrigation-ui-static-pressure = Staatiline rõhk
 irrigation-ui-available-flow = Saadaolev vooluhulk
 irrigation-ui-zone-0-next = Tsoon (0 = järgmine)
-irrigation-ui-flow-factor-kv = Vooluteguri kv
+irrigation-ui-flow-factor-kv = Voolutegur kv
 irrigation-ui-stations = Jaamu
 irrigation-ui-select-an-irrigation-object-and-use-calculate = Vali kastmisobjekt ja kasuta objekti infos nuppu „Arvuta“.
 irrigation-ui-position = Asukoht

@@ -8,3 +8,4 @@ uic-databar-w = L
 uic-databar-h = K
 uic-databar-r = R
 uic-databar-arc-r = Kaare R
+uic-databar-ambiguous = „{ $text }“ võib tähendada kahte arvu. Kümnenderaldaja on „{ $decimal }“. Kirjuta arv ilma tuhandeeraldajata.

@@ -1,6 +1,6 @@
 ## plant-ui: plant_ui.rs
 
-plant-ui-spacing-spread = Samm = võra laius
+plant-ui-spacing-spread = Vahe = võra laius
 plant-ui-plants-are-placed-one-canopy-diameter-apart = Taimed asetatakse üksteisest ühe võra läbimõõdu kaugusele
 plant-ui-placement-mode = Asetamise režiim
 plant-ui-plant-style = Taimestiil
@@ -8,17 +8,17 @@ plant-ui-none-use-the-data-bar = (puudub: kasuta andmeriba)
 plant-ui-existing-survey-tree = Olemasolev (mõõdistatud) puu
 plant-ui-place-an-existing-tree-with-a-root = Aseta olemasolev puu koos juurekaitsevööndiga, mitte taim
 plant-ui-trunk-diameter = Tüve läbimõõt
-plant-ui-spacing = Samm
+plant-ui-spacing = Vahe
 plant-ui-count = Arv
 plant-ui-density = Tihedus
-plant-ui-spacing-in-a-row = Samm reas
+plant-ui-spacing-in-a-row = Vahe reas
 plant-ui-rows = Ridu
 plant-ui-row-spacing = Ridade vahe
 plant-ui-stagger-the-rows = Nihuta read
-plant-ui-spacing-x = Samm X
-plant-ui-spacing-y = Samm Y
+plant-ui-spacing-x = Vahe X
+plant-ui-spacing-y = Vahe Y
 plant-ui-staggered = Nihutatud
-plant-ui-grid = Võrk
+plant-ui-grid = Ruudustik
 plant-ui-edge-margin = Serva varu
 plant-ui-size-variation = Suuruse varieeruvus
 plant-ui-random-rotation = Juhuslik pööre
@@ -107,5 +107,5 @@ plant-ui-id-bubble = Tunnuse mull
 plant-ui-none-by-instance = (puudub: eksemplari järgi)
 plant-ui-locked = { $label } (lukustatud)
 plant-ui-checked-this-plant-has-its-own-value = Märgitud: sellel taimel on oma väärtus (eksemplari järgi). Märkimata: väärtuse annab stiil (stiili järgi).
-plant-ui-seed = algarv{ " " }
+plant-ui-seed = juhuseeme{ " " }
 plant-ui-root-protection-radius = Juurekaitseala raadius { $radius } ({ $factor } x tüve läbimõõt)

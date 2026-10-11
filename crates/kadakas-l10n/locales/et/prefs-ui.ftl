@@ -22,4 +22,4 @@ prefs-ui-date-format = Kuupäeva vorming
 prefs-ui-example = Näide: { $length }, { $area }, { $angle }, { $number }, { $date }
 prefs-ui-decimal-degrees = Kümnendkraadid
 prefs-ui-degrees-minutes-seconds = Kraadid, minutid, sekundid
-prefs-ui-bearing = Suunanurk (N 45° E)
+prefs-ui-bearing = Rumb (N 45° E)

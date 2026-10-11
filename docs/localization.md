@@ -98,7 +98,12 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Landscape Area | Haljastusala | area with planting |
 | Hardscape | Kõvakate | paving, walls, hard surfaces |
 | Site Modifiers, Site model | Maapinna muutjad, Maapinnamudel | |
-| Grading, Grade limits | Planeerimine, Planeerimispiir | vertical planning |
+| Grading, Grade limits | Vertikaalplaneerimine, Planeerimispiir | vertical planning |
+| Grade (line), Slope | Kaldejoon, Kalle | |
+| Grid (snap, plant grid), Mesh | Ruudustik, Võrk | |
+| Fill (attribute), Fill (earthwork) | Täitevärv, Täide | |
+| Cut / Fill / Net | Kaeve / Täide / Bilanss | |
+| Spacing | Vahe | |
 | Spot elevation | Kõrgusmärk | |
 | Contours | Horisontaalid | the word on Estonian base maps |
 | Cut / Fill | Kaeve / Täide | |
@@ -151,6 +156,18 @@ The parser reads the active format. It also accepts the other format, but the me
 - Lengths can be `5' 6 1/2"`, `5'-6"`, `5ft 6in`, `6.5"`, `1,5 m` or `50cm`. A number without a unit counts in the active unit. For feet and inches it counts in inches.
 - Angles can be `45,5`, `45°30'`, `-10°15'36"`, `N 45°30' E` or `s80w`.
 - Dates use the order of the active format. The form `yyyy-mm-dd` always works.
+- Numbers with an exponent (`1e3`) work. A group of digits has no leading zero, so `0,500` is one half and not 500.
+- Feet and inches go from large to small and use whole feet. The text `5' -6"`, `6" 5'` and `5 1/2'` is refused.
+
+A number such as `1,500` is a problem in a format whose group symbol is the comma (en-US). It can mean 1500 or 1.5. The Data bar does not guess. It gives no value and shows a message that names the decimal separator. The number fields in the panels show the value that they read, so the person sees it at once.
+
+When a number field loses focus, egui reads its text again. The text has rounded numbers, so this could change the value. Each field therefore remembers the exact value of the text that it showed (`Memo` in `units_ui.rs`). If the text is unchanged, the value is unchanged. A length that is not on the grid of fractions shows as decimal inches (`39.3701"`).
+
+Paper values are not model lengths. A line weight, a text height on paper and a symbol size on paper always show in mm (`.paper_mm()`).
+
+A bearing is for directions only. The methods `.direction()` (rotations, the direction of a fall) and the angle of the Data bar follow the bearing format. If the bearing is active, all other angles show as degrees-minutes-seconds. These are a sweep, a step, a pitch and a sprinkler arc of 360 degrees (`.degrees()`, `Units::plain_angle`).
+
+The decimal separator and the group symbol cannot be the same symbol. `Settings::resolve` uses a space for the groups in that case. Preferences shows the conflicting choice in grey.
 
 The tests include property tests. What the formatter writes, the parser reads back. See `crates/kadakas-units/tests/roundtrip.rs`.
 
@@ -166,6 +183,7 @@ Some texts do not follow these settings. The units of a document, the unit of a 
 
 ## Not done yet
 
+- The process language and the current units (`ACTIVE` in `kadakas-l10n`, `CURRENT` in `kadakas-units`) are the only global state that PLAT-12 allows for the UI. They are preferences of the person. A host with many documents uses `kadakas-api` and never sets them.
 - The launcher (`kadakas-launcher`) has its own English texts. It is a separate program and has no `tr!` calls yet.
 - The hydraulic units of the irrigation tools (kPa, l/min, m/s) are metric only. Only the number format follows the language.
 - Paper sizes (A4, Letter) and the "paper mm" of annotation fields are always millimeters of paper.

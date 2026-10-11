@@ -91,10 +91,15 @@ pub fn with_language<R>(tag: &str, f: impl FnOnce() -> R) -> R {
         .iter()
         .position(|l| l.tag == tag)
         .unwrap_or_default();
-    let before = OVERRIDE.with(|o| o.replace(Some(index)));
-    let out = f();
-    OVERRIDE.with(|o| *o.borrow_mut() = before);
-    out
+    /// Puts the old override back, also when `f` panics.
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERRIDE.with(|o| *o.borrow_mut() = self.0);
+        }
+    }
+    let _restore = Restore(OVERRIDE.with(|o| o.replace(Some(index))));
+    f()
 }
 
 /// The text of a message in the active language. A message that the language lacks comes from
@@ -157,6 +162,18 @@ mod tests {
             with_language("en", || assert_eq!(language(), "en-US"));
             assert_eq!(language(), "et");
         });
+        assert_eq!(language(), "en-US");
+    }
+
+    #[test]
+    fn the_override_is_restored_after_a_panic() {
+        let result = std::panic::catch_unwind(|| {
+            with_language("et", || {
+                assert_eq!(language(), "et");
+                panic!("on purpose");
+            })
+        });
+        assert!(result.is_err());
         assert_eq!(language(), "en-US");
     }
 

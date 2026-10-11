@@ -324,8 +324,8 @@ impl IoUi {
                     Ok(r) => {
                         *status = tr!(
                             "io-dialog-imported-objects-skipped",
-                            imported = r["imported"],
-                            skipped = r["skipped"]
+                            imported = r["imported"].as_u64().unwrap_or(0),
+                            skipped = r["skipped"].as_u64().unwrap_or(0)
                         );
                         event = IoEvent::Imported;
                     }
@@ -390,7 +390,7 @@ impl IoUi {
                 *status = match session.export_file_trusted(params) {
                     Ok(r) => tr!(
                         "io-dialog-exported-objects-to",
-                        count = r["exported"],
+                        count = r["exported"].as_u64().unwrap_or(0),
                         path = form.path.display()
                     ),
                     Err(e) => tr!("io-dialog-export-failed", message = e.message),

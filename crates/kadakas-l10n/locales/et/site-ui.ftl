@@ -5,7 +5,7 @@ site-ui-select-a-site-model-first = Vali kõigepealt maapinnamudel
 site-ui-error = Viga: { $message }
 site-ui-updated-site-model-s =
     Uuendati { $count ->
-        [one] { $count } maapinnamudelit
+        [one] { $count } maapinnamudel
        *[other] { $count } maapinnamudelit
     }
 site-ui-existing = Olemasolev
@@ -43,5 +43,5 @@ site-ui-falls-toward = Langeb suunas
 site-ui-grade-limits = Planeerimispiir
 site-ui-vertices = Tipud
 site-ui-proposed-surface-is-out-of-date-site = Kavandatav pind on aegunud: Maapind > Uuenda maapinnamudelit
-site-ui-cut-fill-net = Kaeve { $cut }  Täide { $fill }  Saldo { $net }
+site-ui-cut-fill-net = Kaeve { $cut }  Täide { $fill }  Bilanss { $net }
 site-ui-surface-area = Pind { $area }

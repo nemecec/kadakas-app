@@ -825,7 +825,7 @@ pub fn data_bar(
                         ui.add(
                             DragValue::new(&mut s.pad_direction_deg)
                                 .speed(1.0)
-                                .degrees(),
+                                .direction(),
                         );
                     }
                 }
@@ -879,6 +879,9 @@ pub fn data_bar(
                     commit = true;
                 }
             }
+            if let Some(problem) = entry.problem() {
+                ui.colored_label(egui::Color32::from_rgb(200, 80, 40), problem);
+            }
             if !entry.want_focus {
                 entry.active = focused || commit;
             }
@@ -909,13 +912,32 @@ pub(crate) struct Fields {
 }
 
 impl Fields {
+    /// A length in mm, in the units of the person.
     pub(crate) fn num(&mut self, ui: &mut Ui, v: &mut f64, speed: f64) {
-        let r = ui.add(DragValue::new(v).speed(speed));
+        let r = ui.add(DragValue::new(v).speed(speed).length());
         self.commit |= r.drag_stopped() || r.lost_focus();
     }
     fn num_range(&mut self, ui: &mut Ui, v: &mut f64) {
-        let r = ui.add(DragValue::new(v).speed(10.0).range(0.0..=1.0e9));
+        let r = ui.add(DragValue::new(v).speed(10.0).range(0.0..=1.0e9).length());
         self.commit |= r.drag_stopped() || r.lost_focus();
+    }
+    /// A plain number: a scale, a factor, a count, a rotation in radians.
+    pub(crate) fn plain(&mut self, ui: &mut Ui, v: &mut f64, speed: f64) {
+        let r = ui.add(DragValue::new(v).speed(speed));
+        self.commit |= r.drag_stopped() || r.lost_focus();
+    }
+    /// A labeled length in mm, in the units of the person.
+    pub(crate) fn length_scalar(&mut self, ui: &mut Ui, label: &str, v: &mut f64, speed: f64) {
+        ui.label(label);
+        self.num(ui, v, speed);
+        ui.end_row();
+    }
+    /// A labeled length on paper, in mm.
+    pub(crate) fn paper_scalar(&mut self, ui: &mut Ui, label: &str, v: &mut f64, speed: f64) {
+        ui.label(label);
+        let r = ui.add(DragValue::new(v).speed(speed).paper_mm());
+        self.commit |= r.drag_stopped() || r.lost_focus();
+        ui.end_row();
     }
     pub(crate) fn xy(&mut self, ui: &mut Ui, label: &str, p: &mut DVec2) {
         ui.label(label);
@@ -927,7 +949,7 @@ impl Fields {
     }
     pub(crate) fn scalar(&mut self, ui: &mut Ui, label: &str, v: &mut f64, speed: f64) {
         ui.label(label);
-        self.num(ui, v, speed);
+        self.plain(ui, v, speed);
         ui.end_row();
     }
     pub(crate) fn text(&mut self, ui: &mut Ui, label: &str, s: &mut String) {
@@ -939,7 +961,7 @@ impl Fields {
     fn angle(&mut self, ui: &mut Ui, label: &str, rad: &mut f64) {
         let mut deg = rad.to_degrees();
         ui.label(label);
-        let r = ui.add(DragValue::new(&mut deg).speed(1.0).degrees());
+        let r = ui.add(DragValue::new(&mut deg).speed(1.0).direction());
         self.commit |= r.drag_stopped() || r.lost_focus();
         *rad = deg.to_radians();
         ui.end_row();
@@ -1059,7 +1081,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                     .changed();
                 ui.end_row();
             }
-            Shape::TitleBlock(tb) => f.scalar(ui, &tr!("panels-margin"), &mut tb.margin, 1.0),
+            Shape::TitleBlock(tb) => f.paper_scalar(ui, &tr!("panels-margin"), &mut tb.margin, 1.0),
             Shape::Annotation(a) => f.commit |= crate::annot_ui::fields(ui, a),
             Shape::Unknown { kind, .. } => {
                 ui.label(tr!(
@@ -1093,7 +1115,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             }
             Shape::Circle { center, radius } => {
                 f.xy(ui, &tr!("panels-center"), center);
-                f.scalar(ui, &tr!("panels-radius"), radius, 10.0);
+                f.length_scalar(ui, &tr!("panels-radius"), radius, 10.0);
             }
             Shape::Arc {
                 center,
@@ -1102,7 +1124,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                 end,
             } => {
                 f.xy(ui, &tr!("panels-center"), center);
-                f.scalar(ui, &tr!("panels-radius"), radius, 10.0);
+                f.length_scalar(ui, &tr!("panels-radius"), radius, 10.0);
                 f.angle(ui, &tr!("panels-start"), start);
                 f.angle(ui, &tr!("panels-end"), end);
             }
@@ -1119,7 +1141,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
                     f.num(ui, &mut p.y, 10.0);
                 });
                 ui.end_row();
-                f.scalar(ui, &tr!("panels-z"), &mut p.z, 10.0);
+                f.length_scalar(ui, &tr!("panels-z"), &mut p.z, 10.0);
             }
             Shape::Polyline3d { points, closed } => {
                 ui.label(tr!("panels-closed"));
@@ -1146,7 +1168,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             Shape::Text { at, text, height } => {
                 f.xy(ui, &tr!("panels-position"), at);
                 f.text(ui, &tr!("panels-text-3"), text);
-                f.scalar(ui, &tr!("panels-height"), height, 5.0);
+                f.length_scalar(ui, &tr!("panels-height"), height, 5.0);
             }
             Shape::Plant {
                 at,
@@ -1156,8 +1178,8 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             } => {
                 f.xy(ui, &tr!("panels-position"), at);
                 f.text(ui, &tr!("panels-species"), species);
-                f.scalar(ui, &tr!("panels-spread"), spread, 50.0);
-                f.scalar(ui, &tr!("panels-height"), height, 50.0);
+                f.length_scalar(ui, &tr!("panels-spread"), spread, 50.0);
+                f.length_scalar(ui, &tr!("panels-height"), height, 50.0);
             }
             Shape::ExistingTree {
                 at,
@@ -1172,9 +1194,9 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             } => {
                 f.xy(ui, &tr!("panels-position"), at);
                 f.text(ui, &tr!("panels-species"), species);
-                f.scalar(ui, &tr!("panels-trunk-diameter"), dbh, 10.0);
-                f.scalar(ui, &tr!("panels-canopy-spread"), spread, 50.0);
-                f.scalar(ui, &tr!("panels-height"), height, 50.0);
+                f.length_scalar(ui, &tr!("panels-trunk-diameter"), dbh, 10.0);
+                f.length_scalar(ui, &tr!("panels-canopy-spread"), spread, 50.0);
+                f.length_scalar(ui, &tr!("panels-height"), height, 50.0);
                 ui.label(tr!("panels-condition"));
                 let before = *condition;
                 egui::ComboBox::from_id_salt("tree_condition")
@@ -1237,7 +1259,7 @@ fn edit_shape(ui: &mut Ui, shape: &mut Shape) -> bool {
             } => {
                 f.xy(ui, &tr!("panels-label-position"), at);
                 f.xy(ui, &tr!("panels-leader-end"), anchor);
-                f.scalar(ui, &tr!("panels-text-height"), height, 5.0);
+                f.length_scalar(ui, &tr!("panels-text-height"), height, 5.0);
             }
             Shape::LandscapeArea { boundary, name } => {
                 f.text(ui, &tr!("panels-name"), name);
@@ -1402,7 +1424,7 @@ pub fn object_info(ui: &mut Ui, session: &mut Session, edit: &mut InfoEdit, stat
             changed = true;
         }
         if let Some(w) = &mut attrs.line_weight {
-            let r = ui.add(DragValue::new(w).speed(0.05).range(0.01..=10.0).length());
+            let r = ui.add(DragValue::new(w).speed(0.05).range(0.01..=10.0).paper_mm());
             changed |= r.drag_stopped() || r.lost_focus();
         }
     });

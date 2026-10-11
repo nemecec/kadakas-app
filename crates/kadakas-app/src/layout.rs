@@ -152,7 +152,7 @@ impl Layouts {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
-                warning = Some(tr!("layout-is-ignored", arg1 = path.display(), e = e));
+                warning = Some(tr!("layout-is-ignored", path = path.display(), e = e));
                 None
             }
         };

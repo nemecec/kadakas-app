@@ -3,14 +3,14 @@
 uic-snap-smart-point-set = Nutikas punkt seatud
 uic-snap-smart-edge-set = Nutikas serv seatud
 uic-snap-no-object-point-under-the-pointer-move = Kursori all pole objekti punkti. Liigu nurgale, otsale või keskpunktile
-uic-snap-kind-grid = Võrk
+uic-snap-kind-grid = Ruudustik
 uic-snap-kind-endpoint = Otspunkt
 uic-snap-kind-midpoint = Poolituspunkt
 uic-snap-kind-center = Keskpunkt
 uic-snap-kind-quadrant = Veerandipunkt
 uic-snap-kind-intersection = Lõikepunkt
 uic-snap-kind-on-edge = Serval
-uic-snap-kind-perpendicular = Ristsuund
+uic-snap-kind-perpendicular = Ristipunkt
 uic-snap-kind-tangent = Puutuja
 uic-snap-kind-angle = Nurk
 uic-snap-kind-distance = Kaugus

@@ -222,11 +222,32 @@ impl DataEntry {
     /// The typed values in mm and degrees; `None` for an empty field or one that does not parse.
     pub fn values(&self) -> Vec<Option<f64>> {
         let fs = self.current_fields();
+        let units = kadakas_units::current();
         self.text
             .iter()
             .enumerate()
-            .map(|(i, t)| fs.get(i).and_then(|f| parse_field(*f, t)))
+            // A number like `1,500` can mean 1500 or 1.5. The Data bar does not guess: it gives
+            // no value and `problem` tells the person.
+            .map(|(i, t)| {
+                fs.get(i)
+                    .filter(|_| units.ambiguous_number(t).is_none())
+                    .and_then(|f| parse_field(*f, t))
+            })
             .collect()
+    }
+
+    /// A message for a typed number that has two readings, or `None`. It names the decimal
+    /// separator of the active format.
+    pub fn problem(&self) -> Option<String> {
+        let units = kadakas_units::current();
+        self.text.iter().find_map(|t| {
+            let decimal = units.ambiguous_number(t)?;
+            Some(tr!(
+                "uic-databar-ambiguous",
+                text = t.trim(),
+                decimal = decimal.to_string()
+            ))
+        })
     }
 
     pub fn any_typed(&self) -> bool {
@@ -332,6 +353,31 @@ mod tests {
             assert_eq!(parse_field(Field::Width, "12"), Some(25.4 * 12.0));
             assert_eq!(field_text(Field::Width, 25.4 * 66.5), "5' 6 1/2\"");
             assert_eq!(Field::Width.unit(), "");
+        });
+    }
+
+    #[test]
+    fn an_ambiguous_number_gives_no_value_and_a_message() {
+        use kadakas_units::{Settings, with_units};
+        let mut e = DataEntry::default();
+        e.sync(Tool::Line, true, false);
+        e.text = vec!["1,500".into(), String::new()];
+        // Decimal comma and space groups (Estonian): 1,500 is one and a half.
+        with_units(Settings::default().resolve("et"), || {
+            assert_eq!(e.values()[0], Some(1.5));
+            assert_eq!(e.problem(), None);
+        });
+        // Decimal point and comma groups (en-US): the Data bar does not guess.
+        with_units(Settings::default().resolve("en-US"), || {
+            assert_eq!(e.values()[0], None);
+            let m = e.problem().unwrap();
+            assert!(m.contains("1,500") && m.contains('.'), "{m}");
+            kadakas_l10n::with_language("et", || {
+                assert!(e.problem().unwrap().contains("Kümnenderaldaja"));
+            });
+            e.text = vec!["1500".into(), "0,500".into()];
+            assert_eq!(e.problem(), None);
+            assert_eq!(e.values()[0], Some(1500.0));
         });
     }
 

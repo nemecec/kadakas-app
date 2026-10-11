@@ -164,10 +164,10 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
         ui.horizontal(|ui| {
             ui.label(label);
             let drag = DragValue::new(v).speed(speed).range(range);
-            ui.add(if unit == "\u{b0}" {
-                drag.degrees()
-            } else {
-                drag.suffix(unit)
+            ui.add(match unit {
+                "\u{b0}" => drag.degrees(),
+                "direction" => drag.direction(),
+                other => drag.suffix(other),
             });
         });
     };
@@ -197,7 +197,7 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
                 &mut s.direction,
                 1.0,
                 -360.0..=360.0,
-                "\u{b0}",
+                "direction",
             );
         }
         IrrMode::Line => {
@@ -322,7 +322,7 @@ pub fn edit(ui: &mut Ui, f: &mut Fields, i: &mut IrrigationShape) {
             f.scalar(ui, &tr!("irrigation-ui-arc-deg"), arc, 1.0);
             f.scalar(ui, &tr!("irrigation-ui-direction-deg"), direction, 1.0);
             let mut r = radius.unwrap_or(0.0);
-            f.scalar(ui, &tr!("irrigation-ui-radius"), &mut r, 10.0);
+            f.length_scalar(ui, &tr!("irrigation-ui-radius"), &mut r, 10.0);
             *radius = (r > 0.0).then_some(r);
             ui.label(tr!("irrigation-ui-zone"));
             ui.label(zone.map_or("-".to_string(), |z| z.to_string()));

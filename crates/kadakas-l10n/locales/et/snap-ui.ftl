@@ -1,7 +1,7 @@
 ## snap-ui: snap_ui.rs
 
-snap-ui-grid = Võrk
-snap-ui-snap-to-the-points-of-the-grid = Haara võrgu punktidesse.
+snap-ui-grid = Ruudustik
+snap-ui-snap-to-the-points-of-the-grid = Haara ruudustiku punktidesse.
 snap-ui-object-points = Objektipunktid
 snap-ui-endpoints-corners-centers-and-circle-quadrants = Otspunktid, nurgad, keskpunktid ja ringi veerandipunktid.
 snap-ui-midpoints = Poolituspunktid
@@ -10,7 +10,7 @@ snap-ui-intersections = Lõikepunktid
 snap-ui-where-two-edges-cross = Koht, kus kaks serva lõikuvad.
 snap-ui-edge = Serv
 snap-ui-the-nearest-point-on-an-edge = Lähim punkt serval.
-snap-ui-perpendicular = Ristsuund
+snap-ui-perpendicular = Ristipunkt
 snap-ui-the-foot-of-the-perpendicular-from-the = Viimasest punktist tõmmatud ristsirge aluspunkt.
 snap-ui-tangent = Puutuja
 snap-ui-the-tangent-point-of-a-circle-seen = Ringi puutepunkt viimasest punktist vaadatuna.
@@ -27,10 +27,10 @@ snap-ui-switch-the-kinds-of-snaps-the-back = Lülita sisse ja välja haaramise l
 snap-ui-step = Samm
 snap-ui-relative-to-the-prior-segment = Eelmise lõigu suhtes
 snap-ui-the-key-switches-this = Klahv / lülitab seda.
-snap-ui-0-uses-the-step-of-the-grid = 0 kasutab võrgu sammu
-snap-ui-snap-to-other-layers = Haara teistele kihtidele
+snap-ui-0-uses-the-step-of-the-grid = 0 kasutab ruudustiku sammu
+snap-ui-snap-to-other-layers = Haaramine teistel kihtidel
 snap-ui-off-only-objects-of-the-active-layer = Väljas: ainult aktiivse kihi objektid.
-snap-ui-snap-to-grey-layers-and-classes = Haara hallidele kihtidele ja klassidele
+snap-ui-snap-to-grey-layers-and-classes = Haaramine hallidel kihtidel ja klassidel
 snap-ui-objects-of-grey-layers-and-classes-cannot = Hallide kihtide ja klasside objekte ei saa valida. See lubab kursoril neisse haarata.
 snap-ui-smartcursor-cues = SmartCursor-vihjed
 snap-ui-show-the-name-of-the-snap-at = Näita haaramise nime kursori juures (Y).

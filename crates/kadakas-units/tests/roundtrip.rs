@@ -122,6 +122,19 @@ proptest! {
     }
 
     #[test]
+    fn widget_text_reads_back_within_its_rounding(
+        mm in -1e6f64..1e6,
+        unit in length_unit(),
+        frac in prop::sample::select(vec![None, Some(0u32), Some(2), Some(16), Some(64)]),
+        nf in number_format(),
+    ) {
+        let units = Units { length: unit, number: nf, inch_fraction: frac.unwrap_or(16), ..Units::METRIC };
+        let text = units.length_compact(mm);
+        let back = units.parse_length(&text).expect("the text of a widget parses");
+        prop_assert!((back - mm).abs() <= 0.01, "{text}: {mm} -> {back}");
+    }
+
+    #[test]
     fn volumes_round_trip(m3 in -1e6f64..1e6, d in 0usize..5, nf in number_format(), imperial in any::<bool>()) {
         let unit = if imperial { VolumeUnit::Yd3 } else { VolumeUnit::M3 };
         let mm3 = m3 * 1e9;

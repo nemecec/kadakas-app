@@ -45,7 +45,7 @@ impl PrefsDialog {
                 language_row(ui, edit.language, edit.active_language);
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-units-and-formats"));
-                units_section(ui, edit.units);
+                units_section(ui, edit.units, edit.active_language);
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-appearance"));
                 ui.horizontal(|ui| {
@@ -104,6 +104,18 @@ fn pick<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, String)],
 ) {
+    pick_with(ui, id, label, value, options, |_| false);
+}
+
+/// Like `pick`, and the options for which `disabled` is true are grey and cannot be chosen.
+fn pick_with<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: String,
+    value: &mut T,
+    options: &[(T, String)],
+    disabled: impl Fn(&T) -> bool,
+) {
     ui.horizontal(|ui| {
         ui.label(label);
         let shown = options
@@ -115,7 +127,10 @@ fn pick<T: Copy + PartialEq>(
             .selected_text(shown)
             .show_ui(ui, |ui| {
                 for (v, t) in options {
-                    ui.selectable_value(value, *v, t);
+                    let button = egui::Button::selectable(*value == *v, t.as_str());
+                    if ui.add_enabled(!disabled(v), button).clicked() {
+                        *value = *v;
+                    }
                 }
             });
     });
@@ -130,7 +145,18 @@ pub fn angle_format_name(f: AngleFormat) -> String {
     }
 }
 
-fn units_section(ui: &mut egui::Ui, s: &mut Settings) {
+/// The symbol of the decimal separator and of the digit grouping that the settings give in a
+/// language. The choices that use the same symbol twice are grey in the lists.
+fn separator_symbols(s: &Settings, language: &str) -> (char, Option<char>) {
+    let (convention, _) = kadakas_units::Units::conventions(language);
+    (
+        s.decimal.unwrap_or(convention.decimal).symbol(),
+        s.grouping.unwrap_or(convention.grouping).symbol(),
+    )
+}
+
+fn units_section(ui: &mut egui::Ui, s: &mut Settings, language: &str) {
+    let (decimal_symbol, grouping_symbol) = separator_symbols(s, language);
     let auto = || tr!("prefs-ui-automatic");
     pick(
         ui,
@@ -169,7 +195,7 @@ fn units_section(ui: &mut egui::Ui, s: &mut Settings) {
             (Some(64), "1/64".into()),
         ],
     );
-    pick(
+    pick_with(
         ui,
         "pref_decimal",
         tr!("prefs-ui-decimal-separator"),
@@ -179,8 +205,9 @@ fn units_section(ui: &mut egui::Ui, s: &mut Settings) {
             (Some(Decimal::Point), tr!("prefs-ui-point-example")),
             (Some(Decimal::Comma), tr!("prefs-ui-comma-example")),
         ],
+        |d| d.is_some_and(|d| Some(d.symbol()) == grouping_symbol),
     );
-    pick(
+    pick_with(
         ui,
         "pref_grouping",
         tr!("prefs-ui-digit-grouping"),
@@ -192,6 +219,7 @@ fn units_section(ui: &mut egui::Ui, s: &mut Settings) {
             (Some(Grouping::Point), "1.234.567".into()),
             (Some(Grouping::Space), "1\u{a0}234\u{a0}567".into()),
         ],
+        |g| g.is_some_and(|g| g.symbol() == Some(decimal_symbol)),
     );
     let date = |f: DateFormat| (Some(f), f.pattern().to_string());
     pick(
@@ -261,6 +289,19 @@ mod tests {
         assert_eq!(size, IconSize::Medium);
         assert_eq!(lang, LanguageChoice::SYSTEM);
         assert_eq!(units, Settings::default());
+    }
+
+    #[test]
+    fn the_symbol_of_the_decimal_separator_and_of_the_groups_are_found() {
+        let s = Settings::default();
+        assert_eq!(separator_symbols(&s, "et"), (',', Some('\u{a0}')));
+        assert_eq!(separator_symbols(&s, "en-US"), ('.', Some(',')));
+        let s = Settings {
+            decimal: Some(Decimal::Comma),
+            grouping: Some(Grouping::None),
+            ..Settings::default()
+        };
+        assert_eq!(separator_symbols(&s, "en-US"), (',', None));
     }
 
     #[test]

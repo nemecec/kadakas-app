@@ -568,7 +568,9 @@ impl GisDialogs {
                     for s in r["skipped"].as_array().into_iter().flatten().take(8) {
                         ui.small(tr!(
                             "gis-dialogs-not-converted-object",
-                            id = s["id"],
+                            id = s["id"]
+                                .as_str()
+                                .map_or_else(|| s["id"].to_string(), str::to_string),
                             kind = s["kind"].as_str().unwrap_or(""),
                             reason = s["reason"].as_str().unwrap_or("")
                         ));

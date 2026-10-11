@@ -229,9 +229,15 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
                 .parse(&stored)
                 .map_or(stored, |d| units.date_text(d));
             let r = ui.text_edit_singleline(&mut s);
-            let value = units
-                .parse_date(&s)
-                .map_or(s, |d| DateFormat::Iso.format(d));
+            // While the person types, the text stays as typed. A finished date is stored as
+            // YYYY-MM-DD.
+            let value = if r.has_focus() {
+                s
+            } else {
+                units
+                    .parse_date(&s)
+                    .map_or(s, |d| DateFormat::Iso.format(d))
+            };
             (Value::String(value), r.lost_focus())
         }
         FieldType::Text | FieldType::Unknown | FieldType::Time => {
@@ -477,6 +483,7 @@ fn record_formats(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut buf: FormatBuffer = load(ui, "record_format_buffer");
     let mut commands: Vec<Command> = Vec::new();
     egui::CollapsingHeader::new(tr!("data-ui-record-formats"))
+        .id_salt("data-ui-record-formats")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -602,6 +609,7 @@ fn worksheets_list(ui: &mut Ui, session: &mut Session, status: &mut String) {
     let mut st: SheetState = load(ui, "sheet_state");
     let mut commands: Vec<Command> = Vec::new();
     egui::CollapsingHeader::new(tr!("data-ui-worksheets"))
+        .id_salt("data-ui-worksheets")
         .default_open(false)
         .show(ui, |ui| {
             let doc = session.editor.doc();
@@ -843,7 +851,7 @@ pub fn table_info(ui: &mut Ui, session: &mut Session, id: ObjectId, status: &mut
             DragValue::new(&mut h)
                 .speed(0.1)
                 .range(0.1..=10_000.0)
-                .length(),
+                .paper_mm(),
         )
     });
     if (r.inner.drag_stopped() || r.inner.lost_focus()) && h != d.text_height {
@@ -1184,6 +1192,7 @@ fn database_setup(
     let mut message: Option<String> = None;
     let fields = criteria_fields(session.editor.doc());
     egui::CollapsingHeader::new(tr!("data-ui-database-rows"))
+        .id_salt("data-ui-database-rows")
         .default_open(false)
         .show(ui, |ui| {
             ui.weak(tr!("data-ui-a-database-block-lists-the-objects-that"));

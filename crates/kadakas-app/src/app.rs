@@ -729,7 +729,7 @@ impl KadakasApp {
             return;
         };
         self.status = match self.session.export_file_trusted(serde_json::json!({"path": p.display().to_string(), "format": "pdf", "overwrite": true})) {
-            Ok(r) => tr!("app-exported-sheet-s-to", count = r["pages"], path = p.display()),
+            Ok(r) => tr!("app-exported-sheet-s-to", count = r["pages"].as_u64().unwrap_or(0), path = p.display()),
             Err(e) => tr!("app-error-2", message = e.message),
         };
     }
@@ -1258,6 +1258,12 @@ impl egui_dock::TabViewer for DockViewer<'_> {
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         tab.title().into()
+    }
+
+    /// The id of a tab does not come from its title, so the state of a tab survives a change of
+    /// the language.
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(("kadakas_dock_tab", format!("{tab:?}")))
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {

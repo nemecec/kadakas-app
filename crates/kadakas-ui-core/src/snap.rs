@@ -239,14 +239,14 @@ mod tests {
     fn the_cue_label_speaks_the_language_and_the_units_of_the_ui() {
         let cue = |s: snapping::Snap| SnapResult::from(s).cue;
         let all = [
-            (Kind::Grid, "Grid", "Võrk"),
+            (Kind::Grid, "Grid", "Ruudustik"),
             (Kind::Endpoint, "Endpoint", "Otspunkt"),
             (Kind::Midpoint, "Midpoint", "Poolituspunkt"),
             (Kind::Center, "Center", "Keskpunkt"),
             (Kind::Quadrant, "Quadrant", "Veerandipunkt"),
             (Kind::Intersection, "Intersection", "Lõikepunkt"),
             (Kind::Edge, "On edge", "Serval"),
-            (Kind::Perpendicular, "Perpendicular", "Ristsuund"),
+            (Kind::Perpendicular, "Perpendicular", "Ristipunkt"),
             (Kind::Tangent, "Tangent", "Puutuja"),
             (Kind::Angle, "Angle", "Nurk"),
             (Kind::Distance, "Distance", "Kaugus"),

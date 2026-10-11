@@ -49,6 +49,18 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("panels.rs", "{i}"),
     ("plant_sheet_ui.rs", "{}{arrow}"),
     ("site_ui.rs", "{vertices}"),
+    // Names of file formats in file dialogs. They are the same in every language.
+    ("app.rs", "Kadakas"),
+    ("app.rs", "SVG"),
+    ("app.rs", "PDF"),
+    ("io_dialog.rs", "DXF"),
+    ("io_dialog.rs", "GeoJSON"),
+    ("io_dialog.rs", "IFC"),
+    ("io_dialog.rs", "IFC4"),
+    ("io_dialog.rs", "Shapefile"),
+    ("plant_ui.rs", "CSV"),
+    // An empty text, a bare placeholder.
+    ("app.rs", "{}"),
 ];
 
 fn workspace() -> PathBuf {
@@ -307,6 +319,12 @@ const FIRST_ARG: &[&str] = &[
     "ComboBox::from_label(",
     "Context::set_title(",
     "text_edit_singleline_hint(",
+    // The names of file types and the title of a file dialog (rfd).
+    ".add_filter(",
+    ".set_title(",
+    // Text that goes to the status line or to a message field.
+    "status = ",
+    "message = ",
 ];
 
 /// Calls with the text as a later argument, with the place of that argument (the first
@@ -380,16 +398,17 @@ fn no_user_visible_literal_is_left_in_an_egui_call() {
                 while let Some(i) = code[from..].find(needle) {
                     let at = from + i + needle.len();
                     from = at;
-                    let mut rest = &code[at..];
-                    // A call that breaks the line after the parenthesis.
-                    let next;
-                    if rest.trim().is_empty()
-                        && let Some(l) = lines.get(n + 1)
-                    {
-                        next = l.to_string();
-                        rest = &next;
+                    // A call that breaks the line after the parenthesis, or after `format!(`.
+                    let mut joined = code[at..].to_string();
+                    for k in 1..=2 {
+                        let t = joined.trim_end();
+                        if (t.is_empty() || t.ends_with("format!("))
+                            && let Some(l) = lines.get(n + k)
+                        {
+                            joined = format!("{t} {}", l.trim());
+                        }
                     }
-                    if let Some(lit) = leading_literal(rest) {
+                    if let Some(lit) = leading_literal(&joined) {
                         found.push(lit.to_string());
                     }
                 }
@@ -418,6 +437,104 @@ fn no_user_visible_literal_is_left_in_an_egui_call() {
         }
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+/// A call of `tr!` in the source: the id, the names of its arguments with their expressions, and
+/// the line.
+struct TrCall {
+    id: String,
+    args: Vec<(String, String)>,
+    line: usize,
+}
+
+fn tr_calls(src: &str) -> Vec<TrCall> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = src[from..].find("tr!(") {
+        let at = from + i;
+        from = at + 4;
+        if src[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let parts = split_args(&src[from..]);
+        let Some(first) = parts.first().map(|p| p.trim()) else {
+            continue;
+        };
+        let Some(id) = first.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
+            continue;
+        };
+        let mut args = Vec::new();
+        for p in &parts[1..] {
+            let p = p.trim();
+            if let Some((name, expr)) = p.split_once('=')
+                && !expr.starts_with('=')
+                && !name.trim().is_empty()
+                && name.trim().chars().all(|c| c.is_alphanumeric() || c == '_')
+            {
+                args.push((name.trim().to_string(), expr.trim().to_string()));
+            }
+        }
+        out.push(TrCall {
+            id: id.to_string(),
+            args,
+            line: src[..at].matches('\n').count() + 1,
+        });
+    }
+    out
+}
+
+#[test]
+fn the_arguments_of_each_tr_call_are_the_variables_of_its_message() {
+    let vars = kadakas_l10n::message_variables(kadakas_l10n::FALLBACK).unwrap();
+    let mut problems = Vec::new();
+    for (path, src) in sources(CODE_CRATES) {
+        let file = path
+            .strip_prefix(workspace())
+            .unwrap()
+            .display()
+            .to_string();
+        for call in tr_calls(&src) {
+            let Some(want) = vars.get(&call.id) else {
+                continue; // the test for unknown ids reports it
+            };
+            let got: BTreeSet<String> = call.args.iter().map(|(n, _)| n.clone()).collect();
+            if &got != want {
+                problems.push(format!(
+                    "{file}:{}: {} passes {:?} but the message uses {:?}",
+                    call.line, call.id, got, want
+                ));
+            }
+            // JSON values print with quotes and are no numbers for the plural rules. Convert
+            // them with `.as_u64()`, `.as_str()` and so on first.
+            for (name, expr) in &call.args {
+                let json_index =
+                    expr.contains("[\"") && !expr.contains(".as_") && !expr.contains(".to_");
+                if json_index {
+                    problems.push(format!(
+                        "{file}:{}: {} argument {name} is a JSON value ({expr}); convert it first",
+                        call.line, call.id
+                    ));
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn the_scan_of_tr_calls_reads_ids_and_argument_names() {
+    let src = "x = tr!(\"a-b\", n = v[\"k\"], other = f(1, 2));\nstr!(\"no\");\ntr!(\"c\")";
+    let calls = tr_calls(src);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].id, "a-b");
+    assert_eq!(calls[0].args[0], ("n".to_string(), "v[\"k\"]".to_string()));
+    assert_eq!(calls[0].args[1].0, "other");
+    assert_eq!(calls[1].line, 3);
+    assert!(calls[1].args.is_empty());
 }
 
 #[test]

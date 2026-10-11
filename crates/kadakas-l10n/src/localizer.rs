@@ -1,5 +1,8 @@
 //! One language: a Fluent bundle for it and a bundle for en-US behind it.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 use unic_langid::LanguageIdentifier;
 
@@ -47,6 +50,9 @@ pub struct Localizer {
     main: FluentBundle<FluentResource>,
     /// `None` when the language is en-US itself.
     fallback: Option<FluentBundle<FluentResource>>,
+    /// The texts of messages that are asked without arguments. A UI asks for the same labels
+    /// in each frame.
+    cache: RefCell<HashMap<String, String>>,
 }
 
 fn bundle(tag: &str) -> FluentBundle<FluentResource> {
@@ -89,6 +95,7 @@ impl Localizer {
             tag,
             main: bundle(tag),
             fallback: (tag != FALLBACK).then(|| bundle(FALLBACK)),
+            cache: RefCell::default(),
         }
     }
 
@@ -155,6 +162,18 @@ impl Localizer {
 
     /// The text of a message. See `crate::translate`.
     pub fn tr(&self, id: &str, args: &[(&str, Arg)]) -> String {
+        if args.is_empty() {
+            if let Some(text) = self.cache.borrow().get(id) {
+                return text.clone();
+            }
+            let text = self.tr_uncached(id, args);
+            self.cache.borrow_mut().insert(id.to_string(), text.clone());
+            return text;
+        }
+        self.tr_uncached(id, args)
+    }
+
+    fn tr_uncached(&self, id: &str, args: &[(&str, Arg)]) -> String {
         let mut fa = FluentArgs::new();
         for (name, value) in args {
             match value {
@@ -231,6 +250,7 @@ mod tests {
                 "en-US",
                 ["a = X\nb = B\n", "bad = {\n"].into_iter(),
             )),
+            cache: RefCell::default(),
         };
         assert_eq!(et.tr("a", &[]), "A");
         assert!(!et.has("b"));
