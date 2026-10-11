@@ -224,10 +224,12 @@ pub fn blobs_needed(r: &Replica, ops: &[Op]) -> Vec<String> {
     let (order, props) = touched(r, ops);
     let mut out: Vec<String> = Vec::new();
     for t in order {
-        if let Some(h) = props[&t].get("shape").and_then(crate::blob::blob_ref)
-            && !out.iter().any(|o| o == h)
-        {
-            out.push(h.to_string());
+        for key in crate::blob::BLOB_PROPS {
+            if let Some(h) = props[&t].get(key).and_then(crate::blob::blob_ref)
+                && !out.iter().any(|o| o == h)
+            {
+                out.push(h.to_string());
+            }
         }
     }
     out

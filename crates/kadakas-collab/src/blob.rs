@@ -19,8 +19,13 @@
 //! server keeps blobs as long as the log refers to them. The checkpoint and the journal of a
 //! client hold the blobs they need.
 //!
-//! Only the key `png` in a shape of kind `underlay`, with a text of at least [`MIN_BLOB_BYTES`], is
-//! replaced.
+//! Two places hold a blob:
+//!
+//! - the key `png` in the property `shape` of an object of kind `underlay`;
+//! - the key `data` in the property `body` of a resource of type `image` (the picture of a plant
+//!   style, PLT-16). Its small thumbnail stays in the operation.
+//!
+//! A text of at least [`MIN_BLOB_BYTES`] is replaced.
 
 use std::collections::BTreeMap;
 
@@ -42,27 +47,36 @@ pub fn sha256_hex(data: &[u8]) -> String {
         .collect()
 }
 
-fn is_underlay(shape: &Value) -> bool {
-    shape.get("kind").and_then(Value::as_str) == Some("underlay")
+/// The properties that can hold a blob.
+pub const BLOB_PROPS: [&str; 2] = ["shape", "body"];
+
+/// The key that holds the picture text in a value of a property, if the value is one that has a
+/// picture: an underlay shape or an image resource body.
+fn holder(v: &Value) -> Option<&'static str> {
+    if v.get("kind").and_then(Value::as_str) == Some("underlay") {
+        Some("png")
+    } else if v.get("type").and_then(Value::as_str) == Some("image") {
+        Some("data")
+    } else {
+        None
+    }
 }
 
-/// If this value is a shape of an underlay with a big picture, the value with a reference instead,
-/// and the blob (hash and text).
-pub fn externalize(shape: &Value) -> Option<(Value, String, String)> {
-    if !is_underlay(shape) {
-        return None;
-    }
-    let png = shape
-        .get("png")?
+/// If this value is the shape of an underlay or the body of an image resource with a big picture,
+/// the value with a reference instead, and the blob (hash and text).
+pub fn externalize(value: &Value) -> Option<(Value, String, String)> {
+    let key = holder(value)?;
+    let text = value
+        .get(key)?
         .as_str()
         .filter(|p| p.len() >= MIN_BLOB_BYTES)?;
-    let hash = sha256_hex(png.as_bytes());
-    let mut v = shape.clone();
-    v["png"] = Value::Object(Map::from_iter([(
+    let hash = sha256_hex(text.as_bytes());
+    let mut v = value.clone();
+    v[key] = Value::Object(Map::from_iter([(
         REF_KEY.to_string(),
         Value::String(hash.clone()),
     )]));
-    Some((v, hash, png.to_string()))
+    Some((v, hash, text.to_string()))
 }
 
 /// The hash in a reference value (`{"$blob": hash}`).
@@ -73,12 +87,9 @@ fn ref_of(v: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// The hash of the blob that a shape value refers to, if it does.
-pub fn blob_ref(shape: &Value) -> Option<&str> {
-    if !is_underlay(shape) {
-        return None;
-    }
-    ref_of(shape.get("png")?)
+/// The hash of the blob that a value (a shape or a resource body) refers to, if it does.
+pub fn blob_ref(value: &Value) -> Option<&str> {
+    ref_of(value.get(holder(value)?)?)
 }
 
 /// The properties with the pictures put back. `Err(hash)` names a blob that `resolve` does not
@@ -88,22 +99,25 @@ pub fn inline_props(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Map<String, Value>, String> {
     let mut out = props.clone();
-    if let Some(shape) = out.get_mut("shape")
-        && let Some(hash) = blob_ref(shape).map(str::to_string)
-    {
-        let text = resolve(&hash).ok_or(hash)?;
-        shape["png"] = Value::String(text);
+    for key in BLOB_PROPS {
+        if let Some(value) = out.get_mut(key)
+            && let Some(hash) = blob_ref(value).map(str::to_string)
+        {
+            let text = resolve(&hash).ok_or(hash)?;
+            let holder = holder(value).expect("a reference has a holder");
+            value[holder] = Value::String(text);
+        }
     }
     Ok(out)
 }
 
 /// The blobs that a map of properties refers to.
 pub fn refs_in(props: &BTreeMap<String, Value>) -> Vec<String> {
-    props
-        .get("shape")
-        .and_then(blob_ref)
+    BLOB_PROPS
+        .iter()
+        .filter_map(|k| props.get(*k))
+        .filter_map(blob_ref)
         .map(str::to_string)
-        .into_iter()
         .collect()
 }
 
@@ -131,6 +145,27 @@ mod tests {
             sha256_hex(&vec![b'a'; 1_000_000]),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
+    }
+
+    #[test]
+    fn the_data_of_an_image_resource_is_a_blob_and_its_thumbnail_is_not() {
+        let text = "B".repeat(MIN_BLOB_BYTES + 4);
+        let body = json!({"type": "image", "sha256": "ab", "data": text, "thumb": "TTTT"});
+        let (v, hash, data) = externalize(&body).unwrap();
+        assert_eq!(data, text);
+        assert_eq!(v["thumb"], "TTTT");
+        assert_eq!(blob_ref(&v), Some(hash.as_str()));
+        assert_eq!(blob_ref(&body), None);
+        // Other resource bodies stay as they are.
+        assert!(externalize(&json!({"type": "plant_style", "data": text})).is_none());
+        let props: BTreeMap<String, Value> = [("body".to_string(), v.clone())].into();
+        assert_eq!(refs_in(&props), vec![hash.clone()]);
+        let mut map = Map::new();
+        map.insert("name".into(), json!("Picture"));
+        map.insert("body".into(), v);
+        let back = inline_props(&map, &|h| (h == hash).then(|| text.clone())).unwrap();
+        assert_eq!(back["body"]["data"], text);
+        assert_eq!(inline_props(&map, &|_| None).unwrap_err(), hash);
     }
 
     #[test]

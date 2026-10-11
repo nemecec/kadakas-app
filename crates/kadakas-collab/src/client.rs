@@ -642,11 +642,15 @@ impl Client {
         for op in &mut ops {
             match op {
                 Op::Create { props, .. } => {
-                    if let Some(v) = props.get_mut("shape") {
-                        put(self, v);
+                    for key in blob::BLOB_PROPS {
+                        if let Some(v) = props.get_mut(key) {
+                            put(self, v);
+                        }
                     }
                 }
-                Op::Set { prop, value, .. } if prop == "shape" => put(self, value),
+                Op::Set { prop, value, .. } if blob::BLOB_PROPS.contains(&prop.as_str()) => {
+                    put(self, value)
+                }
                 _ => {}
             }
         }
@@ -777,13 +781,20 @@ impl Client {
     /// Asks the server for the blobs that the state refers to and that this client does not have.
     fn ask_for_blobs(&mut self) {
         let mut wanted: Vec<String> = Vec::new();
-        for (_, e) in self.view.alive_of(crate::op::Kind::Object) {
-            if let Some(h) = e.get("shape").and_then(blob::blob_ref)
-                && !self.blobs.contains_key(h)
-                && !self.asked.contains(h)
-                && !self.missing.contains(h)
-            {
-                wanted.push(h.to_string());
+        let things = [
+            (crate::op::Kind::Object, "shape"),
+            (crate::op::Kind::Resource, "body"),
+        ];
+        for (kind, key) in things {
+            for (_, e) in self.view.alive_of(kind) {
+                if let Some(h) = e.get(key).and_then(blob::blob_ref)
+                    && !self.blobs.contains_key(h)
+                    && !self.asked.contains(h)
+                    && !self.missing.contains(h)
+                    && !wanted.iter().any(|w| w == h)
+                {
+                    wanted.push(h.to_string());
+                }
             }
         }
         for h in wanted {
@@ -1392,10 +1403,12 @@ fn apply_with_inverse(r: &mut Replica, w: Writer, ops: Vec<Op>) -> (Vec<Op>, Vec
 fn op_blob_refs(op: &Op) -> Vec<String> {
     match op {
         Op::Create { props, .. } => blob::refs_in(props),
-        Op::Set { prop, value, .. } if prop == "shape" => blob::blob_ref(value)
-            .map(str::to_string)
-            .into_iter()
-            .collect(),
+        Op::Set { prop, value, .. } if blob::BLOB_PROPS.contains(&prop.as_str()) => {
+            blob::blob_ref(value)
+                .map(str::to_string)
+                .into_iter()
+                .collect()
+        }
         _ => Vec::new(),
     }
 }

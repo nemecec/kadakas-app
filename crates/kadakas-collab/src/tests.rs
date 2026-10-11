@@ -2819,3 +2819,102 @@ fn a_server_without_the_chain_and_a_client_without_the_chain_still_work() {
     assert_ne!(log_id, "log-1");
     assert!(matches!(outs[1].msg, ServerMsg::Snapshot { .. }));
 }
+
+/// The body of an image resource that has a big file, for the tests of blobs.
+fn image_body(fill: u8) -> (serde_json::Value, String) {
+    use kadakas_core::picture::{encode_base64, sha256_hex};
+    let mut file = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+    file.extend_from_slice(b"IHDR");
+    file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
+    let thumb = encode_base64(&file);
+    file.extend(std::iter::repeat_n(fill, 6_000));
+    let data = encode_base64(&file);
+    let body = json!({
+        "type": "image", "sha256": sha256_hex(&file), "format": "png",
+        "width": 2, "height": 2, "data": data, "thumb": thumb, "source": "leaf.png",
+    });
+    (body, crate::blob::sha256_hex(data.as_bytes()))
+}
+
+#[test]
+fn the_picture_of_a_plant_style_is_a_blob_that_syncs_once() {
+    let mut net = Net::new(2);
+    net.seq.check_entities(true);
+    net.connect(0);
+    net.connect(1);
+    net.settle();
+    let (body, hash) = image_body(7);
+    let target = Target::new(Kind::Resource, Uid::from_num(60));
+    let create = Op::Create {
+        target,
+        props: [
+            ("name".to_string(), json!("Picture 1")),
+            ("body".to_string(), body.clone()),
+        ]
+        .into(),
+        merge: false,
+    };
+    net.clients[0].edit(vec![create]).unwrap();
+    // The operation holds a reference, not the file.
+    let sent = serde_json::to_string(&net.clients[0].journal().pending).unwrap();
+    assert!(
+        sent.len() < 2_000 && sent.contains("$blob"),
+        "{}",
+        sent.len()
+    );
+    net.settle();
+    assert!(net.seq.has_blob(&hash));
+    // The other client has the picture and builds the resource.
+    for i in 0..2 {
+        let m = net.clients[i].materialize(&Document::default());
+        let r = m
+            .doc
+            .resources
+            .image(kadakas_core::resource::ResourceId(Uid::from_num(60)));
+        assert!(r.is_some(), "client {i}: {:?}", m.quarantined);
+    }
+    // A new name for the resource sends no picture again.
+    net.clients[0]
+        .edit(vec![Op::Set {
+            target,
+            prop: "name".into(),
+            value: json!("Renamed"),
+        }])
+        .unwrap();
+    let out = net.clients[0].take_outbox();
+    assert!(!out.iter().any(|m| matches!(m, ClientMsg::BlobPut { .. })));
+}
+
+#[test]
+fn a_late_client_asks_for_the_picture_and_gets_the_resource() {
+    let mut net = Net::new(2);
+    net.seq.check_entities(true);
+    net.connect(0);
+    net.settle();
+    let (body, hash) = image_body(9);
+    let target = Target::new(Kind::Resource, Uid::from_num(61));
+    net.clients[0]
+        .edit(vec![Op::Create {
+            target,
+            props: [
+                ("name".to_string(), json!("Pic")),
+                ("body".to_string(), body),
+            ]
+            .into(),
+            merge: false,
+        }])
+        .unwrap();
+    net.settle();
+    assert!(net.seq.has_blob(&hash));
+    // The second client signs in later. It gets the state with a reference and asks for the blob.
+    net.connect(1);
+    net.settle();
+    let m = net.clients[1].materialize(&Document::default());
+    assert!(
+        m.doc
+            .resources
+            .image(kadakas_core::resource::ResourceId(Uid::from_num(61)))
+            .is_some()
+    );
+    assert!(m.quarantined.is_empty());
+}

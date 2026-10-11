@@ -172,7 +172,7 @@ pub fn materialize_with(
     }
 
     // Resources.
-    let resources = build_resources(view, base, &mut cx);
+    let resources = build_resources(view, base, blobs, &mut cx);
 
     // Objects.
     let mut objects: Vec<Object> = Vec::new();
@@ -301,10 +301,23 @@ fn blame(out: &mut Document, msg: String, cx: &mut Ctx) {
 fn build_resources(
     view: &Replica,
     base: &Document,
+    blobs: &dyn Fn(&str) -> Option<String>,
     cx: &mut Ctx,
 ) -> kadakas_core::resource::Resources {
     let mut list: Vec<Resource> = Vec::new();
     for (id, props) in ordered(view, Kind::Resource, base.resources.iter().map(|r| r.id.0)) {
+        // A picture that has not arrived yet: the resource waits (like an underlay).
+        let props = match crate::blob::inline_props(&props, blobs) {
+            Ok(p) => p,
+            Err(hash) => {
+                cx.quarantine(
+                    Kind::Resource,
+                    id,
+                    format!("the image {hash} has not arrived yet"),
+                );
+                continue;
+            }
+        };
         let parsed = validate_entity(Kind::Resource, id, &props)
             .and_then(|()| read::<Resource>(Kind::Resource, id, &props));
         match parsed {
