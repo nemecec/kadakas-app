@@ -199,6 +199,7 @@ impl Budget {
         true
     }
 
+    #[cfg(test)]
     fn spent(&self, total: u64) -> u64 {
         total - self.left.get()
     }
