@@ -50,6 +50,9 @@ pub struct Localizer {
     main: FluentBundle<FluentResource>,
     /// `None` when the language is en-US itself.
     fallback: Option<FluentBundle<FluentResource>>,
+    /// The terminology overlay of the workspace profile for this language (PLAT-04). Its
+    /// messages win over the messages of the language.
+    overlay: Option<FluentBundle<FluentResource>>,
     /// The texts of messages that are asked without arguments. A UI asks for the same labels
     /// in each frame.
     cache: RefCell<HashMap<String, String>>,
@@ -87,6 +90,13 @@ fn bundle_from<'a>(
 impl Localizer {
     /// A localizer for a supported tag. An unknown tag gives en-US.
     pub fn new(tag: &str) -> Localizer {
+        Localizer::with_overlay(tag, None)
+    }
+
+    /// A localizer whose messages the `.ftl` text `overlay` can replace. The overlay should have
+    /// passed `check_overlay`; a message in it that does not format falls back to the
+    /// normal text.
+    pub fn with_overlay(tag: &str, overlay: Option<&str>) -> Localizer {
         let tag = languages()
             .iter()
             .find(|l| l.tag == tag)
@@ -95,6 +105,7 @@ impl Localizer {
             tag,
             main: bundle(tag),
             fallback: (tag != FALLBACK).then(|| bundle(FALLBACK)),
+            overlay: overlay.map(|text| bundle_from(tag, std::iter::once(text))),
             cache: RefCell::default(),
         }
     }
@@ -181,7 +192,10 @@ impl Localizer {
                 Arg::Text(t) => fa.set(*name, FluentValue::from(t.clone())),
             }
         }
-        Self::format(&self.main, id, &fa)
+        self.overlay
+            .as_ref()
+            .and_then(|b| Self::format(b, id, &fa))
+            .or_else(|| Self::format(&self.main, id, &fa))
             .or_else(|| {
                 self.fallback
                     .as_ref()
@@ -250,6 +264,7 @@ mod tests {
                 "en-US",
                 ["a = X\nb = B\n", "bad = {\n"].into_iter(),
             )),
+            overlay: None,
             cache: RefCell::default(),
         };
         assert_eq!(et.tr("a", &[]), "A");
@@ -272,6 +287,23 @@ mod tests {
         assert!(en.format_errors("common-test-hello.title", &[]).is_empty());
         assert!(en.format_errors("common-test-hello.nope", &[]).is_empty());
         assert!(en.format_errors("no-such-message", &[]).is_empty());
+    }
+
+    #[test]
+    fn an_overlay_wins_over_the_messages_of_the_language() {
+        let plain = Localizer::new("en-US");
+        let over = Localizer::with_overlay("en-US", Some("common-ok = Fine\n"));
+        assert_eq!(plain.tr("common-ok", &[]), "OK");
+        assert_eq!(over.tr("common-ok", &[]), "Fine");
+        // Other messages stay.
+        assert_eq!(
+            over.tr("common-cancel", &[]),
+            plain.tr("common-cancel", &[])
+        );
+        // The overlay of one language does not touch another one.
+        let et = Localizer::with_overlay("et", Some("common-cancel = Peata\n"));
+        assert_eq!(et.tr("common-cancel", &[]), "Peata");
+        assert_eq!(et.tr("common-ok", &[]), "OK");
     }
 
     #[test]

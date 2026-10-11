@@ -23,6 +23,7 @@
 
 mod lang;
 mod localizer;
+mod overlay;
 mod resources;
 
 #[doc(hidden)]
@@ -30,6 +31,7 @@ pub mod argconv;
 
 pub use lang::{FALLBACK, Lang, languages, negotiate, normalize_tag};
 pub use localizer::{Arg, Localizer};
+pub use overlay::{OverlayProblem, check_overlay, overlay_tags, set_overlay};
 pub use resources::{message_ids, message_variables, problems, source_files};
 
 use std::cell::RefCell;
@@ -41,7 +43,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     /// The localizer of this thread, with the language index that it was made for.
-    static CACHE: RefCell<Option<(usize, Rc<Localizer>)>> = const { RefCell::new(None) };
+    static CACHE: RefCell<Option<(usize, usize, Rc<Localizer>)>> = const { RefCell::new(None) };
     /// A language that overrides the process language on this thread.
     static OVERRIDE: RefCell<Option<usize>> = const { RefCell::new(None) };
 }
@@ -54,13 +56,18 @@ fn current_index() -> usize {
 
 fn localizer() -> Rc<Localizer> {
     let index = current_index();
+    let generation = overlay::generation();
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         match &*c {
-            Some((i, l)) if *i == index => l.clone(),
+            Some((i, g, l)) if *i == index && *g == generation => l.clone(),
             _ => {
-                let l = Rc::new(Localizer::new(languages()[index].tag));
-                *c = Some((index, l.clone()));
+                let tag = languages()[index].tag;
+                let l = Rc::new(Localizer::with_overlay(
+                    tag,
+                    overlay::text_for(tag).as_deref(),
+                ));
+                *c = Some((index, generation, l.clone()));
                 l
             }
         }
