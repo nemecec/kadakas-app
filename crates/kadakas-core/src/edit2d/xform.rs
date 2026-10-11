@@ -158,7 +158,7 @@ fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
 }
 
 /// The kinds of shapes that `map_shape` can transform, for error messages.
-pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, extrude, sweep (move and turn only), symbol, group";
+pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, extrude, sweep, symbol, group";
 
 /// `shape` after the transform. Refuses shapes that the transform cannot keep (see the module notes).
 pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
@@ -328,19 +328,21 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
                 .iter()
                 .map(|h| map_vertices(h, true, xf))
                 .collect::<Result<_, _>>()?;
+            // A uniform scale scales the height too (as the scale of a 3D object does). A
+            // stretch in the plan leaves the height as it is.
+            if let Some(k) = sim {
+                e.height *= k;
+                e.base *= k;
+            }
             Shape::Extrude(Box::new(e))
         }
         Shape::Sweep(s) => {
-            // A sweep is a 3D solid: it can be moved and turned, not stretched or mirrored.
+            // A sweep is a 3D solid: a move, a turn, a uniform scale and a mirror keep it a
+            // sweep. A stretch in the plan does not.
+            let k = need_sim("sweep")?;
             let mut s = (**s).clone();
-            if xf.is_translation() {
-                let o = xf.apply(s.origin.truncate());
-                s.origin = o.extend(s.origin.z);
-            } else if let Some((center, angle)) = xf.as_rotation() {
-                s.rotate_z(center, angle);
-            } else {
-                return Err("a sweep can be moved and turned, not scaled or mirrored".into());
-            }
+            let origin = xf.apply(s.origin.truncate());
+            s.remap_plan(origin, xf.m, k, xf.is_reflection());
             Shape::Sweep(Box::new(s))
         }
         Shape::Group { name } => Shape::Group { name: name.clone() },

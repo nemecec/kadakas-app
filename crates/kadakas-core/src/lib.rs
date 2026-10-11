@@ -48,4 +48,4 @@ pub mod viewrules;
 pub mod visibility;
 pub mod worksheet_table;
 
-pub use glam::{DVec2, DVec3};
+pub use glam::{DMat2, DVec2, DVec3};

@@ -1,5 +1,6 @@
 use super::*;
 use crate::curve::VertexKind;
+use crate::mesh::clean_ring;
 use proptest::prelude::*;
 use std::f64::consts::PI;
 
@@ -21,6 +22,15 @@ fn circle(c: DVec2, r: f64) -> Vec<Vertex> {
 
 fn close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol * b.abs().max(1.0)
+}
+
+/// The box of a sweep from the profile points holds the box of the mesh, and is at most `tol`
+/// larger (the chords of the segments cut a little off a round shape).
+fn near_bounds(a: (DVec3, DVec3), m: (DVec3, DVec3), tol: f64) -> bool {
+    (m.0 - a.0).min_element() >= -1e-6
+        && (m.0 - a.0).max_element() <= tol
+        && (a.1 - m.1).min_element() >= -1e-6
+        && (a.1 - m.1).max_element() <= tol
 }
 
 fn all_finite(m: &SolidMesh) -> bool {
@@ -199,7 +209,78 @@ fn huge_profiles_are_refused() {
         let x = 100.0 + 400.0 * k as f64;
         e.holes.push(rect(x, 100.0, x + 100.0, 200.0));
     }
-    assert!(e.problem().unwrap().contains("too many"));
+    assert!(
+        e.problem().unwrap().contains("at most 256 holes"),
+        "{:?}",
+        e.problem()
+    );
+    // Fewer holes with many points each pass the limit of the points.
+    let mut e = Extrude::new(rect(0.0, 0.0, 1.0e6, 1.0e6), 10.0);
+    for k in 0..200 {
+        let x = 100.0 + 4000.0 * k as f64;
+        let ring: Vec<Vertex> = (0..50)
+            .map(|i| {
+                Vertex::corner(DVec2::new(x, 500.0) + DVec2::from_angle(i as f64 * 0.1256) * 1000.0)
+            })
+            .collect();
+        e.holes.push(ring);
+    }
+    assert!(
+        e.problem().unwrap().contains("too many points"),
+        "{:?}",
+        e.problem()
+    );
+}
+
+#[test]
+fn curves_that_ask_for_too_many_points_are_refused_at_once() {
+    // Each Bezier segment of this profile would need thousands of points. The refusal comes from
+    // the budget; the work stays near the budget (no quadratic clean-up of a huge ring).
+    let wild: Vec<Vertex> = (0..100)
+        .map(|i| {
+            let a = i as f64 * 0.37;
+            let r = if i % 2 == 0 { 9.0e6 } else { 1.0e7 };
+            Vertex::new(
+                DVec2::from_angle(a) * r,
+                if i % 3 == 0 {
+                    VertexKind::Corner
+                } else {
+                    VertexKind::Bezier
+                },
+            )
+        })
+        .collect();
+    let e = Extrude::new(wild.clone(), 10.0);
+    assert!(
+        e.problem().unwrap().contains("too many points"),
+        "{:?}",
+        e.problem()
+    );
+    assert!(e.mesh().is_none());
+    let mut s = Sweep::new(wild);
+    s.closed = false;
+    assert!(s.problem().is_some());
+    assert_eq!(s.bounds3(), (s.origin, s.origin));
+    // The budget of the flatten call itself.
+    let verts = rect(0.0, 0.0, 10.0, 10.0);
+    assert!(curve::flatten_limited(&verts, true, 1.0, 3).is_none());
+    assert!(curve::flatten_limited(&verts, true, 1.0, 4).is_some());
+}
+
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_wild_curves_are_refused_fast() {
+    let wild: Vec<Vertex> = (0..400)
+        .map(|i| {
+            Vertex::new(
+                DVec2::from_angle(i as f64 * 0.37) * 1.0e7,
+                VertexKind::Bezier,
+            )
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    assert!(Extrude::new(wild, 10.0).problem().is_some());
+    assert!(started.elapsed().as_secs_f64() < 1.0);
 }
 
 #[test]
@@ -236,7 +317,7 @@ fn a_flat_full_turn_is_a_closed_cylinder() {
     let (lo, hi) = s.bounds3();
     assert!((hi.x - 1000.0).abs() < 1e-6 && (lo.x + 1000.0).abs() < 1e-6);
     assert_eq!((lo.z, hi.z), (0.0, 2000.0));
-    assert_eq!((lo, hi), m.bounds());
+    assert!(near_bounds((lo, hi), m.bounds(), 1e-6));
 }
 
 #[test]
@@ -301,7 +382,7 @@ fn a_profile_that_touches_the_axis_with_a_pitch_keeps_all_triangles() {
     s.pitch = 50.0;
     s.sweep_angle_deg = 180.0;
     let m = s.mesh().unwrap();
-    assert!(m.is_closed() || m.signed_volume().abs() > 0.0);
+    assert!(m.is_closed());
     assert!(all_finite(&m));
 }
 
@@ -349,6 +430,9 @@ fn the_axis_can_lie_along_x_and_the_frame_is_right_handed() {
 fn a_segment_count_above_the_limit_is_lowered() {
     let mut s = cylinder(100.0, 100.0);
     s.sweep_angle_deg = 3600.0;
+    // Ten turns of a flat sweep lie on each other; with a pitch they do not.
+    assert!(s.problem().unwrap().contains("needs a pitch"));
+    s.pitch = 500.0;
     s.segment_angle_deg = MIN_SEGMENT_ANGLE;
     assert!(s.segments_capped());
     assert_eq!(s.segments(), MAX_SEGMENTS);
@@ -362,6 +446,7 @@ fn a_segment_count_above_the_limit_is_lowered() {
         .collect();
     let mut s = Sweep::new(big);
     s.closed = false;
+    s.pitch = 100_000.0;
     s.sweep_angle_deg = 3600.0;
     s.segment_angle_deg = 1.0;
     assert!(s.problem().unwrap().contains("too many triangles"));
@@ -403,7 +488,7 @@ fn bad_sweeps_say_what_is_wrong() {
             s.closed = false;
             s.profile.truncate(1)
         })
-        .contains("2 to 8000")
+        .contains("at least 2 vertices")
     );
     assert!(
         problem(&|s| {
@@ -534,6 +619,287 @@ fn a_polygon_face_follows_the_normal() {
     assert!(polygon_face(&[DVec3::ZERO, DVec3::X, DVec3::new(f64::NAN, 1.0, 0.0)]).is_none());
 }
 
+// ------------------------------------------------------------------ closed caps
+
+fn pts_profile(p: &[(f64, f64)]) -> Vec<Vertex> {
+    curve::corners(
+        &p.iter()
+            .map(|(x, y)| DVec2::new(*x, *y))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn assert_solid(e: &Extrude) {
+    assert_eq!(e.problem(), None);
+    let m = e.mesh().unwrap();
+    assert!(m.is_closed(), "the mesh is not closed");
+    assert!(
+        close(m.signed_volume(), e.volume(), 1e-9),
+        "{} {}",
+        m.signed_volume(),
+        e.volume()
+    );
+}
+
+#[test]
+fn rectilinear_profiles_make_closed_meshes() {
+    // The T shape, a comb with three slots, a sawtooth: ear clipping makes corners on one line.
+    let t = pts_profile(&[
+        (0.0, 0.0),
+        (30.0, 0.0),
+        (30.0, 10.0),
+        (20.0, 10.0),
+        (20.0, 30.0),
+        (10.0, 30.0),
+        (10.0, 10.0),
+        (0.0, 10.0),
+    ]);
+    assert_solid(&Extrude::new(t, 5.0));
+    let comb = pts_profile(&[
+        (0.0, 0.0),
+        (70.0, 0.0),
+        (70.0, 40.0),
+        (60.0, 40.0),
+        (60.0, 10.0),
+        (50.0, 10.0),
+        (50.0, 40.0),
+        (40.0, 40.0),
+        (40.0, 10.0),
+        (30.0, 10.0),
+        (30.0, 40.0),
+        (20.0, 40.0),
+        (20.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 40.0),
+        (0.0, 40.0),
+    ]);
+    assert_solid(&Extrude::new(comb, 5.0));
+    let mut saw = vec![(0.0, 0.0)];
+    for k in 0..6 {
+        let x = 10.0 * k as f64;
+        saw.push((x + 10.0, 0.0));
+        saw.push((x + 10.0, 10.0));
+    }
+    saw.push((60.0, 20.0));
+    saw.push((0.0, 20.0));
+    assert_solid(&Extrude::new(pts_profile(&saw), 5.0));
+    // A grid of square holes with aligned edges.
+    let mut e = Extrude::new(rect(0.0, 0.0, 100.0, 100.0), 7.0);
+    for (x, y) in [(10.0, 10.0), (60.0, 10.0), (10.0, 60.0), (60.0, 60.0)] {
+        e.holes.push(rect(x, y, x + 30.0, y + 30.0));
+    }
+    assert_solid(&e);
+    // Holes in the arms of the T, in line with each other.
+    let mut e = Extrude::new(
+        pts_profile(&[(0.0, 0.0), (90.0, 0.0), (90.0, 30.0), (0.0, 30.0)]),
+        3.0,
+    );
+    e.holes = vec![
+        rect(10.0, 10.0, 20.0, 20.0),
+        rect(40.0, 10.0, 50.0, 20.0),
+        rect(70.0, 10.0, 80.0, 20.0),
+    ];
+    assert_solid(&e);
+}
+
+#[test]
+fn many_holes_are_bridged_quickly_and_the_hole_count_is_limited() {
+    // The work counts: 200 holes make 200 bridges, each seen by a few tests, not a search of
+    // all pairs of points.
+    let mut e = Extrude::new(rect(0.0, 0.0, 1000.0, 1000.0), 7.0);
+    for i in 0..14 {
+        for j in 0..14 {
+            let (x, y) = (10.0 + 70.0 * i as f64, 10.0 + 70.0 * j as f64);
+            e.holes.push(rect(x, y, x + 40.0, y + 40.0));
+        }
+    }
+    assert_eq!(e.holes.len(), 196);
+    assert_solid(&e);
+    e.holes.push(rect(990.0 - 1.0, 5.0, 995.0, 8.0));
+    e.holes.truncate(MAX_HOLES);
+    for _ in 0..(MAX_HOLES + 1) {
+        e.holes.push(rect(500.0, 500.0, 501.0, 501.0));
+    }
+    assert!(e.problem().unwrap().contains("at most 256 holes"));
+}
+
+// ------------------------------------------------------------------ sweeps: pitch, mirror, bounds
+
+#[test]
+fn a_sweep_over_a_full_turn_needs_a_pitch_that_clears_the_profile() {
+    let mut s = cylinder(500.0, 100.0);
+    s.sweep_angle_deg = 361.0;
+    assert!(s.problem().unwrap().contains("needs a pitch"));
+    s.pitch = 50.0;
+    assert!(s.problem().unwrap().contains("smaller than the profile"));
+    s.pitch = -99.0;
+    assert!(s.problem().is_some());
+    s.pitch = -150.0;
+    assert_eq!(s.problem(), None);
+    assert!(s.mesh().unwrap().is_closed());
+    // Up to one turn, a small pitch is fine: the ends do not meet.
+    s.sweep_angle_deg = 360.0;
+    s.pitch = 10.0;
+    assert_eq!(s.problem(), None);
+}
+
+#[test]
+fn the_box_of_a_spiral_or_a_leaning_sweep_holds_its_mesh() {
+    for (axis, pitch, angle) in [
+        (DVec3::Z, 400.0, 900.0),
+        (DVec3::new(1.0, 2.0, 3.0), 600.0, 700.0),
+        (DVec3::new(0.0, 1.0, 0.2), -300.0, 500.0),
+        (DVec3::X, 0.0, 300.0),
+    ] {
+        let mut s = Sweep::new(rect(300.0, 0.0, 500.0, 120.0));
+        s.axis = axis;
+        s.pitch = pitch;
+        s.sweep_angle_deg = angle;
+        s.segment_angle_deg = 2.0;
+        s.rotation_deg = 33.0;
+        assert_eq!(s.problem(), None, "{axis}");
+        let m = s.mesh().unwrap();
+        assert!(near_bounds(
+            s.bounds3(),
+            m.bounds(),
+            500.0 * (1.0 - 1f64.to_radians().cos()) + 1e-6
+        ));
+    }
+}
+
+#[test]
+fn turning_scaling_and_mirroring_a_sweep_gives_the_mapped_solid() {
+    let mut s = Sweep::new(rect(200.0, 0.0, 700.0, 300.0));
+    s.origin = DVec3::new(1000.0, 500.0, 50.0);
+    s.sweep_angle_deg = 100.0;
+    s.pitch = 40.0;
+    s.axis = DVec3::new(0.2, 0.1, 1.0);
+    s.rotation_deg = 20.0;
+    let before = s.mesh().unwrap();
+    // A mirror in the x axis with a scale of 2: x, y and z get twice as long, y changes sign.
+    let mut t = s.clone();
+    let lin = DMat2::from_cols(DVec2::new(2.0, 0.0), DVec2::new(0.0, -2.0));
+    t.remap_plan(lin * s.origin.truncate(), lin, 2.0, true);
+    let after = t.mesh().unwrap();
+    assert!(after.signed_volume() > 0.0 && after.is_closed());
+    assert!(
+        close(after.volume(), before.volume() * 8.0, 5e-3),
+        "{} {}",
+        after.volume(),
+        before.volume() * 8.0
+    );
+    let key = |v: &DVec3| {
+        (
+            (v.x * 1e3).round() as i64,
+            (v.y * 1e3).round() as i64,
+            (v.z * 1e3).round() as i64,
+        )
+    };
+    let mut want: Vec<DVec3> = before
+        .vertices
+        .iter()
+        .map(|v| DVec3::new(2.0 * v.x, -2.0 * v.y, 2.0 * v.z))
+        .collect();
+    let mut got = after.vertices.clone();
+    want.sort_by_key(key);
+    got.sort_by_key(key);
+    assert_eq!(want.len(), got.len());
+    for (a, b) in want.iter().zip(&got) {
+        assert!((*a - *b).length() < 1e-5, "{a} {b}");
+    }
+    // A plain uniform scale about a point (no mirror) with an arc vertex.
+    let mut a = Sweep::new(vec![
+        Vertex::corner(DVec2::new(100.0, 0.0)),
+        Vertex::new(DVec2::new(400.0, 0.0), VertexKind::Arc { radius: 30.0 }),
+        Vertex::corner(DVec2::new(400.0, 200.0)),
+        Vertex::corner(DVec2::new(100.0, 200.0)),
+    ]);
+    let v0 = a.mesh().unwrap().volume();
+    a.remap_plan(
+        DVec2::ZERO,
+        DMat2::from_diagonal(DVec2::splat(3.0)),
+        3.0,
+        false,
+    );
+    assert!(close(a.mesh().unwrap().volume(), v0 * 27.0, 5e-3));
+    assert!(matches!(a.profile[1].kind, VertexKind::Arc { radius } if radius == 90.0));
+}
+
+#[test]
+fn fingerprints_follow_every_value() {
+    let e = Extrude::new(rect(0.0, 0.0, 10.0, 10.0), 5.0);
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(e.fingerprint());
+    let mut f = e.clone();
+    f.height = 6.0;
+    assert!(seen.insert(f.fingerprint()));
+    let mut f = e.clone();
+    f.base = 1.0;
+    assert!(seen.insert(f.fingerprint()));
+    let mut f = e.clone();
+    f.profile[1].p.x = 11.0;
+    assert!(seen.insert(f.fingerprint()));
+    let mut f = e.clone();
+    f.profile[1].kind = VertexKind::Arc { radius: 2.0 };
+    assert!(seen.insert(f.fingerprint()));
+    let mut f = e.clone();
+    f.holes = vec![rect(1.0, 1.0, 2.0, 2.0)];
+    assert!(seen.insert(f.fingerprint()));
+    assert_eq!(e.fingerprint(), e.clone().fingerprint());
+    assert!(close(e.volume(), 500.0, 1e-12));
+    let w = cylinder(10.0, 10.0);
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(w.fingerprint());
+    for f in [
+        |s: &mut Sweep| s.pitch = 1.0,
+        |s: &mut Sweep| s.origin.z = 1.0,
+        |s: &mut Sweep| s.axis.x = 0.5,
+        |s: &mut Sweep| s.rotation_deg = 5.0,
+        |s: &mut Sweep| s.closed = false,
+        |s: &mut Sweep| s.sweep_angle_deg = 90.0,
+        |s: &mut Sweep| s.segment_angle_deg = 5.0,
+        |s: &mut Sweep| s.profile[0].kind = VertexKind::Bezier,
+        |s: &mut Sweep| s.profile[1].kind = VertexKind::Cubic,
+        |s: &mut Sweep| s.profile[2].kind = VertexKind::PointOnArc,
+    ] {
+        let mut x = w.clone();
+        f(&mut x);
+        assert!(seen.insert(x.fingerprint()));
+    }
+}
+
+#[test]
+fn clean_ring_removes_straight_runs_in_one_pass_and_wraps_around() {
+    let ring = |n: usize| -> Vec<DVec2> {
+        // A square with many points on every side, starting in the middle of a side.
+        let mut v = Vec::new();
+        for i in 0..n {
+            v.push(DVec2::new(i as f64, 0.0));
+        }
+        for i in 0..n {
+            v.push(DVec2::new(n as f64, i as f64));
+        }
+        for i in 0..n {
+            v.push(DVec2::new(n as f64 - i as f64, n as f64));
+        }
+        for i in 0..n {
+            v.push(DVec2::new(0.0, n as f64 - i as f64));
+        }
+        v.rotate_left(n / 2);
+        v
+    };
+    for n in [2, 5, 3000] {
+        let c = clean_ring(&ring(n));
+        assert_eq!(c.len(), 4, "n {n}");
+    }
+    // Clockwise input comes back counterclockwise; a line has no area.
+    let mut cw = ring(4);
+    cw.reverse();
+    let c = clean_ring(&cw);
+    assert!(geom::signed_area(&c) > 0.0);
+    assert!(clean_ring(&[DVec2::ZERO, DVec2::X, DVec2::X * 2.0, DVec2::X * 3.0]).is_empty());
+}
+
 // ------------------------------------------------------------------ properties
 
 fn star(radii: &[f64]) -> Vec<Vertex> {
@@ -565,6 +931,38 @@ proptest! {
         let want = e.profile_area() * height.abs();
         prop_assert!((m.signed_volume() - want).abs() <= 1e-6 * want);
         prop_assert_eq!(m.bounds(), e.bounds3());
+    }
+
+    // Rectilinear profiles: a staircase on grid lines, with holes on the same lines. Ear clipping
+    // makes many collinear corners here.
+    #[test]
+    fn rectilinear_profiles_with_aligned_holes_are_closed(
+        steps in proptest::collection::vec(1u32..4, 2..7),
+        holes in proptest::collection::vec((0u32..4, 0u32..4), 0..4),
+        height in 1.0f64..500.0,
+    ) {
+        // A staircase: column i is steps[i] cells high.
+        let w = steps.len() as f64 * 10.0;
+        let mut p = vec![(0.0, 0.0), (w, 0.0)];
+        for (i, h) in steps.iter().enumerate().rev() {
+            let (x1, x0) = ((i as f64 + 1.0) * 10.0, i as f64 * 10.0);
+            p.push((x1, *h as f64 * 10.0 + 10.0));
+            p.push((x0, *h as f64 * 10.0 + 10.0));
+        }
+        let mut e = Extrude::new(pts_profile(&p), height);
+        let mut used = std::collections::HashSet::new();
+        for (hx, hy) in holes {
+            let hx = hx % steps.len() as u32;
+            // A cell in the first row of that column, away from the borders by 2.
+            if hy == 0 && used.insert(hx) {
+                let x = hx as f64 * 10.0;
+                e.holes.push(rect(x + 2.0, 2.0, x + 8.0, 8.0));
+            }
+        }
+        prop_assume!(e.problem().is_none());
+        let m = e.mesh().unwrap();
+        prop_assert!(m.is_closed());
+        prop_assert!((m.signed_volume() - e.volume()).abs() <= 1e-6 * e.volume());
     }
 
     #[test]
@@ -615,7 +1013,8 @@ proptest! {
         prop_assert!(m.is_closed());
         let (lo, hi) = s.bounds3();
         let (mlo, mhi) = m.bounds();
-        prop_assert!((lo - mlo).length() < 1e-6 && (hi - mhi).length() < 1e-6);
+        let sag = (u0 + du) * (1.0 - (seg.to_radians() / 2.0).cos()) + 1e-6;
+        prop_assert!(near_bounds((lo, hi), (mlo, mhi), sag), "{lo} {hi} {mlo} {mhi}");
     }
 
     #[test]

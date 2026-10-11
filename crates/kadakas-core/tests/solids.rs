@@ -186,12 +186,41 @@ fn objects_move_turn_and_transform() {
     })
     .unwrap();
     assert!(volume(&ed, e) > 0.0);
+    // A mirror and a uniform scale keep a sweep (the volume grows with the cube of the scale).
+    let v_before = volume(&ed, s);
+    ed.execute(&Command::TransformObjects {
+        ids: vec![s],
+        transform: Transform::Mirror {
+            a: DVec2::ZERO,
+            b: DVec2::X,
+        },
+        copy: false,
+    })
+    .unwrap();
+    assert!((volume(&ed, s) - v_before).abs() < 2e-3 * v_before);
+    ed.execute(&Command::TransformObjects {
+        ids: vec![s, e],
+        transform: Transform::Scale {
+            center: DVec2::ZERO,
+            sx: 2.0,
+            sy: None,
+        },
+        copy: false,
+    })
+    .unwrap();
+    assert!((volume(&ed, s) - 8.0 * v_before).abs() < 2e-2 * v_before);
+    let Shape::Extrude(x) = &ed.doc().object(e).unwrap().shape else {
+        panic!()
+    };
+    assert_eq!(x.height, 1000.0, "a uniform scale scales the height too");
+    // A stretch in the plan is refused for a sweep.
     let err = ed
         .execute(&Command::TransformObjects {
             ids: vec![s],
-            transform: Transform::Mirror {
-                a: DVec2::ZERO,
-                b: DVec2::X,
+            transform: Transform::Scale {
+                center: DVec2::ZERO,
+                sx: 2.0,
+                sy: Some(1.0),
             },
             copy: false,
         })

@@ -13,18 +13,20 @@
 //! [`MAX_RING_POINTS`] points once its curves are cut into lines, a sweep has at most
 //! [`MAX_SEGMENTS`] segments, and a mesh has at most [`MAX_TRIANGLES`] triangles.
 
-use glam::{DVec2, DVec3};
+use glam::{DMat2, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::curve::{self, Vertex};
+use crate::curve::{self, Vertex, VertexKind};
 use crate::geom;
-use crate::mesh::{clean_ring, triangulate};
+use crate::mesh::{clean_ring, triangulate, triangulate_edge_exact};
 use crate::model::MAX_COORD;
 
 /// Most points of a profile after its curves are cut into lines (all rings together).
 pub const MAX_RING_POINTS: usize = 8_000;
 /// Most segments of a sweep. A larger count is lowered to this number.
 pub const MAX_SEGMENTS: u32 = 720;
+/// Most holes of an extrude.
+pub const MAX_HOLES: usize = 256;
 /// Most triangles of the mesh of one solid.
 pub const MAX_TRIANGLES: usize = 400_000;
 /// Default sweep angle in degrees (a full turn).
@@ -127,7 +129,14 @@ fn bounds_of(points: impl Iterator<Item = DVec3>) -> (DVec3, DVec3) {
 /// The outline of a profile as a counterclockwise ring of points: curves cut into lines, repeated
 /// and straight-through points removed. Empty when the ring has no area.
 pub fn ring_points(profile: &[Vertex]) -> Vec<DVec2> {
-    clean_ring(&curve::flatten(profile, true, TOLERANCE))
+    ring_points_limited(profile, MAX_RING_POINTS).unwrap_or_default()
+}
+
+/// Like [`ring_points`], and `None` as soon as the curves need more than `budget` points. The
+/// work stays near the budget, however the vertices curve.
+fn ring_points_limited(profile: &[Vertex], budget: usize) -> Option<Vec<DVec2>> {
+    let flat = curve::flatten_limited(profile, true, TOLERANCE, budget)?;
+    Some(clean_ring(&flat))
 }
 
 fn orient(a: DVec2, b: DVec2, c: DVec2) -> f64 {
@@ -222,21 +231,18 @@ pub fn rings_valid(rings: &[Vec<DVec2>]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The ring of a closed profile, or why it cannot be used.
-fn profile_ring(profile: &[Vertex], what: &str) -> Result<Vec<DVec2>, String> {
+/// The ring of a closed profile, or why it cannot be used. `budget` is the number of points that
+/// may still be used; the points of the ring are taken off it.
+fn profile_ring(profile: &[Vertex], what: &str, budget: &mut usize) -> Result<Vec<DVec2>, String> {
     if profile.len() < 3 {
         return Err(format!("the {what} needs at least 3 vertices"));
     }
-    if profile.len() > MAX_RING_POINTS {
-        return Err(format!("the {what} has too many vertices"));
-    }
-    let ring = ring_points(profile);
+    let too_many = || format!("the {what} has too many points (at most {MAX_RING_POINTS} in all)");
+    let ring = ring_points_limited(profile, *budget).ok_or_else(too_many)?;
     if ring.len() < 3 {
         return Err(format!("the {what} has no area"));
     }
-    if ring.len() > MAX_RING_POINTS {
-        return Err(format!("the {what} has too many points"));
-    }
+    *budget = budget.checked_sub(ring.len()).ok_or_else(too_many)?;
     Ok(ring)
 }
 
@@ -284,6 +290,11 @@ impl Extrude {
 
     /// The first problem with the values, as text.
     pub fn problem(&self) -> Option<String> {
+        self.scalar_problem().or_else(|| self.rings().err())
+    }
+
+    /// The problems of the numbers, before the profile is looked at.
+    fn scalar_problem(&self) -> Option<String> {
         if !self.is_finite() {
             return Some("an extrude needs finite numbers".into());
         }
@@ -293,23 +304,46 @@ impl Extrude {
         if self.height.abs() > MAX_COORD || self.base.abs() > MAX_COORD {
             return Some("the height or the base is out of range".into());
         }
-        self.rings().err()
+        if self.holes.len() > MAX_HOLES {
+            return Some(format!("an extrude has at most {MAX_HOLES} holes"));
+        }
+        None
     }
 
     /// The outline and the holes as rings: the outline counterclockwise, the holes clockwise.
     fn rings(&self) -> Result<Vec<Vec<DVec2>>, String> {
-        let mut rings = vec![profile_ring(&self.profile, "profile")?];
+        let mut budget = MAX_RING_POINTS;
+        let mut rings = vec![profile_ring(&self.profile, "profile", &mut budget)?];
         for h in &self.holes {
-            let mut ring = profile_ring(h, "hole")?;
+            let mut ring = profile_ring(h, "hole", &mut budget)?;
             ring.reverse();
             rings.push(ring);
-        }
-        if rings.iter().map(Vec::len).sum::<usize>() > MAX_RING_POINTS {
-            return Err("the profile has too many points".into());
         }
         // The check wants every ring as given; the direction does not matter for it.
         rings_valid(&rings).map_err(|e| e.to_string())?;
         Ok(rings)
+    }
+
+    /// A number that changes when any value of the extrude changes. Object Info uses it to know
+    /// when its figures need to be made again.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.holes.len().hash(&mut h);
+        for ring in &self.holes {
+            ring.len().hash(&mut h);
+        }
+        for v in self.profile.iter().chain(self.holes.iter().flatten()) {
+            hash_vertex(v, &mut h);
+        }
+        self.height.to_bits().hash(&mut h);
+        self.base.to_bits().hash(&mut h);
+        h.finish()
+    }
+
+    /// The volume in mm3: the area of the profile minus the holes, times the height. No mesh.
+    pub fn volume(&self) -> f64 {
+        self.profile_area() * self.height.abs()
     }
 
     /// Area of the profile minus the holes, in mm2.
@@ -333,7 +367,7 @@ impl Extrude {
 
     /// The closed mesh, or `None` when [`Extrude::problem`] finds a problem.
     pub fn mesh(&self) -> Option<SolidMesh> {
-        if self.problem().is_some() {
+        if self.scalar_problem().is_some() {
             return None;
         }
         let rings = self.rings().ok()?;
@@ -369,6 +403,29 @@ impl Extrude {
 
 /// Triangles of a polygon with holes, as indices into the rings written one after the other.
 /// Each hole is joined to the outline by a bridge, then the ring is cut into ears.
+/// True if the direction from `b` to `d` points into the corner `a`, `b`, `c` of a ring that has
+/// its inside on the left: the angle from the way on (`c`) turning left to `d` is smaller than
+/// the angle from the way on to the way back (`a`).
+fn in_corner(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    let angle = |from: DVec2, to: DVec2| {
+        let t = from.perp_dot(to).atan2(from.dot(to));
+        if t < 0.0 {
+            t + std::f64::consts::TAU
+        } else {
+            t
+        }
+    };
+    let (next, back) = (c - b, a - b);
+    let back_angle = angle(next, back);
+    // A straight or reversed corner: the whole half plane to the left counts.
+    let back_angle = if back_angle == 0.0 {
+        std::f64::consts::TAU
+    } else {
+        back_angle
+    };
+    angle(next, d - b) < back_angle
+}
+
 fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
     let mut pts: Vec<DVec2> = rings[0].clone();
     let mut ids: Vec<u32> = (0..rings[0].len() as u32).collect();
@@ -379,53 +436,54 @@ fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
         off += r.len();
     }
     // The hole with the largest x first, as it is the easiest to see from the outline.
+    let rightmost = |h: usize| {
+        rings[h]
+            .iter()
+            .enumerate()
+            .fold((0usize, f64::NEG_INFINITY), |best, (j, p)| {
+                if p.x > best.1 { (j, p.x) } else { best }
+            })
+    };
     let mut holes: Vec<usize> = (1..rings.len()).collect();
-    holes.sort_by(|&a, &b| {
-        let mx = |h: usize| {
-            rings[h]
-                .iter()
-                .map(|p| p.x)
-                .fold(f64::NEG_INFINITY, f64::max)
-        };
-        mx(b).total_cmp(&mx(a)).then(a.cmp(&b))
-    });
-    let mut used: Vec<DVec2> = Vec::new();
+    holes.sort_by(|&a, &b| rightmost(b).1.total_cmp(&rightmost(a).1).then(a.cmp(&b)));
     for (k, &h) in holes.iter().enumerate() {
         let hole = &rings[h];
         let rest: Vec<&Vec<DVec2>> = holes[k + 1..].iter().map(|&g| &rings[g]).collect();
-        // The closest pair of points that see each other.
-        let mut best: Option<(f64, usize, usize)> = None;
-        for (i, p) in pts.iter().enumerate() {
-            if used.contains(p) {
-                continue;
+        // From the rightmost point of the hole to the nearest point of the ring that it can see.
+        let (j, _) = rightmost(h);
+        let q = hole[j];
+        let mut order: Vec<usize> = (0..pts.len()).collect();
+        order.sort_by(|&a, &b| {
+            pts[a]
+                .distance_squared(q)
+                .total_cmp(&pts[b].distance_squared(q))
+                .then(a.cmp(&b))
+        });
+        let blocked = |ring: &[DVec2], p: DVec2| {
+            let n = ring.len();
+            (0..n).any(|e| {
+                let (a, b) = (ring[e], ring[(e + 1) % n]);
+                a != p && a != q && b != p && b != q && segments_meet(p, q, a, b)
+            })
+        };
+        let mut tried: Vec<DVec2> = Vec::new();
+        let i = order.into_iter().find_map(|i| {
+            let p = pts[i];
+            if tried.contains(&p) {
+                return None;
             }
-            for (j, q) in hole.iter().enumerate() {
-                let d = p.distance_squared(*q);
-                if best.is_some_and(|b| d >= b.0) {
-                    continue;
-                }
-                let blocked = |ring: &[DVec2], skip_a: DVec2, skip_b: DVec2| {
-                    let n = ring.len();
-                    (0..n).any(|e| {
-                        let (a, b) = (ring[e], ring[(e + 1) % n]);
-                        a != skip_a
-                            && a != skip_b
-                            && b != skip_a
-                            && b != skip_b
-                            && segments_meet(*p, *q, a, b)
-                    })
-                };
-                if blocked(&pts, *p, *q)
-                    || blocked(hole, *p, *q)
-                    || rest.iter().any(|r| blocked(r, *p, *q))
-                {
-                    continue;
-                }
-                best = Some((d, i, j));
+            tried.push(p);
+            if blocked(&pts, p) || blocked(hole, p) || rest.iter().any(|r| blocked(r, p)) {
+                return None;
             }
-        }
-        let (_, i, j) = best?;
-        used.push(pts[i]);
+            // A point that an earlier bridge used is twice in the ring. Take the copy whose
+            // corner holds the direction to the hole.
+            (0..pts.len()).filter(|&c| pts[c] == p).find(|&c| {
+                let n = pts.len();
+                in_corner(pts[(c + n - 1) % n], p, pts[(c + 1) % n], q)
+            })
+        });
+        let i = i?;
         let m = hole.len();
         let mut np = Vec::with_capacity(pts.len() + m + 2);
         let mut ni = Vec::with_capacity(pts.len() + m + 2);
@@ -443,7 +501,7 @@ fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
         ids = ni;
     }
     Some(
-        triangulate(&pts)
+        triangulate_edge_exact(&pts)
             .into_iter()
             .map(|t| t.map(|v| ids[v]))
             .collect(),
@@ -561,11 +619,13 @@ impl Sweep {
     }
 
     /// The profile as points: a ring (counterclockwise) when closed, else the flattened path.
-    fn profile_points(&self) -> Vec<DVec2> {
+    /// `None` when the curves need more than [`MAX_RING_POINTS`] points.
+    fn profile_points(&self) -> Option<Vec<DVec2>> {
         if self.closed {
-            ring_points(&self.profile)
+            ring_points_limited(&self.profile, MAX_RING_POINTS)
         } else {
-            geom::dedupe_points(&curve::flatten(&self.profile, false, TOLERANCE), 1e-9)
+            let flat = curve::flatten_limited(&self.profile, false, TOLERANCE, MAX_RING_POINTS)?;
+            Some(geom::dedupe_points(&flat, 1e-9))
         }
     }
 
@@ -582,53 +642,81 @@ impl Sweep {
 
     /// The first problem with the values, as text.
     pub fn problem(&self) -> Option<String> {
+        self.prepare().err()
+    }
+
+    /// Checks everything and gives the points of the profile.
+    fn prepare(&self) -> Result<Vec<DVec2>, String> {
         if !self.is_finite() {
-            return Some("a sweep needs finite numbers".into());
+            return Err("a sweep needs finite numbers".into());
         }
         if self.axis.length() < 1e-9 {
-            return Some("the axis needs a direction".into());
+            return Err("the axis needs a direction".into());
         }
         if self.origin.abs().max_element() > MAX_COORD || self.pitch.abs() > MAX_COORD {
-            return Some("the axis point or the pitch is out of range".into());
+            return Err("the axis point or the pitch is out of range".into());
         }
         if !(self.sweep_angle_deg > 0.0 && self.sweep_angle_deg <= MAX_SWEEP_ANGLE) {
-            return Some(format!(
+            return Err(format!(
                 "the sweep angle must be between 0 and {MAX_SWEEP_ANGLE} degrees"
             ));
         }
         if !(self.segment_angle_deg >= MIN_SEGMENT_ANGLE && self.segment_angle_deg <= 180.0) {
-            return Some(format!(
+            return Err(format!(
                 "the segment angle must be between {MIN_SEGMENT_ANGLE} and 180 degrees"
             ));
         }
+        if self.sweep_angle_deg > 360.0 && self.pitch == 0.0 {
+            return Err(
+                "a sweep angle over 360 degrees needs a pitch, or the turns lie on each other"
+                    .into(),
+            );
+        }
         let pts = if self.closed {
-            match profile_ring(&self.profile, "profile") {
-                Ok(r) => r,
-                Err(e) => return Some(e),
-            }
+            let mut budget = MAX_RING_POINTS;
+            profile_ring(&self.profile, "profile", &mut budget)?
         } else {
-            if self.profile.len() < 2 || self.profile.len() > MAX_RING_POINTS {
-                return Some("an open profile needs 2 to 8000 vertices".into());
+            if self.profile.len() < 2 {
+                return Err("an open profile needs at least 2 vertices".into());
             }
-            let p = self.profile_points();
-            if p.len() < 2 || p.len() > MAX_RING_POINTS {
-                return Some("the profile has no length or too many points".into());
+            let p = self
+                .profile_points()
+                .ok_or("the profile has too many points")?;
+            if p.len() < 2 {
+                return Err("the profile has no length".into());
             }
             p
         };
         if self.closed
             && let Err(e) = rings_valid(std::slice::from_ref(&pts))
         {
-            return Some(format!("the profile is not simple: {e}"));
+            return Err(format!("the profile is not simple: {e}"));
         }
-        if let Err(e) = self.side(&pts) {
-            return Some(e);
+        self.side(&pts)?;
+        if self.sweep_angle_deg > 360.0 {
+            let (lo, hi) = pts
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+                    (a.min(p.y), b.max(p.y))
+                });
+            if self.pitch.abs() < hi - lo {
+                return Err(
+                    "the pitch is smaller than the profile along the axis: the turns cross each other"
+                        .into(),
+                );
+            }
         }
-        let quads = pts.len() as u64 * u64::from(self.segments()) * 2;
-        if quads > MAX_TRIANGLES as u64 {
-            return Some("the sweep has too many triangles. Raise the segment angle".into());
+        // The walls, and the two end caps of a solid that is not a flat full turn.
+        let m = pts.len() as u64;
+        let caps = if self.closed && !self.is_full_turn() {
+            2 * m
+        } else {
+            0
+        };
+        if m * u64::from(self.segments()) * 2 + caps > MAX_TRIANGLES as u64 {
+            return Err("the sweep has too many triangles. Raise the segment angle".into());
         }
-        None
+        Ok(pts)
     }
 
     fn at(&self, f: &(DVec3, DVec3, DVec3), p: DVec2, theta: f64) -> DVec3 {
@@ -642,29 +730,90 @@ impl Sweep {
         self.origin + w * (p.y + rise) + (e1 * c + e2 * s) * p.x
     }
 
-    /// Box around the solid as (min, max): the box of the mesh points.
+    /// Box around the solid as (min, max). It is computed from the profile points and the angles
+    /// where the turned points reach an extreme, without a mesh. The box of the mesh lies inside
+    /// it (the chords of a segment cut a little off a round shape).
     pub fn bounds3(&self) -> (DVec3, DVec3) {
-        let pts = self.profile_points();
-        if pts.is_empty() || self.problem().is_some() {
-            return (self.origin, self.origin);
+        let none = (self.origin, self.origin);
+        let Some(pts) = self.profile_points() else {
+            return none;
+        };
+        if pts.is_empty()
+            || !self.is_finite()
+            || self.axis.length() < 1e-9
+            || self.sweep_angle_deg <= 0.0
+        {
+            return none;
         }
         let f = self.frame();
-        let n = self.segments();
-        let total = self.sweep_angle_deg.to_radians();
-        bounds_of((0..=n).flat_map(|k| {
-            let theta = total * f64::from(k) / f64::from(n);
-            let f = &f;
-            pts.iter().map(move |p| self.at(f, *p, theta))
-        }))
+        let (w, e1, e2) = f;
+        let tau = std::f64::consts::TAU;
+        let total = self.sweep_angle_deg.min(MAX_SWEEP_ANGLE).to_radians();
+        let mut acc = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        let mut add = |q: DVec3| {
+            acc.0 = acc.0.min(q);
+            acc.1 = acc.1.max(q);
+        };
+        for p in &pts {
+            add(self.at(&f, *p, 0.0));
+            add(self.at(&f, *p, total));
+            if p.x == 0.0 {
+                continue;
+            }
+            // An extreme of a coordinate: the derivative has these roots.
+            for c in 0..3 {
+                let (a, b) = (p.x * e1[c], p.x * e2[c]);
+                let rise = w[c] * self.pitch / tau;
+                let r = a.hypot(b);
+                if r < 1e-12 || (rise / r).abs() > 1.0 {
+                    continue;
+                }
+                let psi = a.atan2(b);
+                let base = (-rise / r).acos();
+                for sign in [1.0, -1.0] {
+                    let t0 = sign * base - psi;
+                    let (k0, k1) = ((-t0 / tau).ceil(), ((total - t0) / tau).floor());
+                    let mut k = k0;
+                    while k <= k1 {
+                        add(self.at(&f, *p, t0 + k * tau));
+                        k += 1.0;
+                    }
+                }
+            }
+        }
+        acc
+    }
+
+    /// A number that changes when any value of the sweep changes. Object Info uses it to know
+    /// when its figures need to be made again.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.closed.hash(&mut h);
+        for v in self.profile.iter() {
+            hash_vertex(v, &mut h);
+        }
+        for x in [
+            self.origin.x,
+            self.origin.y,
+            self.origin.z,
+            self.axis.x,
+            self.axis.y,
+            self.axis.z,
+            self.rotation_deg,
+            self.sweep_angle_deg,
+            self.segment_angle_deg,
+            self.pitch,
+        ] {
+            x.to_bits().hash(&mut h);
+        }
+        h.finish()
     }
 
     /// The mesh, or `None` when [`Sweep::problem`] finds a problem. A closed profile gives a closed
     /// mesh (end caps unless the sweep is a flat full turn). An open profile gives a surface.
     pub fn mesh(&self) -> Option<SolidMesh> {
-        if self.problem().is_some() {
-            return None;
-        }
-        let pts = self.profile_points();
+        let pts = self.prepare().ok()?;
         let m = pts.len();
         let f = self.frame();
         let n = self.segments() as usize;
@@ -710,7 +859,7 @@ impl Sweep {
             }
         }
         if self.closed && !full {
-            let flat: Vec<[usize; 3]> = triangulate(&pts);
+            let flat: Vec<[usize; 3]> = triangulate_edge_exact(&pts);
             for t in flat {
                 // The start cap faces backward, the end cap forward.
                 triangles.push([index[0][t[0]], index[0][t[1]], index[0][t[2]]]);
@@ -730,25 +879,58 @@ impl Sweep {
     /// Turns the solid about the vertical line through `center` by `angle` radians
     /// (a rotation in the plan). The axis and the profile plane turn with it.
     pub fn rotate_z(&mut self, center: DVec2, angle: f64) {
+        let r = DMat2::from_angle(angle);
+        let o = center + r * (self.origin.truncate() - center);
+        self.remap_plan(o, r, 1.0, false);
+    }
+
+    /// Moves the solid by a map of the plan: the axis point goes to `origin_xy`, plan vectors
+    /// (the axis, the direction of the profile plane) go through `lin`, and all sizes along z and
+    /// in the profile are multiplied by `scale` (a uniform scale; `lin` holds the same factor).
+    /// With `reflect` the map mirrors: the solid is a mirror image, which is a sweep around the
+    /// opposite axis with the profile and the pitch turned over.
+    pub fn remap_plan(&mut self, origin_xy: DVec2, lin: DMat2, scale: f64, reflect: bool) {
         let (_, e1_old, _) = self.frame();
-        let turn = |v: DVec3| {
-            let (s, c) = angle.sin_cos();
-            DVec3::new(v.x * c - v.y * s, v.x * s + v.y * c, v.z)
-        };
-        let o = turn((self.origin.truncate() - center).extend(self.origin.z));
-        self.origin = DVec3::new(o.x + center.x, o.y + center.y, o.z);
-        self.axis = turn(self.axis);
-        // The wanted direction of the profile plane, and the one the new frame gives.
-        let want = turn(e1_old);
-        let keep = self.rotation_deg;
+        self.origin = DVec3::new(origin_xy.x, origin_xy.y, self.origin.z * scale);
+        let ax = lin * self.axis.truncate();
+        self.axis = DVec3::new(ax.x, ax.y, self.axis.z * scale);
+        let want_xy = lin * e1_old.truncate();
+        let want = DVec3::new(want_xy.x, want_xy.y, e1_old.z * scale).normalize_or_zero();
+        for v in &mut self.profile {
+            v.p *= scale;
+            if let VertexKind::Arc { radius } = &mut v.kind {
+                *radius *= scale;
+            }
+        }
+        self.pitch *= scale;
+        if reflect {
+            self.axis = -self.axis;
+            for v in &mut self.profile {
+                v.p.y = -v.p.y;
+            }
+            self.pitch = -self.pitch;
+        }
         self.rotation_deg = 0.0;
         let (_, e1, e2) = self.frame();
         let phi = want.dot(e2).atan2(want.dot(e1));
         self.rotation_deg = if phi.is_finite() {
             phi.to_degrees()
         } else {
-            keep
+            0.0
         };
+    }
+}
+
+fn hash_vertex(v: &Vertex, h: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    v.p.x.to_bits().hash(h);
+    v.p.y.to_bits().hash(h);
+    match v.kind {
+        VertexKind::Corner => 0u8.hash(h),
+        VertexKind::Arc { radius } => (1u8, radius.to_bits()).hash(h),
+        VertexKind::PointOnArc => 2u8.hash(h),
+        VertexKind::Bezier => 3u8.hash(h),
+        VertexKind::Cubic => 4u8.hash(h),
     }
 }
 

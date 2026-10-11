@@ -8,13 +8,13 @@
 //!
 //! Heights (Z) stay as they are: there is no vertical datum conversion.
 
-use kadakas_core::DVec2;
 use kadakas_core::command::Command;
 use kadakas_core::curve::{Vertex, VertexKind};
 use kadakas_core::georef::Georeference;
 use kadakas_core::hardscape::{HardscapePatch, Mode};
 use kadakas_core::landscape::LandscapePatch;
 use kadakas_core::model::{Document, Object, Shape};
+use kadakas_core::{DMat2, DVec2};
 use kadakas_crs::{Crs, Transformer};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -162,14 +162,21 @@ impl Mapper<'_> {
                 for h in &mut e.holes {
                     self.vertices(h)?;
                 }
+                // The heights are lengths: they follow the scale of the CRS change.
+                e.height *= self.scale;
+                e.base *= self.scale;
             }
-            // The axis point moves; the size of the profile follows the scale of the CRS change.
+            // The axis point moves and the sizes follow the scale of the CRS change. The plan
+            // directions (the axis, the plane of the profile) turn as the map turns at the axis
+            // point: the map of two nearby points gives the turn.
             Shape::Sweep(sw) => {
-                sw.origin = self.point3(sw.origin)?;
-                for v in &mut sw.profile {
-                    v.p *= self.scale;
-                }
-                sw.pitch *= self.scale;
+                let o = self.point3(sw.origin)?;
+                let step = 1000.0;
+                let at = sw.origin.truncate();
+                let dx = (self.point(at + DVec2::new(step, 0.0))? - o.truncate()) / step;
+                let dy = (self.point(at + DVec2::new(0.0, step))? - o.truncate()) / step;
+                sw.remap_plan(o.truncate(), DMat2::from_cols(dx, dy), self.scale, false);
+                sw.origin.z = o.z;
             }
             Shape::Locus3d { p } => *p = self.point3(*p)?,
             Shape::Mesh3d(m) => self.vec3(&mut m.vertices)?,
@@ -808,6 +815,45 @@ mod tests {
         );
         assert!(u.problem().is_none());
         assert!(p.report.warnings.iter().any(|w| w.contains("heights")));
+    }
+
+    #[test]
+    fn extrudes_and_sweeps_follow_the_map() {
+        use kadakas_core::solid3d::{Extrude, Sweep};
+        let mut ed = doc_in("EPSG:3067", DVec2::new(385_000.0, 6_672_000.0), 0.0);
+        let mut e = Extrude::new(ring(4000.0), 500.0);
+        e.holes = vec![corners(&[
+            DVec2::new(1000.0, 1000.0),
+            DVec2::new(2000.0, 1000.0),
+            DVec2::new(2000.0, 2000.0),
+        ])];
+        let x = add(&mut ed, Shape::Extrude(Box::new(e)));
+        let mut sw = Sweep::new(corners(&[
+            DVec2::new(100.0, 0.0),
+            DVec2::new(600.0, 0.0),
+            DVec2::new(600.0, 800.0),
+        ]));
+        sw.origin = kadakas_core::DVec3::new(2000.0, 3000.0, 100.0);
+        sw.axis = kadakas_core::DVec3::new(1.0, 0.0, 0.0);
+        let w = add(&mut ed, Shape::Sweep(Box::new(sw.clone())));
+        let p = plan(ed.doc(), "EPSG:32635", &ReprojectOptions::default()).unwrap();
+        ed.execute(&p.command.clone().unwrap()).unwrap();
+        assert_eq!(p.report.changed["extrude"], 1);
+        assert_eq!(p.report.changed["sweep"], 1);
+        let Shape::Extrude(e2) = &ed.doc().object(x).unwrap().shape else {
+            panic!()
+        };
+        assert!(e2.problem().is_none() && e2.holes.len() == 1);
+        assert!((e2.height - 500.0 * p.report.scale_factor).abs() < 1e-6);
+        let Shape::Sweep(s2) = &ed.doc().object(w).unwrap().shape else {
+            panic!()
+        };
+        assert!(s2.problem().is_none());
+        assert!((s2.origin.z - 100.0).abs() < 1.0e3, "{}", s2.origin.z);
+        // The axis still points the same way on the map (the CRS turn is small here), and the
+        // profile is as large as the scale says.
+        assert!(s2.axis.truncate().normalize().dot(DVec2::X) > 0.99);
+        assert!((s2.profile[1].p.x - 600.0 * p.report.scale_factor).abs() < 1e-6);
     }
 
     #[test]

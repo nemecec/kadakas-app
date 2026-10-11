@@ -201,6 +201,9 @@ fn a_landscape_area_brings_its_holes_and_bad_profiles_are_skipped() {
         },
     );
     let made = extrude(ed.doc(), &[area, bow, flat], &ExtrudeOptions::default());
+    // A sweep of a shape with holes is skipped with a note: the holes would be lost.
+    let swept = sweep(ed.doc(), &[area], &SweepOptions::default());
+    assert!(swept.command.is_none() && swept.skipped[0].1.contains("holes"));
     assert_eq!(made.created.len(), 1);
     assert_eq!(made.skipped.len(), 2);
     assert!(made.skipped[0].1.contains("itself"), "{:?}", made.skipped);
@@ -443,6 +446,7 @@ fn open_shapes_sweep_to_surfaces_and_bad_ones_are_skipped() {
         &[open],
         &SweepOptions {
             sweep_angle_deg: 3600.0,
+            pitch: 5000.0,
             segment_angle_deg: solid3d::MIN_SEGMENT_ANGLE,
             ..SweepOptions::default()
         },

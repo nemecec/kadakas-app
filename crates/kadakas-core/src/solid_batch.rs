@@ -99,7 +99,7 @@ fn default_segment() -> f64 {
 
 /// Options of Model > Extrude.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ExtrudeOptions {
     /// Height in mm. A negative height extrudes downward.
     pub height: f64,
@@ -121,7 +121,7 @@ impl Default for ExtrudeOptions {
 
 /// Options of Model > Sweep.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SweepOptions {
     /// Sweep angle in degrees. 360 is a full turn.
     pub sweep_angle_deg: f64,
@@ -293,6 +293,12 @@ struct Frame {
     along: Option<DVec2>,
 }
 
+/// True if the shape can be the axis of a sweep: a line, or a polyline with two vertices.
+pub fn is_axis_shape(shape: &Shape) -> bool {
+    matches!(shape, Shape::Line { .. })
+        || matches!(shape, Shape::Polyline { points, .. } if points.len() == 2)
+}
+
 fn axis_line(doc: &Document, id: ObjectId) -> Result<(DVec2, DVec2), String> {
     let o = doc.object(id).ok_or("the axis object does not exist")?;
     let (a, b) = match &o.shape {
@@ -332,6 +338,14 @@ pub fn sweep(doc: &Document, ids: &[ObjectId], opts: &SweepOptions) -> Made {
         };
         // A closed shape, or an open polyline or line for a surface.
         let (profile, closed) = match closed_profile_of(o) {
+            Ok((_, holes)) if !holes.is_empty() => {
+                made.skipped.push((
+                    id,
+                    "a sweep profile cannot have holes (the shape has holes, which would be lost)"
+                        .into(),
+                ));
+                continue;
+            }
             Ok((p, _)) => (p, true),
             Err(why) => match &o.shape {
                 Shape::Line { a, b } => (curve::corners(&[*a, *b]), false),
