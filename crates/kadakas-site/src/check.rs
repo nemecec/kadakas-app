@@ -710,11 +710,12 @@ pub fn simplify(points: &[DVec3], lines: &[SiteLine], tolerance: f64) -> Simplif
             .collect();
     }
     // A last look at the whole result: a removed point that the final surface misses by more
-    // than the tolerance comes back.
-    if !removed_all.is_empty() {
+    // than the tolerance comes back. Bringing points back changes the surface, so the look
+    // repeats until no point comes back. Each round restores at least one point, so it ends.
+    while !removed_all.is_empty() {
         let mut src = loose.clone();
         src.extend(out.lines.iter().flat_map(|l| l.points.iter().copied()));
-        if let Ok(tin) = Tin::build(&SourceData {
+        let Ok(tin) = Tin::build(&SourceData {
             points: src,
             lines: out
                 .lines
@@ -724,17 +725,19 @@ pub fn simplify(points: &[DVec3], lines: &[SiteLine], tolerance: f64) -> Simplif
                     closed: l.closed,
                 })
                 .collect(),
-        }) {
-            for p in &removed_all {
-                if tin
-                    .elevation_at(p.truncate())
-                    .is_some_and(|z| (z - p.z).abs() > tolerance)
-                {
-                    loose.push(*p);
-                    out.removed_points -= 1;
-                }
-            }
+        }) else {
+            break;
+        };
+        let (bad, good): (Vec<DVec3>, Vec<DVec3>) = removed_all.iter().partition(|p| {
+            tin.elevation_at(p.truncate())
+                .is_some_and(|z| (z - p.z).abs() > tolerance)
+        });
+        if bad.is_empty() {
+            break;
         }
+        out.removed_points -= bad.len();
+        loose.extend(bad);
+        removed_all = good;
     }
     out.points = loose;
     out
@@ -1001,6 +1004,73 @@ mod tests {
         // Nothing to triangulate: the points stay.
         let s = simplify(&[DVec3::ZERO, DVec3::X], &[], 1.0);
         assert_eq!(s.points.len(), 2);
+    }
+
+    /// Shrunk case of the property below, found once by proptest (a 6 by 6 grid of heights).
+    #[test]
+    fn simplify_regression_sparse_grid_stays_within_the_tolerance() {
+        let zs = [
+            0.0,
+            0.0,
+            0.0,
+            46.80807916565487,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            42.819876373516244,
+            13.984815533302179,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            28.28665398785454,
+            14.835260929129856,
+            0.0,
+            0.0,
+            43.259550958162734,
+            26.828903960422878,
+            22.861120602652665,
+            48.06414068593241,
+            0.0,
+            0.0,
+            19.588512058879722,
+            32.44771158964106,
+            31.71666303103338,
+            0.0,
+            0.0,
+            0.0,
+            42.31342689034366,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ];
+        let tol = 9.606617896334644;
+        let pts: Vec<DVec3> = (0..36)
+            .map(|i| DVec3::new((i % 6) as f64 * 1000.0, (i / 6) as f64 * 1000.0, zs[i]))
+            .collect();
+        let s = simplify(&pts, &[], tol);
+        assert_eq!(s.points.len() + s.removed_points + s.removed_duplicates, 36);
+        let full = Tin::build(&SourceData {
+            points: pts.clone(),
+            lines: vec![],
+        })
+        .unwrap();
+        let small = Tin::build(&SourceData {
+            points: s.points.clone(),
+            lines: vec![],
+        })
+        .unwrap();
+        for p in &pts {
+            if let (Some(a), Some(b)) = (
+                full.elevation_at(p.truncate()),
+                small.elevation_at(p.truncate()),
+            ) {
+                assert!((a - b).abs() <= tol * 2.0 + 1e-6, "{p:?}: {a} vs {b}");
+            }
+        }
     }
 
     proptest! {
