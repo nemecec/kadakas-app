@@ -331,6 +331,31 @@ fn num(ui: &mut Ui, commit: &mut bool, label: &str, v: &mut f64, speed: f64) {
 pub fn fields(ui: &mut Ui, a: &mut Annot) -> bool {
     let mut commit = false;
     match a {
+        Annot::Dimension(d) if d.mode == kadakas_core::annot::DimMode::Area => {
+            ui.label(tr!("annot-ui-area"));
+            ui.label(kadakas_units::current().area_text(d.area.unwrap_or(0.0)));
+            ui.end_row();
+            num(
+                ui,
+                &mut commit,
+                &tr!("annot-ui-label-offset-paper-mm"),
+                &mut d.offset,
+                0.5,
+            );
+            ui.label(tr!("annot-ui-text"));
+            let mut t = d.text.clone().unwrap_or_default();
+            let r = ui.text_edit_singleline(&mut t);
+            d.text = (!t.is_empty()).then_some(t);
+            commit |= r.lost_focus();
+            ui.end_row();
+            ui.label(tr!("annot-ui-linked-shape"));
+            ui.label(if d.anchors.iter().flatten().next().is_some() {
+                tr!("annot-ui-linked")
+            } else {
+                tr!("annot-ui-not-linked")
+            });
+            ui.end_row();
+        }
         Annot::Dimension(d) => {
             num(
                 ui,

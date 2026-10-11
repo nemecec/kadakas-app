@@ -28,7 +28,7 @@ mod length;
 mod number;
 
 pub use angle::{AngleFormat, format_angle, parse_angle};
-pub use area::{AreaUnit, VolumeUnit, format_area, format_volume, parse_area, parse_volume};
+pub use area::{AreaUnit, VolumeUnit, format_area, format_area_drawing, format_volume, parse_area, parse_volume};
 pub use date::{Date, DateFormat, days_in_month, is_leap};
 pub use length::{LengthUnit, format_drawing, format_ftin_drawing, format_length, parse_length};
 pub use number::{Decimal, Grouping, NumberFormat, round_half_away, trim_negative_zero};

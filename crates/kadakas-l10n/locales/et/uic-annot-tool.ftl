@@ -26,3 +26,6 @@ uic-annot-tool-click-the-object-to-tag-the-tag = Klõpsa objektil, mida sildista
 uic-annot-tool-click-to-place-the-north-arrow = Klõpsa põhjanoole asetamiseks.
 uic-annot-tool-click-to-place-the-scale-bar-it = Klõpsa mõõtkavariba asetamiseks. See järgib kihi mõõtkava.
 uic-annot-tool-click-the-corners-around-the-changes-enter = Klõpsa muudatuste ümber olevatel nurkadel. Enter või topeltklõps lõpetab.
+uic-annot-tool-area = Pindala
+uic-annot-tool-click-a-closed-shape = Klõpsata tuleb suletud kujul. Silt näitab selle pindala ja järgib kuju.
+uic-annot-tool-click-a-closed-shape-2 = Klõpsata tuleb suletud kujul

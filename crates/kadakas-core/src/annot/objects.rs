@@ -79,6 +79,8 @@ pub enum Axis {
 ///   center of a circle or an arc, the radius follows the object.
 /// - `ArcLength`: 3 points: the center, the start and the end of a counterclockwise arc. With an anchor
 ///   on the center of an arc object, the points follow the arc.
+/// - `Area`: 1 point (the label). The value is `Dimension::area`, kept up to date from the anchored
+///   object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DimMode {
@@ -90,6 +92,10 @@ pub enum DimMode {
     Radial,
     Diameter,
     ArcLength,
+    /// The area of a closed shape (Vectorworks: area dimension). One point: where the label sits.
+    /// With an anchor on the center of the object, the label follows the object and the area
+    /// updates when the shape changes.
+    Area,
 }
 
 impl DimMode {
@@ -131,10 +137,11 @@ impl DimMode {
             DimMode::Radial => "radial",
             DimMode::Diameter => "diameter",
             DimMode::ArcLength => "arc_length",
+            DimMode::Area => "area",
         }
     }
 
-    pub const NAMES: [&'static str; 15] = [
+    pub const NAMES: [&'static str; 16] = [
         "horizontal",
         "vertical",
         "aligned",
@@ -150,6 +157,7 @@ impl DimMode {
         "radial",
         "diameter",
         "arc_length",
+        "area",
     ];
 
     pub fn from_name(name: &str) -> Option<DimMode> {
@@ -165,6 +173,7 @@ impl DimMode {
             "radial" | "radius" => DimMode::Radial,
             "diameter" => DimMode::Diameter,
             "arc_length" | "arc" => DimMode::ArcLength,
+            "area" | "area_dimension" => DimMode::Area,
             "linear" => DimMode::Linear {
                 axis: Axis::Aligned,
             },
@@ -187,6 +196,7 @@ impl DimMode {
     /// The fewest points the mode needs, and the most (`usize::MAX` for no limit).
     pub fn point_range(self) -> (usize, usize) {
         match self {
+            DimMode::Area => (1, 1),
             DimMode::Linear { .. } | DimMode::Radial | DimMode::Diameter => (2, 2),
             DimMode::Angular | DimMode::ArcLength => (3, 3),
             DimMode::Chain { .. } | DimMode::Baseline { .. } => (3, MAX_DIM_POINTS),
@@ -220,6 +230,10 @@ pub struct Dimension {
     /// True when an anchor let go because its vertex or edge is gone. The point keeps its place.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub detached: bool,
+    /// The measured area of an `Area` dimension, in square layer units. The commands keep it up
+    /// to date from the anchored object. When the object is deleted the last value stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<f64>,
 }
 
 /// Text with a text style. The size is paper mm, so it follows the scale of the layer.

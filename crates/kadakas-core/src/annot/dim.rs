@@ -40,6 +40,7 @@ pub fn values(d: &Dimension) -> Vec<f64> {
             let sweep = ((p[2] - p[0]).to_angle() - (p[1] - p[0]).to_angle()).rem_euclid(TAU);
             vec![p[0].distance(p[1]) * sweep]
         }
+        DimMode::Area => vec![d.area.unwrap_or(0.0)],
     }
 }
 
@@ -99,6 +100,17 @@ pub fn format_length(mm: f64, style: &DimensionStyle) -> String {
     kadakas_units::format_drawing(mm, style.unit, style.precision as usize, style.show_unit)
 }
 
+/// An area in real mm² as text in the area unit of the style.
+pub fn format_area(mm2: f64, style: &DimensionStyle) -> String {
+    kadakas_units::format_area_drawing(
+        mm2,
+        style.area_unit,
+        style.area_precision as usize,
+        style.area_round_to,
+        style.area_show_unit,
+    )
+}
+
 /// An angle in degrees as text.
 pub fn format_angle(deg: f64, style: &DimensionStyle) -> String {
     format!(
@@ -138,6 +150,7 @@ pub fn texts(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<String> {
         .map(|v| {
             let body = match d.mode {
                 DimMode::Angular => format_angle(*v, style),
+                DimMode::Area => format_area(v / (ctx.real * ctx.real), style),
                 _ => format_length(v / ctx.real, style) + &tolerance_text(style),
             };
             let lead = match d.mode {
@@ -437,6 +450,18 @@ pub fn prims(d: &Dimension, style: &DimensionStyle, ctx: &Ctx) -> Vec<Prim> {
                 * (style.text_gap_mm * ctx.paper + (dir.x.abs() * w + dir.y.abs() * h) / 2.0);
             out.push(Prim::text(
                 mid - DVec2::new(0.0, h * 0.35),
+                &texts[0],
+                h,
+                true,
+                style.color,
+            ));
+        }
+        DimMode::Area => {
+            // The label sits in the middle of the shape, moved up by the offset (paper mm).
+            let h = style.text_size_mm * ctx.paper;
+            let at = p[0] + DVec2::new(0.0, d.offset * ctx.paper);
+            out.push(Prim::text(
+                at - DVec2::new(0.0, h * 0.35),
                 &texts[0],
                 h,
                 true,

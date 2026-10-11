@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::length::LengthUnit;
-use crate::number::{NumberFormat, is_group_space};
+use crate::number::{NumberFormat, is_group_space, round_half_away, trim_negative_zero};
 
 /// The unit in which areas show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +66,28 @@ pub fn format_area(mm2: f64, unit: AreaUnit, decimals: usize, nf: &NumberFormat)
         nf.format(mm2 / unit.mm2_per_unit(), decimals),
         unit.suffix()
     )
+}
+
+/// An area in mm² as a drawing text does: fixed decimals with a point, an optional rounding to a
+/// multiple of `round_to` units, and the suffix of the unit when `show_unit` is set. No sign for a
+/// negative zero.
+pub fn format_area_drawing(
+    mm2: f64,
+    unit: AreaUnit,
+    decimals: usize,
+    round_to: Option<f64>,
+    show_unit: bool,
+) -> String {
+    let mut v = mm2 / unit.mm2_per_unit();
+    if let Some(inc) = round_to.filter(|i| i.is_finite() && *i > 0.0) {
+        v = round_half_away(v / inc, 0) * inc;
+    }
+    let n = trim_negative_zero(format!("{:.decimals$}", round_half_away(v, decimals)));
+    if show_unit {
+        format!("{n}{}", unit.suffix())
+    } else {
+        n
+    }
 }
 
 /// The unit for volumes: cubic meters for metric lengths, cubic yards for imperial ones (the
@@ -225,6 +247,20 @@ mod tests {
         for bad in ["", "abc", "5 parsecs", "m3"] {
             assert_eq!(p(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn drawing_areas_round_and_show_the_unit() {
+        let ha = 1.0e10;
+        assert_eq!(format_area_drawing(ha, AreaUnit::M2, 2, None, true), "10000.00 m\u{b2}");
+        assert_eq!(format_area_drawing(ha, AreaUnit::Ha, 1, None, false), "1.0");
+        assert_eq!(format_area_drawing(12.3e6, AreaUnit::M2, 1, Some(0.5), true), "12.5 m\u{b2}");
+        assert_eq!(format_area_drawing(12.2e6, AreaUnit::M2, 2, Some(5.0), false), "10.00");
+        assert_eq!(format_area_drawing(ha, AreaUnit::Ac, 3, None, true), "2.471 ac");
+        assert_eq!(format_area_drawing(100.0 * 304.8 * 304.8, AreaUnit::Ft2, 0, None, true), "100 ft\u{b2}");
+        // A bad increment is ignored.
+        assert_eq!(format_area_drawing(2.0e6, AreaUnit::M2, 0, Some(0.0), false), "2");
+        assert_eq!(format_area_drawing(-0.0, AreaUnit::M2, 1, None, false), "0.0");
     }
 
     #[test]

@@ -491,3 +491,142 @@ fn defaults_and_the_dimension_arm_of_draw() {
     );
     let _ = site;
 }
+
+// ---------------------------------------------------------------- area dimensions
+
+fn area_dim(ed: &mut Editor, shape: ObjectId, style: Option<ResourceId>) -> ObjectId {
+    add_annot(
+        ed,
+        Annot::Dimension(Dimension {
+            anchors: vec![Some(Anchor {
+                object: shape,
+                target: AnchorTarget::Center,
+                count: None,
+            })],
+            style,
+            area: None,
+            ..dim(DimMode::Area, vec![v(0.0, 0.0)])
+        }),
+    )
+}
+
+fn area_of(ed: &Editor, id: ObjectId) -> Dimension {
+    let Annot::Dimension(d) = annot_of(ed, id) else {
+        panic!()
+    };
+    d
+}
+
+#[test]
+fn an_area_dimension_shows_the_area_and_follows_the_shape() {
+    let mut ed = Editor::default();
+    let r = add(
+        &mut ed,
+        Shape::Rect {
+            min: v(0.0, 0.0),
+            max: v(4000.0, 5000.0),
+        },
+    );
+    let a = area_dim(&mut ed, r, None);
+    let d = area_of(&ed, a);
+    assert_eq!(d.area, Some(20.0e6));
+    assert_eq!(d.points, vec![v(2000.0, 2500.0)]);
+    assert_eq!(
+        dim::texts(&d, &DimensionStyle::default(), &ctx100()),
+        vec!["20.00 m\u{b2}"]
+    );
+    // The shape changes: the label follows and the area updates.
+    modify(
+        &mut ed,
+        r,
+        Shape::Rect {
+            min: v(0.0, 0.0),
+            max: v(1000.0, 1000.0),
+        },
+    );
+    let d = area_of(&ed, a);
+    assert_eq!(d.area, Some(1.0e6));
+    assert_eq!(d.points, vec![v(500.0, 500.0)]);
+    // A circle is exact too.
+    let c = add(
+        &mut ed,
+        Shape::Circle {
+            center: v(0.0, 0.0),
+            radius: 1000.0,
+        },
+    );
+    let ac = area_dim(&mut ed, c, None);
+    let area = area_of(&ed, ac).area.unwrap();
+    assert!((area - std::f64::consts::PI * 1.0e6).abs() < 1e-6);
+    // Undo puts the old area back.
+    assert!(ed.undo());
+    assert!(ed.undo());
+    assert_eq!(area_of(&ed, a).area, Some(1.0e6));
+}
+
+#[test]
+fn an_area_dimension_keeps_its_last_value_when_the_shape_is_deleted() {
+    let mut ed = Editor::default();
+    let r = add(
+        &mut ed,
+        Shape::Rect {
+            min: v(0.0, 0.0),
+            max: v(2000.0, 2000.0),
+        },
+    );
+    let a = area_dim(&mut ed, r, None);
+    ed.execute(&Command::DeleteObjects { ids: vec![r] })
+        .unwrap();
+    let d = area_of(&ed, a);
+    assert!(d.anchors.is_empty());
+    assert_eq!(d.area, Some(4.0e6));
+    assert!(Annot::Dimension(d.clone()).problem().is_none());
+    let bad = Dimension {
+        area: Some(-1.0),
+        ..d
+    };
+    assert!(Annot::Dimension(bad).problem().is_some());
+}
+
+#[test]
+fn area_styles_set_the_unit_the_decimals_and_the_rounding() {
+    let d = Dimension {
+        area: Some(12.34e6),
+        ..dim(DimMode::Area, vec![v(0.0, 0.0)])
+    };
+    let ctx = ctx100();
+    let mut s = DimensionStyle::default();
+    assert_eq!(dim::texts(&d, &s, &ctx), vec!["12.34 m\u{b2}"]);
+    s.area_unit = kadakas_units::AreaUnit::Ft2;
+    s.area_precision = 0;
+    assert_eq!(dim::texts(&d, &s, &ctx), vec!["133 ft\u{b2}"]);
+    s.area_unit = kadakas_units::AreaUnit::M2;
+    s.area_precision = 1;
+    s.area_round_to = Some(0.5);
+    s.area_show_unit = false;
+    s.prefix = "A=".into();
+    s.suffix = "!".into();
+    assert_eq!(dim::texts(&d, &s, &ctx), vec!["A=12.5!"]);
+    // A custom text replaces the value.
+    let t = Dimension {
+        text: Some("Lawn".into()),
+        ..d.clone()
+    };
+    assert_eq!(dim::texts(&t, &s, &ctx), vec!["Lawn"]);
+    // The label is one text, moved up by the offset.
+    let o = Dimension { offset: 10.0, ..d };
+    let prims = dim::prims(&o, &s, &ctx);
+    assert_eq!(prims.len(), 1);
+    let Prim::Text { at, .. } = &prims[0] else {
+        panic!()
+    };
+    assert!(at.y > 900.0);
+    // Checks.
+    s.area_round_to = Some(0.0);
+    assert!(s.validate().is_err());
+    s.area_round_to = None;
+    s.area_precision = 9;
+    assert!(s.validate().is_err());
+    assert_eq!(DimMode::from_name("Area Dimension"), Some(DimMode::Area));
+    assert_eq!(DimMode::Area.point_range(), (1, 1));
+}

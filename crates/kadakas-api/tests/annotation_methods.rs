@@ -633,3 +633,53 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     );
     assert!(err(&mut s, "tag_style.delete", json!({"id":"Plant tag"})).contains("used by"));
 }
+
+#[test]
+fn area_dimensions_show_the_area_and_follow_the_shape() {
+    let mut s = Session::with_sequential_ids();
+    let rect = exec(
+        &mut s,
+        json!({"op":"add_object","shape":{"kind":"rect","min":[0,0],"max":[4000,5000]}}),
+    )[0];
+    let style = ok(
+        &mut s,
+        "dimension_style.create",
+        json!({"name":"Areas","area_unit":"ft2","area_precision":0}),
+    )["id"]
+        .clone();
+    let plain = ok(&mut s, "dimension.add", json!({"mode":"area","object":rect}));
+    assert_eq!(plain["texts"], json!(["20.00 m\u{b2}"]));
+    assert_eq!(plain["values"], json!([20.0e6]));
+    let styled = ok(
+        &mut s,
+        "dimension.add",
+        json!({"mode":"area","object":rect,"style":style}),
+    );
+    assert_eq!(styled["texts"], json!(["215 ft\u{b2}"]));
+    // The shape changes: both labels follow.
+    exec(
+        &mut s,
+        json!({"op":"modify_object","id":rect,"shape":{"kind":"rect","min":[0,0],"max":[1000,1000]}}),
+    );
+    let id = plain["id"].as_uid().unwrap();
+    assert_eq!(item(&mut s, id)["computed"]["texts"], json!(["1.00 m\u{b2}"]));
+    let id = styled["id"].as_uid().unwrap();
+    assert_eq!(item(&mut s, id)["computed"]["texts"], json!(["11 ft\u{b2}"]));
+    // Errors.
+    assert!(
+        err(&mut s, "dimension.add", json!({"mode":"area","points":[[0,0]]}))
+            .contains("needs object")
+    );
+    let ln = line(&mut s, [0.0, 0.0], [1.0, 1.0]);
+    assert!(
+        err(&mut s, "dimension.add", json!({"mode":"area","object":ln})).contains("closed shape")
+    );
+    assert!(
+        err(
+            &mut s,
+            "dimension.add",
+            json!({"mode":"area","object":rect,"style":"nope"})
+        )
+        .contains("nope")
+    );
+}

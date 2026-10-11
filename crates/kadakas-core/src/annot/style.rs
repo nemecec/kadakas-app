@@ -126,6 +126,14 @@ pub struct DimensionStyle {
     /// Round lengths to a multiple of this many real mm (for example 0.5 or 5) before they are
     /// shown. `None`: round to `precision` decimals only.
     pub round_to: Option<f64>,
+    /// The unit of area dimensions (m², ha, ft², ac).
+    pub area_unit: kadakas_units::AreaUnit,
+    /// Decimals of areas.
+    pub area_precision: u8,
+    /// Add the unit after the number of an area.
+    pub area_show_unit: bool,
+    /// Round areas to a multiple of this many `area_unit` before they are shown.
+    pub area_round_to: Option<f64>,
 }
 
 impl Default for DimensionStyle {
@@ -148,6 +156,10 @@ impl Default for DimensionStyle {
             tolerance: None,
             color: None,
             round_to: None,
+            area_unit: kadakas_units::AreaUnit::M2,
+            area_precision: 2,
+            area_show_unit: true,
+            area_round_to: None,
         }
     }
 }
@@ -160,8 +172,14 @@ impl DimensionStyle {
         fin("ext_overshoot_mm", self.ext_overshoot_mm, 0.0, 50.0)?;
         fin("baseline_spacing_mm", self.baseline_spacing_mm, 1.0, 100.0)?;
         fin("text_gap_mm", self.text_gap_mm, 0.0, 50.0)?;
-        if self.precision > 8 || self.angle_precision > 8 {
+        if self.precision > 8 || self.angle_precision > 8 || self.area_precision > 8 {
             return Err("precision is at most 8 decimals".into());
+        }
+        if self
+            .area_round_to
+            .is_some_and(|r| !r.is_finite() || r <= 0.0 || r > 1.0e9)
+        {
+            return Err("area_round_to must be a positive number of area units".into());
         }
         if let Some(t) = self.tolerance {
             fin("tolerance plus", t.plus, 0.0, 1.0e6)?;

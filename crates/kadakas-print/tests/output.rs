@@ -1781,3 +1781,35 @@ fn viewport_visibility_is_independent_of_the_document() {
         "hiding in the document does not hide in the viewport"
     );
 }
+
+#[test]
+fn an_area_dimension_prints_its_area_in_the_page_and_the_pdf() {
+    use kadakas_core::annot::{Anchor, AnchorTarget, Annot, DimMode, Dimension};
+    let (mut ed, sheet, _) = project();
+    let rect = ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(&o.shape, Shape::Rect { max, .. } if max.x == 10_000.0))
+        .unwrap()
+        .id;
+    add(
+        &mut ed,
+        Shape::Annotation(Box::new(Annot::Dimension(Dimension {
+            mode: DimMode::Area,
+            points: vec![v(0.0, 0.0)],
+            anchors: vec![Some(Anchor::new(rect, AnchorTarget::Center))],
+            offset: 0.0,
+            style: None,
+            text: None,
+            detached: false,
+            area: None,
+        }))),
+        None,
+        Attributes::default(),
+    );
+    let t = texts(&prims(&ed, sheet));
+    assert!(t.contains(&"60.00 m\u{b2}".to_string()), "{t:?}");
+    let bytes = pdf_of(&ed, &[sheet]);
+    assert!(bytes.starts_with(b"%PDF-"));
+}

@@ -26,3 +26,6 @@ uic-annot-tool-click-the-object-to-tag-the-tag = Click the object to tag. The ta
 uic-annot-tool-click-to-place-the-north-arrow = Click to place the north arrow.
 uic-annot-tool-click-to-place-the-scale-bar-it = Click to place the scale bar. It follows the scale of the layer.
 uic-annot-tool-click-the-corners-around-the-changes-enter = Click the corners around the changes. Enter or double-click finishes.
+uic-annot-tool-area = Area
+uic-annot-tool-click-a-closed-shape = Click a closed shape. The label shows its area and follows the shape.
+uic-annot-tool-click-a-closed-shape-2 = Click a closed shape

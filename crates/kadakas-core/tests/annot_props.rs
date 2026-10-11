@@ -33,7 +33,7 @@ proptest! {
         let l = add(&mut ed, Shape::Line { a, b });
         let anchor = |i| Some(Anchor { object: l, target: AnchorTarget::Vertex { index: i }, count: None });
         let d = add(&mut ed, Shape::Annotation(Box::new(Annot::Dimension(Dimension {
-            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![a, b], anchors: vec![anchor(0), anchor(1)], offset: 5.0, style: None, text: None, detached: false,
+            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![a, b], anchors: vec![anchor(0), anchor(1)], offset: 5.0, style: None, text: None, detached: false, area: None,
         }))));
         for (dx, dy) in moves {
             ed.execute(&Command::MoveObjects { ids: vec![l], delta: DVec2::new(dx, dy) }).unwrap();
@@ -80,7 +80,7 @@ proptest! {
         let (pa, pb) = (verts[ia].1, verts[ib].1);
         let anchor = |i| Some(Anchor::new(pl, AnchorTarget::Vertex { index: i }));
         let d = add(&mut ed, Shape::Annotation(Box::new(Annot::Dimension(Dimension {
-            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![pa, pb], anchors: vec![anchor(ia), anchor(ib)], offset: 5.0, style: None, text: None, detached: false,
+            mode: DimMode::Linear { axis: Axis::Aligned }, points: vec![pa, pb], anchors: vec![anchor(ia), anchor(ib)], offset: 5.0, style: None, text: None, detached: false, area: None,
         }))));
         let mut last = [pa, pb];
         let mut attached = [true, true];

@@ -78,6 +78,7 @@ impl Annot {
             Annot::Dimension(d) => {
                 d.points.iter().for_each(&mut v);
                 f(d.offset);
+                d.area.into_iter().for_each(&mut *f);
             }
             Annot::Text(t) => v(&t.at),
             Annot::Callout(c) => {
@@ -224,6 +225,9 @@ impl Annot {
                     && d.points[0] == d.points[1]
                 {
                     return Some("the radius must be positive".into());
+                }
+                if d.mode == DimMode::Area && d.area.is_some_and(|a| a < 0.0) {
+                    return Some("the area cannot be negative".into());
                 }
                 if d.text.as_deref().is_some_and(|t| long(t, 1000)) {
                     return Some("dimension text is too long".into());

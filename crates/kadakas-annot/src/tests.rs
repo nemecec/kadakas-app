@@ -468,3 +468,31 @@ fn legends_cap_their_rows_and_use_the_style_colors_of_plants() {
         1
     );
 }
+
+#[test]
+fn svg_of_an_area_dimension_has_the_area_text() {
+    let mut ed = Editor::default();
+    let r = add(
+        &mut ed,
+        Shape::Rect {
+            min: DVec2::ZERO,
+            max: DVec2::new(3000.0, 2000.0),
+        },
+    );
+    let d = add(
+        &mut ed,
+        Shape::Annotation(Box::new(Annot::Dimension(Dimension {
+            mode: DimMode::Area,
+            points: vec![DVec2::ZERO],
+            anchors: vec![Some(Anchor::new(r, AnchorTarget::Center))],
+            offset: 0.0,
+            style: None,
+            text: None,
+            detached: false,
+            area: None,
+        }))),
+    );
+    let mut out = String::new();
+    svg::object_svg(ed.doc(), ed.doc().object(d).unwrap(), "", &mut out);
+    assert!(out.contains("6.00 m\u{b2}"), "{out}");
+}

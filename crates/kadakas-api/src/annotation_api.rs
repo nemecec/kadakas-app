@@ -74,7 +74,7 @@ style_methods!(
 
 pub const DIMENSION_ADD: (&str, &str) = (
     "dimension.add",
-    "Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (degrees for angular).",
+    "Add a dimension. params: {mode, points?, anchors?, object?, angle?, offset?, style?, text?, layer?, class?, viewport?}. mode: horizontal, vertical, aligned, chain_horizontal|vertical|aligned, baseline_horizontal|vertical|aligned, ordinate_horizontal|vertical, angular, radial, diameter, arc_length, area. points: [[x, y]] (2 for linear, radial and diameter; 3 for angular and arc_length, in that order: vertex, first ray, second ray; center, start, end; 3 or more for chain and baseline; datum first for ordinate). anchors: one entry per point, null or {object, vertex: i} | {object, edge: i, t?} | {object, center: true}. With anchors the dimension is associative: it follows the objects, and when an object is deleted the dimension keeps its last position. With anchors and no points, the points come from the anchors. For radial, diameter and arc_length give object (a circle or an arc) and angle (radians, default 0.78) instead of points. An area dimension (mode area) needs object, a closed shape (rectangle, circle, closed polyline, landscape area, hardscape, site modifier). It shows the area in the unit of the dimension style (area_unit: m2|ha|ft2|ac, area_precision, area_show_unit, area_round_to), sits at the middle of the shape, and follows the shape: when the shape changes, the area updates (a viewport is not supported). offset is then the paper mm that the label moves up (default 0). offset is the distance of the dimension line from the first point in paper mm (default 8; for angular and arc_length the radius or the distance from the arc). Returns {id, mode, values, texts, points}; values are real mm (real mm2 for area, degrees for angular).",
 );
 pub const CALLOUT_ADD: (&str, &str) = (
     "callout.add",
@@ -498,7 +498,16 @@ fn prep_dimension(
     })?;
     j.insert("mode".into(), serde_json::to_value(mode).unwrap());
     if !j.contains_key("offset") {
-        j.insert("offset".into(), json!(8.0));
+        let default = if mode == DimMode::Area { 0.0 } else { 8.0 };
+        j.insert("offset".into(), json!(default));
+    }
+    if mode == DimMode::Area && in_viewport {
+        return Err(bad("an area dimension cannot go in a viewport"));
+    }
+    if mode == DimMode::Area && !j.contains_key("object") {
+        return Err(bad(
+            "an area dimension needs object (a closed shape): the area follows it",
+        ));
     }
     let mut anchors: Vec<Value> = match j.get("anchors") {
         Some(Value::Array(a)) => a.iter().map(anchor_json).collect::<Result<_, _>>()?,
@@ -518,6 +527,14 @@ fn prep_dimension(
             .shape;
         let angle = j.remove("angle").and_then(|v| v.as_f64()).unwrap_or(0.78);
         let pts = match (mode, shape) {
+            (DimMode::Area, shape) => {
+                let (Some(area), Some(at)) = (shape.area(), kadakas_core::annot::ref_point(shape))
+                else {
+                    return Err(bad("object must be a closed shape (it has no area)"));
+                };
+                j.insert("area".into(), json!(area));
+                vec![at]
+            }
             (
                 DimMode::Radial | DimMode::Diameter,
                 Shape::Circle { center, radius } | Shape::Arc { center, radius, .. },
@@ -786,6 +803,8 @@ fn computed(doc: &Document, a: &Annot, ctx: &Ctx) -> Value {
                 .map(|v| {
                     if matches!(d.mode, DimMode::Angular) {
                         *v
+                    } else if d.mode == DimMode::Area {
+                        v / (ctx.real * ctx.real)
                     } else {
                         v / ctx.real
                     }
