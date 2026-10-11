@@ -326,8 +326,9 @@ fn a_refused_edit_and_a_failed_sign_in_are_reported() {
         "collab.connect",
         json!({"token": "secret", "now_ms": 3}),
     );
-    // The client was made with the first token. A new user ID starts a client with the token.
-    assert_eq!(st["state"], "failed");
+    // The same user keeps its client, and the new token goes in the next `hello`.
+    assert_ne!(st["state"], "failed");
+    call(&mut c, "collab.disconnect", json!({}));
     let st = call(
         &mut c,
         "collab.connect",

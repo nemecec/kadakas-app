@@ -2007,13 +2007,13 @@ class Api:
         return self._call("revision.list", params or None)
 
     def collab_status(self, **params: Any) -> Any:
-        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text, or null if the host gave none), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
+        """State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.
 
         JSON-RPC method ``collab.status``."""
         return self._call("collab.status", params or None)
 
     def collab_connect(self, **params: Any) -> Any:
-        """Connect to the endpoint that the host gave this session. Refused in a session with predictable IDs (sequential ids). params: {user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), token? (for the server), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.
+        """Connect to a shared document. Refused in a session with predictable IDs (sequential ids). params: {url? (the server: ws://host:port/ws/<doc> or wss://..., or the base address of the server together with doc; default: the endpoint the host gave, or the default URL from KADAKAS_COLLAB_URL or --collab-url), doc? (the document ID, UUID text; needed when url is a base address), token? (for the server; default: KADAKAS_COLLAB_TOKEN or --collab-token; it stays in memory only), user? (UUID text; default: the user of an earlier connection, or of the saved journal, or a new one), name? (shown to others), store? (a file path without extension: the offline log is saved in <store>.journal.json and <store>.checkpoint.json, and read from them; native only, the path policy applies), discard? (true: drop edits that wait for another user), now_ms?}. The shared document replaces the open one. Work that was made offline stays in the queue and goes to the server. Returns the status.
 
         JSON-RPC method ``collab.connect``."""
         return self._call("collab.connect", params or None)

@@ -342,6 +342,11 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
     let use_url = text("url").is_some()
         || (s.collab.default_url.is_some()
             && (s.collab.endpoint.is_none() || text("doc").is_some()));
+    if !use_url && s.collab.endpoint.is_none() {
+        return Err(RpcError::policy(
+            "this session has no collaboration endpoint: give url (and token, doc), or set KADAKAS_COLLAB_URL or --collab-url",
+        ));
+    }
     if s.sequential_ids {
         return Err(RpcError::policy(
             "a session with predictable (sequential) IDs cannot join a shared document: its IDs would meet the IDs of other users",
@@ -363,10 +368,6 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             text("doc").as_deref(),
             token.as_deref(),
         )?);
-    } else if s.collab.endpoint.is_none() {
-        return Err(RpcError::policy(
-            "this session has no collaboration endpoint: give url (and token, doc), or set KADAKAS_COLLAB_URL or --collab-url",
-        ));
     }
     #[cfg(not(target_arch = "wasm32"))]
     let store = match text("store") {
