@@ -154,7 +154,7 @@ Non-goals
 | UI-09 | Keyboard shortcuts compatible with common CAD habits (the default keys follow Vectorworks 2026; see `keymap.rs`). | P0 | done |
 | UI-10 | Light and dark themes: View > Theme (System, Light, Dark), saved per user. The panels use the egui theme. The canvas has a white or a dark paper, and in the dark theme nearly black pens are drawn light. The document does not change. | P1 | done |
 | UI-11 | Tool modes in tool bar. Keys jump between mode groups. Done for the vertex modes of the path tools (group 1, key U). | P1 | done |
-| UI-12 | Undo history list. | P2 | planned |
+| UI-13 | Undo history list. | P2 | planned |
 
 ### 4.5 Site model and grading
 
@@ -381,7 +381,7 @@ Crate `kadakas-irrigation` (pure, wasm-compatible) holds the hydraulic model. Th
 | IOP-15 | IFC export options: classes become presentation layers, 2D annotations on or off, design layers as building storeys on or off, a named data map. GlobalIds stay stable (project GUID in the document). | P1 | done |
 | IOP-08 | PDF export. | P1 | done |
 | IOP-09 | DXF 3D entities. | P1 | done: 3D polylines (import and export), 3DFACE import (3D polygons, or one mesh per layer with the option `faces: mesh`), POLYFACE and polygon mesh import (`mesh3d`), mesh export as POLYFACE or 3DFACE (`mesh_entity`), and the site surface as a mesh (`site_mesh`). Checked with the ezdxf audit. |
-| IOP-10 | DWG import and export. | P2 | planned |
+| IOP-10 | DWG import and export. | P2 | done through an external converter (IOP-21). Native DWG reading and writing is not planned. |
 | IOP-11 | OBJ, STL, STEP. | P2 | partial: OBJ done (X3D-03). STL and STEP are missing. FBX and 3DS are out of scope. |
 | IOP-12 | Point cloud import. | P2 | planned |
 | IOP-13 | Native `.vwx`. | Deferred | planned |
@@ -410,7 +410,7 @@ Crate `kadakas-irrigation` (pure, wasm-compatible) holds the hydraulic model. Th
 | API-42 | Presentation methods: `material.*` (list, get, create, update, duplicate, delete, add_defaults, import_texture, assign, slots), `render_style.*` (list, get, create, update, duplicate, delete, set_active), `sun.set`, `sun.get`, `render.hidden_line`, and `render.png {render_style, mode, samples}`. Examples in `describe.presentation`. | P1 | done |
 | API-15 | Command schema: `describe {schema: true}` returns `command_schema`, the JSON Schema (draft 2020-12) of every command, made by `schemars` from the `Command` type, so it follows the code. The kinds line, rect, circle, arc, polyline, text, plant, locus3d, polyline3d, group, landscape_area and hardscape are described field by field and vertex kinds exactly (a proptest checks that what the schema accepts, serde accepts); IDs have a maximum of 2^53 - 1. Other shape kinds, resource bodies and patches are structural only, and `describe` lists them. The schema is saved in `crates/kadakas-core/tests/command_schema.json`; a test fails when it changes and the file is renewed with `UPDATE_SCHEMA=1`. | P1 | done |
 | API-16 | `objects.query {criteria, columns?, layer?, class?, kind?, limit?, select?}`: finds objects with the criteria language of worksheet database blocks (`Kind = "plant" AND Area > 20`, `Class = "Trees"`, `'Soil'.'Depth' > 300`) from `kadakas-sheet` (`db::query_objects`), and returns the IDs and the values of the columns. | P1 | done |
-| API-17 | Event stream: document changed, selection changed. | P2 | planned |
+| API-17 | Event stream: document changed, selection changed. | P2 | partly done (PLAT-02): document changes go as `events.change` over stdio and TCP. Open: selection events, events over MCP. |
 | API-18 | Import/export methods (`import.file`, `export.file`) for DXF, Shapefile, GeoJSON, IFC and DWG. Options and mappings are in `describe`. | P1 | done |
 | API-19 | `view.list` and `view.set`: choose the view of the live app. | P1 | done |
 | API-44 | GIS methods: `gis.sources`, `gis.cache.clear`, `gis.georef.set`, `gis.coords`, `gis.reproject`, `gis.wms.capabilities|add|refresh`, `gis.wmts.capabilities|add`, `gis.wfs.capabilities|import`, `gis.geoimage.import`, `gis.job.status|cancel`. Network calls follow the allow list of `--allow-url` (default: none) and the folder list of `--allow-dir` for files. Examples and the policy are in `describe.gis`. `objects.list` and `objects.get` do not send the picture of an underlay. | P0 | done |
