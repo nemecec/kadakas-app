@@ -196,18 +196,19 @@ pub fn path_outline(center: &[DVec2], width: f64, join: Join, closed: bool) -> V
     let mut shapes = shapes;
     shapes.sort_by(|a, b| area(&b[0]).abs().total_cmp(&area(&a[0]).abs()));
     let to_p = |v: &[f64; 2]| DVec2::new(v[0] + o.x, v[1] + o.y);
-    let mut parts = shapes.iter();
-    let Some(first) = parts.next() else {
+    // Every contour after the first one is a hole, or a part that only touches. Each is bridged to
+    // the ring, and must not be crossed by the bridges of the others.
+    let mut contours: Vec<Vec<DVec2>> = shapes
+        .iter()
+        .flat_map(|shape| shape.iter().map(|c| c.iter().map(to_p).collect()))
+        .collect();
+    if contours.is_empty() {
         return Vec::new();
-    };
-    let mut ring: Vec<DVec2> = first[0].iter().map(to_p).collect();
-    for hole in &first[1..] {
-        ring = bridge(ring, hole.iter().map(to_p).collect());
     }
-    for shape in parts {
-        for contour in shape {
-            ring = bridge(ring, contour.iter().map(to_p).collect());
-        }
+    let mut ring = contours.remove(0);
+    for k in 0..contours.len() {
+        let (done, rest) = contours.split_at_mut(k + 1);
+        ring = bridge_among(ring, std::mem::take(&mut done[k]), rest);
     }
     let ring = dedupe(&ring);
     if ring.len() < 3 {
@@ -323,9 +324,15 @@ fn segments_meet(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> bool {
 /// start or end at one of its two ends.
 fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
     let n = ring.len();
+    // A corner a hair from the middle of the bridge would end up inside its thin slit.
+    let (pq, len2) = (q - p, p.distance_squared(q));
+    let near = |c: DVec2| {
+        let t = (c - p).dot(pq) / len2;
+        t > 1e-3 && t < 1.0 - 1e-3 && c.distance(p + pq * t) <= 1e-6 * len2.sqrt()
+    };
     (0..n).any(|k| {
         let (a, b) = (ring[k], ring[(k + 1) % n]);
-        a != p && a != q && b != p && b != q && segments_meet(p, q, a, b)
+        a != p && a != q && b != p && b != q && (segments_meet(p, q, a, b) || near(a))
     })
 }
 
@@ -334,12 +341,24 @@ fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
 /// each other: it crosses no edge of the outer ring or of the hole. A bridge that crosses an
 /// edge would make a loop.
 pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
+    bridge_among(outer, hole, &[])
+}
+
+/// Like `bridge`, and the bridge also keeps clear of the contours in `others`, which a later call
+/// joins to the ring.
+fn bridge_among(outer: Vec<DVec2>, hole: Vec<DVec2>, others: &[Vec<DVec2>]) -> Vec<DVec2> {
     if hole.len() < 3 {
         return outer;
     }
+    let clear = |p: DVec2, q: DVec2| {
+        !bridge_blocked(p, q, &outer)
+            && !bridge_blocked(p, q, &hole)
+            && !others.iter().any(|o| bridge_blocked(p, q, o))
+    };
     // The closest pairs first. Only a few are tried; the closest pair is the fallback.
     let mut tried: Vec<(usize, usize)> = Vec::new();
     let mut chosen = None;
+    let mut found = false;
     for _ in 0..24 {
         let mut best = (f64::INFINITY, usize::MAX, usize::MAX);
         for (i, p) in outer.iter().enumerate() {
@@ -357,11 +376,27 @@ pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
         if chosen.is_none() {
             chosen = Some((i, j));
         }
-        if !bridge_blocked(outer[i], hole[j], &outer) && !bridge_blocked(outer[i], hole[j], &hole) {
+        if clear(outer[i], hole[j]) {
             chosen = Some((i, j));
+            found = true;
             break;
         }
         tried.push((i, j));
+    }
+    // The closest pairs can all be blocked: other holes that are already part of the ring may
+    // stand in the way. Then every pair is tried, the closest first, so the bridge never crosses
+    // an edge as long as some pair sees each other.
+    if !found && outer.len().saturating_mul(hole.len()) <= MAX_BRIDGE_PAIRS {
+        let mut pairs: Vec<(f64, usize, usize)> = Vec::with_capacity(outer.len() * hole.len());
+        for (i, p) in outer.iter().enumerate() {
+            for (j, q) in hole.iter().enumerate() {
+                pairs.push((p.distance_squared(*q), i, j));
+            }
+        }
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some(&(_, i, j)) = pairs.iter().find(|&&(_, i, j)| clear(outer[i], hole[j])) {
+            chosen = Some((i, j));
+        }
     }
     let Some((i, j)) = chosen else { return outer };
     // The way back along the bridge is moved a hair to the side, away from the way out, so that
@@ -384,6 +419,9 @@ pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
     out.extend_from_slice(&outer[i + 1..]);
     out
 }
+
+/// The most pairs of points that the slow search for a bridge sorts (memory bound).
+const MAX_BRIDGE_PAIRS: usize = 4_000_000;
 
 /// Width of a bridge, as a fraction of its length. The area that this adds or takes is negligible.
 const BRIDGE_WIDTH: f64 = 1e-7;

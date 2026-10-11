@@ -964,7 +964,10 @@ mod group_tests {
         script(
             stubs.path(),
             "dwg2dxf",
-            &format!("sleep 60 &\necho $! > \"{}\"\nwait", pidfile.display()),
+            &format!(
+                "sleep 120 &\necho $! > \"{0}.tmp\"\nmv \"{0}.tmp\" \"{0}\"\nwait",
+                pidfile.display()
+            ),
         );
         let dwg = work.path().join("a.dwg");
         fs::write(&dwg, "x").unwrap();
@@ -973,7 +976,8 @@ mod group_tests {
             ..Search::default()
         };
         let quick = RunOptions {
-            timeout: Duration::from_secs(3),
+            // Long enough for a busy machine to start the shell and its child first.
+            timeout: Duration::from_secs(15),
             ..RunOptions::default()
         };
         let e = import_file(
@@ -985,6 +989,7 @@ mod group_tests {
         )
         .unwrap_err();
         assert!(matches!(e, DwgError::Timeout { .. }), "{e}");
+        // The stub renames the file when it is complete, so a read never sees half a number.
         let pid: i32 = fs::read_to_string(&pidfile)
             .unwrap()
             .trim()
@@ -992,7 +997,7 @@ mod group_tests {
             .unwrap();
         // The child of the converter dies with the group (give the system a moment to remove it).
         let mut gone = false;
-        for _ in 0..50 {
+        for _ in 0..300 {
             if !alive(pid) {
                 gone = true;
                 break;

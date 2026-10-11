@@ -309,3 +309,71 @@ fn helpers() {
     }
     assert_eq!(Join::from_name("x"), None);
 }
+
+/// The outline has no loop: a triangulation covers exactly its area, and no two edges cross.
+fn assert_simple_outline(pts: &[DVec2], width: f64) {
+    for j in [Join::Round, Join::Bevel, Join::Miter] {
+        let ring = open(pts, width, j);
+        let clean = crate::mesh::clean_ring(&ring);
+        let covered: f64 = crate::mesh::triangulate(&clean)
+            .iter()
+            .map(|t| polygon_area(&[clean[t[0]], clean[t[1]], clean[t[2]]]))
+            .sum();
+        let area = polygon_area(&clean);
+        assert!(
+            (covered - area).abs() <= 1e-6 * area,
+            "{j:?}: {covered} vs {area}"
+        );
+        let n = ring.len();
+        for a in 0..n {
+            for b in a + 2..n {
+                if a == 0 && b == n - 1 {
+                    continue;
+                }
+                let (p, q) = (ring[a], ring[(a + 1) % n]);
+                let (r, s) = (ring[b], ring[(b + 1) % n]);
+                // Edges that meet at a bridge share a point.
+                let share = |x: DVec2, y: DVec2| x.distance(y) < 1e-3;
+                if share(p, r) || share(p, s) || share(q, r) || share(q, s) {
+                    continue;
+                }
+                assert!(!segments_meet(p, q, r, s), "{j:?}: edges {a} and {b} cross");
+            }
+        }
+    }
+}
+
+/// Found by the property test: the outline has two holes. The 24 closest pairs for the second
+/// bridge were all blocked, and the fallback crossed an edge of the first hole.
+#[test]
+fn a_second_hole_is_bridged_without_crossing_the_first() {
+    assert_simple_outline(
+        &[
+            v(0.0, 0.0),
+            v(2233.5517853766314, 0.0),
+            v(1748.3124935721771, -556.6333364192927),
+            v(-213.98429311535733, -231.49262687701645),
+            v(-383.30611496418226, -2122.1377799708835),
+            v(-1862.0873582661125, 128.22311856221177),
+            v(1829.1845654195213, 1954.8617892412788),
+        ],
+        1002.2221588239406,
+    );
+}
+
+/// Found by the property test: a corner of the second hole lies 6e-8 mm from the line of the
+/// bridge to the first hole. The bridge made a thin slit around it, and ear clipping covered the hole.
+#[test]
+fn a_bridge_keeps_clear_of_the_corner_of_another_hole() {
+    assert_simple_outline(
+        &[
+            v(0.0, 0.0),
+            v(20.0, 0.0),
+            v(-105.98531597744656, -236.24028388646025),
+            v(78.98429658174325, -370.0202842747546),
+            v(32.9483137692117, -148.87483533347236),
+            v(15.917552316185407, -159.3606907744993),
+        ],
+        100.0,
+    );
+}
