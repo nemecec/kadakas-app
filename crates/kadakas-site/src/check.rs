@@ -536,6 +536,9 @@ fn dp_keep(pts: &[DVec3], tol: f64) -> Vec<bool> {
     keep
 }
 
+/// The most rounds of the last look in `simplify` that bring removed points back.
+const MAX_RESTORE_ROUNDS: usize = 16;
+
 /// Removes what the surface does not need. `tolerance` (mm, positive) is the largest change of
 /// height or line shape that is allowed. Lines keep their ends; a closed line keeps at least
 /// three vertices. Loose points that sit on a line vertex are kept, as the triangulation uses
@@ -711,8 +714,17 @@ pub fn simplify(points: &[DVec3], lines: &[SiteLine], tolerance: f64) -> Simplif
     }
     // A last look at the whole result: a removed point that the final surface misses by more
     // than the tolerance comes back. Bringing points back changes the surface, so the look
-    // repeats until no point comes back. Each round restores at least one point, so it ends.
+    // repeats until no point comes back. Each round restores at least one point, so it ends. After
+    // `MAX_RESTORE_ROUNDS` rounds all the points that are still removed come back, which is always
+    // within the tolerance and bounds the work on a big model.
+    let mut rounds = 0;
     while !removed_all.is_empty() {
+        if rounds == MAX_RESTORE_ROUNDS {
+            out.removed_points -= removed_all.len();
+            loose.append(&mut removed_all);
+            break;
+        }
+        rounds += 1;
         let mut src = loose.clone();
         src.extend(out.lines.iter().flat_map(|l| l.points.iter().copied()));
         let Ok(tin) = Tin::build(&SourceData {
