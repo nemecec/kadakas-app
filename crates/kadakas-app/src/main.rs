@@ -36,6 +36,7 @@ mod panels;
 mod plant_draw;
 mod plant_sheet_ui;
 mod plant_ui;
+mod plugin_ui;
 mod prefs;
 mod prefs_ui;
 mod present_ui;

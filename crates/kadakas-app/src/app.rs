@@ -112,6 +112,8 @@ pub struct KadakasApp {
     /// The Scripts palette, its console, and the parameters of plug-in objects.
     #[cfg(not(target_arch = "wasm32"))]
     script_ui: crate::script_ui::ScriptUi,
+    /// WebAssembly plug-ins: the Plug-ins window, the trust dialog, the form and the tool.
+    plugin_ui: crate::plugin_ui::PluginUi,
     /// The coordinate readout of the Data bar.
     readout: crate::gis_ui::ReadoutState,
     /// Autosave, crash recovery and the Preferences dialog.
@@ -202,8 +204,8 @@ impl KadakasApp {
             args.iter().any(|a| a == "--allow-agent-scripts");
         // The scripts of plug-in objects that the user trusted before.
         app.session.scripting.trust = kadakas_api::TrustStore::load_default();
-        // The WebAssembly plug-in modules that the user trusted before.
-        app.session.wasm_plugins.registry.trust = kadakas_api::ModuleTrust::load_default();
+        // The WebAssembly plug-in modules that the user installed and trusted before.
+        app.plugin_ui.attach_user_storage(&mut app.session);
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             let gpu = Gpu3d::new(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(gpu);
@@ -326,6 +328,7 @@ impl KadakasApp {
         crate::collab_ui::web::watch_hash(app.web_fragments.clone());
         crate::collab_ui::web::warn_before_close();
         crate::collab_ui::web::install_test_hook();
+        app.plugin_ui.begin_web_storage(&cc.egui_ctx);
         app
     }
 
@@ -422,6 +425,7 @@ impl KadakasApp {
             gis_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             script_ui: Default::default(),
+            plugin_ui: Default::default(),
             readout: Default::default(),
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
@@ -773,6 +777,7 @@ impl KadakasApp {
                     self.run_action(ctx, a);
                 }
             }
+            MenuAction::PlugIns => self.plugin_ui.open(),
             MenuAction::CollabConnect => self.collab.open_dialog(),
             MenuAction::CollabDisconnect => {
                 let now = crate::collab_ui::now_ms();
@@ -1097,6 +1102,7 @@ impl KadakasApp {
             _ => {}
         }
         if let Some(t) = action.tool() {
+            self.plugin_ui.cancel();
             // Drawing happens on the plan. Choosing a drawing tool in 3D goes back to it.
             if t != Tool::Select && !self.plan() {
                 self.set_standard_view(StandardView::Plan);
@@ -1125,7 +1131,10 @@ impl KadakasApp {
             Action::EnterGroup => self.enter_group(),
             Action::ExitGroup => self.exit_group(),
             Action::Cancel => {
-                if self.machine.is_busy() {
+                if self.plugin_ui.running() {
+                    self.plugin_ui.cancel();
+                    self.status = String::new();
+                } else if self.machine.is_busy() {
                     self.machine.cancel();
                 } else {
                     self.machine.set_tool(Tool::Select);
@@ -1136,6 +1145,9 @@ impl KadakasApp {
                 self.profiles.request_command_focus();
                 // The Enter key must not reach the field in the same frame.
                 ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            }
+            Action::Finish if self.plugin_ui.running() => {
+                self.plugin_ui.finish(&mut self.session, &mut self.status)
             }
             Action::Finish => self.send(Input::Enter),
             Action::CommandLine => self.profiles.request_command_focus(),
@@ -1507,8 +1519,27 @@ impl KadakasApp {
 
         self.apply_typed_radius();
 
-        // Tool events.
-        if !panning && !space {
+        // Tool events. A running plug-in tool takes them instead of the tool machine.
+        if self.plugin_ui.running() {
+            if !panning && !space {
+                let pixel = 1.0 / self.view.zoom;
+                if pressed && resp.hovered() {
+                    self.plugin_ui
+                        .clicked(&mut self.session, self.cursor, mods, &mut self.status);
+                } else if hover.is_some() {
+                    self.plugin_ui.pointer_moved(
+                        &mut self.session,
+                        self.cursor,
+                        pixel,
+                        mods,
+                        &mut self.status,
+                    );
+                }
+                if resp.double_clicked() {
+                    self.plugin_ui.finish(&mut self.session, &mut self.status);
+                }
+            }
+        } else if !panning && !space {
             if pressed && resp.hovered() {
                 self.send(Input::Press {
                     p: self.cursor,
@@ -1524,7 +1555,7 @@ impl KadakasApp {
                 self.send(Input::DoubleClick);
             }
         }
-        if resp.hovered() && self.machine.tool() != Tool::Select {
+        if resp.hovered() && (self.machine.tool() != Tool::Select || self.plugin_ui.running()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
 
@@ -1552,6 +1583,7 @@ impl KadakasApp {
             show_grid: self.show_grid,
             site: Some((self.session.site_cache(), self.session.editor.revision())),
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
+            plugin_preview: self.plugin_ui.preview(),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
         // The cursors and selections of the other users. Presence is never in the document.
@@ -1774,6 +1806,7 @@ impl KadakasApp {
             });
         }
         for (label, m) in [
+            (tr!("panels-plug-ins"), MenuAction::PlugIns),
             (tr!("app-preferences"), MenuAction::Preferences),
             (tr!("app-export-svg"), MenuAction::ExportSvg),
             (tr!("app-select-all"), MenuAction::SelectAll),
@@ -2073,12 +2106,16 @@ impl KadakasApp {
                         &mut self.settings,
                         self.session.editor.doc(),
                         &mut self.annot_requests,
-                    )
+                    );
+                    self.plugin_ui
+                        .tool_set(ui, &mut self.session, &mut self.status);
                 });
             }
             Tab::ObjectInfo => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     panels::object_info(ui, &mut self.session, &mut self.info, &mut self.status);
+                    self.plugin_ui
+                        .object_info(ui, &mut self.session, &mut self.status);
                     #[cfg(not(target_arch = "wasm32"))]
                     self.script_ui
                         .plugin_info(ui, &mut self.session, &mut self.status);
@@ -2330,6 +2367,8 @@ impl eframe::App for KadakasApp {
         {
             self.needs_fit = true;
         }
+        self.plugin_ui
+            .show(&ctx, &mut self.session, &mut self.status);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(script) = self
             .script_ui

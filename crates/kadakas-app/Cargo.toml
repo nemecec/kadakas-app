@@ -21,6 +21,7 @@ kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
+kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
 kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
 kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }

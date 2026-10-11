@@ -39,6 +39,8 @@ commands! {
     MapSources => "file.map_sources", msg!("panels-map-sources"), true;
     ChangeCrs => "file.change_crs", msg!("panels-change-crs"), true;
     Scripts => "file.scripts", msg!("panels-scripts"), true;
+    // The window that lists installed WebAssembly plug-ins: install, review, trust, remove.
+    PlugIns => "file.plugins", msg!("panels-plug-ins"), false;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
     Preferences => "file.preferences", msg!("panels-preferences"), false;
@@ -280,6 +282,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "file.change_crs",
                 "-",
                 "file.scripts",
+                "file.plugins",
                 "-",
                 "file.collaboration",
                 "-",

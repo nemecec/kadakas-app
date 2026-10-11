@@ -576,6 +576,8 @@ pub struct Frame<'a> {
     pub site: Option<(&'a kadakas_site::SiteCache, u64)>,
     /// The page of the active sheet layer. The canvas shows the sheet instead of the model.
     pub sheet: Option<(&'a crate::sheets_ui::SheetUi, &'a kadakas_print::Page)>,
+    /// The preview of a running plug-in tool: shapes that are not in the document.
+    pub plugin_preview: &'a [Shape],
 }
 
 pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
@@ -694,6 +696,14 @@ pub fn paint(painter: &Painter, rect: Rect, view: &View, f: &Frame) {
         }
     }
     draw_preview(&painter, view, f);
+    for shape in f.plugin_preview {
+        let st = Style {
+            pen: PREVIEW_COLOR,
+            fill: PREVIEW_COLOR.gamma_multiply(0.12),
+            width: 1.5,
+        };
+        draw_shape(&painter, view, shape, st, DVec2::ZERO);
+    }
     crate::snap_ui::draw_smart(&painter, view, f.smart, f.dark);
     if let Some(s) = f.snap {
         crate::snap_ui::draw_snap(&painter, view, s, f.cues, f.dark, rect);
@@ -889,6 +899,7 @@ mod tests {
                     show_grid: true,
                     site: None,
                     sheet: None,
+                    plugin_preview: &[],
                 };
                 paint(&ui.painter_at(rect), rect, &view, &frame);
             });
@@ -907,6 +918,7 @@ mod tests {
                 show_grid: false,
                 site: None,
                 sheet: None,
+                plugin_preview: &[],
             };
             paint(&ui.painter_at(rect), rect, &View::default(), &frame);
         });

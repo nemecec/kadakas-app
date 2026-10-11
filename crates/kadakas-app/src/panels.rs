@@ -39,6 +39,8 @@ pub enum MenuAction {
     ChangeCrs,
     /// File > Scripts: the Scripts palette with its console.
     Scripts,
+    /// File > Plug-ins: install, review and trust WebAssembly plug-ins.
+    PlugIns,
     Undo,
     Redo,
     Delete,
@@ -132,6 +134,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         Cmd::MapSources => M::MapSources,
         Cmd::ChangeCrs => M::ChangeCrs,
         Cmd::Scripts => M::Scripts,
+        Cmd::PlugIns => M::PlugIns,
         Cmd::Preferences => M::Preferences,
         Cmd::Undo => M::Undo,
         Cmd::Redo => M::Redo,
@@ -537,6 +540,7 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::MapSources
         | MenuAction::ChangeCrs
         | MenuAction::Scripts
+        | MenuAction::PlugIns
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
         | MenuAction::CollabConnect

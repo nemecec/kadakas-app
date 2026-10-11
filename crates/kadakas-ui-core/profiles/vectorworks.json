@@ -320,6 +320,7 @@
         "file.change_crs",
         "-",
         "file.scripts",
+        "file.plugins",
         "-",
         "file.collaboration",
         "-",
