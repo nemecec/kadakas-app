@@ -140,5 +140,6 @@ def test_an_image_column_prints_the_picture_in_pdf_and_svg_and_csv_skips_it(cad,
     assert lines[0].startswith("Style,Picture,Count")
     assert any(line.startswith("Field maple,,1") for line in lines)
     # The cell value is the picture resource.
-    cells = cad.result("worksheet.get", {"id": ws})
-    assert "image" in str(cells)
+    values = cad.result("worksheet.evaluate", {"id": ws})["values"]
+    images = [row[1] for row in values if isinstance(row[1], dict)]
+    assert len(images) == 1 and images[0]["image"] == cad.result("plant_style.get", {"id": sid})["image"]

@@ -1130,8 +1130,10 @@ mod tests {
             },
         );
         assert!(msg.contains("maple.png"), "{msg}");
-        let mut st = PlantUi::default();
-        st.selected = Some(id);
+        let mut st = PlantUi {
+            selected: Some(id),
+            ..PlantUi::default()
+        };
         let mut status = String::new();
         frame(|ui| resource_manager(ui, &mut s, &mut st, &mut status));
         let plant = *s.editor.doc().objects.keys().next().unwrap();

@@ -92,7 +92,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// character. `max_bytes` bounds the work before any decoding is done.
 pub fn decode_base64(text: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     let t = text.as_bytes();
-    if t.len() % 4 != 0 {
+    if !t.len().is_multiple_of(4) {
         return Err("the base64 text has a wrong length".into());
     }
     if t.len() / 4 * 3 > max_bytes + 2 {
@@ -107,7 +107,7 @@ pub fn decode_base64(text: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     }
     let mut out = Vec::with_capacity(t.len() / 4 * 3);
     let quads = t.len() / 4;
-    for (n, quad) in t.chunks_exact(4).enumerate() {
+    for (n, quad) in t.as_chunks::<4>().0.iter().enumerate() {
         let pad = if n + 1 == quads {
             quad.iter().rev().take_while(|c| **c == b'=').count()
         } else {
