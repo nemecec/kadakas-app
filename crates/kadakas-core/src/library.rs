@@ -1247,4 +1247,33 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[test]
+    fn a_picture_is_used_by_its_style_and_travels_with_it() {
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Oak".into(),
+                body: ResourceBody::plant_style(PlantStyle::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let out = ed
+            .execute(&Command::SetPlantPicture {
+                style,
+                picture: Some(Box::new(crate::picture::tests::sample(1))),
+            })
+            .unwrap();
+        let img = ResourceId(out.created[0]);
+        assert_eq!(usage(ed.doc(), img).resources, vec![style]);
+        let row = list(ed.doc(), Some("image"), None);
+        assert_eq!((row.len(), row[0].used_by), (1, 1));
+        assert_eq!(
+            body_refs(&ed.doc().resources.get(style).unwrap().body),
+            vec![img]
+        );
+        let moved = remap_body(&ed.doc().resources.get(style).unwrap().body, &|_| style);
+        assert!(matches!(moved, ResourceBody::PlantStyle(s) if s.image == Some(style)));
+    }
 }

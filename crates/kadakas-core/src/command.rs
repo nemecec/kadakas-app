@@ -292,6 +292,14 @@ pub enum Command {
         #[serde(default)]
         unlink: bool,
     },
+    /// Set or clear the picture of a plant style, as one step. The picture is stored once as an
+    /// `image` resource (a picture with the same hash is reused), and a picture that no style uses
+    /// any more is removed. A new picture resource is returned in `created`.
+    SetPlantPicture {
+        style: ResourceId,
+        #[serde(default)]
+        picture: Option<Box<crate::picture::ImageResource>>,
+    },
     /// Attach a record to objects. `values` are checked against the record format. Fields
     /// without a value get the default. Each object can have a record once.
     AttachRecord {
@@ -1312,7 +1320,8 @@ impl<'a> Tx<'a> {
             | Command::ModifyResource { .. }
             | Command::DeleteResource { .. }
             | Command::AddPlants { .. }
-            | Command::SetPlantStyle { .. } => self.run_plant(cmd, out)?,
+            | Command::SetPlantStyle { .. }
+            | Command::SetPlantPicture { .. } => self.run_plant(cmd, out)?,
             Command::Group { .. }
             | Command::Ungroup { .. }
             | Command::AddObjectIn { .. }

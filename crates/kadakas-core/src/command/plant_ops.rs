@@ -42,9 +42,10 @@ impl Tx<'_> {
                 self.doc.resources.get(img).map(|r| &r.body),
                 Some(ResourceBody::Graphic(g)) if matches!(**g, crate::graphics::GraphicResource::Texture(_))
             );
-            if !is_texture {
+            let is_picture = self.doc.resources.image(img).is_some();
+            if !is_texture && !is_picture {
                 return Err(match self.doc.resources.get(img) {
-                    Some(_) => invalid(format!("resource {img} is not a texture (image)")),
+                    Some(_) => invalid(format!("resource {img} is not an image or a texture")),
                     None => CommandError::NoResource(img),
                 });
             }
@@ -195,6 +196,12 @@ impl Tx<'_> {
                 self.resync(&users);
             }
             Command::DeleteResource { id, reassign } => {
+                if matches!(
+                    self.doc.resources.get(*id).map(|r| &r.body),
+                    Some(ResourceBody::Image(_))
+                ) {
+                    return self.delete_image(*id, *reassign);
+                }
                 if self.graphic_delete(*id, *reassign)? {
                     return Ok(());
                 }
@@ -453,8 +460,102 @@ impl Tx<'_> {
                     *self.doc.object_mut(id).expect("checked") = o;
                 }
             }
+            Command::SetPlantPicture { style, picture } => {
+                let mut st = self
+                    .doc
+                    .resources
+                    .plant_style(*style)
+                    .ok_or(CommandError::NoResource(*style))?
+                    .clone();
+                let old = st.image;
+                let new = match picture {
+                    None => None,
+                    Some(p) => Some(self.picture_resource(p, out)?),
+                };
+                st.image = new;
+                let r = self.doc.resources.get_mut(*style).expect("checked");
+                r.body = ResourceBody::plant_style(st);
+                let users = self.users_of(*style);
+                self.resync(&users);
+                // A picture that no style uses any more goes with the style that had it.
+                if let Some(old) = old.filter(|o| Some(*o) != new)
+                    && self.doc.resources.image(old).is_some()
+                    && self.image_users(old).is_empty()
+                {
+                    self.doc.resources.remove(old);
+                }
+            }
             _ => unreachable!("run_plant is called for plant commands only"),
         }
+        Ok(())
+    }
+
+    /// The plant styles that use a picture resource.
+    fn image_users(&self, id: ResourceId) -> Vec<ResourceId> {
+        self.doc
+            .resources
+            .plant_styles()
+            .filter(|(_, _, s)| s.image == Some(id))
+            .map(|(sid, _, _)| sid)
+            .collect()
+    }
+
+    /// The resource of a picture: the one with the same hash if the document has it, else a new one.
+    fn picture_resource(
+        &mut self,
+        p: &crate::picture::ImageResource,
+        out: &mut Outcome,
+    ) -> Result<ResourceId, CommandError> {
+        p.validate().map_err(invalid)?;
+        if let Some(id) = self.doc.resources.find_image(&p.sha256) {
+            return Ok(id);
+        }
+        let mut name = p.default_name();
+        if self
+            .doc
+            .resources
+            .iter()
+            .any(|r| r.body.type_name() == "image" && r.name.eq_ignore_ascii_case(&name))
+        {
+            name = format!("Picture {}", &p.sha256[..16]);
+        }
+        let id = ResourceId(self.alloc()?);
+        self.doc.resources.push(Resource {
+            id,
+            name,
+            body: ResourceBody::Image(Box::new(p.clone())),
+        });
+        out.created.push(id.0);
+        Ok(id)
+    }
+
+    /// Deletes a picture resource. The plant styles that use it take `reassign` (another picture) or lose their picture.
+    fn delete_image(
+        &mut self,
+        id: ResourceId,
+        reassign: Option<ResourceId>,
+    ) -> Result<(), CommandError> {
+        if let Some(to) = reassign {
+            if to == id {
+                return Err(invalid("cannot reassign a resource to itself"));
+            }
+            if self.doc.resources.image(to).is_none() {
+                return Err(match self.doc.resources.get(to) {
+                    Some(_) => invalid("reassign to a resource of the same type"),
+                    None => CommandError::NoResource(to),
+                });
+            }
+        }
+        for sid in self.image_users(id) {
+            if let Some(Resource {
+                body: ResourceBody::PlantStyle(s),
+                ..
+            }) = self.doc.resources.get_mut(sid)
+            {
+                s.image = reassign;
+            }
+        }
+        self.doc.resources.remove(id);
         Ok(())
     }
 }
@@ -1302,5 +1403,126 @@ mod tests {
             (e.style.graphic, e.style.id_code.as_str()),
             (PlantGraphic::Star, "ZZ")
         );
+    }
+
+    fn set_picture(
+        ed: &mut Editor,
+        style: ResourceId,
+        p: Option<crate::picture::ImageResource>,
+    ) -> Result<Outcome, CommandError> {
+        ed.execute(&Command::SetPlantPicture {
+            style,
+            picture: p.map(Box::new),
+        })
+    }
+
+    #[test]
+    fn a_picture_is_stored_once_shared_and_removed_with_its_last_style() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let b = add_style(&mut ed, "B", 4000.0);
+        let before = ed.doc().resources.len();
+        let out = set_picture(&mut ed, a, Some(sample(1))).unwrap();
+        let img = ResourceId(out.created[0]);
+        assert_eq!(ed.doc().resources.plant_style(a).unwrap().image, Some(img));
+        assert_eq!(ed.doc().resources.len(), before + 1);
+        // The same file for another style makes no new resource.
+        let out = set_picture(&mut ed, b, Some(sample(1))).unwrap();
+        assert!(out.created.is_empty());
+        assert_eq!(ed.doc().resources.plant_style(b).unwrap().image, Some(img));
+        assert_eq!(ed.doc().resources.find_image(&sample(1).sha256), Some(img));
+        // Clearing one keeps the picture for the other, clearing the last removes it.
+        set_picture(&mut ed, a, None).unwrap();
+        assert!(ed.doc().resources.image(img).is_some());
+        set_picture(&mut ed, b, None).unwrap();
+        assert!(ed.doc().resources.image(img).is_none());
+        assert_eq!(ed.doc().resources.len(), before);
+        // Replacing a picture removes the old one. One undo step brings both back.
+        set_picture(&mut ed, a, Some(sample(1))).unwrap();
+        let depth = ed.undo_depth();
+        set_picture(&mut ed, a, Some(sample(2))).unwrap();
+        assert_eq!(ed.undo_depth(), depth + 1);
+        assert!(ed.doc().resources.find_image(&sample(1).sha256).is_none());
+        assert!(ed.undo());
+        assert!(ed.doc().resources.find_image(&sample(1).sha256).is_some());
+        assert!(ed.doc().resources.find_image(&sample(2).sha256).is_none());
+    }
+
+    #[test]
+    fn picture_errors_change_nothing() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let mut bad = sample(1);
+        bad.sha256 = "0".repeat(64);
+        assert!(matches!(
+            set_picture(&mut ed, a, Some(bad)),
+            Err(CommandError::Invalid(m)) if m.contains("hash")
+        ));
+        assert!(matches!(
+            set_picture(&mut ed, ResourceId(crate::uid::Uid::from_u128(9)), None),
+            Err(CommandError::NoResource(_))
+        ));
+        assert!(ed.doc().resources.plant_style(a).unwrap().image.is_none());
+    }
+
+    #[test]
+    fn deleting_a_picture_clears_or_reassigns_the_styles() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let one = ResourceId(set_picture(&mut ed, a, Some(sample(1))).unwrap().created[0]);
+        let two = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Other".into(),
+                body: ResourceBody::Image(Box::new(sample(2))),
+            })
+            .unwrap()
+            .created[0],
+        );
+        for bad in [one, ResourceId(crate::uid::Uid::from_u128(9)), a] {
+            assert!(
+                ed.execute(&Command::DeleteResource {
+                    id: one,
+                    reassign: Some(bad)
+                })
+                .is_err()
+            );
+        }
+        ed.execute(&Command::DeleteResource {
+            id: one,
+            reassign: Some(two),
+        })
+        .unwrap();
+        assert_eq!(ed.doc().resources.plant_style(a).unwrap().image, Some(two));
+        ed.execute(&Command::DeleteResource {
+            id: two,
+            reassign: None,
+        })
+        .unwrap();
+        assert!(ed.doc().resources.plant_style(a).unwrap().image.is_none());
+        // A style may refer to a picture resource through `image`, but not to a style.
+        let three = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Third".into(),
+                body: ResourceBody::Image(Box::new(sample(3))),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let mut st = ed.doc().resources.plant_style(a).unwrap().clone();
+        st.image = Some(three);
+        let modify = |st: PlantStyle| Command::ModifyResource {
+            id: a,
+            name: None,
+            body: Some(ResourceBody::plant_style(st)),
+        };
+        assert!(ed.execute(&modify(st.clone())).is_ok());
+        st.image = Some(a);
+        assert!(matches!(
+            ed.execute(&modify(st)),
+            Err(CommandError::Invalid(m)) if m.contains("not an image")
+        ));
     }
 }
