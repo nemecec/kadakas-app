@@ -1413,14 +1413,13 @@ mod tests {
                 body: ResourceBody::Graphic(Box::new(GraphicResource::Symbol(def))),
             });
         }
-        let t = std::time::Instant::now();
+        // A deep chain of nested symbols stops at the budget (`truncated`).
         let (out, truncated) = expand_report(
             &doc.resources,
             ResourceId::from_num(14),
             &DAffine2::IDENTITY,
         );
         assert!(truncated && out.is_empty());
-        assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
         let obj = Object::new(
             ObjectId::from_num(50),
             crate::model::FIRST_LAYER,

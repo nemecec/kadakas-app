@@ -774,8 +774,40 @@ mod tests {
     }
 
     #[test]
-    fn a_large_site_draws_fast_and_small() {
+    fn a_large_site_draws_small_and_is_computed_once() {
         // 50 000 points: the bands merge into a few rings, not one path per triangle.
+        let mut ed = Editor::default();
+        let id = add(
+            &mut ed,
+            grid_site(224, 100.0, |x, y| {
+                300.0 * ((x / 900.0).sin() + (y / 1100.0).cos())
+            }),
+        );
+        let cache = SiteCache::default();
+        let site = SiteResult::compute(ed.doc(), id).unwrap();
+        let spec = AnalysisSpec {
+            mode: Mode::Slope,
+            surface: Follow::Existing,
+            ..AnalysisSpec::default()
+        };
+        let a = for_site(&cache, &site, &spec).unwrap();
+        let svg = draw(id, &a).svg();
+        assert_eq!(cache.analyses_computed(), 1);
+        assert!(a.tri_band.len() > 90_000);
+        // About a vertex per boundary corner, far fewer than three per triangle.
+        let corners: usize = a.rings.iter().flatten().map(Vec::len).sum();
+        assert!(corners < a.tri_band.len() / 2, "{corners} corners");
+        assert!(svg.len() < 4_000_000, "{} bytes", svg.len());
+        // The second call finds the result in the cache.
+        let before = cache.analyses_computed();
+        let again = for_site(&cache, &site, &spec).unwrap();
+        assert!(Arc::ptr_eq(&a, &again) && cache.analyses_computed() == before);
+    }
+
+    /// Timing: run in release mode, `cargo test -p kadakas-site --release --lib -- --ignored perf_`
+    #[test]
+    #[ignore = "timing test: run in release mode"]
+    fn perf_a_large_site_draws_in_under_a_second() {
         let mut ed = Editor::default();
         let id = add(
             &mut ed,
@@ -794,15 +826,7 @@ mod tests {
         let a = for_site(&cache, &site, &spec).unwrap();
         let svg = draw(id, &a).svg();
         let took = start.elapsed();
+        assert!(!svg.is_empty());
         assert!(took.as_secs_f64() < 1.0, "analysis and svg took {took:?}");
-        assert!(a.tri_band.len() > 90_000);
-        // About a vertex per boundary corner, far fewer than three per triangle.
-        let corners: usize = a.rings.iter().flatten().map(Vec::len).sum();
-        assert!(corners < a.tri_band.len() / 2, "{corners} corners");
-        assert!(svg.len() < 4_000_000, "{} bytes", svg.len());
-        // The second call finds the result in the cache.
-        let before = cache.analyses_computed();
-        let again = for_site(&cache, &site, &spec).unwrap();
-        assert!(Arc::ptr_eq(&a, &again) && cache.analyses_computed() == before);
     }
 }

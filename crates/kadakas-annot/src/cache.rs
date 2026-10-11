@@ -3,6 +3,7 @@
 //! document, so they are made once per revision.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use kadakas_core::annot::draw::{self, Ctx, LegendRow, Prim, TextSource};
@@ -21,6 +22,10 @@ struct Inner {
 #[derive(Default)]
 pub struct AnnotCache {
     inner: Mutex<Inner>,
+    /// How often the primitives of an object were made (a count of the work, for tests).
+    prim_builds: AtomicU64,
+    /// How often the rows of a legend were made.
+    row_builds: AtomicU64,
 }
 
 struct Cached<'a> {
@@ -39,6 +44,7 @@ impl TextSource for Cached<'_> {
         if let Some(rows) = self.cache.lock(self.revision).rows.get(&key) {
             return rows.as_ref().clone();
         }
+        self.cache.row_builds.fetch_add(1, Ordering::Relaxed);
         let rows = Arc::new(crate::legend_rows(doc, legend));
         self.cache
             .lock(self.revision)
@@ -64,6 +70,15 @@ impl AnnotCache {
         g
     }
 
+    /// How many times the primitives of an object were made, and how many times the rows of a
+    /// legend. A call that finds its answer in the cache does not count.
+    pub fn builds(&self) -> (u64, u64) {
+        (
+            self.prim_builds.load(Ordering::Relaxed),
+            self.row_builds.load(Ordering::Relaxed),
+        )
+    }
+
     /// The primitives of an annotation object on its layer. `revision` is the revision of the
     /// document (0: do not keep anything).
     pub fn prims(&self, doc: &Document, obj: &Object, revision: u64) -> Arc<Vec<Prim>> {
@@ -81,6 +96,7 @@ impl AnnotCache {
         if let Some(p) = self.lock(revision).prims.get(&obj.id) {
             return p.clone();
         }
+        self.prim_builds.fetch_add(1, Ordering::Relaxed);
         let made = Arc::new(draw::prims(
             doc,
             a,

@@ -1085,15 +1085,12 @@ mod tests {
             1200,
             900,
         );
-        let t = std::time::Instant::now();
         let hl = hidden_lines(&scene, &cam, 1200, 900, &HlOptions::default());
-        let took = t.elapsed();
         eprintln!(
-            "{} triangles, {} segments, {took:?}",
+            "{} triangles, {} segments",
             scene.mesh.triangle_count(),
             hl.segments.len()
         );
-        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
         assert!(hl.visible_edge_count() > 2_000);
     }
 

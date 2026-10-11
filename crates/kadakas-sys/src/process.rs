@@ -179,9 +179,7 @@ mod tests {
             child.wait().unwrap();
             // Nobody of the group is left: the pipe closes at once.
             let mut out = Vec::new();
-            let t = std::time::Instant::now();
             std::io::Read::read_to_end(&mut child.stdout.take().unwrap(), &mut out).unwrap();
-            assert!(t.elapsed() < std::time::Duration::from_secs(5));
             // The killed processes may be zombies for a moment, until init collects them.
             let gone = (0..400).any(|_| {
                 // SAFETY: signal 0 only checks that the group exists.

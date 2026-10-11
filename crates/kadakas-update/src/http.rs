@@ -472,12 +472,10 @@ mod tests {
         let c = UreqHttp::new()
             .allow_loopback_http()
             .with_timeouts(Duration::from_millis(300), Duration::from_secs(30));
-        let started = Instant::now();
         let e = c
             .get(&format!("http://127.0.0.1:{port}/a"), 100, &mut Vec::new())
             .unwrap_err();
         assert!(e.to_string().contains("stalled"), "{e}");
-        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

@@ -242,7 +242,7 @@ fn park(s: &mut Session, n: i64) -> kadakas_core::uid::Uid {
 }
 
 #[test]
-fn many_plants_instance_and_sections_are_fast_and_shared() {
+fn many_plants_instance_and_sections_are_shared() {
     let dir = tmp("park");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -259,11 +259,10 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
     );
     assert!(r["report"]["instances"].as_u64().unwrap() >= 3000 - 8);
     assert!(std::fs::metadata(&glb).unwrap().len() < 6_000_000);
-    // A section of the park, in a debug build, in seconds; later calls and the sheet use the cache.
+    // Later calls and the sheet use the cached drawing of the section.
     let sheet = ok(&mut s, "sheet.create", json!({"name": "S", "paper": "a1"}))["layer"]
         .as_uid()
         .unwrap();
-    let t = std::time::Instant::now();
     let vp = ok(
         &mut s,
         "section_viewport.create",
@@ -271,12 +270,9 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
     )["id"]
         .as_uid()
         .unwrap();
-    let first = t.elapsed();
-    assert!(first.as_secs_f64() < 5.0, "create took {first:?}");
     // The viewport was added after the drawing was made for it, so the first get is a new revision.
     ok(&mut s, "section_viewport.get", json!({"id": vp}));
     let builds = s.section_cache.lock().unwrap().builds;
-    let t = std::time::Instant::now();
     let got = ok(&mut s, "section_viewport.get", json!({"id": vp}));
     assert!(
         got["edge_count"].as_u64().unwrap() > 100,
@@ -290,15 +286,50 @@ fn many_plants_instance_and_sections_are_fast_and_shared() {
         "export.file",
         json!({"path": dir.join("park.pdf"), "format": "pdf"}),
     );
-    let later = t.elapsed();
-    assert!(
-        later.as_secs_f64() < 5.0,
-        "get, render and pdf took {later:?}"
-    );
     assert_eq!(
         s.section_cache.lock().unwrap().builds,
         builds,
         "get, the sheet and the PDF reuse the drawing"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Timing: a section of a park of 3000 plants. Run in release mode:
+/// `cargo test -p kadakas-api --release -- --ignored`
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_park_section_create_and_cached_get() {
+    let dir = tmp("park-perf");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::with_sequential_ids();
+    let line = park(&mut s, 3000);
+    let sheet = ok(&mut s, "sheet.create", json!({"name": "S", "paper": "a1"}))["layer"]
+        .as_uid()
+        .unwrap();
+    let t = std::time::Instant::now();
+    let vp = ok(
+        &mut s,
+        "section_viewport.create",
+        json!({"sheet": sheet, "line": line, "scale": "fit"}),
+    )["id"]
+        .as_uid()
+        .unwrap();
+    let first = t.elapsed();
+    assert!(first.as_secs_f64() < 1.0, "create took {first:?}");
+    ok(&mut s, "section_viewport.get", json!({"id": vp}));
+    let t = std::time::Instant::now();
+    ok(&mut s, "section_viewport.get", json!({"id": vp}));
+    ok(&mut s, "sheet.render", json!({"sheet": sheet}));
+    ok(
+        &mut s,
+        "export.file",
+        json!({"path": dir.join("park.pdf"), "format": "pdf"}),
+    );
+    let later = t.elapsed();
+    assert!(
+        later.as_secs_f64() < 1.0,
+        "get, render and pdf took {later:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

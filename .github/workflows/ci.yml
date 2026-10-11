@@ -28,6 +28,13 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: cargo build -p kadakas-cli
       - run: uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
+  # Timing tests (`#[ignore]`, see docs/dev-guide.md). They need a release build, so they do not run in `test`.
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - run: cargo test --release -p kadakas-core -p kadakas-site -p kadakas-api -- --ignored
   wasm:
     runs-on: ubuntu-latest
     steps:

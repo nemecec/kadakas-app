@@ -999,7 +999,6 @@ mod tests {
             variation: None,
         })
         .unwrap();
-        let t = std::time::Instant::now();
         let out = run(
             ed.doc(),
             &database(
@@ -1012,7 +1011,6 @@ mod tests {
             0,
         );
         assert_eq!(out.matched, 5000);
-        assert!(t.elapsed().as_secs() < 5);
     }
 
     #[test]

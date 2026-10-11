@@ -1,6 +1,4 @@
-//! Annotation methods: limits, speed, and the north arrow style.
-
-use std::time::Instant;
+//! Annotation methods: limits, cache use, and the north arrow style. Timing tests are in `perf.rs`.
 
 use kadakas_api::Session;
 use serde_json::{Value, json};
@@ -30,15 +28,14 @@ fn plants(s: &mut Session, n: usize) {
 }
 
 #[test]
-fn twenty_legends_over_4000_plants_add_little_to_an_svg_export() {
+fn twenty_legends_over_4000_plants_share_one_set_of_rows_and_a_second_export_is_cached() {
     let mut s = Session::with_sequential_ids();
     plants(&mut s, 4000);
-    let t = Instant::now();
     let base = call(&mut s, "render.svg", json!({}))["svg"]
         .as_str()
         .unwrap()
         .len();
-    let plain = t.elapsed();
+    assert_eq!(s.annotation_builds(), (0, 0), "no annotations yet");
     for i in 0..20 {
         call(
             &mut s,
@@ -46,33 +43,25 @@ fn twenty_legends_over_4000_plants_add_little_to_an_svg_export() {
             json!({"at": [i * 10, 0], "criteria": "Kind = \"plant\"", "group_by": "Style"}),
         );
     }
-    let t = Instant::now();
     let with = call(&mut s, "render.svg", json!({}))["svg"]
         .as_str()
         .unwrap()
         .len();
-    let extra = t.elapsed().saturating_sub(plain);
     assert!(with > base);
-    // A generous limit: the test must catch a slow algorithm, not a busy machine.
-    assert!(extra.as_millis() < 500, "20 legends added {extra:?}");
-    // A second export of the same revision is served from the cache. Take the best of 5 runs,
-    // so that one slow moment of the machine does not fail the test.
-    let cached = (0..5)
-        .map(|_| {
-            let t = Instant::now();
-            call(&mut s, "render.svg", json!({}));
-            t.elapsed()
-        })
-        .min()
-        .unwrap();
-    assert!(
-        cached.as_millis() < 100 + plain.as_millis(),
-        "cached export took {cached:?}"
-    );
+    // Work done: 20 legends make 20 sets of primitives, but the rows (one scan of the document)
+    // are made once, because the legends have the same criteria and grouping.
+    assert_eq!(s.annotation_builds(), (20, 1));
+    // A second export of the same revision is served from the cache.
+    let again = call(&mut s, "render.svg", json!({}))["svg"]
+        .as_str()
+        .unwrap()
+        .len();
+    assert_eq!(again, with);
+    assert_eq!(s.annotation_builds(), (20, 1), "the cache made nothing new");
 }
 
 #[test]
-fn tag_all_is_not_quadratic() {
+fn tag_all_tags_every_matching_plant() {
     let mut s = Session::with_sequential_ids();
     plants(&mut s, 3000);
     call(
@@ -80,14 +69,12 @@ fn tag_all_is_not_quadratic() {
         "tag_style.create",
         json!({"name": "T", "lines": ["{IdCode}"]}),
     );
-    let t = Instant::now();
     let r = call(
         &mut s,
         "data_tag.tag_all",
         json!({"style": "T", "criteria": "Kind = \"plant\""}),
     );
     assert_eq!(r["tagged"], 3000);
-    assert!(t.elapsed().as_secs() < 5, "tag_all took {:?}", t.elapsed());
 }
 
 #[test]

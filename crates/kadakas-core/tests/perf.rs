@@ -36,7 +36,7 @@ fn timed<T>(what: &str, f: impl FnOnce() -> T) -> T {
 }
 
 #[test]
-#[ignore]
+#[ignore = "timing test: run in release mode"]
 fn add_50k_objects_in_one_batch() {
     let cmd = add_all();
     let mut ed = Editor::default();
@@ -49,7 +49,7 @@ fn add_50k_objects_in_one_batch() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "timing test: run in release mode"]
 fn move_50k_objects_in_one_command() {
     let mut ed = Editor::default();
     ed.execute(&add_all()).unwrap();
@@ -69,7 +69,7 @@ fn move_50k_objects_in_one_command() {
 
 /// 5000 plants and 1000 hardscapes, some of them concave with curved corners.
 #[test]
-#[ignore]
+#[ignore = "timing test: run in release mode"]
 fn mesh_build_5k_plants_and_1k_hardscapes() {
     use kadakas_core::curve::{self, Vertex, VertexKind};
     use kadakas_core::mesh::{MeshCache, build};
@@ -134,8 +134,6 @@ fn mesh_build_5k_plants_and_1k_hardscapes() {
     // The cache makes repeat calls free.
     let mut cache = MeshCache::default();
     cache.get(ed.revision(), ed.doc());
-    let t = Instant::now();
     cache.get(ed.revision(), ed.doc());
-    assert!(t.elapsed() < Duration::from_millis(1));
     assert_eq!(cache.builds, 1);
 }

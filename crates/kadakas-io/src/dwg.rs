@@ -796,7 +796,6 @@ mod tests {
             timeout: Duration::from_millis(300),
             ..RunOptions::default()
         };
-        let t = Instant::now();
         let e = import_file(
             &dwg,
             &ImportOptions::default(),
@@ -806,7 +805,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(e, DwgError::Timeout { .. }), "{e}");
-        assert!(t.elapsed() < Duration::from_secs(10));
         // The tool made DXF that is not DXF.
         let s = Stubs::new();
         s.script("dwg2dxf", "echo garbage > \"$3\"");

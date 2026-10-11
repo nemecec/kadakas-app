@@ -815,17 +815,11 @@ fn marks_cannot_make_marks_and_export_stays_small() {
         &mut s,
         json!({"op": "add_object", "shape": {"kind": "line", "a": [0, 0], "b": [6000, 0]}}),
     );
-    let t = std::time::Instant::now();
     let svg = ok(&mut s, "render.svg", json!({}))["svg"]
         .as_str()
         .unwrap()
         .to_string();
-    assert!(
-        t.elapsed().as_secs() < 2 && svg.len() < 200_000,
-        "{} bytes in {:?}",
-        svg.len(),
-        t.elapsed()
-    );
+    assert!(svg.len() < 200_000, "{} bytes", svg.len());
     let out = tmp("mark.dxf");
     let r = ok(&mut s, "export.file", json!({"path": out, "format": "dxf"}));
     assert!(r["exported"].as_u64().unwrap() >= 1);

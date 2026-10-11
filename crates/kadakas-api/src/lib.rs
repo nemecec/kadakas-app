@@ -736,6 +736,13 @@ impl Session {
         }
     }
 
+    /// How often the annotation cache made primitives and legend rows, as `(primitives, rows)`.
+    /// Tests use it to check the work done (a cache hit makes no new entry).
+    #[doc(hidden)]
+    pub fn annotation_builds(&self) -> (u64, u64) {
+        self.annot_cache.builds()
+    }
+
     /// The SVG of the document with the site model and annotation extensions. `render.svg`, the
     /// command `kadakas render` and the app's SVG export all use this one function.
     /// The width is in px, 16 to 8192.

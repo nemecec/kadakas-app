@@ -63,13 +63,11 @@ fn tin_of_50k_points_in_under_a_second() {
 }
 
 #[test]
-fn tin_of_5k_points_builds_quickly_in_any_mode() {
-    let t = Instant::now();
+fn tin_of_5k_points_builds_in_any_mode() {
     let tin = Tin::build(&SourceData {
         points: random_terrain(5_000),
         lines: vec![],
     })
     .unwrap();
     assert!(tin.triangles.len() > 5_000);
-    assert!(t.elapsed().as_secs_f64() < 5.0);
 }

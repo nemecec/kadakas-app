@@ -263,18 +263,14 @@ fn a_refused_token_fails_the_client_for_good_and_the_tries_stop() {
 
 #[test]
 fn connect_returns_at_once_and_close_does_not_wait_for_a_connection_that_is_not_there() {
-    // 10.255.255.1 is not routed here: the connection hangs or fails, but the call returns.
-    let mut ep = WsEndpoint::new("ws://127.0.0.1:9/ws/x", None).unwrap();
-    let t0 = Instant::now();
+    // A listener that never answers: the TCP connection opens (the system queues it) and the
+    // WebSocket handshake never ends. A call that waited for it would block this test for good.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://{}/ws/x", silent.local_addr().unwrap());
+    let mut ep = WsEndpoint::new(&url, None).unwrap();
     let mut t = ep.connect().unwrap();
-    let _ = t.recv();
-    assert!(t0.elapsed() < Duration::from_millis(200));
+    assert!(matches!(t.recv(), Ok(None)), "nothing arrives yet");
     t.close();
-    assert!(
-        t0.elapsed() < Duration::from_millis(1500),
-        "{:?}",
-        t0.elapsed()
-    );
     // Messages sent while the socket is not open yet wait in the queue.
     let server = TestServer::start();
     let mut t = WsEndpoint::new(&server.url("doc"), None)
@@ -328,11 +324,9 @@ fn a_dead_server_is_an_error_and_not_a_hang() {
     let url = server.url("doc");
     server.stop();
     let mut ep = WsEndpoint::new(&url, None).unwrap();
-    let t0 = Instant::now();
     let mut t = ep.connect().unwrap();
     assert!(matches!(end_of(&mut *t), TransportError::Closed));
     assert!(t.failure().unwrap().contains("cannot connect"));
-    assert!(t0.elapsed() < Duration::from_secs(6));
     // wss to a server that speaks no TLS fails with an error too.
     let live = TestServer::start();
     let wss = live.url("doc").replace("ws://", "wss://");

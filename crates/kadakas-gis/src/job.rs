@@ -111,10 +111,9 @@ mod tests {
             Ok(5)
         });
         assert_eq!(j.label, "slow");
-        let t = Instant::now();
+        // A call that blocked here would never return: the job waits for the signal below.
         assert!(!j.is_done());
         assert!(j.take().is_none());
-        assert!(t.elapsed() < Duration::from_millis(200));
         go.send(()).unwrap();
         assert_eq!(j.wait(Duration::from_secs(5)).unwrap().unwrap(), 5);
         assert!(j.take().is_none());
