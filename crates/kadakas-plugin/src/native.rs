@@ -5,10 +5,11 @@
 //! - **No imports.** The linker is empty, so a module cannot call the host, WASI, files or the
 //!   network. A module that wants an import does not load.
 //! - **Fuel.** Every call gets [`Limits::fuel`]. An endless loop stops with a limit error.
-//! - **Wall-clock time.** Fuel counts instructions, but `memory.fill` and `memory.copy` cost one
-//!   unit for many bytes. So a ticker thread advances the epoch of the engine every
-//!   [`TICK_MILLIS`] ms, and every call has a deadline of [`Limits::max_millis`]. The fuel stays
-//!   as the exact limit that does not depend on the speed of the computer.
+//! - **Wall-clock time.** Fuel counts instructions, and wasmtime 49 also charges bulk operations
+//!   such as `memory.fill` and `memory.copy` by size. Other slow calls may still cost little fuel.
+//!   So a ticker thread advances the epoch of the engine every [`TICK_MILLIS`] ms, and every call
+//!   has a deadline of [`Limits::max_millis`]. The fuel stays as the exact limit that does not
+//!   depend on the speed of the computer.
 //! - **Determinism.** NaN results are made canonical, and relaxed SIMD (whose results depend on
 //!   the processor) is off, so one module gives the same shapes on every computer.
 //! - **Memory.** A call may use [`Limits::memory_bytes`] of linear memory. Growing past it stops

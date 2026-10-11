@@ -635,34 +635,46 @@ fn a_good_answer_gives_core_shapes_with_attributes() {
 
 // ------------------------------------------------- time, compile limits, determinism
 
+const BULK_FILL_LOOP: &str =
+    "(loop $l (memory.fill (i32.const 0) (i32.const 1) (i32.const 131072)) (br $l)) (i64.const 0)";
+
+fn run_bulk_fill_loop(limits: &Limits) -> PluginError {
+    let wasm = module_with(MANIFEST, "", Some(BULK_FILL_LOOP), "");
+    let p = load(&wasm, limits).unwrap();
+    p.reset(
+        &permit_for(&p),
+        &Map::new(),
+        &Geometry::Point {
+            at: [0.0, 0.0],
+            rotation: 0.0,
+        },
+    )
+    .unwrap_err()
+}
+
 #[test]
 fn a_bulk_memory_loop_is_stopped_by_the_time_limit() {
-    // memory.fill costs one fuel unit for 128 KiB, so fuel alone would take minutes to run out.
-    let wasm = module_with(
-        MANIFEST,
-        "",
-        Some(
-            "(loop $l (memory.fill (i32.const 0) (i32.const 1) (i32.const 131072)) (br $l)) (i64.const 0)",
-        ),
-        "",
-    );
-    let limits = Limits {
+    // Older wasmtime charged one fuel unit for a whole memory.fill, so fuel alone took minutes to
+    // run out. Newer wasmtime charges by size. To test the epoch deadline on its own, this test
+    // gives the call so much fuel that only the clock can stop it.
+    let e = run_bulk_fill_loop(&Limits {
         max_millis: 300,
+        fuel: u64::MAX / 2,
         ..Limits::default()
-    };
-    let p = load(&wasm, &limits).unwrap();
-    let e = p
-        .reset(
-            &permit_for(&p),
-            &Map::new(),
-            &Geometry::Point {
-                at: [0.0, 0.0],
-                rotation: 0.0,
-            },
-        )
-        .unwrap_err();
+    });
     assert!(
         matches!(&e, PluginError::Limit(m) if m.contains("300 ms")),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_bulk_memory_loop_is_also_stopped_by_fuel() {
+    // With the default fuel, the size-based charge of memory.fill ends the loop long before the
+    // time limit.
+    let e = run_bulk_fill_loop(&Limits::default());
+    assert!(
+        matches!(&e, PluginError::Limit(m) if m.contains("fuel")),
         "{e}"
     );
 }

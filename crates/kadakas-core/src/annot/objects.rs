@@ -175,10 +175,9 @@ impl DimMode {
                     DimMode::Chain { axis: a }
                 } else if let Some(a) = s.strip_prefix("baseline_").and_then(axis_of) {
                     DimMode::Baseline { axis: a }
-                } else if let Some(a) = s.strip_prefix("ordinate_").and_then(axis_of) {
-                    DimMode::Ordinate { axis: a }
                 } else {
-                    return None;
+                    let a = s.strip_prefix("ordinate_").and_then(axis_of)?;
+                    DimMode::Ordinate { axis: a }
                 }
             }
         })

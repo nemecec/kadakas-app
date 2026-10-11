@@ -66,6 +66,7 @@ yanked = "deny"
 # with a reason. Keep this list empty if you can.
 ignore = [
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in kadakas-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
+  { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (a notice, not a bug). It is pulled in only by egui_dock; no maintained upgrade." },
 ]
 
 [sources]

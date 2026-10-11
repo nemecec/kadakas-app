@@ -779,7 +779,7 @@ pub fn render_rgba(name: &str, px: u32, color: [u8; 3]) -> Option<Vec<u8>> {
     );
     let mut data = pm.take();
     // Pixmap pixels are premultiplied. Make them straight.
-    for p in data.chunks_exact_mut(4) {
+    for p in data.as_chunks_mut::<4>().0 {
         let a = p[3] as u32;
         if a > 0 && a < 255 {
             for c in &mut p[..3] {
@@ -1080,7 +1080,12 @@ mod tests {
     fn rendering_uses_the_color_and_scales() {
         let a = render_rgba("line", 48, [255, 0, 0]).unwrap();
         assert_eq!(a.len(), 48 * 48 * 4);
-        let hit = a.chunks_exact(4).find(|p| p[3] > 200).expect("pixels");
+        let hit = a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .find(|p| p[3] > 200)
+            .expect("pixels");
         assert_eq!(&hit[..3], &[255, 0, 0]);
         assert!(render_rgba("line", 0, [0; 3]).is_some());
     }
@@ -1096,7 +1101,7 @@ mod tests {
         for (i, (name, _)) in ICONS.iter().enumerate() {
             let src = render_rgba(name, px, [20, 20, 20]).unwrap();
             assert!(
-                src.chunks_exact(4).any(|p| p[3] > 0),
+                src.as_chunks::<4>().0.iter().any(|p| p[3] > 0),
                 "icon {name} renders blank"
             );
             let (cx, cy) = ((i as u32 % cols) * cell + 8, (i as u32 / cols) * cell + 8);
@@ -1124,7 +1129,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         for (px, zoom) in [(16, 4), (24, 3), (48, 1)] {
             let (w, h, data) = sheet(px, zoom);
-            let dark = data.chunks_exact(4).filter(|p| p[0] < 128).count();
+            let dark = data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[0] < 128)
+                .count();
             assert!(
                 dark > 3000,
                 "the {px} px icon sheet is blank ({dark} dark pixels)"

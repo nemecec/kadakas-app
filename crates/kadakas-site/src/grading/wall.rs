@@ -638,7 +638,9 @@ impl Mesh {
     /// The volume that the faces enclose: positive for a closed solid with faces that point outward.
     pub fn volume(&self) -> f64 {
         self.idx
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let [a, b, c] = [t[0], t[1], t[2]].map(|i| self.pos[i as usize]);
                 a.dot(b.cross(c)) / 6.0

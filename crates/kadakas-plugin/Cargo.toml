@@ -13,12 +13,12 @@ kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11.0"
 # Reads the structure of a module (function sizes, locals) before it is compiled. Pure.
-wasmparser = { version = "0.243.0", default-features = false, features = ["std"] }
+wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 # Only what we need: the runtime and the Cranelift compiler. No WASI, no cache, no async, no text format.
-wasmtime = { version = "40.0.4", default-features = false, features = ["std", "runtime", "cranelift"] }
+wasmtime = { version = "49.0.2", default-features = false, features = ["std", "runtime", "cranelift"] }
 
 [dev-dependencies]
 # Test modules are written as text (WAT) and compiled in the tests. Not shipped.

@@ -1021,7 +1021,7 @@ mod tests {
         );
         let center = Vec3::new(1500.0, 0.0, 600.0);
         // Triangles on the side and the top must face away from the middle of the block.
-        for t in m.indices.chunks_exact(3) {
+        for t in m.indices.as_chunks::<3>().0 {
             let [a, b, c] = [
                 m.positions[t[0] as usize],
                 m.positions[t[1] as usize],

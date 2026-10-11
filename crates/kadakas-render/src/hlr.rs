@@ -971,8 +971,20 @@ mod tests {
         assert!(svg.contains("stroke-dasharray"));
         // The image has dark lines on white and some gray dashes.
         let img = a.rasterize([255, 255, 255, 255], 1.5);
-        let dark = img.rgba.chunks_exact(4).filter(|p| p[0] < 80).count();
-        let white = img.rgba.chunks_exact(4).filter(|p| p[0] == 255).count();
+        let dark = img
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] < 80)
+            .count();
+        let white = img
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] == 255)
+            .count();
         assert!(dark > 200 && white > 200 * 200 / 2, "{dark} {white}");
         assert_eq!(img, a.rasterize([255, 255, 255, 255], 1.5));
     }

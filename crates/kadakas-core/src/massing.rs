@@ -306,7 +306,7 @@ impl Massing {
                 *dir.entry((t[k], t[(k + 1) % 3])).or_default() += 1;
             }
         }
-        for (&(a, b), _) in dir.iter() {
+        for &(a, b) in dir.keys() {
             if !dir.contains_key(&(b, a)) {
                 s.tris.push([n + a, n + b, b]);
                 s.tris.push([n + a, b, a]);

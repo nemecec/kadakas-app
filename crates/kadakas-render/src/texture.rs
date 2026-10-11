@@ -59,7 +59,7 @@ impl TextureImage {
     pub fn average(&self) -> [f32; 3] {
         let n = (self.width as f64 * self.height as f64).max(1.0);
         let mut sum = [0.0f64; 3];
-        for p in self.rgba.chunks_exact(4) {
+        for p in self.rgba.as_chunks::<4>().0 {
             for k in 0..3 {
                 sum[k] += p[k] as f64;
             }
@@ -295,12 +295,16 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
     let rgba: Vec<u8> = match frame.color_type {
         png::ColorType::Rgba => data.to_vec(),
         png::ColorType::Rgb => data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
         png::ColorType::Grayscale => data.iter().flat_map(|g| [*g, *g, *g, 255]).collect(),
         png::ColorType::GrayscaleAlpha => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
         png::ColorType::Indexed => return Err("indexed PNG was not expanded".into()),
@@ -351,7 +355,9 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
         width: w,
         height: h,
         rgba: rgb
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
     })
@@ -492,7 +498,7 @@ mod tests {
                 assert!((avg[1] - 140.0).abs() < 40.0, "{kind:?} {avg:?}");
             }
             // Every pixel is opaque.
-            assert!(a.rgba.chunks_exact(4).all(|p| p[3] == 255));
+            assert!(a.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         }
     }
 

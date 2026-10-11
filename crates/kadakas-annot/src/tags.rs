@@ -119,6 +119,6 @@ pub fn revisions(doc: &Document) -> Vec<RevisionInfo> {
         }
         r.clouds.push(o.id);
     }
-    out.sort_by(|a, b| a.revision.to_lowercase().cmp(&b.revision.to_lowercase()));
+    out.sort_by_key(|a| a.revision.to_lowercase());
     out
 }

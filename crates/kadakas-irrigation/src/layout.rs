@@ -251,7 +251,7 @@ pub fn drip_lines(
             })
             .collect();
         xs.sort_by(f64::total_cmp);
-        for pair in xs.chunks_exact(2) {
+        for pair in xs.as_chunks::<2>().0 {
             let (x0, x1) = (pair[0] + inset, pair[1] - inset);
             if x1 - x0 > EPS {
                 out.push((

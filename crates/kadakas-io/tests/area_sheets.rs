@@ -43,8 +43,7 @@ fn exporters_skip_hardscapes_and_landscape_areas_on_sheets() {
     );
     let mut doc = ed.doc().clone();
     // The commands refuse these shapes on a sheet, so put them there directly.
-    let mut next = 900;
-    for shape in [
+    for (next, shape) in (900..).zip([
         Shape::Hardscape {
             boundary: tri(54321.0),
             material: "x".into(),
@@ -55,9 +54,8 @@ fn exporters_skip_hardscapes_and_landscape_areas_on_sheets() {
             boundary: tri(65432.0),
             name: "PAPERBED".into(),
         },
-    ] {
+    ]) {
         let id = ObjectId(kadakas_core::uid::Uid::from_num(next));
-        next += 1;
         doc.objects
             .insert(id, Object::new(id, sheet, NONE_CLASS, shape));
     }

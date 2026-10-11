@@ -122,7 +122,7 @@ impl<W: Write> Exporter<'_, W> {
             .entity_with("IFCTRIANGULATEDFACESET", |out| {
                 write!(out, "#{list},$,$,(")?;
                 let mut first = true;
-                for t in idx.chunks_exact(3) {
+                for t in idx.as_chunks::<3>().0 {
                     if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
                         continue;
                     }
@@ -144,7 +144,7 @@ impl<W: Write> Exporter<'_, W> {
             pts.push(self.pt3([p.x, p.y, p.z])?);
         }
         let mut faces = Vec::new();
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
                 continue;
             }
