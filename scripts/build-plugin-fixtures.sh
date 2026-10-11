@@ -24,9 +24,9 @@ fixtures=crates/kadakas-plugin/tests/fixtures
 mkdir -p "$fixtures"
 
 # The home folder first and the repository second: when two prefixes match, rustc takes the last.
-remap="--remap-path-prefix=${HOME}=/build/home --remap-path-prefix=${PWD}=/build/repo"
-if [ -n "${CARGO_HOME:-}" ]; then remap="--remap-path-prefix=${CARGO_HOME}=/build/cargo $remap"; fi
-if [ -n "${RUSTUP_HOME:-}" ]; then remap="--remap-path-prefix=${RUSTUP_HOME}=/build/rustup $remap"; fi
+remap="--remap-path-prefix=${HOME}=/build-home --remap-path-prefix=${PWD}=/build-repo"
+if [ -n "${CARGO_HOME:-}" ]; then remap="--remap-path-prefix=${CARGO_HOME}=/build-cargo $remap"; fi
+if [ -n "${RUSTUP_HOME:-}" ]; then remap="--remap-path-prefix=${RUSTUP_HOME}=/build-rustup $remap"; fi
 
 status=0
 # crate folder : module file name

@@ -816,3 +816,6 @@ mod limits_tests;
 
 #[path = "format_tests.rs"]
 mod format_tests;
+
+#[path = "fixture_tests.rs"]
+mod fixture_tests;
