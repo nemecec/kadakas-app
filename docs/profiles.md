@@ -1,0 +1,108 @@
+# Workspace profiles (PLAT-04)
+
+A workspace profile makes Kadakas feel like another CAD program. One app holds several profiles, and you switch between them while it runs. A profile bundles:
+
+- a keymap (all key chords),
+- command aliases (short names that you type in a small field),
+- the tool sets of the Tool bar: which sets exist, their order, and the tools in each,
+- the menus: which commands are in which menu, and in which order,
+- a terminology overlay: some terms of the UI replaced, per language,
+- optional default units and formats.
+
+Two profiles are built in:
+
+| Profile | Id | What it is |
+|---|---|---|
+| Vectorworks-like | `vectorworks` | The default. Keys, menus, tool sets and terms follow Vectorworks 2026. It is what Kadakas had before profiles, unchanged. |
+| AutoCAD-like | `autocad` | Single-letter keys, about 90 command aliases, Draw, Modify and Annotate menus and tool sets, and terms such as Layer and Dynamic input. |
+
+AutoCAD is a trademark of Autodesk, Inc. Kadakas names it only to say what the profile is like. The profile uses public general knowledge of common command aliases. It has no Autodesk text, icons or files. See `docs/attribution.md`.
+
+## Use a profile
+
+- **Preferences > Workspace profile** shows the profiles. Pick one and it applies at once: keys, menus, tool sets, terms and the command field.
+- **Start with a profile.** The launcher passes `--profile NAME` and sets `KADAKAS_PROFILE` (PLAT-06). The app also accepts them directly. `NAME` is the id or the name of a profile, ignoring case and punctuation (`autocad`, `AutoCAD-like` and `autocad_like` all work). An unknown name shows a note and the app uses the last profile or the default. Without a name, the app starts with the profile of the last session (the id in `profile.txt` in the config folder).
+- **Duplicate** makes a copy that you own. **Rename**, **Delete** and **Export** work on the active profile. **Import** reads a profile file and adds it with a free id and name. The web build has no user profiles on disk.
+- Built-in profiles are read-only. When you change one (a key, the order of tools), Kadakas makes your own copy first, switches to it, and says so.
+- **Shortcuts and tools...** opens the editor. For each action it lists the keys, with a button to remove a key, add a key (press the new key; Esc cancels) and reset the action to its default. If the new key belongs to another action, the editor names that action and asks before it moves the key. Below the keys, each tool set lists its tools with up and down buttons.
+
+Where the files are:
+
+| System | Folder |
+|---|---|
+| macOS | `~/Library/Application Support/kadakas/profiles/` |
+| Linux | `$XDG_CONFIG_HOME/kadakas/profiles/`, else `~/.config/kadakas/profiles/` |
+| Windows | `%APPDATA%\kadakas\profiles\` |
+
+`KADAKAS_PREFS_DIR` moves the config folder. A user profile is `profiles/<id>.json`. The old `keymap.json` still changes the Vectorworks-like profile only.
+
+## The command alias field
+
+Some programs let you type a command name. Kadakas has no command line, so a profile with aliases shows a compact field in the status bar. Press Enter (when nothing is being drawn) or the key of `ui.command_line` (Cmd/Ctrl+9 in the AutoCAD-like profile) to focus it. Type letters and press Enter. The field shows the action that Enter will run, or the aliases that start with your letters. An empty field repeats the last command. Up and Down step through earlier commands. Esc empties the field. An unknown alias stays in the field and shows a message.
+
+Single keys never fire while the field has focus, so `CO` is safe to type. Outside the field, a single letter that is in the keymap runs at once (`C` is the Circle tool in the AutoCAD-like profile). To run an alias that starts with such a letter, focus the field first.
+
+The state machine of the field (`CommandLine`) is in `kadakas-ui-core`, so another UI can reuse it. The app draws the field.
+
+## The profile file
+
+A profile is a JSON object. `format`, `id` and `name` come first; every other part is optional. A missing part takes the default of the Vectorworks-like profile (keys, tool sets, menus) or is empty (aliases, terms, units). So a file can hold only what differs.
+
+```json
+{
+  "format": 1,
+  "id": "my-profile",
+  "name": "My profile",
+  "description": "Optional text.",
+  "keymap": { "tool.line": ["L"], "tool.rect": [], "view.zoom_fit": ["Z", "Home"] },
+  "aliases": { "PL": "tool.polyline", "ZE": "view.zoom_fit" },
+  "tool_sets": [ { "id": "draw", "tools": ["tool.select", "tool.line"] } ],
+  "menus": [ { "id": "draw", "items": ["tool.line", "-", "tool.circle"] } ],
+  "terms": { "en-US": "panels-class = Layer\n", "et": "panels-class = Kiht\n" },
+  "units": { "length": "m", "angle": "decimal" }
+}
+```
+
+| Key | Content |
+|---|---|
+| `format` | Required. The version of the file format. Today it is `1`. A file with a higher number is refused, with a message. When the format changes in a way that old files cannot read, the number goes up and the app converts old files. |
+| `id` | Lower case letters, digits, `-` and `_`, 1 to 24 characters. It is the file name without `.json`. Without it, the file name counts. |
+| `name` | Required, at most 60 characters. Shown in the list (the built-in profiles show a translated name). |
+| `description` | Optional text. |
+| `keymap` | Action ids and chords, as in `keymap.json`: `"tool.line": "G"` or `["G", "Alt+2"]`. An empty list removes all keys of the action. An action that the part names loses its default keys first. An action that it does not name keeps the Vectorworks-like default. A key that is also a default key of an action that the part does not name moves to the named action, and the loader lists it as a problem. The list of action ids is the first column of `docs/keyboard-shortcuts.md`. An exported file holds all actions. |
+| `aliases` | Alias to action id. An alias is 1 to 16 letters or digits (upper case is made from lower case). The target is any action id (`tool.polyline`, `edit.undo`, `cmd.duplicate_array`, ...). |
+| `tool_sets` | A list of `{ "id", "name"?, "tools": [...] }`. A tool is the action id of the tool (`tool.line`). The order in the list is the order in the Tool bar. A set with a known id (`basic`, `modify`, `landscape`, `site`, `irrigation`, `annotation`, `draw`, `annotate`) has a translated title; any other set needs a `name`. The options of the current tool show under the set that holds it. |
+| `menus` | A list of `{ "id", "name"?, "items": [...] }`. An item is `-` (a separator), a menu command or a tool id. Known menu ids with a translated title: `file`, `edit`, `modify`, `site`, `view`, `window`, `help`, `draw`, `annotate`. Any other menu needs a `name`. |
+| `terms` | Language tag to a Fluent text. See below. |
+| `units` | The same object as `units` in `prefs.json` (`length`, `area`, `angle`, ...). The app applies it when the person picks the profile. It does not change again when the app restarts. |
+
+Menu commands: `file.new`, `file.open`, `file.save`, `file.save_as`, `file.export_svg`, `file.export_pdf`, `file.import`, `file.export`, `file.map_sources`, `file.change_crs`, `file.scripts`, `file.preferences`, `edit.undo`, `edit.redo`, `edit.delete`, `edit.select_all`, `ui.quick_search`, `cmd.duplicate_array`, `cmd.rotate_left_90`, `cmd.rotate_right_90`, `cmd.flip_horizontal`, `cmd.flip_vertical`, `cmd.add_surface`, `cmd.subtract_surface`, `cmd.clip_surface`, `cmd.intersect_surface`, `cmd.compose`, `site.create_model`, `site.update_model`, `view.zoom_fit`, `view.history_previous`, `view.history_next`, `view.show_grid`, `view.snapping`, `view.theme`, `view.icon_size`, `window.panels`, `window.layouts`, `help.about`. The browser build leaves out the commands that need files.
+
+How the loader treats mistakes: it never stops for a wrong part. It uses the default for that part and lists a problem (an unknown action, a bad key, an unknown tool or menu item, a duplicate id, a wrong type, a bad alias, a bad terms text). The problems show in the status line when the app loads a file, and after an import. Only a file that cannot be a profile at all is refused: not JSON, not an object, no `format`, a format that is too new, or no name.
+
+The file `crates/kadakas-ui-core/profiles/vectorworks.json` is a full example. A test keeps it equal to the default profile.
+
+## Terminology overlays
+
+`terms` renames terms through Fluent. Each language tag holds a `.ftl` text. Its messages replace the messages with the same id:
+
+```
+panels-class = Layer
+panels-classes = Layers
+panels-add-class = Add Layer
+```
+
+- The ids are the message ids in `crates/kadakas-l10n/locales/en-US/`.
+- A message may use only the variables of the original message.
+- The overlay applies while its language is active. Give a text for each language that you want to change. A profile with only `en-US` leaves Estonian as it was.
+- The loader drops the text of a language that has a syntax error or a wrong variable, and lists a problem. An id that does not exist does no harm and is listed.
+- The overlay is a preference of the person, like the language. It is not document data and the API never sees it.
+
+The AutoCAD-like profile changes Class to Layer (Kiht), Sheet Layers to Layouts (Paigutused), Selection tool to Select, Duplicate Array to Array, and Data bar to Dynamic input. The texts are `crates/kadakas-ui-core/profiles/autocad.en-US.ftl` and `autocad.et.ftl`.
+
+## For developers
+
+- Model: `kadakas_ui_core::profile` (`Profile::parse`, `to_json`, `Profile::builtins`, `ProfileSet`, `CommandLine`, `layout`). It is pure and builds for wasm. The app crate holds the files and the windows (`crates/kadakas-app/src/profiles.rs`).
+- Key edits: `Keymap::set_chords` and `Keymap::conflict_for` find and resolve conflicts. `Profile::set_chords`, `reset_chords`, `move_tool` and `set_alias` edit a user profile.
+- Terms: `kadakas_l10n::set_overlay`, `check_overlay`, and `with_overlay` (one thread; for tests).
+- Add a profile to the program: put the JSON in `crates/kadakas-ui-core/profiles/`, add it to `Profile::builtins`, and add its name and description to `uic-profile.ftl` in both languages.

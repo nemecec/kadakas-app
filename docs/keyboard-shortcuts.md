@@ -50,6 +50,31 @@ is already used by another action, the user file wins, the other action loses th
   Top/Plan is the 2D drawing. The other views are the 3D view. In 3D, drag orbits (the Flyover behavior), Shift-drag,
   Space-drag or middle-drag pans, and the wheel zooms toward the pointer. Zoom to Fit works in 3D too.
 
+## Workspace profiles
+
+The keys on this page are the keys of the Vectorworks-like profile, the default. Other profiles bring their own keys. See `docs/profiles.md`. The `keymap.json` file above still works and changes the Vectorworks-like profile. A user profile has its own keymap; edit it in Preferences > Workspace profile > Shortcuts and tools.
+
+## AutoCAD-like profile
+
+The AutoCAD-like profile uses keys and command aliases that are common in CAD programs of that family. The source is public general knowledge of the usual command aliases. The profile has no vendor text or icons. AutoCAD is a trademark of Autodesk, Inc. (see `docs/attribution.md`). Kadakas has no command line. A short field in the status bar takes an alias: press Enter (with nothing to finish) or Cmd/Ctrl+9, type the letters, press Enter. An empty field repeats the last command. Up and Down show earlier commands. These keys differ from the Vectorworks-like ones:
+
+| Key | Action |
+|---|---|
+| L | Line tool |
+| C | Circle tool |
+| T | Text tool |
+| O | Offset tool |
+| F | Fillet tool |
+| V | Selection tool (Kadakas key; the profile has no other key for it) |
+| Z or Home | Zoom to fit |
+| Cmd/Ctrl+F | Quick search (F is Fillet) |
+| Cmd/Ctrl+9 | Focus the command alias field |
+| F12, F10 | SmartCursor cues, angles relative to the prior segment |
+| Shift+T | Acquire a smart point |
+| Shift+U, I, O, P, K, J | Tool mode groups 1 to 6 |
+
+Aliases (a selection; the file has all of them): `L` line, `PL` polyline, `REC` rectangle, `C` circle, `T` or `MT` text, `M` selection tool (drag to move), `CO` or `AR` Duplicate Array (Kadakas has no plain Copy tool), `RO` rotate, `MI` mirror, `SC` scale, `O` offset, `F` fillet, `CHA` chamfer, `TR` trim, `EX` extend, `BR` split, `X` or `UG` ungroup, `G` group, `E` or `DEL` delete, `U` undo, `Z` or `ZE` zoom to fit, `DLI` dimension, `DAN` angular dimension, `DRA` radial dimension, `MLD` callout, `REVCLOUD` revision cloud, `UNI`, `SU`, `IN` the surface commands, `PLOT` PDF export. Kadakas-only aliases: `PLANT`, `LANDAREA`, `HARDSCAPE`, `SITEMOD`, `GRADING`, `MASSING`, `IRRIGATION`, `DATATAG`, `NORTHARROW`, `SCALEBAR`, `LEGEND`.
+
 ## Tools
 
 Tool keys switch the active tool.

@@ -8,7 +8,7 @@ Kadakas itself is licensed under Apache-2.0 OR MIT (`LICENSE-APACHE`, `LICENSE-M
 
 Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent project and is not affiliated with, endorsed by, or sponsored by Vectorworks, Inc.
 
-AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Kadakas reads or writes, or to compare workflows. Kadakas is not affiliated with their owners.
+AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products only to describe the file formats that Kadakas reads or writes, or to compare workflows. The built-in "AutoCAD-like" workspace profile (PLAT-04, `docs/profiles.md`) uses the name only to say that its keys, command aliases and menu arrangement are familiar to people who know that program. The profile uses general public knowledge of common command aliases. It contains no Autodesk text, icon or file. Kadakas is not affiliated with their owners.
 
 SketchUp is a trademark of Trimble Inc. The feature spec names a SketchUp-like user interface as a possible future flavor. Kadakas has no SketchUp import or export and is not affiliated with Trimble Inc.
 
