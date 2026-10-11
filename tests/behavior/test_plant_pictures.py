@@ -112,3 +112,33 @@ def test_the_picture_methods_are_in_describe(cad):
     names = {m["name"] for m in d["methods"]}
     assert {"plant_style.set_picture", "plant_style.clear_picture", "plant_style.get_picture"} <= names
     assert d["plant_pictures"]["formats"] == ["png", "jpeg"]
+
+
+def test_an_image_column_prints_the_picture_in_pdf_and_svg_and_csv_skips_it(cad, tmp_path):
+    sid = make_style(cad, "Field maple")
+    make_style(cad, "Silver birch")
+    cad.result("plants.place", {"mode": "poly", "style": "Field maple", "points": [[0, 0]]})
+    cad.result("plants.place", {"mode": "poly", "style": "Silver birch", "points": [[1000, 0]]})
+    cad.result("plant_style.set_picture", {"id": sid, "base64": base64.b64encode(png_bytes(40, 20)).decode()})
+    db = {
+        "source": "plant_list",
+        "columns": [{"header": "Style", "expr": "Style"}, {"header": "Picture", "expr": "Image"}, {"header": "Count", "expr": "Count"}],
+    }
+    ws = cad.result("worksheet.create", {"name": "Plants with pictures", "databases": [db]})["id"]
+    sheet = cad.result("sheet.create", {"name": "L-1", "paper": "a3"})["layer"]
+    cad.result("worksheet.place", {"id": ws, "at": [20, 280], "layer": sheet, "text_height": 3})
+    # The sheet SVG embeds one picture, for the style that has one.
+    svg = cad.result("sheet.render", {"sheet": sheet})["svg"]
+    assert svg.count("<image") == 1
+    pdf = tmp_path / "t.pdf"
+    cad.result("export.file", {"format": "pdf", "path": str(pdf)})
+    data = pdf.read_bytes()
+    assert b"/Subtype /Image" in data or b"/Subtype/Image" in data
+    # CSV cannot carry pictures: the cell is empty, the other cells stay.
+    csv_text = cad.result("worksheet.export", {"id": ws, "format": "csv"})["csv"]
+    lines = csv_text.strip().splitlines()
+    assert lines[0].startswith("Style,Picture,Count")
+    assert any(line.startswith("Field maple,,1") for line in lines)
+    # The cell value is the picture resource.
+    cells = cad.result("worksheet.get", {"id": ws})
+    assert "image" in str(cells)

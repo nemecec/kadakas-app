@@ -86,7 +86,7 @@ The result is the same on every client (it converges), but it is not what either
 that only move, or that are only added at the end, are safe. A later version needs stable point IDs
 in the document to remove this limit. A resource body is one property too.
 
-The picture of an **underlay** is not sent in the operation. The client sends it once as a blob
+The file of a **plant picture** (an `image` resource, PLT-16) is sent the same way, so changing the name of the resource or the picture of a second style sends no file. The picture of an **underlay** is not sent in the operation. The client sends it once as a blob
 (section 4.7) and the shape holds a reference. A move or a new opacity of the underlay sends a small
 operation.
 
@@ -462,7 +462,7 @@ Every error code has a class. The client acts on the class:
 
 ### 4.7 Blobs
 
-The picture of an underlay (the base64 text of a PNG, 4 KiB or more) is a *blob*. The client
+The picture of an underlay (the base64 text of a PNG, 4 KiB or more) and the file of a plant picture (the key `data` in the body of an `image` resource, 4 KiB or more; its small thumbnail stays in the operation) are *blobs*. The client
 replaces it in the operation by `{"$blob": "<sha256 hex>"}` (the SHA-256 of the text), keeps the text,
 and sends `blob_put` first. The server checks that the hash is the SHA-256 of `data` (`bad_message`
 if not) and keeps the blob; one blob is at most 32 MiB. Before it orders a transaction, the server

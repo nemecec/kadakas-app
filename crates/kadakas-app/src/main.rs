@@ -33,6 +33,7 @@ mod keymap;
 mod layout;
 mod locale;
 mod panels;
+mod picture_ui;
 mod plant_draw;
 mod plant_sheet_ui;
 mod plant_ui;

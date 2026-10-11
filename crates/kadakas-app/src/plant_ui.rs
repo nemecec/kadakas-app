@@ -214,6 +214,7 @@ pub struct PlantUi {
     buffer: Option<Buffer>,
     reassign: Option<ResourceId>,
     new_key: String,
+    pictures: crate::picture_ui::PictureUi,
 }
 
 struct Buffer {
@@ -497,6 +498,8 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
     ui.heading(tr!("plant-ui-resource-manager"));
     ui.separator();
     let mut commands: Vec<Command> = Vec::new();
+    // Pictures that the web build got from the browser, and pictures chosen in this frame.
+    let mut picked: Vec<crate::picture_ui::Picked> = st.pictures.take();
     egui::CollapsingHeader::new(tr!("plant-ui-plant-styles"))
         .id_salt("plant-ui-plant-styles")
         .default_open(true)
@@ -603,6 +606,20 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                     }
                 }
                 ui.separator();
+                match crate::picture_ui::picture_row(ui, doc, id) {
+                    crate::picture_ui::RowAction::Choose => {
+                        let limit = session.limits().picture_limits().max_bytes;
+                        picked.extend(st.pictures.choose(ui.ctx(), id, limit));
+                    }
+                    crate::picture_ui::RowAction::Remove => {
+                        commands.push(Command::SetPlantPicture {
+                            style: id,
+                            picture: None,
+                        })
+                    }
+                    crate::picture_ui::RowAction::None => {}
+                }
+                ui.separator();
                 let n = used_by(doc, id);
                 if n > 0 {
                     ui.label(tr!("plant-ui-in-use-by-object-s-choose-a", n = n));
@@ -647,6 +664,9 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
             });
         });
     crate::plant_sheet_ui::window(ui.ctx(), session, &mut st.sheet, status);
+    for p in picked {
+        *status = crate::picture_ui::apply(session, p);
+    }
     for c in commands {
         let out = run_command(session, &c, status);
         match (&c, out) {
@@ -873,6 +893,9 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
         .map_or(tr!("plant-ui-none-by-instance"), |_| eff.style_name.clone());
     ui.separator();
     ui.strong(tr!("plant-ui-plant-style"));
+    if let Some(sid) = eff.style_id {
+        crate::picture_ui::show_small(ui, doc, sid, 48.0);
+    }
     egui::ComboBox::from_id_salt(("plant_style_of", id))
         .selected_text(selected_text)
         .show_ui(ui, |ui| {
@@ -1092,5 +1115,47 @@ mod tests {
         frame(|ui| {
             color_row(ui, "Fill", &mut c);
         });
+    }
+
+    #[test]
+    fn a_style_with_a_picture_shows_it_in_the_editor_the_thumbnail_and_object_info() {
+        use crate::picture_ui::{Picked, apply};
+        let (mut s, id) = with_styles();
+        let msg = apply(
+            &mut s,
+            Picked {
+                style: id,
+                name: "maple.png".into(),
+                bytes: kadakas_render::picture::test_png(30, 20),
+            },
+        );
+        assert!(msg.contains("maple.png"), "{msg}");
+        let mut st = PlantUi::default();
+        st.selected = Some(id);
+        let mut status = String::new();
+        frame(|ui| resource_manager(ui, &mut s, &mut st, &mut status));
+        let plant = *s.editor.doc().objects.keys().next().unwrap();
+        frame(|ui| plant_object_info(ui, &mut s, plant, &mut status));
+        // The Resource Manager thumbnail is the picture.
+        let t = kadakas_render::thumbnail::thumbnail(s.editor.doc(), id);
+        assert!(t.picture.is_some());
+        frame(|ui| crate::resource_ui::paint_thumbnail(ui, &t, 36.0));
+        // The style editor row asks for Remove, and the command clears the picture.
+        s.editor
+            .execute(&Command::SetPlantPicture {
+                style: id,
+                picture: None,
+            })
+            .unwrap();
+        frame(|ui| resource_manager(ui, &mut s, &mut st, &mut status));
+        assert!(
+            s.editor
+                .doc()
+                .resources
+                .plant_style(id)
+                .unwrap()
+                .image
+                .is_none()
+        );
     }
 }

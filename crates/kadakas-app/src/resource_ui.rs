@@ -54,6 +54,23 @@ pub fn paint_thumbnail(ui: &mut Ui, t: &Thumbnail, side: f32) {
         egui::StrokeKind::Inside,
     );
     let k = side / SIZE as f32;
+    if let Some(pic) = &t.picture {
+        let tex =
+            crate::picture_ui::texture(ui.ctx(), &pic.sha256, [pic.width, pic.height], || {
+                pic.rgba.to_vec()
+            });
+        let ([x, y], [w, h]) = pic.placement();
+        let r = egui::Rect::from_min_size(
+            Pos2::new(rect.min.x + x as f32 * k, rect.min.y + y as f32 * k),
+            Vec2::new(w as f32 * k, h as f32 * k),
+        );
+        p.image(
+            tex.id(),
+            r,
+            egui::Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
     let map = |q: &[f64; 2]| Pos2::new(rect.min.x + q[0] as f32 * k, rect.min.y + q[1] as f32 * k);
     let col = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
     for path in &t.paths {
