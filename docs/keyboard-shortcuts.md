@@ -217,6 +217,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Exit text editing | Esc (both) | Escape | planned |
 | Palettes: Object Info, Navigation, Attributes, Resource Manager | Cmd+I / Cmd+Shift+N / Cmd+Shift+A / Cmd+R / Ctrl+I / Ctrl+Shift+N / Ctrl+Shift+A / Ctrl+R | Ctrl+I / Ctrl+Shift+N / Ctrl+Shift+A / Ctrl+R | planned |
 | Quick search (`ui.quick_search`) | F (both) | F | done |
+| Command line: focus the command alias field of a profile that has aliases (`ui.command_line`) | none (no VW default) | none | done |
 | Edit current workspace | Cmd+Shift+Option+W / Ctrl+Shift+Alt+W | Ctrl+Shift+Alt+W | planned |
 
 ## Data bar

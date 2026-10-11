@@ -56,6 +56,7 @@ pub(crate) const FILES_EN_US: &[(&str, &str)] = files!(
     "uic-keymap.ftl",
     "uic-modify-tool.ftl",
     "uic-plant-tool.ftl",
+    "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-tools.ftl"
 );
@@ -105,6 +106,7 @@ pub(crate) const FILES_ET: &[(&str, &str)] = files!(
     "uic-keymap.ftl",
     "uic-modify-tool.ftl",
     "uic-plant-tool.ftl",
+    "uic-profile.ftl",
     "uic-snap.ftl",
     "uic-tools.ftl"
 );

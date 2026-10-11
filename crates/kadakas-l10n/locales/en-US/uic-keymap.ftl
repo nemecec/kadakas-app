@@ -42,6 +42,7 @@ action-cmd-rotate-right-90 = Rotate right 90 degrees
 action-cmd-flip-horizontal = Flip horizontal
 action-cmd-flip-vertical = Flip vertical
 action-ui-quick-search = Quick search for commands
+action-ui-command-line = Command line: type a command alias
 action-view-history-previous = Previous view in history
 action-view-history-next = Next view in history
 action-snap-cues = Toggle SmartCursor cues
