@@ -15,8 +15,8 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::store::FileBackend;
-use crate::store::{MAX_TRUST_BYTES, MAX_TRUST_ENTRIES, StoreBackend, TRUST_FILE, parse_trust};
+use crate::store::{FileBackend, TRUST_FILE};
+use crate::store::{MAX_TRUST_BYTES, MAX_TRUST_ENTRIES, StoreBackend, parse_trust};
 
 /// The SHA-256 of a module, as lower case hex.
 pub fn hash(wasm: &[u8]) -> String {

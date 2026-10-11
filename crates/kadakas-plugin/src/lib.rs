@@ -11,22 +11,29 @@
 //!   the errors. It names no engine.
 //! - `native` (native targets only): the wasmtime engine. No imports, so no files or network. Fuel
 //!   and a memory cap limit every call.
-//! - [`stub`]: the engine of the browser build. It says that plug-ins are not available there yet.
-//!   A browser engine can implement the same two traits later.
+//! - [`harden`]: rewrites a module so that it enforces its own fuel and memory cap. For engines
+//!   that have no limits of their own.
+//! - [`metered`]: the engine for such hosts, on top of a small `Compiler` trait. The browser
+//!   engine (`web`, wasm32 only) is a `Compiler` on the `WebAssembly` API of the page.
+//! - [`store`]: keeps installed modules and the trust list between sessions, on a medium that the
+//!   caller gives (a folder, the browser storage, memory).
 //! - [`plugin`]: [`Plugin`], one loaded module, with the checks of the manifest and the answer.
 //! - [`trust`]: trust by the SHA-256 of the module file.
 //! - [`registry`]: the installed plug-ins of a session.
 //!
 //! The crate never touches a document. The API crate turns the shapes into commands.
 
+pub mod harden;
+pub mod metered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 pub mod plugin;
 pub mod registry;
 pub mod runtime;
 pub mod store;
-pub mod stub;
 pub mod trust;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 pub use plugin::{Generated, Plugin, ToolCall, ToolDone, ToolStep};
 pub use registry::{Registry, StoreReport};

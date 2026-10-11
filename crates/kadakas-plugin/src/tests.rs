@@ -807,3 +807,6 @@ mod tool_tests;
 
 #[path = "persist_tests.rs"]
 mod persist_tests;
+
+#[path = "metered_tests.rs"]
+mod metered_tests;

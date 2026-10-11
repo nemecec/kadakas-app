@@ -6,8 +6,9 @@
 //! this interface (see [`crate::plugin::Plugin`]), so every backend behaves the same.
 //!
 //! - Native builds use `wasmtime` (`crate::native`).
-//! - The browser build has a stub (`crate::stub`) that says it is not available yet. A later
-//!   backend can call the `WebAssembly` API of the browser behind the same two traits.
+//! - The browser build uses the `WebAssembly` API of the page (`crate::web`) through the metered
+//!   engine (`crate::metered`), which gets its fuel and memory cap from a rewrite of the module
+//!   (`crate::harden`).
 
 use std::fmt;
 
@@ -119,7 +120,7 @@ pub trait PluginRuntime: MaybeSend {
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError>;
 }
 
-/// The engine of this build: wasmtime on native targets, a stub in the browser.
+/// The engine of this build: wasmtime on native targets, the browser engine on wasm32.
 pub fn default_runtime() -> Box<dyn PluginRuntime> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -127,7 +128,7 @@ pub fn default_runtime() -> Box<dyn PluginRuntime> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        Box::new(crate::stub::UnavailableRuntime)
+        Box::new(crate::web::runtime())
     }
 }
 

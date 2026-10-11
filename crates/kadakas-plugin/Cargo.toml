@@ -12,6 +12,8 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11.0"
+# Rewrites a module before it is compiled (limits for the browser engine). Pure.
+wasm-encoder = { version = "0.258.3", default-features = false, features = ["std", "wasmparser"] }
 # Reads the structure of a module (function sizes, locals) before it is compiled. Pure.
 wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }
 
@@ -19,6 +21,14 @@ wasmparser = { version = "0.258.3", default-features = false, features = ["std"]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 # Only what we need: the runtime and the Cranelift compiler. No WASI, no cache, no async, no text format.
 wasmtime = { version = "49.0.2", default-features = false, features = ["std", "runtime", "cranelift"] }
+
+# The browser engine: the WebAssembly API of the page, and its localStorage.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+base64 = "0.22.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
 
 [dev-dependencies]
 # Test modules are written as text (WAT) and compiled in the tests. Not shipped.

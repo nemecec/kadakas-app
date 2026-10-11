@@ -32,7 +32,7 @@ pub const NATIVE_TOTAL_CAP: usize = 64 << 20;
 
 /// Most bytes of all stored modules together in a browser. The browser quota is small, and it is
 /// shared with the autosave of the drawing.
-pub const WEB_TOTAL_CAP: usize = 3 << 20;
+pub const WEB_TOTAL_CAP: usize = 2 << 20;
 
 /// Largest trust list that the host reads, in bytes.
 pub const MAX_TRUST_BYTES: usize = 1 << 20;

@@ -2896,14 +2896,20 @@ dependencies = [
 name = "kadakas-plugin"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "js-sys",
  "kadakas-core",
  "kadakas-plugin-abi",
  "kadakas-sys",
  "serde_json",
  "sha2 0.11.0",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-encoder",
  "wasmparser",
  "wasmtime",
  "wat",
+ "web-sys",
 ]
 
 [[package]]
