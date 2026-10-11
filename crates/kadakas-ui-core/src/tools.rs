@@ -34,6 +34,8 @@ pub enum Tool {
     Hardscape,
     /// Massing models: a footprint with a height or floors and a roof.
     Massing,
+    /// The 3D Polygon: vertices with a height (the shape `polyline3d`).
+    Polygon3d,
     /// Site modifiers: one tool with modes (pad, grade limits).
     SiteModifier,
     /// Irrigation: one tool with modes (outlet, line, POC, valve, controller).
@@ -112,6 +114,7 @@ impl Tool {
     ];
     pub const LANDSCAPE: [Tool; 3] = [Tool::Plant, Tool::LandscapeArea, Tool::Hardscape];
     pub const SITE: [Tool; 3] = [Tool::SiteModifier, Tool::Grading, Tool::Massing];
+    pub const MODEL: [Tool; 1] = [Tool::Polygon3d];
     pub const ANNOTATION: [Tool; 6] = [
         Tool::Dimension,
         Tool::Callout,
@@ -145,6 +148,7 @@ impl Tool {
             Tool::LandscapeArea => tr!("uic-tools-landscape-area"),
             Tool::Hardscape => tr!("uic-tools-hardscape"),
             Tool::Massing => tr!("uic-tools-massing-model"),
+            Tool::Polygon3d => tr!("uic-tools-polygon3d"),
             Tool::SiteModifier => tr!("uic-tools-site-modifiers"),
             Tool::Irrigation => tr!("uic-tools-irrigation"),
             Tool::Grading => tr!("uic-tools-grading"),
@@ -279,6 +283,8 @@ pub struct ToolSettings {
     pub areas: crate::area::AreaToolSettings,
     /// Height, floors and roof of the Massing Model tool.
     pub massing: crate::massing::MassingToolSettings,
+    /// Height and closing of the 3D Polygon tool.
+    pub polygon3d: crate::polygon3d::Polygon3dSettings,
     /// Mode and options of the Irrigation tool.
     pub irrigation: IrrSettings,
     /// Mode and options of the Grading tool.
@@ -310,6 +316,7 @@ impl Default for ToolSettings {
             pad_direction_deg: 0.0,
             areas: Default::default(),
             massing: Default::default(),
+            polygon3d: Default::default(),
             irrigation: Default::default(),
             grading: Default::default(),
             annot: Default::default(),
@@ -598,6 +605,10 @@ impl ToolMachine {
                 elevation: None,
             },
             Tool::Massing if pts.len() >= 3 => Shape::Massing(Box::new(s.massing.massing(pts))),
+            Tool::Polygon3d => match s.polygon3d.shape(&pts) {
+                Some(shape) => shape,
+                None => return vec![],
+            },
             Tool::SiteModifier if pts.len() >= 3 && s.modifier_mode == ModifierMode::Pad => {
                 let flat = kadakas_core::site::boundary_points(&pts);
                 let slope = s.pad_end_elevation.and_then(|end| {
@@ -655,6 +666,7 @@ impl ToolMachine {
             | Tool::LandscapeArea
             | Tool::Hardscape
             | Tool::SiteModifier
+            | Tool::Polygon3d
             | Tool::Massing => match input {
                 Input::Press { p, .. } => {
                     let s = cx.settings;
@@ -1031,6 +1043,7 @@ impl ToolMachine {
             ) => {
                 tr!("uic-tools-click-points-pick-a-vertex-mode-in")
             }
+            (Tool::Polygon3d, _) => tr!("uic-tools-click-the-points-of-the-3d-polygon-double"),
             (Tool::Grading, _) => {
                 tr!("uic-tools-pick-a-mode-in-the-data-bar")
             }
@@ -1828,6 +1841,35 @@ mod tests {
     }
 
     #[test]
+    fn polygon3d_tool_draws_points_with_a_height() {
+        let mut f = Fixture::new(Tool::Polygon3d);
+        f.settings.polygon3d.z = 1500.0;
+        for (x, y) in [(0.0, 0.0), (4000.0, 0.0), (4000.0, 3000.0)] {
+            f.click(x, y);
+        }
+        assert!(f.m.hint().contains("3D polygon"));
+        f.send(Input::Enter);
+        let shapes = f.shapes();
+        let [Shape::Polyline3d { points, closed }] = shapes.as_slice() else {
+            panic!("{shapes:?}")
+        };
+        assert!(*closed && points.len() == 3 && points.iter().all(|p| p.z == 1500.0));
+        assert!(!has_vertex_modes(Tool::Polygon3d));
+        assert_eq!(Tool::Polygon3d.name(), "3D Polygon");
+        // An open path needs two points. Two points do not close.
+        let mut g = Fixture::new(Tool::Polygon3d);
+        g.click(0.0, 0.0);
+        g.click(100.0, 0.0);
+        g.send(Input::DoubleClick);
+        assert!(g.shapes().is_empty());
+        g.settings.polygon3d.closed = false;
+        g.click(0.0, 0.0);
+        g.click(100.0, 0.0);
+        g.send(Input::Enter);
+        assert_eq!(g.shapes().len(), 1);
+    }
+
+    #[test]
     fn massing_tool_draws_a_building_block() {
         let mut f = Fixture::new(Tool::Massing);
         f.settings.massing.by_floors = true;
@@ -1911,6 +1953,7 @@ mod tests {
             &Tool::BASIC[..],
             &Tool::LANDSCAPE[..],
             &Tool::SITE[..],
+            &Tool::MODEL[..],
             &Tool::ANNOTATION[..],
             &Tool::IRRIGATION[..],
             &Tool::MODIFY[..],
@@ -1921,7 +1964,7 @@ mod tests {
     #[test]
     fn every_tool_has_a_name_and_every_group_is_complete() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 29);
         for t in &tools {
             assert!(!t.name().is_empty());
         }
@@ -1941,6 +1984,7 @@ mod tests {
             Tool::Hardscape,
             Tool::SiteModifier,
             Tool::Massing,
+            Tool::Polygon3d,
         ];
         for tool in all_tools() {
             let mut f = Fixture::new(tool);

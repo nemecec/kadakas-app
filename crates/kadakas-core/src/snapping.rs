@@ -287,6 +287,16 @@ impl Geometry {
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => polygon_edges(boundary, true, self),
             Shape::Massing(m) => polygon_edges(&m.footprint, true, self),
+            Shape::Extrude(e) => {
+                polygon_edges(&e.profile, true, self);
+                for h in &e.holes {
+                    polygon_edges(h, true, self);
+                }
+            }
+            Shape::Sweep(_) => {
+                let (lo, hi) = shape.bounds();
+                self.add_box(lo, hi);
+            }
             Shape::Mesh3d(m) => {
                 let (lo, hi) = m.bounds3();
                 self.add_box(lo.truncate(), hi.truncate());

@@ -205,6 +205,38 @@ pub fn draw_shape(painter: &Painter, view: &View, shape: &Shape, st: Style, offs
                 painter.line_segment(seg, stroke);
             }
         }
+        Shape::Extrude(e) => {
+            let tol = curve_tolerance(view.zoom);
+            let outer = curve::flatten(&e.profile, true, tol);
+            let holes: Vec<Vec<DVec2>> = e
+                .holes
+                .iter()
+                .map(|h| curve::flatten(h, true, tol))
+                .collect();
+            // The holes join the outline by bridges, so the fill leaves them empty.
+            let filled = holes.iter().fold(outer.clone(), |acc, h| {
+                kadakas_core::hardscape::offset::bridge(acc, h.clone())
+            });
+            let sp: Vec<Pos2> = filled.iter().map(|p| s(*p)).collect();
+            fill_polygon(painter, &filled, &sp, st.fill);
+            path(&outer, true);
+            for h in &holes {
+                path(h, true);
+            }
+        }
+        Shape::Sweep(sw) => {
+            // Plan view: the box around the solid. The 3D view shows the surface.
+            let (lo, hi) = sw.bounds3();
+            let flat = [
+                lo.truncate(),
+                DVec2::new(hi.x, lo.y),
+                hi.truncate(),
+                DVec2::new(lo.x, hi.y),
+            ];
+            let sp: Vec<Pos2> = flat.iter().map(|p| s(*p)).collect();
+            fill_polygon(painter, &flat, &sp, st.fill);
+            path(&flat, true);
+        }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh. The 3D view shows the triangles.
             let (lo, hi) = m.bounds3();

@@ -120,6 +120,7 @@ pub fn length_m(shape: &Shape) -> Option<f64> {
             curve_length(boundary, true)
         }
         Shape::Massing(m) => curve_length(&m.footprint, true),
+        Shape::Extrude(e) => curve_length(&e.profile, true),
         Shape::Polyline3d { points, closed } => {
             let mut t: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
             if *closed && points.len() > 1 {
@@ -148,6 +149,7 @@ fn is_closed(shape: &Shape) -> bool {
             | Shape::LandscapeArea { .. }
             | Shape::Hardscape { .. }
             | Shape::Massing(_)
+            | Shape::Extrude(_)
             | Shape::Polyline { closed: true, .. }
             | Shape::Polyline3d { closed: true, .. }
     )
@@ -373,6 +375,11 @@ fn builtin(
         // The volume of all layers, components included.
         "volume" => match shape {
             Shape::Massing(m) => num(m.quantities().volume / 1e9),
+            // A closed solid only: an open sweep is a surface.
+            Shape::Extrude(_) | Shape::Sweep(_) => shape
+                .solid_mesh()
+                .filter(|m| m.is_closed())
+                .map_or(Prop::NotApplicable, |m| num(m.volume() / 1e9)),
             Shape::Hardscape { .. } => crate::hardscape::report::quantities_on(doc, obj, ground)
                 .map_or(Prop::NotApplicable, |q| num(q.volume_m3)),
             _ => Prop::NotApplicable,
@@ -386,6 +393,8 @@ fn builtin(
             Shape::ExistingTree { species, .. } => text(species.clone()),
             Shape::LandscapeArea { name, .. } => text(name.clone()),
             Shape::Massing(m) => text(m.name.clone()),
+            Shape::Extrude(e) => text(e.name.clone()),
+            Shape::Sweep(s) => text(s.name.clone()),
             Shape::Hardscape { material, .. } => text(material.clone()),
             Shape::Text { text: t, .. } => text(t.clone()),
             _ => Prop::NotApplicable,
@@ -427,6 +436,7 @@ fn builtin(
         },
         "height" => match shape {
             Shape::Massing(m) => num(m.eave_height()),
+            Shape::Extrude(e) => num(e.height.abs()),
             Shape::Plant { height, .. } | Shape::ExistingTree { height, .. } => num(*height),
             _ => Prop::NotApplicable,
         },

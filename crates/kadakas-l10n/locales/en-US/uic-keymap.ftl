@@ -101,3 +101,6 @@ action-view-shaded = Shaded rendering
 action-view-hidden-line = Hidden Line rendering
 action-view-dashed-hidden-line = Dashed Hidden Line rendering
 action-view-realistic = Realistic rendering (textures, sun and shadows)
+action-tool-polygon3d = 3D Polygon tool
+action-cmd-extrude = Extrude
+action-cmd-sweep = Sweep

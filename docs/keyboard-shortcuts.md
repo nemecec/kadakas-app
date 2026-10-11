@@ -109,6 +109,7 @@ Tool keys switch the active tool.
 | Hardscape tool (Kadakas) (`tool.hardscape`) | none | Alt+Shift+H (no VW default; plain H stays Pan) | done |
 | Site Modifiers tool (Kadakas; modes Pad and Grade Limits) (`tool.site_modifier`) | none | Alt+Shift+G (no VW default; Alt+Shift+D is the Door tool) | done |
 | Massing Model tool (Kadakas) (`tool.massing`) | none | Alt+Shift+M (no VW default) | done |
+| 3D Polygon tool (Kadakas; vertices with a height) (`tool.polygon3d`) | none | none (no VW default; set a key in `keymap.json`) | done |
 | Irrigation tool (Kadakas; modes Outlet, Line, POC, Valve and Controller) (`tool.irrigation`) | none | Alt+Shift+I (no VW default; the Vectorworks list has no irrigation keys, and plain I is tool mode group 2) | done |
 | Grading tool (Kadakas; modes Landscape Wall, Grade, Spot Elevation, Stake and Section Line) (`tool.grading`) | none | none (Alt+Shift+W is the Window tool in Vectorworks on the Mac, so set a key in `keymap.json`: `{ "tool.grading": "Alt+Shift+K" }`) | done |
 | Data Tag tool (Kadakas) (`tool.data_tag`) | none | Alt+Shift+T (no VW default) | done |
@@ -225,6 +226,8 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Clip Surface (`cmd.clip_surface`) | Cmd+Shift+Option+C / Ctrl+Shift+Alt+C | Cmd/Ctrl+Shift+Alt+C | done |
 | Subtract Surface (Kadakas; the base is the lowest selected shape) (`cmd.subtract_surface`) | none | none (no VW default) | done |
 | Intersect Surface (`cmd.intersect_surface`) | Cmd+Shift+Option+I / Ctrl+Shift+Alt+I | Cmd/Ctrl+Shift+Alt+I | done |
+| Extrude (Model > Extrude) (`cmd.extrude`) | none | none (no VW default) | done |
+| Sweep (Model > Sweep) (`cmd.sweep`) | none | none (no VW default) | done |
 | Compose (`cmd.compose`) | Cmd+Shift+Option+P / Ctrl+Shift+Alt+P | Cmd/Ctrl+Shift+Alt+P | done |
 | Move (dialog) | Cmd+M / Ctrl+M | Ctrl+M | planned |
 | Group (`edit.group`) | Cmd+G / Ctrl+G | Cmd/Ctrl+G | done |

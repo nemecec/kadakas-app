@@ -35,8 +35,10 @@ const DENIED_PREFIXES: &[&str] = &[
 /// dialog names), not the texts that guard files, licenses or settings.
 pub const OVERLAYABLE: &[&str] = &[
     "action-cmd-duplicate-array",
+    "action-cmd-sweep",
     "action-databar-focus",
     "action-databar-prev",
+    "action-tool-polygon3d",
     "action-tool-select",
     "app-add-a-sheet-layer-first-navigation-sheet",
     "area-ui-the-formation-level-under-the-build-up",
@@ -61,6 +63,7 @@ pub const OVERLAYABLE: &[&str] = &[
     "panels-nothing-selected-active-layer-active-class",
     "panels-override-the-class-attribute",
     "panels-radius-of-new-arc-vertices-type-a",
+    "panels-sweep",
     "plant-ui-back-to-the-elevation-of-the-layer",
     "plant-ui-no-site-model-on-the-layer-of",
     "plant-ui-none-use-the-data-bar",
@@ -71,9 +74,11 @@ pub const OVERLAYABLE: &[&str] = &[
     "snap-ui-off-only-objects-of-the-active-layer",
     "snap-ui-snap-to-grey-layers-and-classes",
     "snap-ui-snap-to-other-layers",
+    "solid-ui-sweep",
     "uic-annot-tool-click-to-place-the-scale-bar-it",
     "uic-tools-click-to-place-set-values-in-the",
     "uic-tools-pick-a-mode-in-the-data-bar",
+    "uic-tools-polygon3d",
 ];
 
 /// True when an overlay may replace the message `id`.

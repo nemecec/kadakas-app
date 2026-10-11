@@ -24,6 +24,7 @@ use crate::prefs::{self, Prefs};
 use crate::quick_search::{QuickCommand, QuickItem, QuickSearch};
 use crate::resource_ui::{self, ResourceUi};
 use crate::screenshot;
+use crate::solid_ui::{Request as SolidRequest, SolidDialog};
 use crate::theme::{self, ThemeChoice};
 use crate::view::{View, ViewExt as _, grid_step};
 use crate::view3d::{self, View3d};
@@ -73,6 +74,7 @@ pub struct KadakasApp {
     layout_checked: f64,
     quick: QuickSearch,
     array_dlg: ArrayDialog,
+    solid_dlg: SolidDialog,
     view_history: ViewHistory,
     /// Screenshot requests of agents that wait for a picture.
     shots: Vec<screenshot::Pending>,
@@ -396,6 +398,7 @@ impl KadakasApp {
             layout_checked: 0.0,
             quick: QuickSearch::default(),
             array_dlg: ArrayDialog::default(),
+            solid_dlg: SolidDialog::default(),
             view_history: ViewHistory::default(),
             shots: Vec::new(),
             shot_key: 0,
@@ -762,6 +765,8 @@ impl KadakasApp {
             | MenuAction::ClipSurface
             | MenuAction::IntersectSurface
             | MenuAction::Compose
+            | MenuAction::Extrude
+            | MenuAction::Sweep
             | MenuAction::RotateLeft90
             | MenuAction::RotateRight90
             | MenuAction::FlipHorizontal
@@ -1174,6 +1179,15 @@ impl KadakasApp {
                     self.status = tr!("app-select-the-objects-to-duplicate-first");
                 } else {
                     self.array_dlg.open();
+                }
+            }
+            Action::CmdExtrude | Action::CmdSweep => {
+                if self.session.selection.is_empty() {
+                    self.status = tr!("app-select-2d-shapes-to-turn-into-a-solid-first");
+                } else if action == Action::CmdExtrude {
+                    self.solid_dlg.open_extrude();
+                } else {
+                    self.solid_dlg.open_sweep();
                 }
             }
             Action::CmdAddSurface => self.surface_op(SurfaceOp::Add),
@@ -1704,6 +1718,61 @@ impl KadakasApp {
 
     /// Add, subtract, clip, intersect or compose the selected shapes. For Subtract the lowest shape
     /// of the drawing is the base and the others cut it. For Clip the topmost one cuts the others.
+    /// Model > Extrude and Model > Sweep: turns the selected 2D shapes into solids in one undo step.
+    /// The new solids become the selection.
+    fn make_solids(&mut self, req: SolidRequest) {
+        use kadakas_core::model::Shape;
+        use kadakas_core::solid_batch;
+        let doc = self.session.editor.doc();
+        let ids = self.session.selection.clone();
+        let made = match req {
+            SolidRequest::Extrude(opts) => match opts.check() {
+                Ok(()) => solid_batch::extrude(doc, &ids, &opts),
+                Err(e) => {
+                    self.status = tr!("app-error", e = e);
+                    return;
+                }
+            },
+            SolidRequest::Sweep(mut opts, use_line) => {
+                if use_line {
+                    // The first selected line is the axis.
+                    opts.axis_id = ids.iter().copied().find(|id| {
+                        doc.object(*id)
+                            .is_some_and(|o| matches!(o.shape, Shape::Line { .. }))
+                    });
+                    if opts.axis_id.is_none() {
+                        self.status = tr!("app-select-a-line-for-the-axis-too");
+                        return;
+                    }
+                }
+                match opts.check() {
+                    Ok(()) => solid_batch::sweep(doc, &ids, &opts),
+                    Err(e) => {
+                        self.status = tr!("app-error", e = e);
+                        return;
+                    }
+                }
+            }
+        };
+        let (made_count, skipped) = (made.created.len(), made.skipped.len());
+        if let Some(cmd) = &made.command {
+            self.exec(cmd);
+            self.session.selection = made.created.iter().map(|c| c.1).collect();
+        }
+        self.status = match (made_count, skipped) {
+            (0, _) => tr!(
+                "app-no-solid-made-reason",
+                reason = made
+                    .skipped
+                    .first()
+                    .map(|s| s.1.clone())
+                    .unwrap_or_default()
+            ),
+            (n, 0) => tr!("app-solids-made", count = n),
+            (n, k) => tr!("app-solids-made-skipped", count = n, skipped = k),
+        };
+    }
+
     fn surface_op(&mut self, op: SurfaceOp) {
         let doc = self.session.editor.doc();
         let mut ids = self.session.selection.clone();
@@ -2437,6 +2506,9 @@ impl eframe::App for KadakasApp {
         let center = self.selection_center();
         if let Some(cmd) = self.array_dlg.show(&ctx, &self.session.selection, center) {
             self.exec(&cmd);
+        }
+        if let Some(req) = self.solid_dlg.show(&ctx, &self.session.selection) {
+            self.make_solids(req);
         }
         let items = if self.quick.is_open() {
             self.quick_items()

@@ -101,3 +101,6 @@ action-view-shaded = Varjutatud kuvamine
 action-view-hidden-line = Peidetud joonte kuvamine
 action-view-dashed-hidden-line = Katkendjoonega peidetud joonte kuvamine
 action-view-realistic = Realistlik kuvamine (tekstuurid, päike ja varjud)
+action-tool-polygon3d = 3D-hulknurga tööriist
+action-cmd-extrude = Väljapressimine
+action-cmd-sweep = Pöördkeha

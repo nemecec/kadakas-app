@@ -157,6 +157,20 @@ impl Mapper<'_> {
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => self.vertices(boundary)?,
             Shape::Massing(m) => self.vertices(&mut m.footprint)?,
+            Shape::Extrude(e) => {
+                self.vertices(&mut e.profile)?;
+                for h in &mut e.holes {
+                    self.vertices(h)?;
+                }
+            }
+            // The axis point moves; the size of the profile follows the scale of the CRS change.
+            Shape::Sweep(sw) => {
+                sw.origin = self.point3(sw.origin)?;
+                for v in &mut sw.profile {
+                    v.p *= self.scale;
+                }
+                sw.pitch *= self.scale;
+            }
             Shape::Locus3d { p } => *p = self.point3(*p)?,
             Shape::Mesh3d(m) => self.vec3(&mut m.vertices)?,
             Shape::Polyline3d { points, .. } => self.vec3(points)?,

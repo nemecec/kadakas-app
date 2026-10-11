@@ -1058,6 +1058,14 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
             cx.pt3(w, 10, p.x, p.y, p.z);
         }
         Shape::Mesh3d(m) => native::mesh_object(w, cx, o, layer, hidden, m),
+        Shape::Extrude(_) | Shape::Sweep(_) => {
+            // The mesh of the solid, up at the elevation of its layer.
+            let Some(m) = o.shape.solid_mesh() else {
+                return false;
+            };
+            let m = m.lifted(cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation));
+            native::mesh(w, cx, o, layer, hidden, &m.vertices, &m.triangles);
+        }
         Shape::Polyline3d { points, closed } => polyline3d(
             w,
             cx,

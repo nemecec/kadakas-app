@@ -227,6 +227,30 @@ fn draw_object(
                 hi.y - lo.y
             )
         }
+        Shape::Extrude(e) => {
+            // The profile and the holes in one path: the holes are cut out (even-odd).
+            let d: Vec<String> = std::iter::once(&e.profile)
+                .chain(e.holes.iter())
+                .map(|r| curve::path(r, true).svg_d())
+                .collect();
+            writeln!(
+                s,
+                r#"<path d="{}" {style} fill-rule="evenodd" data-kind="extrude"/>"#,
+                d.join(" ")
+            )
+        }
+        Shape::Sweep(sw) => {
+            // Plan view: the box around the solid.
+            let (lo, hi) = sw.bounds3();
+            writeln!(
+                s,
+                r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="sweep"/>"#,
+                lo.x,
+                -hi.y,
+                hi.x - lo.x,
+                hi.y - lo.y
+            )
+        }
         Shape::Massing(m) => {
             let res = if curve::all_straight(&m.footprint) {
                 writeln!(

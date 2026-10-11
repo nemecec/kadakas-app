@@ -819,6 +819,25 @@ impl Builder<'_> {
                 self.scene.mesh.part = PART_MAIN;
                 add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
             }
+            Shape::Extrude(_) | Shape::Sweep(_) => {
+                // The mesh is measured from the layer: add its elevation.
+                if let Some(sm) = obj.shape.solid_mesh() {
+                    let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                    let pts: Vec<Vec3> = sm
+                        .vertices
+                        .iter()
+                        .map(|p| {
+                            Vec3::new(
+                                (p.x - o.x) as f32,
+                                (p.y - o.y) as f32,
+                                (z + p.z - o.z) as f32,
+                            )
+                        })
+                        .collect();
+                    self.scene.mesh.part = PART_MAIN;
+                    add_shaded(&mut self.scene.mesh, &pts, &sm.triangles, color, id);
+                }
+            }
             Shape::Massing(m) => {
                 let color = fill.unwrap_or(crate::massing::DEFAULT_COLOR);
                 let mut sink = SceneSink {
@@ -856,6 +875,13 @@ impl Builder<'_> {
                 self.scene
                     .lines
                     .polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
+                // A closed 3D polygon with a fill is a face.
+                if let (true, Some(color), Some(tris)) =
+                    (*closed, fill, crate::solid3d::polygon_face(points))
+                {
+                    self.scene.mesh.part = PART_MAIN;
+                    add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                }
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}

@@ -158,7 +158,7 @@ fn rect_corners(min: DVec2, max: DVec2) -> [DVec2; 4] {
 }
 
 /// The kinds of shapes that `map_shape` can transform, for error messages.
-pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, symbol, group";
+pub const SUPPORTED: &str = "line, rect, circle, arc, polyline, text, plant, existing_tree, plant_tag, locus3d, polyline3d, extrude, sweep (move and turn only), symbol, group";
 
 /// `shape` after the transform. Refuses shapes that the transform cannot keep (see the module notes).
 pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
@@ -319,6 +319,29 @@ pub fn map_shape(shape: &Shape, xf: &Xf) -> Result<Shape, String> {
                     scale_y: scale_y.map(|v| v * s),
                 }
             }
+        }
+        Shape::Extrude(e) => {
+            let mut e = (**e).clone();
+            e.profile = map_vertices(&e.profile, true, xf)?;
+            e.holes = e
+                .holes
+                .iter()
+                .map(|h| map_vertices(h, true, xf))
+                .collect::<Result<_, _>>()?;
+            Shape::Extrude(Box::new(e))
+        }
+        Shape::Sweep(s) => {
+            // A sweep is a 3D solid: it can be moved and turned, not stretched or mirrored.
+            let mut s = (**s).clone();
+            if xf.is_translation() {
+                let o = xf.apply(s.origin.truncate());
+                s.origin = o.extend(s.origin.z);
+            } else if let Some((center, angle)) = xf.as_rotation() {
+                s.rotate_z(center, angle);
+            } else {
+                return Err("a sweep can be moved and turned, not scaled or mirrored".into());
+            }
+            Shape::Sweep(Box::new(s))
         }
         Shape::Group { name } => Shape::Group { name: name.clone() },
         other => {

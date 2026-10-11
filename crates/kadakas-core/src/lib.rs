@@ -36,6 +36,8 @@ pub mod section;
 pub mod sheets;
 pub mod site;
 pub mod snapping;
+pub mod solid3d;
+pub mod solid_batch;
 pub mod sun;
 pub mod survey;
 pub mod svg;

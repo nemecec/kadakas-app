@@ -73,6 +73,25 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             let flat = curve::flatten(&m.footprint, true, curve_tolerance(tol));
             edge_dist(&flat, true, p) <= tol || point_in_polygon(p, &flat)
         }
+        Shape::Extrude(e) => {
+            let t = curve_tolerance(tol);
+            let outline = curve::flatten(&e.profile, true, t);
+            let holes: Vec<Vec<DVec2>> =
+                e.holes.iter().map(|h| curve::flatten(h, true, t)).collect();
+            edge_dist(&outline, true, p) <= tol
+                || holes.iter().any(|h| edge_dist(h, true, p) <= tol)
+                || (point_in_polygon(p, &outline) && !holes.iter().any(|h| point_in_polygon(p, h)))
+        }
+        Shape::Sweep(sw) => {
+            let (lo, hi) = sw.bounds3();
+            let corners = [
+                lo.truncate(),
+                DVec2::new(hi.x, lo.y),
+                hi.truncate(),
+                DVec2::new(lo.x, hi.y),
+            ];
+            edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
+        }
         Shape::Mesh3d(m) => {
             let (lo, hi) = m.bounds3();
             let corners = [

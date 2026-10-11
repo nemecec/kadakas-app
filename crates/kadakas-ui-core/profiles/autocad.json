@@ -122,7 +122,13 @@
     "DATATAG": "tool.data_tag",
     "NORTHARROW": "tool.north_arrow",
     "SCALEBAR": "tool.scale_bar",
-    "LEGEND": "cmd.graphic_legend"
+    "LEGEND": "cmd.graphic_legend",
+    "EXT": "cmd.extrude",
+    "EXTRUDE": "cmd.extrude",
+    "REV": "cmd.sweep",
+    "REVOLVE": "cmd.sweep",
+    "3P": "tool.polygon3d",
+    "3DPOLY": "tool.polygon3d"
   },
   "tool_sets": [
     {
@@ -157,6 +163,7 @@
     },
     { "id": "landscape", "tools": ["tool.plant", "tool.landscape_area", "tool.hardscape"] },
     { "id": "site", "tools": ["tool.site_modifier", "tool.grading", "tool.massing"] },
+    { "id": "3d", "tools": ["tool.polygon3d"] },
     { "id": "irrigation", "tools": ["tool.irrigation"] }
   ],
   "menus": [
@@ -254,6 +261,7 @@
         "tool.revision_cloud"
       ]
     },
+    { "id": "model", "items": ["cmd.extrude", "cmd.sweep", "-", "tool.polygon3d"] },
     { "id": "site", "items": ["site.create_model", "site.update_model"] },
     {
       "id": "view",

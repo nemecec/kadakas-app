@@ -24,6 +24,7 @@ impl<W: Write> Exporter<'_, W> {
             Shape::SiteModel { .. } => self.terrain(obj),
             Shape::Massing(_) => self.massing(obj),
             Shape::Mesh3d(_) => self.mesh3d(obj),
+            Shape::Extrude(_) | Shape::Sweep(_) => self.solid(obj),
             Shape::Underlay(_) => skip("map underlay (a picture)"),
             Shape::SiteModifier { .. } => skip("site modifier: its effect is in the terrain"),
             Shape::Viewport(_) | Shape::TitleBlock(_) => skip("sheet object (paper space)"),

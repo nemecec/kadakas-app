@@ -82,3 +82,12 @@ app-angles-relative-to-the-prior-segment-on = Nurgad eelmise lõigu suhtes: sees
 app-angles-relative-to-the-prior-segment-off = Nurgad eelmise lõigu suhtes: väljas
 app-snap-on = Haaramine { $name }: sees
 app-snap-off = Haaramine { $name }: väljas
+app-select-2d-shapes-to-turn-into-a-solid-first = Esmalt tuleb valida 2D-kujundid
+app-select-a-line-for-the-axis-too = Teljeks tuleb valida ka joon
+app-no-solid-made-reason = Keha ei tehtud: { $reason }
+app-solids-made =
+    { $count ->
+        [one] Tehti { $count } keha
+       *[other] Tehti { $count } keha
+    }
+app-solids-made-skipped = Tehti { $count } keha, vahele jäeti { $skipped }

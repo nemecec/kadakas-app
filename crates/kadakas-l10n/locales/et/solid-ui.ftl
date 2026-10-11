@@ -1,0 +1,25 @@
+# Väljapressimine, pöördkeha ja 3D-hulknurk (3D-03): Mudeli dialoogid, Objekti info ja tööriista valikud.
+solid-ui-extrude = Väljapressimine
+solid-ui-sweep = Pöördkeha
+solid-ui-height = Kõrgus
+solid-ui-base = Alus
+solid-ui-keep-the-shapes = Algsed 2D-kujundid jäetakse alles
+solid-ui-sweep-angle = Pöördenurk
+solid-ui-segment-angle = Lõigunurk
+solid-ui-pitch = Samm (tõus ühe pöörde kohta)
+solid-ui-axis = Telg
+solid-ui-vertical-axis-at-the-profile = Püstine telg profiili vasakus servas
+solid-ui-the-selected-line = Valitud joon
+solid-ui-ok = OK
+solid-ui-select-2d-shapes-first = Esmalt tuleb valida 2D-kujundid.
+solid-ui-name = Nimi
+solid-ui-holes = Augud
+solid-ui-volume = Ruumala
+solid-ui-closed-profile = Suletud profiil
+solid-ui-profile-angle = Profiili asend
+solid-ui-axis-point = Telje punkt
+solid-ui-axis-direction = Telje suund
+solid-ui-segments = Lõikude arv
+solid-ui-segments-capped = { $count } (piiratud suurima arvuga)
+solid-ui-lowest-point = Madalaim punkt
+solid-ui-height-of-new-points = Uute punktide kõrgus
