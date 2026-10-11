@@ -123,7 +123,7 @@ fn a_tool_run_can_end_with_plain_shapes_or_only_show_the_result() {
             .doc()
             .objects
             .values()
-            .all(|o| o.data.get(DATA_KEY).is_none() && o.parent.is_none())
+            .all(|o| !o.data.contains_key(DATA_KEY) && o.parent.is_none())
     );
     ok(&mut s, "undo", json!({}));
     assert_eq!(s.editor.doc().objects.len(), 0);
