@@ -17,6 +17,7 @@ Python stays the tool for automation scripts. See [scripting.md](scripting.md). 
 - [Write a plug-in](#write-a-plug-in)
 - [The ABI](#the-abi)
 - [Safety and limits](#safety-and-limits)
+- [Threat model](#threat-model)
 - [API reference](#api-reference)
 - [Browser and server](#browser-and-server)
 - [What is not done yet](#what-is-not-done-yet)
@@ -74,6 +75,7 @@ The app keeps installed modules and the trust list for the next session:
 - **Desktop.** Modules are files in `plugins/modules/<sha256>.wasm`, and the trust list is `plugins/trusted_wasm_plugins.json`, both in the user data folder (`~/Library/Application Support/kadakas` on macOS, `%APPDATA%\kadakas` on Windows, `$XDG_DATA_HOME/kadakas` or `~/.local/share/kadakas` elsewhere). The files are private to the user (mode 0600 on Unix) and are written atomically.
 - **Browser.** The same data is in the `localStorage` of the page, as text. If the browser gives no storage (a private window, storage switched off) or a write fails (the quota is full), the module still works in this session and the app says that it is not kept. The browser keeps at most 2 MiB of modules in total.
 - **Checks on load.** The name of a stored module is its SHA-256. On load the host reads at most 2 MiB per file, computes the hash again and refuses a file that does not match. A changed file is not compiled and not run. It stays on the disk and the app reports it at the start. Then the module goes through the same checks as a new install (size, structure, manifest, no imports). The total of all stored modules is capped (64 MiB on the desktop, 2 MiB in the browser). A module that does not fit is installed for the session but not saved.
+- **Listing runs nothing.** Next to each module the app stores its description as `<sha256>.manifest.json`. At start the app lists the plug-ins from these records and does not compile or run any module. A module is compiled, and `describe` runs, the first time it is needed (a review, or a trusted use), and its answer must equal the stored description or the module is refused. A stored module without a description is reported and not loaded.
 - **Trust follows the hash.** A stored module that was changed would have another hash, so it cannot be trusted by accident.
 - **Tests and servers.** The folder is a parameter of the host (`Registry::open_home`). Only the app turns it on, with the folder of the user. `kadakas serve`, `kadakas mcp` and all tests keep modules in memory. The trust list moved from the config folder to the data folder with this change; trust that an older build wrote must be given again.
 
@@ -277,12 +279,15 @@ Version rules: a change that breaks old modules gets a new ABI version. New opti
 
 | Protection | How |
 |---|---|
+| Valid modules only | Every module is *validated* (not only parsed) against a fixed list of WebAssembly features before any engine sees it. The list: mutable globals, sign extension, saturating float to int, multi-value, bulk memory, reference types, SIMD and tail calls. Everything else is off, in particular exceptions, garbage collected types, threads, memory64, custom page sizes, multiple memories, relaxed SIMD, wide arithmetic and stack switching. Both engines use the same list, so they accept the same modules. The browser rewrite validates its input and its output. |
+| Tables | At most 4 tables of at most 100 000 elements each. |
 | No files, no network, no clock | The module has no imports. The host gives it nothing. WASI is not available. |
 | Time | Every call gets a fuel amount (200 million work units, about one per instruction) and, on a computer, 1.5 seconds of real time. Fuel gives the same result on every computer. The time limit stops loops that do much work for little fuel. Both give a limit error. **In the browser there is fuel but no time limit** (see below). |
 | Memory | Every call can use 64 MiB. A module that needs more stops with a limit error. |
 | Stack | A deep or endless recursion stops with a limit error. |
 | Size | The module file: 2 MiB. One function: 256 KiB. At most 5000 functions and 5000 local variables in a function (the host checks this before it compiles the module). The answer: 2 MiB, 2000 shapes, 100 000 polyline vertices. |
 | Bad answers | The call fails and the drawing does not change. Examples: bad JSON, an unknown shape kind, a radius of zero or less, a number that is not finite. Numbers above 1 000 000 000 mm fail too. This holds for the shapes of `reset`, the preview and the result of a tool, and the geometry and parameters of a tool result. |
+| Text | Names, authors, descriptions, labels, options, units, hints and messages lose format characters (zero-width characters and the marks that change the direction of text, such as U+202E) and control characters. A label or option has at most 100 characters, a choice at most 64 options, a record at most 32 fields. |
 | Tool state | At most 64 KiB of JSON. A preview has at most 2000 shapes. A hint has at most 200 characters. |
 | Same result everywhere | NaN results are made canonical, and relaxed SIMD is off. |
 | Fresh instance | Every call starts in an empty instance. A call cannot see the memory of another call. |
@@ -292,6 +297,18 @@ Version rules: a change that breaks old modules gets a new ABI version. New opti
 `plugins.info` shows the limits of a session.
 
 The engine is `wasmtime` (Apache-2.0 with the LLVM exception), used without WASI. See [attribution.md](attribution.md).
+
+## Threat model
+
+What the sandbox protects against: a module that you installed and may even have trusted. It cannot reach your files, the network or the clock, it cannot use more than its fuel, memory and tables, and everything it returns is checked before it enters your drawing.
+
+What it does not protect against, and where the boundary of trust lies:
+
+- **Programs on your computer and scripts in the same browser origin can change the trust list and the stored modules.** The trust list (`trusted_wasm_plugins.json`) and the stored modules are ordinary files in your user data folder, and in a browser they are in the `localStorage` of the page. A program that runs as you can edit them. A script of the same origin can edit `localStorage`. Trust is therefore not a defense against such code: that code could do worse things directly. Kadakas checks the SHA-256 of every stored module against its name, so a changed module file is not run, and it checks the answer of `describe` against the stored description, but an attacker who can write the trust list can trust a module that is stored with a matching hash. Keep your user folder private (the files are created with mode 0600 on Unix).
+- **The trust decision is yours, in the app.** An agent that talks to the API cannot trust or untrust a module. With the host flag `--allow-agent-scripts` an agent can run plug-ins without trust, as it can run Python. Do not start the app with this flag for agents that you do not trust.
+- **The dialog shows what the module says about itself.** The name, author and description are text of the plug-in. The SHA-256 and the size are computed by Kadakas. Format characters are removed from the texts, but a module can still choose a misleading name. Compare the hash with the one that the publisher gives.
+- **A trusted module can still waste time and draw wrong shapes.** In the browser there is no time limit (see above).
+- **The trust list moved.** Older builds wrote it to the config folder (`trusted_wasm_plugins.json`). It is now in `plugins/` in the user data folder. There is no migration: trust that an older build wrote must be given again. This is a change in these release notes.
 
 ## API reference
 
@@ -334,12 +351,29 @@ The host is split so that the engine can change:
 - *No imports.* A module with an import does not load, and the import object is empty.
 - *Same checks as native.* Size of the module, functions, locals and the size of the answer are checked before and after, with the same code.
 
-**What the browser does not enforce: a time limit.** Fuel counts instructions. It does not count time, and a page cannot stop a module that runs on its own thread. A Web Worker with a timeout and `terminate()` would stop it, but a worker can be called only asynchronously, and the `plugins.*` methods are synchronous. So the browser build has no limit of 1.5 seconds. A module can use its whole fuel (200 million instructions, which is some tenths of a second on a normal computer, more on a slow one), and a call blocks the page until then. `plugins.info` says `time_limit_ms: null` there. A tool that fails ends its run, so it blocks the page at most once. Other gaps of the browser build:
+**What the browser does not enforce: a time limit.** Fuel counts instructions. It does not count time, and a page cannot stop a module that runs on its own thread. The browser build therefore has **no wall-clock limit**, and every call blocks the page until it ends. Only the fuel bounds the time, and the browser gives each call less fuel than a computer does:
 
-- Chrome refuses to compile a module over 4 KB with the synchronous API on the main thread. The app compiles modules with the asynchronous API before it installs them (`web::precompile`), and the compiled module is found by the hash of the rewritten bytes. A module that is installed without this step works only where the browser compiles synchronously.
-- The `WebAssembly` features that the browser does not support make a module fail to compile ("invalid"). Wasmtime and the browsers can differ here.
+| Call | Fuel in the browser | Fuel on a computer |
+|---|---|---|
+| `describe` | 5 million | 200 million |
+| pointer move of a tool | 15 million | 200 million |
+| `reset`, click and finish of a tool | 50 million | 200 million |
+
+The real limits, stated plainly:
+
+- A module that uses its whole fuel in every call is slow, but it does not hang the page for ever. How long 50 million instructions take depends on the computer: some tenths of a second on a normal one, more on a slow one.
+- **A tool that is slow but succeeds blocks the page on every event.** A pointer move can cost up to 15 million instructions, and the app sends at most one move per frame, so a tool at the top of that budget makes the page jerky. The app cannot make this better without a worker.
+- A tool that runs out of fuel, crashes or gives a bad answer ends its run, so it blocks the page at most once more.
+- Stored modules are listed from a stored description of each module. No stored module is compiled or run when the page loads. A module is compiled and `describe` runs the first time someone needs it: when you review it, or when a trusted module is used. The answer must match the stored description.
+
+**Follow-up (not done).** The way to a real limit is a Web Worker that runs the module, with a timeout of 1.5 seconds and `terminate()` when it is over, and `plugins.*` calls that are asynchronous for reset and tool steps. A worker can be called only asynchronously, and the `plugins.*` methods and the tool state are synchronous today, so this is a change of the API and of the app, not of the engine.
+
+Other gaps of the browser build:
+
+- Chrome refuses to compile a module over 4 KB with the synchronous API on the main thread. The app compiles modules with the asynchronous API before it installs them (`web::precompile`), with the same limits as the registry, and the compiled module is found by the hash of the rewritten bytes. A module that is installed without this step works only where the browser compiles synchronously.
+- The `WebAssembly` features that the browser does not support make a module fail to compile ("invalid"). The allowed list above is small on purpose.
 - The memory cap is reported as a limit error only when the memory is at the cap after a failure. Another failure is reported as a crash.
-- The browser engine is not tested in a real browser in this repository. Its logic is.
+- The browser engine is tested in Chromium in the repository `kadakas-server` (`scripts/test-browser.sh`), with a test hook that is in the test build only. Its logic is also tested on the desktop.
 
 Because the shapes are plain data, a drawing with plug-in objects works in the browser even without the plug-in. Only changing the parameters needs a plug-in engine.
 

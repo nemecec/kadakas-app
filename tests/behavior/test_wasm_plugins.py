@@ -238,3 +238,15 @@ def test_the_tool_refuses_bad_events_and_shows_the_message_of_the_module(make_se
     # A tool step with a point that is too large is refused by the host.
     assert cad.error("plugins.tool_step",
                      {"plugin": STONES_ID, "event": {"type": "move", "at": [1e12, 0]}})["code"] == 4
+
+
+def test_the_children_never_see_the_real_user_folders(cad):
+    """The CLI of the tests runs with a private home (helpers.isolated_env)."""
+    import os
+    from helpers import TEST_HOME, isolated_env
+
+    env = isolated_env()
+    assert env["HOME"] == str(TEST_HOME) and env["XDG_DATA_HOME"].startswith(str(TEST_HOME))
+    assert TEST_HOME != os.path.expanduser("~")
+    # Nothing was written to the real data folder by this test run for the plug-in store.
+    assert cad.result("plugins.info")["persistent"] is False

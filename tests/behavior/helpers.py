@@ -16,6 +16,39 @@ _EXE = "kadakas.exe" if sys.platform == "win32" else "kadakas"
 BIN = Path(os.environ.get("KADAKAS_BIN", REPO / "target" / "debug" / _EXE))
 
 
+def _make_home() -> Path:
+    """A private home for the child processes. The CLI reads and may write the folders of the
+    user (config, data, state: the trust list of plug-ins, for one). A test must never see or
+    change the real ones, so every child gets this folder as HOME and for all the variables that
+    name a user folder."""
+    import tempfile
+
+    home = Path(tempfile.mkdtemp(prefix="kadakas-test-home-"))
+    for sub in ("config", "data", "state", "cache", "runtime"):
+        (home / sub).mkdir()
+    return home
+
+
+TEST_HOME = _make_home()
+
+
+def isolated_env() -> dict:
+    """The environment for a child process: the real one, with every user folder moved."""
+    env = dict(os.environ)
+    env.update(
+        HOME=str(TEST_HOME),
+        USERPROFILE=str(TEST_HOME),
+        APPDATA=str(TEST_HOME / "data"),
+        LOCALAPPDATA=str(TEST_HOME / "state"),
+        XDG_CONFIG_HOME=str(TEST_HOME / "config"),
+        XDG_DATA_HOME=str(TEST_HOME / "data"),
+        XDG_STATE_HOME=str(TEST_HOME / "state"),
+        XDG_CACHE_HOME=str(TEST_HOME / "cache"),
+        XDG_RUNTIME_DIR=str(TEST_HOME / "runtime"),
+    )
+    return env
+
+
 class StdioClient:
     """A child `kadakas` process that reads one JSON object per line on stdin.
 
@@ -31,6 +64,7 @@ class StdioClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            env=isolated_env(),
         )
         self._lines: queue.Queue = queue.Queue()
         self._err = bytearray()
@@ -225,7 +259,12 @@ class McpClient(StdioClient):
 
 def run_cli(*args, timeout=60):
     return subprocess.run(
-        [str(BIN), *args], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout
+        [str(BIN), *args],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=isolated_env(),
     )
 
 
