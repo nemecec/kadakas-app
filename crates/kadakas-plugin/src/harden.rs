@@ -17,6 +17,18 @@
 //!   more at the start is refused. A `memory.grow` over the cap returns -1, as in any engine.
 //! - **No imports.** A module with an import is refused.
 //!
+//! - **Tables.** Every table gets a maximum of [`MAX_TABLE_ELEMENTS`] elements, a module whose table
+//!   starts bigger is refused, and a module has at most [`MAX_TABLES`] tables (as in the native
+//!   engine).
+//! - **Validation first.** The input is *validated* with an explicit list of WebAssembly features
+//!   ([`allowed_features`]) before it is rewritten, and the output is validated again. This is not
+//!   optional: the fuel counter has the first free global index, so a module that is invalid
+//!   (for example one that uses `global.set 0` with no globals of its own) could become valid
+//!   after the rewrite and reset its own fuel. The list leaves out everything whose effects the
+//!   rewrite does not charge or cap: exceptions (their handlers run without charges), garbage
+//!   collected arrays (they bypass fuel and the memory cap), threads, memory64, custom page sizes,
+//!   multiple memories, relaxed SIMD, wide arithmetic and stack switching.
+//!
 //! The global is exported as [`FUEL_EXPORT`], so the host can tell "out of fuel" from a trap of
 //! the module: out of fuel means the global is below zero after the trap.
 //!
@@ -32,7 +44,7 @@ use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType,
     Instruction, MemoryType, Module, SectionId, ValType,
 };
-use wasmparser::{Operator, Parser, Payload};
+use wasmparser::{Operator, Parser, Payload, Validator, WasmFeatures};
 
 use crate::runtime::PluginError;
 
@@ -41,6 +53,35 @@ pub const FUEL_EXPORT: &str = "kadakas_fuel";
 
 /// Size of a WebAssembly page in bytes.
 pub const PAGE: u64 = 65_536;
+
+/// Most elements that a table may hold. The same cap as the native engine.
+pub const MAX_TABLE_ELEMENTS: u64 = 100_000;
+
+/// Most tables in a module. The same as the native engine.
+pub const MAX_TABLES: u32 = 4;
+
+/// The WebAssembly features that a plug-in may use. This is the single list for both engines
+/// (`Plugin::load` validates with it before any engine sees the module). It is an allowlist: a
+/// feature that is not named here is off.
+pub fn allowed_features() -> WasmFeatures {
+    WasmFeatures::WASM1
+        | WasmFeatures::BULK_MEMORY
+        | WasmFeatures::REFERENCE_TYPES
+        | WasmFeatures::SIGN_EXTENSION
+        | WasmFeatures::SATURATING_FLOAT_TO_INT
+        | WasmFeatures::MULTI_VALUE
+        | WasmFeatures::SIMD
+        | WasmFeatures::TAIL_CALL
+}
+
+/// Validates a module against [`allowed_features`]. Parsing alone does not check that a module is
+/// well formed or that it stays inside the features: this does.
+pub fn validate(wasm: &[u8]) -> Result<(), PluginError> {
+    Validator::new_with_features(allowed_features())
+        .validate_all(wasm)
+        .map(|_| ())
+        .map_err(|e| PluginError::Invalid(format!("the module is not valid: {e}")))
+}
 
 /// One unit of fuel pays for this many elements of a bulk operation.
 const BULK_UNIT_SHIFT: i64 = 4;
@@ -206,6 +247,24 @@ impl Reencode for Hardener {
         })
     }
 
+    fn table_type(
+        &mut self,
+        t: wasmparser::TableType,
+    ) -> Result<wasm_encoder::TableType, Error<Self::Error>> {
+        if t.table64 || t.shared {
+            return user(Fail::Invalid("a table must be a plain 32-bit table".into()));
+        }
+        if t.initial > MAX_TABLE_ELEMENTS {
+            return user(Fail::Limit(format!(
+                "a table starts with {} elements. The limit is {MAX_TABLE_ELEMENTS}",
+                t.initial
+            )));
+        }
+        let mut out = wasm_encoder::reencode::utils::table_type(self, t)?;
+        out.maximum = Some(t.maximum.map_or(MAX_TABLE_ELEMENTS, |m| m.min(MAX_TABLE_ELEMENTS)));
+        Ok(out)
+    }
+
     fn parse_global_section(
         &mut self,
         globals: &mut GlobalSection,
@@ -310,6 +369,7 @@ impl Reencode for Hardener {
 /// Rewrites a module so that it enforces the fuel and the memory cap itself. See the module
 /// documentation. The result has the same exports plus [`FUEL_EXPORT`].
 pub fn harden(wasm: &[u8], limits: &HardenLimits) -> Result<Vec<u8>, PluginError> {
+    validate(wasm)?;
     let mut globals = 0u32;
     let mut has_global_section = false;
     for payload in Parser::new(0).parse_all(wasm) {
@@ -318,6 +378,12 @@ pub fn harden(wasm: &[u8], limits: &HardenLimits) -> Result<Vec<u8>, PluginError
                 return Err(PluginError::Invalid(
                     "the module has imports. A plug-in may import nothing".into(),
                 ));
+            }
+            Payload::TableSection(r) if r.count() > MAX_TABLES => {
+                return Err(PluginError::Limit(format!(
+                    "the module has {} tables. The limit is {MAX_TABLES}",
+                    r.count()
+                )));
             }
             Payload::GlobalSection(r) => {
                 has_global_section = true;
@@ -351,7 +417,10 @@ pub fn harden(wasm: &[u8], limits: &HardenLimits) -> Result<Vec<u8>, PluginError
             Error::ParseError(e) => PluginError::Invalid(e.to_string()),
             other => PluginError::Invalid(other.to_string()),
         })?;
-    Ok(module.finish())
+    let out = module.finish();
+    // The rewrite must give a valid module with the same features. If it does not, refuse.
+    validate(&out)?;
+    Ok(out)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -634,5 +703,85 @@ mod tests {
         assert_eq!(manifest.id, "org.kadakas.raised-planter");
         let used = 200_000_000 - fuel_left(&mut store, &instance);
         assert!(used > 100 && used < 5_000_000, "{used}");
+    }
+
+    // ---- adversarial modules (tests/fixtures/probes, with the sources as .wat)
+
+    const PROBE_GLOBAL: &str = include_str!("../tests/fixtures/probes/a_global.wat");
+    const PROBE_EH: &str = include_str!("../tests/fixtures/probes/b_eh.wat");
+    const PROBE_GC: &str = include_str!("../tests/fixtures/probes/c_gc.wat");
+    const PROBE_MULTI_MEMORY: &str = include_str!("../tests/fixtures/probes/d_mm.wat");
+    const PROBE_TABLE: &str = include_str!("../tests/fixtures/probes/e_tab.wat");
+
+    #[test]
+    fn probe_1_an_invalid_module_cannot_reach_the_fuel_global() {
+        // It sets global 0, and has no global of its own: invalid. The rewrite would have made
+        // global 0 the fuel counter and the module valid.
+        let e = harden(&wat(PROBE_GLOBAL), &LIMITS);
+        assert!(
+            matches!(&e, Err(PluginError::Invalid(m)) if m.contains("not valid")),
+            "{e:?}"
+        );
+        // The host refuses it before any engine sees it.
+        assert!(crate::plugin::scan(&wat(PROBE_GLOBAL), &crate::Limits::default()).is_err());
+    }
+
+    #[test]
+    fn probe_2_exception_handlers_are_refused() {
+        assert!(matches!(harden(&wat(PROBE_EH), &LIMITS), Err(PluginError::Invalid(_))));
+        assert!(crate::plugin::scan(&wat(PROBE_EH), &crate::Limits::default()).is_err());
+    }
+
+    #[test]
+    fn probe_3_garbage_collected_arrays_are_refused() {
+        assert!(matches!(harden(&wat(PROBE_GC), &LIMITS), Err(PluginError::Invalid(_))));
+        assert!(crate::plugin::scan(&wat(PROBE_GC), &crate::Limits::default()).is_err());
+    }
+
+    #[test]
+    fn probe_4_more_than_one_memory_and_huge_tables_are_refused() {
+        assert!(matches!(
+            harden(&wat(PROBE_MULTI_MEMORY), &LIMITS),
+            Err(PluginError::Invalid(_))
+        ));
+        let e = harden(&wat(PROBE_TABLE), &LIMITS);
+        assert!(
+            matches!(&e, Err(PluginError::Limit(m)) if m.contains("table")),
+            "{e:?}"
+        );
+        // Native engine and browser engine accept the same modules.
+        assert!(crate::plugin::scan(&wat(PROBE_MULTI_MEMORY), &crate::Limits::default()).is_err());
+    }
+
+    #[test]
+    fn tables_get_a_maximum_and_there_are_at_most_four() {
+        let grow = r#"(module (memory (export "memory") 1) (table (export "t") 1 funcref)
+          (func (export "grow") (param i32) (result i32) (table.grow 0 (ref.null func) (local.get 0))))"#;
+        let (mut store, instance) = instantiate(&harden(&wat(grow), &LIMITS).unwrap());
+        let f = instance.get_typed_func::<i32, i32>(&mut store, "grow").unwrap();
+        assert_eq!(f.call(&mut store, 100_000).unwrap(), -1);
+        assert_eq!(f.call(&mut store, 10).unwrap(), 1);
+        let five = r#"(module (memory (export "memory") 1)
+          (table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref))"#;
+        assert!(matches!(
+            harden(&wat(five), &LIMITS),
+            Err(PluginError::Limit(m)) if m.contains("tables")
+        ));
+        let four = r#"(module (memory (export "memory") 1)
+          (table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref))"#;
+        assert!(harden(&wat(four), &LIMITS).is_ok());
+        let big_max = r#"(module (memory (export "memory") 1) (table 1 5000000 funcref))"#;
+        assert!(harden(&wat(big_max), &LIMITS).is_ok());
+    }
+
+    #[test]
+    fn the_examples_pass_the_allowed_features() {
+        for bytes in [
+            &include_bytes!("../tests/fixtures/raised_planter.wasm")[..],
+            &include_bytes!("../tests/fixtures/stone_row.wasm")[..],
+        ] {
+            validate(bytes).unwrap();
+        }
+        assert!(validate(b"\0asm\x01\0\0\0\x01").is_err());
     }
 }

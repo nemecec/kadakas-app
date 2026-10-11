@@ -10,6 +10,32 @@ use crate::MAX_VALUE;
 /// Longest text value, in characters.
 pub const MAX_TEXT: usize = 10_000;
 
+/// Longest label, option or unit text of a schema, in characters (the unit has its own, lower cap).
+pub const MAX_LABEL: usize = 100;
+
+/// Most options of a choice.
+pub const MAX_OPTIONS: usize = 64;
+
+/// Most fields of a record.
+pub const MAX_FIELDS: usize = 32;
+
+/// True for a character that formats text without showing: zero-width characters, the marks that
+/// change the direction of text (bidi controls such as U+202E), the soft hyphen, the byte order
+/// mark and the tag characters. Text of a plug-in is shown to people (the trust dialog, the form,
+/// the status bar), where such a character can make a name read as another one.
+pub fn is_format_char(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}'
+        | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}'
+        | '\u{FFF9}'..='\u{FFFB}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
+}
+
+/// The text without format characters (see [`is_format_char`]).
+pub fn strip_format(s: &str) -> String {
+    s.chars().filter(|c| !is_format_char(*c)).collect()
+}
+
 /// The type of a parameter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,6 +164,18 @@ impl ParamSchema {
         self.validate_in(false)
     }
 
+    /// Removes format characters from the texts that people read.
+    pub fn sanitize(&mut self) {
+        self.label = strip_format(&self.label);
+        self.unit = strip_format(&self.unit);
+        for o in &mut self.options {
+            *o = strip_format(o);
+        }
+        for f in &mut self.fields {
+            f.sanitize();
+        }
+    }
+
     fn validate_in(&self, nested: bool) -> Result<(), String> {
         if !valid_name(&self.name) {
             return Err(format!(
@@ -146,6 +184,24 @@ impl ParamSchema {
             ));
         }
         let n = &self.name;
+        if self.label.chars().count() > MAX_LABEL || self.label.chars().any(char::is_control) {
+            return Err(format!(
+                "parameter {n}: the label has at most {MAX_LABEL} characters and no control characters"
+            ));
+        }
+        if self.options.len() > MAX_OPTIONS
+            || self
+                .options
+                .iter()
+                .any(|o| o.chars().count() > MAX_LABEL || o.chars().any(char::is_control))
+        {
+            return Err(format!(
+                "parameter {n}: a choice has at most {MAX_OPTIONS} options of at most {MAX_LABEL} characters"
+            ));
+        }
+        if self.fields.len() > MAX_FIELDS {
+            return Err(format!("parameter {n}: a record has at most {MAX_FIELDS} fields"));
+        }
         match self.ty {
             ParamType::Choice if self.options.is_empty() => {
                 return Err(format!("parameter {n}: a choice needs options"));
@@ -309,6 +365,39 @@ mod tests {
             ..ParamSchema::new("h", ParamType::Number)
         };
         assert!(half.coerce(&json!(2)).unwrap_err().contains("-inf"));
+    }
+
+    #[test]
+    fn format_characters_are_stripped_and_texts_are_capped() {
+        assert!(is_format_char('\u{202E}') && is_format_char('\u{200B}') && !is_format_char('a'));
+        assert_eq!(strip_format("Pl\u{202E}ant\u{FEFF}"), "Plant");
+        let mut p = ParamSchema::new("c", ParamType::Choice).with_label("A\u{202E}B");
+        p.options = vec!["x\u{200B}y".into()];
+        let mut r = ParamSchema::new("r", ParamType::Record);
+        r.fields = vec![p.clone()];
+        r.sanitize();
+        assert_eq!(r.fields[0].label, "AB");
+        assert_eq!(r.fields[0].options, vec!["xy".to_string()]);
+        let mut long = ParamSchema::new("c", ParamType::Choice);
+        long.options = (0..65).map(|i| format!("o{i}")).collect();
+        assert!(long.validate().unwrap_err().contains("options"));
+        long.options = vec!["x".repeat(101)];
+        assert!(long.validate().is_err());
+        long.options = vec!["a\u{7}".into()];
+        assert!(long.validate().is_err());
+        let labeled = ParamSchema::new("n", ParamType::Bool).with_label(&"l".repeat(101));
+        assert!(labeled.validate().unwrap_err().contains("label"));
+        assert!(
+            ParamSchema::new("n", ParamType::Bool)
+                .with_label("a\u{7}")
+                .validate()
+                .is_err()
+        );
+        let mut rec = ParamSchema::new("r", ParamType::Record);
+        rec.fields = (0..33)
+            .map(|i| ParamSchema::new(&format!("f{i}"), ParamType::Bool))
+            .collect();
+        assert!(rec.validate().unwrap_err().contains("fields"));
     }
 
     #[test]

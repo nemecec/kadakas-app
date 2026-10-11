@@ -121,6 +121,14 @@ impl RawInstance for PlainInstance {
         data.get(ptr as usize..end).map(<[u8]>::to_vec)
     }
 
+    fn set_fuel(&mut self, fuel: i64) -> Result<(), RawError> {
+        self.instance
+            .get_global(&mut self.store, "kadakas_fuel")
+            .ok_or_else(|| RawError::Trap("no fuel counter".into()))?
+            .set(&mut self.store, wasmtime::Val::I64(fuel))
+            .map_err(raw)
+    }
+
     fn fuel_left(&mut self) -> Option<i64> {
         self.instance
             .get_global(&mut self.store, "kadakas_fuel")?

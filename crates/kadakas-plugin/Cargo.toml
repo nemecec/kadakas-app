@@ -15,7 +15,7 @@ sha2 = "0.11.0"
 # Rewrites a module before it is compiled (limits for the browser engine). Pure.
 wasm-encoder = { version = "0.258.3", default-features = false, features = ["std", "wasmparser"] }
 # Reads the structure of a module (function sizes, locals) before it is compiled. Pure.
-wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }
+wasmparser = { version = "0.258.3", default-features = false, features = ["std", "validate", "features", "simd"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }

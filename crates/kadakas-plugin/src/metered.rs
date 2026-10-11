@@ -24,7 +24,7 @@
 
 use crate::harden::{FUEL_EXPORT, HardenLimits, PAGE, harden};
 use crate::runtime::{
-    Limits, LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS,
+    CallKind, Limits, LoadedModule, MaybeSend, PluginError, PluginRuntime, REQUIRED_EXPORTS,
 };
 use kadakas_plugin_abi::guest::unpack;
 
@@ -47,6 +47,9 @@ pub trait RawInstance {
     fn call(&mut self, export: &str, args: &[u32]) -> Result<u64, RawError>;
     /// Reads bytes from the linear memory, or `None` if the range is outside the memory.
     fn read(&mut self, ptr: u32, len: u32) -> Option<Vec<u8>>;
+    /// Sets the fuel of this call (the exported fuel global). The host does this before the first
+    /// call into the instance.
+    fn set_fuel(&mut self, fuel: i64) -> Result<(), RawError>;
     /// The fuel that is left (the value of the exported fuel global), if it can be read.
     fn fuel_left(&mut self) -> Option<i64>;
     /// The size of the linear memory in bytes.
@@ -89,7 +92,7 @@ impl<C: Compiler> PluginRuntime for MeteredRuntime<C> {
         let hardened = harden(
             wasm,
             &HardenLimits {
-                fuel: limits.fuel,
+                fuel: limits.start_fuel(),
                 memory_bytes: limits.memory_bytes,
             },
         )?;
@@ -128,11 +131,10 @@ struct Metered {
 }
 
 impl Metered {
-    fn classify(&self, inst: &mut dyn RawInstance, e: RawError) -> PluginError {
+    fn classify(&self, inst: &mut dyn RawInstance, e: RawError, budget: u64) -> PluginError {
         if inst.fuel_left().is_some_and(|f| f < 0) {
             return PluginError::Limit(format!(
-                "the module used all of its {} fuel units (an endless loop?)",
-                self.limits.fuel
+                "the module used all of its {budget} fuel units (an endless loop?)"
             ));
         }
         match e {
@@ -157,15 +159,20 @@ impl Metered {
         export: &str,
         request: Option<&[u8]>,
         max: usize,
+        kind: CallKind,
     ) -> Result<Vec<u8>, PluginError> {
         let mut inst = self.module.instantiate().map_err(|e| match e {
             RawError::Stack(m) => PluginError::Limit(m),
             RawError::Trap(m) => PluginError::Trap(m),
         })?;
         let inst = inst.as_mut();
-        let packed = match self.call(inst, export, request) {
+        let budget = self.limits.fuel_for(kind);
+        let packed = match inst
+            .set_fuel(i64::try_from(budget).unwrap_or(i64::MAX))
+            .and_then(|()| self.call(inst, export, request))
+        {
             Ok(p) => p,
-            Err(e) => return Err(self.classify(inst, e)),
+            Err(e) => return Err(self.classify(inst, e, budget)),
         };
         if packed == 0 {
             return Err(PluginError::BadOutput("the module gave no answer".into()));
@@ -205,14 +212,25 @@ impl LoadedModule for Metered {
             "describe",
             None,
             MAX_MANIFEST_BYTES.min(self.limits.max_output_bytes),
+            CallKind::Describe,
         )
     }
 
     fn reset(&self, request: &[u8]) -> Result<Vec<u8>, PluginError> {
-        self.run("reset", Some(request), self.limits.max_output_bytes)
+        self.run(
+            "reset",
+            Some(request),
+            self.limits.max_output_bytes,
+            CallKind::Reset,
+        )
     }
 
-    fn tool(&self, request: &[u8]) -> Result<Vec<u8>, PluginError> {
-        self.run("tool", Some(request), self.limits.max_output_bytes)
+    fn tool(&self, request: &[u8], light: bool) -> Result<Vec<u8>, PluginError> {
+        let kind = if light {
+            CallKind::ToolMove
+        } else {
+            CallKind::ToolStep
+        };
+        self.run("tool", Some(request), self.limits.max_output_bytes, kind)
     }
 }

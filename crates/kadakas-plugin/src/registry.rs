@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
+use kadakas_plugin_abi::Manifest;
+
 use crate::plugin::Plugin;
-use crate::runtime::{Limits, PluginError, PluginRuntime, default_runtime};
+use crate::runtime::{Limits, PluginError, PluginRuntime, default_limits, default_runtime};
 use crate::store::{ModuleStore, Rejected, StoreBackend, TRUST_FILE};
 use crate::trust::{self, ModuleTrust};
 
@@ -18,7 +20,7 @@ pub struct StoreReport {
 
 /// The installed plug-ins of one session, with the engine and the limits they run under.
 pub struct Registry {
-    runtime: Box<dyn PluginRuntime>,
+    runtime: Arc<dyn PluginRuntime>,
     limits: Limits,
     plugins: Vec<Plugin>,
     /// The modules that the user trusted.
@@ -31,14 +33,14 @@ pub struct Registry {
 
 impl Default for Registry {
     fn default() -> Self {
-        Registry::new(default_runtime(), Limits::default())
+        Registry::new(default_runtime(), default_limits())
     }
 }
 
 impl Registry {
     pub fn new(runtime: Box<dyn PluginRuntime>, limits: Limits) -> Self {
         Registry {
-            runtime,
+            runtime: Arc::from(runtime),
             limits,
             plugins: Vec::new(),
             trust: ModuleTrust::in_memory(),
@@ -85,7 +87,18 @@ impl Registry {
         };
         for bytes in loaded.modules {
             let hash = trust::hash(&bytes);
-            match Plugin::load(self.runtime.as_ref(), &bytes, &self.limits) {
+            // The manifest comes from the record that was saved at install. No module runs here:
+            // the module is compiled, and checked against this record, when it is first needed.
+            let plugin = match store.read_manifest(&hash) {
+                Ok(Some(record)) => Manifest::from_bytes(&record)
+                    .map_err(PluginError::Invalid)
+                    .and_then(|m| Plugin::stored(self.runtime.clone(), bytes, m, &self.limits)),
+                Ok(None) => Err(PluginError::Invalid(
+                    "the store has no description of this module. Install it again".into(),
+                )),
+                Err(e) => Err(PluginError::Invalid(e)),
+            };
+            match plugin {
                 Ok(plugin) => {
                     report.loaded.push(plugin.manifest().id.clone());
                     // Two stored builds of one id: the later name wins, as for an upgrade.
@@ -162,7 +175,18 @@ impl Registry {
     fn keep(&mut self, wasm: &[u8], replaced: Option<String>) {
         let Some(store) = &self.store else { return };
         let mut warning = None;
-        if let Err(e) = store.save(wasm) {
+        let hash = trust::hash(wasm);
+        let record = self
+            .plugins
+            .iter()
+            .find(|p| p.hash() == hash)
+            .map(|p| serde_json::to_vec(p.manifest()).expect("a manifest is valid JSON"));
+        let saved = store.save(wasm).map_err(|e| e.to_string()).and_then(|()| {
+            record
+                .ok_or_else(|| "the plug-in is not installed".to_string())
+                .and_then(|r| store.save_manifest(&hash, &r))
+        });
+        if let Err(e) = saved {
             warning = Some(format!(
                 "the module works in this session, but it is not kept for the next one: {e}"
             ));

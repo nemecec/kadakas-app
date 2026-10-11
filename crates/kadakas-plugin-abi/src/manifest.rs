@@ -153,10 +153,26 @@ impl Manifest {
 
     /// Reads and checks a manifest from the JSON bytes of `describe`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Manifest, String> {
-        let m: Manifest =
+        let mut m: Manifest =
             serde_json::from_slice(bytes).map_err(|e| format!("the manifest is not valid: {e}"))?;
+        m.sanitize();
         m.validate()?;
         Ok(m)
+    }
+
+    /// Removes format characters (bidi controls, zero-width characters) from every text that people
+    /// read. [`Manifest::from_bytes`] does this before it checks the manifest.
+    pub fn sanitize(&mut self) {
+        use crate::param::strip_format;
+        self.name = strip_format(&self.name);
+        self.author = strip_format(&self.author);
+        self.description = strip_format(&self.description);
+        for p in self.object.iter_mut().flat_map(|o| o.params.iter_mut()) {
+            p.sanitize();
+        }
+        for p in self.tool.iter_mut().flat_map(|t| t.params.iter_mut()) {
+            p.sanitize();
+        }
     }
 
     /// True if the plug-in provides this kind.
@@ -427,6 +443,29 @@ mod tests {
                 .unwrap_err()
                 .contains("not valid")
         );
+    }
+
+    #[test]
+    fn a_manifest_loses_its_format_characters() {
+        let mut m = good();
+        m.name = "Safe\u{202E}gnirtS".into();
+        m.author = "A\u{200B}B".into();
+        m.description = "d\u{FEFF}".into();
+        m.object.as_mut().unwrap().params[0].label = "L\u{2066}".into();
+        let back = Manifest::from_bytes(&serde_json::to_vec(&m).unwrap()).unwrap();
+        assert_eq!(back.name, "SafegnirtS");
+        assert_eq!(back.author, "AB");
+        assert_eq!(back.description, "d");
+        assert_eq!(back.object.unwrap().params[0].label, "L");
+        // A name that is only format characters is empty, and refused.
+        m.name = "\u{202E}".into();
+        assert!(Manifest::from_bytes(&serde_json::to_vec(&m).unwrap()).is_err());
+        // The tool parameters are cleaned too.
+        let mut t = good().with_tool(ToolSpec {
+            params: vec![ParamSchema::new("n", ParamType::Bool).with_label("x\u{200B}")],
+        });
+        t.sanitize();
+        assert_eq!(t.tool.unwrap().params[0].label, "x");
     }
 
     #[test]

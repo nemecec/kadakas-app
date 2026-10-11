@@ -27,7 +27,14 @@ impl<T> MaybeSend for T {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Work units for one call (about one per WebAssembly instruction). A call that needs more stops.
+    /// This is the budget of `reset`, and of a click or finish of a tool.
     pub fuel: u64,
+    /// Work units for `describe`. The native engine uses [`Limits::fuel`] for every call. The
+    /// browser engine has no deadline, so it gives the light calls a smaller budget (see
+    /// [`Limits::browser`]). The budget of a call is never above `fuel`.
+    pub fuel_describe: u64,
+    /// Work units for a pointer move of a tool, which comes many times per second.
+    pub fuel_move: u64,
     /// Wall-clock time for one call, in milliseconds. Fuel counts instructions only. A loop of
     /// `memory.fill` costs little fuel but much time, so the time limit stops it.
     pub max_millis: u64,
@@ -53,6 +60,8 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             fuel: 200_000_000,
+            fuel_describe: 200_000_000,
+            fuel_move: 200_000_000,
             max_millis: 1_500,
             memory_bytes: 64 << 20,
             max_module_bytes: 2 << 20,
@@ -64,6 +73,60 @@ impl Default for Limits {
             max_vertices: 100_000,
         }
     }
+}
+
+impl Limits {
+    /// The limits of the browser build. There is no wall-clock deadline there, so the fuel is the
+    /// only bound of the time that a call blocks the page, and it is smaller: `describe` 5M, a
+    /// pointer move 15M, everything else 50M instructions.
+    pub fn browser() -> Limits {
+        Limits {
+            fuel: 50_000_000,
+            fuel_describe: 5_000_000,
+            fuel_move: 15_000_000,
+            ..Limits::default()
+        }
+    }
+
+    /// The fuel of one kind of call.
+    pub fn fuel_for(&self, call: CallKind) -> u64 {
+        match call {
+            CallKind::Describe => self.fuel_describe,
+            CallKind::ToolMove => self.fuel_move,
+            CallKind::Reset | CallKind::ToolStep => self.fuel,
+        }
+        .min(self.fuel)
+    }
+
+    /// The fuel that a rewritten module starts with before the host sets the fuel of a call: the
+    /// smallest budget, so a start function cannot use more than the lightest call.
+    pub fn start_fuel(&self) -> u64 {
+        self.fuel_for(CallKind::Describe)
+            .min(self.fuel_for(CallKind::ToolMove))
+    }
+}
+
+/// The limits that the registry of this build starts with.
+pub fn default_limits() -> Limits {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Limits::browser()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Limits::default()
+    }
+}
+
+/// Which call of a module this is. The browser engine gives each kind its own fuel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Describe,
+    Reset,
+    /// A pointer move of a tool.
+    ToolMove,
+    /// Any other event of a tool.
+    ToolStep,
 }
 
 /// What can go wrong with a plug-in.
@@ -107,8 +170,9 @@ pub trait LoadedModule: MaybeSend {
     fn describe(&self) -> Result<Vec<u8>, PluginError>;
     /// Calls `reset` with the bytes of a request and returns the bytes of the answer.
     fn reset(&self, request: &[u8]) -> Result<Vec<u8>, PluginError>;
-    /// Calls `tool` with the bytes of a request and returns the bytes of the answer.
-    fn tool(&self, request: &[u8]) -> Result<Vec<u8>, PluginError>;
+    /// Calls `tool` with the bytes of a request and returns the bytes of the answer. `light` is
+    /// true for a pointer move, which gets less fuel in the browser.
+    fn tool(&self, request: &[u8], light: bool) -> Result<Vec<u8>, PluginError>;
 }
 
 /// A WebAssembly engine.

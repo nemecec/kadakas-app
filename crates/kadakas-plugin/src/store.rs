@@ -34,6 +34,9 @@ pub const NATIVE_TOTAL_CAP: usize = 64 << 20;
 /// shared with the autosave of the drawing.
 pub const WEB_TOTAL_CAP: usize = 2 << 20;
 
+/// Largest manifest record that the host reads, in bytes.
+pub const MAX_MANIFEST_RECORD: usize = 256 << 10;
+
 /// Largest trust list that the host reads, in bytes.
 pub const MAX_TRUST_BYTES: usize = 1 << 20;
 
@@ -431,12 +434,37 @@ impl ModuleStore {
         self.backend.write(&name, wasm).map_err(StoreError::Medium)
     }
 
-    /// Removes the module with this hash.
+    /// Removes the module with this hash, and its manifest record.
     pub fn remove(&self, hash: &str) -> Result<(), String> {
         match Self::hash_of(&Self::name_of(hash)) {
-            Some(_) => self.backend.remove(&Self::name_of(hash)),
+            Some(_) => {
+                self.backend.remove(&Self::manifest_name(hash))?;
+                self.backend.remove(&Self::name_of(hash))
+            }
             None => Err(format!("'{hash}' is not a module hash")),
         }
+    }
+
+    /// The name of the blob that holds the manifest of the module with this hash.
+    pub fn manifest_name(hash: &str) -> String {
+        format!("{hash}.manifest.json")
+    }
+
+    /// Saves the manifest of a module next to it. The app lists plug-ins from these records, so a
+    /// module that nobody trusts need not run at start.
+    pub fn save_manifest(&self, hash: &str, manifest_json: &[u8]) -> Result<(), String> {
+        if manifest_json.len() > MAX_MANIFEST_RECORD {
+            return Err("the manifest is too big to store".into());
+        }
+        self.backend
+            .write(&Self::manifest_name(hash), manifest_json)
+    }
+
+    /// The stored manifest of a module, if there is one. It is data from the disk: the caller
+    /// parses and checks it, and compares it with what the module says before it trusts it.
+    pub fn read_manifest(&self, hash: &str) -> Result<Option<Vec<u8>>, String> {
+        self.backend
+            .read(&Self::manifest_name(hash), MAX_MANIFEST_RECORD)
     }
 }
 

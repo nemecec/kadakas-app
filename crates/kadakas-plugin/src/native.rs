@@ -254,7 +254,7 @@ impl LoadedModule for Loaded {
         self.call_with_request("reset", request)
     }
 
-    fn tool(&self, request: &[u8]) -> Result<Vec<u8>, PluginError> {
+    fn tool(&self, request: &[u8], _light: bool) -> Result<Vec<u8>, PluginError> {
         self.call_with_request("tool", request)
     }
 }

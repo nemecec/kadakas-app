@@ -307,6 +307,6 @@ fn an_endless_tool_loop_runs_out_of_fuel() {
     )
     .unwrap();
     let loaded = WasmtimeRuntime::new().load(&wasm, &quick()).unwrap();
-    let e = loaded.tool(b"{}").unwrap_err();
+    let e = loaded.tool(b"{}", false).unwrap_err();
     assert!(matches!(e, PluginError::Limit(m) if m.contains("fuel")));
 }

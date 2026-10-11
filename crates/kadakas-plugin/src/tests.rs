@@ -810,3 +810,9 @@ mod persist_tests;
 
 #[path = "metered_tests.rs"]
 mod metered_tests;
+
+#[path = "limits_tests.rs"]
+mod limits_tests;
+
+#[path = "format_tests.rs"]
+mod format_tests;

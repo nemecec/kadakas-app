@@ -76,7 +76,7 @@ fn a_tampered_or_broken_stored_module_is_not_loaded() {
         report
             .rejected
             .iter()
-            .any(|r| r.reason.contains("not a WebAssembly module"))
+            .any(|r| r.reason.contains("no description"))
     );
     // The files stay. The next start reports them again.
     assert!(file.is_file());
@@ -96,7 +96,8 @@ fn an_upgrade_replaces_the_stored_build_and_a_failing_medium_is_a_warning() {
     let other = module_with(&v2, ONE_CIRCLE, None, "");
     reg.install(&other).unwrap();
     let names: Vec<String> = mem.list().unwrap().into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, vec![format!("{}.wasm", trust::hash(&other))]);
+    let h = trust::hash(&other);
+    assert_eq!(names, vec![format!("{h}.manifest.json"), format!("{h}.wasm")]);
     // The medium refuses writes: the install works, with a warning that is read once.
     *mem.fail_writes.lock().unwrap() = Some("quota".into());
     reg.install(PLANTER).unwrap();
@@ -140,4 +141,67 @@ fn a_stored_module_is_checked_again_with_the_limits_of_now() {
     let report = strict.attach(mem, 2 << 20, 2 << 20);
     assert!(strict.is_empty() && report.loaded.is_empty());
     assert!(report.rejected[0].reason.contains("functions"));
+}
+
+#[test]
+fn a_stored_module_is_listed_without_running_and_checked_when_it_is_first_needed() {
+    let mem = Arc::new(MemoryBackend::new());
+    let mut first = Registry::default();
+    first.attach(mem.clone(), 2 << 20, 2 << 20);
+    first.install(PLANTER).unwrap();
+    let mut next = Registry::default();
+    next.attach(mem.clone(), 2 << 20, 2 << 20);
+    let p = next.get("org.kadakas.raised-planter").unwrap();
+    assert_eq!(p.manifest().name, "Raised planter");
+    assert!(!p.is_active(), "listing must not compile or run the module");
+    // A refused call (no trust) does not run it either.
+    let other = Permit::for_test("not this module");
+    assert!(p.reset(&other, &Map::new(), &rect(2000.0, 800.0)).is_err());
+    assert!(!p.is_active());
+    // A trusted call activates it, and the answer is the same as for a fresh install.
+    let hash = p.hash().to_string();
+    let permit = ModuleTrust::in_memory().permit(&hash, true).unwrap();
+    assert_eq!(
+        p.reset(&permit, &Map::new(), &rect(2000.0, 800.0)).unwrap().len(),
+        3
+    );
+    assert!(p.is_active());
+}
+
+#[test]
+fn a_changed_stored_description_stops_the_module() {
+    let mem = Arc::new(MemoryBackend::new());
+    let mut first = Registry::default();
+    first.attach(mem.clone(), 2 << 20, 2 << 20);
+    first.install(PLANTER).unwrap();
+    let hash = trust::hash(PLANTER);
+    // Someone edits the record: another name.
+    let record = String::from_utf8(
+        mem.read(&format!("{hash}.manifest.json"), 1 << 20)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap()
+    .replace("Raised planter", "Something else");
+    mem.write(&format!("{hash}.manifest.json"), record.as_bytes())
+        .unwrap();
+    let mut next = Registry::default();
+    next.attach(mem.clone(), 2 << 20, 2 << 20);
+    let p = next.get("org.kadakas.raised-planter").unwrap();
+    assert_eq!(p.manifest().name, "Something else");
+    let permit = ModuleTrust::in_memory().permit(&hash, true).unwrap();
+    let e = p
+        .reset(&permit, &Map::new(), &rect(2000.0, 800.0))
+        .unwrap_err();
+    assert!(matches!(e, PluginError::Invalid(m) if m.contains("stored description")));
+    assert!(!p.is_active() && p.activate().is_err());
+    // A record that is not a manifest, or too big, is a stored problem, not a crash.
+    mem.write(&format!("{hash}.manifest.json"), b"{").unwrap();
+    let mut broken = Registry::default();
+    let report = broken.attach(mem.clone(), 2 << 20, 2 << 20);
+    assert!(broken.is_empty() && report.rejected.len() == 1);
+    mem.write(&format!("{hash}.manifest.json"), &vec![b' '; 300_000])
+        .unwrap();
+    let mut huge = Registry::default();
+    assert_eq!(huge.attach(mem, 2 << 20, 2 << 20).rejected.len(), 1);
 }

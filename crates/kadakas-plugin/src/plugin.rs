@@ -3,6 +3,8 @@
 //! The module is untrusted code, so everything it says is checked here, the same way for every
 //! engine: the manifest, the size of the answer, the JSON of the answer, and every shape.
 
+use std::sync::{Arc, OnceLock};
+
 use kadakas_core::DVec2;
 use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Attributes, Color, Shape};
@@ -62,12 +64,25 @@ pub struct ToolStep {
     pub done: Option<ToolDone>,
 }
 
+/// The bytes of a plug-in that was read from the store and not compiled or run yet.
+struct Pending {
+    wasm: Vec<u8>,
+    runtime: Arc<dyn PluginRuntime>,
+}
+
 /// A plug-in module that is loaded and checked.
+///
+/// A plug-in from `Plugin::load` is compiled and has run `describe`. A plug-in from
+/// [`Plugin::stored`] has the manifest that was stored when the module was installed, and **no
+/// code has run**: the module is compiled, and `describe` runs, when someone first needs it, and
+/// the answer must match the stored manifest. A page that lists its plug-ins at load time
+/// therefore never runs a module that nobody trusts.
 pub struct Plugin {
     manifest: Manifest,
     hash: String,
     size: usize,
-    module: Box<dyn LoadedModule>,
+    module: OnceLock<Box<dyn LoadedModule>>,
+    pending: Option<Pending>,
     limits: Limits,
 }
 
@@ -116,9 +131,81 @@ impl Plugin {
             manifest,
             hash: trust::hash(wasm),
             size: wasm.len(),
-            module,
+            module: OnceLock::from(module),
+            pending: None,
             limits: *limits,
         })
+    }
+
+    /// A plug-in from the store. Checks the size and the structure of the bytes (parsing and
+    /// validation only) and takes the manifest that was stored with the module. Runs nothing and
+    /// compiles nothing.
+    pub fn stored(
+        runtime: Arc<dyn PluginRuntime>,
+        wasm: Vec<u8>,
+        manifest: Manifest,
+        limits: &Limits,
+    ) -> Result<Plugin, PluginError> {
+        if wasm.len() > limits.max_module_bytes {
+            return Err(PluginError::Limit(format!(
+                "the module has {} bytes. The limit is {}",
+                wasm.len(),
+                limits.max_module_bytes
+            )));
+        }
+        if !wasm.starts_with(b"\0asm") {
+            return Err(PluginError::Invalid(
+                "this is not a WebAssembly module (a .wasm file starts with the bytes 00 61 73 6d)"
+                    .into(),
+            ));
+        }
+        scan(&wasm, limits)?;
+        manifest.validate().map_err(PluginError::Invalid)?;
+        if let Some(p) = manifest.permissions.first() {
+            return Err(PluginError::Refused(format!(
+                "the plug-in '{}' asks for the permission '{}'. This host grants no permissions",
+                manifest.id,
+                p.name()
+            )));
+        }
+        Ok(Plugin {
+            manifest,
+            hash: trust::hash(&wasm),
+            size: wasm.len(),
+            module: OnceLock::new(),
+            pending: Some(Pending { wasm, runtime }),
+            limits: *limits,
+        })
+    }
+
+    /// True once the module is compiled and has run `describe`.
+    pub fn is_active(&self) -> bool {
+        self.module.get().is_some()
+    }
+
+    /// Compiles the module and runs `describe` if that did not happen yet, and checks that the
+    /// module still says what was stored. A module that does not match is refused for good.
+    pub fn activate(&self) -> Result<(), PluginError> {
+        self.module().map(|_| ())
+    }
+
+    fn module(&self) -> Result<&dyn LoadedModule, PluginError> {
+        if let Some(m) = self.module.get() {
+            return Ok(m.as_ref());
+        }
+        let pending = self.pending.as_ref().ok_or_else(|| {
+            PluginError::Invalid("the plug-in has no module".into())
+        })?;
+        let module = pending.runtime.load(&pending.wasm, &self.limits)?;
+        let described = Manifest::from_bytes(&module.describe()?).map_err(PluginError::Invalid)?;
+        if described != self.manifest {
+            return Err(PluginError::Invalid(format!(
+                "the module '{}' does not say what its stored description says. It was changed or the store was edited",
+                self.manifest.id
+            )));
+        }
+        let _ = self.module.set(module);
+        Ok(self.module.get().expect("just set").as_ref())
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -171,7 +258,7 @@ impl Plugin {
             .map_err(PluginError::Refused)?;
         let request = serde_json::to_vec(&ResetRequest::new(params, geometry.clone()))
             .expect("a request is always valid JSON");
-        let bytes = self.module.reset(&request)?;
+        let bytes = self.module()?.reset(&request)?;
         // The engine limits the size already. A second check keeps every engine to the same rule.
         if bytes.len() > self.limits.max_output_bytes {
             return Err(PluginError::Limit(format!(
@@ -234,7 +321,9 @@ impl Plugin {
         let mut request = ToolRequest::new(call.event.clone(), call.state.clone(), params);
         request.modifiers = call.modifiers;
         let request = serde_json::to_vec(&request).expect("a request is always valid JSON");
-        let bytes = self.module.tool(&request)?;
+        let bytes = self
+            .module()?
+            .tool(&request, matches!(call.event, ToolEvent::Move { .. }))?;
         if bytes.len() > self.limits.max_output_bytes {
             return Err(PluginError::Limit(format!(
                 "the answer has {} bytes. The limit is {}",
@@ -319,6 +408,7 @@ pub const MAX_MESSAGE_CHARS: usize = 1000;
 pub fn clean_message(message: &str) -> String {
     let text: String = message
         .chars()
+        .filter(|c| !kadakas_plugin_abi::param::is_format_char(*c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let text = text.trim();
@@ -370,7 +460,8 @@ pub fn scan(wasm: &[u8], limits: &Limits) -> Result<(), PluginError> {
             _ => {}
         }
     }
-    Ok(())
+    // Parsing does not prove that a module is well formed or inside the allowed features.
+    crate::harden::validate(wasm)
 }
 
 fn v2(p: [f64; 2]) -> DVec2 {

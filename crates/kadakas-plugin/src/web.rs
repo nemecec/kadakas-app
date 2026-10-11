@@ -73,7 +73,7 @@ pub async fn precompile(wasm: &[u8], limits: &Limits) -> Result<(), PluginError>
     let hardened = harden(
         wasm,
         &HardenLimits {
-            fuel: limits.fuel,
+            fuel: limits.start_fuel(),
             memory_bytes: limits.memory_bytes,
         },
     )?;
@@ -257,6 +257,15 @@ impl RawInstance for JsInstance {
 
     fn read(&mut self, ptr: u32, len: u32) -> Option<Vec<u8>> {
         self.range(ptr, len).map(|a| a.to_vec())
+    }
+
+    fn set_fuel(&mut self, fuel: i64) -> Result<(), RawError> {
+        let global = self
+            .fuel
+            .as_ref()
+            .ok_or_else(|| RawError::Trap("no fuel counter".into()))?;
+        global.set_value(&BigInt::from(fuel).into());
+        Ok(())
     }
 
     fn fuel_left(&mut self) -> Option<i64> {
