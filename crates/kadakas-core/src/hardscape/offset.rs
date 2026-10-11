@@ -162,6 +162,56 @@ pub fn shifted(center: &[DVec2], shift: f64) -> Vec<DVec2> {
 /// curves and short legs make no loops. Returns an empty list if the path has no length or the
 /// width is not positive and finite.
 pub fn path_outline(center: &[DVec2], width: f64, join: Join, closed: bool) -> Vec<DVec2> {
+    path_outline_within(center, width, join, closed, WORK_BUDGET)
+}
+
+/// Work units that one `path_outline` call may spend on joining holes to the ring. One unit is
+/// one segment test or one point pair. 20 million units take well under a second, and a normal
+/// path needs a few thousand. A path that needs more gives an empty outline, the same answer as a
+/// path without length, which every caller already handles.
+const WORK_BUDGET: u64 = 20_000_000;
+
+/// The work that a call may spend, counted down. `out` is set when a request was too big.
+struct Budget {
+    left: std::cell::Cell<u64>,
+    out: std::cell::Cell<bool>,
+}
+
+impl Budget {
+    fn new(units: u64) -> Self {
+        Self {
+            left: units.into(),
+            out: false.into(),
+        }
+    }
+
+    /// Takes `units` of work. False, and the budget is out, if not enough is left. The work is
+    /// counted before it is done, so the total never goes over the budget.
+    fn take(&self, units: usize) -> bool {
+        let units = units as u64;
+        let left = self.left.get();
+        if units > left {
+            self.left.set(0);
+            self.out.set(true);
+            return false;
+        }
+        self.left.set(left - units);
+        true
+    }
+
+    fn spent(&self, total: u64) -> u64 {
+        total - self.left.get()
+    }
+}
+
+/// `path_outline` with an explicit work budget.
+fn path_outline_within(
+    center: &[DVec2],
+    width: f64,
+    join: Join,
+    closed: bool,
+    work: u64,
+) -> Vec<DVec2> {
     let mut pts = dedupe(center);
     if closed && pts.len() > 1 && pts[0].distance(pts[pts.len() - 1]) <= SAME {
         pts.pop();
@@ -205,10 +255,15 @@ pub fn path_outline(center: &[DVec2], width: f64, join: Join, closed: bool) -> V
     if contours.is_empty() {
         return Vec::new();
     }
+    let budget = Budget::new(work);
     let mut ring = contours.remove(0);
     for k in 0..contours.len() {
         let (done, rest) = contours.split_at_mut(k + 1);
-        ring = bridge_among(ring, std::mem::take(&mut done[k]), rest);
+        ring = bridge_among(ring, std::mem::take(&mut done[k]), rest, &budget);
+        if budget.out.get() {
+            // A bridge that is not checked can cross an edge. No outline is better than a wrong one.
+            return Vec::new();
+        }
     }
     let ring = dedupe(&ring);
     if ring.len() < 3 {
@@ -322,8 +377,11 @@ fn segments_meet(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> bool {
 
 /// True if the bridge `p`-`q` crosses or touches an edge of the ring, apart from the edges that
 /// start or end at one of its two ends.
-fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
+fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2], budget: &Budget) -> bool {
     let n = ring.len();
+    if !budget.take(n) {
+        return true;
+    }
     // A corner a hair from the middle of the bridge would end up inside its thin slit.
     let (pq, len2) = (q - p, p.distance_squared(q));
     let near = |c: DVec2| {
@@ -341,25 +399,36 @@ fn bridge_blocked(p: DVec2, q: DVec2, ring: &[DVec2]) -> bool {
 /// each other: it crosses no edge of the outer ring or of the hole. A bridge that crosses an
 /// edge would make a loop.
 pub fn bridge(outer: Vec<DVec2>, hole: Vec<DVec2>) -> Vec<DVec2> {
-    bridge_among(outer, hole, &[])
+    // No limit on the work here, as before: the other callers join few and small rings.
+    bridge_among(outer, hole, &[], &Budget::new(u64::MAX))
 }
 
 /// Like `bridge`, and the bridge also keeps clear of the contours in `others`, which a later call
-/// joins to the ring.
-fn bridge_among(outer: Vec<DVec2>, hole: Vec<DVec2>, others: &[Vec<DVec2>]) -> Vec<DVec2> {
+/// joins to the ring. Every segment test and point pair is counted in `budget`. When the budget
+/// is out, no more bridges are checked: the result is then not safe, and the caller must look at
+/// `budget.out` and drop it.
+fn bridge_among(
+    outer: Vec<DVec2>,
+    hole: Vec<DVec2>,
+    others: &[Vec<DVec2>],
+    budget: &Budget,
+) -> Vec<DVec2> {
     if hole.len() < 3 {
         return outer;
     }
     let clear = |p: DVec2, q: DVec2| {
-        !bridge_blocked(p, q, &outer)
-            && !bridge_blocked(p, q, &hole)
-            && !others.iter().any(|o| bridge_blocked(p, q, o))
+        !bridge_blocked(p, q, &outer, budget)
+            && !bridge_blocked(p, q, &hole, budget)
+            && !others.iter().any(|o| bridge_blocked(p, q, o, budget))
     };
     // The closest pairs first. Only a few are tried; the closest pair is the fallback.
     let mut tried: Vec<(usize, usize)> = Vec::new();
     let mut chosen = None;
     let mut found = false;
     for _ in 0..24 {
+        if !budget.take(outer.len() * hole.len()) {
+            break;
+        }
         let mut best = (f64::INFINITY, usize::MAX, usize::MAX);
         for (i, p) in outer.iter().enumerate() {
             for (j, q) in hole.iter().enumerate() {
@@ -386,7 +455,10 @@ fn bridge_among(outer: Vec<DVec2>, hole: Vec<DVec2>, others: &[Vec<DVec2>]) -> V
     // The closest pairs can all be blocked: other holes that are already part of the ring may
     // stand in the way. Then every pair is tried, the closest first, so the bridge never crosses
     // an edge as long as some pair sees each other.
-    if !found && outer.len().saturating_mul(hole.len()) <= MAX_BRIDGE_PAIRS {
+    if !found
+        && outer.len().saturating_mul(hole.len()) <= MAX_BRIDGE_PAIRS
+        && budget.take(outer.len() * hole.len())
+    {
         let mut pairs: Vec<(f64, usize, usize)> = Vec::with_capacity(outer.len() * hole.len());
         for (i, p) in outer.iter().enumerate() {
             for (j, q) in hole.iter().enumerate() {
