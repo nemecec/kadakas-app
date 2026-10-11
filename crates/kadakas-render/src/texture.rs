@@ -272,6 +272,12 @@ pub fn decode_png(png_base64: &str) -> Result<TextureImage, String> {
 
 /// Decodes the bytes of a PNG file to RGBA.
 pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
+    decode_png_limited(bytes, u64::MAX)
+}
+
+/// Like [`decode_png_bytes`], and refuses an image of more than `max_pixels` before it allocates
+/// the pixels. The header gives the size, so a small hostile file cannot ask for a large buffer.
+pub fn decode_png_limited(bytes: &[u8], max_pixels: u64) -> Result<TextureImage, String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
@@ -285,6 +291,11 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
     {
         return Err(format!(
             "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
+        ));
+    }
+    if u64::from(info.width) * u64::from(info.height) > max_pixels {
+        return Err(format!(
+            "an image must not have more than {max_pixels} pixels"
         ));
     }
     let mut buf = vec![0; reader.output_buffer_size().ok_or("the PNG is too large")?];
@@ -318,16 +329,26 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
 
 /// Decodes the bytes of a PNG or JPEG file to RGBA. The kind follows from the first bytes.
 pub fn decode_image_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        decode_jpeg_bytes(bytes)
-    } else if bytes.starts_with(b"\x89PNG") {
-        decode_png_bytes(bytes)
-    } else {
-        Err("the file is not a PNG or JPEG image".into())
-    }
+    decode_image_limited(bytes, u64::MAX)
 }
 
-fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
+/// Like [`decode_image_bytes`], with a limit on the pixels (see [`decode_png_limited`]). A decoder
+/// that panics on a hostile file gives an error, not a crash.
+pub fn decode_image_limited(bytes: &[u8], max_pixels: u64) -> Result<TextureImage, String> {
+    let work = || {
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            decode_jpeg_limited(bytes, max_pixels)
+        } else if bytes.starts_with(b"\x89PNG") {
+            decode_png_limited(bytes, max_pixels)
+        } else {
+            Err("the file is not a PNG or JPEG image".into())
+        }
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|_| Err("the image decoder failed on this file".into()))
+}
+
+fn decode_jpeg_limited(bytes: &[u8], max_pixels: u64) -> Result<TextureImage, String> {
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
@@ -343,6 +364,11 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
     if w == 0 || h == 0 || w > MAX_IMPORT_SIDE || h > MAX_IMPORT_SIDE {
         return Err(format!(
             "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
+        ));
+    }
+    if u64::from(w) * u64::from(h) > max_pixels {
+        return Err(format!(
+            "an image must not have more than {max_pixels} pixels"
         ));
     }
     let rgb = decoder

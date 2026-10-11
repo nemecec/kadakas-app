@@ -5,6 +5,7 @@ pub mod camera;
 pub mod hlr;
 pub mod look;
 pub mod pick;
+pub mod picture;
 pub mod raster;
 pub mod shade;
 pub mod styled;

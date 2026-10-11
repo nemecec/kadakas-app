@@ -2,6 +2,7 @@
 //! 100 x 100 units (Y down). The app draws it with its painter, and `to_svg` makes SVG from the same list.
 
 use std::fmt::Write;
+use std::sync::Arc;
 
 use glam::{DAffine2, DVec2};
 
@@ -26,9 +27,35 @@ pub struct ThumbPath {
     pub width: f64,
 }
 
+/// The picture of a plant style or of an image resource, as small pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThumbPicture {
+    /// The hash of the picture file. The app uses it as the key of its texture.
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA, 8 bits per channel, rows from the top.
+    pub rgba: Arc<Vec<u8>>,
+    /// The same pixels as a PNG in base64, for SVG.
+    pub png_base64: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Thumbnail {
     pub paths: Vec<ThumbPath>,
+    /// A picture instead of paths: the thumbnail of an image resource, and of a plant style that
+    /// has a picture. It is drawn inside the same 100 x 100 box, with its proportions kept.
+    pub picture: Option<ThumbPicture>,
+}
+
+impl ThumbPicture {
+    /// The corner and size of the picture inside the box of the thumbnail (units of `SIZE`).
+    pub fn placement(&self) -> ([f64; 2], [f64; 2]) {
+        let inner = SIZE - 2.0 * MARGIN / 2.0;
+        let k = inner / f64::from(self.width.max(self.height).max(1));
+        let (w, h) = (f64::from(self.width) * k, f64::from(self.height) * k);
+        ([(SIZE - w) / 2.0, (SIZE - h) / 2.0], [w, h])
+    }
 }
 
 impl Thumbnail {
@@ -45,6 +72,14 @@ impl Thumbnail {
             })
         };
         let alpha = |c: Option<[u8; 4]>| c.map_or(1.0, |c| c[3] as f64 / 255.0);
+        if let Some(pic) = &self.picture {
+            let ([x, y], [w, h]) = pic.placement();
+            let _ = writeln!(
+                s,
+                r#"<image x="{x:.2}" y="{y:.2}" width="{w:.2}" height="{h:.2}" href="data:image/png;base64,{}"/>"#,
+                pic.png_base64
+            );
+        }
         for p in &self.paths {
             if p.points.is_empty() {
                 continue;
@@ -126,7 +161,10 @@ fn fit(raws: Vec<Raw>) -> Thumbnail {
             width: 1.0,
         })
         .collect();
-    Thumbnail { paths }
+    Thumbnail {
+        paths,
+        picture: None,
+    }
 }
 
 fn color(c: Color) -> [u8; 4] {
@@ -168,6 +206,25 @@ pub fn thumbnail(doc: &Document, id: ResourceId) -> Thumbnail {
     let Some(r) = doc.resources.get(id) else {
         return Thumbnail::default();
     };
+    let pic = match &r.body {
+        ResourceBody::PlantStyle(p) => p.image.and_then(|i| doc.resources.image(i)),
+        ResourceBody::Image(i) => Some(i.as_ref()),
+        _ => None,
+    };
+    if let Some(pic) = pic
+        && let Some(img) = crate::picture::thumb_image(pic)
+    {
+        return Thumbnail {
+            paths: Vec::new(),
+            picture: Some(ThumbPicture {
+                sha256: pic.sha256.clone(),
+                width: img.width,
+                height: img.height,
+                rgba: Arc::new(img.rgba),
+                png_base64: pic.thumb.clone(),
+            }),
+        };
+    }
     let mut raws: Vec<Raw> = Vec::new();
     match &r.body {
         ResourceBody::Graphic(g) => match g.as_ref() {
@@ -612,9 +669,60 @@ mod tests {
                     width: 1.0,
                 },
             ],
+            picture: None,
         };
         let svg = t.to_svg(20);
         assert_eq!(svg.matches("<path").count(), 1);
         assert!(svg.contains(r#"fill="none""#) && svg.contains(" Z"));
+    }
+
+    #[test]
+    fn a_plant_style_with_a_picture_shows_the_picture() {
+        use crate::picture::{PictureLimits, import_picture, test_png};
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Maple".into(),
+                body: ResourceBody::plant_style(PlantStyle::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        assert!(thumbnail(ed.doc(), style).picture.is_none());
+        let pic = import_picture(&test_png(40, 20), "a.png", PictureLimits::default()).unwrap();
+        let out = ed
+            .execute(&Command::SetPlantPicture {
+                style,
+                picture: Some(Box::new(pic.clone())),
+            })
+            .unwrap();
+        let t = thumbnail(ed.doc(), style);
+        let p = t.picture.as_ref().expect("a picture");
+        assert_eq!(
+            (p.width, p.height, p.sha256.as_str()),
+            (40, 20, pic.sha256.as_str())
+        );
+        assert!(t.paths.is_empty());
+        let ([x, y], [w, h]) = p.placement();
+        assert!(x >= 0.0 && y > x && w > h && x + w <= SIZE && y + h <= SIZE);
+        // The image resource itself has the same thumbnail, and the SVG carries the picture.
+        let own = thumbnail(ed.doc(), ResourceId(out.created[0]));
+        assert_eq!(own.picture, t.picture);
+        assert!(t.to_svg(64).contains("<image") && t.to_svg(64).contains("data:image/png;base64,"));
+        // A picture whose thumbnail has a good header but no pixels falls back to the drawn one.
+        let mut broken = pic;
+        let head = broken.thumb_bytes().unwrap()[..24].to_vec();
+        broken.thumb = kadakas_core::picture::encode_base64(&head);
+        broken.validate().unwrap();
+        let odd = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Odd".into(),
+                body: ResourceBody::Image(Box::new(broken)),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let t = thumbnail(ed.doc(), odd);
+        assert!(t.picture.is_none() && !t.paths.is_empty());
     }
 }
