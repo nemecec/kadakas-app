@@ -493,6 +493,9 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
             .as_ref()
             .is_some_and(|l| l.client.user() == user);
     if !reuse {
+        // Edits since the last sync are not in the client yet: collect them, so that they count as
+        // waiting (and are not dropped without a word when the link is replaced).
+        push_local(s);
         if let Some(l) = &s.collab.link
             && !l.client.pending().is_empty()
             && !flag("discard")
