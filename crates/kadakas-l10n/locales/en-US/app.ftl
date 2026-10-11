@@ -90,4 +90,4 @@ app-solids-made =
         [one] { $count } solid made
        *[other] { $count } solids made
     }
-app-solids-made-skipped = { $count } solids made, { $skipped } skipped
+app-solids-made-skipped = Solids made: { $count }, skipped: { $skipped }

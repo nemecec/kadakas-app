@@ -2829,6 +2829,102 @@ mod tests {
     }
 
     #[test]
+    fn model_extrude_and_sweep_make_solids_from_the_selection() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        let add = |app: &mut KadakasApp, shape: Shape| {
+            let out = app
+                .session
+                .editor
+                .execute(&Command::AddObject {
+                    shape,
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap();
+            ObjectId(out.created[0])
+        };
+        // Nothing selected: a message and no dialog.
+        app.run_action(&ctx, Action::CmdExtrude);
+        assert!(app.status.contains("Select the 2D shapes"), "{}", app.status);
+        assert!(!app.solid_dlg.is_open());
+        let rect = add(
+            &mut app,
+            Shape::Rect {
+                min: DVec2::new(0.0, 0.0),
+                max: DVec2::new(1000.0, 500.0),
+            },
+        );
+        let text = add(
+            &mut app,
+            Shape::Text {
+                at: DVec2::ZERO,
+                text: "t".into(),
+                height: 10.0,
+            },
+        );
+        app.session.selection = vec![rect, text];
+        app.run_action(&ctx, Action::CmdExtrude);
+        assert!(app.solid_dlg.is_open());
+        app.make_solids(SolidRequest::Extrude(Default::default()));
+        assert!(app.status.contains("Solids made: 1"), "{}", app.status);
+        assert_eq!(app.session.selection.len(), 1);
+        let solid = app.session.selection[0];
+        assert_eq!(
+            app.session.editor.doc().object(solid).unwrap().shape.kind(),
+            "extrude"
+        );
+        assert!(app.session.editor.doc().object(rect).is_none());
+        app.undo();
+        assert!(app.session.editor.doc().object(rect).is_some());
+        // Sweep with the selected line as the axis.
+        let line = add(
+            &mut app,
+            Shape::Line {
+                a: DVec2::new(0.0, -2000.0),
+                b: DVec2::new(3000.0, -2000.0),
+            },
+        );
+        app.session.selection = vec![rect, line];
+        app.run_action(&ctx, Action::CmdSweep);
+        let mut opts = kadakas_core::solid_batch::SweepOptions::default();
+        opts.sweep_angle_deg = 90.0;
+        app.make_solids(SolidRequest::Sweep(opts.clone(), true));
+        assert!(app.status.contains("solid made"), "{}", app.status);
+        // Without a line in the selection the line axis is refused with a message.
+        app.undo();
+        app.session.selection = vec![rect];
+        app.make_solids(SolidRequest::Sweep(opts.clone(), true));
+        assert!(app.status.contains("line for the axis"), "{}", app.status);
+        // Wrong numbers and shapes that cannot be turned give a message.
+        opts.sweep_angle_deg = 0.0;
+        app.make_solids(SolidRequest::Sweep(opts, false));
+        assert!(app.status.contains("sweep_angle"), "{}", app.status);
+        let bad = kadakas_core::solid_batch::ExtrudeOptions {
+            height: 0.0,
+            ..Default::default()
+        };
+        app.make_solids(SolidRequest::Extrude(bad));
+        assert!(app.status.contains("height"), "{}", app.status);
+        app.session.selection = vec![text];
+        app.make_solids(SolidRequest::Extrude(Default::default()));
+        assert!(app.status.contains("No solid made"), "{}", app.status);
+        app.make_solids(SolidRequest::Sweep(Default::default(), false));
+        assert!(app.status.contains("No solid made"), "{}", app.status);
+        // The 3D polygon tool and the Model menu commands exist in the default profile.
+        let model = app
+            .profiles
+            .active_profile()
+            .menus
+            .iter()
+            .find(|m| m.id == "model")
+            .expect("a Model menu")
+            .clone();
+        assert_eq!(model.items.len(), 4);
+    }
+
+    #[test]
     fn the_autocad_like_profile_changes_keys_tool_sets_and_aliases() {
         let ctx = egui::Context::default();
         let mut app = KadakasApp::blank();

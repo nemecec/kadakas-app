@@ -90,4 +90,4 @@ app-solids-made =
         [one] Tehti { $count } keha
        *[other] Tehti { $count } keha
     }
-app-solids-made-skipped = Tehti { $count } keha, vahele jäeti { $skipped }
+app-solids-made-skipped = Tehtud kehi: { $count }, vahele jäetud: { $skipped }

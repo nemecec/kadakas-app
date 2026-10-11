@@ -38,6 +38,7 @@ pub(crate) fn describe() -> Value {
             "landscape_area": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION: IFC4 has no VEGETATION type), thin extrusion with holes",
             "plant, existing_tree": "IfcGeographicElement (USERDEFINED, ObjectType VEGETATION), trunk and canopy cylinders plus an IfcBoundingBox",
             "massing": "IfcBuildingElementProxy (NOTDEFINED) with an extruded solid (flat roof) or a closed IfcTriangulatedFaceSet (gable, hip). Pset_BuildingElementProxyCommon, Kadakas_Massing, Kadakas_MassingQuantities (Height, EavesHeight, FootprintArea, GrossFloorArea, GrossVolume). With massing_as_building: IfcBuilding, Pset_BuildingCommon and Qto_BuildingBaseQuantities",
+            "extrude, sweep": "IfcBuildingElementProxy (NOTDEFINED). An extrude is an IfcExtrudedAreaSolid with the profile (IfcArbitraryProfileDefWithVoids when there are holes, curves cut into lines). A sweep is an IfcTriangulatedFaceSet. Kadakas_SolidQuantities (Height, FootprintArea, SurfaceArea, GrossVolume)",
             "other": "2D objects and map underlays are skipped and listed in the report"
         },
         "import": import_describe(),
