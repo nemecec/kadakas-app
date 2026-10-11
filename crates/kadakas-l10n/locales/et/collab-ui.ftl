@@ -19,6 +19,7 @@ collab-ui-discard-text = Võrguühenduseta tehtud muudatused ootavad teist dokum
 collab-ui-discard-button = Jäta kõrvale ja ühenda
 collab-ui-joining = Ühisdokumendiga liitumine... Dokumendi saabumist tuleb oodata.
 collab-ui-status = Koostöö: { $state }
+collab-ui-token-expired = Luba on aegunud. Uus luba tuleb küsida serveri haldurilt.
 collab-ui-already-connected = Ühendus on juba olemas. Esmalt tuleb ühendus katkestada.
 collab-ui-connect-failed = Ühendumine ebaõnnestus: { $error }
 collab-ui-disconnected = Ühendus katkestati. Muudatused jätkuvad võrguühenduseta.

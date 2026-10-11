@@ -243,6 +243,8 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Command line: focus the command alias field of a profile that has aliases (`ui.command_line`) | none (no VW default) | none | done |
 | Edit current workspace | Cmd+Shift+Option+W / Ctrl+Shift+Alt+W | Ctrl+Shift+Alt+W | planned |
 
+The menu command File > Collaboration (Connect..., Disconnect, People; the command id is `file.collaboration`, it is not a key action) has no default key in any profile, and Vectorworks has none either. It is in Quick Search.
+
 ## Data bar
 
 Type exact values while drawing. Line and polyline use L (length) and A (angle). Rectangle uses W and H. Circle uses R. Before the first click all tools use X and Y. Empty fields follow the cursor. Enter creates the object through the normal command path.

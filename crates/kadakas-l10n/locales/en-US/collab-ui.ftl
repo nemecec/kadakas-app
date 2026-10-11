@@ -19,6 +19,7 @@ collab-ui-discard-text = Edits that you made offline wait for another document o
 collab-ui-discard-button = Drop and connect
 collab-ui-joining = Joining the shared document... Wait until it has arrived.
 collab-ui-status = Collaboration: { $state }
+collab-ui-token-expired = The token has run out. Ask the administrator of the server for a new one.
 collab-ui-already-connected = Already connected. Disconnect first.
 collab-ui-connect-failed = Could not connect: { $error }
 collab-ui-disconnected = Disconnected. Your edits go on offline.

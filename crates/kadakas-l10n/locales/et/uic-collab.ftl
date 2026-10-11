@@ -5,6 +5,7 @@ uic-collab-link-connecting = Ühendumine
 uic-collab-link-connected = Ühendatud
 uic-collab-link-reconnecting = Ühendumine uuesti
 uic-collab-link-refused = Tagasi lükatud
+uic-collab-link-stalled = Vastust pole
 uic-collab-link-failed = Ühendus ebaõnnestus
 # { $link } on ühenduse olekusõna, näiteks "Ühendatud".
 uic-collab-status-line-pending =
@@ -33,6 +34,7 @@ uic-collab-err-rate-limited = Server on hõivatud. Muudatused ootavad ja saadeta
 uic-collab-err-server-fault = Serveris tekkis tõrge. Muudatused ootavad ja saadetakse uuesti.
 uic-collab-err-renumber = Muudatuste numbrid olid varem kasutusel. Need nummerdatakse uuesti ja saadetakse.
 uic-collab-err-unknown = Server teatas veast ({ $code }): { $message }
+uic-collab-note-no-answer = Server ei vasta või ei võta ühendust vastu. Aadress ja luba tuleb üle kontrollida (brauser ei erista valet luba võrgukatkestusest).
 uic-collab-note-connected = Ühisdokumendiga on ühendus loodud.
 uic-collab-note-regressed = Server läks varasemasse seisu tagasi. Töö saadetakse uuesti.
 uic-collab-note-renumbered = Ootel muudatused said uued numbrid.

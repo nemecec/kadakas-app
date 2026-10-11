@@ -41,14 +41,28 @@ fn base64url(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The user ID in the `sub` claim of a token (a JWT), if the token has one. The server signs in
-/// a client only if `hello.user` is that ID, so the window passes it as `user`. This reads
-/// the claim and does not check the signature: the server does that.
-pub fn token_user(token: &str) -> Option<String> {
+/// The claims of a token (a JWT). This reads them and does not check the signature: the server
+/// does that.
+fn token_claims(token: &str) -> Option<Value> {
     let payload = token.trim().split('.').nth(1)?;
-    let claims: Value = serde_json::from_slice(&base64url(payload)?).ok()?;
+    serde_json::from_slice(&base64url(payload)?).ok()
+}
+
+/// The user ID in the `sub` claim of a token (a JWT), if the token has one. The server signs in
+/// a client only if `hello.user` is that ID, so the window passes it as `user`.
+pub fn token_user(token: &str) -> Option<String> {
+    let claims = token_claims(token)?;
     let sub = claims.get("sub")?.as_str()?;
     Uid::parse(sub).map(|_| sub.to_string())
+}
+
+/// True if the token (a JWT) has an `exp` claim in the past. A browser cannot see why a
+/// WebSocket was refused (an old token looks like a lost network), so the window checks the expiry
+/// itself before it connects. A token without a readable `exp` is not called expired.
+pub fn token_expired(token: &str, now_secs: u64) -> bool {
+    token_claims(token)
+        .and_then(|c| c.get("exp").and_then(Value::as_u64))
+        .is_some_and(|exp| exp <= now_secs)
 }
 
 /// Why the form cannot make a call.
@@ -569,6 +583,19 @@ mod tests {
         assert_eq!(base64url("aGVsbG8=").unwrap(), b"hello");
         assert_eq!(base64url("+/+/").unwrap(), [0xfb, 0xff, 0xbf]);
         assert_eq!(base64url("-_-_").unwrap(), [0xfb, 0xff, 0xbf]);
+    }
+
+    #[test]
+    fn an_old_token_is_called_expired() {
+        // {"exp":1000}
+        let token = "e30.eyJleHAiOjEwMDB9.c2ln";
+        assert!(!token_expired(token, 999));
+        assert!(token_expired(token, 1000));
+        assert!(token_expired(&format!(" {token} "), 5000));
+        // No exp claim, no JWT, empty: not expired.
+        for t in [JWT, JWT_WITHOUT_SUB, "opaque", "", "a.b.c"] {
+            assert!(!token_expired(t, u64::MAX), "{t}");
+        }
     }
 
     #[test]

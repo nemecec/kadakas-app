@@ -88,7 +88,7 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 - A translation uses the established word of its language for the same thing. The same word must appear in the whole program. Keep a glossary for the language. If a word has two meanings, use two messages.
 - Do not translate file formats and standards (DXF, IFC, WMS). Do not translate unit symbols (mm, kPa, l/min), the names of keys (Esc, Enter, Tab) or the name Kadakas. Keep API ids and file extensions. Keep the text that a person types in a query language, for example `Kind = "plant"`, `AND` and `OR`.
 - Keep the keyboard shortcuts of the keymap. Translate only the label of the action.
-- Write short sentences. Use the imperative for buttons and hints, for example "Klõpsa ...". The Estonian texts use the informal "sa".
+- Write short sentences. Use the imperative for buttons and hints, for example "Klõpsa ...". The older Estonian texts use the informal "sa". New texts (the collaboration texts) use impersonal forms, for example "tuleb küsida" and "jäeti alles", and avoid "sa" and "sina".
 - A message with a trademark keeps the name of the owner (`Vectorworks`, `AutoCAD`) and the note of the owner. See `docs/attribution.md`.
 
 ### Estonian glossary
@@ -96,6 +96,9 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | English | Estonian | Note |
 |---|---|---|
 | Landscape Area | Haljastusala | area with planting |
+| Collaboration, shared document | Koostöö, ühisdokument | the document that several people edit |
+| Token (access) | Luba | the key that the server gives; not "märk" |
+| Presence, people here | Kohalolek, Inimesed | the palette is "Inimesed" |
 | Hardscape | Kõvakate | paving, walls, hard surfaces |
 | Site Modifiers, Site model | Maapinna muutjad, Maapinnamudel | |
 | Grading, Grade limits | Vertikaalplaneerimine, Planeerimispiir | vertical planning |

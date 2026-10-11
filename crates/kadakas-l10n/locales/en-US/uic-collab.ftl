@@ -5,6 +5,7 @@ uic-collab-link-connecting = Connecting
 uic-collab-link-connected = Connected
 uic-collab-link-reconnecting = Reconnecting
 uic-collab-link-refused = Refused
+uic-collab-link-stalled = No answer
 uic-collab-link-failed = Connection failed
 # { $link } is the word for the link, for example "Connected".
 uic-collab-status-line-pending =
@@ -33,6 +34,7 @@ uic-collab-err-rate-limited = The server is busy. Your edits wait and are sent a
 uic-collab-err-server-fault = The server had a fault. Your edits wait and are sent again.
 uic-collab-err-renumber = The numbers of your edits were used before. They are numbered again and sent.
 uic-collab-err-unknown = The server reported an error ({ $code }): { $message }
+uic-collab-note-no-answer = The server does not answer, or it does not accept the connection. Check the address and the token (a browser cannot tell a wrong token from a lost network).
 uic-collab-note-connected = Connected to the shared document.
 uic-collab-note-regressed = The server went back to an earlier state. Your work is sent again.
 uic-collab-note-renumbered = The edits that were waiting got new numbers.

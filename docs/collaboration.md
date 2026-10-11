@@ -782,6 +782,104 @@ restart of the server, offline edits, presence, per-user undo, a plug-in object 
 does not have the plug-in, a new token, a switch to another document) are in the `kadakas-server`
 repository, in `tests/e2e`.
 
+### 9.2 Collaboration in the app (the window)
+
+The app (`kadakas-app`) has a user interface for this client. It does **not** run a second client.
+Every step goes through the calls of section 9 on the one `Session` of the window, so all rules of
+section 9.1 stay: the server copy replaces the open document on joining, tokens stay in memory, and
+so on. The logic that needs no window is in `kadakas_ui_core::collab` (tested without a window); the
+drawing is in `crates/kadakas-app/src/collab_ui.rs`.
+
+**File > Collaboration.** The submenu has Connect..., Disconnect and a link that shows the People
+palette. Both menus of the built-in profiles hold the command `file.collaboration` (a profile file may
+move or drop it). The same commands are in Quick Search. There is no new key: the commands have no
+default key in the Vectorworks-like profile or in the AutoCAD-like profile.
+
+**The Connect dialog.** The fields are the server address, the document ID, the token and the name
+that the others see.
+
+- A full address `ws://host:port/ws/<document ID>` fills the document field. An address with a
+  user name, a password, a query or a fragment is refused in the dialog before any call.
+- The defaults come from `--collab-url` and `KADAKAS_COLLAB_URL`. The default token (`--collab-token`
+  or `KADAKAS_COLLAB_TOKEN`) moves into the session when the program starts and the token variables
+  leave the environment of the program, as for `kadakas serve`. The dialog never shows it: an empty
+  token field means "use the default token", and the dialog says so when the address is the default
+  one. The default token still goes only to the default URL (the API decides).
+- `--allow-collab-url` (or `KADAKAS_COLLAB_ALLOW_URL`) works as for `kadakas serve`. A server that
+  is not on this computer needs an entry (or must be the default URL) and `wss://`.
+- A token (a JWT) whose `exp` claim is in the past is refused by the window before any call ("The token has run out"), because a browser cannot see a refused upgrade.
+- The token field is a password field. The token is never written to the preferences, to the
+  layout file or to a log. The dialog wipes the field when the call has taken the value.
+- The server wants `hello.user` to be the user of the token. The window reads the `sub` claim of the
+  token (a JWT; no signature check, the server does that) and passes it as `user`.
+
+**Unsaved work.** `collab.connect` refuses a join when the open document has changes that nobody
+saved. The window shows a question ("Replace the open document?") and calls again with `replace:
+true` only after the person agrees. Edits that were made offline for another document or user get a
+second question and `discard: true`. The window reads these cases from the stable `reason` of the
+error of the API (`unsaved_changes`, `edits_wait`, `already_connected`), never from its text. The
+window tells the session when it saved the document, so a saved document joins without a question.
+
+**While joining.** Until the first snapshot has arrived (`waiting_for_snapshot` in `collab.status`)
+the window shows a box that blocks the window, the keys do nothing, and an edit that still gets
+through is refused. The box has a Disconnect button. File > New and File > Open are refused while the
+session is joined, because the new document would be pushed into the shared one as edits.
+
+**The status item.** The status bar shows `Collaboration: <state>`:
+
+| State | Meaning |
+|---|---|
+| Offline | no connection is wanted |
+| Connecting | the first connection is being made |
+| Connected | online; the text adds "N edits waiting" when edits wait for the server |
+| Reconnecting | the link was lost and the program tries again by itself |
+| Refused | the server refused the token; no more tries (connect again with a new token) |
+| Connection failed | another fatal error (for example a protocol version that does not match) |
+| No answer | the first connection has had no answer for 20 s. A browser cannot see why an upgrade failed (a wrong token looks like a lost network), so the window says this and names the address and the token as likely causes |
+
+A click opens the dialog (offline) or the People palette. The tooltip shows the address (no token),
+the number of other people and the last error.
+
+**Messages for errors.** Each error class of section 4.6 has a sentence in the language of the UI,
+shown in the status line and kept in the People palette: a refused token, a protocol that does not
+match, a full document ("the server refused your last edit, and it was taken back"), a refused edit,
+a busy server, a server fault (both of these: "your edits wait and are sent again"), numbers of edits
+used before, a state that went back, an offline log that could not be saved or read, and any other
+code (with the code and the English text of the server in the sentence).
+
+**Presence.** The window sends the pointer (in mm, only over the plan), the selection and the view
+(center, mm per pixel, size) through `collab.presence`, about every 100 ms when something changed
+(0.1 mm is not a change). The client library keeps the 50 ms limit and the repeat every 5 s. The
+others are drawn on the canvas: a pointer with the name on a label in the color of the user, and a
+frame and a faint fill around each selected object. A user who changed nothing for 30 s is dimmed,
+and the user is gone after 15 s without news (the client expires it). The color of a user comes from a hash of the user
+ID, and two users on one document get different colors while the palette (8 colors) has a free
+one. The People palette (Window menu) lists you and the others with their color, a mark for a quiet
+user and the number of selected objects. Presence is never in the document.
+
+**Undo and redo.** While the session is joined, Edit > Undo, Edit > Redo and their keys call
+`collab.undo` and `collab.redo`, so a person never takes back the work of somebody else. If a change
+was kept because another person changed it later, the status line says so. Offline, the normal undo
+works.
+
+**The browser.** The web build reads the address fragment `#collab=<ws url>&doc=<id>&token=<t>`
+(and optionally `&name=<n>`), joins at once, and removes the token pair from the address bar with
+`history.replaceState`, also when the rest of the fragment is not valid. A fragment never goes to a
+server. The address in the fragment counts as the default server for that page (the person opened the
+link), and the API still requires `wss://` for any server that is not on this computer. The browser
+uses the sub-protocol for the token (section 9.1).
+
+**The test hook (web build only).** When the address of the page has the query `?kadakas_test=1`, the
+page has `window.kadakasTest` for browser tests: `cmds` (push `JSON.stringify({id, method, params})` to
+run an API call), `results` (the answers, by id) and `state` (JSON with the number of objects, the
+link state and the other people). Without the query, nothing is installed. The browser test of the
+`kadakas-server` repository (`scripts/test-browser.sh`) uses it only to read the state and to run
+some API calls; it draws with the mouse.
+
+**Limits.** The window does not keep an offline log in files (`store`), so edits that wait when the
+program closes are lost; the viewports of the others are sent but not drawn; and the name comes from
+the login name of the operating system (empty in the browser) or from the dialog.
+
 ## 10. Not in version 1
 
 - Creating the first shared document from the content of a `.kad` file. A new, empty shared

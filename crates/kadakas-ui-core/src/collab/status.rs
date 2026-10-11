@@ -163,6 +163,11 @@ fn notice_for(event: &Value) -> Option<Notice> {
     })
 }
 
+/// A first connection that has no answer after this time counts as stalled. A browser cannot
+/// see why an upgrade failed (a wrong or old token looks like a lost network), so the window says
+/// that the server does not answer, and names the likely causes.
+pub const NO_ANSWER_MS: u64 = 20_000;
+
 /// The state of the link, read from `collab.status`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusView {
@@ -179,6 +184,8 @@ pub struct StatusView {
     /// works.
     pub api_connected: bool,
     pub last_error: Option<String>,
+    /// The first connection has had no answer for [`NO_ANSWER_MS`] (the link is `Connecting`).
+    pub stalled: bool,
 }
 
 impl Default for StatusView {
@@ -192,6 +199,7 @@ impl Default for StatusView {
             can_redo: false,
             api_connected: false,
             last_error: None,
+            stalled: false,
         }
     }
 }
@@ -199,16 +207,21 @@ impl Default for StatusView {
 impl StatusView {
     /// The short text of the status bar item.
     pub fn label(&self) -> String {
+        let link = if self.stalled && self.link == Link::Connecting {
+            translate(msg!("uic-collab-link-stalled"), &[])
+        } else {
+            self.link.text()
+        };
         if self.pending > 0 && self.link != Link::Offline {
             translate(
                 msg!("uic-collab-status-line-pending"),
                 &[
-                    ("link", Arg::Text(self.link.text())),
+                    ("link", Arg::Text(link)),
                     ("count", Arg::Num(self.pending as f64)),
                 ],
             )
         } else {
-            self.link.text()
+            link
         }
     }
 
@@ -218,6 +231,10 @@ impl StatusView {
             msg!("uic-collab-status-people"),
             &[("count", Arg::Num(self.peers as f64))],
         );
+        if self.stalled && self.link == Link::Connecting {
+            text.push('\n');
+            text.push_str(&translate(msg!("uic-collab-note-no-answer"), &[]));
+        }
         if let Some(e) = &self.last_error {
             text.push('\n');
             text.push_str(&translate(
@@ -241,6 +258,10 @@ impl StatusView {
 pub struct Tracker {
     was_online: bool,
     failure: Option<ErrorKind>,
+    /// When the first connection started (the time of the caller).
+    trying_since: Option<u64>,
+    /// The notice for a stalled connection was made.
+    stall_told: bool,
 }
 
 impl Tracker {
@@ -249,9 +270,14 @@ impl Tracker {
         *self = Tracker::default();
     }
 
-    /// Takes a status and the events that came with it. Returns the view and the notices of the
-    /// events.
-    pub fn observe(&mut self, status: &Value, events: &[Value]) -> (StatusView, Vec<Notice>) {
+    /// Takes a status, the events that came with it and the time of the caller. Returns the view
+    /// and the notices of the events.
+    pub fn observe(
+        &mut self,
+        status: &Value,
+        events: &[Value],
+        now_ms: u64,
+    ) -> (StatusView, Vec<Notice>) {
         let mut notices = Vec::new();
         for e in events {
             if str_of(e, "event") == "failed" {
@@ -279,6 +305,22 @@ impl Tracker {
                 Link::Offline
             }
         };
+        // A first connection that gets no answer for a long time.
+        let mut stalled = false;
+        if link == Link::Connecting {
+            let since = *self.trying_since.get_or_insert(now_ms);
+            stalled = now_ms.saturating_sub(since) >= NO_ANSWER_MS;
+            if stalled && !self.stall_told {
+                self.stall_told = true;
+                notices.push(Notice::new(
+                    msg!("uic-collab-note-no-answer"),
+                    Severity::Warning,
+                ));
+            }
+        } else {
+            self.trying_since = None;
+            self.stall_told = false;
+        }
         let count = |key: &str| status[key].as_u64().unwrap_or(0) as usize;
         let flag = |key: &str| status[key].as_bool() == Some(true);
         let view = StatusView {
@@ -290,6 +332,7 @@ impl Tracker {
             can_redo: flag("can_redo"),
             api_connected: matches!(state, "connecting" | "syncing" | "online"),
             last_error: status["last_error"].as_str().map(str::to_string),
+            stalled,
         };
         (view, notices)
     }
@@ -325,7 +368,7 @@ mod tests {
     }
 
     fn view(t: &mut Tracker, state: &str) -> StatusView {
-        t.observe(&status(state), &[]).0
+        t.observe(&status(state), &[], 0).0
     }
 
     #[test]
@@ -340,12 +383,12 @@ mod tests {
         assert_eq!(view(&mut t, "connecting").link, Link::Reconnecting);
         let mut lost = status("offline");
         lost["reconnecting"] = json!(true);
-        assert_eq!(t.observe(&lost, &[]).0.link, Link::Reconnecting);
+        assert_eq!(t.observe(&lost, &[], 0).0.link, Link::Reconnecting);
         // Offline without a wish to connect again is offline, and forgets the past.
         assert_eq!(view(&mut t, "offline").link, Link::Offline);
         assert_eq!(view(&mut t, "connecting").link, Link::Connecting);
         // A first try that failed and waits for the next try is still connecting.
-        assert_eq!(t.observe(&lost, &[]).0.link, Link::Connecting);
+        assert_eq!(t.observe(&lost, &[], 0).0.link, Link::Connecting);
         t.reset();
         assert_eq!(view(&mut t, "weird").link, Link::Offline);
     }
@@ -355,7 +398,7 @@ mod tests {
         let mut t = Tracker::default();
         assert_eq!(view(&mut t, "failed").link, Link::Failed);
         let event = json!({"event": "failed", "code": "auth_failed", "message": "bad token"});
-        let (v, notes) = t.observe(&status("failed"), &[event]);
+        let (v, notes) = t.observe(&status("failed"), &[event], 0);
         assert_eq!(v.link, Link::Refused);
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].id, "uic-collab-err-auth");
@@ -365,7 +408,10 @@ mod tests {
         view(&mut t, "online");
         assert_eq!(view(&mut t, "failed").link, Link::Failed);
         let event = json!({"event": "failed", "code": "unsupported_protocol", "message": "v2"});
-        assert_eq!(t.observe(&status("failed"), &[event]).0.link, Link::Failed);
+        assert_eq!(
+            t.observe(&status("failed"), &[event], 0).0.link,
+            Link::Failed
+        );
     }
 
     #[test]
@@ -373,13 +419,13 @@ mod tests {
         let mut t = Tracker::default();
         let s = json!({"state": "online", "pending": 3, "peers": 2, "waiting_for_snapshot": true,
                        "can_undo": true, "can_redo": true, "last_error": "boom"});
-        let v = t.observe(&s, &[]).0;
+        let v = t.observe(&s, &[], 0).0;
         assert_eq!((v.pending, v.peers), (3, 2));
         assert!(v.waiting_for_snapshot && v.can_undo && v.can_redo && v.api_connected);
         assert_eq!(v.last_error.as_deref(), Some("boom"));
         assert!(v.is_active());
         // A status with missing fields reads as zero and false.
-        let v = t.observe(&json!({}), &[]).0;
+        let v = t.observe(&json!({}), &[], 0).0;
         assert_eq!(v, StatusView::default());
         assert!(!v.is_active());
     }
@@ -425,7 +471,7 @@ mod tests {
             json!({"event": "failed", "code": "internal", "message": "oops"}),
             json!({}),
         ];
-        let (_, notes) = t.observe(&status("online"), &events);
+        let (_, notes) = t.observe(&status("online"), &events, 0);
         let ids: Vec<&str> = notes.iter().map(|n| n.id).collect();
         assert_eq!(
             ids,

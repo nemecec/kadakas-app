@@ -15,7 +15,7 @@ use kadakas_core::uid::Uid;
 use kadakas_l10n::tr;
 use kadakas_ui_core::collab::{
     ConnectForm, ConnectIssue, ConnectRequest, Defaults, Link, Notice, OwnPresence, Peer, PeerBook,
-    Severity, StatusView, Tracker, UndoRoute, classify_connect_error, undo_route,
+    Severity, StatusView, Tracker, UndoRoute, classify_connect_error, token_expired, undo_route,
 };
 use serde_json::{Value, json};
 
@@ -164,6 +164,15 @@ impl CollabUi {
         now_ms: u64,
     ) -> Option<String> {
         self.confirm = None;
+        // A browser cannot see why a WebSocket was refused (an old token looks like a lost
+        // network), so an old token is told here, before the call.
+        if request
+            .token
+            .as_deref()
+            .is_some_and(|t| token_expired(t, now_ms / 1000))
+        {
+            return Some(tr!("collab-ui-token-expired"));
+        }
         match session.handle("collab.connect", request.params(now_ms, replace, discard)) {
             Ok(status) => {
                 self.tracker.reset();
@@ -172,7 +181,7 @@ impl CollabUi {
                 self.last_notice = None;
                 self.active = true;
                 self.last_tick_ms = None;
-                let (view, _) = self.tracker.observe(&status, &[]);
+                let (view, _) = self.tracker.observe(&status, &[], now_ms);
                 self.endpoint = status["endpoint"].as_str().map(str::to_string);
                 self.view = view;
                 None
@@ -241,7 +250,7 @@ impl CollabUi {
             }
         };
         let events = sync["events"].as_array().cloned().unwrap_or_default();
-        let (view, notices) = self.tracker.observe(&sync["status"], &events);
+        let (view, notices) = self.tracker.observe(&sync["status"], &events, now_ms);
         self.endpoint = sync["status"]["endpoint"].as_str().map(str::to_string);
         let problems = sync["problems"].as_array().map_or(0, Vec::len);
         // Others see us only while the link is up.
@@ -276,7 +285,7 @@ impl CollabUi {
     /// The status of the link, read now (not from the last round).
     fn fresh_view(&self, session: &mut Session) -> StatusView {
         match session.handle("collab.status", Value::Null) {
-            Ok(s) => self.tracker.clone().observe(&s, &[]).0,
+            Ok(s) => self.tracker.clone().observe(&s, &[], now_ms()).0,
             Err(_) => StatusView::default(),
         }
     }
@@ -704,6 +713,8 @@ pub mod web {
             "objects": session.editor.doc().objects.len(),
             "link": format!("{:?}", collab.view().link),
             "waiting": collab.waiting_for_snapshot(),
+            "stalled": collab.view().stalled,
+            "label": collab.view().label(),
             "peers": collab.peers().iter().map(|p| json!({
                 "name": p.label(), "cursor": p.cursor, "selected": p.selection.len(),
             })).collect::<Vec<_>>(),
@@ -927,6 +938,21 @@ mod tests {
         assert_eq!(ui.connect(&mut s, &anon("Ann"), false, false, 200), None);
         let again = ui.connect(&mut s, &anon("Ann"), false, false, 300).unwrap();
         assert!(again.contains("Already connected"), "{again}");
+    }
+
+    #[test]
+    fn an_old_token_is_told_before_any_call() {
+        // {"exp":1000}
+        let mut s = Session::default();
+        let mut ui = CollabUi::new(Defaults::default());
+        let mut req = anon("Ann");
+        req.token = Some("e30.eyJleHAiOjEwMDB9.c2ln".into());
+        let said = ui.connect(&mut s, &req, false, false, 5_000_000).unwrap();
+        assert!(said.contains("run out"), "{said}");
+        assert!(!ui.is_connected());
+        // A token that is still good goes to the API (which has no endpoint here).
+        let said = ui.connect(&mut s, &req, false, false, 500_000).unwrap();
+        assert!(said.starts_with("Could not connect"), "{said}");
     }
 
     #[test]
