@@ -582,7 +582,7 @@ impl PluginUi {
         let trusted = kadakas_api::review_wasm_plugin(session, id)
             .is_some_and(|r| r["trusted"] == json!(true));
         if !trusted {
-            self.open_review(session, &id.to_string(), true);
+            self.open_review(session, id, true);
             return;
         }
         let name = kadakas_api::review_wasm_plugin(session, id)

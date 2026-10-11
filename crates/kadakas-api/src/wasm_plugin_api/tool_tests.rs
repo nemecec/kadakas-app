@@ -357,7 +357,8 @@ fn install_from_bytes_keeps_the_module_for_the_next_session() {
     let r = install_module(&mut s, &bytes).unwrap();
     assert_eq!(r["id"], STONES_ID);
     assert!(r.get("warning").is_none());
-    assert_eq!(mem.list().unwrap().len(), 1);
+    // The module and its description.
+    assert_eq!(mem.list().unwrap().len(), 2);
     // A medium that refuses writes: the module is installed, with a warning.
     *mem.fail_writes.lock().unwrap() = Some("quota".into());
     let other = std::fs::read(PLANTER).unwrap();
