@@ -180,6 +180,9 @@ impl ScriptHost {
             cmd.env("PYTHONPATH", python::python_path_with(&dir));
         }
         cmd.env("PYTHONUNBUFFERED", "1");
+        // No secret of this program reaches the script, except the token of the endpoint that it
+        // is given on purpose (set below).
+        kadakas_sys::process::scrub_secrets(&mut cmd);
         match &spec.endpoint {
             Some((addr, token)) => {
                 cmd.env("KADAKAS_ADDR", addr).env("KADAKAS_TOKEN", token);

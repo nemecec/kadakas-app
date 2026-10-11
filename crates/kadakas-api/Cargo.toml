@@ -37,5 +37,7 @@ tempfile = "3"
 png = "0.18"
 proptest = "1.11.0"
 kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
+# The in-process WebSocket server for tests of `collab.connect {url}`. Not shipped.
+kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
 # Test modules for the limits are written as text. Not shipped.
 wat = "1"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence, Union
@@ -376,6 +377,101 @@ class Events:
         return self._doc.call_raw("events.poll", params)
 
 
+class Collab:
+    """Shared editing with other people and agents (``doc.collab``).
+
+    ``connect`` joins a document on a collaboration server. After that every call of the normal API
+    (``doc.add``, ``execute``) works on the shared document. Other users' changes reach the document
+    when you call ``sync()`` (or ``presence()`` or ``undo()``). While connected, ``doc.undo()``
+    refuses: use ``doc.collab.undo()``, which takes back only your own edits.
+
+    The token stays in memory; it is never written to a file. See ``docs/collaboration.md``."""
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def connect(self, url: str | None = None, token: str | None = None, doc: str | None = None, *,
+                name: str | None = None, user: str | None = None, store: str | Path | None = None,
+                wait: bool | float = True, **params: Any) -> JsonDict:
+        """Join a shared document and return the status.
+
+        ``url`` is the server (``ws://127.0.0.1:8787``, or ``wss://host/ws/<document>``), ``doc``
+        the document ID, ``token`` the token that the server admin made for you. All three may be
+        left out when the program has defaults (``KADAKAS_COLLAB_URL``, ``KADAKAS_COLLAB_TOKEN``).
+        A server that is not on this computer must be allowed with ``kadakas.open(allow_collab_url=...)``
+        and must use ``wss://``. ``store`` is a path without extension for the offline log.
+
+        The shared document replaces the open one, and edits made before the client is online
+        would be lost. So by default this call syncs until the client is online (``wait=True``:
+        10 seconds; give a number for another limit; ``False``: do not wait). If the server is
+        down, the call raises ``KadakasError``."""
+        given = {"url": url, "token": token, "doc": doc, "name": name, "user": user,
+                 "store": str(store) if store is not None else None}
+        p: JsonDict = {k: v for k, v in given.items() if v is not None}
+        p.update(params)
+        status = self._doc.api.collab_connect(**p)
+        if wait is not False:
+            limit = 10.0 if wait is True else float(wait)
+            status = self.wait_online(limit)
+        return status
+
+    def wait_online(self, timeout: float = 10.0) -> JsonDict:
+        """Sync until the client is online. Raises ``TimeoutError`` otherwise."""
+        end = time.monotonic() + timeout
+        while True:
+            status = self.sync()["status"]
+            if status["state"] == "online":
+                return status
+            if status["state"] == "failed" or time.monotonic() > end:
+                raise TimeoutError(f"the collaboration client is {status['state']}: "
+                                   f"{status.get('last_error') or 'no answer from the server'}")
+            time.sleep(0.01)
+
+    def status(self) -> JsonDict:
+        return self._doc.api.collab_status()
+
+    def sync(self, **params: Any) -> JsonDict:
+        """Send your changes and take the changes of others (see ``collab.sync``)."""
+        return self._doc.api.collab_sync(**params)
+
+    def sync_until(self, done: Callable[[], bool], timeout: float = 10.0, interval: float = 0.01) -> None:
+        """Sync until ``done()`` is true. Raises ``TimeoutError`` after ``timeout`` seconds."""
+        end = time.monotonic() + timeout
+        while True:
+            self.sync()
+            if done():
+                return
+            if time.monotonic() > end:
+                raise TimeoutError("the condition was not true in time")
+            time.sleep(interval)
+
+    def settle(self, timeout: float = 10.0) -> JsonDict:
+        """Sync until all your edits are confirmed by the server. Returns the status."""
+        end = time.monotonic() + timeout
+        while True:
+            status = self.sync()["status"]
+            if status["state"] == "online" and status["pending"] == 0:
+                return status
+            if time.monotonic() > end:
+                raise TimeoutError("your edits were not confirmed in time")
+            time.sleep(0.01)
+
+    def presence(self, **params: Any) -> JsonDict:
+        """Set ``cursor``, ``selection`` or ``viewport`` and list the others (``peers``)."""
+        return self._doc.api.collab_presence(**params)
+
+    def undo(self) -> JsonDict:
+        """Take back your own last edit; the work of others stays."""
+        return self._doc.api.collab_undo()
+
+    def redo(self) -> JsonDict:
+        return self._doc.api.collab_redo()
+
+    def disconnect(self) -> JsonDict:
+        """Close the connection. Edits go on offline and join the shared document on ``connect``."""
+        return self._doc.api.collab_disconnect()
+
+
 class Document:
     """A session with a document. Make one with ``kadakas.open()`` or ``kadakas.connect()``."""
 
@@ -388,6 +484,7 @@ class Document:
         self.report = Reports(self)
         self.worksheets = Worksheets(self)
         self.events = Events(self)
+        self.collab = Collab(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 
         self.plugins = Plugins(self)
@@ -586,12 +683,26 @@ class Document:
 
 def open(path: str | Path | None = None, *, binary: str | Path | None = None,  # noqa: A001
          allow_dir: Sequence[str | Path] = (), allow_agent_scripts: bool = False,
-         allow_converters: bool = False) -> Document:
+         allow_converters: bool = False, allow_url: Sequence[str] = (),
+         allow_collab_url: Sequence[str] = (), collab_url: str | None = None, collab_token: str | None = None) -> Document:
     """Start ``kadakas serve`` and return a ``Document`` for its session.
 
     ``path`` is a document file to open at the start. ``allow_dir`` lists the folders that the
-    session may read and write (default: the current folder). The process ends with ``close()``."""
+    session may read and write (default: the current folder). ``allow_url`` lists the servers for map
+    services. ``allow_collab_url`` lists the collaboration servers that are not on this computer
+    (they must use ``wss://``); ``collab_url`` is allowed without an entry.
+    ``collab_url`` and ``collab_token`` are the defaults of ``doc.collab.connect``; the token goes
+    to the program in its environment, not on the command line. The process ends with ``close()``."""
     args: list[str] = []
+    env: dict[str, str] = {}
+    for u in allow_url:
+        args += ["--allow-url", u]
+    for u in allow_collab_url:
+        args += ["--allow-collab-url", u]
+    if collab_url:
+        env["KADAKAS_COLLAB_URL"] = collab_url
+    if collab_token:
+        env["KADAKAS_COLLAB_TOKEN"] = collab_token
     for d in allow_dir:
         args += ["--allow-dir", str(d)]
     if allow_agent_scripts:
@@ -600,7 +711,7 @@ def open(path: str | Path | None = None, *, binary: str | Path | None = None,  #
         args.append("--allow-converters")
     if path is not None:
         args.append(str(path))
-    return Document(StdioTransport(args, binary))
+    return Document(StdioTransport(args, binary, env or None))
 
 
 def connect(addr: str | None = None, token: str | None = None, *,

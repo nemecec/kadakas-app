@@ -286,6 +286,8 @@ fn run(
         .stderr(Stdio::from(open(&err_path)?));
     // The converter leads its own process group, so a stop reaches the programs that it started too.
     kadakas_sys::process::own_group(&mut cmd);
+    // The converter is a separate program: it gets none of our secrets.
+    kadakas_sys::process::scrub_secrets(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| DwgError::Failed {
         tool: tool.into(),
         detail: format!("cannot start {}: {e}", program.display()),

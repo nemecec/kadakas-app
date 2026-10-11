@@ -124,8 +124,8 @@ impl ErrorCode {
     }
 }
 
-/// Messages from a client to the server.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Messages from a client to the server. The `Debug` text of `hello` hides the token.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMsg {
     Hello {
@@ -171,6 +171,48 @@ pub enum ClientMsg {
     },
     /// The client leaves. The server may close the connection.
     Bye,
+}
+
+impl std::fmt::Debug for ClientMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientMsg::Hello {
+                protocol,
+                user,
+                client,
+                name,
+                last_seq,
+                log_id,
+                last_hash,
+                ..
+            } => f
+                .debug_struct("Hello")
+                .field("protocol", protocol)
+                .field("user", user)
+                .field("client", client)
+                .field("name", name)
+                .field("token", &"<hidden>")
+                .field("last_seq", last_seq)
+                .field("log_id", log_id)
+                .field("last_hash", last_hash)
+                .finish(),
+            ClientMsg::Submit { op_id, ops } => f
+                .debug_struct("Submit")
+                .field("op_id", op_id)
+                .field("ops", ops)
+                .finish(),
+            ClientMsg::Presence { state } => {
+                f.debug_struct("Presence").field("state", state).finish()
+            }
+            ClientMsg::BlobPut { hash, data } => f
+                .debug_struct("BlobPut")
+                .field("hash", hash)
+                .field("data", &format_args!("<{} bytes>", data.len()))
+                .finish(),
+            ClientMsg::BlobGet { hash } => f.debug_struct("BlobGet").field("hash", hash).finish(),
+            ClientMsg::Bye => f.write_str("Bye"),
+        }
+    }
 }
 
 /// Messages from the server to a client.

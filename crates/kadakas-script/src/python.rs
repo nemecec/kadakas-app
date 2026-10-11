@@ -25,6 +25,8 @@ pub const UNSAFE_ENV: &[&str] = &[
     "PYTHONUSERBASE",
     "PYTHONBREAKPOINT",
     "PYTHONPATH",
+    // The token of the collaboration server must not reach a script.
+    "KADAKAS_COLLAB_TOKEN",
 ];
 
 /// A program and the arguments that come before the script.
@@ -45,6 +47,7 @@ impl Interpreter {
         for name in UNSAFE_ENV {
             c.env_remove(name);
         }
+        kadakas_sys::process::scrub_secrets(&mut c);
         c
     }
 

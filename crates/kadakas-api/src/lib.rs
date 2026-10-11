@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 mod annotation_api;
 mod collab_api;
+pub use collab_api::EndpointFactory;
 mod errors;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
@@ -782,6 +783,7 @@ impl Session {
         };
         self.events = hub;
         self.collab = collab;
+        self.collab_mark_saved();
         self.set_sequential_ids(sequential);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -903,13 +905,23 @@ impl Session {
         let revision = self.editor.revision();
         #[cfg(not(target_arch = "wasm32"))]
         let start = std::time::Instant::now();
-        let result = self.dispatch(method, p);
+        let mut result = self.dispatch(method, p);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed = Some(start.elapsed());
         #[cfg(target_arch = "wasm32")]
         let elapsed = None;
         let steps = self.editor.undo_depth().saturating_sub(depth);
         let changed = self.editor.revision() != revision;
+        // A client that waits for its first snapshot would lose the edit: the snapshot replaces
+        // the document. Take the edit back and say why.
+        if changed
+            && result.is_ok()
+            && !method.starts_with("collab.")
+            && collab_api::awaiting_snapshot(self)
+        {
+            self.editor.rollback(steps);
+            result = Err(RpcError::conflict(collab_api::WAIT_MESSAGE));
+        }
         self.enforce_limits(steps, changed, elapsed, result)
     }
 

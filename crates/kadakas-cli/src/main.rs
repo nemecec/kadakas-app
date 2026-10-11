@@ -101,11 +101,38 @@ struct RemoteArgs {
     /// The folder of the open document is always allowed. Not used with --connect: the app decides.
     #[arg(long = "allow-dir", value_name = "DIR")]
     allow_dir: Vec<PathBuf>,
+    /// A collaboration server that is not on this computer and that agents may connect to with
+    /// `collab.connect`: a host name (`collab.example.org`), a pattern (`*.example.org`) or an
+    /// address prefix (`wss://collab.example.org/`). Repeat for more, or give a comma list in
+    /// `KADAKAS_COLLAB_ALLOW_URL`. This is not the list of `--allow-url` (map services). The
+    /// address of `--collab-url` is allowed without an entry. Default: none. The server must
+    /// use `wss://`.
+    #[arg(
+        long = "allow-collab-url",
+        value_name = "URL",
+        env = "KADAKAS_COLLAB_ALLOW_URL",
+        value_delimiter = ','
+    )]
+    allow_collab_url: Vec<String>,
     /// A web address that agents may fetch for map services (WMS, WMTS, WFS): a host name
     /// (`maps.example.org`), a pattern (`*.example.org`) or an address prefix
     /// (`https://maps.example.org/wms/`). Repeat for more. Default: none, so agents cannot use the network.
     #[arg(long = "allow-url", value_name = "URL")]
     allow_url: Vec<String>,
+    /// The default server for `collab.connect`, for example `ws://127.0.0.1:8787` (a base
+    /// address; the call gives `doc`) or `wss://host/ws/<document>`. A server that is not on this
+    /// computer must be allowed with `--allow-url` and must use `wss://`.
+    #[arg(long = "collab-url", value_name = "URL", env = "KADAKAS_COLLAB_URL")]
+    collab_url: Option<String>,
+    /// The default token for `collab.connect`. The token stays in memory. A flag is visible to
+    /// other programs on this computer (`ps`): prefer the environment variable.
+    #[arg(
+        long = "collab-token",
+        value_name = "TOKEN",
+        env = "KADAKAS_COLLAB_TOKEN",
+        hide_env_values = true
+    )]
+    collab_token: Option<String>,
     /// Let requests from agents run Python scripts (`script.run`, and plug-in objects with their own
     /// scripts). Default: off. The plug-in objects that ship with the app always run.
     #[arg(long = "allow-agent-scripts")]
@@ -146,6 +173,12 @@ impl Backend {
         };
         session.paths =
             kadakas_api::PathPolicy::restricted(dirs).with_converters(remote.allow_converters);
+        // Collaboration servers that are not on this computer have a list of their own.
+        session.set_collab_allowed_urls(remote.allow_collab_url);
+        session.set_collab_endpoint_factory(Box::new(|url, token| {
+            kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
+        }));
+        session.set_collab_defaults(remote.collab_url, remote.collab_token);
         session.gis.urls = kadakas_api::UrlPolicy::allow_list(remote.allow_url);
         session.scripting.allow_agent_scripts = remote.allow_agent_scripts;
         session.scripting.trust = kadakas_api::TrustStore::load_default();
@@ -452,6 +485,10 @@ fn export_command(
 
 fn main() {
     let cli = Cli::parse();
+    // The flags (and their environment variables) are read. Remove the secrets from the
+    // environment now, while there is one thread, so no child process inherits them (scripts,
+    // converters) and nothing lists them.
+    kadakas_sys::process::remove_secrets_from_env();
     let result = match cli.cmd {
         Cmd::Serve { file, remote } => Backend::new(file, remote).map(serve),
         Cmd::Mcp {

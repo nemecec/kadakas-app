@@ -33,6 +33,7 @@ pub mod replica;
 pub mod store;
 pub mod transport;
 pub mod undo;
+pub mod url;
 pub mod validate;
 
 #[cfg(test)]

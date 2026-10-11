@@ -107,8 +107,8 @@ pub const RETRY_BASE_MS: u64 = 250;
 /// The longest wait.
 pub const RETRY_MAX_MS: u64 = 30_000;
 
-/// Who the client is and how it signs in.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Who the client is and how it signs in. The `Debug` text hides the token.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ClientConfig {
     /// The person.
     pub user: Uid,
@@ -118,6 +118,17 @@ pub struct ClientConfig {
     pub name: String,
     /// The token for the server. The meaning is up to the server.
     pub token: String,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("user", &self.user)
+            .field("client", &self.client)
+            .field("name", &self.name)
+            .field("token", &"<hidden>")
+            .finish()
+    }
 }
 
 /// Where the connection is.
@@ -446,6 +457,12 @@ impl Client {
 
     // ----- connection -----
 
+    /// Sets the token that the next `hello` carries (for example a new one after the old one ran
+    /// out). The token is never saved.
+    pub fn set_token(&mut self, token: String) {
+        self.cfg.token = token;
+    }
+
     /// Starts the sign-in: queues `hello`. Does nothing unless the client is offline or failed.
     pub fn connect(&mut self) {
         if !matches!(self.state, ConnState::Offline | ConnState::Failed) {
@@ -481,6 +498,13 @@ impl Client {
             ErrorCode::BadMessage,
             format!("the server sent a message that cannot be read: {why}"),
         );
+    }
+
+    /// The server refused the credentials at the door (for example HTTP 401 on the upgrade). The
+    /// client is `Failed` with `auth_failed`, like after a refused `hello`: connecting again with
+    /// the same token would fail again, so the host stops until it has a new token.
+    pub fn auth_refused(&mut self, why: &str) {
+        self.fail(ErrorCode::AuthFailed, why.to_string());
     }
 
     /// Says goodbye to the server and goes offline. `Bye` waits in the outbox.
