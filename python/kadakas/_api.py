@@ -656,6 +656,72 @@ class Api:
         JSON-RPC method ``massing.report``."""
         return self._call("massing.report", params or None)
 
+    def extrude_add(self, **params: Any) -> Any:
+        """Add an extrude (shape kind 'extrude') in one undo step: a closed 2D profile pushed up by a height. The profile stays editable. params: {profile: [vertices] (a closed outline, curves allowed like in polylines), holes?: [[vertices]] (closed outlines inside the profile), height (mm, not zero; negative extrudes downward), base? (height of the profile above the layer in mm, default 0), name?, layer?, class?, parent? (a group)}. A profile that crosses itself, has no area, or has a hole that touches the outline is refused with the reason. Returns {id, quantities}.
+
+        JSON-RPC method ``extrude.add``."""
+        return self._call("extrude.add", params or None)
+
+    def extrude_set(self, **params: Any) -> Any:
+        """Change extrudes. params: {id | ids, profile?, holes?, height?, base?, name?}. Returns {changed: [ids]}.
+
+        JSON-RPC method ``extrude.set``."""
+        return self._call("extrude.set", params or None)
+
+    def extrude_get(self, **params: Any) -> Any:
+        """One extrude with its quantities. params: {id}. Returns {id, name, profile, holes, height, base, quantities: {profile_area_m2, volume_m3, surface_area_m2, triangles}, bounds_mm: {min, max}}.
+
+        JSON-RPC method ``extrude.get``."""
+        return self._call("extrude.get", params or None)
+
+    def extrude_from_shapes(self, **params: Any) -> Any:
+        """Model > Extrude: turn closed 2D shapes (closed polylines, rectangles, circles, landscape areas with their holes, hardscapes, closed 3D polygons) into extrudes in one undo step. params: {ids? (default: the selection), height (mm, default 1000), base? (mm, default 0), delete_source? (default true: the 2D shape becomes the solid; false keeps it), dry_run?}. The class, attributes and group of the shape and its free data go to the solid. The new solids become the selection. Returns {created: [{source, id}], skipped: [{id, reason}], dry_run}.
+
+        JSON-RPC method ``extrude.from_shapes``."""
+        return self._call("extrude.from_shapes", params or None)
+
+    def sweep_add(self, **params: Any) -> Any:
+        """Add a sweep (shape kind 'sweep') in one undo step: a profile turned around an axis. params: {profile: [vertices] (x is the distance from the axis, y the position along it; a closed profile makes a solid with end caps, an open one a surface), closed? (default true), origin? ([x, y, z] of a point of the axis, mm; z is measured from the layer), axis? ([x, y, z] direction, default [0, 0, 1]), rotation? (degrees, the angle of the profile plane around the axis at the start), sweep_angle? (degrees, default 360, at most 3600; more than 360 needs a pitch at least as large as the profile along the axis, or the turns cross each other), segment_angle? (degrees, default 10, from 0.1 to 180: the smaller, the rounder), pitch? (rise along the axis for each full turn in mm, default 0; a spiral), name?, layer?, class?, parent?}. At most 720 segments: a smaller segment angle is lowered to that and the result says so in warnings. A profile that crosses the axis or itself is refused. Returns {id, quantities, warnings}.
+
+        JSON-RPC method ``sweep.add``."""
+        return self._call("sweep.add", params or None)
+
+    def sweep_set(self, **params: Any) -> Any:
+        """Change sweeps. params: {id | ids, profile?, closed?, origin?, axis?, rotation?, sweep_angle?, segment_angle?, pitch?, name?}. Returns {changed: [ids], warnings}.
+
+        JSON-RPC method ``sweep.set``."""
+        return self._call("sweep.set", params or None)
+
+    def sweep_get(self, **params: Any) -> Any:
+        """One sweep with its quantities. params: {id}. Returns {id, name, profile, closed, origin, axis, rotation, sweep_angle, segment_angle, pitch, segments, quantities: {volume_m3 (closed profiles), surface_area_m2, triangles}, bounds_mm, warnings}.
+
+        JSON-RPC method ``sweep.get``."""
+        return self._call("sweep.get", params or None)
+
+    def sweep_from_shapes(self, **params: Any) -> Any:
+        """Model > Sweep: turn 2D shapes into sweeps in one undo step. Closed shapes make solids, open polylines and lines make surfaces. params: {ids? (default: the selection), axis_id? (a line object, or a polyline with two vertices: the profile turns around it, in the plane of the plan; the axis is horizontal and the line stays), axis_at? ([x, y]: a vertical axis at this point instead), sweep_angle? (default 360), segment_angle? (default 10), pitch? (mm per turn, default 0), delete_source? (default true), dry_run?}. Without axis_id and axis_at, the axis is vertical at the left edge of the profile and the profile is read like an elevation: x is the distance from the axis, y the height above the bottom edge. A profile on both sides of the axis is skipped. Returns {created: [{source, id}], skipped: [{id, reason}], dry_run}.
+
+        JSON-RPC method ``sweep.from_shapes``."""
+        return self._call("sweep.from_shapes", params or None)
+
+    def polygon3d_add(self, **params: Any) -> Any:
+        """Add a 3D polygon (shape kind 'polyline3d'): vertices with a height. params: {points: [[x, y, z]], closed? (default true; a closed polygon needs 3 points, an open one 2), fill? (a color [r, g, b, a]: a filled closed polygon is a face in 3D views and renders), name? (in the object data), layer?, class?, parent?}. z is measured from the layer, in mm. Returns {id}.
+
+        JSON-RPC method ``polygon3d.add``."""
+        return self._call("polygon3d.add", params or None)
+
+    def polygon3d_set(self, **params: Any) -> Any:
+        """Change 3D polygons. params: {id | ids, points?, closed?, raise? (mm added to the z of every vertex)}. Returns {changed: [ids]}.
+
+        JSON-RPC method ``polygon3d.set``."""
+        return self._call("polygon3d.set", params or None)
+
+    def polygon3d_get(self, **params: Any) -> Any:
+        """One 3D polygon. params: {id}. Returns {id, points, closed, z_range_mm: [low, high], length_m, area_plan_m2 (closed), face (true when it has a fill and draws as a face)}.
+
+        JSON-RPC method ``polygon3d.get``."""
+        return self._call("polygon3d.get", params or None)
+
     def hardscape_style_list(self, **params: Any) -> Any:
         """Hardscape styles with the number of hardscapes that use each. Returns {styles: [{id, name, used_by, total_thickness, ...fields}]}.
 
@@ -2180,6 +2246,17 @@ METHOD_NAMES: tuple[str, ...] = (
     "massing.get",
     "massing.from_shapes",
     "massing.report",
+    "extrude.add",
+    "extrude.set",
+    "extrude.get",
+    "extrude.from_shapes",
+    "sweep.add",
+    "sweep.set",
+    "sweep.get",
+    "sweep.from_shapes",
+    "polygon3d.add",
+    "polygon3d.set",
+    "polygon3d.get",
     "hardscape_style.list",
     "hardscape_style.get",
     "hardscape_style.create",

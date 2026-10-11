@@ -11,6 +11,7 @@ mod elements;
 mod finish;
 mod massing;
 mod schema;
+mod solids;
 
 pub use schema::Schema;
 
@@ -112,7 +113,9 @@ fn default_class(kind: &str) -> (&'static str, Option<&'static str>) {
     match kind {
         "hardscape" => ("IfcSlab", Some("BASESLAB")),
         "site_model" => ("IfcGeographicElement", Some("TERRAIN")),
-        "massing" | "mesh3d" => ("IfcBuildingElementProxy", Some("NOTDEFINED")),
+        "massing" | "mesh3d" | "extrude" | "sweep" => {
+            ("IfcBuildingElementProxy", Some("NOTDEFINED"))
+        }
         _ => ("IfcGeographicElement", Some("USERDEFINED")),
     }
 }

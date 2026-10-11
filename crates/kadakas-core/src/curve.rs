@@ -773,6 +773,39 @@ pub fn flatten_path(path: &Path, tolerance: f64) -> Vec<DVec2> {
     out
 }
 
+/// Like [`flatten`], with a budget: `None` as soon as the points pass `max_points`. The work is
+/// at most `max_points` plus the pieces of one segment, whatever the vertices ask for.
+pub fn flatten_limited(
+    vertices: &[Vertex],
+    closed: bool,
+    tolerance: f64,
+    max_points: usize,
+) -> Option<Vec<DVec2>> {
+    if vertices.len() > max_points {
+        return None;
+    }
+    if all_straight(vertices) {
+        return Some(positions(vertices));
+    }
+    let tol = if tolerance.is_finite() && tolerance > 0.0 {
+        tolerance
+    } else {
+        DEFAULT_TOLERANCE
+    };
+    let path = path(vertices, closed);
+    let mut out = vec![path.start];
+    for seg in &path.segs {
+        flatten_seg(&mut out, seg, tol);
+        if out.len() > max_points {
+            return None;
+        }
+    }
+    if path.closed && out.len() > 1 {
+        out.pop();
+    }
+    Some(out)
+}
+
 /// Points along the curve of the vertices. See `flatten_path`.
 pub fn flatten(vertices: &[Vertex], closed: bool, tolerance: f64) -> Vec<DVec2> {
     if all_straight(vertices) {

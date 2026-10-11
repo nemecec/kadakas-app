@@ -865,6 +865,8 @@
                 "annotation",
                 "symbol",
                 "mesh3d",
+                "extrude",
+                "sweep",
                 "irrigation"
               ]
             }

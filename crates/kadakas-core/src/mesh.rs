@@ -342,25 +342,36 @@ impl MeshCache {
 /// Removes repeated points and points that lie on a straight run, and returns the ring
 /// counterclockwise. Fewer than three points left means the ring has no area.
 pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
-    let mut pts = crate::geom::open_ring(points, 1e-9);
-    // Drop points where the ring does not turn. Repeat, because a drop can expose another.
+    let straight = |a: DVec2, b: DVec2, c: DVec2| {
+        let (u, v) = (b - a, c - b);
+        u.perp_dot(v).abs() <= 1e-9 * u.length() * v.length() && u.dot(v) > 0.0
+    };
+    // One pass with a stack: a point is dropped when it does not turn. A drop can expose
+    // another, which the loop on the stack top handles.
+    let mut pts: Vec<DVec2> = Vec::with_capacity(points.len());
+    for p in crate::geom::open_ring(points, 1e-9) {
+        while pts.len() >= 2 && straight(pts[pts.len() - 2], pts[pts.len() - 1], p) {
+            pts.pop();
+        }
+        pts.push(p);
+    }
+    // The wrap-around: the end of the list against the start, and the start against the end.
+    let mut start = 0;
     loop {
-        let n = pts.len();
+        let n = pts.len() - start;
         if n < 3 {
             return Vec::new();
         }
-        let straight = (0..n).find(|&i| {
-            let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
-            let (u, v) = (b - a, c - b);
-            u.perp_dot(v).abs() <= 1e-9 * u.length() * v.length() && u.dot(v) > 0.0
-        });
-        match straight {
-            Some(i) => {
-                pts.remove(i);
-            }
-            None => break,
+        let (last, first, second) = (pts[pts.len() - 1], pts[start], pts[start + 1]);
+        if straight(pts[pts.len() - 2], last, first) {
+            pts.pop();
+        } else if straight(last, first, second) {
+            start += 1;
+        } else {
+            break;
         }
     }
+    let mut pts = pts.split_off(start);
     let o = pts[0];
     let area2: f64 = (0..pts.len())
         .map(|i| (pts[i] - o).perp_dot(pts[(i + 1) % pts.len()] - o))
@@ -382,6 +393,17 @@ fn in_triangle(p: DVec2, a: DVec2, b: DVec2, c: DVec2) -> bool {
 /// Concave polygons work. Repeated and collinear points are skipped. A polygon that
 /// crosses itself gives some triangles, but no guarantee about which.
 pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
+    triangulate_with(pts, false)
+}
+
+/// Like [`triangulate`], and a collinear corner keeps its zero-area triangle, so the triangles
+/// cover every edge of the ring. A solid needs this: the cap then meets the walls edge to edge,
+/// with no T-junction.
+pub fn triangulate_edge_exact(pts: &[DVec2]) -> Vec<[usize; 3]> {
+    triangulate_with(pts, true)
+}
+
+fn triangulate_with(pts: &[DVec2], keep_flat: bool) -> Vec<[usize; 3]> {
     let n = pts.len();
     if n < 3 {
         return Vec::new();
@@ -408,7 +430,11 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
             || u.length_squared() == 0.0
             || v.length_squared() == 0.0;
         if flat {
-            // No area: the corner only repeats or continues an edge. Drop it.
+            // No area: the corner only repeats or continues an edge. Drop it. An edge-exact
+            // triangulation keeps the sliver, so that the edges a-b and b-c stay in the mesh.
+            if keep_flat && u.length_squared() > 0.0 && v.length_squared() > 0.0 {
+                out.push([a, b, c]);
+            }
             idx.remove(i);
             misses = 0;
             continue;
@@ -438,7 +464,8 @@ pub fn triangulate(pts: &[DVec2]) -> Vec<[usize; 3]> {
         }
     }
     let (a, b, c) = (idx[0], idx[1], idx[2]);
-    if (pts[b] - pts[a]).perp_dot(pts[c] - pts[b]) > 1e-12 {
+    let distinct = pts[a] != pts[b] && pts[b] != pts[c] && pts[a] != pts[c];
+    if (pts[b] - pts[a]).perp_dot(pts[c] - pts[b]) > 1e-12 || (keep_flat && distinct) {
         out.push([a, b, c]);
     }
     out
@@ -819,6 +846,25 @@ impl Builder<'_> {
                 self.scene.mesh.part = PART_MAIN;
                 add_shaded(&mut self.scene.mesh, &pts, &m.triangles, color, id);
             }
+            Shape::Extrude(_) | Shape::Sweep(_) => {
+                // The mesh is measured from the layer: add its elevation.
+                if let Some(sm) = obj.shape.solid_mesh() {
+                    let color = fill.unwrap_or(crate::solid3d::DEFAULT_COLOR);
+                    let pts: Vec<Vec3> = sm
+                        .vertices
+                        .iter()
+                        .map(|p| {
+                            Vec3::new(
+                                (p.x - o.x) as f32,
+                                (p.y - o.y) as f32,
+                                (z + p.z - o.z) as f32,
+                            )
+                        })
+                        .collect();
+                    self.scene.mesh.part = PART_MAIN;
+                    add_shaded(&mut self.scene.mesh, &pts, &sm.triangles, color, id);
+                }
+            }
             Shape::Massing(m) => {
                 let color = fill.unwrap_or(crate::massing::DEFAULT_COLOR);
                 let mut sink = SceneSink {
@@ -856,6 +902,13 @@ impl Builder<'_> {
                 self.scene
                     .lines
                     .polyline(&pts, *closed, pen.unwrap_or([0, 0, 0, 255]), id);
+                // A closed 3D polygon with a fill is a face.
+                if let (true, Some(color), Some(tris)) =
+                    (*closed, fill, crate::solid3d::polygon_face(points))
+                {
+                    self.scene.mesh.part = PART_MAIN;
+                    add_shaded(&mut self.scene.mesh, &pts, &tris, color, id);
+                }
             }
             // Sheet layer objects are paper space. They never reach the 3D scene.
             Shape::Viewport(_) | Shape::TitleBlock(_) | Shape::Annotation(_) => {}

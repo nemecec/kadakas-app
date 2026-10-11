@@ -323,9 +323,9 @@ fn the_autocad_profile_is_clean() {
     assert_eq!(n, distinct.len());
     // Every tool is reachable in the tool sets, once.
     let mut tools: Vec<Tool> = p.tool_sets.iter().flat_map(|s| s.tools.clone()).collect();
-    assert_eq!(tools.len(), 28);
+    assert_eq!(tools.len(), 29);
     tools.dedup();
-    assert_eq!(tools.len(), 28);
+    assert_eq!(tools.len(), 29);
     assert_eq!(p.tool_sets[0].title(), "Draw");
     assert_eq!(p.menus[2].title(), "Draw");
     // The terms are good for both languages and change the text.
@@ -687,4 +687,33 @@ fn valid_ids_are_kept_and_others_are_made_from_the_text() {
     let p = parse(r#"{"format":1,"name":"x","id":"user_one"}"#).profile;
     assert_eq!(set.add_user(p.clone()), "user_one");
     assert_eq!(set.add_user(p), "user_one-2");
+}
+
+#[test]
+fn the_autocad_profile_has_the_3d_aliases_and_the_model_menu() {
+    let b = Profile::builtins();
+    let p = &b[1];
+    for (alias, action) in [
+        ("EXTRUDE", Action::CmdExtrude),
+        ("EXT", Action::CmdExtrude),
+        ("REVOLVE", Action::CmdSweep),
+        ("REV", Action::CmdSweep),
+        ("3DPOLY", Action::ToolPolygon3d),
+        ("3P", Action::ToolPolygon3d),
+    ] {
+        assert_eq!(p.aliases.get(alias), Some(&action), "{alias}");
+    }
+    assert!(p.menus.iter().any(|m| m.id == "model"));
+    assert!(
+        p.tool_sets
+            .iter()
+            .any(|s| s.tools.contains(&Tool::Polygon3d))
+    );
+    // The terms follow the family: Sweep is Revolve, the 3D Polygon is a 3D Polyline.
+    kadakas_l10n::with_language("en-US", || {
+        kadakas_l10n::with_overlay(&p.overlay(), || {
+            assert_eq!(layout::Cmd::Sweep.label(), "Revolve...");
+            assert_eq!(Tool::Polygon3d.name(), "3D Polyline");
+        });
+    });
 }

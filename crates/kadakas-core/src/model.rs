@@ -234,6 +234,10 @@ pub enum Shape {
     /// A generic 3D object: a triangle mesh with absolute coordinates (see `mesh3d`). The IFC importer uses it
     /// for slabs, coverings and other shapes that have no native Kadakas object.
     Mesh3d(Box<crate::mesh3d::Mesh3d>),
+    /// A closed 2D profile pushed up by a height (see `solid3d`). The profile stays editable.
+    Extrude(Box<crate::solid3d::Extrude>),
+    /// A profile turned around an axis, with a sweep angle, a segment angle and a pitch (see `solid3d`).
+    Sweep(Box<crate::solid3d::Sweep>),
     /// An irrigation object: outlet, line, point of connection, valve or controller
     /// (see `crate::irrigation`). In JSON it is `{"kind": "irrigation", "type": "outlet", ...}`.
     Irrigation(Box<crate::irrigation::IrrigationShape>),
@@ -303,6 +307,8 @@ impl Shape {
             Shape::Massing(_) => "massing",
             Shape::Underlay(_) => "underlay",
             Shape::Mesh3d(_) => "mesh3d",
+            Shape::Extrude(_) => "extrude",
+            Shape::Sweep(_) => "sweep",
             Shape::Irrigation(i) => i.kind(),
         }
     }
@@ -315,6 +321,7 @@ impl Shape {
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => Some(boundary),
             Shape::Massing(m) => Some(&m.footprint),
+            Shape::Extrude(e) => Some(&e.profile),
             _ => None,
         }
     }
@@ -326,6 +333,7 @@ impl Shape {
             | Shape::Hardscape { boundary, .. }
             | Shape::SiteModifier { boundary, .. } => Some(boundary),
             Shape::Massing(m) => Some(&mut m.footprint),
+            Shape::Extrude(e) => Some(&mut e.profile),
             _ => None,
         }
     }
@@ -341,6 +349,8 @@ impl Shape {
             Shape::Massing(m) => m.is_finite(),
             Shape::Underlay(u) => u.is_finite(),
             Shape::Mesh3d(m) => m.is_finite(),
+            Shape::Extrude(e) => e.is_finite(),
+            Shape::Sweep(s) => s.is_finite(),
             Shape::Irrigation(i) => i.is_finite(),
             Shape::Symbol {
                 at,
@@ -454,6 +464,27 @@ impl Shape {
                 .vertices
                 .iter()
                 .for_each(|p| p.to_array().into_iter().for_each(&mut *f)),
+            Shape::Extrude(e) => {
+                e.profile
+                    .iter()
+                    .chain(e.holes.iter().flatten())
+                    .for_each(|x| vertex(x, f));
+                f(e.height);
+                f(e.base);
+            }
+            Shape::Sweep(s) => {
+                s.profile.iter().for_each(|x| vertex(x, f));
+                s.origin.to_array().into_iter().for_each(&mut *f);
+                s.axis.to_array().into_iter().for_each(&mut *f);
+                [
+                    s.rotation_deg,
+                    s.sweep_angle_deg,
+                    s.segment_angle_deg,
+                    s.pitch,
+                ]
+                .into_iter()
+                .for_each(&mut *f);
+            }
             Shape::Symbol {
                 at,
                 rotation,
@@ -579,6 +610,27 @@ impl Shape {
             Shape::Massing(m) => m.problem(),
             Shape::Underlay(u) => u.problem(),
             Shape::Mesh3d(m) => m.problem(),
+            Shape::Extrude(e) => e.problem(),
+            Shape::Sweep(s) => s.problem(),
+            _ => None,
+        }
+    }
+
+    /// The mesh of an extrude or a sweep, with `z` measured from the layer. `None` for other
+    /// shapes and for a solid with a problem.
+    pub fn solid_mesh(&self) -> Option<crate::solid3d::SolidMesh> {
+        match self {
+            Shape::Extrude(e) => e.mesh(),
+            Shape::Sweep(s) => s.mesh(),
+            _ => None,
+        }
+    }
+
+    /// The 3D box of an extrude or a sweep as (min, max), with `z` measured from the layer.
+    pub fn solid_bounds3(&self) -> Option<(DVec3, DVec3)> {
+        match self {
+            Shape::Extrude(e) => Some(e.bounds3()),
+            Shape::Sweep(s) => Some(s.bounds3()),
             _ => None,
         }
     }
@@ -595,6 +647,15 @@ impl Shape {
             Shape::TitleBlock(tb) => tb.translate(d),
             Shape::Annotation(a) => a.translate(d),
             Shape::Massing(m) => m.footprint.iter_mut().for_each(|x| mv(&mut x.p)),
+            Shape::Extrude(e) => e
+                .profile
+                .iter_mut()
+                .chain(e.holes.iter_mut().flatten())
+                .for_each(|x| mv(&mut x.p)),
+            Shape::Sweep(s) => {
+                s.origin.x += d.x;
+                s.origin.y += d.y;
+            }
             Shape::Underlay(u) => {
                 mv(&mut u.min);
                 mv(&mut u.max);
@@ -665,6 +726,11 @@ impl Shape {
             Shape::TitleBlock(tb) => tb.bounds(),
             Shape::Annotation(a) => a.bounds(),
             Shape::Massing(m) => curve::bounds(&m.footprint, true),
+            Shape::Extrude(e) => curve::bounds(&e.profile, true),
+            Shape::Sweep(s) => {
+                let (lo, hi) = s.bounds3();
+                (lo.truncate(), hi.truncate())
+            }
             Shape::Underlay(u) => (u.min, u.max),
             Shape::Mesh3d(m) => {
                 let (lo, hi) = m.bounds3();
@@ -759,6 +825,7 @@ impl Shape {
         match self {
             Shape::Rect { min, max } => Some(((max.x - min.x) * (max.y - min.y)).abs()),
             Shape::Massing(m) => Some(curve::area(&m.footprint)),
+            Shape::Extrude(e) => Some(e.profile_area()),
             Shape::Circle { radius, .. } => Some(std::f64::consts::PI * radius * radius),
             Shape::Polyline3d {
                 points,

@@ -66,3 +66,5 @@ uic-tools-readout-radius = Radius { $radius }
 uic-tools-readout-arc-radius = Radius { $radius }
 uic-tools-readout-move = Move dX { $dx }  dY { $dy }
 uic-tools-readout-box = Box { $width } x { $height }
+uic-tools-polygon3d = 3D Polygon
+uic-tools-click-the-points-of-the-3d-polygon-double = Click the points of the 3D polygon. Double-click or Enter finishes. Esc cancels. Set the height in the options bar.

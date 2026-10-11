@@ -106,6 +106,13 @@ pub const ICONS: &[(&str, &[u8])] = &[
         )),
     ),
     (
+        "extrude",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/extrude.svg"
+        )),
+    ),
+    (
         "fillet",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -358,6 +365,13 @@ pub const ICONS: &[(&str, &[u8])] = &[
         )),
     ),
     (
+        "polygon3d",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/polygon3d.svg"
+        )),
+    ),
+    (
         "split",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -397,6 +411,13 @@ pub const ICONS: &[(&str, &[u8])] = &[
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../assets/icons/kadakas/surface-subtract.svg"
+        )),
+    ),
+    (
+        "sweep",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/icons/kadakas/sweep.svg"
         )),
     ),
     (
@@ -645,6 +666,7 @@ pub fn tool_icon(tool: Tool) -> &'static str {
         Tool::LandscapeArea => "landscape-area",
         Tool::Hardscape => "hardscape",
         Tool::Massing => "massing",
+        Tool::Polygon3d => "polygon3d",
         Tool::SiteModifier => "site-modifier",
         Tool::Irrigation => "irrigation-outlet",
         Tool::Grading => "grade",
@@ -693,6 +715,8 @@ pub fn menu_icon(a: MenuAction) -> &'static str {
         MenuAction::ClipSurface => "surface-clip",
         MenuAction::IntersectSurface => "surface-intersect",
         MenuAction::Compose => "compose",
+        MenuAction::Extrude => "extrude",
+        MenuAction::Sweep => "sweep",
         MenuAction::RotateLeft90 | MenuAction::RotateRight90 => "rotate",
         MenuAction::FlipHorizontal | MenuAction::FlipVertical => "mirror",
         MenuAction::PreviousView => "arrow-narrow-left",
@@ -1020,6 +1044,8 @@ mod tests {
             ClipSurface,
             IntersectSurface,
             Compose,
+            Extrude,
+            Sweep,
             RotateLeft90,
             RotateRight90,
             FlipHorizontal,

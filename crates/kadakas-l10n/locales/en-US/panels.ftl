@@ -171,3 +171,7 @@ panels-add-class = Add Class
 panels-cursor-position = X { $x }  Y { $y } { $unit }
 panels-range-to = { $low } to { $high }
 panels-area-value = Area { $area }
+panels-extrude = Extrude...
+panels-sweep = Sweep...
+panels-model = Model
+panels-3d-modeling = 3D Modeling

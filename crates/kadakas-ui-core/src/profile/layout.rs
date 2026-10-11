@@ -59,6 +59,8 @@ commands! {
     ClipSurface => "cmd.clip_surface", msg!("panels-clip-surface"), false;
     IntersectSurface => "cmd.intersect_surface", msg!("panels-intersect-surface"), false;
     Compose => "cmd.compose", msg!("panels-compose"), false;
+    Extrude => "cmd.extrude", msg!("panels-extrude"), false;
+    Sweep => "cmd.sweep", msg!("panels-sweep"), false;
     CreateSiteModel => "site.create_model", msg!("panels-create-site-model-from-selection"), false;
     UpdateSiteModel => "site.update_model", msg!("panels-update-site-model"), false;
     ZoomFit => "view.zoom_fit", msg!("panels-zoom-to-fit"), false;
@@ -108,6 +110,8 @@ impl Cmd {
             Cmd::ClipSurface => Action::CmdClipSurface,
             Cmd::IntersectSurface => Action::CmdIntersectSurface,
             Cmd::Compose => Action::CmdCompose,
+            Cmd::Extrude => Action::CmdExtrude,
+            Cmd::Sweep => Action::CmdSweep,
             Cmd::ZoomFit => Action::ZoomFit,
             Cmd::PreviousView => Action::ViewHistoryPrevious,
             Cmd::NextView => Action::ViewHistoryNext,
@@ -164,6 +168,8 @@ fn known_title(id: &str) -> Option<&'static str> {
         "edit" => msg!("panels-edit"),
         "modify" => msg!("panels-modify"),
         "site" => msg!("panels-site"),
+        "model" => msg!("panels-model"),
+        "3d" => msg!("panels-3d-modeling"),
         "view" => msg!("panels-view"),
         "window" => msg!("panels-window"),
         "help" => msg!("panels-help"),
@@ -246,6 +252,7 @@ pub fn default_tool_sets() -> Vec<ToolSet> {
         set("modify", &Tool::MODIFY),
         set("landscape", &Tool::LANDSCAPE),
         set("site", &Tool::SITE),
+        set("3d", &Tool::MODEL),
         set("irrigation", &Tool::IRRIGATION),
         set("annotation", &Tool::ANNOTATION),
     ]
@@ -317,6 +324,10 @@ pub fn default_menus() -> Vec<Menu> {
                 "cmd.intersect_surface",
                 "cmd.compose",
             ],
+        ),
+        menu(
+            "model",
+            &["cmd.extrude", "cmd.sweep", "-", "tool.polygon3d"],
         ),
         menu("site", &["site.create_model", "site.update_model"]),
         menu(
@@ -440,11 +451,11 @@ mod tests {
     fn the_default_layout_has_every_tool_once() {
         let sets = default_tool_sets();
         let mut all: Vec<Tool> = sets.iter().flat_map(|s| s.tools.clone()).collect();
-        assert_eq!(all.len(), 28);
+        assert_eq!(all.len(), 29);
         all.dedup();
-        assert_eq!(all.len(), 28);
+        assert_eq!(all.len(), 29);
         assert_eq!(sets[0].tools, Tool::BASIC);
-        assert_eq!(sets[5].tools, Tool::ANNOTATION);
+        assert_eq!(sets[6].tools, Tool::ANNOTATION);
     }
 
     #[test]
@@ -473,7 +484,7 @@ mod tests {
         let mut want = Cmd::ALL.to_vec();
         want.sort();
         assert_eq!(cmds, want);
-        assert_eq!(menus.len(), 7);
+        assert_eq!(menus.len(), 8);
     }
 
     #[test]
