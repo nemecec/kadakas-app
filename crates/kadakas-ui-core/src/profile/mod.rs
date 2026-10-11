@@ -33,6 +33,16 @@ pub const FORMAT: u32 = 1;
 
 /// The longest name of a profile.
 pub const MAX_NAME: usize = 60;
+/// A profile file larger than this is refused before it is parsed.
+pub const MAX_FILE_BYTES: usize = 1024 * 1024;
+/// The most menus, tool sets, entries per menu or set, and aliases that a profile can hold.
+/// More are ignored and listed as a problem.
+pub const MAX_MENUS: usize = 24;
+pub const MAX_TOOL_SETS: usize = 24;
+pub const MAX_ITEMS: usize = 200;
+pub const MAX_ALIASES: usize = 500;
+/// The longest description, in characters. A longer one is cut.
+pub const MAX_DESCRIPTION: usize = 500;
 
 /// The id of the built-in Vectorworks-like profile. It is the default.
 pub const VECTORWORKS_ID: &str = "vectorworks";
@@ -46,6 +56,9 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// The id of the profile that this one was copied from. "Reset" in the Shortcuts editor
+    /// gives the keys of that profile.
+    pub based_on: Option<String>,
     /// True for the profiles that the program carries. They are read-only.
     pub builtin: bool,
     pub keymap: Keymap,
@@ -129,6 +142,9 @@ impl Profile {
     /// problem. Only a file that cannot be a profile at all gives an error. `fallback_id` is the
     /// id when the file has none, for example the file name.
     pub fn parse(text: &str, fallback_id: &str) -> Result<Parsed, ParseError> {
+        if text.len() > MAX_FILE_BYTES {
+            return Err(ParseError::TooLarge);
+        }
         let value: Value =
             serde_json::from_str(text).map_err(|e| ParseError::NotJson(e.to_string()))?;
         let obj = value.as_object().ok_or(ParseError::NotAnObject)?;
@@ -157,15 +173,25 @@ impl Profile {
             }
             None => fallback_id.to_string(),
         };
-        let description = obj
+        let mut description = obj
             .get("description")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        if description.chars().count() > MAX_DESCRIPTION {
+            description = description.chars().take(MAX_DESCRIPTION).collect();
+            problems.push(Problem::TooLong("description".into()));
+        }
+        let based_on = obj
+            .get("based_on")
+            .and_then(Value::as_str)
+            .filter(|b| layout::valid_id(b))
+            .map(str::to_string);
         let mut p = Profile {
             id,
             name: name.to_string(),
             description,
+            based_on,
             builtin: false,
             keymap: Keymap::defaults(),
             aliases: Aliases::new(),
@@ -268,7 +294,10 @@ impl Profile {
             problems.push(Problem::WrongType("aliases".into()));
             return;
         };
-        for (alias, target) in obj {
+        if obj.len() > MAX_ALIASES {
+            problems.push(Problem::TooMany("aliases".into()));
+        }
+        for (alias, target) in obj.iter().take(MAX_ALIASES) {
             let upper = alias.to_ascii_uppercase();
             let action = target.as_str().and_then(Action::from_id);
             match action {
@@ -301,16 +330,22 @@ impl Profile {
                 continue;
             }
             let found = kadakas_l10n::check_overlay(tag, text);
-            // A message that the language lacks does no harm: it never shows. Any other
-            // problem makes the loader drop the text of that language.
-            let harmless = found
-                .iter()
-                .all(|f| matches!(f, kadakas_l10n::OverlayProblem::UnknownMessage(_)));
+            // The program filters the text when it sets the overlay: a message that may not
+            // be replaced, or that has a wrong variable, never shows. Only a text that cannot
+            // be read at all is dropped.
+            let usable = !found.iter().any(|f| {
+                matches!(
+                    f,
+                    kadakas_l10n::OverlayProblem::Syntax(_)
+                        | kadakas_l10n::OverlayProblem::TooLong
+                        | kadakas_l10n::OverlayProblem::UnknownLanguage(_)
+                )
+            });
             problems.extend(found.into_iter().map(|f| Problem::Terms {
                 lang: tag.clone(),
                 problem: f,
             }));
-            if harmless {
+            if usable {
                 self.terms.insert(tag.clone(), text.to_string());
             }
         }
@@ -361,6 +396,9 @@ impl Profile {
         obj.insert("id".into(), json!(self.id));
         obj.insert("name".into(), json!(self.name));
         obj.insert("description".into(), json!(self.description));
+        if let Some(b) = &self.based_on {
+            obj.insert("based_on".into(), json!(b));
+        }
         obj.insert("keymap".into(), Value::Object(keymap));
         obj.insert("aliases".into(), Value::Object(aliases));
         obj.insert("tool_sets".into(), Value::Array(tool_sets));
@@ -396,11 +434,11 @@ impl Profile {
         self.keymap.conflict_for(action, chord)
     }
 
-    /// Back to the key of the Vectorworks-like defaults for one action. Other actions that
-    /// hold those chords lose them.
-    pub fn reset_chords(&mut self, action: Action) -> Vec<(Chord, Action)> {
-        let default = Keymap::defaults();
-        self.set_chords(action, default.chords(action))
+    /// Back to the keys that `base` gives the action. Other actions that hold those chords lose
+    /// them. `ProfileSet::reset_chords` picks `base`: the keymap of the profile this one was
+    /// copied from.
+    pub fn reset_chords(&mut self, action: Action, base: &Keymap) -> Vec<(Chord, Action)> {
+        self.set_chords(action, base.chords(action))
     }
 
     /// Adds or changes an alias. The text is normalized. Returns the action that the alias
@@ -475,7 +513,12 @@ fn read_part<'a>(
         name = Some(id.to_string());
     }
     let items = match o.get(list) {
-        Some(Value::Array(a)) => a.iter().collect(),
+        Some(Value::Array(a)) => {
+            if a.len() > MAX_ITEMS {
+                problems.push(Problem::TooMany(format!("{id}.{list}")));
+            }
+            a.iter().take(MAX_ITEMS).collect()
+        }
         None | Some(Value::Null) => Vec::new(),
         Some(_) => {
             problems.push(Problem::WrongType(format!("{id}.{list}")));
@@ -492,7 +535,10 @@ fn read_tool_sets(v: &Value, problems: &mut Vec<Problem>) -> Option<Vec<ToolSet>
     };
     let mut seen = Vec::new();
     let mut out = Vec::new();
-    for entry in a {
+    if a.len() > MAX_TOOL_SETS {
+        problems.push(Problem::TooMany("tool_sets".into()));
+    }
+    for entry in a.iter().take(MAX_TOOL_SETS) {
         let Some((id, name, items)) = read_part(entry, "tools", &mut seen, problems) else {
             continue;
         };
@@ -525,7 +571,10 @@ fn read_menus(v: &Value, problems: &mut Vec<Problem>) -> Option<Vec<Menu>> {
     };
     let mut seen = Vec::new();
     let mut out = Vec::new();
-    for entry in a {
+    if a.len() > MAX_MENUS {
+        problems.push(Problem::TooMany("menus".into()));
+    }
+    for entry in a.iter().take(MAX_MENUS) {
         let Some((id, name, entries)) = read_part(entry, "items", &mut seen, problems) else {
             continue;
         };

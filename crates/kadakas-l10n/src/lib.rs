@@ -31,7 +31,10 @@ pub mod argconv;
 
 pub use lang::{FALLBACK, Lang, languages, negotiate, normalize_tag};
 pub use localizer::{Arg, Localizer};
-pub use overlay::{OverlayProblem, check_overlay, overlay_tags, set_overlay, with_overlay};
+pub use overlay::{
+    MAX_TEXT, OVERLAYABLE, OverlayProblem, check_overlay, is_overlayable, overlay_tags,
+    set_overlay, with_overlay,
+};
 pub use resources::{message_ids, message_variables, problems, source_files};
 
 use std::cell::RefCell;

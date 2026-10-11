@@ -115,6 +115,20 @@ impl Localizer {
         self.tag
     }
 
+    /// Like `format`, but a message that Fluent cannot format cleanly gives `None`. An overlay
+    /// message with such an error falls back to the normal message.
+    fn format_clean(
+        bundle: &FluentBundle<FluentResource>,
+        id: &str,
+        args: &FluentArgs,
+    ) -> Option<String> {
+        let msg = bundle.get_message(id)?;
+        let pattern = msg.value()?;
+        let mut errors = Vec::new();
+        let text = bundle.format_pattern(pattern, Some(args), &mut errors);
+        errors.is_empty().then(|| text.into_owned())
+    }
+
     fn format(
         bundle: &FluentBundle<FluentResource>,
         id: &str,
@@ -194,7 +208,7 @@ impl Localizer {
         }
         self.overlay
             .as_ref()
-            .and_then(|b| Self::format(b, id, &fa))
+            .and_then(|b| Self::format_clean(b, id, &fa))
             .or_else(|| Self::format(&self.main, id, &fa))
             .or_else(|| {
                 self.fallback
@@ -295,6 +309,9 @@ mod tests {
         let over = Localizer::with_overlay("en-US", Some("common-ok = Fine\n"));
         assert_eq!(plain.tr("common-ok", &[]), "OK");
         assert_eq!(over.tr("common-ok", &[]), "Fine");
+        // An overlay message that does not format falls back to the normal text.
+        let bad = Localizer::with_overlay("en-US", Some("common-ok = { $missing }\n"));
+        assert_eq!(bad.tr("common-ok", &[]), "OK");
         // Other messages stay.
         assert_eq!(
             over.tr("common-cancel", &[]),

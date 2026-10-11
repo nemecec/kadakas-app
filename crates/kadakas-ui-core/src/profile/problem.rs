@@ -45,6 +45,10 @@ pub enum Problem {
         problem: OverlayProblem,
     },
     BadUnits(String),
+    /// A list has more entries than a profile can hold.
+    TooMany(String),
+    /// A text is longer than allowed and was cut.
+    TooLong(String),
 }
 
 fn action_name(id: &str) -> String {
@@ -96,6 +100,17 @@ impl Problem {
                         line = *line
                     )
                 }
+                OverlayProblem::TooLong => tr!("uic-profile-problem-terms-too-long", lang = lang),
+                OverlayProblem::NotAllowed(id) => {
+                    tr!(
+                        "uic-profile-problem-terms-not-allowed",
+                        lang = lang,
+                        id = id
+                    )
+                }
+                OverlayProblem::Reference(id) => {
+                    tr!("uic-profile-problem-terms-reference", lang = lang, id = id)
+                }
                 OverlayProblem::UnknownMessage(id) => {
                     tr!("uic-profile-problem-terms-message", lang = lang, id = id)
                 }
@@ -107,6 +122,8 @@ impl Problem {
                 ),
             },
             Problem::BadUnits(detail) => tr!("uic-profile-problem-bad-units", detail = detail),
+            Problem::TooMany(part) => tr!("uic-profile-problem-too-many", part = part),
+            Problem::TooLong(part) => tr!("uic-profile-problem-too-long", part = part),
         }
     }
 }
@@ -122,6 +139,8 @@ pub enum ParseError {
     BadFormat(u64),
     NoName,
     NameTooLong,
+    /// The file is larger than [`super::MAX_FILE_BYTES`].
+    TooLarge,
 }
 
 impl ParseError {
@@ -134,6 +153,7 @@ impl ParseError {
             ParseError::BadFormat(n) => tr!("uic-profile-error-bad-format", format = n.to_string()),
             ParseError::NoName => tr!("uic-profile-error-no-name"),
             ParseError::NameTooLong => tr!("uic-profile-error-name-too-long"),
+            ParseError::TooLarge => tr!("uic-profile-error-too-large"),
         }
     }
 }

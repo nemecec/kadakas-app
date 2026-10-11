@@ -1,15 +1,21 @@
 //! Workspace profiles in the app (PLAT-04). The model is in `kadakas_ui_core::profile`; this
-//! module keeps the state, reads and writes the user files, and draws the Preferences section,
-//! the Shortcuts and tools window and the command alias field.
+//! module keeps the state and draws the Preferences section, the Shortcuts and tools window and
+//! the command alias field. The files are in `profile_store.rs`.
 
 use egui::Ui;
 use kadakas_l10n::tr;
-use kadakas_ui_core::keymap::{Action, Chord};
+use kadakas_ui_core::keymap::{Action, Chord, Keymap};
 use kadakas_ui_core::profile::{
-    CommandLine, Outcome, Profile, ProfileSet, RenameError, VECTORWORKS_ID,
+    AUTOCAD_ID, CommandLine, Outcome, Profile, ProfileSet, RenameError, VECTORWORKS_ID,
 };
 
 use crate::keymap;
+use crate::profile_store::{ProfileStore, read_limited};
+
+/// The id of the command alias field in egui.
+pub fn command_field_id() -> egui::Id {
+    egui::Id::new("command-alias-field")
+}
 
 /// Profiles, the active one, and the state of their windows.
 pub struct Profiles {
@@ -21,9 +27,11 @@ pub struct Profiles {
     /// The last message for the person (a result or an error), shown in the window.
     pub message: Option<String>,
     pub customize_open: bool,
-    /// The config folder that holds `profiles/` and `profile.txt`. `None` writes nothing (the
-    /// web build, and tests).
-    config: Option<std::path::PathBuf>,
+    /// The user profile files. A store without a config folder writes nothing (the web build,
+    /// and tests).
+    store: ProfileStore,
+    /// The profile that the person is asked to delete.
+    confirm_delete: Option<String>,
     changed: bool,
     switched: bool,
     dirty: Vec<String>,
@@ -60,7 +68,8 @@ impl Profiles {
             focus_command: false,
             message: None,
             customize_open: false,
-            config: None,
+            store: ProfileStore::none(),
+            confirm_delete: None,
             changed: false,
             switched: false,
             dirty: Vec::new(),
@@ -75,56 +84,53 @@ impl Profiles {
     }
 
     /// The user profiles from the config folder, and warnings about files that did not load.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load() -> (Profiles, Vec<String>) {
+    /// `vectorworks_keys` is the keymap of the Vectorworks-like profile with the old
+    /// `keymap.json` applied (see `ProfileStore::load`).
+    pub fn load(vectorworks_keys: Option<Keymap>) -> (Profiles, Vec<String>) {
         match crate::prefs::dir() {
-            Some(dir) => Profiles::load_in(&dir),
-            None => (Profiles::default(), Vec::new()),
+            Some(dir) => Profiles::load_in(&dir, vectorworks_keys),
+            None => {
+                let mut p = Profiles::default();
+                if let Some(k) = vectorworks_keys {
+                    p.set.set_builtin_keymap(VECTORWORKS_ID, k);
+                }
+                (p, Vec::new())
+            }
         }
     }
 
-    /// The user profiles in `config/profiles` (one `<id>.json` file each). Changes are written
-    /// back there.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_in(config: &std::path::Path) -> (Profiles, Vec<String>) {
-        let mut user = Vec::new();
-        let mut warnings = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(config.join("profiles")) {
-            let mut files: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-            files.sort();
-            for path in files {
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
-                match std::fs::read_to_string(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|t| Profile::parse(&t, stem).map_err(|e| e.text()))
-                {
-                    Ok(parsed) => {
-                        if let Some(first) = parsed.problems.first() {
-                            warnings.push(tr!(
-                                "profiles-ui-file-warning",
-                                path = path.display(),
-                                problem = first.text()
-                            ));
-                        }
-                        user.push(parsed.profile);
-                    }
-                    Err(e) => warnings.push(tr!(
-                        "profiles-ui-file-ignored",
-                        path = path.display(),
-                        e = e
-                    )),
-                }
-            }
-        }
-        let mut p = Profiles::with_set(ProfileSet::new(user));
-        p.config = Some(config.to_path_buf());
+    /// Like `load`, for the config folder `config`.
+    pub fn load_in(
+        config: &std::path::Path,
+        vectorworks_keys: Option<Keymap>,
+    ) -> (Profiles, Vec<String>) {
+        let (set, store, warnings) = ProfileStore::load(config, vectorworks_keys);
+        let mut p = Profiles::with_set(set);
+        p.store = store;
         (p, warnings)
+    }
+
+    /// The profile of the last session.
+    pub fn saved_active(&self) -> Option<String> {
+        self.store.saved_active()
+    }
+
+    /// True when the active profile has command aliases, so the command field shows.
+    pub fn has_aliases(&self) -> bool {
+        !self.active_profile().aliases.is_empty()
+    }
+
+    /// Asks for the focus of the command field. Nothing happens in a profile without aliases.
+    pub fn request_command_focus(&mut self) {
+        self.focus_command = self.has_aliases();
+    }
+
+    /// A letter that nothing else took goes to the command field, which takes the focus.
+    pub fn type_into_field(&mut self, text: &str) {
+        if self.has_aliases() {
+            self.command_line.type_text(text);
+            self.focus_command = true;
+        }
     }
 
     /// The profile that is active. An unknown id gives the Vectorworks-like profile.
@@ -172,46 +178,18 @@ impl Profiles {
         self.key_grabbed = false;
     }
 
-    /// Writes the user files that changed and deletes the removed ones.
+    /// Writes the user files that changed, deletes the removed ones, and remembers the active
+    /// profile.
     pub fn flush(&mut self) {
-        let dirty = std::mem::take(&mut self.dirty);
-        let removed = std::mem::take(&mut self.removed);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let Some(config) = self.config.clone() else {
-                return;
-            };
-            let dir = config.join("profiles");
-            for id in dirty {
-                if let Some(p) = self.set.get(&id).filter(|p| !p.builtin) {
-                    let file = format!("{id}.json");
-                    if let Err(e) = crate::prefs::write_file(&dir, &file, &p.to_json()) {
-                        self.message = Some(e);
-                    }
-                }
+        for id in std::mem::take(&mut self.dirty) {
+            if let Err(e) = self.store.write(&self.set, &id) {
+                self.message = Some(e);
             }
-            for id in removed {
-                let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
-            }
-            self.save_active();
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (dirty, removed);
-    }
-
-    /// Remembers the active profile for the next start.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn save_active(&self) {
-        if let Some(dir) = &self.config {
-            let _ = crate::prefs::write_file(dir, "profile.txt", &self.active);
+        for id in std::mem::take(&mut self.removed) {
+            self.store.delete(&id);
         }
-    }
-
-    /// The profile of the last session.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn saved_active(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.config.as_ref()?.join("profile.txt")).ok()?;
-        Some(text.trim().to_string()).filter(|t| !t.is_empty())
+        self.store.save_active(&self.active);
     }
 
     /// The id of a profile that can be edited. A built-in profile gets a user copy, which
@@ -258,13 +236,24 @@ impl Profiles {
                 self.capture = Some(a);
                 self.conflict = None;
             }
-            Edit::Reset(a) => self.edit(|p| {
-                p.reset_chords(a);
-            }),
+            Edit::Reset(a) => self.reset(a),
             Edit::MoveTool(set, from, to) => self.edit(|p| {
                 p.move_tool(set, from, to);
             }),
         }
+    }
+
+    /// Resets the keys of one action to the keys of the profile that the active one was copied
+    /// from.
+    fn reset(&mut self, action: Action) {
+        let Some(id) = self.edit_target() else {
+            return;
+        };
+        self.set.reset_chords(&id, action);
+        if !self.dirty.contains(&id) {
+            self.dirty.push(id);
+        }
+        self.changed = true;
     }
 
     /// Gives `chord` to `action` (in addition to its other chords).
@@ -397,15 +386,33 @@ pub fn section(ui: &mut Ui, p: &mut Profiles) {
             }
         }
         if !builtin && ui.button(tr!("profiles-ui-delete")).clicked() {
-            p.set.remove(&id);
-            p.removed.push(id.clone());
-            p.select(VECTORWORKS_ID);
-            p.flush();
+            p.confirm_delete = Some(id.clone());
         }
         if ui.button(tr!("profiles-ui-shortcuts-and-tools")).clicked() {
             p.customize_open = true;
         }
     });
+    if let Some(target) = p.confirm_delete.clone() {
+        if p.active != target {
+            // The person picked another profile in the meantime.
+            p.confirm_delete = None;
+        } else {
+            let name = p.active_profile().name.clone();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr!("profiles-ui-confirm-delete", name = name));
+                if ui.button(tr!("profiles-ui-confirm-delete-yes")).clicked() {
+                    p.set.remove(&target);
+                    p.removed.push(target.clone());
+                    p.confirm_delete = None;
+                    p.select(VECTORWORKS_ID);
+                    p.flush();
+                }
+                if ui.button(tr!("common-cancel")).clicked() {
+                    p.confirm_delete = None;
+                }
+            });
+        }
+    }
     if let Some(m) = &p.message {
         ui.label(m);
     }
@@ -438,9 +445,7 @@ fn import(p: &mut Profiles) {
     else {
         return;
     };
-    let result = std::fs::read_to_string(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|text| p.set.import(&text).map_err(|e| e.text()));
+    let result = read_limited(&path).and_then(|text| p.set.import(&text).map_err(|e| e.text()));
     match result {
         Ok((id, problems)) => {
             let name = p.set.get(&id).map(|q| q.name.clone()).unwrap_or_default();
@@ -612,9 +617,13 @@ pub fn command_line_ui(ui: &mut Ui, p: &mut Profiles) -> Option<Outcome> {
         return None;
     }
     let aliases = &profile.aliases;
-    let id = egui::Id::new("command-alias-field");
+    let id = command_field_id();
     if std::mem::take(&mut p.focus_command) {
         ui.memory_mut(|m| m.request_focus(id));
+    }
+    let mut tip = tr!("profiles-ui-command-tip");
+    if profile.builtin && profile.id == AUTOCAD_ID {
+        tip = format!("{tip}\n{}", tr!("profiles-ui-command-tip-differences"));
     }
     let mut text = p.command_line.text().to_string();
     let r = ui
@@ -624,7 +633,7 @@ pub fn command_line_ui(ui: &mut Ui, p: &mut Profiles) -> Option<Outcome> {
                 .desired_width(110.0)
                 .hint_text(tr!("profiles-ui-command")),
         )
-        .on_hover_text(tr!("profiles-ui-command-tip"));
+        .on_hover_text(tip);
     if text != p.command_line.text() {
         p.command_line.set_text(&text);
     }
@@ -808,29 +817,17 @@ mod tests {
     }
 
     #[test]
-    fn user_profiles_are_written_read_and_removed() {
+    fn changes_are_written_and_the_active_profile_is_remembered() {
         let dir = std::env::temp_dir().join(format!("kadakas-profiles-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        // The prefs folder is the parent of `profiles`.
-        let mut p = Profiles::default();
-        let copy = p.set.duplicate("autocad").unwrap();
-        let text = p.set.get(&copy).unwrap().to_json();
-        std::fs::create_dir_all(dir.join("profiles")).unwrap();
-        std::fs::write(dir.join("profiles").join(format!("{copy}.json")), &text).unwrap();
-        std::fs::write(dir.join("profiles").join("bad.json"), "nope").unwrap();
-        std::fs::write(dir.join("profiles").join("note.txt"), "x").unwrap();
-        let mut loaded = Profiles::load_in(&dir);
-        assert_eq!(loaded.0.set.all().len(), 3);
-        assert_eq!(loaded.1.len(), 1);
-        assert!(loaded.0.set.get(&copy).is_some());
-        assert_eq!(Profiles::load_in(&dir.join("none")).0.set.all().len(), 2);
-        // Changes are written back, and the active profile is remembered.
-        assert_eq!(loaded.0.saved_active(), None);
-        loaded.0.select(&copy);
-        loaded.0.add_chord(Action::ToolLine, chord("Q"));
-        loaded.0.flush();
-        assert_eq!(loaded.0.saved_active(), Some(copy.clone()));
-        let again = Profiles::load_in(&dir).0;
+        let (mut p, warnings) = Profiles::load_in(&dir, None);
+        assert!(warnings.is_empty());
+        assert_eq!(p.saved_active(), None);
+        p.add_chord(Action::ToolLine, chord("Q"));
+        let copy = p.active.clone();
+        p.flush();
+        assert_eq!(p.saved_active(), Some(copy.clone()));
+        let again = Profiles::load_in(&dir, None).0;
         assert!(
             again
                 .set
@@ -840,10 +837,42 @@ mod tests {
                 .chords(Action::ToolLine)
                 .contains(&chord("Q"))
         );
-        loaded.0.set.remove(&copy);
-        loaded.0.removed.push(copy.clone());
-        loaded.0.flush();
+        // Reset gives the keys of the profile that the copy was made from.
+        p.apply(Edit::Reset(Action::ToolLine));
+        assert_eq!(
+            p.active_profile().keymap.chords(Action::ToolLine),
+            [chord("2")]
+        );
+        // Delete removes the file.
+        p.set.remove(&copy);
+        p.removed.push(copy.clone());
+        p.select(VECTORWORKS_ID);
+        p.flush();
         assert!(!dir.join("profiles").join(format!("{copy}.json")).exists());
+        assert_eq!(p.saved_active().as_deref(), Some(VECTORWORKS_ID));
+        // The legacy keymap reaches the profile.
+        let (km, _) = Keymap::with_overrides(r#"{"tool.line": "G"}"#);
+        let (p2, _) = Profiles::load_in(&dir, Some(km));
+        assert_eq!(
+            p2.active_profile().keymap.chords(Action::ToolLine),
+            [chord("G")]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn letters_go_to_the_command_field_only_in_a_profile_with_aliases() {
+        let mut p = Profiles::default();
+        p.type_into_field("l");
+        p.request_command_focus();
+        assert!(p.command_line.is_empty() && !p.focus_command);
+        p.select("autocad");
+        p.type_into_field("p");
+        p.type_into_field("l");
+        assert_eq!(p.command_line.text(), "PL");
+        assert!(p.focus_command);
+        p.focus_command = false;
+        p.request_command_focus();
+        assert!(p.focus_command);
     }
 }

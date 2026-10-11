@@ -175,10 +175,9 @@ fn bad_parts_are_replaced_by_defaults_and_listed() {
     assert_eq!(q.tool_sets.len(), 3);
     assert_eq!(q.tool_sets[0].tools, vec![Tool::Line]);
     assert!(q.units.is_none());
-    // The en-US text had an unknown variable and is dropped. The Estonian text names a
-    // message that does not exist; that does no harm, so the text stays.
-    assert!(!q.terms.contains_key("en-US"));
-    assert!(q.terms.contains_key("et"));
+    // The program filters the messages when it sets the overlay, so both texts stay in the
+    // profile. They are not dropped, because they can be read.
+    assert!(q.terms.contains_key("en-US") && q.terms.contains_key("et"));
 }
 
 #[test]
@@ -282,12 +281,23 @@ fn the_autocad_profile_is_clean() {
     let again = parse(AUTOCAD_JSON);
     assert!(again.problems.is_empty(), "{:?}", again.problems);
     let k = &p.keymap;
-    assert_eq!(k.action_for(chord("L")), Some(Action::ToolLine));
-    assert_eq!(k.action_for(chord("C")), Some(Action::ToolCircle));
-    assert_eq!(k.action_for(chord("O")), Some(Action::ToolOffset));
-    assert_eq!(k.action_for(chord("F")), Some(Action::ToolFillet));
-    assert_eq!(k.action_for(chord("Z")), Some(Action::ZoomFit));
-    assert_eq!(k.action_for(chord("2")), None);
+    // Letters go to the command field, so no plain letter or digit runs a tool.
+    for key in ["L", "C", "O", "F", "Z", "V", "T", "2", "X"] {
+        assert_eq!(k.action_for(chord(key)), None, "{key}");
+    }
+    assert_eq!(k.action_for(chord("Home")), Some(Action::ZoomFit));
+    for a in Action::ALL {
+        for c in k.chords(*a) {
+            let plain = !c.command && !c.ctrl && !c.alt && !c.shift;
+            let letter = c.key.name().len() == 1 || c.key.name().starts_with("Num");
+            assert!(
+                !(plain && letter),
+                "{} has the plain key {}",
+                a.id(),
+                c.to_text()
+            );
+        }
+    }
     assert_eq!(k.action_for(chord("Cmd/Ctrl+9")), Some(Action::CommandLine));
     for (alias, action) in [
         ("PL", Action::ToolPolyline),
@@ -371,7 +381,7 @@ fn editing_a_profile() {
     assert_eq!(moved, vec![(chord("4"), Action::ToolRect)]);
     assert_eq!(p.keymap.chords(Action::ToolLine), [chord("4"), chord("Q")]);
     // Reset gives the default back and takes it from the new holder.
-    let moved = p.reset_chords(Action::ToolRect);
+    let moved = p.reset_chords(Action::ToolRect, &Keymap::defaults());
     assert_eq!(moved, vec![(chord("4"), Action::ToolLine)]);
     assert_eq!(p.keymap.chords(Action::ToolRect), [chord("4")]);
 
@@ -488,4 +498,193 @@ fn names_and_ids_are_made_from_text() {
 fn overlay_pairs_are_listed() {
     let p = parse(r#"{"format":1,"name":"a","terms":{"et":"common-ok = Okei\n"}}"#).profile;
     assert_eq!(p.overlay(), vec![("et", "common-ok = Okei\n")]);
+}
+
+#[test]
+fn every_message_of_the_builtin_terms_may_be_replaced() {
+    for p in Profile::builtins() {
+        for (tag, text) in &p.terms {
+            let ids = parse_ids(text);
+            assert!(!ids.is_empty());
+            for id in ids {
+                assert!(
+                    kadakas_l10n::is_overlayable(&id),
+                    "{}: {tag}: {id} is not overlayable",
+                    p.id
+                );
+            }
+            assert!(text.len() < kadakas_l10n::MAX_TEXT);
+        }
+        // Both languages replace the same messages.
+        if p.terms.len() == 2 {
+            assert_eq!(parse_ids(&p.terms["en-US"]), parse_ids(&p.terms["et"]));
+        }
+    }
+}
+
+/// The labels that sit next to each other in Object Info and in the Navigation palette must
+/// read differently, with and without the terms of any built-in profile.
+#[test]
+fn neighbor_labels_stay_different_under_every_overlay() {
+    let groups: [&[&str]; 4] = [
+        // Object Info: the layer and the class of an object.
+        &["panels-layer", "panels-class"],
+        // Navigation: the lists of design layers, classes and sheet layers.
+        &[
+            "panels-design-layers",
+            "panels-classes",
+            "sheets-ui-sheet-layers",
+        ],
+        &[
+            "panels-add-design-layer",
+            "panels-add-class",
+            "sheets-ui-add-sheet-layer",
+        ],
+        &["io-dialog-design-layer", "io-dialog-class-from-attribute"],
+    ];
+    for p in Profile::builtins() {
+        for lang in kadakas_l10n::languages() {
+            kadakas_l10n::with_language(lang.tag, || {
+                kadakas_l10n::with_overlay(&p.overlay(), || {
+                    for g in groups {
+                        let texts: Vec<String> = g
+                            .iter()
+                            .map(|id| kadakas_l10n::translate(id, &[]))
+                            .collect();
+                        let distinct: std::collections::HashSet<&String> = texts.iter().collect();
+                        assert_eq!(
+                            distinct.len(),
+                            texts.len(),
+                            "{} {}: {g:?} {texts:?}",
+                            p.id,
+                            lang.tag
+                        );
+                    }
+                });
+            });
+        }
+    }
+}
+
+#[test]
+fn big_files_and_long_lists_are_limited() {
+    let big = format!(
+        r#"{{"format":1,"name":"a","description":"{}"}}"#,
+        " ".repeat(MAX_FILE_BYTES)
+    );
+    assert_eq!(Profile::parse(&big, "x").unwrap_err(), ParseError::TooLarge);
+    assert!(!ParseError::TooLarge.text().starts_with("uic-"));
+
+    let long = "d".repeat(MAX_DESCRIPTION + 5);
+    let p = parse(&format!(
+        r#"{{"format":1,"name":"a","description":"{long}"}}"#
+    ));
+    assert_eq!(p.profile.description.chars().count(), MAX_DESCRIPTION);
+    assert_eq!(p.problems, vec![Problem::TooLong("description".into())]);
+    assert!(!p.problems[0].text().starts_with("uic-"));
+
+    let aliases: Vec<String> = (0..MAX_ALIASES + 3)
+        .map(|i| format!(r#""A{i}":"tool.line""#))
+        .collect();
+    let menus: Vec<String> = (0..MAX_MENUS + 2)
+        .map(|i| format!(r#"{{"id":"m{i}","name":"M","items":[]}}"#))
+        .collect();
+    let sets: Vec<String> = (0..MAX_TOOL_SETS + 2)
+        .map(|i| format!(r#"{{"id":"s{i}","name":"S","tools":[]}}"#))
+        .collect();
+    let items: Vec<String> = (0..MAX_ITEMS + 2).map(|_| r#""-""#.to_string()).collect();
+    let text = format!(
+        r#"{{"format":1,"name":"a","aliases":{{{}}},"menus":[{},{{"id":"big","name":"B","items":[{}]}}],"tool_sets":[{}]}}"#,
+        aliases.join(","),
+        menus.join(","),
+        items.join(","),
+        sets.join(",")
+    );
+    let p = parse(&text);
+    assert_eq!(p.profile.aliases.len(), MAX_ALIASES);
+    assert_eq!(p.profile.menus.len(), MAX_MENUS);
+    assert_eq!(p.profile.tool_sets.len(), MAX_TOOL_SETS);
+    for part in ["aliases", "menus", "tool_sets"] {
+        assert!(
+            p.problems.contains(&Problem::TooMany(part.into())),
+            "{part}"
+        );
+    }
+    let one = parse(&format!(
+        r#"{{"format":1,"name":"a","menus":[{{"id":"big","name":"B","items":[{}]}}]}}"#,
+        items.join(",")
+    ));
+    assert_eq!(one.profile.menus[0].items.len(), MAX_ITEMS);
+    assert!(one.problems.contains(&Problem::TooMany("big.items".into())));
+    assert!(!one.problems[0].text().starts_with("uic-"));
+}
+
+#[test]
+fn a_copy_remembers_its_base_and_reset_goes_back_to_it() {
+    let mut set = ProfileSet::new(vec![]);
+    let copy = set.duplicate(AUTOCAD_ID).unwrap();
+    assert_eq!(
+        set.get(&copy).unwrap().based_on.as_deref(),
+        Some(AUTOCAD_ID)
+    );
+    // The file keeps the base.
+    let back = parse(&set.get(&copy).unwrap().to_json()).profile;
+    assert_eq!(back.based_on.as_deref(), Some(AUTOCAD_ID));
+    // Change a key, then reset: the key of the AutoCAD-like profile comes back, not the
+    // Vectorworks-like default.
+    set.user_mut(&copy)
+        .unwrap()
+        .set_chords(Action::ZoomFit, &[chord("Q")]);
+    let moved = set.reset_chords(&copy, Action::ZoomFit).unwrap();
+    assert!(moved.is_empty());
+    assert_eq!(
+        set.get(&copy).unwrap().keymap.chords(Action::ZoomFit),
+        [chord("Home")]
+    );
+    // A copy of a copy follows the chain up to the built-in profile.
+    let copy2 = set.duplicate(&copy).unwrap();
+    assert_eq!(set.base_keymap(&copy2), set.get(AUTOCAD_ID).unwrap().keymap);
+    // A broken or missing base gives the defaults.
+    set.user_mut(&copy2).unwrap().based_on = Some("gone".into());
+    assert_eq!(set.base_keymap(&copy2), Keymap::defaults());
+    set.user_mut(&copy2).unwrap().based_on = None;
+    assert_eq!(set.base_keymap("nope"), Keymap::defaults());
+    assert!(set.reset_chords(AUTOCAD_ID, Action::ZoomFit).is_none());
+    // A bad `based_on` in a file is dropped.
+    assert!(
+        parse(r#"{"format":1,"name":"a","based_on":"Bad Id"}"#)
+            .profile
+            .based_on
+            .is_none()
+    );
+}
+
+#[test]
+fn a_builtin_keymap_can_be_replaced_and_is_copied() {
+    let mut set = ProfileSet::new(vec![]);
+    let (km, w) = Keymap::with_overrides(r#"{"tool.line": "G"}"#);
+    assert!(w.is_empty());
+    assert!(set.set_builtin_keymap(VECTORWORKS_ID, km.clone()));
+    assert!(!set.set_builtin_keymap("nope", km.clone()));
+    assert_eq!(set.get(VECTORWORKS_ID).unwrap().keymap, km);
+    let copy = set.duplicate(VECTORWORKS_ID).unwrap();
+    assert_eq!(
+        set.get(&copy).unwrap().keymap.action_for(chord("G")),
+        Some(Action::ToolLine)
+    );
+    // Resetting an action in the copy gives the keys that work in the base.
+    assert_eq!(set.base_keymap(&copy), km);
+}
+
+#[test]
+fn valid_ids_are_kept_and_others_are_made_from_the_text() {
+    let set = ProfileSet::new(vec![]);
+    assert_eq!(set.unique_id("my_profile"), "my_profile");
+    assert_eq!(set.unique_id("My Profile"), "my-profile");
+    assert_eq!(slug("a_b"), "a_b");
+    assert_eq!(slug("___"), "profile");
+    let mut set = ProfileSet::new(vec![]);
+    let p = parse(r#"{"format":1,"name":"x","id":"user_one"}"#).profile;
+    assert_eq!(set.add_user(p.clone()), "user_one");
+    assert_eq!(set.add_user(p), "user_one-2");
 }

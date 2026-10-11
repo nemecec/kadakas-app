@@ -3,7 +3,8 @@
 
 use kadakas_l10n::tr;
 
-use super::{MAX_NAME, ParseError, Problem, Profile};
+use super::{MAX_NAME, ParseError, Problem, Profile, layout};
+use crate::keymap::{Action, Chord, Keymap};
 
 /// Why a profile cannot be renamed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,13 +19,16 @@ pub enum RenameError {
     NameTaken,
 }
 
-/// Lower case letters and digits of `text`, with `-` between words, at most 24 characters. Empty
-/// text gives `profile`.
+/// Lower case letters and digits of `text`, with `-` between words (`_` stays), at most 24
+/// characters. Empty text gives `profile`.
 pub fn slug(text: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in text.chars() {
-        if c.is_ascii_alphanumeric() {
+        if c == '_' {
+            out.push('_');
+            dash = false;
+        } else if c.is_ascii_alphanumeric() {
             if dash && !out.is_empty() {
                 out.push('-');
             }
@@ -38,11 +42,19 @@ pub fn slug(text: &str) -> String {
     while out.ends_with('-') {
         out.pop();
     }
-    if out.is_empty() {
+    if out.is_empty() || out.chars().all(|c| c == '_') {
         "profile".into()
     } else {
         out
     }
+}
+
+/// Letters and digits of `text` in lower case: the form in which names are compared.
+fn loose(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 /// The built-in profiles and the user profiles. The built-in ones come first.
@@ -57,13 +69,34 @@ impl ProfileSet {
         let mut set = ProfileSet {
             profiles: Profile::builtins(),
         };
-        for mut p in user {
-            p.builtin = false;
-            p.id = set.unique_id(&p.id);
-            p.name = set.unique_name(&p.name);
-            set.profiles.push(p);
+        for p in user {
+            set.add_user(p);
         }
         set
+    }
+
+    /// Adds a user profile and returns its id. A valid id that is free stays as it is. Another
+    /// id is made from it. A name that is taken gets a number.
+    pub fn add_user(&mut self, mut p: Profile) -> String {
+        p.builtin = false;
+        p.id = self.unique_id(&p.id);
+        p.name = self.unique_name(&p.name);
+        let id = p.id.clone();
+        self.profiles.push(p);
+        id
+    }
+
+    /// Gives a built-in profile another keymap. The app uses it to apply the old `keymap.json`
+    /// to the Vectorworks-like profile, so the keys that work are the keys that the profile
+    /// shows and copies.
+    pub fn set_builtin_keymap(&mut self, id: &str, keymap: Keymap) -> bool {
+        match self.profiles.iter_mut().find(|p| p.id == id && p.builtin) {
+            Some(p) => {
+                p.keymap = keymap;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn all(&self) -> &[Profile] {
@@ -78,15 +111,19 @@ impl ProfileSet {
     /// `AutoCAD-like` and `autocad_like` both find the same profile). The launcher passes this
     /// text as `--profile NAME`.
     pub fn find(&self, key: &str) -> Option<&Profile> {
-        let k = slug(key);
+        let k = loose(key);
         self.get(key)
-            .or_else(|| self.profiles.iter().find(|p| p.id == k))
-            .or_else(|| self.profiles.iter().find(|p| slug(&p.name) == k))
+            .or_else(|| self.profiles.iter().find(|p| loose(&p.id) == k))
+            .or_else(|| self.profiles.iter().find(|p| loose(&p.name) == k))
     }
 
     /// An id that no profile has, starting from `base`.
     pub fn unique_id(&self, base: &str) -> String {
-        let base = slug(base);
+        let base = if layout::valid_id(base) {
+            base.to_string()
+        } else {
+            slug(base)
+        };
         let mut id = base.clone();
         let mut n = 2;
         while self.get(&id).is_some() {
@@ -129,6 +166,7 @@ impl ProfileSet {
             id: self.unique_id(&name),
             name,
             description: src.display_description(),
+            based_on: Some(src.id.clone()),
             builtin: false,
             ..src
         };
@@ -175,6 +213,31 @@ impl ProfileSet {
         Ok(())
     }
 
+    /// The keymap that "reset" gives: the keymap of the profile that `id` was copied from. A
+    /// chain of copies is followed up to a built-in profile; a profile without a source (or with
+    /// a source that is gone) resets to the Vectorworks-like defaults.
+    pub fn base_keymap(&self, id: &str) -> Keymap {
+        let mut at = self.get(id).and_then(|p| p.based_on.clone());
+        for _ in 0..16 {
+            let Some(base) = at.as_deref().and_then(|b| self.get(b)) else {
+                break;
+            };
+            if base.builtin {
+                return base.keymap.clone();
+            }
+            at = base.based_on.clone();
+        }
+        Keymap::defaults()
+    }
+
+    /// Resets the keys of one action in a user profile to the keys of its base profile. Other
+    /// actions that hold those chords lose them. Returns the moved chords; `None` for a
+    /// built-in or unknown profile.
+    pub fn reset_chords(&mut self, id: &str, action: Action) -> Option<Vec<(Chord, Action)>> {
+        let base = self.base_keymap(id);
+        self.user_mut(id).map(|p| p.reset_chords(action, &base))
+    }
+
     /// Removes a user profile. False for a built-in or unknown profile.
     pub fn remove(&mut self, id: &str) -> bool {
         match self.profiles.iter().position(|p| p.id == id && !p.builtin) {
@@ -190,12 +253,7 @@ impl ProfileSet {
     /// name. Returns the id and the problems that the loader worked around.
     pub fn import(&mut self, text: &str) -> Result<(String, Vec<Problem>), ParseError> {
         let parsed = Profile::parse(text, "imported")?;
-        let mut p = parsed.profile;
-        p.builtin = false;
-        p.id = self.unique_id(&p.id);
-        p.name = self.unique_name(&p.name);
-        let id = p.id.clone();
-        self.profiles.push(p);
+        let id = self.add_user(parsed.profile);
         Ok((id, parsed.problems))
     }
 }

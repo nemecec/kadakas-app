@@ -140,6 +140,16 @@ fn web_entropy() -> u64 {
     }
 }
 
+/// The letter or digit of a key, if it is one. The command field takes these.
+fn typed_char(key: Key) -> Option<char> {
+    let name = key.name();
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphanumeric() => Some(c),
+        _ => None,
+    }
+}
+
 impl KadakasApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
@@ -185,7 +195,11 @@ impl KadakasApp {
             eprintln!("kadakas: {w}");
         }
         // The profile of `--profile NAME` or `KADAKAS_PROFILE`, else the one of the last session.
-        let (profiles, mut warnings) = crate::profiles::Profiles::load();
+        // The old keymap.json belongs to the Vectorworks-like profile: it is read once here and
+        // becomes the keymap of that profile, so one keymap is the truth.
+        let (legacy_keys, key_warnings) = keymap::load();
+        let (profiles, mut warnings) = crate::profiles::Profiles::load(Some(legacy_keys));
+        warnings.extend(key_warnings);
         app.profiles = profiles;
         let wanted = if requested_profile.is_empty() {
             app.profiles.saved_active()
@@ -204,9 +218,7 @@ impl KadakasApp {
         }
         let _ = app.profiles.take_changed();
         kadakas_l10n::set_overlay(&app.profiles.active_profile().overlay());
-        let (keys, key_warnings) = app.keys_for_active();
-        warnings.extend(key_warnings);
-        app.keys = keys;
+        app.keys = app.profiles.active_profile().keymap.clone();
         for w in &warnings {
             eprintln!("kadakas: {w}");
         }
@@ -516,17 +528,6 @@ impl KadakasApp {
             .collect();
     }
 
-    /// The keymap of the active profile. The old `keymap.json` still changes the Vectorworks-like
-    /// profile, so existing files keep working.
-    fn keys_for_active(&self) -> (Keymap, Vec<String>) {
-        let p = self.profiles.active_profile();
-        #[cfg(not(target_arch = "wasm32"))]
-        if p.builtin && p.id == kadakas_ui_core::profile::VECTORWORKS_ID {
-            return keymap::load();
-        }
-        (p.keymap.clone(), Vec::new())
-    }
-
     /// Puts the active profile to work: its keymap and its terms. A change of the profile applies
     /// at once. `switched` is true when the person picked another profile; then its default
     /// units apply too.
@@ -539,16 +540,12 @@ impl KadakasApp {
     fn apply_profile_state(&mut self, switched: bool) {
         let p = self.profiles.active_profile();
         let (units, name) = (p.units, p.display_name());
-        let (keys, warnings) = self.keys_for_active();
-        self.keys = keys;
+        self.keys = self.profiles.active_profile().keymap.clone();
         if switched {
             if let Some(u) = units {
                 self.prefs.units = u;
             }
             self.status = tr!("profiles-ui-profile-active", name = name);
-        }
-        if let Some(w) = warnings.first() {
-            self.status = w.clone();
         }
         self.machine.cancel();
     }
@@ -918,14 +915,13 @@ impl KadakasApp {
                 }
             }
             // Enter with nothing to finish goes to the command alias field of the profile.
-            Action::Finish
-                if !self.machine.is_busy()
-                    && !self.profiles.active_profile().aliases.is_empty() =>
-            {
-                self.profiles.focus_command = true
+            Action::Finish if !self.machine.is_busy() && self.profiles.has_aliases() => {
+                self.profiles.request_command_focus();
+                // The Enter key must not reach the field in the same frame.
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
             }
             Action::Finish => self.send(Input::Enter),
-            Action::CommandLine => self.profiles.focus_command = true,
+            Action::CommandLine => self.profiles.request_command_focus(),
             Action::ToolMode1 => self.mode_group(1),
             Action::ToolMode2 => self.mode_group(2),
             Action::ToolMode3 => self.mode_group(3),
@@ -1060,6 +1056,17 @@ impl KadakasApp {
         for (key, physical, mods, repeat) in events {
             let Some((action, chord)) = keymap::action_for_event(&self.keys, key, physical, mods)
             else {
+                // A profile with command aliases takes the letters and digits that no key
+                // uses: they start the alias in the command field.
+                if !typing
+                    && !repeat
+                    && !mods.command
+                    && !mods.ctrl
+                    && !mods.alt
+                    && let Some(c) = typed_char(key)
+                {
+                    self.profiles.type_into_field(&c.to_string());
+                }
                 continue;
             };
             if repeat && !action.repeats() {
@@ -1524,6 +1531,7 @@ impl KadakasApp {
                     | Action::NudgeDown
             ) || a.id().starts_with("mode.")
                 || !a.implemented()
+                || (a == Action::CommandLine && !self.profiles.has_aliases())
         };
         for a in Action::ALL.iter().copied().filter(|a| !skip(*a)) {
             out.push(QuickItem {
@@ -2118,6 +2126,8 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        // A request that the field did not take (no field in this profile) must not wait.
+        self.profiles.focus_command = false;
         match alias {
             Some(Outcome::Run(a) | Outcome::Repeat(a)) => self.run_action(&ctx, a),
             Some(Outcome::Unknown(alias)) => {
@@ -2487,14 +2497,19 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         };
-        // The key 2 was the Line tool in the Vectorworks-like profile. Here L is.
+        // The key 2 was the Line tool in the Vectorworks-like profile. Here no key runs a tool:
+        // the letters and digits go to the command field.
         frame(&mut app, &ctx, vec![key(egui::Key::Num2)]);
         assert_eq!(app.machine.tool(), Tool::Select);
+        assert_eq!(app.profiles.command_line.text(), "2");
+        app.profiles.command_line.clear();
         frame(&mut app, &ctx, vec![key(egui::Key::L)]);
-        assert_eq!(app.machine.tool(), Tool::Line);
+        assert_eq!(app.machine.tool(), Tool::Select);
+        assert_eq!(app.profiles.command_line.text(), "L");
+        assert!(app.profiles.focus_command);
+        app.profiles.command_line.clear();
+        app.profiles.focus_command = false;
         // Enter with nothing to finish goes to the command alias field.
-        app.machine.set_tool(Tool::Select);
-        assert!(!app.profiles.focus_command);
         frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
         assert!(app.profiles.focus_command);
         // An alias runs its action.
@@ -2535,6 +2550,72 @@ mod tests {
         let ctx = egui::Context::default();
         frame(&mut app, &ctx, vec![key(egui::Key::Num2)]);
         assert_eq!(app.machine.tool(), Tool::Line);
+    }
+
+    #[test]
+    fn enter_and_letters_move_the_focus_to_the_command_field() {
+        let ctx = egui::Context::default();
+        let mut app = KadakasApp::blank();
+        assert!(app.profiles.select_named("autocad"));
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        let id = crate::profiles::command_field_id();
+        let key = |k| egui::Event::Key {
+            key: k,
+            physical_key: Some(k),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // A frame like `update`: the keys first, then the field in the status bar.
+        let run = |app: &mut KadakasApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let c = ui.ctx().clone();
+                app.handle_keys(&c);
+                egui::Panel::bottom("status").show(ui, |ui| {
+                    let _ = crate::profiles::command_line_ui(ui, &mut app.profiles);
+                });
+                app.profiles.focus_command = false;
+            });
+        };
+        run(&mut app, vec![]);
+        assert!(!ctx.memory(|m| m.has_focus(id)));
+        run(&mut app, vec![key(egui::Key::Enter)]);
+        run(&mut app, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(id)), "Enter focuses the field");
+        // Surrender the focus. A letter starts the alias and focuses the field again.
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        run(&mut app, vec![]);
+        assert!(!ctx.memory(|m| m.has_focus(id)));
+        run(&mut app, vec![key(egui::Key::P)]);
+        run(&mut app, vec![]);
+        assert_eq!(app.profiles.command_line.text(), "P");
+        assert!(ctx.memory(|m| m.has_focus(id)));
+        // In the Vectorworks-like profile there is no field, and Enter does nothing there.
+        assert!(
+            app.profiles
+                .select(kadakas_ui_core::profile::VECTORWORKS_ID)
+        );
+        let switched = app.profiles.take_changed().unwrap();
+        app.apply_profile_state(switched);
+        let ctx2 = egui::Context::default();
+        let _ = ctx2.run_ui(Default::default(), |ui| {
+            egui::Panel::bottom("status").show(ui, |ui| {
+                assert!(crate::profiles::command_line_ui(ui, &mut app.profiles).is_none());
+            });
+        });
+        assert!(!ctx2.memory(|m| m.has_focus(id)));
+        app.run_action(&ctx2, Action::CommandLine);
+        assert!(!app.profiles.focus_command);
+        assert!(
+            app.quick_items()
+                .iter()
+                .all(|i| i.label != Action::CommandLine.label())
+        );
     }
 
     #[test]

@@ -56,19 +56,17 @@ The keys on this page are the keys of the Vectorworks-like profile, the default.
 
 ## AutoCAD-like profile
 
-The AutoCAD-like profile uses keys and command aliases that are common in CAD programs of that family. The source is public general knowledge of the usual command aliases. The profile has no vendor text or icons. AutoCAD is a trademark of Autodesk, Inc. (see `docs/attribution.md`). Kadakas has no command line. A short field in the status bar takes an alias: press Enter (with nothing to finish) or Cmd/Ctrl+9, type the letters, press Enter. An empty field repeats the last command. Up and Down show earlier commands. These keys differ from the Vectorworks-like ones:
+The AutoCAD-like profile uses command aliases that are common in CAD programs of that family. The source is public general knowledge of the usual command aliases. The profile has no vendor text or icons. AutoCAD is a trademark of Autodesk, Inc. (see `docs/attribution.md`).
+
+Kadakas has no command line. A short field in the status bar takes an alias. In this profile, **a letter or digit that no key uses starts the alias**: press the keys (`P`, `L`), and they go to the field, which takes the focus. Press Enter to run the alias. You can also press Enter (with nothing to finish) or Cmd/Ctrl+9 to focus the field first. An empty field repeats the last command. Up and Down show earlier commands. Esc empties the field.
+
+The profile therefore has **no single-letter key for a tool**. The reason: the first letter of `PL`, `CO` or `TR` would run another tool at once, and the second letter would do something else. Every tool, including the ones that need one letter in AutoCAD (`L`, `C`, `Z`), runs after Enter. The keys that are left need a modifier, so they never clash with typing. These keys differ from the Vectorworks-like ones:
 
 | Key | Action |
 |---|---|
-| L | Line tool |
-| C | Circle tool |
-| T | Text tool |
-| O | Offset tool |
-| F | Fillet tool |
-| V | Selection tool (Kadakas key; the profile has no other key for it) |
-| Z or Home | Zoom to fit |
-| Cmd/Ctrl+F | Quick search (F is Fillet) |
-| Cmd/Ctrl+9 | Focus the command alias field |
+| Home | Zoom to fit (alias `Z`) |
+| Cmd/Ctrl+F | Quick search (`F` is the Fillet alias) |
+| Cmd/Ctrl+9 | Focus the command alias field (the browser build keeps Cmd/Ctrl+9 for its own tabs: press Enter instead) |
 | F12, F10 | SmartCursor cues, angles relative to the prior segment |
 | Shift+T | Acquire a smart point |
 | Shift+U, I, O, P, K, J | Tool mode groups 1 to 6 |

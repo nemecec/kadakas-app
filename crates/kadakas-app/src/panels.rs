@@ -209,8 +209,25 @@ pub fn menu_bar(
                 }
             });
         }
+        // Preferences is how a person reaches the profiles. A profile without that command
+        // still gets a way to it.
+        if lacks_preferences(profile) {
+            ui.menu_button(Cmd::Preferences.label(), |ui| {
+                let label = Cmd::Preferences.label();
+                menu_item(ui, keys, &label, true, MenuAction::Preferences, &mut out);
+            });
+        }
     });
     out
+}
+
+/// True when no menu of the profile has the Preferences command (menus that are empty, or
+/// that a profile file left it out of).
+pub fn lacks_preferences(profile: &Profile) -> bool {
+    !profile
+        .menus
+        .iter()
+        .any(|m| m.items.contains(&Item::Command(Cmd::Preferences)))
 }
 
 fn menu_item(
@@ -1726,6 +1743,48 @@ mod tests {
             attrs: Attributes::default(),
         };
         ObjectId(session.editor.execute(&cmd).unwrap().created[0])
+    }
+
+    #[test]
+    fn a_profile_without_a_preferences_command_still_gets_a_way_to_it() {
+        let mut p = Profile::vectorworks();
+        assert!(!lacks_preferences(&p));
+        for m in &mut p.menus {
+            m.items.clear();
+        }
+        assert!(lacks_preferences(&p));
+        p.menus.clear();
+        assert!(lacks_preferences(&p));
+        // The bar draws without a menu of the profile.
+        let ctx = egui::Context::default();
+        let state = MenuState {
+            can_undo: false,
+            can_redo: false,
+            can_site: false,
+            can_update_site: false,
+        };
+        let mut snap = kadakas_core::snapping::Settings::default();
+        let (mut cues, mut theme, mut size, mut grid) = (
+            true,
+            crate::theme::ThemeChoice::System,
+            IconSize::Medium,
+            true,
+        );
+        let mut extras = MenuExtras {
+            snap: &mut snap,
+            cues: &mut cues,
+            theme: &mut theme,
+            icon_size: &mut size,
+            layout_names: Vec::new(),
+            can_back: false,
+            can_forward: false,
+            has_selection: false,
+            requests: Vec::new(),
+        };
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let out = menu_bar(ui, &Keymap::defaults(), &p, &state, &mut extras, &mut grid);
+            assert!(out.is_empty());
+        });
     }
 
     #[test]
