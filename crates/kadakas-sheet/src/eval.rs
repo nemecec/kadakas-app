@@ -22,6 +22,11 @@ pub trait Env {
     fn blank_is_zero(&self) -> bool {
         true
     }
+    /// The area unit that `AREA` uses when the formula names none. Metric unless the document
+    /// says otherwise.
+    fn area_unit(&self) -> kadakas_units::AreaUnit {
+        kadakas_units::AreaUnit::M2
+    }
 }
 
 /// The names of the functions, for help texts.
@@ -42,6 +47,10 @@ pub const FUNCTIONS: &[(&str, &str)] = &[
         "ROUND(number, digits): rounds to a number of decimals",
     ),
     ("ABS", "ABS(number): the size of a number"),
+    (
+        "AREA",
+        "AREA(area_m2, unit?, decimals?, round_to?, show_unit?): an area as text. unit is \"m2\", \"ha\", \"ft2\" or \"ac\" (default: from the dimension standard of the document, metric without one). decimals defaults to the usual number for the unit, round_to rounds to a multiple of that many units, show_unit (default true) adds the unit",
+    ),
     ("CONCAT", "CONCAT(values...): joins text"),
     ("AND", "AND(tests...): true if all are true"),
     ("OR", "OR(tests...): true if one is true"),
@@ -176,6 +185,54 @@ fn numbers(vals: &[Value]) -> Result<Vec<f64>, ErrorKind> {
     Ok(out)
 }
 
+/// `AREA(area_m2, unit?, decimals?, round_to?, show_unit?)`: the text of an area (a format for a
+/// tag field).
+fn area_text(args: &[Expr], env: &dyn Env) -> Value {
+    if let Err(v) = arity(args, 1, 5) {
+        return v;
+    }
+    // An object without an area (a line) has an empty `Area`: the field shows nothing.
+    if eval(&args[0], env).is_empty() {
+        return Value::Empty;
+    }
+    let num = |i: usize| args.get(i).map(|e| eval(e, env).to_number());
+    let m2 = match num(0) {
+        Some(Ok(x)) => x,
+        Some(Err(k)) => return err(k),
+        None => return err(ErrorKind::Value),
+    };
+    let unit = match args.get(1).map(|e| eval(e, env)) {
+        None => env.area_unit(),
+        Some(Value::Error(k)) => return err(k),
+        Some(v) => match kadakas_units::AreaUnit::from_name(&v.to_text()) {
+            Some(u) => u,
+            None => return err(ErrorKind::Value),
+        },
+    };
+    let decimals = match num(2) {
+        None => unit.default_decimals(),
+        Some(Ok(d)) => d.trunc().clamp(0.0, 8.0) as usize,
+        Some(Err(k)) => return err(k),
+    };
+    let round_to = match num(3) {
+        None => None,
+        Some(Ok(r)) => Some(r),
+        Some(Err(k)) => return err(k),
+    };
+    let show = match args.get(4).map(|e| eval(e, env).to_bool()) {
+        None => true,
+        Some(Ok(b)) => b,
+        Some(Err(k)) => return err(k),
+    };
+    Value::Text(kadakas_units::format_area_drawing(
+        m2 * 1.0e6,
+        unit,
+        decimals,
+        round_to,
+        show,
+    ))
+}
+
 fn arity(args: &[Expr], min: usize, max: usize) -> Result<(), Value> {
     if args.len() < min || args.len() > max {
         Err(err(ErrorKind::Value))
@@ -252,6 +309,7 @@ fn call(name: &str, args: &[Expr], env: &dyn Env) -> Value {
             let nudged = scaled + scaled.abs() * 4.0 * f64::EPSILON * scaled.signum();
             Value::num(nudged.round() / f)
         }
+        "AREA" => area_text(args, env),
         "ABS" => {
             if let Err(v) = arity(args, 1, 1) {
                 return v;
@@ -396,6 +454,32 @@ mod tests {
 
     fn t(s: &str) -> Value {
         Value::Text(s.into())
+    }
+
+    #[test]
+    fn area_formats_an_area_for_a_tag() {
+        // The default unit of the test environment is square meters.
+        assert_eq!(ev("AREA(12.345)"), t("12.35 m\u{b2}"));
+        assert_eq!(ev("AREA(12.345, \"m2\", 1)"), t("12.3 m\u{b2}"));
+        assert_eq!(ev("AREA(12.345, \"m2\", 0, 5, FALSE)"), t("10"));
+        assert_eq!(ev("AREA(10000, \"ha\")"), t("1.0000 ha"));
+        assert_eq!(ev("AREA(10, \"ft2\", 0)"), t("108 ft\u{b2}"));
+        assert_eq!(ev("AREA(4046.8564224, \"acre\", 2)"), t("1.00 ac"));
+        assert_eq!(ev("AREA(\"x\")"), Value::Error(ErrorKind::Value));
+        assert_eq!(ev("AREA(1, \"yd2\")"), Value::Error(ErrorKind::Value));
+        assert_eq!(ev("AREA(1, 1/0)"), Value::Error(ErrorKind::Div0));
+        assert_eq!(ev("AREA(1, \"m2\", \"x\")"), Value::Error(ErrorKind::Value));
+        assert_eq!(
+            ev("AREA(1, \"m2\", 1, \"x\")"),
+            Value::Error(ErrorKind::Value)
+        );
+        assert_eq!(
+            ev("AREA(1, \"m2\", 1, 1, \"x\")"),
+            Value::Error(ErrorKind::Value)
+        );
+        assert_eq!(ev("AREA()"), Value::Error(ErrorKind::Value));
+        assert_eq!(ev("AREA(Z9)"), Value::Empty);
+        assert_eq!(ev("AREA(1/0)"), Value::Error(ErrorKind::Div0));
     }
 
     #[test]

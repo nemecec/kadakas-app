@@ -1881,7 +1881,7 @@ class Api:
         return self._call("text_style.get", params or None)
 
     def text_style_create(self, **params: Any) -> Any:
-        """Create a text style. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a text style. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``text_style.create``."""
         return self._call("text_style.create", params or None)
@@ -1911,7 +1911,7 @@ class Api:
         return self._call("dimension_style.get", params or None)
 
     def dimension_style_create(self, **params: Any) -> Any:
-        """Create a dimension style (dimension standard). params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a dimension style (dimension standard). params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``dimension_style.create``."""
         return self._call("dimension_style.create", params or None)
@@ -1941,7 +1941,7 @@ class Api:
         return self._call("tag_style.get", params or None)
 
     def tag_style_create(self, **params: Any) -> Any:
-        """Create a data tag style. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a data tag style. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``tag_style.create``."""
         return self._call("tag_style.create", params or None)
@@ -1971,7 +1971,7 @@ class Api:
         return self._call("notes_db.get", params or None)
 
     def notes_db_create(self, **params: Any) -> Any:
-        """Create a notes database. params: {name, ...fields}; see describe.annotation.resources for the fields. Returns {id}.
+        """Create a notes database. params: {name, ...fields}; see describe.annotation.resources for the fields. A tag style also takes preset: "area". Returns {id}.
 
         JSON-RPC method ``notes_db.create``."""
         return self._call("notes_db.create", params or None)

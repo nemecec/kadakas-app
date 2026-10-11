@@ -22,6 +22,7 @@ action-tool-north-arrow = Põhjanoole tööriist
 action-tool-scale-bar = Mõõtkavariba tööriist
 action-tool-revision-cloud = Muudatuspilve tööriist
 action-cmd-graphic-legend = Lisa graafiline legend
+action-cmd-dimension-standards = Muuda mõõtmestamise standardit
 action-tool-rotate = Pööramise tööriist
 action-tool-mirror = Peegeldamise tööriist
 action-tool-scale = Skaleerimise tööriist

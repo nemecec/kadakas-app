@@ -175,3 +175,34 @@ def test_pdf_tags_do_not_overlap_when_the_viewport_scale_differs_from_the_layer_
     words = {m[4]: tuple(float(x) for x in m[:4]) for m in re.findall(r'xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(\w+)<', boxes)}
     a, b = words["Alpha"], words["Beta"]
     assert a[2] <= b[0] or b[2] <= a[0], f"labels overlap: {a} {b}"
+
+
+def test_area_tag_shows_the_net_area_follows_the_shape_and_exports(cad, tmp_path):
+    bed = cad.execute({"op": "add_object", "shape": {"kind": "landscape_area", "name": "Bed", "boundary": [
+        {"p": [0, 0], "kind": "corner"}, {"p": [10000, 0], "kind": "corner"},
+        {"p": [10000, 10000], "kind": "corner"}, {"p": [0, 10000], "kind": "corner"}]}})[0]
+    style = cad.result("tag_style.create", {"name": "Area", "preset": "area"})["id"]
+    assert cad.result("tag_style.get", {"id": style})["lines"] == ["{AREA(Area)}"]
+    tag = cad.result("data_tag.add", {"style": style, "object": bed, "offset": [0, 0]})
+    assert tag["lines"] == ["100.00 m²"]
+    # Holes are taken out, and the tag follows the shape.
+    cad.result("landscape_area.set", {"id": bed, "holes": [[[2000, 2000], [4000, 2000], [4000, 4000], [2000, 4000]]]})
+    assert annotations(cad)[tag["id"]]["computed"]["lines"] == ["96.00 m²"]
+    cad.execute({"op": "move_objects", "ids": [bed], "delta": [500, 0]})
+    assert annotations(cad)[tag["id"]]["computed"]["lines"] == ["96.00 m²"]
+    # The field formats an area: unit, decimals, rounding, no unit.
+    cad.result("tag_style.update", {"id": style, "lines": ['{AREA(Area, "ha", 4)}', '{AREA(Area, "ft2", 0, 10, FALSE)}']})
+    assert annotations(cad)[tag["id"]]["computed"]["lines"] == ["0.0096 ha", "1030"]
+    # An imperial dimension standard changes the default unit.
+    cad.result("tag_style.update", {"id": style, "lines": ["{AREA(Area)}"]})
+    cad.result("dimension_style.create", {"name": "US", "unit": "ft_in"})
+    assert annotations(cad)[tag["id"]]["computed"]["lines"] == ["1033.3 ft²"]
+    # The label is in the SVG and the DXF.
+    assert "1033.3 ft²" in cad.result("render.svg", {"width": 600})["svg"]
+    ezdxf = pytest.importorskip("ezdxf")
+    path = tmp_path / "area.dxf"
+    cad.result("export.file", {"format": "dxf", "path": str(path)})
+    doc = ezdxf.readfile(path)
+    texts = [e.dxf.text for e in doc.modelspace().query("TEXT")] + [e.text for e in doc.modelspace().query("MTEXT")]
+    assert any("1033.3 ft" in t for t in texts), texts
+    assert "preset" in cad.error("tag_style.create", {"name": "X", "preset": "nope"})["message"]

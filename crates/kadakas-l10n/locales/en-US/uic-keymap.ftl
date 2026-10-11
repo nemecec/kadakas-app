@@ -22,6 +22,7 @@ action-tool-north-arrow = North Arrow tool
 action-tool-scale-bar = Scale Bar tool
 action-tool-revision-cloud = Revision Cloud tool
 action-cmd-graphic-legend = Add a graphic legend
+action-cmd-dimension-standards = Edit the dimension standard
 action-tool-rotate = Rotate tool
 action-tool-mirror = Mirror tool
 action-tool-scale = Scale tool

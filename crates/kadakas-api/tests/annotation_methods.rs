@@ -633,3 +633,94 @@ fn tags_legends_callouts_scale_bars_and_revisions() {
     );
     assert!(err(&mut s, "tag_style.delete", json!({"id":"Plant tag"})).contains("used by"));
 }
+
+#[test]
+fn the_area_tag_style_labels_areas_on_layers_and_sheets() {
+    let mut s = Session::with_sequential_ids();
+    let bed = exec(
+        &mut s,
+        json!({"op":"add_object","shape":{"kind":"landscape_area","name":"Bed","boundary":[
+            {"p":[0,0],"kind":"corner"},{"p":[10000,0],"kind":"corner"},
+            {"p":[10000,10000],"kind":"corner"},{"p":[0,10000],"kind":"corner"}]}}),
+    )[0];
+    let style = ok(
+        &mut s,
+        "tag_style.create",
+        json!({"name":"Area","preset":"area"}),
+    )["id"]
+        .clone();
+    let got = ok(&mut s, "tag_style.get", json!({"id": style}));
+    assert_eq!(got["lines"], json!(["{AREA(Area)}"]));
+    // Other fields change the preset, and a wrong preset is refused.
+    let big = ok(
+        &mut s,
+        "tag_style.create",
+        json!({"name":"Hectares","preset":"area","lines":["{AREA(Area, \"ha\", 4)}"],"frame":"box"}),
+    )["id"]
+        .clone();
+    assert_eq!(
+        ok(&mut s, "tag_style.get", json!({"id": big}))["frame"],
+        "box"
+    );
+    assert!(
+        err(
+            &mut s,
+            "tag_style.create",
+            json!({"name":"X","preset":"nope"})
+        )
+        .contains("preset")
+    );
+    assert!(
+        err(
+            &mut s,
+            "text_style.create",
+            json!({"name":"X","preset":"area"})
+        )
+        .contains("preset")
+    );
+    // On the design layer.
+    let tag = ok(
+        &mut s,
+        "data_tag.add",
+        json!({"style":style,"object":bed,"offset":[0,0]}),
+    );
+    let id = tag["id"].as_uid().unwrap();
+    assert_eq!(tag["lines"], json!(["100.00 m\u{b2}"]));
+    // On a sheet: the label is in the annotation space of a viewport.
+    let sheet = ok(&mut s, "sheet.create", json!({"name":"S","paper":"a3"}))["layer"]
+        .as_uid()
+        .unwrap();
+    let vp = ok(
+        &mut s,
+        "viewport.create",
+        json!({"sheet":sheet,"scale":100,"view":"plan"}),
+    )["id"]
+        .as_uid()
+        .unwrap();
+    let on_sheet = ok(
+        &mut s,
+        "data_tag.add",
+        json!({"style":big,"object":bed,"viewport":vp}),
+    );
+    assert_eq!(on_sheet["lines"], json!(["0.0100 ha"]));
+    // A hole is taken out, and both labels follow.
+    ok(
+        &mut s,
+        "landscape_area.set",
+        json!({"id":bed,"holes":[[[2000,2000],[4000,2000],[4000,4000],[2000,4000]]]}),
+    );
+    assert_eq!(
+        item(&mut s, id)["computed"]["lines"],
+        json!(["96.00 m\u{b2}"])
+    );
+    // An imperial dimension standard changes the default unit of the field.
+    ok(
+        &mut s,
+        "dimension_style.create",
+        json!({"name":"US","unit":"ft_in"}),
+    );
+    assert_eq!(
+        item(&mut s, id)["computed"]["lines"],
+        json!(["1033.3 ft\u{b2}"])
+    );
+}

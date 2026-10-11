@@ -644,7 +644,7 @@ pub fn tool_panel(
         }
         // The options of the current tool sit under the set that holds it.
         if set.tools.contains(&current) && !extras_shown {
-            tool_extras(ui, m, settings, doc);
+            tool_extras(ui, m, settings, doc, requests);
             extras_shown = true;
         }
     }
@@ -652,7 +652,7 @@ pub fn tool_panel(
         crate::annot_ui::panel_buttons(ui, doc, requests);
     }
     if !extras_shown {
-        tool_extras(ui, m, settings, doc);
+        tool_extras(ui, m, settings, doc, requests);
     }
     if has_vertex_modes(m.tool()) {
         vertex_mode_bar(ui, settings, keys);
@@ -672,6 +672,7 @@ fn tool_extras(
     m: &mut ToolMachine,
     settings: &mut ToolSettings,
     doc: &kadakas_core::model::Document,
+    requests: &mut crate::annot_ui::PanelRequests,
 ) {
     if m.tool() == Tool::Select {
         select_mode_bar(ui, settings);
@@ -684,7 +685,7 @@ fn tool_extras(
         m.cancel();
     }
     if Tool::ANNOTATION.contains(&m.tool()) {
-        crate::annot_ui::tool_options(ui, m.tool(), settings, doc);
+        crate::annot_ui::tool_options(ui, m.tool(), settings, doc, requests);
     }
 }
 

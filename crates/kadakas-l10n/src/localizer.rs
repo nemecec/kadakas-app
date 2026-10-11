@@ -110,6 +110,22 @@ impl Localizer {
         }
     }
 
+    /// A localizer for a tag whose messages come from these texts only (no fallback, no overlay).
+    /// The check of the message files uses it.
+    pub(crate) fn from_texts<'a>(tag: &str, texts: impl Iterator<Item = &'a str>) -> Localizer {
+        let tag = languages()
+            .iter()
+            .find(|l| l.tag == tag)
+            .map_or(FALLBACK, |l| l.tag);
+        Localizer {
+            tag,
+            main: bundle_from(tag, texts),
+            fallback: None,
+            overlay: None,
+            cache: RefCell::default(),
+        }
+    }
+
     /// The tag of the language.
     pub fn tag(&self) -> &'static str {
         self.tag

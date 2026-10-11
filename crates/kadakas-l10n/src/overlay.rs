@@ -76,6 +76,7 @@ pub const OVERLAYABLE: &[&str] = &[
     "snap-ui-snap-to-other-layers",
     "solid-ui-sweep",
     "uic-annot-tool-click-to-place-the-scale-bar-it",
+    "uic-style-edit-kind-dimension",
     "uic-tools-click-to-place-set-values-in-the",
     "uic-tools-pick-a-mode-in-the-data-bar",
     "uic-tools-polygon3d",
@@ -359,6 +360,36 @@ mod tests {
         assert_eq!(
             check_overlay("xx", ""),
             vec![OverlayProblem::UnknownLanguage("xx".into())]
+        );
+    }
+
+    #[test]
+    fn functions_selectors_and_nested_placeables_are_checked_for_variables() {
+        const ID: &str = "panels-nothing-selected-active-layer-active-class";
+        let check = |body: &str| check_overlay("en-US", &format!("{ID} = {body}\n"));
+        let unknown = |v: &str| {
+            vec![OverlayProblem::UnknownVariable {
+                id: ID.into(),
+                variable: v.into(),
+            }]
+        };
+        // The variables of the original are fine in a function, a named argument, a selector
+        // and a nested placeable.
+        assert!(check("{ NUMBER($layer, minimumFractionDigits: 1) } { $class }").is_empty());
+        assert!(check("{ $layer ->\n    [a] x { $class }\n   *[b] { $layer }\n}").is_empty());
+        assert!(check("{ { $class } }").is_empty());
+        // Others are not, wherever they stand.
+        assert_eq!(check("{ NUMBER($zz) }"), unknown("zz"));
+        assert_eq!(check("{ $zz ->\n   *[b] x\n}"), unknown("zz"));
+        assert_eq!(
+            check("{ $layer ->\n    [a] { $zz }\n   *[b] x\n}"),
+            unknown("zz")
+        );
+        assert_eq!(check("{ { $zz } }"), unknown("zz"));
+        // A function that refers to a message is a reference.
+        assert_eq!(
+            check("{ NUMBER(panels-class) }"),
+            vec![OverlayProblem::Reference(ID.into())]
         );
     }
 

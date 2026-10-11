@@ -50,3 +50,4 @@ panels-sweep = Revolve...
 solid-ui-sweep = Revolve
 action-tool-polygon3d = 3D Polyline tool
 uic-tools-polygon3d = 3D Polyline
+uic-style-edit-kind-dimension = Dimension style

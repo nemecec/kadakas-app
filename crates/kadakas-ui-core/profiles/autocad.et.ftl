@@ -47,3 +47,4 @@ panels-sweep = Pööre...
 solid-ui-sweep = Pööre
 action-tool-polygon3d = 3D-murdjoone tööriist
 uic-tools-polygon3d = 3D-murdjoon
+uic-style-edit-kind-dimension = Mõõtmestiil

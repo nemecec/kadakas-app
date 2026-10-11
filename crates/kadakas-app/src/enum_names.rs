@@ -94,6 +94,18 @@ pub const KNOWN: &[&str] = &[
     msg!("enum-summary-min"),
     msg!("enum-summary-max"),
     msg!("enum-summary-count"),
+    msg!("enum-terminator-arrow"),
+    msg!("enum-terminator-open-arrow"),
+    msg!("enum-terminator-tick"),
+    msg!("enum-terminator-dot"),
+    msg!("enum-terminator-none"),
+    msg!("enum-justify-left"),
+    msg!("enum-justify-center"),
+    msg!("enum-justify-right"),
+    msg!("enum-frame-none"),
+    msg!("enum-frame-box"),
+    msg!("enum-frame-underline"),
+    msg!("enum-frame-circle"),
 ];
 
 #[cfg(test)]
@@ -135,6 +147,21 @@ mod tests {
         for id in ["none", "sum", "average", "min", "max", "count"] {
             want.push(key("summary", id));
         }
+        want.extend(
+            kadakas_ui_core::style_edit::TERMINATORS
+                .iter()
+                .map(|c| key(kadakas_ui_core::style_edit::TERMINATOR_DOMAIN, c.id)),
+        );
+        want.extend(
+            kadakas_ui_core::style_edit::JUSTIFICATIONS
+                .iter()
+                .map(|c| key(kadakas_ui_core::style_edit::JUSTIFY_DOMAIN, c.id)),
+        );
+        want.extend(
+            kadakas_ui_core::style_edit::FRAMES
+                .iter()
+                .map(|c| key(kadakas_ui_core::style_edit::FRAME_DOMAIN, c.id)),
+        );
         for k in &want {
             assert!(KNOWN.contains(&k.as_str()), "{k} is not in KNOWN");
         }

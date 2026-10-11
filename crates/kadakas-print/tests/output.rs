@@ -1781,3 +1781,60 @@ fn viewport_visibility_is_independent_of_the_document() {
         "hiding in the document does not hide in the viewport"
     );
 }
+#[test]
+fn an_area_tag_in_a_viewport_prints_the_net_area_and_follows_the_shape() {
+    use kadakas_core::annot::style::{AnnotResource, TagStyle};
+    use kadakas_core::annot::{Annot, DataTag};
+    let (mut ed, sheet, vp) = project();
+    let rect = ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(&o.shape, Shape::Rect { max, .. } if max.x == 10_000.0))
+        .unwrap()
+        .id;
+    let style = kadakas_core::resource::ResourceId(
+        ed.execute(&Command::AddResource {
+            name: "Area".into(),
+            body: kadakas_core::resource::ResourceBody::annot(AnnotResource::TagStyle(
+                TagStyle::area(),
+            )),
+        })
+        .unwrap()
+        .created[0],
+    );
+    set_viewport(&mut ed, vp, |v| {
+        v.annotations.push(Annotation {
+            id: 99,
+            class: NONE_CLASS,
+            attrs: Attributes::default(),
+            item: AnnotationItem::Shape {
+                shape: Box::new(Shape::Annotation(Box::new(Annot::DataTag(DataTag {
+                    style,
+                    object: rect,
+                    offset: v_(5.0, 5.0),
+                    at: v_(10.0, 10.0),
+                    anchor: v_(5.0, 5.0),
+                })))),
+            },
+        });
+    });
+    let t = texts(&prims(&ed, sheet));
+    assert!(t.contains(&"60.00 m\u{b2}".to_string()), "{t:?}");
+    // The shape changes: the printed label follows.
+    ed.execute(&Command::ModifyObject {
+        id: rect,
+        shape: Some(Shape::Rect {
+            min: v(0.0, 0.0),
+            max: v(10_000.0, 3000.0),
+        }),
+        layer: None,
+        class: None,
+        attrs: None,
+    })
+    .unwrap();
+    let t = texts(&prims(&ed, sheet));
+    assert!(t.contains(&"30.00 m\u{b2}".to_string()), "{t:?}");
+    let bytes = pdf_of(&ed, &[sheet]);
+    assert!(bytes.starts_with(b"%PDF-"));
+}
