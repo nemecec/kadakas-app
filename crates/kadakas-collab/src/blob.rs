@@ -111,6 +111,29 @@ pub fn inline_props(
     Ok(out)
 }
 
+/// The properties of a resource for reading it, without a copy of the picture text. If the body is
+/// an image whose file is a blob, the file is not put into the body: the body gets an empty `data`,
+/// and the text comes back as the second value, to be set on the resource that is read (the text is
+/// shared, not copied). `Err(hash)` names a blob that `resolve` does not have.
+#[allow(clippy::type_complexity)]
+pub fn take_image_blob(
+    props: &Map<String, Value>,
+    resolve: &dyn Fn(&str) -> Option<std::sync::Arc<str>>,
+) -> Result<(Map<String, Value>, Option<(String, std::sync::Arc<str>)>), String> {
+    let mut out = props.clone();
+    let Some(body) = out.get_mut("body") else {
+        return Ok((out, None));
+    };
+    let Some(hash) = blob_ref(body).map(str::to_string) else {
+        return Ok((out, None));
+    };
+    let text = resolve(&hash).ok_or_else(|| hash.clone())?;
+    if let Some(holder) = holder(body) {
+        body[holder] = Value::String(String::new());
+    }
+    Ok((out, Some((hash, text))))
+}
+
 /// The blobs that a map of properties refers to.
 pub fn refs_in(props: &BTreeMap<String, Value>) -> Vec<String> {
     BLOB_PROPS
@@ -166,6 +189,33 @@ mod tests {
         let back = inline_props(&map, &|h| (h == hash).then(|| text.clone())).unwrap();
         assert_eq!(back["body"]["data"], text);
         assert_eq!(inline_props(&map, &|_| None).unwrap_err(), hash);
+    }
+
+    #[test]
+    fn an_image_blob_is_taken_out_without_a_copy_of_the_text() {
+        let text: std::sync::Arc<str> = "B".repeat(MIN_BLOB_BYTES + 4).into();
+        let body = json!({"type": "image", "data": text.to_string(), "thumb": "T"});
+        let (v, hash, _) = externalize(&body).unwrap();
+        let mut props = Map::new();
+        props.insert("name".into(), json!("P"));
+        props.insert("body".into(), v);
+        let t = text.clone();
+        let h = hash.clone();
+        let (out, taken) = take_image_blob(&props, &move |x| (x == h).then(|| t.clone())).unwrap();
+        let (got_hash, got_text) = taken.unwrap();
+        assert_eq!(got_hash, hash);
+        assert!(std::sync::Arc::ptr_eq(&got_text, &text));
+        assert_eq!(out["body"]["data"], "");
+        assert_eq!(out["body"]["thumb"], "T");
+        assert_eq!(take_image_blob(&props, &|_| None).unwrap_err(), hash);
+        // Properties without a blob come back as they are.
+        let mut plain = Map::new();
+        plain.insert("body".into(), json!({"type": "plant_style"}));
+        assert_eq!(
+            take_image_blob(&plain, &|_| None).unwrap(),
+            (plain.clone(), None)
+        );
+        assert_eq!(take_image_blob(&Map::new(), &|_| None).unwrap().1, None);
     }
 
     #[test]

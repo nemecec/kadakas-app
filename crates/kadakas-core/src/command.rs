@@ -593,6 +593,28 @@ struct Meta {
     georef: Option<crate::georef::Georeference>,
 }
 
+impl Command {
+    /// The pictures that this command brings into the document, those of the commands in a batch
+    /// too.
+    pub fn pictures<'a>(&'a self, out: &mut Vec<&'a crate::picture::ImageResource>) {
+        match self {
+            Command::SetPlantPicture {
+                picture: Some(p), ..
+            } => out.push(p),
+            Command::AddResource {
+                body: ResourceBody::Image(i),
+                ..
+            } => out.push(i),
+            Command::ModifyResource {
+                body: Some(ResourceBody::Image(i)),
+                ..
+            } => out.push(i),
+            Command::Batch { commands } => commands.iter().for_each(|c| c.pictures(out)),
+            _ => {}
+        }
+    }
+}
+
 impl Meta {
     fn of(doc: &Document) -> Self {
         Meta {
@@ -651,6 +673,9 @@ pub struct Patch {
 /// Costs in the estimate of the size of a patch, in bytes.
 const OBJECT_BYTES: u64 = 320;
 const META_PART_BYTES: u64 = 200;
+/// What a picture resource counts in a patch. The text itself is shared and counts once, in the
+/// document.
+const IMAGE_PART_BYTES: u64 = 1024;
 
 fn object_bytes(o: &Object) -> u64 {
     OBJECT_BYTES
@@ -663,10 +688,15 @@ fn object_bytes(o: &Object) -> u64 {
 impl Meta {
     /// A rough size in bytes.
     fn approx_bytes(&self) -> u64 {
+        // A picture is shared text: the steps of the history point to the same text. It counts as a
+        // fixed cost, and the sum does not serialize megabytes of text.
         let resources: u64 = self
             .resources
             .iter()
-            .map(|r| serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64))
+            .map(|r| match &r.body {
+                ResourceBody::Image(_) => IMAGE_PART_BYTES,
+                _ => serde_json::to_vec(r).map_or(META_PART_BYTES, |v| v.len() as u64),
+            })
             .sum();
         (self.layers.len() + self.classes.len()) as u64 * META_PART_BYTES + resources + 512
     }
@@ -1672,6 +1702,9 @@ pub struct Editor {
     log: ChangeLog,
     /// Most bytes that the undo steps may hold (see [`Editor::set_history_limit`]).
     history_limit: u64,
+    /// The largest picture file and the most pixels that a command may bring (see
+    /// [`Editor::set_picture_limits`]).
+    picture_limits: (usize, u64),
 }
 
 impl Default for Editor {
@@ -1712,6 +1745,10 @@ impl Editor {
             // A client that asks for changes before this editor existed gets `truncated`.
             log: ChangeLog::starting_at(revision),
             history_limit: u64::MAX,
+            picture_limits: (
+                crate::picture::MAX_PICTURE_BYTES,
+                crate::picture::MAX_PICTURE_PIXELS,
+            ),
         }
     }
 
@@ -1728,6 +1765,7 @@ impl Editor {
 
     /// Runs a command as one undo step. On error the document is unchanged.
     pub fn execute(&mut self, cmd: &Command) -> Result<Outcome, CommandError> {
+        self.check_pictures(cmd)?;
         let meta_before = Meta::of(&self.doc);
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
@@ -1916,6 +1954,35 @@ impl Editor {
 
     /// Caps the undo steps by size: when the steps hold more bytes, the oldest ones are dropped
     /// (the newest step always stays). `u64::MAX`: no cap.
+    /// Sets the largest picture file (bytes) and the most pixels that a command may bring into the
+    /// document. The limits never go above those of the file format. Every way to add a picture
+    /// passes here: `SetPlantPicture`, `AddResource`, `ModifyResource` and `Batch`.
+    pub fn set_picture_limits(&mut self, max_bytes: usize, max_pixels: u64) {
+        self.picture_limits = (
+            max_bytes.min(crate::picture::MAX_PICTURE_BYTES),
+            max_pixels.min(crate::picture::MAX_PICTURE_PIXELS),
+        );
+    }
+
+    fn check_pictures(&self, cmd: &Command) -> Result<(), CommandError> {
+        let (bytes, pixels) = self.picture_limits;
+        let mut found = Vec::new();
+        cmd.pictures(&mut found);
+        for p in found {
+            if p.byte_len() > bytes {
+                return Err(CommandError::Invalid(format!(
+                    "the picture file is larger than {bytes} bytes"
+                )));
+            }
+            if u64::from(p.width) * u64::from(p.height) > pixels {
+                return Err(CommandError::Invalid(format!(
+                    "the picture has more than {pixels} pixels"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_history_limit(&mut self, bytes: u64) {
         self.history_limit = bytes;
         self.trim_history();

@@ -42,7 +42,7 @@ use kadakas_core::model::{
     Class, ClassId, Document, FIRST_LAYER, Layer, LayerId, LayerKind, NONE_CLASS, Object, ObjectId,
     Shape,
 };
-use kadakas_core::resource::{Resource, ResourceId};
+use kadakas_core::resource::{Resource, ResourceBody, ResourceId};
 use kadakas_core::sheets::allowed_on_sheet;
 use kadakas_core::uid::Uid;
 use serde_json::{Map, Value};
@@ -126,16 +126,24 @@ fn read<T: serde::de::DeserializeOwned>(
 /// Builds the document that a replica describes. `base` gives what is not shared: the order of
 /// things that exist in both, the generator of IDs and the active layer and class. Never fails.
 pub fn materialize(view: &Replica, base: &Document) -> Materialized {
-    materialize_with(view, base, &|_| None)
+    materialize_with(view, base, &|_| None, &mut |_, i| i.verify_data())
 }
 
 /// Like [`materialize`], with a way to find the blobs (pictures) that the state refers to. An
 /// object whose picture is not there yet is left out (quarantine) and appears when it arrives.
+///
+/// The text of a blob is shared (`Arc<str>`), so a picture is not copied. `verify(hash, image)`
+/// checks that the file of a picture, which came as the blob `hash`, fits the fields of the
+/// resource. A caller that builds the document many times keeps the answer for each blob, so a
+/// picture is read once (see `Client::materialize`).
 pub fn materialize_with(
     view: &Replica,
     base: &Document,
-    blobs: &dyn Fn(&str) -> Option<String>,
+    blobs: &dyn Fn(&str) -> Option<std::sync::Arc<str>>,
+    verify: &mut dyn FnMut(&str, &kadakas_core::picture::ImageResource) -> Result<(), String>,
 ) -> Materialized {
+    let object_blobs = |h: &str| blobs(h).map(|t| t.to_string());
+    let object_blobs: &dyn Fn(&str) -> Option<String> = &object_blobs;
     let mut cx = Ctx {
         quarantined: Vec::new(),
         repairs: Vec::new(),
@@ -172,12 +180,12 @@ pub fn materialize_with(
     }
 
     // Resources.
-    let resources = build_resources(view, base, blobs, &mut cx);
+    let resources = build_resources(view, base, blobs, verify, &mut cx);
 
     // Objects.
     let mut objects: Vec<Object> = Vec::new();
     for (id, props) in ordered(view, Kind::Object, std::iter::empty()) {
-        let props = match crate::blob::inline_props(&props, blobs) {
+        let props = match crate::blob::inline_props(&props, object_blobs) {
             Ok(p) => p,
             Err(hash) => {
                 cx.quarantine(
@@ -301,13 +309,14 @@ fn blame(out: &mut Document, msg: String, cx: &mut Ctx) {
 fn build_resources(
     view: &Replica,
     base: &Document,
-    blobs: &dyn Fn(&str) -> Option<String>,
+    blobs: &dyn Fn(&str) -> Option<std::sync::Arc<str>>,
+    verify: &mut dyn FnMut(&str, &kadakas_core::picture::ImageResource) -> Result<(), String>,
     cx: &mut Ctx,
 ) -> kadakas_core::resource::Resources {
     let mut list: Vec<Resource> = Vec::new();
     for (id, props) in ordered(view, Kind::Resource, base.resources.iter().map(|r| r.id.0)) {
         // A picture that has not arrived yet: the resource waits (like an underlay).
-        let props = match crate::blob::inline_props(&props, blobs) {
+        let (props, blob) = match crate::blob::take_image_blob(&props, blobs) {
             Ok(p) => p,
             Err(hash) => {
                 cx.quarantine(
@@ -319,7 +328,21 @@ fn build_resources(
             }
         };
         let parsed = validate_entity(Kind::Resource, id, &props)
-            .and_then(|()| read::<Resource>(Kind::Resource, id, &props));
+            .and_then(|()| read::<Resource>(Kind::Resource, id, &props))
+            .and_then(|mut r| {
+                // The file of a picture: set the shared text, and check it against the fields.
+                // This is the first time the data is used, so it is read here, once per blob.
+                if let ResourceBody::Image(img) = &mut r.body {
+                    match &blob {
+                        Some((hash, text)) => {
+                            img.data = text.clone().into();
+                            verify(hash, img)?;
+                        }
+                        None => img.verify_data()?,
+                    }
+                }
+                Ok(r)
+            });
         match parsed {
             Ok(r) => list.push(r),
             Err(e) => cx.quarantine(Kind::Resource, id, e),

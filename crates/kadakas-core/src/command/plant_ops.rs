@@ -161,6 +161,7 @@ impl Tx<'_> {
         match cmd {
             Command::AddResource { name, body } => {
                 body.validate().map_err(invalid)?;
+                body.verify().map_err(invalid)?;
                 self.check_body_refs(body)?;
                 self.check_graphic_refs(None, body)?;
                 self.check_resource_name(name, body, None)?;
@@ -185,6 +186,10 @@ impl Tx<'_> {
                     return Err(invalid("the type of a resource cannot change"));
                 }
                 new_body.validate().map_err(invalid)?;
+                // A new picture file is read once; the same file (the same shared text) is not.
+                if new_body != current.body {
+                    new_body.verify().map_err(invalid)?;
+                }
                 self.check_body_refs(&new_body)?;
                 self.check_graphic_refs(Some(*id), &new_body)?;
                 self.check_resource_name(&new_name, &new_body, Some(*id))?;
@@ -510,14 +515,21 @@ impl Tx<'_> {
         if let Some(id) = self.doc.resources.find_image(&p.sha256) {
             return Ok(id);
         }
+        // A new file: read it once and check it against its fields.
+        p.verify_data().map_err(invalid)?;
+        let taken = |doc: &crate::model::Document, n: &str| {
+            doc.resources
+                .iter()
+                .any(|r| r.body.type_name() == "image" && r.name.eq_ignore_ascii_case(n))
+        };
         let mut name = p.default_name();
-        if self
-            .doc
-            .resources
-            .iter()
-            .any(|r| r.body.type_name() == "image" && r.name.eq_ignore_ascii_case(&name))
-        {
-            name = format!("Picture {}", &p.sha256[..16]);
+        if taken(self.doc, &name) {
+            name = format!("Image {}", &p.sha256[..16]);
+            let mut n = 2;
+            while taken(self.doc, &name) {
+                name = format!("Image {} ({n})", &p.sha256[..16]);
+                n += 1;
+            }
         }
         let id = ResourceId(self.alloc()?);
         self.doc.resources.push(Resource {
@@ -554,6 +566,8 @@ impl Tx<'_> {
             {
                 s.image = reassign;
             }
+            let users = self.users_of(sid);
+            self.resync(&users);
         }
         self.doc.resources.remove(id);
         Ok(())
@@ -1524,5 +1538,174 @@ mod tests {
             ed.execute(&modify(st)),
             Err(CommandError::Invalid(m)) if m.contains("not an image")
         ));
+    }
+
+    #[test]
+    fn pictures_obey_the_limits_of_the_editor_by_every_way_in() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let size = sample(1).byte_len();
+        ed.set_picture_limits(size - 1, u64::MAX);
+        let set = Command::SetPlantPicture {
+            style: a,
+            picture: Some(Box::new(sample(1))),
+        };
+        let add = Command::AddResource {
+            name: "I".into(),
+            body: ResourceBody::Image(Box::new(sample(2))),
+        };
+        let modify = Command::ModifyResource {
+            id: a,
+            name: None,
+            body: Some(ResourceBody::Image(Box::new(sample(3)))),
+        };
+        for c in [set.clone(), add.clone(), modify] {
+            assert!(
+                matches!(ed.execute(&c), Err(CommandError::Invalid(m)) if m.contains("larger"))
+            );
+            let batch = Command::Batch { commands: vec![c] };
+            assert!(ed.execute(&batch).is_err());
+        }
+        ed.set_picture_limits(usize::MAX, 3);
+        assert!(matches!(ed.execute(&set), Err(CommandError::Invalid(m)) if m.contains("pixels")));
+        // The limits never go above the limits of the format, and a picture within them is fine.
+        ed.set_picture_limits(usize::MAX, u64::MAX);
+        assert!(ed.execute(&set).is_ok());
+        assert!(ed.execute(&add).is_ok());
+    }
+
+    #[test]
+    fn a_picture_whose_data_does_not_match_its_fields_is_refused() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let mut bad = sample(1);
+        bad.sha256 = "0".repeat(64);
+        let add = Command::AddResource {
+            name: "I".into(),
+            body: ResourceBody::Image(Box::new(bad.clone())),
+        };
+        assert!(matches!(ed.execute(&add), Err(CommandError::Invalid(m)) if m.contains("hash")));
+        let set = Command::SetPlantPicture {
+            style: a,
+            picture: Some(Box::new(bad)),
+        };
+        assert!(ed.execute(&set).is_err());
+        let mut wrong_size = sample(2);
+        wrong_size.width = 7;
+        let set = Command::SetPlantPicture {
+            style: a,
+            picture: Some(Box::new(wrong_size)),
+        };
+        assert!(matches!(ed.execute(&set), Err(CommandError::Invalid(m)) if m.contains("size")));
+        // A good picture is added, and a change of its name does not read the file again.
+        let good = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Good".into(),
+                body: ResourceBody::Image(Box::new(sample(3))),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::ModifyResource {
+            id: good,
+            name: Some("Renamed".into()),
+            body: None,
+        })
+        .unwrap();
+        let body = ed.doc().resources.get(good).unwrap().body.clone();
+        ed.execute(&Command::ModifyResource {
+            id: good,
+            name: None,
+            body: Some(body),
+        })
+        .ok();
+    }
+
+    #[test]
+    fn the_history_shares_the_picture_text_and_counts_it_as_a_small_cost() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        ed.execute(&Command::SetPlantPicture {
+            style: a,
+            picture: Some(Box::new(sample(1))),
+        })
+        .unwrap();
+        let img = ed.doc().resources.find_image(&sample(1).sha256).unwrap();
+        let before = ed.doc().resources.image(img).unwrap().data.clone();
+        // Edits of other resources keep the same text in the document, in the undo steps and in the log.
+        for n in 0..5 {
+            ed.execute(&Command::ModifyResource {
+                id: a,
+                name: Some(format!("Style {n}")),
+                body: None,
+            })
+            .unwrap();
+        }
+        let after = &ed.doc().resources.image(img).unwrap().data;
+        assert!(std::sync::Arc::ptr_eq(before.as_arc(), after.as_arc()));
+        assert!(ed.undo());
+        let back = &ed.doc().resources.image(img).unwrap().data;
+        assert!(std::sync::Arc::ptr_eq(before.as_arc(), back.as_arc()));
+        // A big picture adds a fixed cost to the history, not its text.
+        let big = {
+            let mut p = sample(9);
+            p.data = "A".repeat(4 * 1024 * 1024).into();
+            p
+        };
+        let mut doc = ed.doc().clone();
+        let big_id = ResourceId(doc.alloc_id());
+        doc.resources.push(Resource {
+            id: big_id,
+            name: "Big".into(),
+            body: ResourceBody::Image(Box::new(big)),
+        });
+        let mut ed2 = Editor::new(doc);
+        ed2.set_history_limit(64 * 1024);
+        for n in 0..4 {
+            ed2.execute(&Command::ModifyResource {
+                id: a,
+                name: Some(format!("S{n}")),
+                body: None,
+            })
+            .unwrap();
+        }
+        assert!(ed2.undo_depth() >= 4, "{}", ed2.undo_depth());
+    }
+
+    #[test]
+    fn a_new_picture_name_never_clashes_and_a_deleted_picture_resyncs_its_styles() {
+        use crate::picture::tests::sample;
+        let mut ed = Editor::default();
+        let a = add_style(&mut ed, "A", 4000.0);
+        let p = sample(1);
+        // A resource that already has the default name, with other content.
+        ed.execute(&Command::AddResource {
+            name: p.default_name(),
+            body: ResourceBody::Image(Box::new(sample(2))),
+        })
+        .unwrap();
+        ed.execute(&Command::AddResource {
+            name: format!("Image {}", &p.sha256[..16]),
+            body: ResourceBody::Image(Box::new(sample(3))),
+        })
+        .unwrap();
+        let out = set_picture(&mut ed, a, Some(p)).unwrap();
+        let name = &ed
+            .doc()
+            .resources
+            .get(ResourceId(out.created[0]))
+            .unwrap()
+            .name;
+        assert!(name.ends_with("(2)"), "{name}");
+        ed.doc().clone().validate().unwrap();
+        ed.execute(&Command::DeleteResource {
+            id: ResourceId(out.created[0]),
+            reassign: None,
+        })
+        .unwrap();
+        assert!(ed.doc().resources.plant_style(a).unwrap().image.is_none());
     }
 }

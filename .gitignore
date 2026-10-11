@@ -8,3 +8,4 @@ __pycache__/
 /.claude/worktrees/
 /dist
 /dist-web
+proptest-regressions/

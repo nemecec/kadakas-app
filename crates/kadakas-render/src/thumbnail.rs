@@ -36,7 +36,7 @@ pub struct ThumbPicture {
     pub height: u32,
     /// RGBA, 8 bits per channel, rows from the top.
     pub rgba: Arc<Vec<u8>>,
-    /// The same pixels as a PNG in base64, for SVG.
+    /// The same pixels as a PNG in base64, for SVG. Empty: the SVG leaves the picture out.
     pub png_base64: String,
 }
 
@@ -51,7 +51,7 @@ pub struct Thumbnail {
 impl ThumbPicture {
     /// The corner and size of the picture inside the box of the thumbnail (units of `SIZE`).
     pub fn placement(&self) -> ([f64; 2], [f64; 2]) {
-        let inner = SIZE - 2.0 * MARGIN / 2.0;
+        let inner = SIZE - 2.0 * MARGIN;
         let k = inner / f64::from(self.width.max(self.height).max(1));
         let (w, h) = (f64::from(self.width) * k, f64::from(self.height) * k);
         ([(SIZE - w) / 2.0, (SIZE - h) / 2.0], [w, h])
@@ -72,7 +72,7 @@ impl Thumbnail {
             })
         };
         let alpha = |c: Option<[u8; 4]>| c.map_or(1.0, |c| c[3] as f64 / 255.0);
-        if let Some(pic) = &self.picture {
+        if let Some(pic) = self.picture.as_ref().filter(|p| !p.png_base64.is_empty()) {
             let ([x, y], [w, h]) = pic.placement();
             let _ = writeln!(
                 s,
@@ -202,7 +202,29 @@ fn segs_raws(segs: &[pattern::PatternSeg], out: &mut Vec<Raw>) {
 }
 
 /// The thumbnail of a resource. A resource that does not exist gives an empty thumbnail.
+///
+/// A picture shows with the thumbnail that the resource stores. That thumbnail comes from the
+/// sender; a program that shows it to a person uses [`thumbnail_with`] and gives the pixels that it
+/// derived from the file (`crate::picture::derive_thumb`).
 pub fn thumbnail(doc: &Document, id: ResourceId) -> Thumbnail {
+    thumbnail_with(doc, id, &|pic| {
+        crate::picture::thumb_image(pic).map(|img| ThumbPicture {
+            sha256: pic.sha256.clone(),
+            width: img.width,
+            height: img.height,
+            rgba: Arc::new(img.rgba),
+            png_base64: pic.thumb.to_string(),
+        })
+    })
+}
+
+/// Like [`thumbnail`], and `picture` gives the small picture for an image resource, or `None` if
+/// there is none to show (yet). Then the drawn thumbnail is used.
+pub fn thumbnail_with(
+    doc: &Document,
+    id: ResourceId,
+    picture: &dyn Fn(&kadakas_core::picture::ImageResource) -> Option<ThumbPicture>,
+) -> Thumbnail {
     let Some(r) = doc.resources.get(id) else {
         return Thumbnail::default();
     };
@@ -211,18 +233,10 @@ pub fn thumbnail(doc: &Document, id: ResourceId) -> Thumbnail {
         ResourceBody::Image(i) => Some(i.as_ref()),
         _ => None,
     };
-    if let Some(pic) = pic
-        && let Some(img) = crate::picture::thumb_image(pic)
-    {
+    if let Some(pic) = pic.and_then(picture) {
         return Thumbnail {
             paths: Vec::new(),
-            picture: Some(ThumbPicture {
-                sha256: pic.sha256.clone(),
-                width: img.width,
-                height: img.height,
-                rgba: Arc::new(img.rgba),
-                png_base64: pic.thumb.clone(),
-            }),
+            picture: Some(pic),
         };
     }
     let mut raws: Vec<Raw> = Vec::new();
@@ -704,7 +718,12 @@ mod tests {
         );
         assert!(t.paths.is_empty());
         let ([x, y], [w, h]) = p.placement();
-        assert!(x >= 0.0 && y > x && w > h && x + w <= SIZE && y + h <= SIZE);
+        assert!(x >= MARGIN - 1e-9 && y > x && w > h);
+        assert!(x + w <= SIZE - MARGIN + 1e-9 && y + h <= SIZE - MARGIN + 1e-9);
+        assert!(
+            (w - (SIZE - 2.0 * MARGIN)).abs() < 1e-9,
+            "the long side fills the box"
+        );
         // The image resource itself has the same thumbnail, and the SVG carries the picture.
         let own = thumbnail(ed.doc(), ResourceId(out.created[0]));
         assert_eq!(own.picture, t.picture);
@@ -712,7 +731,7 @@ mod tests {
         // A picture whose thumbnail has a good header but no pixels falls back to the drawn one.
         let mut broken = pic;
         let head = broken.thumb_bytes().unwrap()[..24].to_vec();
-        broken.thumb = kadakas_core::picture::encode_base64(&head);
+        broken.thumb = kadakas_core::picture::encode_base64(&head).into();
         broken.validate().unwrap();
         let odd = ResourceId(
             ed.execute(&Command::AddResource {

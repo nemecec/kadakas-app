@@ -188,7 +188,8 @@ pub fn list(doc: &Document, type_filter: Option<&str>, search: Option<&str>) -> 
 
 /// The types that a purge removes when you name none. Worksheets and data maps are work of their own,
 /// so they stay unless you name them.
-pub const PURGE_TYPES: [&str; 9] = [
+pub const PURGE_TYPES: [&str; 10] = [
+    "image",
     "symbol",
     "hatch",
     "tile",
@@ -371,6 +372,21 @@ impl Planner<'_> {
         }
         if stack.contains(&id) {
             return Err(format!("resource {} uses itself", r.name));
+        }
+        // The same picture file is stored once: reuse the picture the document has.
+        if let ResourceBody::Image(img) = &r.body
+            && let Some(eid) = self.dst.resources.find_image(&img.sha256)
+        {
+            self.map.insert(id, eid);
+            self.items.push(ImportItem {
+                src: id,
+                dst: eid,
+                name: r.name.clone(),
+                type_name: "image",
+                status: ImportStatus::Reused,
+                dependency,
+            });
+            return Ok(eid);
         }
         let type_name = r.body.type_name();
         let existing = self
@@ -1275,5 +1291,59 @@ mod tests {
         );
         let moved = remap_body(&ed.doc().resources.get(style).unwrap().body, &|_| style);
         assert!(matches!(moved, ResourceBody::PlantStyle(s) if s.image == Some(style)));
+    }
+
+    #[test]
+    fn an_import_reuses_a_picture_the_document_has_and_purge_removes_unused_pictures() {
+        use crate::picture::tests::sample;
+        let style = |ed: &mut Editor, name: &str| {
+            ResourceId(
+                ed.execute(&Command::AddResource {
+                    name: name.into(),
+                    body: ResourceBody::plant_style(PlantStyle::default()),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let mut src = Editor::default();
+        let s1 = style(&mut src, "Oak");
+        src.execute(&Command::SetPlantPicture {
+            style: s1,
+            picture: Some(Box::new(sample(1))),
+        })
+        .unwrap();
+        let mut dst = Editor::default();
+        let d1 = style(&mut dst, "Maple");
+        dst.execute(&Command::SetPlantPicture {
+            style: d1,
+            picture: Some(Box::new(sample(1))),
+        })
+        .unwrap();
+        let plan = import_plan(dst.doc(), src.doc(), &[s1], Conflict::Rename).unwrap();
+        dst.execute(&plan.command.unwrap()).unwrap();
+        let images = list(dst.doc(), Some("image"), None);
+        assert_eq!(images.len(), 1, "one file, one picture");
+        assert_eq!(images[0].used_by, 2);
+        // A picture that no style uses is in the default purge.
+        let id = images[0].id;
+        for sid in dst
+            .doc()
+            .resources
+            .plant_styles()
+            .map(|(i, _, _)| i)
+            .collect::<Vec<_>>()
+        {
+            let mut st = dst.doc().resources.plant_style(sid).unwrap().clone();
+            st.image = None;
+            dst.execute(&Command::ModifyResource {
+                id: sid,
+                name: None,
+                body: Some(ResourceBody::plant_style(st)),
+            })
+            .unwrap();
+        }
+        assert_eq!(purge_plan(dst.doc(), &["image"]), vec![id]);
+        assert!(purge_plan(dst.doc(), &PURGE_TYPES).contains(&id));
     }
 }
