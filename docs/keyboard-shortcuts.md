@@ -271,6 +271,10 @@ Type exact values while drawing. Line and polyline use L (length) and A (angle).
 | Activate the Selection tool | Double-click in the drawing (both) | Double-click in the drawing | planned |
 | Previous or next view | Mouse buttons 4 and 5 (Windows only) | Mouse buttons 4 and 5 | done |
 
+## Plug-in tools
+
+A tool from a WebAssembly plug-in (tool set "Plug-ins") uses the keys that other drawing tools use. It adds none. Click sends a point, Enter or a double click finishes, Esc stops the tool and drops its preview. Shift, Ctrl (Cmd on macOS) and Alt are sent to the plug-in with each event.
+
 ## Not applicable
 
 These Vectorworks shortcuts have no function in Kadakas and none is planned.

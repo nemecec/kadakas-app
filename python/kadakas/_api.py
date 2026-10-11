@@ -1107,19 +1107,19 @@ class Api:
         return self._call("script.list", params or None)
 
     def plugins_info(self, **params: Any) -> Any:
-        """How WebAssembly plug-ins run here. Returns {engine (wasmtime, or unavailable in the browser build), agent_plugins_allowed, installed, limits: {fuel, memory_bytes, max_module_bytes, max_output_bytes, max_shapes, max_vertices}, abi_version}.
+        """How WebAssembly plug-ins run here. Returns {engine (wasmtime on a computer, webassembly in the browser build), agent_plugins_allowed, installed, persistent (true when installed modules and trust are kept for the next session), limits: {fuel, memory_bytes, max_module_bytes, max_output_bytes, max_shapes, max_vertices}, abi_version, time_limit_ms (the wall-clock limit of one call, or null where the engine has none: the browser)}.
 
         JSON-RPC method ``plugins.info``."""
         return self._call("plugins.info", params or None)
 
     def plugins_list(self, **params: Any) -> Any:
-        """The installed plug-ins. Returns [{id, name, version, abi_version, description, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted (a user trusted this exact module), runnable (trusted, or the host allows agents with --allow-agent-scripts), shape_type, params (the schema), instances}]. Only kind object can be placed in this version.
+        """The installed plug-ins. Returns [{id, name, version, abi_version, description, author, kinds: [object | tool], permissions, hash (SHA-256 of the module), size, trusted (a user trusted this exact module), runnable (trusted, or the host allows agents with --allow-agent-scripts), shape_type, params (the schema of the object), tool_params (the schema of the tool options, or null), instances}]. Kind object is placed with plugins.place, kind tool is driven with plugins.tool_step.
 
         JSON-RPC method ``plugins.list``."""
         return self._call("plugins.list", params or None)
 
     def plugins_install(self, **params: Any) -> Any:
-        """Load a plug-in module (.wasm) from a file. params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. A new build with the id of an installed plug-in replaces the old build: objects keep their shapes (plugins.object shows stale: true) until you call plugins.reset, and the new build must be trusted again. Returns the entry of plugins.list plus {existing, replaced: hash of the old build or null, stale_objects}.
+        """Load a plug-in module (.wasm) from a file (not in the browser build). params: {path}. A path must end in .wasm and be inside an allowed folder. Loading runs the module's describe function inside the sandbox, but nothing else: placing objects needs trust. A module that imports anything, asks for a permission, or has a bad manifest is refused. Installing the same module again changes nothing. A new build with the id of an installed plug-in replaces the old build: objects keep their shapes (plugins.object shows stale: true) until you call plugins.reset, and the new build must be trusted again. Returns the entry of plugins.list plus {existing, replaced: hash of the old build or null, stale_objects, warning? (the module is installed, but it is not kept for the next session)}.
 
         JSON-RPC method ``plugins.install``."""
         return self._call("plugins.install", params or None)
@@ -1159,6 +1159,12 @@ class Api:
 
         JSON-RPC method ``plugins.preview``."""
         return self._call("plugins.preview", params or None)
+
+    def plugins_tool_step(self, **params: Any) -> Any:
+        """Send one event to the tool of a plug-in (kind tool). params: {plugin: id | name, event: {type: start | move | click | finish, at?: [x, y] (drawing coordinates in mm, for move and click)}, modifiers?: {shift?, ctrl?, alt?}, state? (what the last step returned; null at the start), params? (tool options; missing ones use the defaults), commit? (default true), layer?, class?, name?}. The module answers with a preview and, at the end, a result. A tool keeps no memory between calls: send back the state you got. When the result comes and commit is true, the shapes or the plug-in object go into the drawing as one undo step with the change origin script. With commit false nothing changes and the result is only shown. Returns {state, preview: [shapes], hint, done: bool, result?: {kind: shapes | object, ids? (shapes), id? (object), params? and geometry? (object), shapes: count, committed: bool}}.
+
+        JSON-RPC method ``plugins.tool_step``."""
+        return self._call("plugins.tool_step", params or None)
 
     def section_viewport_line_add(self, **params: Any) -> Any:
         """Add a section line: a vertical cut plane along the line from a to b. params: {a: [x, y], b: [x, y], name? (default "A"), look? (left | right: the side of the line, going from a to b, that the view looks to; default left), mode? (cut | elevation; an elevation cuts nothing and shows the model seen from the line), depth? (far clip in mm; nothing farther than this beyond the line is drawn; default no limit), beyond? (draw the objects beyond the cut; default true), layer?, class?}. The line is a plain line object on a design layer with its settings in data.section_line. Returns {id}.
@@ -2258,6 +2264,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "plugins.reset",
     "plugins.object",
     "plugins.preview",
+    "plugins.tool_step",
     "section_viewport.line_add",
     "section_viewport.line_set",
     "section_viewport.create",

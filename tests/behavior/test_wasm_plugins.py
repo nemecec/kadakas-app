@@ -40,7 +40,7 @@ def test_describe_lists_the_plugin_methods_with_examples(rpc):
     names = {m["name"] for m in d["methods"]}
     assert {"plugins.info", "plugins.list", "plugins.install", "plugins.remove",
             "plugins.place", "plugins.set_params", "plugins.reset", "plugins.object",
-            "plugins.preview"} <= names
+            "plugins.preview", "plugins.tool_step"} <= names
     assert "sandboxed" in d["plugins"]["summary"]
     assert {e["method"] for e in d["plugins"]["examples"]} <= names
 
@@ -174,3 +174,67 @@ def test_reset_reports_each_object_and_skips_duplicates(make_serve):
     missing = "00000000-0000-0000-0000-0000000000ff"
     res = cad.result("plugins.reset", {"ids": [missing, group, group]})["results"]
     assert [r["ok"] for r in res] == [False, True]
+
+
+STONES = REPO / "crates" / "kadakas-plugin" / "tests" / "fixtures" / "stone_row.wasm"
+STONES_ID = "org.kadakas.stone-row"
+
+
+def step(cad, event, **extra):
+    return cad.result("plugins.tool_step", {"plugin": STONES_ID, "event": event, **extra})
+
+
+def test_a_tool_plugin_lists_its_kinds_and_author(cad):
+    got = cad.result("plugins.install", {"path": str(STONES)})
+    assert got["kinds"] == ["object", "tool"] and got["author"]
+    assert [p["name"] for p in got["tool_params"]] == ["size", "gap"]
+
+
+def test_an_untrusted_tool_does_not_run(cad):
+    cad.result("plugins.install", {"path": str(STONES)})
+    err = cad.error("plugins.tool_step", {"plugin": STONES_ID, "event": {"type": "start"}})
+    assert err["code"] == 4 and "not trusted" in err["message"]
+
+
+def test_a_tool_run_in_two_clicks_places_an_object_in_one_undo_step(make_serve):
+    cad = make_serve("--allow-agent-scripts")
+    cad.result("plugins.install", {"path": str(STONES)})
+    first = step(cad, {"type": "start"})
+    assert first["done"] is False and first["hint"]
+    clicked = step(cad, {"type": "click", "at": [0, 0]}, state=first["state"])
+    moved = step(cad, {"type": "move", "at": [3000, 0]}, state=clicked["state"])
+    assert len(moved["preview"]) == 4 and cad.result("document.summary")["object_count"] == 0
+    end = step(cad, {"type": "click", "at": [3000, 0]}, state=moved["state"])
+    assert end["done"] is True and end["result"]["kind"] == "object"
+    group = end["result"]["id"]
+    assert len(children(cad.result, group)) == 4
+    info = cad.result("plugins.object", {"id": group})
+    assert info["plugin"] == STONES_ID and info["params"]["size"] == 400
+    assert cad.result("undo")["done"]
+    assert cad.result("document.summary")["object_count"] == 0
+
+
+def test_shift_gives_plain_shapes_and_commit_false_changes_nothing(make_serve):
+    cad = make_serve("--allow-agent-scripts")
+    cad.result("plugins.install", {"path": str(STONES)})
+    state = {"start": [0, 0]}
+    shown = step(cad, {"type": "click", "at": [3000, 0]}, state=state, commit=False)
+    assert shown["result"]["committed"] is False and cad.result("document.summary")["object_count"] == 0
+    plain = step(cad, {"type": "click", "at": [3000, 0]}, state=state,
+                 modifiers={"shift": True})
+    assert plain["result"]["kind"] == "shapes" and len(plain["result"]["ids"]) == 4
+    assert all(o.get("parent") is None for o in cad.result("objects.list"))
+
+
+def test_the_tool_refuses_bad_events_and_shows_the_message_of_the_module(make_serve):
+    cad = make_serve("--allow-agent-scripts")
+    cad.result("plugins.install", {"path": str(STONES)})
+    assert cad.error("plugins.tool_step", {"plugin": STONES_ID, "event": {"type": "dance"}})["code"] == -32602
+    assert cad.error("plugins.tool_step", {"plugin": STONES_ID, "event": {"type": "move"}})["code"] == -32602
+    err = cad.error("plugins.tool_step",
+                    {"plugin": STONES_ID, "event": {"type": "click", "at": [5, 0]},
+                     "state": {"start": [0, 0]}})
+    assert err["code"] == 1 and "shorter" in err["message"]
+    # A tool step with a point that is too large is refused by the host.
+    assert cad.error("plugins.tool_step",
+                     {"plugin": STONES_ID, "event": {"type": "move", "at": [1e12, 0]}})["code"] == 4

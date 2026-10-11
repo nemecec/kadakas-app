@@ -2,9 +2,9 @@
 
 This guide shows how to write a plug-in for Kadakas and how to use one.
 
-A plug-in is a small WebAssembly program (a `.wasm` file). It makes a parametric object, such as a raised planter. You give it parameters and a place. It gives back shapes.
+A plug-in is a small WebAssembly program (a `.wasm` file). It makes a parametric object, such as a raised planter. You give it parameters and a place. It gives back shapes. A plug-in can also offer a drawing tool: it answers to clicks and shows a preview.
 
-Plug-ins run in a sandbox. They cannot read files, use the network or read the clock. They run the same way on the desktop, on a server and (later) in the browser.
+Plug-ins run in a sandbox. They cannot read files, use the network or read the clock. They run on the desktop, on a server and in the browser. The limits are the same everywhere, with one exception in the browser (see [Browser and server](#browser-and-server)).
 
 Python stays the tool for automation scripts. See [scripting.md](scripting.md). Python plug-in objects still work. If the object must run the same everywhere, use a WebAssembly plug-in. It is also the better choice for objects that you share with other people. They need not trust a Python script.
 
@@ -12,6 +12,8 @@ Python stays the tool for automation scripts. See [scripting.md](scripting.md). 
 
 - [How it works](#how-it-works)
 - [Use a plug-in](#use-a-plug-in)
+- [Use plug-ins in the app](#use-plug-ins-in-the-app)
+- [Tools](#tools)
 - [Write a plug-in](#write-a-plug-in)
 - [The ABI](#the-abi)
 - [Safety and limits](#safety-and-limits)
@@ -51,8 +53,8 @@ Or with raw JSON-RPC:
 Trust works like this:
 
 - A module that nobody trusted does not run. The call fails with the error code `4` (kind `policy`). The message shows the hash.
-- The user trusts a module in the app. The trust file is `trusted_wasm_plugins.json` in the config folder. (The dialog is not in the app yet. See [What is not done yet](#what-is-not-done-yet).)
-- No API method adds trust. Agents can run plug-ins only when the host allows it: start `kadakas serve`, `kadakas mcp` or the app with `--allow-agent-scripts`. This is the same rule as for Python scripts. `plugins.list` shows `trusted` (a user trusted this exact module) and `runnable` (trusted, or the flag is set).
+- The user trusts a module in the app, in the trust dialog (see [Use plug-ins in the app](#use-plug-ins-in-the-app)). The trust list is `trusted_wasm_plugins.json` in the folder `plugins` of the user data folder (see [Keep modules between sessions](#keep-modules-between-sessions)).
+- **No API method adds trust, and none removes it.** There is no `plugins.trust`. An agent cannot decide for the user. The trust dialog and the button "Stop trusting" are in the app only, and the function behind them is not an API method. Agents can run plug-ins only when the host allows it: start `kadakas serve`, `kadakas mcp` or the app with `--allow-agent-scripts`. This is the same rule as for Python scripts. `plugins.list` shows `trusted` (a user trusted this exact module) and `runnable` (trusted, or the flag is set).
 - A sandboxed module is safer than a Python script, but it can still draw wrong shapes or waste time. That is why the user still approves each module.
 
 ## Upgrade a plug-in
@@ -63,13 +65,59 @@ When a reset reads the old parameters of an object, it drops the ones that the n
 
 A reset replaces only the shapes that the plug-in made. Shapes that you added to the group stay. The class of the shapes stays too. A move of the group is followed, as long as you move the shapes of the plug-in.
 
-Installed modules are not kept between sessions yet. When you start a new session, install the module again. The shapes of existing objects stay in the drawing. If the module is not installed, the objects show their shapes and `plugins.object` says `installed: false`.
+If the module is not installed, the objects show their shapes and `plugins.object` says `installed: false`.
+
+## Keep modules between sessions
+
+The app keeps installed modules and the trust list for the next session:
+
+- **Desktop.** Modules are files in `plugins/modules/<sha256>.wasm`, and the trust list is `plugins/trusted_wasm_plugins.json`, both in the user data folder (`~/Library/Application Support/kadakas` on macOS, `%APPDATA%\kadakas` on Windows, `$XDG_DATA_HOME/kadakas` or `~/.local/share/kadakas` elsewhere). The files are private to the user (mode 0600 on Unix) and are written atomically.
+- **Browser.** The same data is in the `localStorage` of the page, as text. If the browser gives no storage (a private window, storage switched off) or a write fails (the quota is full), the module still works in this session and the app says that it is not kept. The browser keeps at most 2 MiB of modules in total.
+- **Checks on load.** The name of a stored module is its SHA-256. On load the host reads at most 2 MiB per file, computes the hash again and refuses a file that does not match. A changed file is not compiled and not run. It stays on the disk and the app reports it at the start. Then the module goes through the same checks as a new install (size, structure, manifest, no imports). The total of all stored modules is capped (64 MiB on the desktop, 2 MiB in the browser). A module that does not fit is installed for the session but not saved.
+- **Trust follows the hash.** A stored module that was changed would have another hash, so it cannot be trusted by accident.
+- **Tests and servers.** The folder is a parameter of the host (`Registry::open_home`). Only the app turns it on, with the folder of the user. `kadakas serve`, `kadakas mcp` and all tests keep modules in memory. The trust list moved from the config folder to the data folder with this change; trust that an older build wrote must be given again.
+
+## Use plug-ins in the app
+
+- **File > Plug-ins** opens the Plug-ins window. It lists the installed plug-ins with their state (trusted or not), the number of objects that use each one, and the buttons Review, Stop trusting and Remove (Remove is off while objects use the plug-in). **Install plug-in...** picks a `.wasm` file.
+- **The trust dialog** opens when you install a module that is not trusted, when you press Review, when you choose a tool of a module that is not trusted, and when you press Review in Object Info. It shows the name, the version, the author (the module says it; the host does not check it), the SHA-256, the size in bytes, what the module can do (make parametric objects, draw with a tool) and the description. The module asks for no permissions, because the host grants none, so the dialog has none to show: it says that the module cannot read your drawing, your files, the network or the clock. The buttons are **Trust** and **Cancel**. Trust is for the exact bytes. A new build has a new hash and the dialog opens again.
+- **Object Info** shows a form for a selected plug-in object. A number shows its range (as a hint) and its unit; a length uses the length unit of the person; there are checkboxes, choices, text fields, colors and groups of fields. The form checks what you type when you leave the field or press Enter. A wrong value stays in the field with a message and nothing changes. A right value is one `plugins.set_params` call: one undo step with the change origin `script`. Esc puts the saved value back, and **Default** puts the default of one parameter back. **Run again** makes the shapes again. If the plug-in is not trusted, the form is off and has a Review button. If the last run failed, Object Info shows the error and says that the shapes are from the last good run.
+- **The tool set "Plug-ins"** in the Tools palette has one button for each installed plug-in that has a tool.
+
+## Tools
+
+A plug-in that lists the kind `tool` can draw with the mouse. The messages are JSON, as for `reset`, and the same limits apply to each call.
+
+The host sends **events** in drawing coordinates (mm):
+
+| Event | When |
+|---|---|
+| `{"type": "start"}` | The person chose the tool. |
+| `{"type": "move", "at": [x, y]}` | The pointer moved. The app sends it only when the pointer moved by more than 2 pixels. |
+| `{"type": "click", "at": [x, y]}` | The person clicked. |
+| `{"type": "finish"}` | The person pressed Enter or double-clicked. |
+
+Esc never reaches the module. The host drops the state and the preview.
+
+The request has the event, the **modifiers** (`{"shift": false, "ctrl": false, "alt": false}`; `ctrl` is Cmd on macOS), the **state**, the tool **params** (defaults filled in) and `"units": "mm"`. The answer is `{"status": "ok", "state": ..., "preview": [shapes], "hint": "text", "result": null}` or `{"status": "error", "message": "..."}`.
+
+- **State.** Every call runs in a new instance, so the module has no memory between calls. It puts what it needs in `state` (any JSON, at most 64 KiB) and the host sends it back with the next event. The host does not look inside the state.
+- **Preview.** Shapes as in `reset`. The app draws them on the canvas. They never enter the drawing. An empty list is fine.
+- **Hint.** A short text for the status bar (at most 200 characters; control characters become spaces). It is text of the plug-in, so it is not translated.
+- **Result.** When `result` is set, the run ends. It is `{"type": "shapes", "shapes": [...]}` (plain shapes, at least one) or `{"type": "object", "params": {...}, "geometry": {...}}`. An object result is always an object **of the same module**: the host checks the geometry (the kind and the numbers) and the parameters against the manifest, calls `reset`, and adds the group like `plugins.place`. A module cannot place the object of another module. The module must provide the kind `object` for that.
+- **Errors.** `{"status": "error", "message": "..."}` is a refusal by the module, for example a click that is too close. In the app the run goes on and the message shows in the status bar. A limit, a crash or a bad answer ends the run, so a module that fails is not asked again for every mouse move.
+- **Manifest.** `"kinds": ["tool"]` (or both) and a `"tool": {"params": [...]}` part. The tool parameters use the schema of object parameters. The app has no editor for them yet and uses the defaults. An agent can pass `params` to `plugins.tool_step`.
+- **API.** `plugins.tool_step {plugin, event, modifiers?, state?, params?, commit?}` sends one event. With `commit` (the default) the result goes into the drawing in one undo step with the change origin `script`.
+
+The app asks for trust before the first event. An agent needs the trust of the user too (or the host flag `--allow-agent-scripts`).
+
+The example `plugins/stone-row` is an object (a row of stepping stones along a line) and a tool (click the start, move to see the stones, click the end; Shift ends with plain shapes). It has about 150 lines.
 
 ## Write a plug-in
 
 You can use any language that makes WebAssembly. The examples use Rust, with the crate `kadakas-plugin-abi`. It has the manifest and message types, so you do not write JSON by hand.
 
-The example `plugins/raised-planter` is a good start. It has about 120 lines.
+The example `plugins/raised-planter` is a good start. It has about 120 lines. The example `plugins/stone-row` shows a tool.
 
 ### 1. Make the crate
 
@@ -132,7 +180,7 @@ The shape type says how a user places the object:
 | `rectangle` | `{min: [x, y], max: [x, y]}` |
 | `path` | `{points: [[x, y], ...], closed}` |
 
-Parameter types are `number`, `length` (mm), `text`, `bool`, `choice` (with `options`), `color` (`#rrggbb`) and `record` (a group of fields). Kadakas checks every value before it calls your module. Your module always gets all parameters, with defaults filled in.
+Parameter types are `number` (with an optional `unit` text such as `pcs`, shown next to the field), `length` (mm), `text`, `bool`, `choice` (with `options`), `color` (`#rrggbb`) and `record` (a group of fields). `min` and `max` give the range of a number or a length. Kadakas checks every value before it calls your module. Your module always gets all parameters, with defaults filled in.
 
 ### 3. Do the reset
 
@@ -148,6 +196,8 @@ fn make_shapes(request: ResetRequest) -> Result<Vec<OutShape>, String> {
 export_plugin!(describe = manifest, reset = make_shapes);
 ```
 
+A tool plug-in writes `export_plugin!(describe = manifest, tool = run_tool);`, and a plug-in with both writes `export_plugin!(describe = manifest, reset = make_shapes, tool = run_tool);`. The function that you leave out answers with an error.
+
 Rules for the answer:
 
 - Return at least one shape.
@@ -156,7 +206,7 @@ Rules for the answer:
 - Colors are `[r, g, b, a]`. Leave them out to use the class colors. `color_rgba("#6b4f3a")` turns a color parameter into this form.
 - If the module cannot make the object (for example, it is too small), return `Err(message)`. The user sees your message. The old shapes stay.
 - Do not use `panic!`. A panic ends the call with a crash message and no detail.
-- The exports of the module are called `alloc`, `dealloc`, `describe` and `reset`. Do not use these names for your own functions. That is why the example calls its function `make_shapes`.
+- The exports of the module are called `alloc`, `dealloc`, `describe`, `reset` and `tool`. Do not use these names for your own functions. That is why the example calls its function `make_shapes`.
 
 ### 4. Build it
 
@@ -176,7 +226,7 @@ The example module in the repository is rebuilt with `scripts/build-plugin-fixtu
 
 ## The ABI
 
-The ABI (application binary interface) is the contract between the host and the module. This is version `1`. The host refuses a module with another version.
+The ABI (application binary interface) is the contract between the host and the module. This is version `2`. The host refuses a module with another version. Version 2 added the export `tool`, the manifest field `author` and the manifest part `tool`; rebuild a module of version 1 against this crate.
 
 The module has these exports and no imports:
 
@@ -186,7 +236,8 @@ The module has these exports and no imports:
 | `alloc(len: u32) -> u32` | Reserve `len` bytes. Return the address. |
 | `dealloc(ptr: u32, len: u32)` | Free a block. The Kadakas host does not call it (see below), but the export must exist. |
 | `describe() -> u64` | Return the manifest as JSON. |
-| `reset(ptr: u32, len: u32) -> u64` | Read the request at `ptr`. Return the answer as JSON. |
+| `reset(ptr: u32, len: u32) -> u64` | Read the request at `ptr`. Return the answer as JSON. For the kind `object`. |
+| `tool(ptr: u32, len: u32) -> u64` | Read the tool request at `ptr`. Return the answer as JSON. For the kind `tool`. |
 
 A `u64` result holds an address in the high 32 bits and a length in the low 32 bits. A result of `0` means "no answer", which is an error.
 
@@ -199,8 +250,9 @@ The manifest:
   "id": "org.kadakas.raised-planter",
   "name": "Raised planter",
   "version": "1.0.0",
-  "abi_version": 1,
+  "abi_version": 2,
   "description": "A raised planter.",
+  "author": "The Kadakas project",
   "kinds": ["object"],
   "object": {"shape_type": "rectangle", "params": [{"name": "wall", "type": "length", "default": 150, "min": 50, "max": 500}]},
   "permissions": []
@@ -215,9 +267,9 @@ The request:
 
 The answer is `{"status": "ok", "shapes": [...]}` or `{"status": "error", "message": "..."}`. A shape is `{"kind": "line", "a": [0, 0], "b": [10, 0], "attrs": {"pen": [0, 0, 0, 255], "line_weight": 0.35}}`. The `attrs` are optional.
 
-`kinds` can be `object` or `tool`. The kind `tool` is reserved. ABI version 1 has no tool messages yet. The host lists such a plug-in but does not run it.
+`kinds` can be `object`, `tool` or both. The kind `object` needs an `object` part, and the kind `tool` needs a `tool` part. The `author` is text for the trust dialog. The host shows it and does not check it.
 
-`permissions` can name `read_document`, `filesystem`, `network` or `clock`. ABI version 1 has no calls from the module to the host. The host grants none. It refuses a module that asks.
+`permissions` can name `read_document`, `filesystem`, `network` or `clock`. ABI version 2 has no calls from the module to the host. The host grants none. It refuses a module that asks.
 
 Version rules: a change that breaks old modules gets a new ABI version. New optional fields in the JSON do not. The host ignores nothing silently: an unknown shape kind or field in the answer is an error.
 
@@ -226,14 +278,16 @@ Version rules: a change that breaks old modules gets a new ABI version. New opti
 | Protection | How |
 |---|---|
 | No files, no network, no clock | The module has no imports. The host gives it nothing. WASI is not available. |
-| Time | Every call gets a fuel amount (200 million work units, about one per instruction) and 1.5 seconds of real time. Fuel gives the same result on every computer. The time limit stops loops that do much work for little fuel, such as `memory.fill`. Both give a limit error. |
+| Time | Every call gets a fuel amount (200 million work units, about one per instruction) and, on a computer, 1.5 seconds of real time. Fuel gives the same result on every computer. The time limit stops loops that do much work for little fuel. Both give a limit error. **In the browser there is fuel but no time limit** (see below). |
 | Memory | Every call can use 64 MiB. A module that needs more stops with a limit error. |
 | Stack | A deep or endless recursion stops with a limit error. |
 | Size | The module file: 2 MiB. One function: 256 KiB. At most 5000 functions and 5000 local variables in a function (the host checks this before it compiles the module). The answer: 2 MiB, 2000 shapes, 100 000 polyline vertices. |
-| Bad answers | The call fails and the drawing does not change. Examples: bad JSON, an unknown shape kind, a radius of zero or less, a number that is not finite. Numbers above 1 000 000 000 mm fail too. |
+| Bad answers | The call fails and the drawing does not change. Examples: bad JSON, an unknown shape kind, a radius of zero or less, a number that is not finite. Numbers above 1 000 000 000 mm fail too. This holds for the shapes of `reset`, the preview and the result of a tool, and the geometry and parameters of a tool result. |
+| Tool state | At most 64 KiB of JSON. A preview has at most 2000 shapes. A hint has at most 200 characters. |
 | Same result everywhere | NaN results are made canonical, and relaxed SIMD is off. |
 | Fresh instance | Every call starts in an empty instance. A call cannot see the memory of another call. |
-| Trust | The user trusts the module by its SHA-256 hash. Or the host lets agents run plug-ins. |
+| Trust | The user trusts the module by its SHA-256 hash, in the dialog of the app. Or the host lets agents run plug-ins. No API method gives trust. |
+| Storage | A stored module is checked against its SHA-256 on load, and the sizes are capped (see [Keep modules between sessions](#keep-modules-between-sessions)). |
 
 `plugins.info` shows the limits of a session.
 
@@ -245,15 +299,16 @@ All methods are in `describe` with examples. The names have `plugins` in the plu
 
 | Method | What it does |
 |---|---|
-| `plugins.info` | The engine, the limits and the number of installed plug-ins. |
+| `plugins.info` | The engine, the limits (`time_limit_ms` is `null` in the browser), whether modules are kept (`persistent`) and the number of installed plug-ins. |
 | `plugins.list` | The installed plug-ins with id, name, version, kinds, permissions, parameter schema, hash, trust and use count. |
-| `plugins.install {path}` | Load a `.wasm` file. The path rules of the other file methods apply (`--allow-dir`). The extension is `.wasm`. |
+| `plugins.install {path}` | Load a `.wasm` file. The path rules of the other file methods apply (`--allow-dir`). The extension is `.wasm`. Not in the browser build, which has no paths for agents: the user installs there. |
 | `plugins.remove {plugin}` | Remove a plug-in that no object uses. |
 | `plugins.place {plugin, params?, geometry, layer?, class?, name?}` | Make an object. One undo step. |
 | `plugins.set_params {id, params}` | Change parameters and make the shapes again. If the module fails, the old shapes stay and the object shows the error. |
 | `plugins.reset {id \| ids \| plugin}` | Make the shapes again, for example after a new build. An object that fails is reported and the others still run. |
 | `plugins.object {id}` | The state of one object. |
 | `plugins.preview {plugin, params?, geometry}` | Run the module and return the shapes. The drawing does not change. |
+| `plugins.tool_step {plugin, event, modifiers?, state?, params?, commit?, layer?, class?, name?}` | Send one event to the tool. Returns the state, the preview, the hint and, at the end, the result. |
 
 Error codes follow the rules of the API:
 
@@ -268,17 +323,30 @@ Error codes follow the rules of the API:
 The host is split so that the engine can change:
 
 - `kadakas-plugin-abi` is pure Rust. It builds for `wasm32-unknown-unknown`, so it works in the browser build and in plug-ins.
-- `kadakas-plugin` has two traits, `PluginRuntime` and `LoadedModule`. Everything above them (manifest checks, trust, parameter checks, shape checks) is the same for all engines.
+- `kadakas-plugin` has two traits, `PluginRuntime` and `LoadedModule`. Everything above them (manifest checks, trust, parameter checks, shape checks, tool checks) is the same for all engines.
 - Native builds (the desktop app and the server) use the `wasmtime` engine.
-- The browser build has a stub engine. It says "plug-ins do not run in the browser build yet". A later engine can call the `WebAssembly` API of the browser behind the same two traits. Every call runs in a new instance, and the interface is bytes in and bytes out. So such an engine needs about 100 lines.
-- Because the shapes are plain data, a drawing with plug-in objects works in the browser today. Only changing the parameters needs a plug-in engine.
+- The browser build uses the `WebAssembly` API of the page. The code is split in three parts: `harden.rs` rewrites a module, `metered.rs` makes the calls and finds the cause of a failure, and `web.rs` is the thin glue to `js-sys`. The first two are plain Rust. They are tested on the desktop with a test compiler on wasmtime that has no limits of its own, so only the glue (about 300 lines) has no test in this repository.
+
+**How the browser enforces the limits.** A browser gives no fuel, no memory cap and no deadline. So the host rewrites the module before the browser compiles it:
+
+- *Fuel.* The rewrite adds a counter (a mutable global) that starts at the fuel of the call. Each run of straight code subtracts its number of instructions at its start. At the start of every function and of every loop body the module checks the counter and executes `unreachable` when it is below zero. Endless loops, endless recursion and tail calls all pass such a point. `memory.fill`, `memory.copy`, `memory.init` and the table versions are charged by size. The host reads the counter after a trap and reports a limit error ("the module used all of its fuel").
+- *Memory.* The rewrite sets the maximum of the memory to the cap (64 MiB). A module that needs more at the start does not load. `memory.grow` over the cap answers -1.
+- *No imports.* A module with an import does not load, and the import object is empty.
+- *Same checks as native.* Size of the module, functions, locals and the size of the answer are checked before and after, with the same code.
+
+**What the browser does not enforce: a time limit.** Fuel counts instructions. It does not count time, and a page cannot stop a module that runs on its own thread. A Web Worker with a timeout and `terminate()` would stop it, but a worker can be called only asynchronously, and the `plugins.*` methods are synchronous. So the browser build has no limit of 1.5 seconds. A module can use its whole fuel (200 million instructions, which is some tenths of a second on a normal computer, more on a slow one), and a call blocks the page until then. `plugins.info` says `time_limit_ms: null` there. A tool that fails ends its run, so it blocks the page at most once. Other gaps of the browser build:
+
+- Chrome refuses to compile a module over 4 KB with the synchronous API on the main thread. The app compiles modules with the asynchronous API before it installs them (`web::precompile`), and the compiled module is found by the hash of the rewritten bytes. A module that is installed without this step works only where the browser compiles synchronously.
+- The `WebAssembly` features that the browser does not support make a module fail to compile ("invalid"). Wasmtime and the browsers can differ here.
+- The memory cap is reported as a limit error only when the memory is at the cap after a failure. Another failure is reported as a crash.
+- The browser engine is not tested in a real browser in this repository. Its logic is.
+
+Because the shapes are plain data, a drawing with plug-in objects works in the browser even without the plug-in. Only changing the parameters needs a plug-in engine.
 
 ## What is not done yet
 
-- The kind `tool`. The manifest can say it, but the ABI has no messages for pointer events.
-- The dialog in the app to trust a module. The function is ready (`kadakas_api::trust_wasm_plugin`). The window is not.
-- A parameter editor in Object Info for WebAssembly plug-in objects.
-- A browser engine.
-- Keeping installed modules between sessions, and a plug-in folder.
 - Permissions. The host grants none.
+- A time limit in the browser (a worker setup; see above).
+- An editor in the app for the options of a tool (the defaults are used).
 - Curved polyline vertices in the answer.
+- A plug-in folder that the app watches. Modules are installed one by one.
