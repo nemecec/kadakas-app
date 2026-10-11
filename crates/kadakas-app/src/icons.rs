@@ -697,6 +697,7 @@ pub fn menu_icon(a: MenuAction) -> &'static str {
         MenuAction::PreviousView => "arrow-narrow-left",
         MenuAction::NextView => "arrow-narrow-right",
         MenuAction::QuickSearch => "search",
+        MenuAction::Tool(t) => tool_icon(t),
     }
 }
 

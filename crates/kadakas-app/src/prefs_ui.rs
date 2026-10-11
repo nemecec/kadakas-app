@@ -22,6 +22,8 @@ pub struct PrefsEdit<'a> {
     pub units: &'a mut Settings,
     /// The language that is active now, for the entry "system default".
     pub active_language: &'static str,
+    /// The workspace profiles (PLAT-04).
+    pub profiles: &'a mut crate::profiles::Profiles,
 }
 
 impl PrefsDialog {
@@ -46,6 +48,8 @@ impl PrefsDialog {
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-units-and-formats"));
                 units_section(ui, edit.units, edit.active_language);
+                ui.add_space(6.0);
+                crate::profiles::section(ui, edit.profiles);
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-appearance"));
                 ui.horizontal(|ui| {
@@ -258,12 +262,14 @@ mod tests {
         size: &'a mut IconSize,
         lang: &'a mut LanguageChoice,
         units: &'a mut Settings,
+        profiles: &'a mut crate::profiles::Profiles,
     ) -> PrefsEdit<'a> {
         PrefsEdit {
             icon_size: size,
             language: lang,
             units,
             active_language: "en-US",
+            profiles,
         }
     }
 
@@ -275,13 +281,22 @@ mod tests {
         let mut size = IconSize::Medium;
         let mut lang = LanguageChoice::SYSTEM;
         let mut units = Settings::default();
-        d.show(&ctx, edit(&mut size, &mut lang, &mut units), &mut au);
+        let mut profiles = crate::profiles::Profiles::default();
+        d.show(
+            &ctx,
+            edit(&mut size, &mut lang, &mut units, &mut profiles),
+            &mut au,
+        );
         assert!(!d.is_open());
         d.open();
         for tag in ["en-US", "et"] {
             kadakas_l10n::with_language(tag, || {
                 let _ = ctx.run_ui(Default::default(), |ui| {
-                    d.show(ui.ctx(), edit(&mut size, &mut lang, &mut units), &mut au)
+                    d.show(
+                        ui.ctx(),
+                        edit(&mut size, &mut lang, &mut units, &mut profiles),
+                        &mut au,
+                    )
                 });
             });
         }

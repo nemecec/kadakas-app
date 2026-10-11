@@ -38,6 +38,7 @@ mod plant_ui;
 mod prefs;
 mod prefs_ui;
 mod present_ui;
+mod profiles;
 mod quick_search;
 mod resource_ui;
 mod rules_ui;

@@ -19,8 +19,50 @@ pub(crate) fn generation() -> usize {
     GENERATION.load(Ordering::Relaxed)
 }
 
+thread_local! {
+    /// An overlay that replaces the process overlay on this thread only. For tests.
+    static LOCAL: std::cell::RefCell<Option<Vec<(&'static str, String)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn build(texts: &[(&str, &str)]) -> Vec<(&'static str, String)> {
+    let mut list: Vec<(&'static str, String)> = Vec::new();
+    for (tag, text) in texts {
+        let exact = crate::languages()
+            .iter()
+            .find(|l| l.tag.eq_ignore_ascii_case(tag));
+        if let Some(l) = exact {
+            list.retain(|(t, _)| *t != l.tag);
+            list.push((l.tag, (*text).to_string()));
+        }
+    }
+    list
+}
+
+/// Runs `f` with another overlay on this thread only. Tests use it, like `with_language`.
+pub fn with_overlay<R>(texts: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+    /// Puts the old overlay back, also when `f` panics.
+    struct Restore(Option<Vec<(&'static str, String)>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LOCAL.with(|l| *l.borrow_mut() = self.0.take());
+            GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let _restore = Restore(LOCAL.with(|l| l.replace(Some(build(texts)))));
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    f()
+}
+
 /// The overlay text of a language, if any.
 pub(crate) fn text_for(tag: &str) -> Option<String> {
+    if let Some(found) = LOCAL.with(|l| {
+        l.borrow()
+            .as_ref()
+            .map(|list| list.iter().find(|(t, _)| *t == tag).map(|(_, s)| s.clone()))
+    }) {
+        return found;
+    }
     let guard = OVERLAY.read().unwrap_or_else(|e| e.into_inner());
     guard
         .iter()
@@ -37,16 +79,7 @@ pub fn overlay_tags() -> Vec<&'static str> {
 /// Sets the terminology overlay of the process. `texts` are (tag, `.ftl` text). A tag that
 /// is not the tag of a supported language is ignored. An empty list removes the overlay.
 pub fn set_overlay(texts: &[(&str, &str)]) {
-    let mut list: Vec<(&'static str, String)> = Vec::new();
-    for (tag, text) in texts {
-        let exact = crate::languages()
-            .iter()
-            .find(|l| l.tag.eq_ignore_ascii_case(tag));
-        if let Some(l) = exact {
-            list.retain(|(t, _)| *t != l.tag);
-            list.push((l.tag, (*text).to_string()));
-        }
-    }
+    let list = build(texts);
     *OVERLAY.write().unwrap_or_else(|e| e.into_inner()) = list;
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }

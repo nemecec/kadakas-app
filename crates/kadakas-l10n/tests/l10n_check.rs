@@ -33,6 +33,12 @@ const UNUSED_OK: &[&str] = &[
 const LITERAL_OK: &[(&str, &str)] = &[
     // A multiplication sign and a close mark on small buttons.
     ("panels.rs", "\\u{d7}"),
+    // The profile windows: a key with a remove mark, the arrows that reorder tools, and the
+    // name of the profile file format.
+    ("profiles.rs", "{} \\u{d7}"),
+    ("profiles.rs", "\\u{25b2}"),
+    ("profiles.rs", "\\u{25bc}"),
+    ("profiles.rs", "JSON"),
     ("data_ui.rs", "x"),
     ("gis_ui.rs", "x"),
     ("plant_ui.rs", "x"),

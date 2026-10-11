@@ -180,15 +180,15 @@ impl Profile {
         if let Some(v) = section(obj, "aliases") {
             p.read_aliases(v, &mut problems);
         }
-        if let Some(v) = section(obj, "tool_sets") {
-            if let Some(sets) = read_tool_sets(v, &mut problems) {
-                p.tool_sets = sets;
-            }
+        if let Some(v) = section(obj, "tool_sets")
+            && let Some(list) = read_tool_sets(v, &mut problems)
+        {
+            p.tool_sets = list;
         }
-        if let Some(v) = section(obj, "menus") {
-            if let Some(menus) = read_menus(v, &mut problems) {
-                p.menus = menus;
-            }
+        if let Some(v) = section(obj, "menus")
+            && let Some(list) = read_menus(v, &mut problems)
+        {
+            p.menus = list;
         }
         if let Some(v) = section(obj, "terms") {
             p.read_terms(v, &mut problems);
