@@ -24,6 +24,9 @@ mod irrigation_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
+mod picture_api;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod picture_api_tests;
 mod plants_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_api;
@@ -245,6 +248,9 @@ pub const METHODS: &[(&str, &str)] = &[
     plants_api::REPORT_EXISTING_TREES,
     plants_api::PLANTS_DRAPE,
     plants_api::PLANT_TAG_SET,
+    picture_api::PLANT_STYLE_SET_PICTURE,
+    picture_api::PLANT_STYLE_CLEAR_PICTURE,
+    picture_api::PLANT_STYLE_GET_PICTURE,
     // Records, the Data Manager and worksheets (see data_api.rs).
     data_api::RECORD_FORMAT_LIST,
     data_api::RECORD_FORMAT_GET,
@@ -839,6 +845,16 @@ impl Session {
         self.paths.resolve(path, self.doc_dir.as_deref(), write)
     }
 
+    /// The canonical path of a folder, if the path policy allows it (no extension rule). A
+    /// restricted session may read inside the folders it was given.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn check_dir(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        if !self.paths.is_restricted() {
+            return std::fs::canonicalize(path).map_err(|e| e.to_string());
+        }
+        self.paths.resolve(path, self.doc_dir.as_deref(), false)
+    }
+
     /// The 3D scene of the current document. It is rebuilt only when the document changed.
     pub fn scene(&mut self) -> Arc<Scene> {
         let revision = self.editor.revision();
@@ -983,6 +999,7 @@ impl Session {
                 "vertex_kinds": "Polyline points and landscape/hardscape boundaries are vertices. [x, y] is a corner. Other kinds are {p: [x, y], kind: corner | arc (with radius, a fillet) | point_on_arc | bezier | cubic}.",
                 "command_examples": command_examples(),
                 "plants": plants_api::describe(),
+                "plant_pictures": picture_api::describe(),
                 "data": data_api::describe(),
                 "hardscapes": hardscape_api::describe(),
                 "presentation": present_api::describe(),
@@ -1302,6 +1319,7 @@ impl Session {
                     return r;
                 }
                 return plants_api::handle(self, method, p.clone())
+                    .or_else(|| picture_api::handle(self, method, p.clone()))
                     .or_else(|| sheets_api::handle(self, method, p.clone()))
                     .or_else(|| symbols_api::handle(self, method, p.clone()))
                     .or_else(|| edit2d_api::handle(self, method, p.clone()))

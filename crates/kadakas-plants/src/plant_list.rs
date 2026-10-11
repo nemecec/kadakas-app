@@ -23,6 +23,8 @@ pub struct AreaShare {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PlantListRow {
     pub style: Option<ResourceId>,
+    /// The picture resource of the style, if the document has it.
+    pub image: Option<ResourceId>,
     pub name: String,
     pub id_code: String,
     pub botanical_name: String,
@@ -54,6 +56,12 @@ pub struct PlantList {
     pub total_area_m2: f64,
 }
 
+/// The picture resource of a style, if the style has one and the resource exists.
+pub fn picture_of(doc: &Document, style: ResourceId) -> Option<ResourceId> {
+    let img = doc.resources.plant_style(style)?.image?;
+    doc.resources.image(img).map(|_| img)
+}
+
 /// The plant list of the document. Single plants come from the plant schedule. Plants of
 /// landscape areas are added to the row of their style. Plants of one style with different
 /// overrides share one row here. The rows are sorted by name.
@@ -73,6 +81,7 @@ pub fn plant_list(doc: &Document) -> PlantList {
             }
             None => rows.push(PlantListRow {
                 style: r.style,
+                image: r.style.and_then(|id| picture_of(doc, id)),
                 name: r.name,
                 id_code: r.id_code,
                 botanical_name: r.botanical_name,
@@ -113,6 +122,7 @@ pub fn plant_list(doc: &Document) -> PlantList {
                     };
                     rows.push(PlantListRow {
                         style: Some(p.plant),
+                        image: picture_of(doc, p.plant),
                         name: p.name.clone(),
                         id_code: s.id_code.clone(),
                         botanical_name: s.botanical_name.clone(),

@@ -3,6 +3,9 @@
 //! The XLSX writer is small and has no dependencies: it writes values (numbers, text, booleans),
 //! not formulas, with the decimals of the cell format. The ZIP container is "stored" (no
 //! compression). Excel, LibreOffice and Numbers open the files.
+//!
+//! Picture cells (`Value::Image`) are left out of both formats: CSV gets an empty cell and XLSX
+//! gets no cell. The app and the PDF, SVG and PNG sheets draw them.
 
 use crate::compute::Computed;
 use crate::formula::CellRef;
@@ -170,7 +173,8 @@ fn sheet_xml(c: &Computed) -> String {
             let v = c.value(r, col);
             let at = CellRef { row: r, col };
             let body = match &v {
-                Value::Empty => continue,
+                // XLSX cells here hold values only. A picture is skipped (see the module text).
+                Value::Empty | Value::Image(_) => continue,
                 Value::Number(n) => {
                     let style = c
                         .format(r, col)

@@ -102,6 +102,7 @@ fn value_json(v: &kadakas_sheet::Value) -> Value {
         V::Text(t) => json!(t),
         V::Bool(b) => json!(b),
         V::Error(e) => json!({"error": e.code()}),
+        V::Image(id) => json!({"image": id}),
     }
 }
 

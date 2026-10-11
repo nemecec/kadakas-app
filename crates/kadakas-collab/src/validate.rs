@@ -68,6 +68,18 @@ pub fn layer_problem(l: &Layer) -> Option<String> {
     None
 }
 
+/// The slow checks of a thing, for a thing whose data arrives now: a picture is read and compared
+/// with its fields. Other things pass. A server runs it on the things that a transaction touches.
+pub fn verify_entity(kind: Kind, id: Uid, props: &Map<String, Value>) -> Result<(), String> {
+    if kind != Kind::Resource {
+        return Ok(());
+    }
+    let full = with_id(id, &crate::docsync::unflatten(kind, props));
+    let r: Resource =
+        serde_json::from_value(full).map_err(|e| format!("not a valid Resource: {e}"))?;
+    r.body.verify()
+}
+
 /// Checks the properties of one thing. `Ok` if they make a valid thing of this kind.
 pub fn validate_entity(kind: Kind, id: Uid, props: &Map<String, Value>) -> Result<(), String> {
     if matches!(kind, Kind::Object | Kind::Layer)
@@ -224,10 +236,12 @@ pub fn blobs_needed(r: &Replica, ops: &[Op]) -> Vec<String> {
     let (order, props) = touched(r, ops);
     let mut out: Vec<String> = Vec::new();
     for t in order {
-        if let Some(h) = props[&t].get("shape").and_then(crate::blob::blob_ref)
-            && !out.iter().any(|o| o == h)
-        {
-            out.push(h.to_string());
+        for key in crate::blob::BLOB_PROPS {
+            if let Some(h) = props[&t].get(key).and_then(crate::blob::blob_ref)
+                && !out.iter().any(|o| o == h)
+            {
+                out.push(h.to_string());
+            }
         }
     }
     out
@@ -270,6 +284,7 @@ pub fn check_entities(
     for t in order {
         let full = crate::blob::inline_props(&props[&t], blobs).map_err(CheckError::MissingBlob)?;
         validate_entity(t.kind, t.id, &full)
+            .and_then(|()| verify_entity(t.kind, t.id, &full))
             .map_err(|e| CheckError::Invalid(format!("{:?} {}: {e}", t.kind, t.id)))?;
     }
     Ok(())

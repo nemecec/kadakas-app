@@ -130,6 +130,7 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Arc Angle, Start Angle, Segment Angle, Pitch (of a sweep) | Kaare nurk, Alguse nurk, Lõigunurk, Samm | the Sweep dialog; Extrusion is Väljapress |
 | Dimension standard, Notes database | Mõõtmestamise standard, Märkuste andmebaas | style editors |
 | Area (dimension) | Pindala | the Area mode of the Dimension tool |
+| Picture (of a plant style) | Pilt | PNG or JPEG file in a plant style |
 
 ## Terminology overlays (PLAT-04)
 

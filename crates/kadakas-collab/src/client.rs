@@ -85,6 +85,7 @@
 //! ignored.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use kadakas_core::change::ChangeSet;
 use kadakas_core::model::Document;
@@ -199,6 +200,36 @@ pub struct DocEdit {
     pub problems: Vec<String>,
 }
 
+/// The facts of the picture files, by the hash of their blob (see `Client::materialize`).
+#[derive(Default)]
+struct PictureFacts {
+    by_blob: std::collections::HashMap<String, Result<kadakas_core::picture::ImageFacts, String>>,
+    /// How many files were read.
+    reads: usize,
+}
+
+impl PictureFacts {
+    /// Checks the fields of a picture against its file. The file (the blob text) is read the first
+    /// time only.
+    fn check(
+        &mut self,
+        hash: &str,
+        img: &kadakas_core::picture::ImageResource,
+        text: Option<&Arc<str>>,
+    ) -> Result<(), String> {
+        if !self.by_blob.contains_key(hash) {
+            let text = text.ok_or("the picture has not arrived yet")?;
+            self.reads += 1;
+            self.by_blob
+                .insert(hash.to_string(), kadakas_core::picture::facts_of_text(text));
+        }
+        match &self.by_blob[hash] {
+            Ok(f) => img.check_facts(f),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
 /// A transaction that waits to be sent again.
 #[derive(Clone, Copy, Debug)]
 struct Retry {
@@ -238,7 +269,10 @@ pub struct Client {
     changed: bool,
     retry: Option<Retry>,
     /// The blobs (pictures) that this client has, by hash.
-    blobs: BTreeMap<String, String>,
+    blobs: BTreeMap<String, Arc<str>>,
+    /// What the files of the picture blobs say about themselves, by blob hash. A file is read once
+    /// (not at every change of the shared document).
+    facts: Mutex<PictureFacts>,
     /// The blobs that were sent on this connection. A blob is sent again on a new connection.
     put_on_conn: BTreeSet<String>,
     /// Blobs that were asked for, and blobs that the server does not have.
@@ -279,6 +313,7 @@ impl Client {
             changed: false,
             retry: None,
             blobs: BTreeMap::new(),
+            facts: Mutex::new(PictureFacts::default()),
             put_on_conn: BTreeSet::new(),
             asked: BTreeSet::new(),
             missing: BTreeSet::new(),
@@ -319,7 +354,8 @@ impl Client {
                     c.head_seq = cp.seq;
                     c.log_id = Some(cp.log_id).filter(|l| !l.is_empty());
                     c.chain = cp.chain;
-                    c.blobs.extend(cp.blobs);
+                    c.blobs
+                        .extend(cp.blobs.into_iter().map(|(h, d)| (h, Arc::from(d))));
                     c.has_state = true;
                 }
                 Err(e) => c
@@ -335,7 +371,8 @@ impl Client {
                     c.pending = j.pending.into();
                     c.undo = j.undo;
                     c.redo = j.redo;
-                    c.blobs.extend(j.blobs);
+                    c.blobs
+                        .extend(j.blobs.into_iter().map(|(h, d)| (h, Arc::from(d))));
                     c.saved_journal = text;
                 }
                 Ok(_) => c.events.push(ClientEvent::StoreCorrupt(
@@ -636,17 +673,21 @@ impl Client {
         let put = |this: &mut Client, v: &mut Value| {
             if let Some((r, hash, data)) = blob::externalize(v) {
                 *v = r;
-                this.blobs.insert(hash, data);
+                this.blobs.insert(hash, Arc::from(data));
             }
         };
         for op in &mut ops {
             match op {
                 Op::Create { props, .. } => {
-                    if let Some(v) = props.get_mut("shape") {
-                        put(self, v);
+                    for key in blob::BLOB_PROPS {
+                        if let Some(v) = props.get_mut(key) {
+                            put(self, v);
+                        }
                     }
                 }
-                Op::Set { prop, value, .. } if prop == "shape" => put(self, value),
+                Op::Set { prop, value, .. } if blob::BLOB_PROPS.contains(&prop.as_str()) => {
+                    put(self, value)
+                }
                 _ => {}
             }
         }
@@ -666,7 +707,7 @@ impl Client {
                 {
                     self.outbox.push(ClientMsg::BlobPut {
                         hash: h,
-                        data: data.clone(),
+                        data: data.to_string(),
                     });
                 }
             }
@@ -676,7 +717,22 @@ impl Client {
     /// The document that the view describes, with the pictures it refers to (see
     /// `materialize::materialize_with`).
     pub fn materialize(&self, base: &Document) -> crate::materialize::Materialized {
-        crate::materialize::materialize_with(&self.view, base, &|h| self.blobs.get(h).cloned())
+        let mut verify = |hash: &str, img: &kadakas_core::picture::ImageResource| {
+            let mut facts = self.facts.lock().unwrap_or_else(|e| e.into_inner());
+            facts.check(hash, img, self.blobs.get(hash))
+        };
+        crate::materialize::materialize_with(
+            &self.view,
+            base,
+            &|h| self.blobs.get(h).cloned(),
+            &mut verify,
+        )
+    }
+
+    /// How many picture files this client has read to check them. A file is read once, however many
+    /// times the shared document changes.
+    pub fn picture_reads(&self) -> usize {
+        self.facts.lock().unwrap_or_else(|e| e.into_inner()).reads
     }
 
     /// Takes back your last edit (see `undo` for the rules). Other users' work stays.
@@ -777,13 +833,20 @@ impl Client {
     /// Asks the server for the blobs that the state refers to and that this client does not have.
     fn ask_for_blobs(&mut self) {
         let mut wanted: Vec<String> = Vec::new();
-        for (_, e) in self.view.alive_of(crate::op::Kind::Object) {
-            if let Some(h) = e.get("shape").and_then(blob::blob_ref)
-                && !self.blobs.contains_key(h)
-                && !self.asked.contains(h)
-                && !self.missing.contains(h)
-            {
-                wanted.push(h.to_string());
+        let things = [
+            (crate::op::Kind::Object, "shape"),
+            (crate::op::Kind::Resource, "body"),
+        ];
+        for (kind, key) in things {
+            for (_, e) in self.view.alive_of(kind) {
+                if let Some(h) = e.get(key).and_then(blob::blob_ref)
+                    && !self.blobs.contains_key(h)
+                    && !self.asked.contains(h)
+                    && !self.missing.contains(h)
+                    && !wanted.iter().any(|w| w == h)
+                {
+                    wanted.push(h.to_string());
+                }
             }
         }
         for h in wanted {
@@ -879,7 +942,7 @@ impl Client {
             ServerMsg::Blob { hash, data } => {
                 if blob::sha256_hex(data.as_bytes()) == hash && data.len() <= blob::MAX_BLOB_BYTES {
                     self.asked.remove(&hash);
-                    self.blobs.insert(hash, data);
+                    self.blobs.insert(hash, Arc::from(data));
                     self.changed = true;
                 }
             }
@@ -1267,7 +1330,7 @@ impl Client {
         self.blobs
             .iter()
             .filter(|(h, _)| want.contains(*h))
-            .map(|(h, d)| (h.clone(), d.clone()))
+            .map(|(h, d)| (h.clone(), d.to_string()))
             .collect()
     }
 
@@ -1286,7 +1349,7 @@ impl Client {
         self.blobs
             .iter()
             .filter(|(h, _)| want.contains(*h))
-            .map(|(h, d)| (h.clone(), d.clone()))
+            .map(|(h, d)| (h.clone(), d.to_string()))
             .collect()
     }
 
@@ -1392,10 +1455,12 @@ fn apply_with_inverse(r: &mut Replica, w: Writer, ops: Vec<Op>) -> (Vec<Op>, Vec
 fn op_blob_refs(op: &Op) -> Vec<String> {
     match op {
         Op::Create { props, .. } => blob::refs_in(props),
-        Op::Set { prop, value, .. } if prop == "shape" => blob::blob_ref(value)
-            .map(str::to_string)
-            .into_iter()
-            .collect(),
+        Op::Set { prop, value, .. } if blob::BLOB_PROPS.contains(&prop.as_str()) => {
+            blob::blob_ref(value)
+                .map(str::to_string)
+                .into_iter()
+                .collect()
+        }
         _ => Vec::new(),
     }
 }

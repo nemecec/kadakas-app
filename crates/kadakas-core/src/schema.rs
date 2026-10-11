@@ -256,6 +256,10 @@ schema_impl!(ResourceBody, "ResourceBody", |_g| json_schema!({
     "additionalProperties": true
 }));
 
+schema_impl!(crate::picture::ImageResource, "ImageResource", |_g| opaque(
+    "A picture: {sha256, format (png|jpeg), width, height, data (base64 of the file), thumb (base64 PNG), source?}. Use plant_style.set_picture to make one from a file."
+));
+
 schema_impl!(crate::sheets::SavedView, "SavedView", |_g| opaque(
     "A saved view: name, layer visibility, active layer and camera."
 ));

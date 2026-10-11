@@ -791,12 +791,39 @@ pub fn draw_table(
             continue;
         }
         for col in 1..=l.cols {
-            let text = c.display(r, col);
-            if text.is_empty() {
-                continue;
-            }
             let (left, right) = (xs[col as usize - 1], xs[col as usize]);
             if right < clip.min.x || left > clip.max.x {
+                continue;
+            }
+            if let Some(img) = c.value(r, col).image() {
+                // A picture cell: the image, inside the cell. The texture comes from the cache
+                // (the thumbnail is derived from the file once, not in every frame), and the
+                // proportions are those of the texture.
+                if let Some(res) = doc.resources.image(img)
+                    && let Some((tex, tsize)) = crate::picture_ui::resolve(painter.ctx(), res)
+                {
+                    let m = size * 0.15;
+                    let cell = egui::Rect::from_min_max(
+                        egui::pos2(left + m, y + m),
+                        egui::pos2(right - m, y + row_h - m),
+                    );
+                    let k = (cell.width() / tsize[0].max(1) as f32)
+                        .min(cell.height() / tsize[1].max(1) as f32);
+                    let r = egui::Rect::from_center_size(
+                        cell.center(),
+                        egui::vec2(tsize[0] as f32 * k, tsize[1] as f32 * k),
+                    );
+                    painter.image(
+                        tex.id(),
+                        r,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+                continue;
+            }
+            let text = c.display(r, col);
+            if text.is_empty() {
                 continue;
             }
             let color = if c.value(r, col).is_error() {

@@ -143,7 +143,9 @@ pub enum RowSource {
     Objects,
     /// One row per plant style, with the single plants and the plants of landscape area mixes
     /// counted together, as `report.plant_list` does. Names: Style, IdCode, Botanical,
-    /// CommonName, Category, Size, Container, Root, Plants, InAreas, Count, Price, Cost, Area.
+    /// CommonName, Category, Size, Container, Root, Plants, InAreas, Count, Price, Cost, Area, Image
+    /// (the picture of the style). On objects, the name `Image` (or `Picture`) gives the picture of the
+    /// plant style of a plant.
     PlantList,
 }
 

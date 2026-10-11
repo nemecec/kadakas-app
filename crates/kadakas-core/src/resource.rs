@@ -36,6 +36,8 @@ pub enum ResourceBody {
     Annot(Box<crate::annot::style::AnnotResource>),
     /// A material or a render style (see `crate::present`).
     Render(Box<crate::present::RenderResource>),
+    /// A picture file with its thumbnail (see `crate::picture`). Plant styles refer to it.
+    Image(Box<crate::picture::ImageResource>),
     Unknown(serde_json::Value),
 }
 
@@ -64,6 +66,7 @@ impl Serialize for ResourceBody {
             ResourceBody::IrrigationCatalog(v) => v.serialize(s),
             ResourceBody::Annot(a) => a.serialize(s),
             ResourceBody::Render(r) => r.serialize(s),
+            ResourceBody::Image(i) => tagged(i.as_ref(), "image", s),
             ResourceBody::Unknown(v) => v.serialize(s),
         }
     }
@@ -103,6 +106,14 @@ impl<'de> Deserialize<'de> for ResourceBody {
                 .map(|m| ResourceBody::DataMap(Box::new(m)))
                 .map_err(serde::de::Error::custom),
             Some("worksheet") => Ok(ResourceBody::Worksheet(v)),
+            // A picture this version cannot read is kept as it is and saved again.
+            Some("image") => {
+                // Read from the value itself: a copy of a big picture text would cost memory.
+                let read = <crate::picture::ImageResource as Deserialize>::deserialize(&v);
+                Ok(read.map_or(ResourceBody::Unknown(v), |i| {
+                    ResourceBody::Image(Box::new(i))
+                }))
+            }
             Some("irrigation_catalog") => Ok(ResourceBody::IrrigationCatalog(v)),
             Some("hardscape_style") => serde_json::from_value::<HardscapeStyle>(v)
                 .map(|s| ResourceBody::HardscapeStyle(Box::new(s)))
@@ -156,7 +167,18 @@ impl ResourceBody {
             ResourceBody::IrrigationCatalog(_) => "irrigation_catalog",
             ResourceBody::Annot(a) => a.type_name(),
             ResourceBody::Render(r) => r.type_name(),
+            ResourceBody::Image(_) => "image",
             ResourceBody::Unknown(_) => "unknown",
+        }
+    }
+
+    /// Reads the file of a picture and checks it against its fields (see
+    /// `ImageResource::verify_data`). Other content passes. It costs time in proportion to the size
+    /// of the picture, so it runs where the data first arrives: a command, a file load.
+    pub fn verify(&self) -> Result<(), String> {
+        match self {
+            ResourceBody::Image(i) => i.verify_data(),
+            _ => Ok(()),
         }
     }
 
@@ -179,6 +201,7 @@ impl ResourceBody {
             ResourceBody::IrrigationCatalog(_) => Ok(()),
             ResourceBody::Annot(a) => a.validate(),
             ResourceBody::Render(r) => r.validate(),
+            ResourceBody::Image(i) => i.validate(),
             ResourceBody::Unknown(_) => Ok(()),
         }
     }
@@ -225,6 +248,33 @@ impl Resources {
     pub fn remove(&mut self, id: ResourceId) -> Option<Resource> {
         let i = self.0.iter().position(|r| r.id == id)?;
         Some(self.0.remove(i))
+    }
+
+    /// Reads the file of every picture and checks it (see [`ResourceBody::verify`]). A document
+    /// that is loaded from a file or from outside runs it once.
+    pub fn verify_pictures(&self) -> Result<(), String> {
+        for r in &self.0 {
+            r.body
+                .verify()
+                .map_err(|e| format!("resource {} ('{}'): {e}", r.id, r.name))?;
+        }
+        Ok(())
+    }
+
+    /// The picture with this ID.
+    pub fn image(&self, id: ResourceId) -> Option<&crate::picture::ImageResource> {
+        match &self.get(id)?.body {
+            ResourceBody::Image(i) => Some(i.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The picture resource with this file hash.
+    pub fn find_image(&self, sha256: &str) -> Option<ResourceId> {
+        self.0.iter().find_map(|r| match &r.body {
+            ResourceBody::Image(i) if i.sha256 == sha256 => Some(r.id),
+            _ => None,
+        })
     }
 
     /// The plant style with this ID.
@@ -380,6 +430,51 @@ mod tests {
             ResourceId::from_num(3).to_string(),
             "00000000-0000-0000-0000-000000000003"
         );
+    }
+
+    #[test]
+    fn a_picture_resource_round_trips_and_an_unreadable_one_is_kept() {
+        let pic = crate::picture::tests::sample(7);
+        let body = ResourceBody::Image(Box::new(pic.clone()));
+        assert_eq!(body.type_name(), "image");
+        body.validate().unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["type"], "image");
+        assert_eq!(serde_json::from_value::<ResourceBody>(json).unwrap(), body);
+        // A picture from a newer app (a format this version does not know) stays as it is.
+        let newer = serde_json::json!({"type": "image", "format": "webp", "data": "x"});
+        let read: ResourceBody = serde_json::from_value(newer.clone()).unwrap();
+        assert_eq!(read, ResourceBody::Unknown(newer));
+        let mut bad = pic;
+        bad.sha256 = "0".repeat(64);
+        let bad = ResourceBody::Image(Box::new(bad));
+        assert!(bad.validate().is_ok(), "the hash is checked with the data");
+        assert!(bad.verify().is_err());
+        assert!(
+            ResourceBody::plant_style(PlantStyle::default())
+                .verify()
+                .is_ok()
+        );
+        let mut docres = Resources::default();
+        docres.push(Resource {
+            id: ResourceId::from_num(2),
+            name: "Bad".into(),
+            body: bad,
+        });
+        assert!(docres.verify_pictures().unwrap_err().contains("Bad"));
+        let mut r = Resources::default();
+        r.push(Resource {
+            id: ResourceId::from_num(1),
+            name: "Picture".into(),
+            body,
+        });
+        assert!(r.image(ResourceId::from_num(1)).is_some());
+        assert!(r.image(ResourceId::from_num(2)).is_none());
+        assert_eq!(
+            r.find_image(&crate::picture::tests::sample(7).sha256),
+            Some(ResourceId::from_num(1))
+        );
+        assert_eq!(r.find_image("nope"), None);
     }
 
     #[test]

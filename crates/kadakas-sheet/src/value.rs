@@ -46,6 +46,10 @@ pub enum Value {
     Text(String),
     Bool(bool),
     Error(ErrorKind),
+    /// A picture: the ID of an `image` resource of the document. It shows as a picture in
+    /// outputs that carry images (the app and PDF, SVG and PNG sheets). As text it is empty, so
+    /// CSV and XLSX exports skip it.
+    Image(kadakas_core::resource::ResourceId),
 }
 
 /// A number as text, without float noise: up to 10 decimals, no trailing zeros.
@@ -103,6 +107,15 @@ impl Value {
                 .filter(|n| n.is_finite())
                 .ok_or(ErrorKind::Value),
             Value::Error(e) => Err(*e),
+            Value::Image(_) => Err(ErrorKind::Value),
+        }
+    }
+
+    /// The picture of the value, if it is one.
+    pub fn image(&self) -> Option<kadakas_core::resource::ResourceId> {
+        match self {
+            Value::Image(id) => Some(*id),
+            _ => None,
         }
     }
 
@@ -114,7 +127,7 @@ impl Value {
             Value::Number(n) => Ok(*n != 0.0),
             Value::Text(s) if s.eq_ignore_ascii_case("true") => Ok(true),
             Value::Text(s) if s.eq_ignore_ascii_case("false") => Ok(false),
-            Value::Text(_) => Err(ErrorKind::Value),
+            Value::Text(_) | Value::Image(_) => Err(ErrorKind::Value),
             Value::Error(e) => Err(*e),
         }
     }
@@ -122,7 +135,7 @@ impl Value {
     /// The text of the value, as `&` and CONCAT use it.
     pub fn to_text(&self) -> String {
         match self {
-            Value::Empty => String::new(),
+            Value::Empty | Value::Image(_) => String::new(),
             Value::Number(n) => format_number(*n),
             Value::Text(s) => s.clone(),
             Value::Bool(true) => "TRUE".into(),
@@ -138,6 +151,7 @@ impl Value {
             Value::Text(_) => 2,
             Value::Bool(_) => 3,
             Value::Error(_) => 4,
+            Value::Image(_) => 5,
         }
     }
 
@@ -260,6 +274,16 @@ mod tests {
             Greater
         );
         assert_eq!(Value::Empty.compare(&Value::Empty), Equal);
+        let img = Value::Image(kadakas_core::resource::ResourceId::from_num(3));
+        assert_eq!(img.compare(&t("a")), Greater);
+        assert_eq!(
+            img.image().map(|i| i.0),
+            Some(kadakas_core::uid::Uid::from_num(3))
+        );
+        assert_eq!(t("a").image(), None);
+        assert_eq!(img.to_text(), "");
+        assert_eq!(img.to_number(), Err(ErrorKind::Value));
+        assert_eq!(img.to_bool(), Err(ErrorKind::Value));
         // Negative zero equals zero.
         assert_eq!(Value::Number(-0.0).compare(&Value::Number(0.0)), Equal);
         assert_eq!(Value::Number(-0.0).compare(&Value::Empty), Equal);

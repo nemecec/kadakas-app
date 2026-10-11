@@ -26,6 +26,7 @@ pub mod mesh;
 pub mod mesh3d;
 pub mod model;
 pub mod pattern;
+pub mod picture;
 pub mod plants;
 pub mod present;
 pub mod props;

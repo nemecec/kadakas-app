@@ -84,7 +84,7 @@ We implement these from the public descriptions. No code or data is copied unles
 | Esri Shapefile technical description, GeoJSON (RFC 7946) | `kadakas-io`: shapefile and GeoJSON import and export |
 | Last-writer-wins register and a central sequencer that orders an operation log (common techniques of replicated data, for example Shapiro et al., "A comprehensive study of Convergent and Commutative Replicated Data Types", 2011). UUID version 7 (RFC 9562) | `kadakas-collab` and `docs/collaboration.md`: merge rules and IDs of the collaboration protocol. No dependency or code is added |
 | Fractional indexing for ordered lists, in the form of the `fractional-indexing` library of Rocicorp (CC0 / public domain; the technique is known from the editor of Figma and the write-up of Evan Wallace). We wrote our own code and use no code of the library | `kadakas-collab`: `order.rs` (keys of the stacking order) |
-| SHA-256 (FIPS 180-4, NIST) through the `sha2` crate 0.10.9 (RustCrypto, MIT OR Apache-2.0), the same version that `kadakas-update` uses | `kadakas-collab`: `blob.rs` (hash of pictures). It is in `THIRD_PARTY_NOTICES.txt` already |
+| SHA-256 (FIPS 180-4, NIST) through the `sha2` crate 0.10.9 (RustCrypto, MIT OR Apache-2.0), the same version that `kadakas-update` uses | `kadakas-collab`: `blob.rs` (hash of pictures), and `kadakas-core`: `picture.rs` (hash of plant pictures, PLT-16; no new crate). It is in `THIRD_PARTY_NOTICES.txt` already |
 | Vectorworks 2026 public help pages and shortcut list (app-help.vectorworks.net) | Workflow, terms and default keys follow them. We use public information only and copy no text, icon or graphic. See `docs/keyboard-shortcuts.md`. |
 
 ## Tools that we use but do not ship

@@ -234,6 +234,10 @@ pub struct ImportedStyle {
     pub style: PlantStyle,
     /// The fields (and `custom:key` entries) that the row gave a value for.
     pub given: Vec<String>,
+    /// The picture file named in the `image` column, as written. The path is relative to the
+    /// folder that the host gives (`pictures_dir` in the API). The catalog only reads the name; the
+    /// host reads the file.
+    pub picture: Option<String>,
 }
 
 impl ImportedStyle {
@@ -336,6 +340,7 @@ fn read_row(
     let mut name = String::new();
     let mut warns = Vec::new();
     let mut given: Vec<String> = Vec::new();
+    let mut picture = None;
     for (i, col) in cols.iter().enumerate() {
         let cell = row.get(i).map(|c| c.trim()).unwrap_or("");
         match col {
@@ -399,8 +404,9 @@ fn read_row(
                         )),
                     },
                     "hydrozone" => s.irrigation.hydrozone = cell.to_string(),
-                    // The picture is a resource of the document. The file only names it.
-                    "image" => {}
+                    // The picture is a resource of the document. The cell names a file that the
+                    // host reads (relative to the CSV file).
+                    "image" => picture = Some(cell.to_string()),
                     "hours_per_year" => {
                         if let Ok(Some(v)) = num(&mut warns) {
                             s.maintenance.hours_per_year = v;
@@ -424,7 +430,7 @@ fn read_row(
                     _ => unreachable!("FIELDS lists every field"),
                 }
                 // A value that gave a warning does not count as given.
-                if warns.len() == warned {
+                if warns.len() == warned && *f != "image" {
                     given.push(f.to_string());
                 }
             }
@@ -446,6 +452,7 @@ fn read_row(
             name,
             style: s,
             given,
+            picture,
         },
         warns,
     ))
@@ -888,5 +895,25 @@ mod tests {
         for cat in PlantCategory::ALL {
             assert!(r.styles.iter().any(|s| s.style.category == cat), "{cat:?}");
         }
+    }
+
+    #[test]
+    fn the_image_column_names_a_picture_file_and_is_not_a_style_field() {
+        let r = import(
+            "name,image\nMaple,pics/maple.jpg\nOak,\n",
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(r.styles[0].picture.as_deref(), Some("pics/maple.jpg"));
+        assert_eq!(r.styles[1].picture, None);
+        assert!(!r.styles[0].given.iter().any(|g| g == "image"));
+        // A repeated import with "update" must not clear a picture the style has.
+        let base = PlantStyle {
+            image: Some(kadakas_core::resource::ResourceId(
+                kadakas_core::uid::Uid::from_num(5),
+            )),
+            ..PlantStyle::default()
+        };
+        assert_eq!(r.styles[0].apply_to(&base).image, base.image);
     }
 }

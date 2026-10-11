@@ -1122,6 +1122,9 @@ impl Document {
         let mut doc: Document =
             serde_json::from_value(value).map_err(|e| LoadError::Parse(e.to_string()))?;
         doc.validate().map_err(LoadError::Invalid)?;
+        doc.resources
+            .verify_pictures()
+            .map_err(LoadError::Invalid)?;
         Ok(doc)
     }
 
@@ -2122,6 +2125,30 @@ mod tests {
             "empty data and no parent are left out"
         );
         assert_eq!(Document::from_json(&text).unwrap(), doc);
+    }
+
+    #[test]
+    fn loading_a_file_reads_the_pictures_once_and_refuses_a_false_hash() {
+        use crate::resource::{Resource, ResourceBody, ResourceId};
+        let mut doc = Document::default();
+        let good = crate::picture::tests::sample(1);
+        let mut bad = crate::picture::tests::sample(2);
+        bad.sha256 = "0".repeat(64);
+        for (n, p) in [("Good", good), ("Bad", bad)] {
+            let id = ResourceId(doc.alloc_id());
+            doc.resources.push(Resource {
+                id,
+                name: n.into(),
+                body: ResourceBody::Image(Box::new(p)),
+            });
+            let text = serde_json::to_string(&doc).unwrap();
+            let loaded = Document::from_json(&text);
+            if n == "Good" {
+                assert!(loaded.is_ok());
+            } else {
+                assert!(matches!(loaded, Err(LoadError::Invalid(m)) if m.contains("Bad")));
+            }
+        }
     }
 
     #[test]

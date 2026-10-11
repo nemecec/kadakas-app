@@ -235,6 +235,10 @@
       "description": "Hardscape settings to change. Missing fields stay.",
       "type": "object"
     },
+    "ImageResource": {
+      "description": "A picture: {sha256, format (png|jpeg), width, height, data (base64 of the file), thumb (base64 PNG), source?}. Use plant_style.set_picture to make one from a file.",
+      "type": "object"
+    },
     "LandscapePatch": {
       "description": "Landscape area settings to change. Missing fields stay.",
       "type": "object"
@@ -1956,6 +1960,34 @@
       "required": [
         "op",
         "ids"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set or clear the picture of a plant style, as one step. The picture is stored once as an\n`image` resource (a picture with the same hash is reused), and a picture that no style uses\nany more is removed. A new picture resource is returned in `created`.",
+      "properties": {
+        "op": {
+          "const": "set_plant_picture",
+          "type": "string"
+        },
+        "picture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "style": {
+          "$ref": "#/$defs/ResourceId"
+        }
+      },
+      "required": [
+        "op",
+        "style"
       ],
       "type": "object"
     },

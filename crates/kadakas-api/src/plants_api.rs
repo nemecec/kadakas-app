@@ -50,7 +50,7 @@ pub const PLANT_STYLE_DELETE: (&str, &str) = (
 );
 pub const PLANT_STYLE_IMPORT_CSV: (&str, &str) = (
     "plant_style.import_csv",
-    "Create plant styles from CSV text (columns are mapped by header). params: {csv, unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, warnings}.",
+    "Create plant styles from CSV text (columns are mapped by header). params: {csv, pictures_dir? (folder that the picture file names of an image column are relative to; without it pictures are skipped with a warning), unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, pictures, warnings}.",
 );
 pub const PLANT_STYLE_EXPORT_CSV: (&str, &str) = (
     "plant_style.export_csv",
@@ -105,7 +105,7 @@ fn object(p: &Value) -> Result<&Map<String, Value>, RpcError> {
 }
 
 /// A style reference: an ID, or a style name.
-fn style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
+pub(crate) fn style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
     let id = match v {
         Value::String(s) => kadakas_core::uid::Uid::parse(s.trim())
             .map(ResourceId)
@@ -162,6 +162,7 @@ fn style_json(doc: &Document, id: ResourceId) -> Value {
     v["id"] = json!(id);
     v["name"] = json!(r.name);
     v["used_by"] = json!(used);
+    v["picture"] = crate::picture_api::picture_meta(doc, s.image).unwrap_or(Value::Null);
     v
 }
 
@@ -443,18 +444,35 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
         Some("update") => true,
         Some(_) => return Err(bad("'on_duplicate' must be skip or update")),
     };
+    let pictures_dir = match m.get("pictures_dir") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(d)) => Some(d.clone()),
+        Some(_) => return Err(bad("'pictures_dir' must be text")),
+    };
     let result = catalog::import(csv, &opts).map_err(bad)?;
+    let mut warnings = result.warnings.clone();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut files = crate::picture_api::CsvPictures::new(s, pictures_dir.as_deref());
+    #[cfg(target_arch = "wasm32")]
+    let _ = &pictures_dir;
     let doc = s.editor.doc();
+    // The styles come first and take the next IDs in order, so a picture can name the style it
+    // belongs to. The pictures follow. All of it is one batch, so the import is one undo step.
+    let mut ids = doc.id_plan();
     let (mut commands, mut skipped) = (Vec::new(), Vec::new());
-    let (mut created, mut updated) = (0usize, Vec::new());
+    let (mut created, mut updated) = (Vec::new(), Vec::new());
+    let mut wanted: Vec<(ResourceId, String, String)> = Vec::new();
     for imp in result.styles {
-        match doc.resources.find_plant_style(&imp.name) {
+        let file = imp.picture.clone().filter(|f| !f.trim().is_empty());
+        let style = match doc.resources.find_plant_style(&imp.name) {
             None => {
+                let id = ResourceId(ids.take());
                 commands.push(Command::AddResource {
-                    name: imp.name,
+                    name: imp.name.clone(),
                     body: ResourceBody::plant_style(imp.style),
                 });
-                created += 1;
+                created.push(id);
+                id
             }
             Some(id) if update => {
                 let merged = imp.apply_to(doc.resources.plant_style(id).expect("exists"));
@@ -464,16 +482,44 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
                     body: Some(ResourceBody::plant_style(merged)),
                 });
                 updated.push(id);
+                id
             }
-            Some(_) => skipped.push(imp.name),
+            Some(_) => {
+                skipped.push(imp.name);
+                continue;
+            }
+        };
+        if let Some(file) = file {
+            wanted.push((style, imp.name, file));
         }
     }
-    let out = s
-        .editor
+    let mut with_pictures = 0usize;
+    for (style, name, file) in wanted {
+        #[cfg(not(target_arch = "wasm32"))]
+        let got = if pictures_dir.is_none() {
+            Err("give pictures_dir to read picture files".to_string())
+        } else {
+            files.get(s, &file)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let got: Result<kadakas_core::picture::ImageResource, String> =
+            Err(format!("the picture file '{file}' cannot be used"));
+        match got {
+            Ok(pic) => {
+                commands.push(Command::SetPlantPicture {
+                    style,
+                    picture: Some(Box::new(pic)),
+                });
+                with_pictures += 1;
+            }
+            Err(e) => warnings.push(format!("style '{name}': picture skipped, {e}")),
+        }
+    }
+    s.editor
         .execute(&Command::Batch { commands })
         .map_err(RpcError::from)?;
     Ok(
-        json!({ "created": out.created, "created_count": created, "updated": updated, "skipped": skipped, "warnings": result.warnings }),
+        json!({ "created": created, "created_count": created.len(), "updated": updated, "skipped": skipped, "pictures": with_pictures, "warnings": warnings }),
     )
 }
 

@@ -272,6 +272,115 @@ pub fn decode_png(png_base64: &str) -> Result<TextureImage, String> {
 
 /// Decodes the bytes of a PNG file to RGBA.
 pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
+    decode_png_limited(bytes, u64::MAX)
+}
+
+/// How the bytes of a decoded image are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RawLayout {
+    Gray,
+    GrayAlpha,
+    Rgb,
+    Rgba,
+}
+
+impl RawLayout {
+    fn channels(self) -> usize {
+        match self {
+            RawLayout::Gray => 1,
+            RawLayout::GrayAlpha => 2,
+            RawLayout::Rgb => 3,
+            RawLayout::Rgba => 4,
+        }
+    }
+}
+
+/// A decoded image as the decoder made it, 8 bits per channel. Keeping this layout saves a copy of
+/// the pixels: a thumbnail is made from it, and RGBA is made only when a caller needs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawImage {
+    pub width: u32,
+    pub height: u32,
+    pub layout: RawLayout,
+    pub data: Vec<u8>,
+}
+
+impl RawImage {
+    fn pixel(&self, i: usize) -> [u8; 4] {
+        let c = self.layout.channels();
+        let p = &self.data[i * c..i * c + c];
+        match self.layout {
+            RawLayout::Gray => [p[0], p[0], p[0], 255],
+            RawLayout::GrayAlpha => [p[0], p[0], p[0], p[1]],
+            RawLayout::Rgb => [p[0], p[1], p[2], 255],
+            RawLayout::Rgba => [p[0], p[1], p[2], p[3]],
+        }
+    }
+
+    /// The image as RGBA. An image that is RGBA already is moved, not copied.
+    pub fn into_rgba(self) -> TextureImage {
+        let (width, height) = (self.width, self.height);
+        if self.layout == RawLayout::Rgba {
+            return TextureImage {
+                width,
+                height,
+                rgba: self.data,
+            };
+        }
+        let n = width as usize * height as usize;
+        let mut rgba = Vec::with_capacity(n * 4);
+        for i in 0..n {
+            rgba.extend_from_slice(&self.pixel(i));
+        }
+        TextureImage {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    /// Scales the image down by whole factors (box filter) until both sides are at most `max`,
+    /// straight from the decoded layout. The result is RGBA.
+    pub fn downscale(&self, max: u32) -> TextureImage {
+        let k = self.width.max(self.height).div_ceil(max.max(1)).max(1);
+        if k == 1 {
+            return self.clone().into_rgba();
+        }
+        let (w, h) = ((self.width / k).max(1), (self.height / k).max(1));
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = [0u32; 4];
+                let mut n = 0;
+                for dy in 0..k {
+                    for dx in 0..k {
+                        let sx = (x * k + dx).min(self.width - 1);
+                        let sy = (y * k + dy).min(self.height - 1);
+                        let px = self.pixel((sy * self.width + sx) as usize);
+                        for (total, v) in sum.iter_mut().zip(px) {
+                            *total += u32::from(v);
+                        }
+                        n += 1;
+                    }
+                }
+                rgba.extend(sum.iter().map(|s| (s / n) as u8));
+            }
+        }
+        TextureImage {
+            width: w,
+            height: h,
+            rgba,
+        }
+    }
+}
+
+/// Like [`decode_png_bytes`], and refuses an image of more than `max_pixels` before it allocates
+/// the pixels. The header gives the size, so a small hostile file cannot ask for a large buffer.
+pub fn decode_png_limited(bytes: &[u8], max_pixels: u64) -> Result<TextureImage, String> {
+    decode_png_raw(bytes, max_pixels).map(RawImage::into_rgba)
+}
+
+fn decode_png_raw(bytes: &[u8], max_pixels: u64) -> Result<RawImage, String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
@@ -287,47 +396,63 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
             "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
         ));
     }
+    if u64::from(info.width) * u64::from(info.height) > max_pixels {
+        return Err(format!(
+            "an image must not have more than {max_pixels} pixels"
+        ));
+    }
     let mut buf = vec![0; reader.output_buffer_size().ok_or("the PNG is too large")?];
     let frame = reader
         .next_frame(&mut buf)
         .map_err(|e| format!("cannot read the PNG: {e}"))?;
-    let data = &buf[..frame.buffer_size()];
-    let rgba: Vec<u8> = match frame.color_type {
-        png::ColorType::Rgba => data.to_vec(),
-        png::ColorType::Rgb => data
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect(),
-        png::ColorType::Grayscale => data.iter().flat_map(|g| [*g, *g, *g, 255]).collect(),
-        png::ColorType::GrayscaleAlpha => data
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
-            .collect(),
+    buf.truncate(frame.buffer_size());
+    let layout = match frame.color_type {
+        png::ColorType::Rgba => RawLayout::Rgba,
+        png::ColorType::Rgb => RawLayout::Rgb,
+        png::ColorType::Grayscale => RawLayout::Gray,
+        png::ColorType::GrayscaleAlpha => RawLayout::GrayAlpha,
         png::ColorType::Indexed => return Err("indexed PNG was not expanded".into()),
     };
-    Ok(TextureImage {
+    if buf.len() != frame.width as usize * frame.height as usize * layout.channels() {
+        return Err("the PNG has an unsupported layout".into());
+    }
+    Ok(RawImage {
         width: frame.width,
         height: frame.height,
-        rgba,
+        layout,
+        data: buf,
     })
 }
 
 /// Decodes the bytes of a PNG or JPEG file to RGBA. The kind follows from the first bytes.
 pub fn decode_image_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        decode_jpeg_bytes(bytes)
-    } else if bytes.starts_with(b"\x89PNG") {
-        decode_png_bytes(bytes)
-    } else {
-        Err("the file is not a PNG or JPEG image".into())
-    }
+    decode_image_limited(bytes, u64::MAX)
 }
 
-fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
+/// Like [`decode_image_bytes`], with a limit on the pixels (see [`decode_png_limited`]).
+pub fn decode_image_limited(bytes: &[u8], max_pixels: u64) -> Result<TextureImage, String> {
+    decode_raw_limited(bytes, max_pixels).map(RawImage::into_rgba)
+}
+
+/// Decodes a PNG or JPEG file and keeps the layout of the decoder (see [`RawImage`]). A decoder
+/// that panics on a hostile file gives an error where the program unwinds. A web build is compiled
+/// with `panic = abort`, where a panic ends the page: the limits on the size and the pixels are
+/// what protect it there.
+pub fn decode_raw_limited(bytes: &[u8], max_pixels: u64) -> Result<RawImage, String> {
+    let work = || {
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            decode_jpeg_raw(bytes, max_pixels)
+        } else if bytes.starts_with(b"\x89PNG") {
+            decode_png_raw(bytes, max_pixels)
+        } else {
+            Err("the file is not a PNG or JPEG image".into())
+        }
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|_| Err("the image decoder failed on this file".into()))
+}
+
+fn decode_jpeg_raw(bytes: &[u8], max_pixels: u64) -> Result<RawImage, String> {
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
@@ -345,21 +470,22 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<TextureImage, String> {
             "an image side must be 1 to {MAX_IMPORT_SIDE} pixels"
         ));
     }
+    if u64::from(w) * u64::from(h) > max_pixels {
+        return Err(format!(
+            "an image must not have more than {max_pixels} pixels"
+        ));
+    }
     let rgb = decoder
         .decode()
         .map_err(|e| format!("cannot read the JPEG: {e:?}"))?;
     if rgb.len() != (w * h * 3) as usize {
         return Err("the JPEG has an unsupported color layout".into());
     }
-    Ok(TextureImage {
+    Ok(RawImage {
         width: w,
         height: h,
-        rgba: rgb
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect(),
+        layout: RawLayout::Rgb,
+        data: rgb,
     })
 }
 
@@ -730,5 +856,50 @@ mod tests {
             rgba: vec![50; 36],
         };
         assert_eq!(downscale(&odd, 2).width, 1);
+    }
+
+    #[test]
+    fn raw_images_keep_the_decoder_layout_and_scale_down_from_it() {
+        let gray = RawImage {
+            width: 2,
+            height: 1,
+            layout: RawLayout::Gray,
+            data: vec![10, 200],
+        };
+        assert_eq!(
+            gray.clone().into_rgba().rgba,
+            vec![10, 10, 10, 255, 200, 200, 200, 255]
+        );
+        let ga = RawImage {
+            width: 1,
+            height: 1,
+            layout: RawLayout::GrayAlpha,
+            data: vec![9, 100],
+        };
+        assert_eq!(ga.into_rgba().rgba, vec![9, 9, 9, 100]);
+        let rgba = RawImage {
+            width: 1,
+            height: 1,
+            layout: RawLayout::Rgba,
+            data: vec![1, 2, 3, 4],
+        };
+        assert_eq!(rgba.clone().into_rgba().rgba, vec![1, 2, 3, 4]);
+        // The scaled result is the same as the scaling of the RGBA copy.
+        let big = RawImage {
+            width: 6,
+            height: 4,
+            layout: RawLayout::Rgb,
+            data: (0..72).map(|i| (i * 3) as u8).collect(),
+        };
+        assert_eq!(big.downscale(3), downscale(&big.clone().into_rgba(), 3));
+        assert_eq!(big.downscale(100), big.into_rgba());
+    }
+
+    #[test]
+    fn decoded_pngs_keep_their_layout() {
+        let rgba = encode_png(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        let raw = decode_raw_limited(&rgba, u64::MAX).unwrap();
+        assert_eq!((raw.layout, raw.data.len()), (RawLayout::Rgba, 8));
+        assert!(decode_raw_limited(b"nothing", u64::MAX).is_err());
     }
 }
