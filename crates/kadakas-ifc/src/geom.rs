@@ -97,7 +97,7 @@ pub fn solid_mesh(
     // Bottom: the same triangles, turned around.
     let off = points.len() as u32;
     points.extend(top.iter().map(|p| DVec3::new(p.x, p.y, p.z - thickness)));
-    for t in top_idx.chunks_exact(3) {
+    for t in top_idx.as_chunks::<3>().0 {
         idx.extend([off + t[0], off + t[2], off + t[1]]);
     }
     // Walls along the outline, and around the holes (clockwise, so the outside of the solid is on the right).
@@ -136,7 +136,9 @@ pub const STEP: f64 = DRAPE_STEP;
 
 /// Volume enclosed by a closed triangle mesh (positive when the triangles face outward).
 pub fn signed_volume(points: &[DVec3], idx: &[u32]) -> f64 {
-    idx.chunks_exact(3)
+    idx.as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| points[t[0] as usize].dot(points[t[1] as usize].cross(points[t[2] as usize])))
         .sum::<f64>()
         / 6.0

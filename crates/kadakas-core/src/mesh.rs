@@ -235,7 +235,7 @@ impl SceneSink<'_> {
         let pts: Vec<Vec3> = positions.iter().map(|p| self.local(*p)).collect();
         let mut normals = vec![Vec3::ZERO; pts.len()];
         let mut tris = Vec::with_capacity(indices.len() / 3);
-        for t in indices.chunks_exact(3) {
+        for t in indices.as_chunks::<3>().0 {
             let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
             if a >= pts.len() || b >= pts.len() || c >= pts.len() {
                 continue;
@@ -1022,7 +1022,7 @@ impl Builder<'_> {
             mesh.vertex(base + *p, *n, *c);
         }
         let keep = mesh.part;
-        for (k, t) in f.indices.chunks_exact(3).enumerate() {
+        for (k, t) in f.indices.as_chunks::<3>().0.iter().enumerate() {
             // A mesh without parts (a hedge along a path) gets the part of the builder.
             mesh.part = f.tri_part.get(k).copied().unwrap_or(keep);
             mesh.tri(first + t[0], first + t[1], first + t[2], id);

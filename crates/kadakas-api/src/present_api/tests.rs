@@ -860,7 +860,9 @@ fn render_png_uses_materials_styles_the_sun_and_shadows() {
     assert_eq!(r["mode"], "hidden_line");
     let (_, _, px) = png_pixels(&r);
     let white = px
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] == 255 && p[1] == 255)
         .count();
     assert!(white > 200 * 200 * 8 / 10, "{white}");

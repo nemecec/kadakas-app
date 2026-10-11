@@ -308,8 +308,14 @@ fn hidden_line_modes_draw_dark_lines_on_white() {
             ..opts(300, 300)
         },
     );
-    let count =
-        |img: &Image, f: &dyn Fn(&[u8]) -> bool| img.rgba.chunks_exact(4).filter(|p| f(p)).count();
+    let count = |img: &Image, f: &dyn Fn(&[u8]) -> bool| {
+        img.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| f(&p[..]))
+            .count()
+    };
     let white = count(&hidden, &|p| p[0] == 255 && p[1] == 255);
     let dark = count(&hidden, &|p| p[0] < 100);
     assert!(white > 300 * 300 * 8 / 10, "mostly white: {white}");
@@ -337,8 +343,10 @@ fn wireframe_and_empty_scenes_and_supersampling() {
     let img = render_doc(&empty, &cam, &opts(32, 24));
     assert!(
         img.rgba
-            .chunks_exact(4)
-            .all(|p| p == crate::raster::BACKGROUND)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == crate::raster::BACKGROUND)
     );
     // Supersampling gives intermediate values on the edge of the cube.
     let flat = render_doc(&ed, &cam, &opts(100, 100));
@@ -351,7 +359,7 @@ fn wireframe_and_empty_scenes_and_supersampling() {
         },
     );
     let levels = |img: &Image| {
-        let mut s: Vec<u8> = img.rgba.chunks_exact(4).map(|p| p[0]).collect();
+        let mut s: Vec<u8> = img.rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect();
         s.sort_unstable();
         s.dedup();
         s.len()
@@ -374,7 +382,14 @@ fn edges_can_be_switched_off() {
         },
     );
     assert_ne!(with, without);
-    let dark = |img: &Image| img.rgba.chunks_exact(4).filter(|p| p[0] < 60).count();
+    let dark = |img: &Image| {
+        img.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] < 60)
+            .count()
+    };
     assert!(dark(&with) > dark(&without));
 }
 

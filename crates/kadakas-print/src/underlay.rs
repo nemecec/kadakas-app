@@ -18,7 +18,9 @@ pub fn image_prim(u: &Underlay, xf: &Xf) -> Option<ImagePrim> {
     let b = xf.p(u.max);
     let rgb: Vec<u8> = img
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| {
             let alpha = f64::from(p[3]) / 255.0 * u.opacity;
             [0, 1, 2].map(|c| (f64::from(p[c]) * alpha + 255.0 * (1.0 - alpha)).round() as u8)

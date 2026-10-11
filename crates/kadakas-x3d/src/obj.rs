@@ -124,13 +124,13 @@ pub fn write_obj(
             }
             let textured = !prim.uvs.is_empty();
             if prim.lines {
-                for s in prim.indices.chunks_exact(2) {
+                for s in prim.indices.as_chunks::<2>().0 {
                     writeln!(obj, "l {} {}", vbase + s[0] as usize, vbase + s[1] as usize)
                         .map_err(w)?;
                 }
                 stats.lines += prim.indices.len() / 2;
             } else {
-                for t in prim.indices.chunks_exact(3) {
+                for t in prim.indices.as_chunks::<3>().0 {
                     let f = |i: u32| {
                         let v = vbase + i as usize;
                         let n = nbase + i as usize;

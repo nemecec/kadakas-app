@@ -134,7 +134,7 @@ fn geo_keys(keys: &[u16]) -> (Option<u32>, bool) {
     let (mut projected, mut geographic, mut point) = (None, None, false);
     if keys.len() >= 4 {
         let n = usize::from(keys[3]);
-        for k in keys[4..].chunks_exact(4).take(n) {
+        for k in keys[4..].as_chunks::<4>().0.iter().take(n) {
             let (id, location, value) = (k[0], k[1], k[3]);
             if location != 0 {
                 continue;

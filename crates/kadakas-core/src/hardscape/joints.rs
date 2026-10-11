@@ -285,7 +285,9 @@ impl<'a> EdgeIndex<'a> {
             }
         }
         hits.sort_by(f64::total_cmp);
-        hits.chunks_exact(2)
+        hits.as_chunks::<2>()
+            .0
+            .iter()
             .filter(|w| w[1] > from && w[0] < to)
             .map(|w| (w[0].max(from), w[1].min(to)))
             .filter(|(a, b)| b > a)

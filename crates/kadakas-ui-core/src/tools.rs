@@ -808,12 +808,11 @@ impl ToolMachine {
             Input::Move(p) => {
                 match &mut self.state {
                     State::Drag { cur, .. } | State::Box { cur, .. } => *cur = p,
-                    State::Lasso { points, .. } => {
+                    State::Lasso { points, .. }
                         // Skip points that are too close to the last one.
-                        if points.last().is_none_or(|l| l.distance(p) > cx.tol * 0.5) {
+                        if points.last().is_none_or(|l| l.distance(p) > cx.tol * 0.5) => {
                             points.push(p);
                         }
-                    }
                     _ => {}
                 }
                 vec![]

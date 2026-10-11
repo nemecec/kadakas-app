@@ -76,10 +76,7 @@ pub fn chain(segments: &[(DVec2, DVec2)]) -> Vec<Chain> {
         .collect();
     starts.extend((0..at.len()).filter(|v| at[*v].len() == 2));
     for start in starts {
-        loop {
-            let Some(&first) = at[start].iter().find(|e| !used[**e]) else {
-                break;
-            };
+        while let Some(&first) = at[start].iter().find(|e| !used[**e]) {
             let mut pts = vec![snap.points[start]];
             let mut cur = start;
             let mut e = first;

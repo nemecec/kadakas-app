@@ -186,8 +186,10 @@ fn draw_image(pix: &mut Pixmap, i: &ImagePrim, k: f64, h: u32, mask: Option<&Mas
     let mut src = Pixmap::new(i.width, i.height).expect("image size is valid");
     for (d, s) in src
         .data_mut()
-        .chunks_exact_mut(4)
-        .zip(i.rgb.chunks_exact(3))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(i.rgb.as_chunks::<3>().0)
     {
         d.copy_from_slice(&[s[0], s[1], s[2], 255]);
     }

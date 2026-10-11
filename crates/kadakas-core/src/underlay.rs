@@ -141,13 +141,17 @@ impl Underlay {
         match info.color_type {
             png::ColorType::Rgba => data.extend_from_slice(src),
             png::ColorType::Rgb => src
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .for_each(|p| data.extend_from_slice(&[p[0], p[1], p[2], 255])),
             png::ColorType::Grayscale => src
                 .iter()
                 .for_each(|g| data.extend_from_slice(&[*g, *g, *g, 255])),
             png::ColorType::GrayscaleAlpha => src
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .for_each(|p| data.extend_from_slice(&[p[0], p[0], p[0], p[1]])),
             png::ColorType::Indexed => return None,
         }
