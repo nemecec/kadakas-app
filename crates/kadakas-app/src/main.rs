@@ -14,6 +14,7 @@ mod autosave_fs;
 mod autosave_ui;
 mod canvas;
 mod canvas3d;
+mod collab_ui;
 mod data_ui;
 mod databar;
 mod enum_names;
@@ -62,6 +63,11 @@ fn main() -> eframe::Result {
     let env = std::env::var("KADAKAS_AGENT_PORT").ok();
     let port = agent::parse_agent_port(&args, env.as_deref());
     let allow_dirs = agent::parse_allow_dirs(&args);
+    // Collaboration settings (`--collab-url`, `--collab-token`, `--allow-collab-url` and the
+    // variables). Then the token variables leave the environment, so no child process (a Python
+    // script, a converter) can read them.
+    let collab = kadakas_ui_core::collab::CollabArgs::parse(&args, &|k| std::env::var(k).ok());
+    kadakas_sys::process::remove_secrets_from_env();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
@@ -71,7 +77,14 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Kadakas",
         options,
-        Box::new(move |cc| Ok(Box::new(app::KadakasApp::new(cc, port, allow_dirs.clone())))),
+        Box::new(move |cc| {
+            Ok(Box::new(app::KadakasApp::new(
+                cc,
+                port,
+                allow_dirs.clone(),
+                collab.clone(),
+            )))
+        }),
     )
 }
 

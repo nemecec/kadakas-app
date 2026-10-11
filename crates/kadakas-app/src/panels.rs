@@ -62,6 +62,10 @@ pub enum MenuAction {
     PreviousView,
     NextView,
     QuickSearch,
+    /// File > Collaboration > Connect.
+    CollabConnect,
+    /// File > Collaboration > Disconnect.
+    CollabDisconnect,
     /// A tool in a menu of the profile: choosing it selects the tool.
     Tool(Tool),
 }
@@ -76,6 +80,8 @@ pub struct MenuExtras<'a> {
     pub can_back: bool,
     pub can_forward: bool,
     pub has_selection: bool,
+    /// The session has joined (or is joining) a shared document.
+    pub collab_connected: bool,
     /// Requests that `MenuAction` (which is `Copy`) cannot hold. The menu fills this list.
     pub requests: Vec<MenuRequest>,
 }
@@ -150,6 +156,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         | Cmd::IconSize
         | Cmd::WindowPanels
         | Cmd::WindowLayouts
+        | Cmd::Collaboration
         | Cmd::About => return None,
     })
 }
@@ -312,6 +319,35 @@ fn command_item(
             }
         }
         Cmd::WindowLayouts => window_layouts(ui, extras),
+        Cmd::Collaboration => {
+            let connected = extras.collab_connected;
+            ui.menu_button(c.label(), |ui| {
+                let label = tr!("collab-ui-connect");
+                menu_item(ui, keys, &label, !connected, MenuAction::CollabConnect, out);
+                let label = tr!("collab-ui-disconnect");
+                menu_item(
+                    ui,
+                    keys,
+                    &label,
+                    connected,
+                    MenuAction::CollabDisconnect,
+                    out,
+                );
+                ui.separator();
+                if ui
+                    .button(tr!(
+                        "panels-show",
+                        name = crate::layout::Tab::People.title()
+                    ))
+                    .clicked()
+                {
+                    extras
+                        .requests
+                        .push(MenuRequest::ShowTab(crate::layout::Tab::People));
+                    ui.close();
+                }
+            });
+        }
         Cmd::About => {
             if ui.button(c.label()).clicked() {
                 extras.requests.push(MenuRequest::About);
@@ -494,6 +530,8 @@ pub fn menu_key(a: MenuAction) -> Option<Action> {
         | MenuAction::Scripts
         | MenuAction::CreateSiteModel
         | MenuAction::Preferences
+        | MenuAction::CollabConnect
+        | MenuAction::CollabDisconnect
         | MenuAction::UpdateSiteModel => return None,
     })
 }
@@ -1779,6 +1817,7 @@ mod tests {
             can_back: false,
             can_forward: false,
             has_selection: false,
+            collab_connected: false,
             requests: Vec::new(),
         };
         let _ = ctx.run_ui(Default::default(), |ui| {

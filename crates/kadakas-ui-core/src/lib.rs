@@ -10,6 +10,7 @@
 
 pub mod annot_pick;
 pub mod area;
+pub mod collab;
 pub mod databar;
 pub mod effects;
 pub mod grading;

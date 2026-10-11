@@ -57,7 +57,19 @@ pub struct RpcError {
     pub code: i64,
     pub message: String,
     pub kind: &'static str,
+    /// A stable reason for callers in the same process (a UI), for a case where `kind` is too
+    /// coarse. It is not part of the JSON-RPC answer. See the `REASON_*` constants.
+    pub reason: Option<&'static str>,
 }
+
+/// `collab.connect`: the open document has changes that nobody saved, and the shared document
+/// would replace it. The caller may ask the person, then pass `replace: true`.
+pub const REASON_UNSAVED_CHANGES: &str = "unsaved_changes";
+/// `collab.connect`: edits still wait for another document or another user. The caller may ask
+/// the person, then pass `discard: true`.
+pub const REASON_EDITS_WAIT: &str = "edits_wait";
+/// `collab.connect`: the session is connected already.
+pub const REASON_ALREADY_CONNECTED: &str = "already_connected";
 
 impl RpcError {
     pub fn new(code: i64, kind: &'static str, e: impl std::fmt::Display) -> Self {
@@ -65,7 +77,13 @@ impl RpcError {
             code,
             message: e.to_string(),
             kind,
+            reason: None,
         }
+    }
+    /// Adds a stable reason (see the `REASON_*` constants).
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
+        self
     }
     pub fn invalid_params(e: impl std::fmt::Display) -> Self {
         Self::new(-32602, "invalid_params", e)

@@ -179,6 +179,8 @@
         "-",
         "file.scripts",
         "-",
+        "file.collaboration",
+        "-",
         "file.preferences"
       ]
     },

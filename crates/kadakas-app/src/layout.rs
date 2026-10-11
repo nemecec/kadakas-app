@@ -23,10 +23,12 @@ pub enum Tab {
     Resources,
     Schedule,
     Snapping,
+    /// The other people in a shared document (PLAT-09).
+    People,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 8] = [
         Tab::Drawing,
         Tab::Tools,
         Tab::ObjectInfo,
@@ -34,6 +36,7 @@ impl Tab {
         Tab::Resources,
         Tab::Schedule,
         Tab::Snapping,
+        Tab::People,
     ];
 
     pub fn title(self) -> String {
@@ -45,6 +48,7 @@ impl Tab {
             Tab::Resources => tr!("layout-resources"),
             Tab::Schedule => tr!("layout-plant-schedule"),
             Tab::Snapping => tr!("layout-snapping"),
+            Tab::People => tr!("layout-people"),
         }
     }
 
@@ -67,6 +71,7 @@ pub fn default_state() -> DockState<Tab> {
             Tab::Navigation,
             Tab::Resources,
             Tab::Schedule,
+            Tab::People,
         ],
     );
     main.split_left(center, 0.82, vec![Tab::Tools, Tab::Snapping]);

@@ -39,6 +39,8 @@ commands! {
     MapSources => "file.map_sources", msg!("panels-map-sources"), true;
     ChangeCrs => "file.change_crs", msg!("panels-change-crs"), true;
     Scripts => "file.scripts", msg!("panels-scripts"), true;
+    // A block: the submenu File > Collaboration (Connect, Disconnect, People).
+    Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
     Preferences => "file.preferences", msg!("panels-preferences"), false;
     Undo => "edit.undo", msg!("panels-undo"), false;
     Redo => "edit.redo", msg!("panels-redo"), false;
@@ -278,6 +280,8 @@ pub fn default_menus() -> Vec<Menu> {
                 "file.change_crs",
                 "-",
                 "file.scripts",
+                "-",
+                "file.collaboration",
                 "-",
                 "file.preferences",
             ],

@@ -12,6 +12,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
 kadakas-api = { version = "0.1.0", path = "../kadakas-api" }
 kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
+kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
 kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
@@ -42,8 +43,10 @@ sys-locale = "0.3.2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wgpu = { version = "29", default-features = false, features = ["webgpu", "webgl"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto", "Navigator"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Storage", "Crypto", "Navigator", "Location", "History"] }
 js-sys = "0.3"
 
 [dev-dependencies]
 pollster = "1.0.1"
+kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
+kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }

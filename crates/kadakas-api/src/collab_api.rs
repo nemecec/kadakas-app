@@ -66,7 +66,7 @@ use crate::{RpcError, Session};
 
 pub const STATUS: (&str, &str) = (
     "collab.status",
-    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
+    "State of the collaboration client. Returns {state (none | offline | connecting | syncing | online | failed), endpoint (text without a token, or null if there is none), reconnecting (true: the session connects again by itself after a loss), last_error (why the last try to connect failed, or null), user, client (this program's writer ID), name, log_id, confirmed_seq, head_seq, pending (edits not yet confirmed by the server), waiting_for_snapshot (true: the first snapshot has not arrived, so the document will be replaced and an edit now would be lost), peers (number of other clients), can_undo, can_redo, quarantined (things of the shared state that are not in the document, with the reason), repairs}.",
 );
 pub const CONNECT: (&str, &str) = (
     "collab.connect",
@@ -163,8 +163,8 @@ impl Session {
     }
 
     /// The document was saved to a file or loaded from one: `collab.connect` does not call its
-    /// content unsaved any more.
-    pub(crate) fn collab_mark_saved(&mut self) {
+    /// content unsaved any more. A host that saves without the API (the window) calls this.
+    pub fn collab_mark_saved(&mut self) {
         self.collab.clean_rev = Some(self.editor.revision());
     }
 
@@ -311,6 +311,7 @@ fn status(s: &Session) -> Value {
                 "confirmed_seq": c.confirmed_seq(),
                 "head_seq": c.head_seq(),
                 "pending": c.pending().len(),
+                "waiting_for_snapshot": awaiting_snapshot(s),
                 "peers": c.peers().len(),
                 "can_undo": c.can_undo(),
                 "can_redo": c.can_redo(),
@@ -428,9 +429,10 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         ));
     }
     if is_connected(s) {
-        return Err(RpcError::conflict(
-            "already connected: call collab.disconnect first",
-        ));
+        return Err(
+            RpcError::conflict("already connected: call collab.disconnect first")
+                .with_reason(crate::errors::REASON_ALREADY_CONNECTED),
+        );
     }
     // The endpoint and the token for it (the default token only for the default URL).
     let mut made: Option<MadeEndpoint> = None;
@@ -509,7 +511,8 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
                 "{} edits wait {why} (user {}): connect to that document as that user again, or pass discard: true to drop them",
                 l.client.pending().len(),
                 l.client.user()
-            )));
+            ))
+            .with_reason(crate::errors::REASON_EDITS_WAIT));
         }
         // The shared document replaces the open one. A document with changes that nobody
         // saved, and that never met a shared state, would be lost.
@@ -522,7 +525,8 @@ fn connect(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError> {
         if !has_shared_state && unsaved && !flag("replace") {
             return Err(RpcError::conflict(
                 "the open document has changes that are not saved, and the shared document replaces it: save it with file.save, or pass replace: true",
-            ));
+            )
+            .with_reason(crate::errors::REASON_UNSAVED_CHANGES));
         }
         let cfg = ClientConfig {
             user,

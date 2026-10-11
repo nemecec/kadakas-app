@@ -2669,6 +2669,8 @@ dependencies = [
  "js-sys",
  "kadakas-annot",
  "kadakas-api",
+ "kadakas-collab",
+ "kadakas-collab-ws",
  "kadakas-core",
  "kadakas-gis",
  "kadakas-irrigation",

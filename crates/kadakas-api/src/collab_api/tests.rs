@@ -278,10 +278,9 @@ fn offline_work_goes_out_after_reconnect() {
     let st = call(&mut a, "collab.connect", json!({"now_ms": 3_100}));
     assert_eq!(st["state"], "online");
     assert_eq!(st["pending"], 0);
-    assert_eq!(
-        fail(&mut a, "collab.connect", json!({"now_ms": 3_200})).kind,
-        "conflict"
-    );
+    let e = fail(&mut a, "collab.connect", json!({"now_ms": 3_200}));
+    assert_eq!(e.kind, "conflict");
+    assert_eq!(e.reason, Some(crate::REASON_ALREADY_CONNECTED));
     call(&mut b, "collab.sync", json!({"now_ms": 3_300}));
     assert!(has(&b, &id));
     // Another user ID starts a new client.
@@ -639,6 +638,7 @@ fn waiting_edits_of_one_user_are_not_dropped_for_another() {
         json!({"user": "00000000-0000-7000-8000-000000000042", "now_ms": 3_000}),
     );
     assert_eq!(e.kind, "conflict");
+    assert_eq!(e.reason, Some(crate::REASON_EDITS_WAIT));
     assert!(e.message.contains("discard"));
     let st = call(
         &mut a,
@@ -1280,4 +1280,24 @@ fn the_stacking_order_is_shared() {
     call(&mut b, "collab.sync", json!({"now_ms": 3_100}));
     assert_eq!(b.editor.doc().layers[0].id.0.to_string(), second);
     assert!(same(&a, &b));
+}
+
+#[test]
+fn a_join_with_unsaved_work_says_why_and_the_status_tells_when_to_wait() {
+    let mut a = Session::default();
+    let hub = Hub::new(Sequencer::new(docsync::replica_of(&Document::default())));
+    a.set_collab_endpoint(Box::new(hub.endpoint()));
+    add_rect(&mut a, 0);
+    let e = fail(&mut a, "collab.connect", json!({"now_ms": 1_000}));
+    assert_eq!(e.kind, "conflict");
+    assert_eq!(e.reason, Some(crate::REASON_UNSAVED_CHANGES));
+    // No other error has a reason.
+    assert_eq!(fail(&mut a, "collab.nope", json!({})).reason, None);
+    let st = call(
+        &mut a,
+        "collab.connect",
+        json!({"replace": true, "now_ms": 1_000}),
+    );
+    assert_eq!(st["state"], "online");
+    assert_eq!(st["waiting_for_snapshot"], false);
 }

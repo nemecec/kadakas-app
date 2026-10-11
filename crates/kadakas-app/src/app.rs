@@ -118,12 +118,32 @@ pub struct KadakasApp {
     autosave: crate::autosave_ui::AutosaveUi,
     about: crate::about::About,
     prefs_ui: crate::prefs_ui::PrefsDialog,
+    /// Collaboration (PLAT-09): the Connect dialog, the status of the link, the other users.
+    collab: crate::collab_ui::CollabUi,
+    /// The pointer on the canvas in model units (mm), for presence. `None` outside the canvas.
+    own_cursor: Option<[f64; 2]>,
     /// Files that the browser has picked, waiting for the next frame.
     #[cfg(target_arch = "wasm32")]
     web_inbox: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>,
     /// Set when a download of the document has finished. Then the browser copy is not needed.
     #[cfg(target_arch = "wasm32")]
     web_saved: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+/// A name to show to the others: the user name of the operating system. Empty if unknown (the
+/// browser build, or a program without a login name).
+fn default_user_name() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ["USER", "USERNAME"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+            .unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
 }
 
 /// 64 random bits from the browser (`crypto.getRandomValues`, or `Math.random` without it).
@@ -156,8 +176,10 @@ impl KadakasApp {
         cc: &eframe::CreationContext<'_>,
         agent_port: Option<u16>,
         allow_dirs: Vec<std::path::PathBuf>,
+        collab: kadakas_ui_core::collab::CollabArgs,
     ) -> Self {
         let mut app = Self::blank();
+        app.init_collab(collab);
         // Agents may only use these folders and the folder of the open document. Dialogs of the user are not limited.
         let args: Vec<String> = std::env::args().collect();
         let requested_profile =
@@ -257,6 +279,24 @@ impl KadakasApp {
         app
     }
 
+    /// Gives the session the collaboration settings of the start (`--collab-url`,
+    /// `--collab-token`, `--allow-collab-url` and the variables). The token moves into the
+    /// session and stays in memory; the dialog never sees it.
+    fn init_collab(&mut self, args: kadakas_ui_core::collab::CollabArgs) {
+        let kadakas_ui_core::collab::CollabArgs { url, token, allow } = args;
+        let defaults = kadakas_ui_core::collab::Defaults {
+            url: url.clone(),
+            has_token: token.is_some(),
+            user: token
+                .as_deref()
+                .and_then(kadakas_ui_core::collab::token_user),
+            name: default_user_name(),
+        };
+        self.session.set_collab_allowed_urls(allow);
+        self.session.set_collab_defaults(url, token);
+        self.collab = crate::collab_ui::CollabUi::new(defaults);
+    }
+
     /// The start of the web build: no agent server, no files, no Python.
     #[cfg(target_arch = "wasm32")]
     pub fn new_web(cc: &eframe::CreationContext<'_>) -> Self {
@@ -273,13 +313,58 @@ impl KadakasApp {
         app.language = crate::locale::apply(prefs.language, &prefs.units);
         app.status = tr!("app-web-build-files-open-and-save-through");
         app.autosave.begin();
+        // `#collab=<ws url>&doc=<id>&token=<t>`: join at once. The token leaves the address bar.
+        if let Some(fragment) = crate::collab_ui::web::take_fragment() {
+            app.join_from_fragment(fragment);
+        }
+        crate::collab_ui::web::install_test_hook();
         app
     }
 
+    /// Web: joins the document of the address fragment. The address in the fragment counts as
+    /// the default server (the person opened the link). A fresh page has nothing to lose.
+    #[cfg(target_arch = "wasm32")]
+    fn join_from_fragment(&mut self, fragment: kadakas_ui_core::collab::Fragment) {
+        use kadakas_ui_core::collab::{ConnectForm, Defaults};
+        let defaults = Defaults {
+            url: Some(fragment.url.clone()),
+            has_token: false,
+            user: None,
+            name: fragment.name.clone().unwrap_or_default(),
+        };
+        self.session
+            .set_collab_defaults(Some(fragment.url.clone()), None);
+        self.collab = crate::collab_ui::CollabUi::new(defaults.clone());
+        let mut form = ConnectForm::from_fragment(defaults, &fragment);
+        match form.request() {
+            Ok(req) => {
+                self.status = tr!("collab-ui-web-joining", server = fragment.url.clone());
+                if let Some(e) = self.collab.connect(
+                    &mut self.session,
+                    &req,
+                    false,
+                    false,
+                    crate::collab_ui::now_ms(),
+                ) {
+                    self.status = e;
+                }
+            }
+            Err(e) => self.status = e.text(),
+        }
+        form.clear_secret();
+        self.collab.set_form(form);
+    }
+
     fn blank() -> Self {
+        let mut session = Session::default();
+        // The WebSocket for `collab.connect`; the same code runs in the browser and on the
+        // desktop.
+        session.set_collab_endpoint_factory(Box::new(|url, token| {
+            kadakas_collab_ws::endpoint_for(url, token).map_err(|e| e.to_string())
+        }));
         KadakasApp {
             profiles: Default::default(),
-            session: Session::default(),
+            session,
             view: View::default(),
             needs_fit: true,
             view3d: View3d::default(),
@@ -333,6 +418,8 @@ impl KadakasApp {
             autosave: crate::autosave_ui::AutosaveUi::inert(),
             about: crate::about::About::default(),
             prefs_ui: crate::prefs_ui::PrefsDialog::default(),
+            collab: crate::collab_ui::CollabUi::new(Default::default()),
+            own_cursor: None,
             #[cfg(target_arch = "wasm32")]
             web_inbox: Default::default(),
             #[cfg(target_arch = "wasm32")]
@@ -340,12 +427,63 @@ impl KadakasApp {
         }
     }
 
+    /// What this user shows to the others (presence): the pointer, the selection and the view.
+    fn own_presence(&self) -> crate::collab_ui::Own {
+        let viewport = self.canvas_rect.filter(|_| self.plan()).map(|r| {
+            let c = self.view.to_model(r.center());
+            (
+                [c.x, c.y],
+                1.0 / self.view.zoom,
+                [r.width() as f64, r.height() as f64],
+            )
+        });
+        crate::collab_ui::Own {
+            cursor: self.own_cursor.filter(|_| self.plan()),
+            selection: self
+                .session
+                .selection
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            viewport,
+        }
+    }
+
+    /// Collaboration, once a frame: one round with the API now and then, then the dialogs.
+    fn collab_frame(&mut self, ctx: &egui::Context) {
+        let now = crate::collab_ui::now_ms();
+        let own = self.own_presence();
+        let out = self.collab.tick(&mut self.session, now, &own);
+        if let Some(s) = out.status {
+            self.status = s;
+        }
+        if out.document_changed {
+            crate::annot_ui::set_revision(self.session.editor.revision());
+        }
+        if self.collab.view().is_active() || out.document_changed {
+            ctx.request_repaint_after(std::time::Duration::from_millis(crate::collab_ui::TICK_MS));
+        }
+        if let Some(s) = self.collab.show(ctx, &mut self.session, now) {
+            self.status = s;
+        }
+    }
+
     fn exec(&mut self, cmd: &Command) {
+        // The first snapshot of a shared document replaces the open one: an edit now would be lost.
+        if self.collab.waiting_for_snapshot() {
+            self.status = tr!("collab-ui-joining");
+            return;
+        }
         panels::run_command(&mut self.session, cmd, &mut self.status);
         crate::annot_ui::set_revision(self.session.editor.revision());
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
+        // A new or opened document would be pushed into the shared one as thousands of edits.
+        if self.collab.is_connected() {
+            self.status = tr!("collab-ui-blocked-replace");
+            return;
+        }
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
         self.session.replace_document(doc);
@@ -384,11 +522,27 @@ impl KadakasApp {
     }
 
     fn undo(&mut self) {
-        let _ = self.session.handle("undo", Value::Null);
+        self.undo_or_redo(false);
     }
 
     fn redo(&mut self) {
-        let _ = self.session.handle("redo", Value::Null);
+        self.undo_or_redo(true);
+    }
+
+    /// Connected: the per-user undo (it never takes back the work of another person). Offline:
+    /// the normal undo of the document.
+    fn undo_or_redo(&mut self, redo: bool) {
+        use kadakas_ui_core::collab::UndoRoute;
+        if self.collab.route(&mut self.session) == UndoRoute::Collab {
+            let now = crate::collab_ui::now_ms();
+            if let Some(text) = self.collab.undo(&mut self.session, redo, now) {
+                self.status = text;
+            }
+            return;
+        }
+        let _ = self
+            .session
+            .handle(if redo { "redo" } else { "undo" }, Value::Null);
     }
 
     fn delete_selection(&mut self) {
@@ -587,6 +741,11 @@ impl KadakasApp {
                     self.run_action(ctx, a);
                 }
             }
+            MenuAction::CollabConnect => self.collab.open_dialog(),
+            MenuAction::CollabDisconnect => {
+                let now = crate::collab_ui::now_ms();
+                self.status = self.collab.disconnect(&mut self.session, now);
+            }
             MenuAction::Open => self.open_file(ctx),
             MenuAction::Save => self.save(false, ctx),
             MenuAction::SaveAs => self.save(true, ctx),
@@ -704,6 +863,7 @@ impl KadakasApp {
     fn take_web_files(&mut self) {
         // The browser copy goes only after a download really worked.
         if self.web_saved.take() {
+            self.session.collab_mark_saved();
             self.autosave.saved();
         }
         let files: Vec<_> = self.web_inbox.borrow_mut().drain(..).collect();
@@ -757,6 +917,7 @@ impl KadakasApp {
         match file_io::write_document(&path, self.session.editor.doc()) {
             Ok(()) => {
                 self.status = tr!("app-saved", name = path.display());
+                self.session.collab_mark_saved();
                 self.path = Some(path);
                 self.set_title(ctx);
             }
@@ -1246,6 +1407,11 @@ impl KadakasApp {
                 .request_repaint_after(std::time::Duration::from_millis(450));
         }
 
+        // The pointer for presence: the raw position, not the snapped one.
+        self.own_cursor = latest.filter(|p| rect.contains(*p)).map(|p| {
+            let m = self.view.to_model(p);
+            [m.x, m.y]
+        });
         // Cursor and snapping.
         if let Some(p) = latest.filter(|p| rect.contains(*p) || self.machine.is_busy()) {
             let raw = self.view.to_model(p);
@@ -1332,6 +1498,17 @@ impl KadakasApp {
             sheet: page.as_deref().map(|p| (&self.nav.sheets, p)),
         };
         canvas::paint(&ui.painter_at(rect), rect, &self.view, &frame);
+        // The cursors and selections of the other users. Presence is never in the document.
+        if !self.collab.peers().is_empty() {
+            crate::collab_ui::paint_peers(
+                &ui.painter_at(rect),
+                rect,
+                &self.view,
+                self.session.editor.doc(),
+                self.collab.peers(),
+                crate::collab_ui::now_ms(),
+            );
+        }
     }
 }
 
@@ -1581,6 +1758,16 @@ impl KadakasApp {
                 ),
                 keys: String::new(),
                 command: QuickCommand::SnapToggle(name),
+            });
+        }
+        for (label, m) in [
+            (tr!("collab-ui-connect"), MenuAction::CollabConnect),
+            (tr!("collab-ui-disconnect"), MenuAction::CollabDisconnect),
+        ] {
+            out.push(QuickItem {
+                label,
+                keys: String::new(),
+                command: QuickCommand::Menu(m),
             });
         }
         for tab in Tab::ALL.iter().copied().filter(|t| t.closeable()) {
@@ -1867,6 +2054,10 @@ impl KadakasApp {
                     plant_ui::plant_schedule(ui, &mut self.session, &mut self.status);
                 });
             }
+            Tab::People => {
+                let now = crate::collab_ui::now_ms();
+                egui::ScrollArea::vertical().show(ui, |ui| self.collab.people_ui(ui, now));
+            }
             Tab::Snapping => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     crate::snap_ui::palette(
@@ -1981,6 +2172,9 @@ impl eframe::App for KadakasApp {
             self.session.editor.doc(),
         );
         self.about.show(&ctx);
+        self.collab_frame(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        crate::collab_ui::web::test_hook(&mut self.session, &self.collab);
         if self.autosave.take_prefs_request() {
             self.prefs_ui.open();
         }
@@ -2006,15 +2200,19 @@ impl eframe::App for KadakasApp {
             self.machine.anchor().is_some(),
             self.arc_fields(),
         );
-        self.handle_keys(&ctx);
+        // Not while the shared document is on its way: a key could change the document.
+        if !self.collab.waiting_for_snapshot() {
+            self.handle_keys(&ctx);
+        }
         self.profiles.end_frame();
         // The camera follows the chosen view, whoever chose it: a key, the view bar or an agent.
         let forced = self.session.take_view_changed();
         self.view3d.sync(self.session.view, forced);
 
+        // Connected, Undo and Redo work on your own edits (the per-user undo).
         let (can_undo, can_redo) = (
-            self.session.editor.can_undo(),
-            self.session.editor.can_redo(),
+            self.session.editor.can_undo() || self.collab.can_undo(false),
+            self.session.editor.can_redo() || self.collab.can_undo(true),
         );
         let mut actions = Vec::new();
         let mut requests = Vec::new();
@@ -2036,6 +2234,7 @@ impl eframe::App for KadakasApp {
                 can_back: self.view_history.can_go_back(),
                 can_forward: self.view_history.can_go_forward(),
                 has_selection: !self.session.selection.is_empty(),
+                collab_connected: self.collab.is_connected(),
                 requests: Vec::new(),
             };
             let state = panels::MenuState {
@@ -2091,6 +2290,7 @@ impl eframe::App for KadakasApp {
             self.set_standard_view(self.session.view.view);
         }
         let mut alias = None;
+        let mut collab_click = None;
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let d = &self.session.editor.doc();
@@ -2101,6 +2301,8 @@ impl eframe::App for KadakasApp {
                 ui.separator();
                 ui.label(self.machine.hint_for(&self.settings));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    collab_click = self.collab.status_item(ui);
+                    ui.separator();
                     if self.plan() {
                         let u = kadakas_units::current();
                         ui.label(tr!(
@@ -2126,6 +2328,11 @@ impl eframe::App for KadakasApp {
                 });
             });
         });
+        match collab_click {
+            Some(crate::collab_ui::StatusClick::OpenDialog) => self.collab.open_dialog(),
+            Some(crate::collab_ui::StatusClick::ShowPeople) => self.layouts.show_tab(Tab::People),
+            None => {}
+        }
         // A request that the field did not take (no field in this profile) must not wait.
         self.profiles.focus_command = false;
         match alias {
@@ -2947,5 +3154,144 @@ mod tests {
         // The subscriber is told to read the document again.
         let notes = app.session.take_notifications(0);
         assert_eq!(notes[0]["method"], "events.reset");
+    }
+
+    fn add_rect_command(x: f64) -> Command {
+        Command::AddObject {
+            shape: Shape::Rect {
+                min: DVec2::new(x, 0.0),
+                max: DVec2::new(x + 1000.0, 500.0),
+            },
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        }
+    }
+
+    /// Two windows on one in-memory server: the window under test (`app`) and a plain session.
+    fn joined_app() -> (KadakasApp, Session, kadakas_collab::testkit::Hub) {
+        use kadakas_collab::docsync;
+        use kadakas_collab::testkit::{Hub, Sequencer};
+        let mut app = KadakasApp::blank();
+        let hub = Hub::new(Sequencer::new(docsync::replica_of(
+            app.session.editor.doc(),
+        )));
+        app.session.set_collab_endpoint(Box::new(hub.endpoint()));
+        let mut other = Session::default();
+        other.set_collab_endpoint(Box::new(hub.endpoint()));
+        other
+            .handle(
+                "collab.connect",
+                serde_json::json!({"name": "Bo", "now_ms": 1_000}),
+            )
+            .unwrap();
+        let req = kadakas_ui_core::collab::ConnectRequest {
+            url: None,
+            doc: None,
+            token: None,
+            user: None,
+            name: Some("Ann".into()),
+        };
+        assert_eq!(
+            app.collab
+                .connect(&mut app.session, &req, false, false, 1_000),
+            None
+        );
+        (app, other, hub)
+    }
+
+    fn rounds(
+        app: &mut KadakasApp,
+        other: &mut Session,
+        hub: &kadakas_collab::testkit::Hub,
+        from: u64,
+    ) {
+        for i in 1..=4 {
+            let t = from + i * crate::collab_ui::TICK_MS;
+            hub.set_time(t);
+            let own = app.own_presence();
+            app.collab.tick(&mut app.session, t, &own);
+            other
+                .handle("collab.sync", serde_json::json!({"now_ms": t}))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn connected_undo_takes_back_only_your_own_edit_and_new_is_blocked() {
+        let (mut app, mut other, hub) = joined_app();
+        rounds(&mut app, &mut other, &hub, 2_000);
+        assert!(app.collab.is_connected());
+        let rect = |x: i64| {
+            serde_json::json!({"command": {"op": "add_object",
+                "shape": {"kind": "rect", "min": [x, 0], "max": [x + 1000, 500]}}})
+        };
+        other.handle("execute", rect(0)).unwrap();
+        rounds(&mut app, &mut other, &hub, 3_000);
+        assert_eq!(app.session.editor.doc().objects.len(), 1);
+        // The window draws a rectangle through its own command path, then undoes it.
+        app.exec(&add_rect_command(5000.0));
+        rounds(&mut app, &mut other, &hub, 4_000);
+        assert_eq!(other.editor.doc().objects.len(), 2);
+        app.undo();
+        rounds(&mut app, &mut other, &hub, 5_000);
+        assert_eq!(
+            app.session.editor.doc().objects.len(),
+            1,
+            "the own edit is gone"
+        );
+        assert_eq!(
+            other.editor.doc().objects.len(),
+            1,
+            "the other rectangle stays"
+        );
+        app.redo();
+        rounds(&mut app, &mut other, &hub, 6_000);
+        assert_eq!(other.editor.doc().objects.len(), 2);
+        // A new document would be pushed into the shared one: refused, with a reason.
+        app.replace_document(Document::default(), None);
+        assert_eq!(app.session.editor.doc().objects.len(), 2);
+        assert!(app.status.contains("Disconnect"), "{}", app.status);
+        // After the disconnect the normal undo works again.
+        app.apply_menu(&egui::Context::default(), MenuAction::CollabDisconnect);
+        assert!(!app.collab.is_connected());
+        app.exec(&add_rect_command(9000.0));
+        app.undo();
+        assert_eq!(app.session.editor.doc().objects.len(), 2);
+        app.replace_document(Document::default(), None);
+        assert_eq!(app.session.editor.doc().objects.len(), 0);
+    }
+
+    #[test]
+    fn edits_wait_while_the_shared_document_is_on_its_way() {
+        let mut app = KadakasApp::blank();
+        app.collab.set_waiting(true);
+        app.exec(&add_rect_command(0.0));
+        assert_eq!(app.session.editor.doc().objects.len(), 0);
+        assert!(app.status.contains("Joining"), "{}", app.status);
+    }
+
+    #[test]
+    fn the_people_palette_and_the_status_item_draw_with_others_in_the_document() {
+        let (mut app, mut other, hub) = joined_app();
+        other
+            .handle(
+                "collab.presence",
+                serde_json::json!({"cursor": [100.0, 100.0], "now_ms": 2_000}),
+            )
+            .unwrap();
+        rounds(&mut app, &mut other, &hub, 2_000);
+        assert_eq!(app.collab.peers().len(), 1);
+        let ctx = egui::Context::default();
+        for language in ["en-US", "et"] {
+            kadakas_l10n::with_language(language, || {
+                app.layouts.show_tab(Tab::People);
+                dock_frame(&mut app, &ctx);
+            });
+        }
+        // The view goes with the presence in plan, and not in 3D.
+        assert!(app.own_presence().viewport.is_some());
+        app.session.view.view = StandardView::Front;
+        assert!(app.own_presence().viewport.is_none());
     }
 }

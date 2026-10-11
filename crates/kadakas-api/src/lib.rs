@@ -11,7 +11,7 @@ mod errors;
 pub mod events;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
-pub use errors::RpcError;
+pub use errors::{REASON_ALREADY_CONNECTED, REASON_EDITS_WAIT, REASON_UNSAVED_CHANGES, RpcError};
 #[cfg(test)]
 mod care_api_tests;
 mod data_api;
