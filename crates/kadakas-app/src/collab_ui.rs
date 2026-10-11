@@ -907,6 +907,56 @@ pub mod web {
 
         thread_local! {
             static HOOK: Cell<bool> = const { Cell::new(false) };
+            /// Modules that the page gave to the hook and that are compiled now: (id of the
+            /// call, the bytes or the reason that they could not be compiled).
+            static MODULES: RefCell<Vec<(String, Result<Vec<u8>, String>)>> =
+                const { RefCell::new(Vec::new()) };
+        }
+
+        /// The calls that exist only in the test build (the cargo feature `test-hook`). They are
+        /// not API methods. `test.plugin_install {b64}` compiles a module (the browser compiles
+        /// large modules only asynchronously) and installs it, as the install button does.
+        /// `test.plugin_trust {plugin}` trusts the installed module with this id: **the trust
+        /// dialog of the app is what a user presses, and a release build has neither this call nor
+        /// any other way to trust**.
+        fn test_call(session: &mut Session, key: &str, call: &Value) -> Option<Value> {
+            use base64::Engine as _;
+            match call["method"].as_str()? {
+                "test.plugin_install" => {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(call["params"]["b64"].as_str().unwrap_or(""))
+                        .map_err(|e| e.to_string());
+                    let key = key.to_string();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let checked = match bytes {
+                            Ok(b) => kadakas_plugin::web::precompile(
+                                &b,
+                                &kadakas_plugin::runtime::default_limits(),
+                            )
+                            .await
+                            .map(|()| b)
+                            .map_err(|e| e.to_string()),
+                            Err(e) => Err(e),
+                        };
+                        MODULES.with(|m| m.borrow_mut().push((key, checked)));
+                    });
+                    None
+                }
+                "test.plugin_trust" => {
+                    let id = call["params"]["plugin"].as_str().unwrap_or("");
+                    Some(match kadakas_api::review_wasm_plugin(session, id) {
+                        Some(r) => {
+                            let hash = r["hash"].as_str().unwrap_or("").to_string();
+                            match kadakas_api::trust_wasm_plugin(session, id, &hash) {
+                                Ok(()) => json!({"ok": true}),
+                                Err(e) => json!({"error": e}),
+                            }
+                        }
+                        None => json!({"error": "no such plug-in"}),
+                    })
+                }
+                _ => None,
+            }
         }
 
         pub fn install() {
@@ -942,14 +992,32 @@ pub mod web {
                 while cmds.length() > 0 {
                     let text = cmds.shift().as_string().unwrap_or_default();
                     let call: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                    let key = call["id"].to_string();
+                    if call["method"].as_str() == Some("test.plugin_install") {
+                        test_call(session, &key, &call);
+                        continue;
+                    }
                     let answer = match call["method"].as_str() {
+                        Some(m) if m.starts_with("test.") => test_call(session, &key, &call)
+                            .unwrap_or_else(|| json!({"error": "no such test call"})),
                         Some(m) => match session.handle(m, call["params"].clone()) {
                             Ok(v) => json!({"ok": v}),
                             Err(e) => json!({"error": e.message, "kind": e.kind}),
                         },
                         None => json!({"error": "no method"}),
                     };
-                    let key = call["id"].to_string();
+                    let _ = Reflect::set(&results, &key.into(), &answer.to_string().into());
+                }
+                // Modules that are compiled now are installed, and the page gets the answer.
+                let ready: Vec<_> = MODULES.with(|m| m.borrow_mut().drain(..).collect());
+                for (key, bytes) in ready {
+                    let answer = match bytes {
+                        Ok(b) => match kadakas_api::install_wasm_plugin(session, &b) {
+                            Ok(v) => json!({"ok": v}),
+                            Err(e) => json!({"error": e.message, "kind": e.kind}),
+                        },
+                        Err(e) => json!({"error": e, "kind": "invalid"}),
+                    };
                     let _ = Reflect::set(&results, &key.into(), &answer.to_string().into());
                 }
             }
