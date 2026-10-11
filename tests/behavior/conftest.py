@@ -1,13 +1,14 @@
 """Fixtures: each test gets its own `kadakas` subprocess, so tests never share state."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from helpers import BIN, REPO, JsonRpc, McpClient
+from helpers import BIN, REPO, TEST_HOME, JsonRpc, McpClient
 
 
 # Agents may only use some folders. The tests use pytest's temp folders and the files of the repository.
@@ -20,6 +21,9 @@ def built_cli():
     if not os.environ.get("KADAKAS_SKIP_BUILD"):
         subprocess.run(["cargo", "build", "-p", "kadakas-cli"], cwd=REPO, check=True)
     assert BIN.exists(), f"kadakas binary not found at {BIN}"
+    yield
+    # The private home of the child processes (helpers.isolated_env) is only for this session.
+    shutil.rmtree(TEST_HOME, ignore_errors=True)
 
 
 @pytest.fixture

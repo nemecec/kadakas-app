@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pytest import approx
 
-from helpers import BIN
+from helpers import BIN, isolated_env
 
 CHECK = Path(__file__).with_name("ifc_check.py")
 SQUARE = [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
@@ -23,7 +23,7 @@ def read_ifc(path):
         pytest.skip("uv is not installed")
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "ifcopenshell", "python", "-I", str(CHECK), str(path)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=600, env=isolated_env(uv=True),
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip("IfcOpenShell is not available")
@@ -190,7 +190,8 @@ def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
     src.chmod(stat.S_IRUSR)
     before = src.read_bytes()
     out = tmp_path / "cli.ifc"
-    run = subprocess.run([str(BIN), "export", str(src), "-o", str(out)], capture_output=True, text=True)
+    run = subprocess.run([str(BIN), "export", str(src), "-o", str(out)],
+                         capture_output=True, text=True, env=isolated_env())
     assert run.returncode == 0, run.stderr
     assert src.read_bytes() == before
     assert out.read_text().startswith("ISO-10303-21;")
@@ -198,7 +199,8 @@ def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
     # The same file gives the same bytes again.
     again = tmp_path / "cli.ifc"
     first = out.read_bytes()
-    run = subprocess.run([str(BIN), "export", str(src), "-o", str(again)], capture_output=True, text=True)
+    run = subprocess.run([str(BIN), "export", str(src), "-o", str(again)],
+                         capture_output=True, text=True, env=isolated_env())
     assert run.returncode == 0 and again.read_bytes() == first
 
 

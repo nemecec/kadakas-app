@@ -822,3 +822,6 @@ mod fixture_tests;
 
 #[path = "probe_tests.rs"]
 mod probe_tests;
+
+#[path = "probe_run_tests.rs"]
+mod probe_run_tests;

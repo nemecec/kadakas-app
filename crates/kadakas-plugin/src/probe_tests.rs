@@ -10,12 +10,19 @@ fn probe_binaries_are_the_compiled_text() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/probes");
     let update = std::env::var_os("UPDATE_PROBES").is_some();
     let mut n = 0;
+    let mut n_valid = 0;
     for entry in std::fs::read_dir(&dir).unwrap().flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "wat") {
             continue;
         }
         let compiled = wat::parse_file(&path).unwrap();
+        // The probes a to e are refused at load. The probes f to h are valid: they run too long
+        // or grow too much, and `probe_run_tests` shows that the fuel and the caps stop them.
+        let refused = path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n < "f");
         let binary = path.with_extension("wasm");
         if update {
             std::fs::write(&binary, &compiled).unwrap();
@@ -26,7 +33,12 @@ fn probe_binaries_are_the_compiled_text() {
             "{} is not the compiled text. Run with UPDATE_PROBES=1",
             binary.display()
         );
-        // Every probe is refused by the host, whatever the engine.
+        // The probes a to e are refused by the host, whatever the engine.
+        if !refused {
+            assert!(crate::plugin::scan(&compiled, &crate::Limits::default()).is_ok());
+            n_valid += 1;
+            continue;
+        }
         assert!(
             crate::plugin::scan(&compiled, &crate::Limits::default()).is_err()
                 || crate::harden::harden(
@@ -42,7 +54,7 @@ fn probe_binaries_are_the_compiled_text() {
         );
         n += 1;
     }
-    assert!(n >= 5);
+    assert!(n >= 5 && n_valid >= 3);
 }
 
 #[test]

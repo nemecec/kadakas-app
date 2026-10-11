@@ -32,9 +32,18 @@ def _make_home() -> Path:
 TEST_HOME = _make_home()
 
 
-def isolated_env() -> dict:
-    """The environment for a child process: the real one, with every user folder moved."""
+_UV_CACHE: list[str] = []
+
+
+def isolated_env(uv: bool = False) -> dict:
+    """The environment for a child process: the real one, with every user folder moved.
+
+    A child that runs `uv` keeps the real cache of uv (`uv=True`): the private home has an empty
+    one, and every test would download its packages again."""
     env = dict(os.environ)
+    if uv and not _UV_CACHE:
+        found = subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True, check=False)
+        _UV_CACHE.append(env.get("UV_CACHE_DIR") or found.stdout.strip())
     env.update(
         HOME=str(TEST_HOME),
         USERPROFILE=str(TEST_HOME),
@@ -46,6 +55,8 @@ def isolated_env() -> dict:
         XDG_CACHE_HOME=str(TEST_HOME / "cache"),
         XDG_RUNTIME_DIR=str(TEST_HOME / "runtime"),
     )
+    if uv and _UV_CACHE[0]:
+        env["UV_CACHE_DIR"] = _UV_CACHE[0]
     return env
 
 

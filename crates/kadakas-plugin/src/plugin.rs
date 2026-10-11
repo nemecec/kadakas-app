@@ -82,6 +82,9 @@ pub struct Plugin {
     hash: String,
     size: usize,
     module: OnceLock<Box<dyn LoadedModule>>,
+    /// Why activation failed, kept so that a module that does not match its record is not
+    /// compiled and run again for every look at it.
+    failure: OnceLock<PluginError>,
     pending: Option<Pending>,
     limits: Limits,
 }
@@ -132,6 +135,7 @@ impl Plugin {
             hash: trust::hash(wasm),
             size: wasm.len(),
             module: OnceLock::from(module),
+            failure: OnceLock::new(),
             pending: None,
             limits: *limits,
         })
@@ -173,6 +177,7 @@ impl Plugin {
             hash: trust::hash(&wasm),
             size: wasm.len(),
             module: OnceLock::new(),
+            failure: OnceLock::new(),
             pending: Some(Pending { wasm, runtime }),
             limits: *limits,
         })
@@ -193,6 +198,23 @@ impl Plugin {
         if let Some(m) = self.module.get() {
             return Ok(m.as_ref());
         }
+        if let Some(e) = self.failure.get() {
+            return Err(e.clone());
+        }
+        match self.activate_once() {
+            Ok(module) => {
+                let _ = self.module.set(module);
+                Ok(self.module.get().expect("just set").as_ref())
+            }
+            Err(e) => {
+                let _ = self.failure.set(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    /// Compiles the pending module, runs `describe` and compares the answer with the record.
+    fn activate_once(&self) -> Result<Box<dyn LoadedModule>, PluginError> {
         let pending = self
             .pending
             .as_ref()
@@ -205,8 +227,7 @@ impl Plugin {
                 self.manifest.id
             )));
         }
-        let _ = self.module.set(module);
-        Ok(self.module.get().expect("just set").as_ref())
+        Ok(module)
     }
 
     pub fn manifest(&self) -> &Manifest {

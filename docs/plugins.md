@@ -361,6 +361,10 @@ The host is split so that the engine can change:
 
 The real limits, stated plainly:
 
+- **The start function runs before the budget of the call is set.** A module may have a start function (it runs when the instance is made). It gets up to 5 million fuel, the smallest budget, and then the fuel of the call is set. So a call can cost its budget plus up to 5 million.
+- **One event can cost two budgets.** A tool step that ends with an object result also runs `reset` for that object, so a click or finish can use up to 2 x 50 million fuel.
+- **Bulk operations are cheap in fuel and costly in time.** `memory.copy` and `memory.fill` cost one unit of fuel per 16 bytes, so a copy of 64 MiB costs 4 million units of the 50 million.
+
 - A module that uses its whole fuel in every call is slow, but it does not hang the page for ever. How long 50 million instructions take depends on the computer: some tenths of a second on a normal one, more on a slow one.
 - **A tool that is slow but succeeds blocks the page on every event.** A pointer move can cost up to 15 million instructions, and the app sends at most one move per frame, so a tool at the top of that budget makes the page jerky. The app cannot make this better without a worker.
 - A tool that runs out of fuel, crashes or gives a bad answer ends its run, so it blocks the page at most once more.
