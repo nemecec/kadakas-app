@@ -50,6 +50,7 @@ mod script_ui;
 mod sheets_ui;
 mod site_ui;
 mod snap_ui;
+mod style_ui;
 mod tess;
 mod theme;
 mod units_ui;

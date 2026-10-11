@@ -84,10 +84,18 @@ pub enum Axis {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DimMode {
-    Linear { axis: Axis },
-    Chain { axis: Axis },
-    Baseline { axis: Axis },
-    Ordinate { axis: Axis },
+    Linear {
+        axis: Axis,
+    },
+    Chain {
+        axis: Axis,
+    },
+    Baseline {
+        axis: Axis,
+    },
+    Ordinate {
+        axis: Axis,
+    },
     Angular,
     Radial,
     Diameter,

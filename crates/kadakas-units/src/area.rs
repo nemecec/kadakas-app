@@ -252,15 +252,36 @@ mod tests {
     #[test]
     fn drawing_areas_round_and_show_the_unit() {
         let ha = 1.0e10;
-        assert_eq!(format_area_drawing(ha, AreaUnit::M2, 2, None, true), "10000.00 m\u{b2}");
+        assert_eq!(
+            format_area_drawing(ha, AreaUnit::M2, 2, None, true),
+            "10000.00 m\u{b2}"
+        );
         assert_eq!(format_area_drawing(ha, AreaUnit::Ha, 1, None, false), "1.0");
-        assert_eq!(format_area_drawing(12.3e6, AreaUnit::M2, 1, Some(0.5), true), "12.5 m\u{b2}");
-        assert_eq!(format_area_drawing(12.2e6, AreaUnit::M2, 2, Some(5.0), false), "10.00");
-        assert_eq!(format_area_drawing(ha, AreaUnit::Ac, 3, None, true), "2.471 ac");
-        assert_eq!(format_area_drawing(100.0 * 304.8 * 304.8, AreaUnit::Ft2, 0, None, true), "100 ft\u{b2}");
+        assert_eq!(
+            format_area_drawing(12.3e6, AreaUnit::M2, 1, Some(0.5), true),
+            "12.5 m\u{b2}"
+        );
+        assert_eq!(
+            format_area_drawing(12.2e6, AreaUnit::M2, 2, Some(5.0), false),
+            "10.00"
+        );
+        assert_eq!(
+            format_area_drawing(ha, AreaUnit::Ac, 3, None, true),
+            "2.471 ac"
+        );
+        assert_eq!(
+            format_area_drawing(100.0 * 304.8 * 304.8, AreaUnit::Ft2, 0, None, true),
+            "100 ft\u{b2}"
+        );
         // A bad increment is ignored.
-        assert_eq!(format_area_drawing(2.0e6, AreaUnit::M2, 0, Some(0.0), false), "2");
-        assert_eq!(format_area_drawing(-0.0, AreaUnit::M2, 1, None, false), "0.0");
+        assert_eq!(
+            format_area_drawing(2.0e6, AreaUnit::M2, 0, Some(0.0), false),
+            "2"
+        );
+        assert_eq!(
+            format_area_drawing(-0.0, AreaUnit::M2, 1, None, false),
+            "0.0"
+        );
     }
 
     #[test]

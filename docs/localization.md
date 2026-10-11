@@ -124,6 +124,8 @@ The language list in Preferences comes from `LANGUAGES`. It shows the native nam
 | Dimension | Mõõtmestamine (tool), Mõõt (value) | |
 | Callout, Data Tag, Revision Cloud | Viide, Andmesilt, Muudatuspilv | |
 | North Arrow, Scale Bar | Põhjanool, Mõõtkavariba | |
+| Dimension standard, Notes database | Mõõtmestamise standard, Märkuste andmebaas | style editors |
+| Area (dimension) | Pindala | the Area mode of the Dimension tool |
 
 ## Terminology overlays (PLAT-04)
 

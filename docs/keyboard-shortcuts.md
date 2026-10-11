@@ -125,7 +125,7 @@ Tool keys switch the active tool.
 ## Tool modes
 
 The Dimension tool has one group of mode buttons (Horizontal, Vertical, Aligned, Chain, Baseline, Ordinate, Angular, Radial, Diameter,
-Arc length). Group 1 (`U`) picks the next mode. `.` and `,` start the tool in Angular and Radial mode.
+Arc length, Area). Group 1 (`U`) picks the next mode. `.` and `,` start the tool in Angular and Radial mode.
 
 Keys that cycle the groups of mode buttons in the tool bar (UI-11).
 The Polyline, Landscape Area and Hardscape tools have one group of mode buttons: the vertex modes

@@ -478,6 +478,9 @@ impl KadakasApp {
         if let Some(s) = self.collab.show(ctx, &mut self.session, now) {
             self.status = s;
         }
+        self.resource_ui
+            .styles
+            .show(ctx, &mut self.session, &mut self.status);
         if self.collab.take_save_request() {
             self.save(false, ctx);
         }
@@ -1044,6 +1047,9 @@ impl KadakasApp {
     fn run_annot_requests(&mut self) {
         for cmd in std::mem::take(&mut self.annot_requests.commands) {
             self.exec(&cmd);
+        }
+        if let Some(id) = self.annot_requests.edit_style.take() {
+            self.resource_ui.styles.open(&self.session, id);
         }
         if std::mem::take(&mut self.annot_requests.legend) {
             self.add_legend();

@@ -647,7 +647,11 @@ fn area_dimensions_show_the_area_and_follow_the_shape() {
         json!({"name":"Areas","area_unit":"ft2","area_precision":0}),
     )["id"]
         .clone();
-    let plain = ok(&mut s, "dimension.add", json!({"mode":"area","object":rect}));
+    let plain = ok(
+        &mut s,
+        "dimension.add",
+        json!({"mode":"area","object":rect}),
+    );
     assert_eq!(plain["texts"], json!(["20.00 m\u{b2}"]));
     assert_eq!(plain["values"], json!([20.0e6]));
     let styled = ok(
@@ -662,13 +666,23 @@ fn area_dimensions_show_the_area_and_follow_the_shape() {
         json!({"op":"modify_object","id":rect,"shape":{"kind":"rect","min":[0,0],"max":[1000,1000]}}),
     );
     let id = plain["id"].as_uid().unwrap();
-    assert_eq!(item(&mut s, id)["computed"]["texts"], json!(["1.00 m\u{b2}"]));
+    assert_eq!(
+        item(&mut s, id)["computed"]["texts"],
+        json!(["1.00 m\u{b2}"])
+    );
     let id = styled["id"].as_uid().unwrap();
-    assert_eq!(item(&mut s, id)["computed"]["texts"], json!(["11 ft\u{b2}"]));
+    assert_eq!(
+        item(&mut s, id)["computed"]["texts"],
+        json!(["11 ft\u{b2}"])
+    );
     // Errors.
     assert!(
-        err(&mut s, "dimension.add", json!({"mode":"area","points":[[0,0]]}))
-            .contains("needs object")
+        err(
+            &mut s,
+            "dimension.add",
+            json!({"mode":"area","points":[[0,0]]})
+        )
+        .contains("needs object")
     );
     let ln = line(&mut s, [0.0, 0.0], [1.0, 1.0]);
     assert!(

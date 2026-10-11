@@ -11,7 +11,7 @@ use kadakas_core::resource::ResourceId;
 use kadakas_render::thumbnail::{SIZE, Thumbnail, thumbnail};
 use serde_json::{Value, json};
 
-const TYPES: [&str; 11] = [
+const TYPES: [&str; 15] = [
     "",
     "plant_style",
     "hardscape_style",
@@ -23,6 +23,10 @@ const TYPES: [&str; 11] = [
     "hatch",
     "tile",
     "line_type",
+    "dimension_style",
+    "text_style",
+    "tag_style",
+    "notes_database",
 ];
 
 #[derive(Default)]
@@ -30,6 +34,8 @@ pub struct ResourceUi {
     search: String,
     ty: usize,
     rename: Option<(ResourceId, String)>,
+    /// The style editor windows (ANN-12).
+    pub styles: crate::style_ui::StyleWindows,
     import_path: String,
     /// Thumbnails by resource, for one revision of the document.
     thumbs: HashMap<ResourceId, Thumbnail>,
@@ -150,6 +156,12 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                         });
                     });
                     ui.menu_button("...", |ui| {
+                        if crate::style_ui::has_editor(r.type_name)
+                            && ui.button(tr!("style-ui-edit")).clicked()
+                        {
+                            action = Some((r.id, "edit"));
+                            ui.close();
+                        }
                         if ui.button(tr!("resource-ui-duplicate")).clicked() {
                             action = Some((r.id, "duplicate"));
                             ui.close();
@@ -172,6 +184,9 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 ));
             }
             match action {
+                Some((id, "edit")) => {
+                    st.styles.open(session, id);
+                }
                 Some((id, "duplicate")) => {
                     call(session, "resource.duplicate", json!({"id": id}), status);
                 }
@@ -192,6 +207,14 @@ pub fn section(ui: &mut Ui, session: &mut Session, st: &mut ResourceUi, status: 
                 }
                 _ => {}
             }
+            ui.menu_button(tr!("style-ui-new-style"), |ui| {
+                for kind in kadakas_ui_core::style_edit::StyleKind::ALL {
+                    if ui.button(crate::style_ui::kind_label(kind)).clicked() {
+                        st.styles.create(session, kind, status);
+                        ui.close();
+                    }
+                }
+            });
             if ui.button(tr!("resource-ui-delete-unused")).clicked()
                 && let Some(v) = call(session, "resource.purge_unused", json!({}), status)
             {
