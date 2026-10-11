@@ -65,8 +65,8 @@ fn the_endless_loop_module_is_valid_and_both_engines_stop_it() {
         at: [0.0, 0.0],
         rotation: 0.0,
     };
-    let native = crate::Plugin::load(&crate::native::WasmtimeRuntime::new(), &compiled, &limits)
-        .unwrap();
+    let native =
+        crate::Plugin::load(&crate::native::WasmtimeRuntime::new(), &compiled, &limits).unwrap();
     let permit = crate::trust::ModuleTrust::in_memory()
         .permit(native.hash(), true)
         .unwrap();

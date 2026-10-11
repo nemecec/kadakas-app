@@ -974,6 +974,14 @@ pub mod web {
             let _ = Reflect::set(&hook, &"cmds".into(), &Array::new());
             let _ = Reflect::set(&hook, &"results".into(), &js_sys::Object::new());
             let _ = Reflect::set(&hook, &"state".into(), &"{}".into());
+            // The names of the test-only calls, as text that the page can read. It also keeps the
+            // names in the data of the build, where `scripts/check-test-hook.sh` of the
+            // kadakas-server repository looks for them: a release build must not have them.
+            let _ = Reflect::set(
+                &hook,
+                &"extra_calls".into(),
+                &"test.plugin_install test.plugin_trust".into(),
+            );
             let _ = Reflect::set(&win, &"kadakasTest".into(), &hook);
         }
 
