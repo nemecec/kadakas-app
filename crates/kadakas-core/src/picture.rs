@@ -221,29 +221,32 @@ impl ImageResource {
     }
 }
 
+/// A tiny resource for tests of this and other crates. The file is a PNG header, not a
+/// decodable image: the core only checks marks and hashes. `seed` makes different hashes.
+#[doc(hidden)]
+pub fn header_only_sample(seed: u8) -> ImageResource {
+    let mut file = PNG_MAGIC.to_vec();
+    file.extend_from_slice(&[0, 0, 0, 13]);
+    file.extend_from_slice(b"IHDR");
+    file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
+    file.push(seed);
+    let thumb = file.clone();
+    ImageResource {
+        sha256: sha256_hex(&file),
+        format: PictureFormat::Png,
+        width: 2,
+        height: 2,
+        data: encode_base64(&file),
+        thumb: encode_base64(&thumb),
+        source: "leaf.png".into(),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 
-    /// A tiny valid resource for tests. The file is a PNG header, not a decodable image: the
-    /// core only checks marks and hashes.
-    pub fn sample(seed: u8) -> ImageResource {
-        let mut file = PNG_MAGIC.to_vec();
-        file.extend_from_slice(&[0, 0, 0, 13]);
-        file.extend_from_slice(b"IHDR");
-        file.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
-        file.push(seed);
-        let thumb = file.clone();
-        ImageResource {
-            sha256: sha256_hex(&file),
-            format: PictureFormat::Png,
-            width: 2,
-            height: 2,
-            data: encode_base64(&file),
-            thumb: encode_base64(&thumb),
-            source: "leaf.png".into(),
-        }
-    }
+    pub use super::header_only_sample as sample;
 
     #[test]
     fn a_valid_picture_passes_and_gives_its_bytes() {

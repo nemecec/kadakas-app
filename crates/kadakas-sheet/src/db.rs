@@ -86,6 +86,7 @@ impl Env for ListEnv<'_> {
             "price" | "unitprice" => Value::num(r.unit_price),
             "cost" | "totalprice" => Value::num(r.total_price),
             "area" => Value::num(r.area_m2),
+            "image" | "picture" => r.image.map_or(Value::Empty, Value::Image),
             _ => Value::Error(ErrorKind::Name),
         }
     }
@@ -131,6 +132,12 @@ impl Env for ObjEnv<'_> {
     }
 
     fn name(&self, name: &str) -> Value {
+        // The picture of the plant style of a plant (PLT-16).
+        if matches!(norm(name).as_str(), "image" | "picture") {
+            return kadakas_core::plants::link::style_of(self.obj)
+                .and_then(|id| kadakas_plants::plant_list::picture_of(self.doc, id))
+                .map_or(Value::Empty, Value::Image);
+        }
         from_prop(props::property_on(self.doc, self.obj, &[name], self.ground))
     }
 
@@ -986,6 +993,58 @@ mod tests {
         );
         d3.source = RowSource::PlantList;
         assert_eq!(run(ed.doc(), &d3, 0).matched, 0);
+    }
+
+    #[test]
+    fn the_image_column_shows_the_picture_of_the_plant_style() {
+        use kadakas_core::picture::header_only_sample;
+        let mut ed = Editor::default();
+        let style = |ed: &mut Editor, name: &str| {
+            kadakas_core::resource::ResourceId(
+                ed.execute(&Command::AddResource {
+                    name: name.into(),
+                    body: kadakas_core::resource::ResourceBody::plant_style(Default::default()),
+                })
+                .unwrap()
+                .created[0],
+            )
+        };
+        let (a, b) = (style(&mut ed, "Maple"), style(&mut ed, "Oak"));
+        let out = ed
+            .execute(&Command::SetPlantPicture {
+                style: a,
+                picture: Some(Box::new(header_only_sample(1))),
+            })
+            .unwrap();
+        let img = kadakas_core::resource::ResourceId(out.created[0]);
+        for s in [a, b] {
+            ed.execute(&Command::AddPlants {
+                style: Some(s),
+                overrides: Default::default(),
+                positions: vec![DVec2::ZERO],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
+        }
+        // The plant list: one row per style.
+        let mut d = database(
+            "",
+            vec![col("Style", "Style", None), col("Pic", "Image", None)],
+        );
+        d.source = RowSource::PlantList;
+        let out = run(ed.doc(), &d, 0);
+        let pics: Vec<Value> = out.lines[1..].iter().map(|l| l.values[1].clone()).collect();
+        assert_eq!(pics, vec![Value::Image(img), Value::Empty]);
+        // Objects: a plant gets the picture of its style. Other objects have none.
+        let d = database("Kind = \"plant\"", vec![col("Pic", "Picture", None)]);
+        let out = run(ed.doc(), &d, 0);
+        let mut got: Vec<Value> = out.lines[1..].iter().map(|l| l.values[0].clone()).collect();
+        got.sort_by(|x, y| x.compare(y));
+        assert_eq!(got, vec![Value::Empty, Value::Image(img)]);
+        // A text column for a picture is empty text, so CSV skips it.
+        assert_eq!(Value::Image(img).to_text(), "");
     }
 
     #[test]

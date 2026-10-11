@@ -2,6 +2,7 @@
 //! (see `kadakas_core::worksheet_table`). It is used on sheets and inside plan viewports.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::DVec2;
 use kadakas_core::ground::GroundSource;
@@ -26,6 +27,8 @@ const ERROR: Rgba = [190, 40, 30, 255];
 #[derive(Default)]
 pub struct Tables {
     map: HashMap<ResourceId, Computed>,
+    /// The thumbnails of the pictures in the cells: width, height and RGB on white paper.
+    pictures: HashMap<ResourceId, (u32, u32, Arc<Vec<u8>>)>,
     /// The site models of the page, for the contours, the analysis colors and the grading graphics.
     /// A page is made from one document, so the revision is always the same.
     site: kadakas_site::SiteCache,
@@ -51,8 +54,22 @@ impl Tables {
                 map.insert(d.worksheet, compute_with(&def, doc, ground));
             }
         }
+        // The pictures that the cells show. Each is decoded once.
+        let mut pictures = HashMap::new();
+        for c in map.values() {
+            for (_, _, v) in c.cells() {
+                if let Some(id) = v.image()
+                    && !pictures.contains_key(&id)
+                    && let Some(res) = doc.resources.image(id)
+                    && let Some(p) = kadakas_render::picture::thumb_rgb_on_white(res)
+                {
+                    pictures.insert(id, p);
+                }
+            }
+        }
         Tables {
             map,
+            pictures,
             site: Default::default(),
             sections: None,
         }
@@ -80,6 +97,11 @@ impl Tables {
 
     pub fn get(&self, id: ResourceId) -> Option<&Computed> {
         self.map.get(&id)
+    }
+
+    /// The thumbnail of a picture in a cell.
+    pub fn picture(&self, id: ResourceId) -> Option<&(u32, u32, Arc<Vec<u8>>)> {
+        self.pictures.get(&id)
     }
 }
 
@@ -128,12 +150,41 @@ pub fn table_prims(
     }
     for r in 1..=l.rows {
         for col in 1..=l.cols {
+            let (left, right) = (col_x[col as usize - 1], col_x[col as usize]);
+            if let Some(id) = c.value(r, col).image() {
+                // A picture fills the cell, with a margin, and keeps its proportions.
+                if let Some((w, hgt, rgb)) = tables.picture(id) {
+                    let margin = 0.15 * h;
+                    let cell_top = top - f64::from(r - 1) * l.row_height;
+                    let (box_w, box_h) = (right - left - 2.0 * margin, l.row_height - 2.0 * margin);
+                    let k = (box_w / f64::from(*w)).min(box_h / f64::from(*hgt));
+                    let (pw, ph) = (f64::from(*w) * k, f64::from(*hgt) * k);
+                    let (x0, y0) = (
+                        left + (right - left - pw) / 2.0,
+                        cell_top - (l.row_height + ph) / 2.0,
+                    );
+                    let (a, b) = (xf.p(DVec2::new(x0, y0)), xf.p(DVec2::new(x0 + pw, y0 + ph)));
+                    out.push(Prim::Image(ImagePrim {
+                        min: a.min(b),
+                        max: a.max(b),
+                        width: *w,
+                        height: *hgt,
+                        rgb: rgb.clone(),
+                    }));
+                }
+                continue;
+            }
             let text = c.display(r, col);
             if text.is_empty() {
                 continue;
             }
-            let (left, right) = (col_x[col as usize - 1], col_x[col as usize]);
-            let base = top - f64::from(r - 1) * l.row_height - l.row_height * BASELINE;
+            let row_top = top - f64::from(r - 1) * l.row_height;
+            // In a tall row (a table with pictures) the text sits in the middle of the row.
+            let base = if l.has_images {
+                row_top - l.row_height / 2.0 - 0.35 * h
+            } else {
+                row_top - l.row_height * BASELINE
+            };
             let at_x = if is_number(c, r, col) {
                 (right - 0.45 * h - text.chars().count() as f64 * DIGIT * h).max(left + 0.2 * h)
             } else {
@@ -466,5 +517,129 @@ mod tests {
         );
         assert!(out.is_empty());
         assert!(kadakas_core::worksheet_table::data(&obj).is_some());
+    }
+
+    #[test]
+    fn a_picture_cell_prints_as_an_image_in_the_pdf_and_the_svg() {
+        use kadakas_core::command::Command as C;
+        use kadakas_render::picture::{PictureLimits, import_picture, test_png};
+        use kadakas_sheet::{ColumnDef, DatabaseDef, RowSource};
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&C::AddResource {
+                name: "Maple".into(),
+                body: ResourceBody::plant_style(Default::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        let plain = ResourceId(
+            ed.execute(&C::AddResource {
+                name: "Oak".into(),
+                body: ResourceBody::plant_style(Default::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        for s in [style, plain] {
+            ed.execute(&C::AddPlants {
+                style: Some(s),
+                overrides: Default::default(),
+                positions: vec![DVec2::ZERO],
+                layer: None,
+                class: None,
+                variation: None,
+            })
+            .unwrap();
+        }
+        let pic = import_picture(&test_png(60, 30), "maple.png", PictureLimits::default()).unwrap();
+        ed.execute(&C::SetPlantPicture {
+            style,
+            picture: Some(Box::new(pic)),
+        })
+        .unwrap();
+        let mut def = WorksheetDef::default();
+        def.databases.push(DatabaseDef {
+            source: RowSource::PlantList,
+            columns: ["Style", "Image"]
+                .map(|e| ColumnDef {
+                    header: e.into(),
+                    expr: e.into(),
+                    ..ColumnDef::default()
+                })
+                .to_vec(),
+            ..DatabaseDef::default()
+        });
+        let ws = ResourceId(
+            ed.execute(&C::AddResource {
+                name: "Plants".into(),
+                body: ResourceBody::Worksheet(def.to_value()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&C::AddSheet {
+            name: "A1".into(),
+            paper: None,
+            orientation: None,
+            number: None,
+            title: None,
+        })
+        .unwrap();
+        let sheet = ed.doc().sheet_layers().next().unwrap().id;
+        let l = layout(&compute(&def, ed.doc()), 3.0);
+        assert!(l.has_images);
+        ed.execute(&C::AddWorksheetTable {
+            worksheet: ws,
+            at: DVec2::new(20.0, 200.0),
+            size: DVec2::new(l.width, l.height),
+            text_height: Some(3.0),
+            layer: Some(sheet),
+            class: None,
+            attrs: Default::default(),
+        })
+        .unwrap();
+        let page = compose_page(ed.doc(), sheet).unwrap();
+        let images: Vec<&ImagePrim> = page
+            .prims
+            .iter()
+            .filter_map(|p| {
+                if let Prim::Image(i) = p {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(images.len(), 1, "one style has a picture");
+        let i = images[0];
+        assert_eq!((i.width, i.height), (60, 30));
+        assert!(i.max.x > i.min.x && i.max.y > i.min.y);
+        // The picture keeps its proportions (2 to 1) and lies inside the table.
+        assert!(((i.max.x - i.min.x) / (i.max.y - i.min.y) - 2.0).abs() < 1e-6);
+        assert!(
+            i.min.x >= 0.0 && i.max.x <= page.size.x && i.min.y >= 0.0 && i.max.y <= page.size.y
+        );
+        // The picture sits in the second column, to the right of the style name.
+        let maple = page
+            .prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text(t) if t.text == "Maple" => Some(t.at),
+                _ => None,
+            })
+            .unwrap();
+        assert!(i.min.x > maple.x);
+        let t = texts(&page.prims);
+        assert!(t.contains(&"Maple".to_string()) && t.contains(&"Oak".to_string()));
+        // PDF and SVG carry the picture.
+        let pdf = crate::pdf::write_pdf(&[&page], "plants");
+        assert!(
+            pdf.windows(14)
+                .any(|w| w == b"/Subtype/Image" || w == b"/Subtype /Imag"),
+            "the PDF has an image"
+        );
+        let svg = crate::svg::page_svg(&page);
+        assert!(svg.contains("<image"));
     }
 }

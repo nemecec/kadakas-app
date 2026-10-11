@@ -171,7 +171,7 @@ class Api:
         return self._call("plant_style.delete", params or None)
 
     def plant_style_import_csv(self, **params: Any) -> Any:
-        """Create plant styles from CSV text (columns are mapped by header). params: {csv, unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, warnings}.
+        """Create plant styles from CSV text (columns are mapped by header). params: {csv, pictures_dir? (folder that the picture file names of an image column are relative to; without it pictures are skipped with a warning), unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, pictures, warnings}.
 
         JSON-RPC method ``plant_style.import_csv``."""
         return self._call("plant_style.import_csv", params or None)
@@ -223,6 +223,24 @@ class Api:
 
         JSON-RPC method ``plant_tag.set``."""
         return self._call("plant_tag.set", params or None)
+
+    def plant_style_set_picture(self, **params: Any) -> Any:
+        """Set the picture of a plant style from a PNG or JPEG file. params: {id (the style ID or name), path | base64 (the file bytes as base64 text), name? (the file name to remember, for base64)}. The file is stored once in the document (by SHA-256) and shared by styles that use the same file. The size is limited (default 8 MiB and 16 million pixels). One undo step. Returns {id, image (the picture resource ID), created (false if the document had the file already), picture}.
+
+        JSON-RPC method ``plant_style.set_picture``."""
+        return self._call("plant_style.set_picture", params or None)
+
+    def plant_style_clear_picture(self, **params: Any) -> Any:
+        """Remove the picture of a plant style. The picture resource goes too when no other style uses it. params: {id}. Returns {id, had_picture}.
+
+        JSON-RPC method ``plant_style.clear_picture``."""
+        return self._call("plant_style.clear_picture", params or None)
+
+    def plant_style_get_picture(self, **params: Any) -> Any:
+        """The picture of a plant style. params: {id, thumbnail? (true adds thumbnail_base64, a PNG of at most 160 px), bytes? (true adds base64, the original file)}. Returns {id, has_picture, picture?: {image, sha256, format, mime, width, height, size_bytes, source}, thumbnail_base64?, base64?}.
+
+        JSON-RPC method ``plant_style.get_picture``."""
+        return self._call("plant_style.get_picture", params or None)
 
     def record_format_list(self, **params: Any) -> Any:
         """Record formats with their fields and the number of objects that use each. Returns {formats: [{id, name, fields, used_by}]}.
@@ -2168,6 +2186,9 @@ METHOD_NAMES: tuple[str, ...] = (
     "report.existing_trees",
     "plants.drape",
     "plant_tag.set",
+    "plant_style.set_picture",
+    "plant_style.clear_picture",
+    "plant_style.get_picture",
     "record_format.list",
     "record_format.get",
     "record_format.create",

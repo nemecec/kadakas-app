@@ -14,6 +14,9 @@ const CHAR_WIDTH: f64 = 0.55;
 const PADDING: f64 = 0.9;
 /// Row height relative to the text height.
 const ROW: f64 = 1.6;
+/// Row height and column width of a table with pictures, relative to the text height. A picture
+/// is drawn inside its cell with a small margin.
+pub const IMAGE_CELL: f64 = 4.0;
 
 /// Column widths and row height of a table, in the unit of the text height.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +27,9 @@ pub struct TableLayout {
     pub row_height: f64,
     pub width: f64,
     pub height: f64,
+    /// True if some cell holds a picture. Then all rows are `IMAGE_CELL` high and the columns
+    /// with pictures are at least as wide.
+    pub has_images: bool,
 }
 
 /// The layout of the calculated worksheet at a text height. An empty worksheet gets one small cell.
@@ -35,23 +41,32 @@ pub fn layout(c: &Computed, text_height: f64) -> TableLayout {
     };
     let rows = c.rows.clamp(1, MAX_ROWS);
     let cols = c.cols.clamp(1, MAX_COLS);
+    let image_in = |col: u32| (1..=rows).any(|r| c.value(r, col).image().is_some());
+    let has_images = (1..=cols).any(image_in);
     let col_widths: Vec<f64> = (1..=cols)
         .map(|col| {
             let chars = (1..=rows)
                 .map(|r| c.display(r, col).chars().count())
                 .max()
                 .unwrap_or(0);
-            (chars as f64 * CHAR_WIDTH + PADDING).max(3.0) * h
+            let w = (chars as f64 * CHAR_WIDTH + PADDING).max(3.0) * h;
+            if image_in(col) {
+                w.max(IMAGE_CELL * h)
+            } else {
+                w
+            }
         })
         .collect();
     let width = col_widths.iter().sum();
+    let row = if has_images { IMAGE_CELL } else { ROW } * h;
     TableLayout {
         rows,
         cols,
         col_widths,
-        row_height: ROW * h,
+        row_height: row,
         width,
-        height: ROW * h * f64::from(rows),
+        height: row * f64::from(rows),
+        has_images,
     }
 }
 
@@ -101,5 +116,55 @@ mod tests {
         assert_eq!((l.rows, l.cols), (MAX_ROWS, MAX_COLS));
         assert_eq!(layout(&c, f64::NAN).row_height, 1.6);
         assert_eq!(layout(&c, -2.0).row_height, 1.6);
+    }
+
+    #[test]
+    fn a_table_with_pictures_has_tall_rows_and_wide_picture_columns() {
+        use crate::def::{ColumnDef, DatabaseDef, RowSource};
+        use kadakas_core::command::{Command, Editor};
+        use kadakas_core::resource::{ResourceBody, ResourceId};
+        let mut ed = Editor::default();
+        let style = ResourceId(
+            ed.execute(&Command::AddResource {
+                name: "Maple".into(),
+                body: ResourceBody::plant_style(Default::default()),
+            })
+            .unwrap()
+            .created[0],
+        );
+        ed.execute(&Command::AddPlants {
+            style: Some(style),
+            overrides: Default::default(),
+            positions: vec![kadakas_core::DVec2::ZERO],
+            layer: None,
+            class: None,
+            variation: None,
+        })
+        .unwrap();
+        let mut w = WorksheetDef::default();
+        w.databases.push(DatabaseDef {
+            source: RowSource::PlantList,
+            columns: ["Style", "Image"]
+                .map(|e| ColumnDef {
+                    header: e.into(),
+                    expr: e.into(),
+                    ..ColumnDef::default()
+                })
+                .to_vec(),
+            ..DatabaseDef::default()
+        });
+        let plain = layout(&compute(&w, ed.doc()), 2.0);
+        assert!(!plain.has_images);
+        // The style gets a picture: the table changes its row height and the picture column.
+        ed.execute(&Command::SetPlantPicture {
+            style,
+            picture: Some(Box::new(kadakas_core::picture::header_only_sample(1))),
+        })
+        .unwrap();
+        let l = layout(&compute(&w, ed.doc()), 2.0);
+        assert!(l.has_images);
+        assert_eq!(l.row_height, IMAGE_CELL * 2.0);
+        assert!(l.col_widths[1] >= IMAGE_CELL * 2.0);
+        assert!((l.height - l.row_height * f64::from(l.rows)).abs() < 1e-9);
     }
 }

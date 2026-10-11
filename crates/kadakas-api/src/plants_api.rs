@@ -50,7 +50,7 @@ pub const PLANT_STYLE_DELETE: (&str, &str) = (
 );
 pub const PLANT_STYLE_IMPORT_CSV: (&str, &str) = (
     "plant_style.import_csv",
-    "Create plant styles from CSV text (columns are mapped by header). params: {csv, unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, warnings}.",
+    "Create plant styles from CSV text (columns are mapped by header). params: {csv, pictures_dir? (folder that the picture file names of an image column are relative to; without it pictures are skipped with a warning), unit? (mm|cm|m, for spread and height columns without a unit), mapping? ({field: header}), on_duplicate? (skip|update, default skip)}. Returns {created, updated, skipped, pictures, warnings}.",
 );
 pub const PLANT_STYLE_EXPORT_CSV: (&str, &str) = (
     "plant_style.export_csv",
@@ -105,7 +105,7 @@ fn object(p: &Value) -> Result<&Map<String, Value>, RpcError> {
 }
 
 /// A style reference: an ID, or a style name.
-fn style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
+pub(crate) fn style_ref(doc: &Document, v: &Value) -> Result<ResourceId, RpcError> {
     let id = match v {
         Value::String(s) => kadakas_core::uid::Uid::parse(s.trim())
             .map(ResourceId)
@@ -162,6 +162,7 @@ fn style_json(doc: &Document, id: ResourceId) -> Value {
     v["id"] = json!(id);
     v["name"] = json!(r.name);
     v["used_by"] = json!(used);
+    v["picture"] = crate::picture_api::picture_meta(doc, s.image).unwrap_or(Value::Null);
     v
 }
 
@@ -443,7 +444,24 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
         Some("update") => true,
         Some(_) => return Err(bad("'on_duplicate' must be skip or update")),
     };
+    let pictures_dir = match m.get("pictures_dir") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(d)) => Some(d.clone()),
+        Some(_) => return Err(bad("'pictures_dir' must be text")),
+    };
     let result = catalog::import(csv, &opts).map_err(bad)?;
+    let mut warnings = result.warnings.clone();
+    // The pictures named in the file, by style name. Read before the first change.
+    let mut pictures: Vec<(String, kadakas_core::picture::ImageResource)> = Vec::new();
+    for imp in &result.styles {
+        let Some(file) = imp.picture.as_deref().filter(|f| !f.is_empty()) else {
+            continue;
+        };
+        match read_csv_picture(s, pictures_dir.as_deref(), file) {
+            Ok(p) => pictures.push((imp.name.clone(), p)),
+            Err(e) => warnings.push(format!("style '{}': picture skipped, {e}", imp.name)),
+        }
+    }
     let doc = s.editor.doc();
     let (mut commands, mut skipped) = (Vec::new(), Vec::new());
     let (mut created, mut updated) = (0usize, Vec::new());
@@ -472,9 +490,49 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
         .editor
         .execute(&Command::Batch { commands })
         .map_err(RpcError::from)?;
+    // Pictures only for styles that were made or updated (not for skipped rows).
+    let mut picture_commands = Vec::new();
+    for (name, pic) in pictures {
+        if skipped.contains(&name) {
+            continue;
+        }
+        if let Some(style) = s.editor.doc().resources.find_plant_style(&name) {
+            picture_commands.push(Command::SetPlantPicture {
+                style,
+                picture: Some(Box::new(pic)),
+            });
+        }
+    }
+    let with_pictures = picture_commands.len();
+    if !picture_commands.is_empty() {
+        s.editor
+            .execute(&Command::Batch {
+                commands: picture_commands,
+            })
+            .map_err(RpcError::from)?;
+    }
     Ok(
-        json!({ "created": out.created, "created_count": created, "updated": updated, "skipped": skipped, "warnings": result.warnings }),
+        json!({ "created": out.created, "created_count": created, "updated": updated, "skipped": skipped, "pictures": with_pictures, "warnings": warnings }),
     )
+}
+
+/// Reads the picture that a CSV row names. Without a folder there is no way to find the file.
+fn read_csv_picture(
+    s: &Session,
+    dir: Option<&str>,
+    file: &str,
+) -> Result<kadakas_core::picture::ImageResource, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = dir.ok_or("give pictures_dir to read picture files")?;
+        // The policy of the session applies to the file itself.
+        crate::picture_api::read_csv_picture(s, std::path::Path::new(dir), file)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, dir, file);
+        Err("reading picture files is not available here".to_string())
+    }
 }
 
 /// Takes the path, boundary or rectangle for a placement mode from an existing object.

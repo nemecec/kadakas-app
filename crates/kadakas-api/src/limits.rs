@@ -42,6 +42,11 @@ pub struct SessionLimits {
     /// the user, and each save trims it to the limit of the session that saves. A host with many
     /// sessions gives each one its own folder (`GisState::cache_dir`) or sets one limit for all.
     pub gis_cache_bytes: u64,
+    /// Largest picture file (a plant style picture), in bytes. Never above the document limit
+    /// of 8 MiB.
+    pub picture_bytes: u64,
+    /// Most pixels of a picture (width times height). Never above 16 million.
+    pub picture_pixels: u64,
 }
 
 impl Default for SessionLimits {
@@ -58,6 +63,8 @@ impl Default for SessionLimits {
             script_timeout: Duration::from_secs(5),
             gis_timeout: Duration::from_secs(20),
             gis_cache_bytes: 256 * 1024 * 1024,
+            picture_bytes: kadakas_core::picture::MAX_PICTURE_BYTES as u64,
+            picture_pixels: kadakas_core::picture::MAX_PICTURE_PIXELS,
         }
     }
 }
@@ -75,8 +82,19 @@ impl SessionLimits {
             import_text_bytes: 16 * 1024 * 1024,
             script_timeout: Duration::from_secs(2),
             gis_cache_bytes: 32 * 1024 * 1024,
+            picture_bytes: 2 * 1024 * 1024,
+            picture_pixels: 4_000_000,
             ..SessionLimits::default()
         }
+    }
+
+    /// The picture limits for the importer of `kadakas-render`.
+    pub fn picture_limits(&self) -> kadakas_render::picture::PictureLimits {
+        kadakas_render::picture::PictureLimits {
+            max_bytes: usize::try_from(self.picture_bytes).unwrap_or(usize::MAX),
+            max_pixels: self.picture_pixels,
+        }
+        .capped()
     }
 
     /// The size to render: each side 16 to `render_side`, scaled down in one piece if the area is
@@ -102,7 +120,7 @@ const RESOURCE_BYTES: u64 = 2048;
 
 /// A rough figure for a document: objects, resources and pictures.
 fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
-    let pictures: u64 = doc
+    let underlays: u64 = doc
         .objects
         .values()
         .map(|o| match &o.shape {
@@ -110,6 +128,15 @@ fn document_bytes(doc: &kadakas_core::model::Document) -> u64 {
             _ => 0,
         })
         .sum();
+    let plant_pictures: u64 = doc
+        .resources
+        .iter()
+        .map(|r| match &r.body {
+            kadakas_core::resource::ResourceBody::Image(i) => (i.data.len() + i.thumb.len()) as u64,
+            _ => 0,
+        })
+        .sum();
+    let pictures = underlays + plant_pictures;
     doc.objects.len() as u64 * OBJECT_BYTES + doc.resources.len() as u64 * RESOURCE_BYTES + pictures
 }
 
