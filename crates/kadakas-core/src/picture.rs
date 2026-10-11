@@ -295,13 +295,14 @@ impl ImageResource {
         if self.source.chars().count() > MAX_SOURCE_CHARS {
             return Err("the picture source name is too long".into());
         }
-        if self.data.len() > MAX_PICTURE_BYTES.div_ceil(3) * 4 || self.data.len() % 4 != 0 {
+        if self.data.len() > MAX_PICTURE_BYTES.div_ceil(3) * 4 || !self.data.len().is_multiple_of(4)
+        {
             return Err("the picture data has a wrong length".into());
         }
         if self.thumb.len() > MAX_THUMB_BASE64 {
             return Err("the picture thumbnail is too large".into());
         }
-        if self.thumb.len() % 4 != 0 {
+        if !self.thumb.len().is_multiple_of(4) {
             return Err("the picture thumbnail is not valid: the text has a wrong length".into());
         }
         // The header of the PNG is in the first 24 bytes, which are the first 32 characters.

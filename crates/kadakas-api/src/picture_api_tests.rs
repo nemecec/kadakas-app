@@ -364,3 +364,206 @@ fn the_methods_are_listed_and_described() {
     assert_eq!(d["plant_pictures"]["formats"], json!(["png", "jpeg"]));
     assert!(crate::picture_api::handle(&mut s, "other", Value::Null).is_none());
 }
+
+#[test]
+fn the_limits_hold_for_execute_batch_and_resource_commands() {
+    let mut s = Session::with_sequential_ids();
+    let id = maple(&mut s);
+    let pic = kadakas_render::picture::import_picture(
+        &test_png(40, 40),
+        "a.png",
+        kadakas_render::picture::PictureLimits::default(),
+    )
+    .unwrap();
+    let picture = serde_json::to_value(&pic).unwrap();
+    s.set_limits(SessionLimits {
+        picture_pixels: 100,
+        ..SessionLimits::default()
+    });
+    let set = json!({"op": "set_plant_picture", "style": id, "picture": picture});
+    let add = json!({"op": "add_resource", "name": "Sneaky", "body": {"type": "image", "sha256": pic.sha256,
+        "format": "png", "width": 40, "height": 40, "data": pic.data.to_string(), "thumb": pic.thumb.to_string()}});
+    for command in [
+        set.clone(),
+        add.clone(),
+        json!({"op": "batch", "commands": [add.clone()]}),
+        json!({"op": "batch", "commands": [json!({"op": "batch", "commands": [set]})]}),
+    ] {
+        let e = fail(&mut s, "execute", json!({"command": command}));
+        assert!(e.message.contains("pixels"), "{}", e.message);
+    }
+    assert!(
+        ok(&mut s, "resource.list", json!({"type": "image"}))["resources"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    s.set_limits(SessionLimits::default());
+    // A picture whose fields do not fit its file is refused whatever the limits.
+    let mut lie = serde_json::to_value(&pic).unwrap();
+    lie["width"] = json!(41);
+    let e = fail(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_plant_picture", "style": id, "picture": lie}}),
+    );
+    assert!(e.message.contains("size"), "{}", e.message);
+    // With room for it, the same command works.
+    ok(&mut s, "execute", json!({"command": add}));
+}
+
+#[test]
+fn the_csv_import_is_one_undo_step_and_reads_each_file_once() {
+    let dir = tmp("csv-once");
+    std::fs::write(dir.join("a.png"), test_png(12, 12)).unwrap();
+    let mut s = csv_session(&dir);
+    let before = s.editor.undo_depth();
+    let csv = "name,image\nOne,a.png\nTwo,a.png\nThree,a.png\n";
+    let r = ok(
+        &mut s,
+        "plant_style.import_csv",
+        json!({"csv": csv, "pictures_dir": dir}),
+    );
+    assert_eq!(
+        (r["created_count"].as_u64(), r["pictures"].as_u64()),
+        (Some(3), Some(3))
+    );
+    assert_eq!(s.editor.undo_depth(), before + 1, "one undo step");
+    let list = ok(&mut s, "resource.list", json!({"type": "image"}));
+    assert_eq!(
+        list["resources"].as_array().unwrap().len(),
+        1,
+        "one picture for three styles"
+    );
+    // The returned IDs are the IDs of the styles.
+    let created = r["created"].as_array().unwrap();
+    assert_eq!(created.len(), 3);
+    assert_eq!(
+        ok(&mut s, "plant_style.get", json!({"id": created[0]}))["name"],
+        "One"
+    );
+    ok(&mut s, "undo", json!({}));
+    assert!(
+        ok(&mut s, "plant_style.list", json!({}))["styles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        ok(&mut s, "resource.list", json!({"type": "image"}))["resources"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_csv_import_caps_the_pictures_of_one_call() {
+    let dir = tmp("csv-cap");
+    let mut csv = String::from("name,image\n");
+    for n in 0..4 {
+        std::fs::write(dir.join(format!("p{n}.png")), test_png(30 + n, 30)).unwrap();
+        csv.push_str(&format!("S{n},p{n}.png\n"));
+    }
+    let one = std::fs::metadata(dir.join("p0.png")).unwrap().len();
+    let mut s = csv_session(&dir);
+    // The limit of one file is the size of one picture, so the total is eight pictures. The
+    // fifth file in a row of bigger files would break the total: use a tiny limit to show it.
+    s.set_limits(SessionLimits {
+        picture_bytes: one + 100,
+        ..SessionLimits::default()
+    });
+    let r = ok(
+        &mut s,
+        "plant_style.import_csv",
+        json!({"csv": csv, "pictures_dir": dir}),
+    );
+    assert_eq!(r["pictures"], 4);
+    let mut t = csv_session(&dir);
+    t.set_limits(SessionLimits {
+        picture_bytes: 1,
+        ..SessionLimits::default()
+    });
+    let r = ok(
+        &mut t,
+        "plant_style.import_csv",
+        json!({"csv": csv, "pictures_dir": dir}),
+    );
+    assert_eq!(r["pictures"], 0);
+    assert_eq!(
+        r["created_count"], 4,
+        "the styles are made, the pictures are skipped"
+    );
+}
+
+#[test]
+fn csv_picture_names_cannot_probe_the_disk() {
+    let dir = tmp("csv-probe");
+    let outside = tmp("csv-probe-outside");
+    std::fs::write(outside.join("secret.png"), test_png(8, 8)).unwrap();
+    std::fs::write(dir.join("ok.png"), test_png(8, 8)).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("secret.png"), dir.join("link.png")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, dir.join("linkdir")).unwrap();
+    let mut s = csv_session(&dir);
+    #[allow(unused_mut)]
+    let mut names = vec![
+        "missing.png".to_string(),
+        "../x.png".to_string(),
+        "/etc/passwd".to_string(),
+        format!("{}", outside.join("secret.png").display()),
+        "link.png".to_string(),
+        "linkdir/secret.png".to_string(),
+        "./ok.png".to_string(),
+    ];
+    #[cfg(windows)]
+    names.extend([
+        "C:x.png".to_string(),
+        "C:\\x.png".to_string(),
+        "\\\\srv\\share\\x.png".to_string(),
+    ]);
+    let mut csv = String::from("name,image\n");
+    for (n, name) in names.iter().enumerate() {
+        csv.push_str(&format!("S{n},{name}\n"));
+    }
+    let r = ok(
+        &mut s,
+        "plant_style.import_csv",
+        json!({"csv": csv, "pictures_dir": dir}),
+    );
+    let warnings: Vec<String> = r["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap().to_string())
+        .collect();
+    // Every refused name gets the same words, whether the file exists or not.
+    let refused = names.len();
+    assert_eq!(warnings.len(), refused, "{warnings:?}");
+    for (w, name) in warnings.iter().zip(&names) {
+        assert!(
+            w.ends_with(&format!(
+                "picture skipped, the picture file '{}' cannot be used",
+                name.trim()
+            )),
+            "{w}"
+        );
+    }
+    // "./ok.png" has a current-folder part, which is not a plain name: it is refused as well, and
+    // the plain name works.
+    let r = ok(
+        &mut s,
+        "plant_style.import_csv",
+        json!({"csv": "name,image\nGood,ok.png\n", "pictures_dir": dir}),
+    );
+    assert_eq!(r["pictures"], 1);
+    // A folder that the policy refuses gives the same answer for every name.
+    let r = ok(
+        &mut s,
+        "plant_style.import_csv",
+        json!({"csv": "name,image\nOther,secret.png\n", "pictures_dir": outside}),
+    );
+    assert_eq!(r["pictures"], 0);
+    assert!(r["warnings"].to_string().contains("cannot be used"));
+}

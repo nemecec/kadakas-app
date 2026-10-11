@@ -498,8 +498,8 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
     ui.heading(tr!("plant-ui-resource-manager"));
     ui.separator();
     let mut commands: Vec<Command> = Vec::new();
-    // Pictures that the web build got from the browser, and pictures chosen in this frame.
-    let mut picked: Vec<crate::picture_ui::Picked> = st.pictures.take();
+    // Images that were chosen and imported since the last frame (off the window thread).
+    let picked: Vec<crate::picture_ui::Imported> = st.pictures.take();
     egui::CollapsingHeader::new(tr!("plant-ui-plant-styles"))
         .id_salt("plant-ui-plant-styles")
         .default_open(true)
@@ -608,8 +608,8 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
                 ui.separator();
                 match crate::picture_ui::picture_row(ui, doc, id) {
                     crate::picture_ui::RowAction::Choose => {
-                        let limit = session.limits().picture_limits().max_bytes;
-                        picked.extend(st.pictures.choose(ui.ctx(), id, limit));
+                        st.pictures
+                            .choose(ui.ctx(), id, session.limits().picture_limits());
                     }
                     crate::picture_ui::RowAction::Remove => {
                         commands.push(Command::SetPlantPicture {
@@ -665,7 +665,7 @@ pub fn resource_manager(ui: &mut Ui, session: &mut Session, st: &mut PlantUi, st
         });
     crate::plant_sheet_ui::window(ui.ctx(), session, &mut st.sheet, status);
     for p in picked {
-        *status = crate::picture_ui::apply(session, p);
+        *status = crate::picture_ui::apply(ui.ctx(), session, p);
     }
     for c in commands {
         let out = run_command(session, &c, status);
@@ -1119,15 +1119,18 @@ mod tests {
 
     #[test]
     fn a_style_with_a_picture_shows_it_in_the_editor_the_thumbnail_and_object_info() {
-        use crate::picture_ui::{Picked, apply};
+        use crate::picture_ui::{apply, import_bytes};
         let (mut s, id) = with_styles();
+        let ctx = egui::Context::default();
         let msg = apply(
+            &ctx,
             &mut s,
-            Picked {
-                style: id,
-                name: "maple.png".into(),
-                bytes: kadakas_render::picture::test_png(30, 20),
-            },
+            import_bytes(
+                id,
+                "maple.png",
+                &kadakas_render::picture::test_png(30, 20),
+                Default::default(),
+            ),
         );
         assert!(msg.contains("maple.png"), "{msg}");
         let mut st = PlantUi {

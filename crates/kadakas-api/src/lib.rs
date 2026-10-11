@@ -855,6 +855,16 @@ impl Session {
         self.paths.resolve(path, self.doc_dir.as_deref(), write)
     }
 
+    /// The canonical path of a folder, if the path policy allows it (no extension rule). A
+    /// restricted session may read inside the folders it was given.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn check_dir(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        if !self.paths.is_restricted() {
+            return std::fs::canonicalize(path).map_err(|e| e.to_string());
+        }
+        self.paths.resolve(path, self.doc_dir.as_deref(), false)
+    }
+
     /// The 3D scene of the current document. It is rebuilt only when the document changed.
     pub fn scene(&mut self) -> Arc<Scene> {
         let revision = self.editor.revision();

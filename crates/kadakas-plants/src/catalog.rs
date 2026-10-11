@@ -234,8 +234,9 @@ pub struct ImportedStyle {
     pub style: PlantStyle,
     /// The fields (and `custom:key` entries) that the row gave a value for.
     pub given: Vec<String>,
-    /// The picture file named in the `image` column, as written (a path relative to the CSV file).
-    /// The catalog only reads the name; the host reads the file.
+    /// The picture file named in the `image` column, as written. The path is relative to the
+    /// folder that the host gives (`pictures_dir` in the API). The catalog only reads the name; the
+    /// host reads the file.
     pub picture: Option<String>,
 }
 

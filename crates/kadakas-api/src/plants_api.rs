@@ -451,28 +451,28 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
     };
     let result = catalog::import(csv, &opts).map_err(bad)?;
     let mut warnings = result.warnings.clone();
-    // The pictures named in the file, by style name. Read before the first change.
-    let mut pictures: Vec<(String, kadakas_core::picture::ImageResource)> = Vec::new();
-    for imp in &result.styles {
-        let Some(file) = imp.picture.as_deref().filter(|f| !f.is_empty()) else {
-            continue;
-        };
-        match read_csv_picture(s, pictures_dir.as_deref(), file) {
-            Ok(p) => pictures.push((imp.name.clone(), p)),
-            Err(e) => warnings.push(format!("style '{}': picture skipped, {e}", imp.name)),
-        }
-    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut files = crate::picture_api::CsvPictures::new(s, pictures_dir.as_deref());
+    #[cfg(target_arch = "wasm32")]
+    let _ = &pictures_dir;
     let doc = s.editor.doc();
+    // The styles come first and take the next IDs in order, so a picture can name the style it
+    // belongs to. The pictures follow. All of it is one batch, so the import is one undo step.
+    let mut ids = doc.id_plan();
     let (mut commands, mut skipped) = (Vec::new(), Vec::new());
-    let (mut created, mut updated) = (0usize, Vec::new());
+    let (mut created, mut updated) = (Vec::new(), Vec::new());
+    let mut wanted: Vec<(ResourceId, String, String)> = Vec::new();
     for imp in result.styles {
-        match doc.resources.find_plant_style(&imp.name) {
+        let file = imp.picture.clone().filter(|f| !f.trim().is_empty());
+        let style = match doc.resources.find_plant_style(&imp.name) {
             None => {
+                let id = ResourceId(ids.take());
                 commands.push(Command::AddResource {
-                    name: imp.name,
+                    name: imp.name.clone(),
                     body: ResourceBody::plant_style(imp.style),
                 });
-                created += 1;
+                created.push(id);
+                id
             }
             Some(id) if update => {
                 let merged = imp.apply_to(doc.resources.plant_style(id).expect("exists"));
@@ -482,57 +482,45 @@ fn import_csv(s: &mut Session, m: &Map<String, Value>) -> Result<Value, RpcError
                     body: Some(ResourceBody::plant_style(merged)),
                 });
                 updated.push(id);
+                id
             }
-            Some(_) => skipped.push(imp.name),
+            Some(_) => {
+                skipped.push(imp.name);
+                continue;
+            }
+        };
+        if let Some(file) = file {
+            wanted.push((style, imp.name, file));
         }
     }
-    let out = s
-        .editor
+    let mut with_pictures = 0usize;
+    for (style, name, file) in wanted {
+        #[cfg(not(target_arch = "wasm32"))]
+        let got = if pictures_dir.is_none() {
+            Err("give pictures_dir to read picture files".to_string())
+        } else {
+            files.get(s, &file)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let got: Result<kadakas_core::picture::ImageResource, String> =
+            Err(format!("the picture file '{file}' cannot be used"));
+        match got {
+            Ok(pic) => {
+                commands.push(Command::SetPlantPicture {
+                    style,
+                    picture: Some(Box::new(pic)),
+                });
+                with_pictures += 1;
+            }
+            Err(e) => warnings.push(format!("style '{name}': picture skipped, {e}")),
+        }
+    }
+    s.editor
         .execute(&Command::Batch { commands })
         .map_err(RpcError::from)?;
-    // Pictures only for styles that were made or updated (not for skipped rows).
-    let mut picture_commands = Vec::new();
-    for (name, pic) in pictures {
-        if skipped.contains(&name) {
-            continue;
-        }
-        if let Some(style) = s.editor.doc().resources.find_plant_style(&name) {
-            picture_commands.push(Command::SetPlantPicture {
-                style,
-                picture: Some(Box::new(pic)),
-            });
-        }
-    }
-    let with_pictures = picture_commands.len();
-    if !picture_commands.is_empty() {
-        s.editor
-            .execute(&Command::Batch {
-                commands: picture_commands,
-            })
-            .map_err(RpcError::from)?;
-    }
     Ok(
-        json!({ "created": out.created, "created_count": created, "updated": updated, "skipped": skipped, "pictures": with_pictures, "warnings": warnings }),
+        json!({ "created": created, "created_count": created.len(), "updated": updated, "skipped": skipped, "pictures": with_pictures, "warnings": warnings }),
     )
-}
-
-/// Reads the picture that a CSV row names. Without a folder there is no way to find the file.
-fn read_csv_picture(
-    s: &Session,
-    dir: Option<&str>,
-    file: &str,
-) -> Result<kadakas_core::picture::ImageResource, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let dir = dir.ok_or("give pictures_dir to read picture files")?;
-        // The policy of the session applies to the file itself.
-        crate::picture_api::read_csv_picture(s, std::path::Path::new(dir), file)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (s, dir, file);
-        Err("reading picture files is not available here".to_string())
-    }
 }
 
 /// Takes the path, boundary or rectangle for a placement mode from an existing object.

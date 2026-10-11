@@ -44,7 +44,7 @@ def test_set_get_clear_and_undo(cad):
     assert base64.b64decode(got["thumbnail_base64"]).startswith(b"\x89PNG")
     assert cad.result("plant_style.get", {"id": sid})["picture"]["sha256"] == r["picture"]["sha256"]
     assert [x["name"] for x in cad.result("resource.list", {"type": "image"})["resources"]] == [
-        "Picture " + r["picture"]["sha256"][:8]
+        "Image " + r["picture"]["sha256"][:8]
     ]
     cad.result("plant_style.clear_picture", {"id": sid})
     assert cad.result("plant_style.get_picture", {"id": sid})["has_picture"] is False

@@ -132,13 +132,17 @@ impl Env for ObjEnv<'_> {
     }
 
     fn name(&self, name: &str) -> Value {
-        // The picture of the plant style of a plant (PLT-16).
-        if matches!(norm(name).as_str(), "image" | "picture") {
+        let found = from_prop(props::property_on(self.doc, self.obj, &[name], self.ground));
+        // The picture of the plant style of a plant (PLT-16) answers to `Image` and `Picture` only
+        // when the object has no property or record field of that name: its own data comes first.
+        if found == Value::Error(ErrorKind::Name)
+            && matches!(norm(name).as_str(), "image" | "picture")
+        {
             return kadakas_core::plants::link::style_of(self.obj)
                 .and_then(|id| kadakas_plants::plant_list::picture_of(self.doc, id))
                 .map_or(Value::Empty, Value::Image);
         }
-        from_prop(props::property_on(self.doc, self.obj, &[name], self.ground))
+        found
     }
 
     fn path(&self, path: &[String]) -> Value {

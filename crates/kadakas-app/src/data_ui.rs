@@ -792,27 +792,26 @@ pub fn draw_table(
         }
         for col in 1..=l.cols {
             let (left, right) = (xs[col as usize - 1], xs[col as usize]);
+            if right < clip.min.x || left > clip.max.x {
+                continue;
+            }
             if let Some(img) = c.value(r, col).image() {
-                // A picture cell: the thumbnail of the picture, inside the cell.
+                // A picture cell: the image, inside the cell. The texture comes from the cache
+                // (the thumbnail is derived from the file once, not in every frame), and the
+                // proportions are those of the texture.
                 if let Some(res) = doc.resources.image(img)
-                    && let Some(px) = kadakas_render::picture::thumb_image(res)
+                    && let Some((tex, tsize)) = crate::picture_ui::resolve(painter.ctx(), res)
                 {
-                    let tex = crate::picture_ui::texture(
-                        painter.ctx(),
-                        &res.sha256,
-                        [px.width, px.height],
-                        || px.rgba,
-                    );
                     let m = size * 0.15;
                     let cell = egui::Rect::from_min_max(
                         egui::pos2(left + m, y + m),
                         egui::pos2(right - m, y + row_h - m),
                     );
-                    let k = (cell.width() / res.width.max(1) as f32)
-                        .min(cell.height() / res.height.max(1) as f32);
+                    let k = (cell.width() / tsize[0].max(1) as f32)
+                        .min(cell.height() / tsize[1].max(1) as f32);
                     let r = egui::Rect::from_center_size(
                         cell.center(),
-                        egui::vec2(res.width as f32 * k, res.height as f32 * k),
+                        egui::vec2(tsize[0] as f32 * k, tsize[1] as f32 * k),
                     );
                     painter.image(
                         tex.id(),
@@ -825,9 +824,6 @@ pub fn draw_table(
             }
             let text = c.display(r, col);
             if text.is_empty() {
-                continue;
-            }
-            if right < clip.min.x || left > clip.max.x {
                 continue;
             }
             let color = if c.value(r, col).is_error() {

@@ -157,6 +157,11 @@ impl Session {
             self.scripting.limits.timeout = limits.script_timeout;
         }
         self.editor.set_history_limit(limits.max_history_bytes);
+        // Every way to add a picture passes the editor, so the limits hold for `execute`, a batch,
+        // `resource.create` and a script as well as for `plant_style.set_picture`.
+        let pic = limits.picture_limits();
+        self.editor
+            .set_picture_limits(pic.max_bytes, pic.max_pixels);
         self.limits = limits;
     }
 
