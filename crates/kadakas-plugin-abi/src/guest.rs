@@ -17,6 +17,7 @@
 
 use crate::manifest::Manifest;
 use crate::message::{OutShape, ResetRequest, ResetResponse};
+use crate::tool::{ToolReply, ToolRequest, ToolResponse};
 
 /// Packs an address and a length into the `u64` that `describe` and `reset` return.
 pub fn pack(ptr: u32, len: u32) -> u64 {
@@ -51,6 +52,36 @@ pub fn reset_bytes(
     serde_json::to_vec(&response).expect("an answer is always valid JSON")
 }
 
+/// The bytes that `tool` returns. A request that does not parse, and an error from `f`, become an
+/// error answer, so the plug-in never has to trap.
+pub fn tool_bytes(
+    input: &[u8],
+    f: impl FnOnce(ToolRequest) -> Result<ToolReply, String>,
+) -> Vec<u8> {
+    let response = match serde_json::from_slice::<ToolRequest>(input) {
+        Err(e) => ToolResponse::Error {
+            message: format!("bad request: {e}"),
+        },
+        Ok(request) => match f(request) {
+            Ok(reply) => ToolResponse::Ok(reply),
+            Err(message) => ToolResponse::Error { message },
+        },
+    };
+    serde_json::to_vec(&response).expect("an answer is always valid JSON")
+}
+
+/// The `reset` function of a module that makes no objects. [`export_plugin!`] uses it when you
+/// leave out `reset`.
+pub fn no_reset(_: ResetRequest) -> Result<Vec<OutShape>, String> {
+    Err("this plug-in makes no objects".into())
+}
+
+/// The `tool` function of a module that has no tool. [`export_plugin!`] uses it when you leave
+/// out `tool`.
+pub fn no_tool(_: ToolRequest) -> Result<ToolReply, String> {
+    Err("this plug-in has no tool".into())
+}
+
 /// Reserves a block of `len` bytes and returns its address. Use it as the export `alloc`.
 #[cfg(target_arch = "wasm32")]
 pub fn alloc(len: u32) -> u32 {
@@ -81,14 +112,30 @@ pub fn read<'a>(ptr: u32, len: u32) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(ptr as usize as *const u8, len as usize) }
 }
 
-/// Exports `alloc`, `dealloc`, `describe` and `reset` for the host.
+/// Exports `alloc`, `dealloc`, `describe`, `reset` and `tool` for the host.
 ///
 /// `describe` is a function `fn() -> Manifest`. `reset` is a function
-/// `fn(ResetRequest) -> Result<Vec<OutShape>, String>`. Use it once, in the crate root of a
-/// `cdylib` for `wasm32-unknown-unknown`.
+/// `fn(ResetRequest) -> Result<Vec<OutShape>, String>`. `tool` is a function
+/// `fn(ToolRequest) -> Result<ToolReply, String>`. Give `reset`, `tool` or both. The one that you
+/// leave out answers with an error. Use the macro once, in the crate root of a `cdylib` for
+/// `wasm32-unknown-unknown`.
 #[macro_export]
 macro_rules! export_plugin {
     (describe = $describe:path, reset = $reset:path) => {
+        $crate::export_plugin!(
+            describe = $describe,
+            reset = $reset,
+            tool = $crate::guest::no_tool
+        );
+    };
+    (describe = $describe:path, tool = $tool:path) => {
+        $crate::export_plugin!(
+            describe = $describe,
+            reset = $crate::guest::no_reset,
+            tool = $tool
+        );
+    };
+    (describe = $describe:path, reset = $reset:path, tool = $tool:path) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn alloc(len: u32) -> u32 {
             $crate::guest::alloc(len)
@@ -109,6 +156,14 @@ macro_rules! export_plugin {
             $crate::guest::leak($crate::guest::reset_bytes(
                 $crate::guest::read(ptr, len),
                 $reset,
+            ))
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn tool(ptr: u32, len: u32) -> u64 {
+            $crate::guest::leak($crate::guest::tool_bytes(
+                $crate::guest::read(ptr, len),
+                $tool,
             ))
         }
     };
@@ -167,5 +222,48 @@ mod tests {
         assert!(
             matches!(v, ResetResponse::Error { message } if message.starts_with("bad request"))
         );
+    }
+
+    #[test]
+    fn tool_bytes_turns_every_outcome_into_an_answer() {
+        let input = br#"{"event":{"type":"click","at":[1,2]},"state":{"n":1}}"#;
+        let ok = tool_bytes(input, |r| {
+            assert_eq!(r.state["n"], 1);
+            Ok(ToolReply {
+                hint: "next".into(),
+                ..ToolReply::default()
+            })
+        });
+        let v: ToolResponse = serde_json::from_slice(&ok).unwrap();
+        assert!(matches!(v, ToolResponse::Ok(r) if r.hint == "next"));
+        let err = tool_bytes(input, |_| Err("no".into()));
+        let v: ToolResponse = serde_json::from_slice(&err).unwrap();
+        assert_eq!(
+            v,
+            ToolResponse::Error {
+                message: "no".into()
+            }
+        );
+        let bad = tool_bytes(b"[]", |_| unreachable!());
+        let v: ToolResponse = serde_json::from_slice(&bad).unwrap();
+        assert!(matches!(v, ToolResponse::Error { message } if message.starts_with("bad request")));
+    }
+
+    #[test]
+    fn the_missing_function_of_a_one_kind_module_answers_with_an_error() {
+        let req = ResetRequest::new(
+            serde_json::Map::new(),
+            crate::message::Geometry::Point {
+                at: [0.0, 0.0],
+                rotation: 0.0,
+            },
+        );
+        assert!(no_reset(req).unwrap_err().contains("no objects"));
+        let t = ToolRequest::new(
+            crate::tool::ToolEvent::Start,
+            serde_json::Value::Null,
+            serde_json::Map::new(),
+        );
+        assert!(no_tool(t).unwrap_err().contains("no tool"));
     }
 }

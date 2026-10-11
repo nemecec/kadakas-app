@@ -251,10 +251,21 @@ impl LoadedModule for Loaded {
     }
 
     fn reset(&self, request: &[u8]) -> Result<Vec<u8>, PluginError> {
+        self.call_with_request("reset", request)
+    }
+
+    fn tool(&self, request: &[u8]) -> Result<Vec<u8>, PluginError> {
+        self.call_with_request("tool", request)
+    }
+}
+
+impl Loaded {
+    /// Calls the export `name` (`reset` or `tool`) with a request and reads the answer.
+    fn call_with_request(&self, name: &str, request: &[u8]) -> Result<Vec<u8>, PluginError> {
         let max = self.limits.max_output_bytes;
         self.call(|store, instance| {
             let alloc = instance.get_typed_func::<u32, u32>(&mut *store, "alloc")?;
-            let reset = instance.get_typed_func::<(u32, u32), u64>(&mut *store, "reset")?;
+            let reset = instance.get_typed_func::<(u32, u32), u64>(&mut *store, name)?;
             let memory = memory_of(store, instance)?;
             let len = u32::try_from(request.len())
                 .map_err(|_| wasmtime::Error::msg("the request is too large"))?;

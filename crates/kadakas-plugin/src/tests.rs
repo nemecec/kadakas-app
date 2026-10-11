@@ -48,7 +48,7 @@ fn escape(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
-const MANIFEST: &str = r#"{"id":"test.mod","name":"Test","version":"1.0","abi_version":1,"kinds":["object"],"object":{"shape_type":"point","params":[{"name":"n","type":"number","default":1}]}}"#;
+const MANIFEST: &str = r#"{"id":"test.mod","name":"Test","version":"1.0","abi_version":2,"kinds":["object"],"object":{"shape_type":"point","params":[{"name":"n","type":"number","default":1}]}}"#;
 const ONE_CIRCLE: &str =
     r#"{"status":"ok","shapes":[{"kind":"circle","center":[0,0],"radius":10}]}"#;
 
@@ -63,8 +63,8 @@ fn module_with(manifest: &str, answer: &str, reset_body: Option<&str>, extra: &s
     );
     let src = format!(
         r#"(module
-  (memory (export "memory") 2)
-  (global $next (mut i32) (i32.const 65536))
+  (memory (export "memory") 8)
+  (global $next (mut i32) (i32.const 393216))
   (data (i32.const {m_ptr}) "{m}")
   (data (i32.const {a_ptr}) "{a}")
   (func (export "alloc") (param $len i32) (result i32)
@@ -76,6 +76,7 @@ fn module_with(manifest: &str, answer: &str, reset_body: Option<&str>, extra: &s
   (func (export "describe") (result i64)
     (i64.or (i64.shl (i64.const {m_ptr}) (i64.const 32)) (i64.const {mlen})))
   (func (export "reset") (param i32 i32) (result i64) {body})
+  (func (export "tool") (param i32 i32) (result i64) {default_reset})
   {extra}
 )"#,
         m = escape(manifest),
@@ -194,7 +195,7 @@ fn the_host_checks_permit_geometry_and_parameters_before_it_runs_anything() {
 #[test]
 fn a_plugin_without_an_object_cannot_be_reset() {
     let manifest =
-        r#"{"id":"test.tool","name":"T","version":"1","abi_version":1,"kinds":["tool"]}"#;
+        r#"{"id":"test.tool","name":"T","version":"1","abi_version":2,"kinds":["tool"],"tool":{}}"#;
     let p = load(&module_with(manifest, ONE_CIRCLE, None, ""), &quick()).unwrap();
     let e = p
         .reset(
@@ -311,7 +312,8 @@ fn a_module_that_declares_too_much_memory_does_not_load() {
           (func (export "alloc") (param i32) (result i32) (i32.const 0))
           (func (export "dealloc") (param i32 i32))
           (func (export "describe") (result i64) (i64.const 0))
-          (func (export "reset") (param i32 i32) (result i64) (i64.const 0)))"#,
+          (func (export "reset") (param i32 i32) (result i64) (i64.const 0))
+          (func (export "tool") (param i32 i32) (result i64) (i64.const 0)))"#,
     )
     .unwrap();
     let e = load(&wasm, &Limits::default()).unwrap_err();
@@ -385,7 +387,8 @@ fn a_module_with_imports_does_not_load() {
           (func (export "alloc") (param i32) (result i32) (i32.const 0))
           (func (export "dealloc") (param i32 i32))
           (func (export "describe") (result i64) (i64.const 0))
-          (func (export "reset") (param i32 i32) (result i64) (i64.const 0)))"#,
+          (func (export "reset") (param i32 i32) (result i64) (i64.const 0))
+          (func (export "tool") (param i32 i32) (result i64) (i64.const 0)))"#,
     )
     .unwrap();
     let e = load(&wasm, &Limits::default()).unwrap_err();
@@ -420,7 +423,7 @@ fn a_bad_manifest_is_refused() {
     assert!(
         matches!(load(&wasm, &quick()), Err(PluginError::Invalid(m)) if m.contains("manifest"))
     );
-    let wrong_abi = MANIFEST.replace("\"abi_version\":1", "\"abi_version\":9");
+    let wrong_abi = MANIFEST.replace("\"abi_version\":2", "\"abi_version\":9");
     let wasm = module_with(&wrong_abi, ONE_CIRCLE, None, "");
     assert!(
         matches!(load(&wasm, &quick()), Err(PluginError::Invalid(m)) if m.contains("ABI version 9"))
@@ -441,7 +444,7 @@ fn a_manifest_that_asks_for_permissions_is_refused() {
 #[test]
 fn a_manifest_that_is_too_big_is_refused() {
     let big = format!(
-        r#"{{"id":"test.big","name":"{}","version":"1","abi_version":1,"kinds":["tool"]}}"#,
+        r#"{{"id":"test.big","name":"{}","version":"1","abi_version":2,"kinds":["tool"],"tool":{{}}}}"#,
         "x".repeat(300_000)
     );
     // The manifest is read with a size limit of its own.
@@ -451,7 +454,8 @@ fn a_manifest_that_is_too_big_is_refused() {
           (func (export "alloc") (param i32) (result i32) (i32.const 0))
           (func (export "dealloc") (param i32 i32))
           (func (export "describe") (result i64) (i64.const {}))
-          (func (export "reset") (param i32 i32) (result i64) (i64.const 0)))"#,
+          (func (export "reset") (param i32 i32) (result i64) (i64.const 0))
+          (func (export "tool") (param i32 i32) (result i64) (i64.const 0)))"#,
         escape(&big),
         (16u64 << 32) | big.len() as u64
     ))
@@ -522,7 +526,7 @@ fn a_pointer_outside_the_memory_is_rejected() {
     let wasm = module_with(
         MANIFEST,
         "",
-        Some("(i64.or (i64.shl (i64.const 131000) (i64.const 32)) (i64.const 5000))"),
+        Some("(i64.or (i64.shl (i64.const 524000) (i64.const 32)) (i64.const 5000))"),
         "",
     );
     let e = run(&wasm).unwrap_err();
@@ -754,7 +758,7 @@ fn the_registry_installs_replaces_and_removes() {
 
     // Another build with the same id replaces the old one.
     let v2 = format!(
-        r#"{{"id":"{id}","name":"Raised planter","version":"2","abi_version":1,"kinds":["tool"]}}"#
+        r#"{{"id":"{id}","name":"Raised planter","version":"2","abi_version":2,"kinds":["tool"],"tool":{{}}}}"#
     );
     let other = module_with(&v2, ONE_CIRCLE, None, "");
     reg.install(&other).unwrap();
@@ -797,3 +801,6 @@ fn an_installed_module_is_not_compiled_twice() {
         Err(PluginError::Limit(_))
     ));
 }
+
+#[path = "tool_tests.rs"]
+mod tool_tests;

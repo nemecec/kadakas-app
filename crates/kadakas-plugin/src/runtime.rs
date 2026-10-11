@@ -106,6 +106,8 @@ pub trait LoadedModule: MaybeSend {
     fn describe(&self) -> Result<Vec<u8>, PluginError>;
     /// Calls `reset` with the bytes of a request and returns the bytes of the answer.
     fn reset(&self, request: &[u8]) -> Result<Vec<u8>, PluginError>;
+    /// Calls `tool` with the bytes of a request and returns the bytes of the answer.
+    fn tool(&self, request: &[u8]) -> Result<Vec<u8>, PluginError>;
 }
 
 /// A WebAssembly engine.
@@ -113,7 +115,7 @@ pub trait PluginRuntime: MaybeSend {
     /// The name of the engine, for display.
     fn name(&self) -> &'static str;
     /// Checks and compiles a module. The module must have no imports and must export `memory`,
-    /// `alloc`, `dealloc`, `describe` and `reset`. The limits apply to every call of the module.
+    /// `alloc`, `dealloc`, `describe`, `reset` and `tool`. The limits apply to every call of the module.
     fn load(&self, wasm: &[u8], limits: &Limits) -> Result<Box<dyn LoadedModule>, PluginError>;
 }
 
@@ -130,4 +132,4 @@ pub fn default_runtime() -> Box<dyn PluginRuntime> {
 }
 
 /// The names that a module must export, with a short description for error messages.
-pub const REQUIRED_EXPORTS: [&str; 5] = ["memory", "alloc", "dealloc", "describe", "reset"];
+pub const REQUIRED_EXPORTS: [&str; 6] = ["memory", "alloc", "dealloc", "describe", "reset", "tool"];

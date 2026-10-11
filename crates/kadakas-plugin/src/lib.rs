@@ -27,7 +27,7 @@ pub mod runtime;
 pub mod stub;
 pub mod trust;
 
-pub use plugin::{Generated, Plugin};
+pub use plugin::{Generated, Plugin, ToolCall, ToolDone, ToolStep};
 pub use registry::Registry;
 pub use runtime::{Limits, LoadedModule, PluginError, PluginRuntime, default_runtime};
 pub use trust::{ModuleTrust, Permit};

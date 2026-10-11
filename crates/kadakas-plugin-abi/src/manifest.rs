@@ -14,8 +14,8 @@ pub const MAX_PARAMS: usize = 64;
 pub enum Kind {
     /// A parametric object. The host calls `reset` and stores the shapes in the document.
     Object,
-    /// A drawing tool. The kind is reserved: ABI version 1 has no tool messages yet, and a host
-    /// lists the kind but does not run it.
+    /// A drawing tool. The host sends clicks and points, the module answers with previews and a
+    /// result (see [`crate::tool`]).
     Tool,
 }
 
@@ -28,7 +28,7 @@ impl Kind {
     }
 }
 
-/// What a plug-in may ask the host for. ABI version 1 has no calls from the module to the host, so
+/// What a plug-in may ask the host for. ABI version 2 has no calls from the module to the host, so
 /// a host grants none of these, and it refuses a module that asks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +87,15 @@ pub struct ObjectSpec {
     pub params: Vec<ParamSchema>,
 }
 
+/// The tool part of a manifest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    /// The options of the tool. The module gets them in every request, with the defaults filled
+    /// in. The app does not have an editor for them yet, so the defaults are used.
+    #[serde(default)]
+    pub params: Vec<ParamSchema>,
+}
+
 /// The manifest of a plug-in module.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -100,11 +109,17 @@ pub struct Manifest {
     pub abi_version: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Who made the plug-in, for the trust dialog. The host shows it; it proves nothing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub author: String,
     /// What the plug-in provides. At least one entry.
     pub kinds: Vec<Kind>,
     /// The object part. Needed when `kinds` has `object`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<ObjectSpec>,
+    /// The tool part. Needed when `kinds` has `tool`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolSpec>,
     /// What the plug-in asks for. Leave it empty if you can.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<Permission>,
@@ -119,10 +134,21 @@ impl Manifest {
             version: version.into(),
             abi_version: ABI_VERSION,
             description: String::new(),
+            author: String::new(),
             kinds: vec![Kind::Object],
             object: Some(spec),
+            tool: None,
             permissions: vec![],
         }
+    }
+
+    /// The same manifest with a tool part and the kind `tool`.
+    pub fn with_tool(mut self, spec: ToolSpec) -> Manifest {
+        if !self.kinds.contains(&Kind::Tool) {
+            self.kinds.push(Kind::Tool);
+        }
+        self.tool = Some(spec);
+        self
     }
 
     /// Reads and checks a manifest from the JSON bytes of `describe`.
@@ -186,6 +212,9 @@ impl Manifest {
                 "the description has at most 1000 characters and no control characters".into(),
             );
         }
+        if self.author.chars().count() > 100 || self.author.chars().any(char::is_control) {
+            return Err("the author has at most 100 characters and no control characters".into());
+        }
         if self.kinds.is_empty() {
             return Err("the plug-in must provide at least one kind".into());
         }
@@ -216,6 +245,23 @@ impl Manifest {
             }
             (None, false) => {}
         }
+        match (&self.tool, self.provides(Kind::Tool)) {
+            (None, true) => return Err("the kind 'tool' needs a 'tool' part".into()),
+            (Some(_), false) => return Err("a 'tool' part needs the kind 'tool'".into()),
+            (Some(t), true) => {
+                if t.params.len() > MAX_PARAMS {
+                    return Err(format!("a tool has at most {MAX_PARAMS} parameters"));
+                }
+                let mut seen = std::collections::HashSet::new();
+                for p in &t.params {
+                    p.validate()?;
+                    if !seen.insert(&p.name) {
+                        return Err(format!("tool parameter '{}' appears twice", p.name));
+                    }
+                }
+            }
+            (None, false) => {}
+        }
         Ok(())
     }
 
@@ -228,6 +274,15 @@ impl Manifest {
             .object
             .as_ref()
             .ok_or("this plug-in provides no object")?;
+        resolve(&spec.params, given)
+    }
+
+    /// The tool parameters, with defaults, checked against the schema of the tool.
+    pub fn resolve_tool_params(
+        &self,
+        given: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        let spec = self.tool.as_ref().ok_or("this plug-in provides no tool")?;
         resolve(&spec.params, given)
     }
 }
@@ -281,7 +336,7 @@ mod tests {
             let e = m.validate().unwrap_err();
             assert!(e.contains(what), "{e}");
         };
-        check(&|m| m.abi_version = 2, "ABI version 2");
+        check(&|m| m.abi_version = 1, "ABI version 1");
         check(&|m| m.id = "Bad Id".into(), "the id");
         check(&|m| m.id = String::new(), "the id");
         check(&|m| m.id = "1abc".into(), "the id");
@@ -302,6 +357,50 @@ mod tests {
         );
         check(&|m| m.object = None, "needs an 'object' part");
         check(&|m| m.kinds = vec![Kind::Tool], "needs the kind 'object'");
+        check(&|m| m.author = "a".repeat(101), "author");
+        check(&|m| m.author = "a\u{7}".into(), "author");
+        check(
+            &|m| m.tool = Some(ToolSpec::default()),
+            "needs the kind 'tool'",
+        );
+        check(
+            &|m| {
+                m.kinds.push(Kind::Tool);
+            },
+            "needs a 'tool' part",
+        );
+        check(
+            &|m| {
+                m.kinds.push(Kind::Tool);
+                m.tool = Some(ToolSpec {
+                    params: (0..65)
+                        .map(|i| ParamSchema::new(&format!("p{i}"), ParamType::Bool))
+                        .collect(),
+                });
+            },
+            "a tool has at most 64",
+        );
+        check(
+            &|m| {
+                m.kinds.push(Kind::Tool);
+                m.tool = Some(ToolSpec {
+                    params: vec![
+                        ParamSchema::new("a", ParamType::Bool),
+                        ParamSchema::new("a", ParamType::Bool),
+                    ],
+                });
+            },
+            "tool parameter 'a' appears twice",
+        );
+        check(
+            &|m| {
+                m.kinds.push(Kind::Tool);
+                m.tool = Some(ToolSpec {
+                    params: vec![ParamSchema::new("1", ParamType::Bool)],
+                });
+            },
+            "must start",
+        );
         check(
             &|m| {
                 m.object.as_mut().unwrap().params = (0..65)
@@ -335,8 +434,32 @@ mod tests {
         let mut m = good();
         m.kinds = vec![Kind::Tool];
         m.object = None;
+        m.tool = Some(ToolSpec::default());
         m.validate().unwrap();
         assert!(m.resolve_params(&serde_json::Map::new()).is_err());
+        assert!(
+            m.resolve_tool_params(&serde_json::Map::new())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_plugin_can_be_object_and_tool_and_has_an_author() {
+        let mut m = good().with_tool(ToolSpec {
+            params: vec![ParamSchema::new("n", ParamType::Number).with_default(json!(3))],
+        });
+        m.author = "Kadakas".into();
+        m.validate().unwrap();
+        // A second call does not add the kind twice.
+        let m = m.with_tool(ToolSpec::default());
+        assert_eq!(m.kinds, vec![Kind::Object, Kind::Tool]);
+        let bytes = serde_json::to_vec(&m).unwrap();
+        assert_eq!(Manifest::from_bytes(&bytes).unwrap(), m);
+        let out = good()
+            .resolve_tool_params(&serde_json::Map::new())
+            .unwrap_err();
+        assert!(out.contains("no tool"));
     }
 
     #[test]

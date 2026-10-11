@@ -6,8 +6,10 @@
 use kadakas_core::DVec2;
 use kadakas_core::curve::Vertex;
 use kadakas_core::model::{Attributes, Color, Shape};
+use kadakas_plugin_abi::tool::{MAX_HINT_CHARS, MAX_STATE_BYTES};
 use kadakas_plugin_abi::{
-    Geometry, Kind, Manifest, OutShape, ResetRequest, ResetResponse, ShapeData,
+    Geometry, Kind, Manifest, Modifiers, OutShape, ResetRequest, ResetResponse, ShapeData,
+    ToolEvent, ToolRequest, ToolResponse, ToolResult,
 };
 use serde_json::{Map, Value};
 
@@ -22,6 +24,42 @@ pub const MAX_LINE_WEIGHT: f64 = 100.0;
 pub struct Generated {
     pub shape: Shape,
     pub attrs: Attributes,
+}
+
+/// One call of a tool: what the person did, and the state that the module gave back last time.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolCall<'a> {
+    pub event: &'a ToolEvent,
+    pub modifiers: Modifiers,
+    /// `Value::Null` at the start.
+    pub state: &'a Value,
+}
+
+/// How a tool run ends. All shapes are checked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolDone {
+    /// Plain shapes for the drawing.
+    Shapes(Vec<Generated>),
+    /// A plug-in object of the same module. The host already ran `reset` for it.
+    Object {
+        /// All parameters, with defaults filled in.
+        params: Map<String, Value>,
+        geometry: Geometry,
+        shapes: Vec<Generated>,
+    },
+}
+
+/// The checked answer of one tool call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolStep {
+    /// What to send back with the next event.
+    pub state: Value,
+    /// Shapes to draw while the person works. They are not part of the drawing.
+    pub preview: Vec<Generated>,
+    /// A short text for the status bar. Control characters are gone.
+    pub hint: String,
+    /// Set when the run ends.
+    pub done: Option<ToolDone>,
 }
 
 /// A plug-in module that is loaded and checked.
@@ -154,6 +192,125 @@ impl Plugin {
     }
 }
 
+impl Plugin {
+    /// Runs one step of the tool. The `permit` must be for this module. `given` holds tool
+    /// parameters; missing ones take the defaults of the manifest. Everything that the module
+    /// answers is checked: the size of the state, the preview, the hint and the result.
+    pub fn tool_step(
+        &self,
+        permit: &Permit,
+        call: &ToolCall<'_>,
+        given: &Map<String, Value>,
+    ) -> Result<ToolStep, PluginError> {
+        if !permit.allows(&self.hash) {
+            return Err(PluginError::Refused(
+                "this plug-in module is not trusted, so it did not run".into(),
+            ));
+        }
+        if !self.manifest.provides(Kind::Tool) {
+            return Err(PluginError::Refused(format!(
+                "the plug-in '{}' provides no tool",
+                self.manifest.id
+            )));
+        }
+        if call.event.point().is_some_and(|p| {
+            !p.iter()
+                .all(|c| c.is_finite() && c.abs() <= kadakas_plugin_abi::MAX_VALUE)
+        }) {
+            return Err(PluginError::Refused(
+                "the point of the event is not a finite number of reasonable size".into(),
+            ));
+        }
+        let state_len = serde_json::to_vec(call.state).map_or(usize::MAX, |b| b.len());
+        if state_len > MAX_STATE_BYTES {
+            return Err(PluginError::Limit(format!(
+                "the state of the tool has more than {MAX_STATE_BYTES} bytes"
+            )));
+        }
+        let params = self
+            .manifest
+            .resolve_tool_params(given)
+            .map_err(PluginError::Refused)?;
+        let mut request = ToolRequest::new(call.event.clone(), call.state.clone(), params);
+        request.modifiers = call.modifiers;
+        let request = serde_json::to_vec(&request).expect("a request is always valid JSON");
+        let bytes = self.module.tool(&request)?;
+        if bytes.len() > self.limits.max_output_bytes {
+            return Err(PluginError::Limit(format!(
+                "the answer has {} bytes. The limit is {}",
+                bytes.len(),
+                self.limits.max_output_bytes
+            )));
+        }
+        let reply = match serde_json::from_slice::<ToolResponse>(&bytes) {
+            Err(e) => {
+                return Err(PluginError::BadOutput(format!(
+                    "the answer is not valid: {e}"
+                )));
+            }
+            Ok(ToolResponse::Error { message }) => {
+                return Err(PluginError::Guest(clean_message(&message)));
+            }
+            Ok(ToolResponse::Ok(reply)) => reply,
+        };
+        let state_len = serde_json::to_vec(&reply.state).map_or(usize::MAX, |b| b.len());
+        if state_len > MAX_STATE_BYTES {
+            return Err(PluginError::Limit(format!(
+                "the state of the tool has {state_len} bytes. The limit is {MAX_STATE_BYTES}"
+            )));
+        }
+        let preview = convert_shapes(&reply.preview, &self.limits, true)?;
+        let hint: String = clean_message(&reply.hint)
+            .chars()
+            .take(MAX_HINT_CHARS)
+            .collect();
+        let done = match reply.result {
+            None => None,
+            Some(ToolResult::Shapes { shapes }) => Some(ToolDone::Shapes(convert_shapes(
+                &shapes,
+                &self.limits,
+                false,
+            )?)),
+            Some(ToolResult::Object { params, geometry }) => {
+                let spec = match (&self.manifest.object, self.manifest.provides(Kind::Object)) {
+                    (Some(spec), true) => spec,
+                    _ => {
+                        return Err(PluginError::BadOutput(
+                            "the tool placed an object, but the plug-in provides no object".into(),
+                        ));
+                    }
+                };
+                if geometry.shape_type() != spec.shape_type {
+                    return Err(PluginError::BadOutput(format!(
+                        "the tool placed a {} geometry, but the object needs a {} one",
+                        geometry.shape_type().name(),
+                        spec.shape_type.name()
+                    )));
+                }
+                // The geometry comes from the module: check numbers and ranges again.
+                let geometry = Geometry::from_value(spec.shape_type, &geometry.to_value())
+                    .map_err(|e| PluginError::BadOutput(format!("the object geometry: {e}")))?;
+                let params = self
+                    .manifest
+                    .resolve_params(&params)
+                    .map_err(|e| PluginError::BadOutput(format!("the object parameters: {e}")))?;
+                let shapes = self.reset(permit, &params, &geometry)?;
+                Some(ToolDone::Object {
+                    params,
+                    geometry,
+                    shapes,
+                })
+            }
+        };
+        Ok(ToolStep {
+            state: reply.state,
+            preview,
+            hint,
+            done,
+        })
+    }
+}
+
 /// Longest message of a plug-in that the host keeps, in characters.
 pub const MAX_MESSAGE_CHARS: usize = 1000;
 
@@ -222,8 +379,17 @@ fn v2(p: [f64; 2]) -> DVec2 {
 
 /// Turns the shapes of an answer into core shapes, and checks them against the limits.
 pub fn convert(shapes: &[OutShape], limits: &Limits) -> Result<Vec<Generated>, PluginError> {
+    convert_shapes(shapes, limits, false)
+}
+
+/// Like [`convert`]. With `allow_empty`, a list without shapes is fine (the preview of a tool).
+pub fn convert_shapes(
+    shapes: &[OutShape],
+    limits: &Limits,
+    allow_empty: bool,
+) -> Result<Vec<Generated>, PluginError> {
     let bad = |i: usize, e: &str| PluginError::BadOutput(format!("shape {i}: {e}"));
-    if shapes.is_empty() {
+    if shapes.is_empty() && !allow_empty {
         return Err(PluginError::BadOutput(
             "the plug-in returned no shapes".into(),
         ));
