@@ -281,6 +281,12 @@ mod tests {
     }
 
     #[test]
+    fn the_limits_are_those_of_the_version_store() {
+        assert_eq!(NAME_MAX, kadakas_review::history::NAME_MAX);
+        assert_eq!(NOTE_MAX, kadakas_review::history::NOTE_MAX);
+    }
+
+    #[test]
     fn the_list_is_read_and_bad_rows_are_left_out() {
         let l = VersionList::parse(&list());
         assert_eq!(l.rows.len(), 2);

@@ -47,3 +47,7 @@ versions-ui-deleted = Deleted version "{ $name }".
 versions-ui-error-name = Give the version a name.
 versions-ui-error-name-long = The name has at most { $max } characters.
 versions-ui-error-note-long = The note has at most { $max } characters.
+versions-ui-undo-note = Undo takes back a version that you just saved.
+versions-ui-confirm-restore = Restore version "{ $name }"? The drawing as it is now is saved as a new version first. Undo takes back the restore and that new version.
+versions-ui-confirm-delete = Delete version "{ $name }"? Undo brings it back.
+versions-ui-pick = Select a version

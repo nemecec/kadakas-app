@@ -47,3 +47,7 @@ versions-ui-deleted = Kustutati versioon "{ $name }".
 versions-ui-error-name = Anna versioonile nimi.
 versions-ui-error-name-long = Nimes on kuni { $max } märki.
 versions-ui-error-note-long = Märkuses on kuni { $max } märki.
+versions-ui-undo-note = Tagasivõtmine võtab tagasi just salvestatud versiooni.
+versions-ui-confirm-restore = Kas taastada versioon "{ $name }"? Praegune joonis salvestatakse enne uue versioonina. Tagasivõtmine võtab tagasi taastamise ja selle uue versiooni.
+versions-ui-confirm-delete = Kas kustutada versioon "{ $name }"? Tagasivõtmine toob selle tagasi.
+versions-ui-pick = Vali versioon

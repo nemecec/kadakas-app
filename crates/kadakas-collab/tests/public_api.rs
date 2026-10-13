@@ -20,7 +20,7 @@ fn the_old_paths_still_resolve() {
     // The modules and some of their items.
     let _ = kadakas_collab::blob::sha256_hex(b"");
     let _ = kadakas_collab::order::valid_key("a0");
-    let _ = kadakas_collab::validate::validate_ops;
+    let _ = kadakas_collab::validate::validate_entity;
     let _ = kadakas_collab::op::validate_ops;
     let _ = kadakas_collab::op::MAX_OPS;
     let _ = kadakas_collab::replica::same_json;

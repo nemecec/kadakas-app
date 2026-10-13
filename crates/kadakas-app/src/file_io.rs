@@ -95,7 +95,7 @@ pub fn agent_line(
             *path = Some(p.clone());
             fx.path_changed = true;
         }
-        Ok(kadakas_api::files::FileDone::Opened(p)) => {
+        Ok(kadakas_api::files::FileDone::Opened(p, _)) => {
             *path = Some(p.clone());
             fx.replaced = true;
             fx.path_changed = true;

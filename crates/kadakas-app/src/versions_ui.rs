@@ -20,6 +20,16 @@ use serde_json::json;
 
 /// The most things that a comparison lists.
 const DIFF_LIMIT: usize = 200;
+/// How long the drawing must stay unchanged before the window compares it with the newest
+/// version (a pass over the whole drawing), in seconds.
+const CHECK_DELAY: f64 = 0.5;
+
+/// What the person is asked to confirm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirm {
+    Restore(u64),
+    Delete(u64),
+}
 
 /// State of the window.
 pub struct VersionsUi {
@@ -31,6 +41,9 @@ pub struct VersionsUi {
     from: Option<Side>,
     to: Side,
     diff: Option<DiffView>,
+    confirm: Option<Confirm>,
+    /// When the comparison of the drawing with the newest version is due (the time of egui).
+    check_due: Option<f64>,
 }
 
 impl Default for VersionsUi {
@@ -43,6 +56,8 @@ impl Default for VersionsUi {
             from: None,
             to: Side::Current,
             diff: None,
+            confirm: None,
+            check_due: None,
         }
     }
 }
@@ -106,11 +121,22 @@ impl VersionsUi {
     }
 
     fn refresh(&mut self, session: &mut Session) {
+        self.refresh_with(session, true);
+    }
+
+    /// Reads the versions. With `current` false the answer has no comparison of the drawing with
+    /// the newest version, which costs a pass over the drawing.
+    fn refresh_with(&mut self, session: &mut Session, current: bool) {
         self.revision = session.editor.revision();
         self.list = session
-            .handle("version.list", json!({}))
+            .handle("version.list", json!({"current": current}))
             .map(|v| VersionList::parse(&v))
             .unwrap_or_default();
+        if let Some(Confirm::Restore(id) | Confirm::Delete(id)) = self.confirm
+            && self.list.find(id).is_none()
+        {
+            self.confirm = None;
+        }
         // A side that is gone cannot be compared. The drawing changed: a comparison with it is old.
         let gone = |s: Side| matches!(s, Side::Version(id) if self.list.find(id).is_none());
         if self.from.is_some_and(gone) {
@@ -223,8 +249,20 @@ impl VersionsUi {
         if !self.open {
             return;
         }
+        // The drawing changes often (every move of the pointer in a drag). The list is read at
+        // once, the comparison with the newest version when the drawing has been quiet.
+        let now = ctx.input(|i| i.time);
         if self.revision != session.editor.revision() {
-            self.refresh(session);
+            self.refresh_with(session, false);
+            self.check_due = Some(now + CHECK_DELAY);
+        }
+        if let Some(due) = self.check_due {
+            if now >= due {
+                self.check_due = None;
+                self.refresh(session);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+            }
         }
         let mut open = self.open;
         egui::Window::new(tr!("versions-ui-title"))
@@ -252,6 +290,7 @@ impl VersionsUi {
         if ui.button(tr!("versions-ui-save")).clicked() {
             self.save(session, status);
         }
+        ui.small(tr!("versions-ui-undo-note"));
         ui.separator();
         self.list_section(ui, session, status);
         ui.separator();
@@ -278,7 +317,7 @@ impl VersionsUi {
             }
             None => {}
         }
-        let mut action = None;
+        let mut ask = None;
         egui::ScrollArea::vertical()
             .id_salt("versions-list")
             .max_height(220.0)
@@ -303,20 +342,43 @@ impl VersionsUi {
                     }
                     ui.horizontal(|ui| {
                         if ui.button(tr!("versions-ui-restore")).clicked() {
-                            action = Some((true, row.id));
+                            ask = Some(Confirm::Restore(row.id));
                         }
                         if ui.button(tr!("versions-ui-delete")).clicked() {
-                            action = Some((false, row.id));
+                            ask = Some(Confirm::Delete(row.id));
                         }
                     });
                     ui.add_space(4.0);
                 }
             });
-        match action {
-            Some((true, id)) => self.restore(session, id, status),
-            Some((false, id)) => self.delete(session, id, status),
-            None => {}
+        if ask.is_some() {
+            self.confirm = ask;
         }
+        let Some(confirm) = self.confirm else { return };
+        let (text, label) = match confirm {
+            Confirm::Restore(id) => (
+                tr!("versions-ui-confirm-restore", name = self.list.name_of(id)),
+                tr!("versions-ui-restore"),
+            ),
+            Confirm::Delete(id) => (
+                tr!("versions-ui-confirm-delete", name = self.list.name_of(id)),
+                tr!("versions-ui-delete"),
+            ),
+        };
+        ui.separator();
+        ui.label(text);
+        ui.horizontal(|ui| {
+            if ui.button(label).clicked() {
+                self.confirm = None;
+                match confirm {
+                    Confirm::Restore(id) => self.restore(session, id, status),
+                    Confirm::Delete(id) => self.delete(session, id, status),
+                }
+            }
+            if ui.button(tr!("common-cancel")).clicked() {
+                self.confirm = None;
+            }
+        });
     }
 
     fn side_combo(
@@ -327,7 +389,7 @@ impl VersionsUi {
         with_current: bool,
     ) -> Option<Side> {
         let mut chosen = current;
-        let text = current.map_or_else(String::new, |s| side_text(&self.list, s));
+        let text = current.map_or_else(|| tr!("versions-ui-pick"), |s| side_text(&self.list, s));
         egui::ComboBox::from_id_salt(salt)
             .selected_text(text)
             .show_ui(ui, |ui| {
@@ -585,6 +647,71 @@ mod tests {
                 assert!(ui.diff.as_ref().unwrap().is_empty());
             });
         }
+    }
+
+    #[test]
+    fn restore_and_delete_ask_first_and_say_what_undo_does() {
+        for lang in kadakas_l10n::languages() {
+            kadakas_l10n::with_language(lang.tag, || {
+                let mut s = Session::with_sequential_ids();
+                let mut ui = VersionsUi::default();
+                let mut status = String::new();
+                add(&mut s, 0);
+                ui.open(&mut s);
+                ui.form.name = "One".into();
+                ui.save(&mut s, &mut status);
+                add(&mut s, 30);
+                let ctx = egui::Context::default();
+                let draw = |ui: &mut VersionsUi, s: &mut Session, status: &mut String| {
+                    let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+                        ui.show(&u.ctx().clone(), s, status);
+                    });
+                };
+                // The question is drawn, and nothing was changed by drawing it.
+                ui.confirm = Some(Confirm::Restore(1));
+                draw(&mut ui, &mut s, &mut status);
+                assert_eq!(s.editor.doc().objects.len(), 2);
+                assert!(tr!("versions-ui-confirm-restore", name = "One").contains("One"));
+                assert!(!tr!("versions-ui-confirm-delete", name = "One").is_empty());
+                assert!(!tr!("versions-ui-undo-note").is_empty());
+                assert!(!tr!("versions-ui-pick").is_empty());
+                ui.confirm = Some(Confirm::Delete(1));
+                draw(&mut ui, &mut s, &mut status);
+                assert_eq!(ui.list.rows.len(), 1);
+                // A question about a version that is gone is dropped.
+                ui.delete(&mut s, 1, &mut status);
+                ui.confirm = Some(Confirm::Delete(1));
+                ui.refresh(&mut s);
+                assert!(ui.confirm.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn the_window_compares_with_the_newest_version_only_when_the_drawing_is_quiet() {
+        let mut s = Session::with_sequential_ids();
+        let mut ui = VersionsUi::default();
+        let mut status = String::new();
+        add(&mut s, 0);
+        ui.open(&mut s);
+        ui.form.name = "One".into();
+        ui.save(&mut s, &mut status);
+        assert_eq!(ui.list.current_is_newest, Some(true));
+        // The drawing changes: the list is read at once without the comparison.
+        add(&mut s, 30);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+            ui.show(&u.ctx().clone(), &mut s, &mut status);
+        });
+        assert_eq!(ui.list.current_is_newest, None);
+        assert!(ui.check_due.is_some());
+        // When the time has come, the comparison is made.
+        ui.check_due = Some(f64::MIN);
+        let _ = ctx.run_ui(egui::RawInput::default(), |u| {
+            ui.show(&u.ctx().clone(), &mut s, &mut status);
+        });
+        assert_eq!(ui.list.current_is_newest, Some(false));
+        assert!(ui.check_due.is_none());
     }
 
     #[test]

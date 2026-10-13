@@ -28,6 +28,7 @@ app-downloading = Laen alla: { $name }
 app-opened = Avatud: { $name }
 app-cannot-open = Ei saa avada: { $name }: { $e }
 app-opened-2 = Avatud: { $name }
+app-load-notes = Fail avati, aga mõnda selle osa parandati või jäeti välja: { $notes }
 app-saved = Salvestatud: { $name }
 app-exported = Eksporditud: { $name }
 app-add-a-sheet-layer-first-navigation-sheet = Lisa kõigepealt lehekiht (Navigeerimine > Lehekihid > +)

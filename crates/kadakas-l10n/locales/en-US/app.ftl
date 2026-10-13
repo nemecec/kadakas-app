@@ -32,6 +32,7 @@ app-downloading = Downloading { $name }
 app-opened = Opened { $name }
 app-cannot-open = Cannot open { $name }: { $e }
 app-opened-2 = Opened { $name }
+app-load-notes = The file was opened, but parts of it were repaired or left out: { $notes }
 app-saved = Saved { $name }
 app-exported = Exported { $name }
 app-add-a-sheet-layer-first-navigation-sheet = Add a sheet layer first (Navigation > Sheet Layers > +)

@@ -155,6 +155,8 @@ pub struct Session {
     pub wasm_plugins: WasmPluginState,
     /// The parsed history of versions of the open document (see `review_api`).
     review: review_api::ReviewCache,
+    /// What the load of the open document repaired (see `Session::load_notes`).
+    load_notes: Vec<String>,
 }
 
 /// The picture of an underlay is not sent in lists: it is megabytes of base64 text.
@@ -765,7 +767,14 @@ impl Session {
             scripting: ScriptingState::default(),
             wasm_plugins: WasmPluginState::default(),
             review: Default::default(),
+            load_notes: Vec::new(),
         }
+    }
+
+    /// What the load of the open document repaired instead of refusing the file: the notes of the
+    /// file format check and of the check of the versions. A host shows them to the person.
+    pub fn load_notes(&self) -> &[String] {
+        &self.load_notes
     }
 
     /// How often the annotation cache made primitives and legend rows, as `(primitives, rows)`.
@@ -792,7 +801,10 @@ impl Session {
     /// A session for an opened document, with empty history and selection.
     pub fn with_document(mut doc: Document) -> Self {
         review_api::vet_document(&mut doc, &SessionLimits::default());
-        Session::with_vetted_document(doc)
+        let notes = doc.load_notes().to_vec();
+        let mut s = Session::with_vetted_document(doc);
+        s.load_notes = notes;
+        s
     }
 
     /// Like `with_document`, for a document whose history was checked already.
@@ -844,6 +856,7 @@ impl Session {
             self.gis.epoch += 1;
         }
         self.set_limits(limits);
+        self.load_notes = notes.clone();
         notes
     }
 

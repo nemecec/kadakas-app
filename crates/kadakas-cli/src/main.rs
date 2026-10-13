@@ -282,6 +282,9 @@ fn remote_call(
 
 fn load(path: &std::path::Path) -> Result<Document, String> {
     let mut doc = kadakas_api::files::read_document(path).map_err(|e| e.message)?;
+    for note in doc.load_notes() {
+        eprintln!("kadakas: {}: {note}", path.display());
+    }
     // An old file has no project GUID. It gets one in memory, and the next save writes it.
     doc.ensure_project_guid();
     Ok(doc)

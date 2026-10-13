@@ -527,7 +527,7 @@ impl KadakasApp {
         }
         // Keep the rest of the session: the event subscriptions, the limits, the allowed folders
         // and addresses, and the scripting policy. `replace_document` keeps the view and snapping.
-        self.session.replace_document(doc);
+        let notes = self.session.replace_document(doc);
         // The app handles this change itself: agents must not see it as a `document.load`.
         self.session.take_replaced();
         self.view_history.clear();
@@ -536,6 +536,11 @@ impl KadakasApp {
         self.machine.cancel();
         self.needs_fit = true;
         self.view3d.request_fit();
+        // What the load repaired (a bad value of a site model, a damaged history of versions)
+        // is told to the person: the file opened, but not as it was written.
+        if !notes.is_empty() {
+            self.status = tr!("app-load-notes", notes = notes.join("; "));
+        }
         true
     }
 
@@ -2697,6 +2702,27 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             egui::CentralPanel::no_frame().show(ui, |ui| app.show_dock(ui));
         });
+    }
+
+    #[test]
+    fn what_a_load_repaired_is_told_in_the_status_line() {
+        for lang in kadakas_l10n::languages() {
+            kadakas_l10n::with_language(lang.tag, || {
+                let mut app = KadakasApp::blank();
+                app.replace_document(Document::default(), None);
+                app.status.clear();
+                let mut doc = Document::default();
+                doc.history = Some(kadakas_core::history::HistoryData::new(
+                    serde_json::json!({"format": 99}),
+                ));
+                assert!(app.replace_document(doc, None));
+                assert!(app.status.contains("format"), "{}", app.status);
+                assert!(app.status.len() > 40);
+                app.status.clear();
+                app.replace_document(Document::default(), None);
+                assert!(app.status.is_empty(), "a clean load says nothing here");
+            });
+        }
     }
 
     #[test]

@@ -21,14 +21,15 @@ pub type WriteFn<'a> = dyn FnMut(&Path, &[u8]) -> Result<(), String> + 'a;
 /// What `file_call` did.
 #[derive(Debug, PartialEq)]
 pub enum FileDone {
-    Opened(PathBuf),
+    /// The path, and what the load repaired (the load notes of the document).
+    Opened(PathBuf, Vec<String>),
     Saved(PathBuf),
 }
 
 impl FileDone {
     pub fn path(&self) -> &Path {
         match self {
-            FileDone::Opened(p) | FileDone::Saved(p) => p,
+            FileDone::Opened(p, _) | FileDone::Saved(p) => p,
         }
     }
 }
@@ -98,10 +99,10 @@ pub fn file_call(
     } else {
         let doc = read_document(&p)?;
         s.check_document_fits(&doc)?;
-        s.replace_document(doc);
+        let notes = s.replace_document(doc);
         s.take_replaced();
         s.doc_dir = dir_of(&p);
-        Ok(FileDone::Opened(p))
+        Ok(FileDone::Opened(p, notes))
     }
 }
 
@@ -113,6 +114,10 @@ pub fn write_document_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// The JSON-RPC response for the result of `file_call`.
 pub fn file_reply(id: Value, result: Result<FileDone, RpcError>) -> String {
     match result {
+        // Like `document.load`: what the load repaired instead of refusing the file.
+        Ok(FileDone::Opened(_, notes)) if !notes.is_empty() => {
+            json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true, "notes": notes}}).to_string()
+        }
         Ok(_) => json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}).to_string(),
         Err(e) => crate::errors::error_response(id, e.code, e.kind, &e.message),
     }
@@ -278,7 +283,11 @@ mod tests {
         call(&mut b, "file.open", &f);
         assert!(!b.take_replaced());
         assert_eq!(b.editor.doc().objects.len(), 1);
-        assert!(FileDone::Opened(f.clone()).path().ends_with("a.kad"));
+        assert!(
+            FileDone::Opened(f.clone(), Vec::new())
+                .path()
+                .ends_with("a.kad")
+        );
         assert!(is_file_method("file.open") && !is_file_method("render.svg"));
     }
 }

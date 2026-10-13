@@ -3054,6 +3054,7 @@ dependencies = [
  "kadakas-l10n",
  "kadakas-plants",
  "kadakas-render",
+ "kadakas-review",
  "kadakas-site",
  "kadakas-units",
  "serde_json",
