@@ -612,6 +612,7 @@ impl Shape {
             Shape::Mesh3d(m) => m.problem(),
             Shape::Extrude(e) => e.problem(),
             Shape::Sweep(s) => s.problem(),
+            Shape::SiteModel { settings, .. } => settings.problem().map(String::from),
             _ => None,
         }
     }

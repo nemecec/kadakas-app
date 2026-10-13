@@ -904,3 +904,78 @@ fn a_hostile_key_is_refused_by_the_check_and_counts_as_no_key() {
         .to_string();
     assert!(crate::order::valid_key(&key));
 }
+
+#[test]
+fn the_terrain_look_of_a_site_model_syncs_as_one_small_property() {
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::model::Shape;
+    let pts = || {
+        (0..500)
+            .map(|i| json!([i, i % 9, 0]))
+            .collect::<Vec<_>>()
+    };
+    let mut ed = Editor::with_sequential_ids();
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "add_object",
+        "shape": {"kind": "site_model", "points": pts()}
+    }))
+    .unwrap();
+    let id = ObjectId(ed.execute(&cmd).unwrap().created[0]);
+    let mut shadow = replica_of(ed.doc());
+    let texture = Uid::from_num(77);
+    let rev = ed.revision();
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "modify_object", "id": id,
+        "shape": {"kind": "site_model", "points": pts(),
+            "settings": {"surface_look": "texture", "texture": texture, "texture_tile": 750.0,
+                         "texture_offset": [5.0, 6.0], "texture_rotation": 20.0,
+                         "elevation_bands": 6}}
+    }))
+    .unwrap();
+    ed.execute(&cmd).unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    // The points did not change: only the base of the shape goes out.
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert!(matches!(&ops[0], Op::Set { prop, value, .. }
+        if prop == "shape" && value["settings"]["texture_tile"] == 750.0
+            && value.get("points").is_none()));
+    shadow.apply_all(Writer::BASELINE, &ops);
+    let m = materialize(&shadow, ed.doc());
+    assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
+    match &m.doc.object(id).unwrap().shape {
+        Shape::SiteModel {
+            settings, points, ..
+        } => {
+            assert_eq!(points.len(), 500);
+            assert_eq!(settings.texture_tile, 750.0);
+            assert_eq!(settings.elevation_bands, 6);
+            assert_eq!(settings.texture, Some(ResourceId(texture)));
+        }
+        other => panic!("{other:?}"),
+    }
+    // A peer sends a tile size that no site model may have: the object is quarantined, not fatal.
+    let mut base = shadow
+        .alive(Target::new(Kind::Object, id.0))
+        .unwrap()
+        .get("shape")
+        .unwrap()
+        .clone();
+    base["settings"]["texture_tile"] = json!(0.5);
+    set(
+        &mut shadow,
+        w(9, 1),
+        Kind::Object,
+        id.0.low_u64(),
+        "shape",
+        base,
+    );
+    let m = materialize(&shadow, ed.doc());
+    assert!(m.quarantined.iter().any(|q| q.target.id == id.0));
+}
