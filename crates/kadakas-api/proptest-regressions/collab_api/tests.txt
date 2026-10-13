@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 077d85ccb8bbb09b0080f0ef894f6013e4492365e8a73b9c891c54f8dd4618fd # shrinks to acts = [Place { s: true, x: 0 }, Redo { s: true }]
+cc b5e014a1aad3fd0645ab36aa71314dd6d965699202de50ab9e86d5f2083ba5b9 # shrinks to acts = [AddRect { s: false, x: 0 }, Place { s: false, x: 0 }, Underlay { s: true, x: 0, v: 0 }, Underlay { s: false, x: 0, v: 0 }, Undo { s: false }, Sync { s: true }, Arrange { s: false, i: 0, j: 197, how: 2 }, AddRect { s: false, x: 314 }, Delete { s: true, i: 191 }, Redo { s: false }, Sync { s: true }, Underlay { s: true, x: -148, v: 1 }]
