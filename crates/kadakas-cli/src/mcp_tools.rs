@@ -107,8 +107,8 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "site",
-        summary: "Site models (terrain), contours, volumes, source data checks, survey point import, pads with retaining edges, and the survey point of the georeference.",
-        prefixes: &["site", "pad", "survey", "georef"],
+        summary: "Site models (terrain), contours, volumes, source data checks, survey point import, pads with retaining edges, texture beds, and the survey point of the georeference.",
+        prefixes: &["site", "pad", "bed", "survey", "georef"],
         read_only: false,
         open_world: false,
     },
