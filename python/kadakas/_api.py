@@ -2133,7 +2133,7 @@ class Api:
         return self._call("version.create", params or None)
 
     def version_list(self, **params: Any) -> Any:
-        """The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, base_revision, auto?, delta_bytes}], count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
+        """The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.
 
         JSON-RPC method ``version.list``."""
         return self._call("version.list", params or None)

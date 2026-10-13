@@ -8,6 +8,18 @@
 //! The state of a version is rebuilt by applying the deltas in order (see [`History::state_at`]).
 //! No version holds a full copy, so a history of many small edits is small.
 //!
+//! # Parents and branches
+//!
+//! The versions are a graph, not a list, so branches can come later (REV-10). Each version has
+//! `parents`, the IDs of the versions it was made from, the first parent first (a merge has two;
+//! the root has none) and a `branch` name (default `main`). A delta is always relative to the
+//! **first parent**, and the state of a version is the base with the deltas along the chain of
+//! first parents applied. The history has a current `branch` and its `head`, the version that the
+//! next one is made from. Today every version has the previous one as its only parent; there are no
+//! calls that make a branch or a merge yet. Folding and deleting keep the graph whole: a version
+//! that is the first parent of a kept version is never lost, the kept version is cut loose from it
+//! with a delta against the new first parent instead.
+//!
 //! # Caps
 //!
 //! [`Limits`] caps the number of versions and the bytes of the history. When a new version breaks
@@ -130,6 +142,13 @@ pub struct VersionMeta {
     /// Who was working when the version was saved (the origin of the editor).
     #[serde(default)]
     pub origin: Origin,
+    /// The versions this one was made from, the first parent first. The delta of this version is
+    /// relative to the first parent. Empty for the first version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<u64>,
+    /// The branch that the version was made on.
+    #[serde(default = "main_branch")]
+    pub branch: String,
     /// The revision of the editor when the version was saved (`Editor::revision`). It is unique in
     /// one process. Use it to find out if the open document changed since the version; it means
     /// nothing after the file is opened again.
@@ -138,6 +157,17 @@ pub struct VersionMeta {
     /// True for a version that Kadakas saved by itself (before a restore).
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto: bool,
+}
+
+/// The name of the branch that every history starts with.
+pub const MAIN_BRANCH: &str = "main";
+/// The longest branch name, in characters.
+pub const BRANCH_MAX: usize = 60;
+/// The most parents of one version.
+pub const PARENTS_MAX: usize = 8;
+
+fn main_branch() -> String {
+    MAIN_BRANCH.to_string()
 }
 
 fn is_false(b: &bool) -> bool {
@@ -180,6 +210,10 @@ pub struct History {
     base: Vec<Op>,
     base_bytes: usize,
     versions: Vec<Version>,
+    /// The branch that new versions go on.
+    branch: String,
+    /// The version that the next one is made from: the newest on the current branch.
+    head: Option<u64>,
 }
 
 /// The result of [`History::load`]: the history that could be kept, and what was repaired.
@@ -208,7 +242,19 @@ impl History {
             base: Vec::new(),
             base_bytes: 0,
             versions: Vec::new(),
+            branch: main_branch(),
+            head: None,
         }
+    }
+
+    /// The branch that new versions go on.
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    /// The version that the next one is made from.
+    pub fn head(&self) -> Option<u64> {
+        self.head
     }
 
     /// A history with no versions. Use [`History::add`] to make the first one.
@@ -248,15 +294,32 @@ impl History {
             .map(|i| ops_bytes(&self.versions[i].delta))
     }
 
-    /// The state of the version at `index` (0 is the oldest): the base with the deltas applied.
+    /// The state of the version at `index` (0 is the oldest, the root): the base with the deltas
+    /// along the chain of first parents applied.
     pub fn state_at(&self, index: usize) -> Result<State, ReviewError> {
         if index >= self.versions.len() {
             return Err(ReviewError::Damaged(format!("no version at {index}")));
         }
+        let mut chain = vec![index];
+        let mut at = index;
+        while let Some(&parent) = self.versions[at].meta.parents.first() {
+            at = self
+                .index_of(parent)
+                .ok_or_else(|| ReviewError::Damaged(format!("the parent {parent} is gone")))?;
+            if chain.len() > self.versions.len() {
+                return Err(ReviewError::Damaged("the parents make a cycle".into()));
+            }
+            chain.push(at);
+        }
+        if at != 0 {
+            return Err(ReviewError::Damaged(
+                "a chain does not reach the root".into(),
+            ));
+        }
         let mut state = State::new();
         state.apply_all(&self.base)?;
-        for v in &self.versions[1..=index] {
-            state.apply_all(&v.delta)?;
+        for &i in chain.iter().rev().skip(1) {
+            state.apply_all(&self.versions[i].delta)?;
         }
         Ok(state)
     }
@@ -267,11 +330,18 @@ impl History {
         self.state_at(i)
     }
 
-    /// The state of the newest version, if there is one.
+    /// The index of the head, or of the newest version if the head is not set.
+    fn head_index(&self) -> Option<usize> {
+        self.head
+            .and_then(|h| self.index_of(h))
+            .or(self.versions.len().checked_sub(1))
+    }
+
+    /// The state of the head version, if there is one.
     pub fn tip_state(&self) -> Result<Option<State>, ReviewError> {
-        match self.versions.len() {
-            0 => Ok(None),
-            n => self.state_at(n - 1).map(Some),
+        match self.head_index() {
+            None => Ok(None),
+            Some(i) => self.state_at(i).map(Some),
         }
     }
 
@@ -332,10 +402,20 @@ impl History {
             author: new.author,
             time_ms: new.time_ms,
             origin: new.origin,
+            parents: Vec::new(),
+            branch: main_branch(),
             base_revision: new.base_revision,
             auto: new.auto,
         };
         let id = meta.id;
+        let mut meta = meta;
+        meta.parents = next
+            .head_index()
+            .map(|i| next.versions[i].meta.id)
+            .into_iter()
+            .collect();
+        meta.branch = next.branch.clone();
+        next.head = Some(id);
         next.next_id = next.next_id.saturating_add(1);
         let delta = match &tip {
             None => {
@@ -378,35 +458,93 @@ impl History {
             self.versions.clear();
             self.base.clear();
             self.base_bytes = 0;
+            self.head = None;
             return Ok(());
         }
+        let gone = self.versions[0].meta.id;
+        let new_root = self.versions[1].meta.id;
         let next = self.state_at(1)?;
+        // A version that was made from the root, other than the new root, gets a delta against
+        // the new root.
+        let cut_loose: Vec<(u64, State)> = (2..self.versions.len())
+            .filter(|&i| self.versions[i].meta.parents.first() == Some(&gone))
+            .map(|i| Ok((self.versions[i].meta.id, self.state_at(i)?)))
+            .collect::<Result<_, ReviewError>>()?;
         self.base = next.snapshot();
         self.base_bytes = ops_bytes(&self.base);
         self.versions.remove(0);
+        for (id, state) in cut_loose {
+            if let Some(i) = self.index_of(id) {
+                let delta = next.diff(&state);
+                let v = &mut self.versions[i];
+                v.meta.parents[0] = new_root;
+                v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
+                v.delta = delta;
+            }
+        }
+        for v in &mut self.versions {
+            v.meta.parents.retain(|p| *p != gone);
+        }
         let first = &mut self.versions[0];
         first.delta.clear();
         first.bytes = meta_bytes(&first.meta);
+        if self.head == Some(gone) {
+            self.head = self.versions.last().map(|v| v.meta.id);
+        }
         Ok(())
     }
 
-    /// Deletes a version. The versions before and after stay as they are. Returns true if no
-    /// version is left.
+    /// Deletes a version. The other versions keep their content: a version made from it is
+    /// made from its first parent instead, with a delta against that. Returns true if no version
+    /// is left.
     pub fn remove(&mut self, id: u64) -> Result<bool, ReviewError> {
         let i = self.index_of(id).ok_or(ReviewError::NotFound(id))?;
         let mut next = self.clone();
         if i == 0 {
             next.drop_first()?;
-        } else if i + 1 == next.versions.len() {
-            next.versions.pop();
         } else {
-            let before = next.state_at(i - 1)?;
-            let after = next.state_at(i + 1)?;
-            let delta = before.diff(&after);
+            let parent = next.versions[i]
+                .meta
+                .parents
+                .first()
+                .copied()
+                .ok_or_else(|| {
+                    ReviewError::Damaged(format!("version {id} has no parent but is not the root"))
+                })?;
+            let parent_state = next.state_of(parent)?;
+            let children: Vec<(u64, State)> = (0..next.versions.len())
+                .filter(|&c| next.versions[c].meta.parents.first() == Some(&id))
+                .map(|c| Ok((next.versions[c].meta.id, next.state_at(c)?)))
+                .collect::<Result<_, ReviewError>>()?;
             next.versions.remove(i);
-            let v = &mut next.versions[i];
-            v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
-            v.delta = delta;
+            for (cid, state) in children {
+                if let Some(c) = next.index_of(cid) {
+                    let delta = parent_state.diff(&state);
+                    let v = &mut next.versions[c];
+                    v.meta.parents[0] = parent;
+                    v.bytes = ops_bytes(&delta) + meta_bytes(&v.meta);
+                    v.delta = delta;
+                }
+            }
+            for v in &mut next.versions {
+                if v.meta.parents.contains(&id) {
+                    let mut seen = Vec::new();
+                    for p in v
+                        .meta
+                        .parents
+                        .iter()
+                        .map(|p| if *p == id { parent } else { *p })
+                    {
+                        if !seen.contains(&p) {
+                            seen.push(p);
+                        }
+                    }
+                    v.meta.parents = seen;
+                }
+            }
+            if next.head == Some(id) {
+                next.head = Some(parent);
+            }
         }
         *self = next;
         Ok(self.versions.is_empty())
@@ -428,6 +566,8 @@ impl History {
         json!({
             "format": FORMAT,
             "next_id": self.next_id,
+            "branch": self.branch,
+            "head": self.head,
             "base": self.base,
             "versions": versions,
         })
@@ -521,7 +661,15 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
         base_bytes: ops_bytes(&base),
         base,
         versions: Vec::new(),
+        branch: main_branch(),
+        head: obj.get("head").and_then(Value::as_u64),
     };
+    if let Some(b) = obj.get("branch").and_then(Value::as_str) {
+        let b = cut(b.trim(), BRANCH_MAX);
+        if !b.is_empty() {
+            history.branch = b;
+        }
+    }
     if list.len() > HARD_MAX_VERSIONS {
         notes.push(format!(
             "the history had {} versions: only the first {HARD_MAX_VERSIONS} were read",
@@ -574,11 +722,38 @@ fn read(value: &Value, notes: &mut Vec<String>) -> Option<History> {
             repaired_texts = true;
         }
         history.next_id = history.next_id.max(meta.id.saturating_add(1));
+        // Parents: the first is the version before (the loader replays the file in order), the
+        // others must be earlier versions.
+        let before = history.versions.last().map(|v| v.meta.id);
+        let old_parents = std::mem::take(&mut meta.parents);
+        meta.parents = before.into_iter().collect();
+        for p in old_parents.iter().skip(1) {
+            if meta.parents.len() < PARENTS_MAX
+                && !meta.parents.contains(p)
+                && history.versions.iter().any(|v| v.meta.id == *p)
+            {
+                meta.parents.push(*p);
+            }
+        }
+        repaired_texts |=
+            old_parents.first().copied() != before || old_parents.len() != meta.parents.len();
+        let branch = cut(meta.branch.trim(), BRANCH_MAX);
+        meta.branch = if branch.is_empty() {
+            main_branch()
+        } else {
+            branch
+        };
         let bytes = ops_bytes(&delta) + meta_bytes(&meta);
         history.versions.push(Version { meta, delta, bytes });
     }
+    if history
+        .head
+        .is_none_or(|h| history.versions.iter().all(|v| v.meta.id != h))
+    {
+        history.head = history.versions.last().map(|v| v.meta.id);
+    }
     if repaired_texts {
-        notes.push("some names, notes or numbers of versions were repaired".into());
+        notes.push("some names, notes, numbers or parents of versions were repaired".into());
     }
     Some(history)
 }

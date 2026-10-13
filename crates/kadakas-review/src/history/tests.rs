@@ -381,6 +381,142 @@ fn limits_are_clamped() {
     ));
 }
 
+fn three() -> (History, State, State, State) {
+    let mut ed = editor();
+    let mut h = History::new();
+    let mut states = Vec::new();
+    for i in 0..3 {
+        circle(&mut ed, f64::from(i) * 7.0);
+        let id = add(&mut h, &ed, &format!("v{i}"));
+        states.push(h.state_of(id).unwrap());
+    }
+    let c = states.pop().unwrap();
+    let b = states.pop().unwrap();
+    let a = states.pop().unwrap();
+    (h, a, b, c)
+}
+
+/// A version made from version 1, after version 2 was made from it too: a branch.
+fn with_branch(h: &mut History, from: u64, name: &str, state: &State) -> u64 {
+    let base = h.state_of(from).unwrap();
+    let id = h.next_id;
+    h.next_id += 1;
+    let delta = base.diff(state);
+    let mut m = h.versions[0].meta.clone();
+    m.id = id;
+    m.name = name.into();
+    m.parents = vec![from];
+    m.branch = "alt".into();
+    let bytes = ops_bytes(&delta) + meta_bytes(&m);
+    h.versions.push(Version {
+        meta: m,
+        delta,
+        bytes,
+    });
+    id
+}
+
+#[test]
+fn versions_record_their_parents_branch_and_head() {
+    let (h, ..) = three();
+    let metas: Vec<&VersionMeta> = h.versions().collect();
+    assert!(metas[0].parents.is_empty());
+    assert_eq!(metas[1].parents, vec![1]);
+    assert_eq!(metas[2].parents, vec![2]);
+    assert!(metas.iter().all(|m| m.branch == MAIN_BRANCH));
+    assert_eq!((h.branch(), h.head()), ("main", Some(3)));
+    let json = h.to_value();
+    assert_eq!(json["branch"], "main");
+    assert_eq!(json["head"], 3);
+    assert!(json["versions"][0].get("parents").is_none());
+    assert_eq!(json["versions"][2]["parents"], serde_json::json!([2]));
+    assert_eq!(History::load(&json, Limits::default()).history.unwrap(), h);
+}
+
+#[test]
+fn a_delta_is_relative_to_the_first_parent() {
+    let (mut h, a, b, _) = three();
+    let mut ed = editor();
+    circle(&mut ed, 100.0);
+    let other = State::of(ed.doc(), Some(&a));
+    let alt = with_branch(&mut h, 1, "alt", &other);
+    assert_eq!(h.state_of(alt).unwrap(), other);
+    assert_eq!(
+        h.state_of(2).unwrap(),
+        b,
+        "the other branch does not disturb version 2"
+    );
+    // Folding the root cuts the branch loose from it: both keep their content.
+    let mut folded = h.clone();
+    let before: Vec<State> = [2, 3, alt]
+        .iter()
+        .map(|i| folded.state_of(*i).unwrap())
+        .collect();
+    folded.drop_first().unwrap();
+    assert_eq!(folded.meta(alt).unwrap().parents, vec![2]);
+    assert!(folded.meta(2).unwrap().parents.is_empty());
+    for (id, want) in [2, 3, alt].iter().zip(before) {
+        assert_eq!(folded.state_of(*id).unwrap(), want);
+    }
+    // Deleting version 2 leaves its child 3 made from version 1, and the branch alone.
+    let mut gone = h.clone();
+    gone.remove(2).unwrap();
+    assert_eq!(gone.meta(3).unwrap().parents, vec![1]);
+    assert_eq!(gone.state_of(3).unwrap(), h.state_of(3).unwrap());
+    assert_eq!(gone.state_of(alt).unwrap(), other);
+    // The head moves back if its version is deleted.
+    let mut last = h.clone();
+    last.head = Some(alt);
+    last.remove(alt).unwrap();
+    assert_eq!(last.head(), Some(1));
+    let mut first = h.clone();
+    first.head = Some(1);
+    first.remove(1).unwrap();
+    assert_eq!(first.head(), Some(alt));
+    // A history that was cut by the caps keeps working.
+    assert!(h.enforce(limits(2, usize::MAX)).is_ok());
+    assert!(h.len() <= 2);
+    for m in h.versions().map(|m| m.id).collect::<Vec<_>>() {
+        assert!(h.state_of(m).is_ok());
+    }
+}
+
+#[test]
+fn damaged_parents_are_repaired_and_a_merge_keeps_its_second_parent() {
+    let (h, ..) = three();
+    let mut v = h.to_value();
+    v["versions"][2]["parents"] = serde_json::json!([2, 1]);
+    let l = load(&v);
+    assert!(l.notes.is_empty(), "{:?}", l.notes);
+    assert_eq!(l.history.unwrap().meta(3).unwrap().parents, vec![2, 1]);
+    // The first parent must be the version before; others must exist and come before.
+    let mut v = h.to_value();
+    v["versions"][2]["parents"] = serde_json::json!([1, 77, 1, 2]);
+    v["versions"][1]["parents"] = serde_json::json!([9]);
+    v["versions"][0]["parents"] = serde_json::json!([5]);
+    v["versions"][0]["branch"] = serde_json::json!("   ");
+    v["versions"][1]["branch"] = serde_json::json!("b".repeat(300));
+    v["head"] = serde_json::json!(999);
+    let l = load(&v);
+    let repaired = l.history.unwrap();
+    assert!(repaired.meta(1).unwrap().parents.is_empty());
+    assert_eq!(repaired.meta(2).unwrap().parents, vec![1]);
+    assert_eq!(repaired.meta(3).unwrap().parents, vec![2, 1]);
+    assert_eq!(repaired.meta(1).unwrap().branch, "main");
+    assert_eq!(repaired.meta(2).unwrap().branch.chars().count(), BRANCH_MAX);
+    assert_eq!(repaired.head(), Some(3));
+    assert!(l.notes.iter().any(|n| n.contains("parents")));
+    // A cut history whose parents point at nothing cannot be rebuilt: the state fails, no panic.
+    let mut broken = h.clone();
+    broken.versions[2].meta.parents = vec![42];
+    assert!(broken.state_at(2).is_err());
+    broken.versions[2].meta.parents = vec![3];
+    assert!(broken.state_at(2).is_err(), "a cycle");
+    broken.versions[2].meta.parents.clear();
+    assert!(broken.state_at(2).is_err(), "a second root");
+    assert!(broken.remove(3).is_err());
+}
+
 /// Any JSON, nested a few levels.
 fn any_json() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![

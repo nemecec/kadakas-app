@@ -32,7 +32,7 @@ pub const VERSION_CREATE: (&str, &str) = (
 );
 pub const VERSION_LIST: (&str, &str) = (
     "version.list",
-    "The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, base_revision, auto?, delta_bytes}], count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.",
+    "The versions, oldest first. Returns {versions: [{id, name, note?, author, time_ms, origin, parents (the IDs of the versions it was made from, first parent first), branch, base_revision, auto?, delta_bytes}], branch (the current branch, default main), head (the version that the next one is made from), count, bytes, limits: {max_versions, max_bytes}, current_is_newest (true: the document has the content of the newest version, null: there is no version)}.",
 );
 pub const VERSION_GET: (&str, &str) = (
     "version.get",
@@ -275,6 +275,8 @@ fn list(s: &mut Session) -> Result<Value, RpcError> {
         "bytes": h.bytes(),
         "limits": {"max_versions": l.max_versions, "max_bytes": l.max_bytes},
         "current_is_newest": newest,
+        "branch": h.branch(),
+        "head": h.head(),
     }))
 }
 
