@@ -206,6 +206,16 @@ fn split(vertices: &[DVec3], poly: &[Pt], level: f64, index: u32) -> (Vec<Pt>, V
 /// Cuts a triangle mesh into one mesh per band that has triangles, in band order. The triangles
 /// are cut at the planes of the plan. Indices that point outside `vertices` are skipped.
 pub fn split_bands(vertices: &[DVec3], indices: &[u32], plan: &BandPlan) -> Vec<BandMesh> {
+    split_bands_capped(vertices, indices, plan, MAX_CUT_TRIANGLES)
+}
+
+/// Like [`split_bands`], with the cap on the output triangles given.
+fn split_bands_capped(
+    vertices: &[DVec3],
+    indices: &[u32],
+    plan: &BandPlan,
+    cap: usize,
+) -> Vec<BandMesh> {
     let n = plan.levels.len() + 1;
     let mut out: Vec<Builder> = (0..n).map(|_| Builder::default()).collect();
     let mut produced = 0usize;
@@ -226,7 +236,7 @@ pub fn split_bands(vertices: &[DVec3], indices: &[u32], plan: &BandPlan) -> Vec<
         let first = plan.band_of(zmin);
         let last = plan.band_of(zmax);
         let crossed = last.saturating_sub(first);
-        if crossed == 0 || produced + 3 * (crossed + 1) > MAX_CUT_TRIANGLES {
+        if crossed == 0 || produced + 3 * (crossed + 1) > cap {
             // Inside one band, or too many pieces: the whole triangle, in the band of its mean height.
             let band = if crossed == 0 {
                 first
@@ -237,9 +247,9 @@ pub fn split_bands(vertices: &[DVec3], indices: &[u32], plan: &BandPlan) -> Vec<
             continue;
         }
         let mut rest = corners;
-        for band in first..last {
+        for (band, builder) in out.iter_mut().enumerate().take(last).skip(first) {
             let (below, above) = split(vertices, &rest, plan.levels[band], band as u32);
-            produced += out[band].polygon(band, &below);
+            produced += builder.polygon(band, &below);
             rest = above;
         }
         produced += out[last].polygon(last, &rest);
@@ -419,18 +429,21 @@ mod tests {
 
     #[test]
     fn the_cap_stops_the_cutting_but_keeps_every_triangle() {
-        // With a plan of 64 bands and many tall triangles the output stays bounded: this checks the
-        // rule at the triangle level with a small cap through the public function's bound.
         let v = vec![
             DVec3::new(0.0, 0.0, 0.0),
             DVec3::new(1.0, 0.0, 0.0),
             DVec3::new(0.0, 1.0, 1000.0),
         ];
         let plan = BandPlan::new(&settings(64), 0.0, 1000.0);
-        let idx: Vec<u32> = (0..50).flat_map(|_| [0, 1, 2]).collect();
-        let parts = split_bands(&v, &idx, &plan);
-        let tris: usize = parts.iter().map(|p| p.indices.len() / 3).sum();
-        assert!(tris >= 50 && tris <= 50 * 64 * 2, "{tris}");
+        let idx = [0, 1, 2, 0, 1, 2];
+        // With room, a triangle that crosses 63 planes gives 64 pieces (at least).
+        let cut = split_bands_capped(&v, &idx[..3], &plan, MAX_CUT_TRIANGLES);
+        assert_eq!(cut.len(), 64);
+        // With a small cap the triangles are not cut: each goes whole to one band.
+        let whole = split_bands_capped(&v, &idx, &plan, 5);
+        assert_eq!(whole.len(), 1);
+        assert_eq!(whole[0].indices.len(), 6);
+        assert_eq!(whole[0].band, plan.band_of(500.0));
     }
 
     proptest! {
