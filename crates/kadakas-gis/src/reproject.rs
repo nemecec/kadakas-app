@@ -126,6 +126,22 @@ impl Mapper<'_> {
         Ok(())
     }
 
+    /// Moves a terrain texture mapping with the ground: its origin moves, it turns as the map
+    /// turns there, and its tile follows the scale of the CRS change.
+    fn mapping(&self, tile: &mut f64, offset: &mut [f64; 2], rotation: &mut f64) -> Result<()> {
+        let step = 1000.0;
+        let at = DVec2::from(*offset);
+        let o = self.point(at)?;
+        let dx = (self.point(at + DVec2::new(step, 0.0))? - o) / step;
+        *rotation += dx.y.atan2(dx.x).to_degrees();
+        *tile = (*tile * self.scale).clamp(
+            kadakas_core::site::MIN_TEXTURE_TILE,
+            kadakas_core::site::MAX_TEXTURE_TILE,
+        );
+        *offset = o.to_array();
+        Ok(())
+    }
+
     /// Moves the points of a shape. `Ok(false)` means the shape has no points in the model.
     fn shape(&self, s: &mut Shape) -> Result<bool> {
         match s {
@@ -153,9 +169,19 @@ impl Mapper<'_> {
                 *at = self.point(*at)?;
                 *anchor = self.point(*anchor)?;
             }
-            Shape::LandscapeArea { boundary, .. }
-            | Shape::Hardscape { boundary, .. }
-            | Shape::SiteModifier { boundary, .. } => self.vertices(boundary)?,
+            Shape::LandscapeArea { boundary, .. } | Shape::Hardscape { boundary, .. } => {
+                self.vertices(boundary)?
+            }
+            Shape::SiteModifier { modifier, boundary } => {
+                self.vertices(boundary)?;
+                // A texture bed with its own mapping is anchored to the ground like a site model.
+                if let kadakas_core::site::ModifierKind::TextureBed {
+                    mapping: Some(m), ..
+                } = modifier
+                {
+                    self.mapping(&mut m.tile, &mut m.offset, &mut m.rotation)?;
+                }
+            }
             Shape::Massing(m) => self.vertices(&mut m.footprint)?,
             Shape::Extrude(e) => {
                 self.vertices(&mut e.profile)?;
@@ -193,16 +219,11 @@ impl Mapper<'_> {
                 // The texture is anchored to the ground: its origin moves, it turns as the map
                 // turns there, and its tile follows the scale of the CRS change.
                 if settings.surface_look == kadakas_core::site::SurfaceLook::Texture {
-                    let step = 1000.0;
-                    let at = DVec2::from(settings.texture_offset);
-                    let o = self.point(at)?;
-                    let dx = (self.point(at + DVec2::new(step, 0.0))? - o) / step;
-                    settings.texture_rotation += dx.y.atan2(dx.x).to_degrees();
-                    settings.texture_tile = (settings.texture_tile * self.scale).clamp(
-                        kadakas_core::site::MIN_TEXTURE_TILE,
-                        kadakas_core::site::MAX_TEXTURE_TILE,
-                    );
-                    settings.texture_offset = o.to_array();
+                    self.mapping(
+                        &mut settings.texture_tile,
+                        &mut settings.texture_offset,
+                        &mut settings.texture_rotation,
+                    )?;
                 }
             }
             Shape::Symbol { at, .. } => *at = self.point(*at)?,
@@ -1100,6 +1121,37 @@ mod tests {
         assert_eq!(settings.texture_tile, 1500.0);
         assert_ne!(settings.texture_offset, [500.0, 700.0]);
         assert!(settings.texture_rotation.is_finite() && settings.texture_rotation.abs() < 5.0);
+        // A texture bed with its own mapping follows the map like the texture of a site model;
+        // a bed with the mapping of the site model has nothing to move.
+        let Shape::SiteModifier {
+            modifier:
+                kadakas_core::site::ModifierKind::TextureBed {
+                    mapping: Some(bm), ..
+                },
+            ..
+        } = moved(Shape::SiteModifier {
+            modifier: kadakas_core::site::ModifierKind::TextureBed {
+                texture: None,
+                mapping: Some(kadakas_core::texture_bed::BedMapping {
+                    tile: 1000.0,
+                    offset: [500.0, 700.0],
+                    rotation: 0.0,
+                }),
+            },
+            boundary: ring(1000.0),
+        })
+        else {
+            panic!()
+        };
+        assert_eq!(bm.tile, 1500.0);
+        assert_ne!(bm.offset, [500.0, 700.0]);
+        moved(Shape::SiteModifier {
+            modifier: kadakas_core::site::ModifierKind::TextureBed {
+                texture: None,
+                mapping: None,
+            },
+            boundary: ring(1000.0),
+        });
         moved(Shape::Symbol {
             symbol: Default::default(),
             at: p,

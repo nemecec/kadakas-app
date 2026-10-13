@@ -860,6 +860,127 @@ mod tests {
         }
     }
 
+    /// A site model with a texture bed. The stand-in extension draws the terrain as two parts:
+    /// the base and the bed (a square at (1000, 1000) to (3000, 3000)).
+    fn bed_scene(
+        ed: &mut Editor,
+        site: kadakas_core::site::SiteSettings,
+        bed: kadakas_core::site::ModifierKind,
+    ) -> (ObjectId, Scene) {
+        use kadakas_core::present::{PART_BED, PART_MAIN};
+        let id = add(
+            ed,
+            Shape::SiteModel {
+                points: vec![
+                    glam::DVec3::ZERO,
+                    glam::DVec3::new(4000.0, 0.0, 0.0),
+                    glam::DVec3::new(0.0, 4000.0, 0.0),
+                ],
+                lines: vec![],
+                settings: site,
+            },
+            None,
+        );
+        add(
+            ed,
+            Shape::SiteModifier {
+                modifier: bed,
+                boundary: kadakas_core::curve::corners(&[
+                    DVec2::new(1000.0, 1000.0),
+                    DVec2::new(3000.0, 1000.0),
+                    DVec2::new(3000.0, 3000.0),
+                    DVec2::new(1000.0, 3000.0),
+                ]),
+            },
+            None,
+        );
+        let quad = |x0: f64, x1: f64| {
+            vec![
+                glam::DVec3::new(x0, 0.0, 0.0),
+                glam::DVec3::new(x1, 0.0, 0.0),
+                glam::DVec3::new(x1, 4000.0, 0.0),
+                glam::DVec3::new(x0, 4000.0, 0.0),
+            ]
+        };
+        let ext = move |_: &Document,
+                        obj: &kadakas_core::model::Object,
+                        sink: &mut kadakas_core::mesh::SceneSink<'_>| {
+            if matches!(obj.shape, Shape::SiteModel { .. }) {
+                sink.mesh(&quad(0.0, 1000.0), &[0, 1, 2, 0, 2, 3], [10, 20, 30, 255]);
+                sink.set_part(PART_BED);
+                sink.mesh(&quad(1000.0, 3000.0), &[0, 1, 2, 0, 2, 3], [10, 20, 30, 255]);
+                sink.set_part(PART_MAIN);
+            }
+        };
+        let scene = kadakas_core::mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
+        (id, scene)
+    }
+
+    #[test]
+    fn a_bed_part_takes_the_material_and_the_mapping_of_its_bed() {
+        use kadakas_core::site::{ModifierKind, SurfaceLook};
+        use kadakas_core::texture_bed::BedMapping;
+        let mut ed = Editor::default();
+        let m = add_material(&mut ed, grass());
+        let own = ModifierKind::TextureBed {
+            texture: Some(m),
+            mapping: Some(BedMapping {
+                tile: 250.0,
+                ..Default::default()
+            }),
+        };
+        let site = kadakas_core::site::SiteSettings {
+            texture_tile: 1000.0,
+            ..Default::default()
+        };
+        let (_, scene) = bed_scene(&mut ed, site.clone(), own);
+        let look = Look::build(ed.doc(), &scene, true);
+        // The base triangles keep their color; the bed triangles have the material.
+        let base: Vec<u32> = (0..2).map(|t| look.tri_material[t]).collect();
+        let bed: Vec<u32> = (2..4).map(|t| look.tri_material[t]).collect();
+        assert_eq!(base, vec![NO_MATERIAL; 2]);
+        assert!(bed.iter().all(|i| *i != NO_MATERIAL));
+        assert_eq!(look.materials.len(), 1);
+        assert!(look.materials[0].texture.is_some());
+        // Corners 0 and 1 of the bed quad (vertices 4 and 5) are 2000 mm apart: 8 repeats of 250 mm.
+        let du = look.uvs[5][0] - look.uvs[4][0];
+        assert!((du - 8.0).abs() < 1e-4, "{du}");
+        // Without its own mapping the bed uses the tile of the site model: 2 repeats.
+        let mut ed2 = Editor::default();
+        let m2 = add_material(&mut ed2, grass());
+        let shared = ModifierKind::TextureBed {
+            texture: Some(m2),
+            mapping: None,
+        };
+        let (_, scene2) = bed_scene(&mut ed2, site.clone(), shared);
+        let look2 = Look::build(ed2.doc(), &scene2, true);
+        let du = look2.uvs[5][0] - look2.uvs[4][0];
+        assert!((du - 2.0).abs() < 1e-4, "{du}");
+        // The elevation look has vertex colors outside, and the bed still has its texture.
+        let mut ed3 = Editor::default();
+        let m3 = add_material(&mut ed3, grass());
+        let elev = kadakas_core::site::SiteSettings {
+            surface_look: SurfaceLook::Elevation,
+            ..site
+        };
+        let (_, scene3) = bed_scene(
+            &mut ed3,
+            elev,
+            ModifierKind::TextureBed {
+                texture: Some(m3),
+                mapping: None,
+            },
+        );
+        let look3 = Look::build(ed3.doc(), &scene3, true);
+        assert_eq!(look3.tri_material[0], NO_MATERIAL);
+        assert_ne!(look3.tri_material[2], NO_MATERIAL);
+        // The layout key tells the bed apart from no bed.
+        assert_ne!(look.layout_key, look3.layout_key);
+        // With textures off the material gives a color and no texture.
+        let flat = Look::build(ed.doc(), &scene, false);
+        assert!(flat.materials[0].texture.is_none());
+    }
+
     /// An empty editor: a stand-in so that `scene_key` of equal content can be compared.
     fn ed_without(scene: &Scene) -> Editor {
         let _ = scene;

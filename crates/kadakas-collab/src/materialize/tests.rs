@@ -975,3 +975,80 @@ fn the_terrain_look_of_a_site_model_syncs_as_one_small_property() {
     let m = materialize(&shadow, ed.doc());
     assert!(m.quarantined.iter().any(|q| q.target.id == id.0));
 }
+
+#[test]
+fn a_texture_bed_syncs_as_a_shape_property_and_bad_values_are_quarantined() {
+    use kadakas_core::command::{Command, Editor};
+    use kadakas_core::model::Shape;
+    use kadakas_core::site::ModifierKind;
+    let mut ed = Editor::with_sequential_ids();
+    let ring = json!([[0, 0], [4000, 0], [4000, 4000], [0, 4000]]);
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "add_object",
+        "shape": {"kind": "site_modifier", "boundary": ring,
+                  "modifier": {"type": "texture_bed"}}
+    }))
+    .unwrap();
+    let id = ObjectId(ed.execute(&cmd).unwrap().created[0]);
+    let mut shadow = replica_of(ed.doc());
+    // The texture and the mapping are part of the shape: one small operation.
+    let texture = Uid::from_num(77);
+    let rev = ed.revision();
+    let cmd: Command = serde_json::from_value(json!({
+        "op": "modify_object", "id": id,
+        "shape": {"kind": "site_modifier", "boundary": ring,
+                  "modifier": {"type": "texture_bed", "texture": texture,
+                               "mapping": {"tile": 500.0, "offset": [1.0, 2.0], "rotation": 15.0}}}
+    }))
+    .unwrap();
+    ed.execute(&cmd).unwrap();
+    let cs = ed
+        .changes_since(rev)
+        .changes
+        .last()
+        .cloned()
+        .cloned()
+        .unwrap();
+    let ops = crate::docsync::ops_from_change(&shadow, ed.doc(), &cs);
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert!(matches!(&ops[0], Op::Set { prop, value, .. }
+        if prop == "shape" && value["modifier"]["mapping"]["tile"] == 500.0));
+    shadow.apply_all(Writer::BASELINE, &ops);
+    let m = materialize(&shadow, ed.doc());
+    assert!(m.quarantined.is_empty(), "{:?}", m.quarantined);
+    match &m.doc.object(id).unwrap().shape {
+        Shape::SiteModifier {
+            modifier: ModifierKind::TextureBed { texture: t, mapping },
+            ..
+        } => {
+            assert_eq!(*t, Some(ResourceId(texture)));
+            assert_eq!(mapping.unwrap().rotation, 15.0);
+        }
+        other => panic!("{other:?}"),
+    }
+    // A peer sends a tile size that no bed may have, or too many points: quarantined, not fatal.
+    let base = shadow
+        .alive(Target::new(Kind::Object, id.0))
+        .unwrap()
+        .get("shape")
+        .unwrap()
+        .clone();
+    let mut bad_tile = base.clone();
+    bad_tile["modifier"]["mapping"]["tile"] = json!(0.5);
+    let many: Vec<_> = (0..4100).map(|i| json!([i, (i * i) % 11])).collect();
+    let mut too_many = base;
+    too_many["boundary"] = json!(many);
+    for (n, value) in [(1u64, bad_tile), (2, too_many)] {
+        let mut replica = shadow.clone();
+        set(
+            &mut replica,
+            w(9, n),
+            Kind::Object,
+            id.0.low_u64(),
+            "shape",
+            value,
+        );
+        let m = materialize(&replica, ed.doc());
+        assert!(m.quarantined.iter().any(|q| q.target.id == id.0), "case {n}");
+    }
+}

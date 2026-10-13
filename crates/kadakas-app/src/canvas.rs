@@ -77,6 +77,20 @@ fn object_style(doc: &Document, o: &Object, zoom: f64) -> Style {
                 modifier: kadakas_core::model::ModifierKind::Pad { .. },
                 ..
             } => tinted([200, 170, 120, 70]),
+            // A texture bed shows the color of its material, or a neutral green.
+            Shape::SiteModifier {
+                modifier: kadakas_core::model::ModifierKind::TextureBed { texture, .. },
+                ..
+            } => {
+                let base = texture
+                    .filter(|t| kadakas_core::present::material(doc, *t).is_some())
+                    .or_else(|| kadakas_core::present::bed_material(doc, o))
+                    .and_then(|t| kadakas_core::present::material(doc, t))
+                    .map_or([150, 190, 120], |m| {
+                        [m.base_color.0[0], m.base_color.0[1], m.base_color.0[2]]
+                    });
+                tinted([base[0], base[1], base[2], 90])
+            }
             _ => fill,
         };
     }

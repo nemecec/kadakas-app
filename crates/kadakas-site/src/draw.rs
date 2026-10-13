@@ -626,6 +626,158 @@ mod tests {
         assert!(scene.mesh.colors.contains(&plan.colors[1]));
     }
 
+    fn grass(ed: &mut Editor) -> kadakas_core::resource::ResourceId {
+        use kadakas_core::present::{Material, Procedural, RenderResource, Texture};
+        let m = Material {
+            texture: Some(Texture::Procedural {
+                kind: Procedural::Grass,
+                seed: 1,
+            }),
+            ..Default::default()
+        };
+        let out = ed
+            .execute(&kadakas_core::command::Command::AddResource {
+                name: "Grass".into(),
+                body: kadakas_core::resource::ResourceBody::Render(Box::new(
+                    RenderResource::Material(m),
+                )),
+            })
+            .unwrap();
+        kadakas_core::resource::ResourceId(out.created[0])
+    }
+
+    fn bed(
+        ed: &mut Editor,
+        texture: Option<kadakas_core::resource::ResourceId>,
+        x0: f64,
+        x1: f64,
+    ) -> kadakas_core::model::ObjectId {
+        add(
+            ed,
+            Shape::SiteModifier {
+                modifier: ModifierKind::TextureBed {
+                    texture,
+                    mapping: None,
+                },
+                boundary: kadakas_core::curve::corners(&[
+                    DVec2::new(x0, 1500.0),
+                    DVec2::new(x1, 1500.0),
+                    DVec2::new(x1, 5500.0),
+                    DVec2::new(x0, 5500.0),
+                ]),
+            },
+        )
+    }
+
+    /// The area seen from above of the triangles of a part, in mm squared.
+    fn part_area(scene: &kadakas_core::mesh::Scene, part: u8) -> f64 {
+        (0..scene.mesh.triangle_count())
+            .filter(|t| scene.mesh.tri_part[*t] == part)
+            .map(|t| {
+                let [a, b, c] = scene.mesh.triangle(t);
+                ((b - a).truncate().perp_dot((c - a).truncate()).abs() / 2.0) as f64
+            })
+            .sum()
+    }
+
+    #[test]
+    fn texture_beds_cut_the_surface_into_parts_without_changing_it() {
+        use kadakas_core::present::{PART_BED, PART_MAIN};
+        let (mut ed, id) = site_with_pad();
+        let g = grass(&mut ed);
+        let cache = SiteCache::default();
+        let build = |ed: &Editor| {
+            let ext = scene_ext(&cache, ed.revision());
+            mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext))
+        };
+        let plain = build(&ed);
+        let plain_area = part_area(&plain, PART_MAIN);
+        // A bed of 2000 by 4000 mm; the pad (2000..4000) lies inside it.
+        bed(&mut ed, Some(g), 1500.0, 3500.0);
+        let scene = build(&ed);
+        assert!(scene.mesh.tri_object.iter().all(|o| *o == id));
+        let (base, in_bed) = (part_area(&scene, PART_MAIN), part_area(&scene, PART_BED));
+        assert!((in_bed - 2000.0 * 4000.0).abs() < 100.0, "{in_bed}");
+        assert!((base + in_bed - plain_area).abs() < 100.0, "{base} {in_bed} {plain_area}");
+        // The grade did not change.
+        let before = SiteResult::compute(ed.doc(), id).unwrap();
+        assert_eq!(before.modifiers.len(), 1, "only the pad is a modifier");
+        // A bed without a material changes nothing.
+        let (mut ed3, _) = site_with_pad();
+        bed(&mut ed3, None, 1500.0, 3500.0);
+        assert_eq!(part_area(&build(&ed3), PART_BED), 0.0);
+        // Two beds: the second part is the front bed.
+        bed(&mut ed, Some(g), 3000.0, 6000.0);
+        let two = build(&ed);
+        let (a, b) = (part_area(&two, PART_BED), part_area(&two, PART_BED + 1));
+        assert!((b - 3000.0 * 4000.0).abs() < 100.0, "{b}");
+        assert!((a - 1500.0 * 4000.0).abs() < 100.0, "{a}");
+        // The bed pieces are on the surface: the heights are those of the plain mesh.
+        for t in 0..two.mesh.triangle_count() {
+            for p in two.mesh.triangle(t) {
+                let (x, y) = (p.x as f64, p.y as f64);
+                if (2010.0..=3990.0).contains(&x) && (2010.0..=3990.0).contains(&y) {
+                    assert!((p.z - 300.0).abs() < 1e-2, "{p}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn beds_act_on_the_existing_surface_of_a_site_without_modifiers() {
+        use kadakas_core::present::PART_BED;
+        let mut ed = Editor::default();
+        let id = add(&mut ed, grid_site(9, 1000.0, |x, _| x / 10.0));
+        let g = grass(&mut ed);
+        bed(&mut ed, Some(g), 1500.0, 3500.0);
+        let cache = SiteCache::default();
+        let ext = scene_ext(&cache, ed.revision());
+        let scene = mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
+        assert!((part_area(&scene, PART_BED) - 2000.0 * 4000.0).abs() < 100.0);
+        // The analysis colors keep their surface: no beds there. Contours-only has no mesh.
+        set_settings(&mut ed, id, |s| s.display_3d = Display3d::Contours);
+        let ext = scene_ext(&cache, ed.revision());
+        let scene = mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext));
+        assert_eq!(part_area(&scene, PART_BED), 0.0);
+        // Existing only, with a proposed surface from a pad: the beds act on the proposed one only.
+        let (mut ed2, id2) = site_with_pad();
+        let g2 = grass(&mut ed2);
+        bed(&mut ed2, Some(g2), 1500.0, 3500.0);
+        set_settings(&mut ed2, id2, |s| s.surface_3d = SurfaceDisplay::Existing);
+        let ext = scene_ext(&cache, ed2.revision());
+        let scene = mesh::build_with(ed2.doc(), glam::DVec3::ZERO, Some(&ext));
+        assert_eq!(part_area(&scene, PART_BED), 0.0);
+    }
+
+    #[test]
+    fn beds_leave_the_elevation_bands_outside_alone() {
+        use kadakas_core::present::{PART_BED, PART_MAIN};
+        let (mut ed, id) = site_with_pad();
+        let g = grass(&mut ed);
+        set_settings(&mut ed, id, |s| {
+            s.surface_look = SurfaceLook::Elevation;
+            s.elevation_bands = 4;
+        });
+        let cache = SiteCache::default();
+        let build = |ed: &Editor| {
+            let ext = scene_ext(&cache, ed.revision());
+            mesh::build_with(ed.doc(), glam::DVec3::ZERO, Some(&ext))
+        };
+        let plain = build(&ed);
+        bed(&mut ed, Some(g), 1500.0, 3500.0);
+        let scene = build(&ed);
+        // The range is that of the whole surface, so the bands outside the bed keep their colors.
+        let band_colors = |s: &kadakas_core::mesh::Scene| -> std::collections::BTreeSet<[u8; 4]> {
+            (0..s.mesh.triangle_count())
+                .filter(|t| s.mesh.tri_part[*t] == PART_MAIN)
+                .map(|t| s.mesh.colors[s.mesh.indices[t * 3] as usize])
+                .collect()
+        };
+        assert!(band_colors(&scene).is_subset(&band_colors(&plain)));
+        assert!(part_area(&scene, PART_BED) > 0.0);
+        assert!(part_area(&scene, PART_MAIN) < part_area(&plain, PART_MAIN));
+    }
+
     #[test]
     fn shown_surfaces_skips_the_duplicate() {
         let mut ed = Editor::default();
